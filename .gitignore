@@ -1,0 +1,28 @@
+# Repo-wide rules. Tech-specific rules live in per-folder .gitignore
+# files (e.g. landing-page/.gitignore for the Next.js app).
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (never commit secrets; commit *.example instead)
+.env
+.env.*
+!.env.example
+
+# Dependencies / build output (safety net across any sub-folder)
+node_modules/
+dist/
+build/
+out/
+.next/
+.npm-cache/
