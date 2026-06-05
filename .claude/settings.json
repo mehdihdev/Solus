@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": ["mcp__playwright"],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Find|Search|List|Show|Display|Fetch|Get|Extract",
+        "hooks": [
+          { "type": "command", "command": "node ./hooks/read_hook.js" }
+        ]
+      }
+    ]
+  }
+}
