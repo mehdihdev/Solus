@@ -1,3 +1,6 @@
+@.claude/rules/common/solus-git-workflow.md
+@.claude/rules/common/security.md
+
 # CLAUDE.md — Solus Root
 
 This file governs all AI-assisted development in this repository. Read it fully before writing any code. Every agent session, subagent, and human contributor follows these rules. Directory-level CLAUDE.md files extend and override this one within their scope.
@@ -123,6 +126,7 @@ When sources conflict, authority flows in this order. Higher overrides lower:
 4. **docs/wireflows/** — UI structure and user flows. Frontend work must match the wireflows. Visual polish within a wireflow is your judgment; changing the flow itself is not.
 5. **Directory CLAUDE.md** — feature-specific rules. These extend the root; within their directory they may add stricter rules but never relax root security or testing requirements.
 6. **This root CLAUDE.md** — the baseline everything inherits.
+7. **Installed harness assets** — the rules in `.claude/rules/ecc/`, skills in `.claude/skills/`, and subagent personas in `.claude/agents/`. These are adopted best practices (curated from the ECC project, MIT) that agents and subagents must read and learn from: rules are always-follow style/procedure guidance, skills are consulted before improvising any procedure they cover, and agent personas define the reviewer/planner/security subagents the protocol names. They sit at the BOTTOM of this hierarchy — where any asset conflicts with anything above (e.g., generic git advice vs. ADR-021), the higher document wins. The Solus-adapted versions shipped in-repo (`solus-git-workflow.md`, the Solus `security-reviewer` and `planner` agents) are already reconciled; prefer them over any generic equivalent.
 
 **Mandatory pre-work check**: before writing code for any task, list which architecture diagrams, API plans, and wireflows govern it, and confirm you've read them. If none exist for your task, that is a signal the design phase is incomplete — flag it rather than improvising.
 
@@ -169,7 +173,7 @@ With the design settled, produce an execution plan before spawning anything:
 - **Task decomposition**: break the feature into units of work, each with a crisp, self-contained spec.
 - **Dependency graph**: which tasks depend on which. Tasks with no dependency edge between them are parallel candidates.
 - **Sequential vs parallel decision**: parallelize only tasks with disjoint file sets and no shared unstable interfaces. If two tasks need the same interface, build (or extract) the interface first — sequentially — then parallelize the implementations against it. When in doubt, sequence; a collision costs more than serialization.
-- **File ownership map**: every task lists the files/directories it owns. Parallel tasks must have provably disjoint ownership. No subagent may touch files outside its assignment.
+- **File ownership map**: every task lists the files/directories it owns. Parallel tasks must have provably disjoint ownership. No subagent may touch files outside its assignment. Write each task's globs to `.claude/state/ownership/<task-id>.list` (one glob or path prefix per line, `#` comments allowed) — the SubagentStop hook (H12) enforces these manifests mechanically. Delete a task's manifest when its work is merged and verified.
 - Present the plan briefly before executing. For large features, the human may want to adjust the split.
 
 ### Branch discipline — one ticket, one branch
@@ -198,17 +202,33 @@ Subagent rules:
 - Subagents work toward the goal given. They do not open MRs, do not push to main, do not modify contracts, DECISIONS.md, or files outside their ownership.
 - Subagent output returns to the orchestrator (in-process) or lands on its branch (worktree) for verification.
 
-### Hooks — automate the guardrails
+### Hooks — the enforcement layer (installed and active)
 
-Use hooks to enforce rules mechanically: pre-commit/pre-edit formatting and linting; post-edit test-subset runs; a pre-handoff full validation pass (lint, type-check, tests, secret scan, dependency audit). A failed hook stops the workflow — never bypass it. If a guardrail can be a hook instead of an instruction, make it a hook.
+The guardrails in this document are enforced mechanically by hooks in `.claude/hooks/`, wired via `.claude/settings.json`. They fire automatically: H1–H6 block protected-path edits, off-branch work, secrets, remote git operations, dangerous commands, and file/symbol recreation before they happen; H7–H9 auto-format, lint, type-check, and test every touched file, feeding failures straight back for immediate fixing; H10 is the Stop gate — an agent cannot finish a work session while its diff fails lint, types, tests, secret scanning, or duplication checks; H12 enforces the Phase 2 ownership manifests at SubagentStop; H13/H14 inject session context and snapshot state before compaction.
 
-### Commands — encode repeatable workflows
+Rules of engagement with hooks:
+- **When a hook blocks you, fix the cause.** The stderr message says what and why. Never bypass a hook, never edit `.claude/hooks/` or `settings.json` (H1 blocks this anyway), never restructure a command to slip past a guard — that is a fireable offense for an agent.
+- `SOLUS_DISABLED_HOOKS` is a human-only control. An agent that believes a hook is misfiring flags it in its completion report.
+- If a guardrail can be a hook instead of an instruction, propose it as a hook (to a human). Instructions get forgotten; hooks don't.
 
-Maintain reusable commands for: bootstrapping the dev environment, running full/module test suites, scaffolding a new connector or checker from template, running a migration cycle, and the full pre-handoff validation pass. Three repetitions of any sequence means it becomes a command.
+### Commands — installed workflows (run them at the right phase)
 
-### Skills — package domain expertise
+Slash commands live in `.claude/commands/` and agents are expected to USE them, not re-derive their workflows:
+- **Phase 2**: `/plan` — execution planning (drives the planner persona; produces the decomposition, dependency graph, and ownership map).
+- **Phase 3**: `/build-fix` when builds break; `/checkpoint` to save verification state mid-feature.
+- **Phase 4**: `/code-review` (fresh-context review), `/quality-gate` (full verification), `/test-coverage` (coverage audit), `/refactor-clean` (dead-code sweep before handoff).
+- **Phase 5 / doc currency**: `/update-docs` and `/update-codemaps` whenever the diff changed structure or behavior that docs describe — the authority hierarchy dies if docs go stale.
+- **Anytime**: `/learn` to extract reusable patterns from the session.
 
-Capture domain procedures as skills (KiCad parsing conventions, URDF→MJCF conversion, Onshape auth flow, security audit procedure, review checklist) so sessions execute them consistently. Check for an applicable skill before improvising a procedure.
+If you find yourself doing the same multi-step sequence three times, propose a new command (to a human) and document it.
+
+### Skills, rules, and subagent personas — learn from the installed harness
+
+The harness ships curated knowledge that every agent and subagent must actively use:
+
+- **Rules** (`.claude/rules/ecc/`): always-follow guidance — common coding style, testing, security, performance, plus the `typescript/` and `python/` packs. `solus-git-workflow.md` supersedes any generic git guidance (ADR-021).
+- **Skills** (`.claude/skills/`): consult the relevant skill BEFORE improvising any procedure it covers. Installed set includes: `tdd-workflow`, `security-review`, `verification-loop`, `eval-harness`, `search-first`, `python-patterns`, `python-testing`, `backend-patterns`, `frontend-patterns`, `postgres-patterns`, `api-design`, `database-migrations`, `docker-patterns`, `deployment-patterns`, `e2e-testing`, and `cost-aware-llm-pipeline` (read this one before touching SOL Agent budget/metering code — it is domain knowledge for ADR-017/018/019). Capture new domain procedures (KiCad parsing, URDF→MJCF, Onshape auth) as new skills as they stabilize.
+- **Subagent personas** (`.claude/agents/`): when the protocol names a role, spawn the matching persona — `planner` (Phase 2), `architect` (Phase 1 support), `tdd-guide` (Phase 3), `code-reviewer` + `security-reviewer` (Phase 4, both mandatory), `python-reviewer`/`typescript-reviewer`/`database-reviewer` (language-specific passes), `build-error-resolver`, `refactor-cleaner`, `doc-updater`, `e2e-runner`. The Solus-adapted `security-reviewer` and `planner` carry §7 model-orchestration checks and the Phase 2 plan format — use those, not generic equivalents.
 
 ### Phase 4 — Verification
 
