@@ -1,6 +1,3 @@
-@.claude/rules/common/solus-git-workflow.md
-@.claude/rules/common/security.md
-
 # CLAUDE.md — Solus Root
 
 This file governs all AI-assisted development in this repository. Read it fully before writing any code. Every agent session, subagent, and human contributor follows these rules. Directory-level CLAUDE.md files extend and override this one within their scope.
@@ -86,20 +83,27 @@ How structure evolves: structural changes are proposed by humans (or flagged by 
 solus/
 ├── CLAUDE.md                  ← this file (root authority)
 ├── DECISIONS.md               ← locked architectural decisions (ADRs)
+├── Makefile / package.json / pnpm-workspace.yaml / .npmrc
+├── tsconfig.base.json / eslint.config.mjs / .prettierrc.json   ← the JS law H7/H8/H10 enforce
+├── pyproject.toml             ← uv workspace + ruff/mypy law  ·  .python-version (3.12)
+├── docker-compose.dev.yml / .gitlab-ci.yml   ← parked until Docker/GitLab setup
+├── .claude/                   ← agent harness: settings.json + hooks (H1–H14), agents/,
+│                                skills/, commands/, rules/ecc/  (state/ is gitignored runtime)
 ├── docs/
 │   ├── architecture/          ← architecture diagrams (authoritative)
 │   ├── wireflows/             ← UI wireflows (authoritative)
 │   ├── api/                   ← API route plans (authoritative)
-│   └── schemas/               ← database schema docs & ERDs
+│   ├── schemas/               ← database schema docs & ERDs
+│   └── qa/                    ← COWORK_QA_<feature>.md handoff files
 ├── apps/
-│   ├── desktop/               ← Electron + React + TypeScript app
+│   ├── desktop/               ← Electron + React + TS (electron-vite; main/preload/renderer)
 │   │   └── CLAUDE.md
-│   └── web/                   ← marketing site / future web app
+│   └── web/                   ← Next.js marketing/landing site ("@solus/web")
 ├── packages/
-│   ├── api/                   ← FastAPI core backend
+│   ├── api/                   ← FastAPI core backend ("solus-api")
 │   │   └── CLAUDE.md
-│   ├── shared-types/          ← shared type definitions
-│   └── contracts/             ← interface contracts (connector, checker, tool, telemetry, event)
+│   ├── shared-types/          ← TS types shared FE↔BE
+│   └── contracts/             ← interface contracts (connector, checker, tool, telemetry, event) — human-owned
 ├── integrations/
 │   ├── github/  gitlab/  kicad/  onshape/  ros/
 │   └── CLAUDE.md              ← connector-specific rules

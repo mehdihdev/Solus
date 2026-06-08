@@ -1,0 +1,30 @@
+[project]
+name = "solus-workspace"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[tool.uv.workspace]
+members = ["packages/api"]
+# Add as they are created: "integrations/*", "reasoning", "livebench"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "node_modules"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C901", "N", "S"]
+ignore = ["S101"]
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages", "integrations", "reasoning", "livebench"]
