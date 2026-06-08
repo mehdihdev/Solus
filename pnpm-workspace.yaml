@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/shared-types"
+
+# Allow build scripts only for these trusted native deps (pnpm reads this here,
+# not from the "pnpm" field in package.json as of pnpm 9.15+).
+onlyBuiltDependencies:
+  - electron
+  - esbuild
