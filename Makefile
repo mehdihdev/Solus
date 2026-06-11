@@ -4,7 +4,7 @@ bootstrap: ## one-command setup (run after cloning)
 	corepack enable && pnpm install
 	uv sync --all-packages
 	$(MAKE) hooks
-	@echo "✅ bootstrap done."
+	@echo "  bootstrap done."
 	@echo "   Terminals: 'make db-up' (once docker is set up), 'make dev-api', 'make dev-desktop'"
 
 hooks:
