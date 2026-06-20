@@ -75,22 +75,10 @@ build:api-image:
   stage: build
   tags: [aws-arm]
   image: docker:27
-  services: [docker:27-dind]
-  variables:
-    DOCKER_HOST: "tcp://docker:2376"
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: "1"
-    DOCKER_CERT_PATH: "/certs/client"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
   before_script:
-    - >
-      docker run --rm
-      -e AWS_ACCESS_KEY_ID
-      -e AWS_SECRET_ACCESS_KEY
-      -e AWS_REGION
-      amazon/aws-cli:latest ecr get-login-password --region "$AWS_REGION"
-      | docker login --username AWS --password-stdin "$ECR_URI"
+    - docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION amazon/aws-cli:latest ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_URI"
   script:
     - docker build -f infrastructure/docker/api.Dockerfile -t "$ECR_URI:$CI_COMMIT_SHORT_SHA" -t "$ECR_URI:$IMAGE_TAG" .
     - docker push "$ECR_URI:$CI_COMMIT_SHORT_SHA"
