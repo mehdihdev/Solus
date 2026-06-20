@@ -2,19 +2,33 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration.
+    """Runtime configuration from environment variables (and a local .env).
 
-    Values are read from environment variables (and a local .env file).
-    Anything not set falls back to the local-dev default below, so the app
-    runs out of the box against docker-compose. Secrets are NEVER hardcoded
-    here in real values (CLAUDE.md §7) — the defaults are local-only.
+    Database connection is assembled from separate components so it works with
+    AWS RDS-managed secrets (which store username/password/host/etc. as separate
+    JSON fields). Locally, the components default to the docker-compose database.
+    Secrets are never hardcoded in real values (CLAUDE.md §7).
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://solus:solus@localhost:5432/solus"
+    # Database components (RDS secret injects these as separate env vars in prod;
+    # locally they default to docker-compose values).
+    db_user: str = "solus"
+    db_password: str = "solus"
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_name: str = "solus"
+
     redis_url: str = "redis://localhost:6379/0"
     api_cors_origins: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql+asyncpg://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
 
     @property
     def cors_origins(self) -> list[str]:

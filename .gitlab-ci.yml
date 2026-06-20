@@ -1,0 +1,6 @@
+create_file:
+  image: alpine
+  script:
+    - echo "Building ..."
+    - mkdir build
+    - touch build/somefile.txt

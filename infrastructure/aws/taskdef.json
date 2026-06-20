@@ -1,0 +1,40 @@
+{
+  "family": "solus-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "executionRoleArn": "arn:aws:iam::344838028176:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "solus-api",
+      "image": "344838028176.dkr.ecr.us-east-1.amazonaws.com/solus/backend:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8000, "protocol": "tcp" }
+      ],
+      "secrets": [
+        { "name": "DB_USER",     "valueFrom": "arn:aws:secretsmanager:us-east-1:344838028176:secret:solus/staging/db-lxVtVM:username::" },
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:344838028176:secret:solus/staging/db-lxVtVM:password::" },
+        { "name": "DB_PORT",     "valueFrom": "arn:aws:secretsmanager:us-east-1:344838028176:secret:solus/staging/db-lxVtVM:port::" },
+        { "name": "DB_NAME",     "valueFrom": "arn:aws:secretsmanager:us-east-1:344838028176:secret:solus/staging/db-lxVtVM:dbname::" }
+      ],
+      "environment": [
+        { "name": "DB_HOST", "value": "http://solus-staging-pg.cclcksg0osrk.us-east-1.rds.amazonaws.com" },
+        { "name": "API_CORS_ORIGINS", "value": "http://localhost:5173,http://localhost:3000" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/solus/staging/backend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}
