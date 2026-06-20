@@ -76,11 +76,14 @@ build:api-image:
   tags: [aws-arm]
   image: docker:27
   services: [docker:27-dind]
+  variables:
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
   before_script:
-    # Get the ECR password from the WORKING aws-cli image (not the broken Alpine python),
-    # then pipe it straight into docker login. No aws-cli installed in this image.
     - >
       docker run --rm
       -e AWS_ACCESS_KEY_ID
