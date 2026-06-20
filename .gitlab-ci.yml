@@ -79,9 +79,15 @@ build:api-image:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
   before_script:
-    - apk add --no-cache python3 py3-pip
-    - pip install awscli --break-system-packages
-    - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_URI"
+    # Get the ECR password from the WORKING aws-cli image (not the broken Alpine python),
+    # then pipe it straight into docker login. No aws-cli installed in this image.
+    - >
+      docker run --rm
+      -e AWS_ACCESS_KEY_ID
+      -e AWS_SECRET_ACCESS_KEY
+      -e AWS_REGION
+      amazon/aws-cli:latest ecr get-login-password --region "$AWS_REGION"
+      | docker login --username AWS --password-stdin "$ECR_URI"
   script:
     - docker build -f infrastructure/docker/api.Dockerfile -t "$ECR_URI:$CI_COMMIT_SHORT_SHA" -t "$ECR_URI:$IMAGE_TAG" .
     - docker push "$ECR_URI:$CI_COMMIT_SHORT_SHA"
