@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Database components (RDS secret injects these as separate env vars in prod;
     # locally they default to docker-compose values).
     db_user: str = "solus"
-    db_password: str = "solus"
+    db_password: str = "solus"  # noqa: S105 — local dev default, real value injected via secret in deployment
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "solus"

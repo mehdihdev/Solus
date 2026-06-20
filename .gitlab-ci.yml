@@ -1,6 +1,112 @@
-create_file:
-  image: alpine
+# Solus CI/CD — ARM build on AWS self-hosted runner → ECS deploy.
+stages: [lint, typecheck, test, security, build, deploy]
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+default:
+  interruptible: true
+
+variables:
+  PNPM_STORE: "$CI_PROJECT_DIR/.pnpm-store"
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+  IMAGE_TAG: "arm-latest"   # the tag your ECS task definition references
+
+.node-base:
+  image: node:22
+  tags: [aws-arm]
+  before_script:
+    - corepack enable
+    - pnpm config set store-dir "$PNPM_STORE"
+    - pnpm install --frozen-lockfile
+  cache:
+    key: { files: [pnpm-lock.yaml] }
+    paths: [.pnpm-store]
+
+.python-base:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  tags: [aws-arm]
+  before_script:
+    - uv sync --all-packages --frozen || uv sync --all-packages
+  cache:
+    key: { files: [uv.lock] }
+    paths: [.uv-cache]
+
+lint:python:
+  extends: .python-base
+  stage: lint
+  script: uv run ruff check .
+
+lint:node:
+  extends: .node-base
+  stage: lint
+  script: pnpm lint
+
+typecheck:python:
+  extends: .python-base
+  stage: typecheck
+  script: uv run mypy packages/api/src
+
+typecheck:node:
+  extends: .node-base
+  stage: typecheck
+  script: pnpm typecheck
+
+test:python:
+  extends: .python-base
+  stage: test
+  script: uv run pytest -q
+
+test:node:
+  extends: .node-base
+  stage: test
+  script: pnpm test
+
+security:gitleaks:
+  stage: security
+  tags: [aws-arm]
+  image: { name: "zricethezav/gitleaks:latest", entrypoint: [""] }
+  script: gitleaks detect --source . --config .gitleaks.toml --no-banner --redact
+
+build:api-image:
+  stage: build
+  tags: [aws-arm]
+  image: docker:27
+  services: [docker:27-dind]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  before_script:
+    - apk add --no-cache aws-cli
+    - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_URI"
   script:
-    - echo "Building ..."
-    - mkdir build
-    - touch build/somefile.txt
+    - docker build -f infrastructure/docker/api.Dockerfile -t "$ECR_URI:$CI_COMMIT_SHORT_SHA" -t "$ECR_URI:$IMAGE_TAG" .
+    - docker push "$ECR_URI:$CI_COMMIT_SHORT_SHA"
+    - docker push "$ECR_URI:$IMAGE_TAG"
+
+deploy:staging:
+  stage: deploy
+  tags: [aws-arm]
+  image: { name: "amazon/aws-cli:latest", entrypoint: [""] }
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  environment:
+    name: staging
+  script:
+    - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment --region "$AWS_REGION"
+    - echo "Staging deploy triggered — image $CI_COMMIT_SHORT_SHA."
+
+# deploy:production (enable when prod ECS service exists):
+# deploy:production:
+#   stage: deploy
+#   tags: [aws-arm]
+#   image: { name: "amazon/aws-cli:latest", entrypoint: [""] }
+#   rules:
+#     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+#       when: manual
+#   environment:
+#     name: production
+#   script:
+#     - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE_PROD" --force-new-deployment --region "$AWS_REGION"

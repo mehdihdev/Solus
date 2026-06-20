@@ -1,0 +1,27 @@
+# gitleaks configuration for Solus
+# Extends the default ruleset, then allowlists known-safe example/placeholder values.
+# Real secrets are still caught everywhere else — this only exempts documented examples.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe placeholders in example/template/documentation files"
+
+# Files that legitimately contain example/placeholder secret-shaped strings:
+#  - .env.example files show the SHAPE of env vars with dummy values
+#  - skill/docs markdown shows example API usage
+paths = [
+  '''.*\.env\.example$''',
+  '''\.claude/skills/.*\.md$''',
+]
+
+# Belt-and-suspenders: exempt the specific known-fake values by regex,
+# so even if they appear elsewhere they won't trip the scanner.
+regexes = [
+  '''sk_live_abc123''',
+]
+
+# You can also pin the exact findings by fingerprint (most surgical):
+# stopwords or commits can be listed here if you prefer fingerprint-level allowlisting.
+commits = []
