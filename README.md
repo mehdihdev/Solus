@@ -9,3 +9,4 @@ Solus is a cross-domain development workspace for robotics teams. It builds a un
 - `make dev-desktop` — run the Electron desktop app.
 
 See [`CLAUDE.md`](./CLAUDE.md) for how development works in this repository.
+

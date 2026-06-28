@@ -269,15 +269,19 @@ For every feature, in this order:
 2. Write the tests first, derived from the spec: happy paths, edge cases, failure modes, and authorization cases.
 3. Confirm the tests fail.
 4. Implement until tests pass.
-5. Refactor with tests green.
+5. Full Test Coverage.
+6. Refactor with tests green.
 
 An MR without tests written against the spec is rejected regardless of whether the code works. Minimum expectations: unit tests for all logic, integration tests for every API endpoint (including auth-failure and cross-team-isolation cases), and contract tests for anything implementing a shared interface (every connector passes the connector contract suite; every checker passes the checker contract suite).
 
 ### Definition of done (every task, every MR)
 
 - [ ] Governing docs identified and followed (architecture, API plan, wireflow)
+- [ ] Full Test Coverage
 - [ ] Tests written first; all passing in CI
 - [ ] No secrets in code; configuration via environment/Secrets Manager only
+- [ ] Use Ponytail plugin to review and shorten code to utmost required
+- [ ] Use Object Oriented Programming principles for scalability 
 - [ ] All inputs validated (Pydantic schemas / TS validation at boundaries)
 - [ ] All DB access parameterized (ORM or bound parameters — never string-built SQL)
 - [ ] Auth + team-authorization enforced on every protected route (and tested)

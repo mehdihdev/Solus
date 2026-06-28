@@ -104,6 +104,7 @@
     "feature-dev@claude-plugins-official": true,
     "security-guidance@claude-plugins-official": true,
     "typescript-lsp@claude-plugins-official": true,
-    "atlassian@claude-plugins-official": true
+    "atlassian@claude-plugins-official": true,
+    "ponytail@ponytail": true
   }
 }
