@@ -1,0 +1,18 @@
+<svg width="380" height="110" viewBox="0 0 380 110" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SOLUS">
+  <title>Solus wordmark — dark text, for light backgrounds</title>
+  <defs>
+    <radialGradient id="orb" cx="0.5" cy="0.5" r="0.5" fx="0.38" fy="0.34">
+      <stop offset="0%" stop-color="#FBE3A6"/>
+      <stop offset="22%" stop-color="#EFBB58"/>
+      <stop offset="58%" stop-color="#E5A43B"/>
+      <stop offset="100%" stop-color="#E5A43B" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5"/>
+    </filter>
+  </defs>
+  <circle cx="56" cy="55" r="24" fill="#E5A43B" opacity="0.40" filter="url(#glow)"/>
+  <circle cx="56" cy="55" r="24" fill="url(#orb)"/>
+  <text x="100" y="55" dominant-baseline="central" fill="#1A1E26"
+    font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="42" font-weight="700" letter-spacing="5">SOLUS</text>
+</svg>

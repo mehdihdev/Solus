@@ -1,0 +1,11 @@
+<svg width="240" height="240" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Solus orb (flat)">
+  <title>Solus orb — flat, no glow (favicons / small sizes)</title>
+  <defs>
+    <radialGradient id="orbFlat" cx="0.5" cy="0.5" r="0.5" fx="0.38" fy="0.34">
+      <stop offset="0%" stop-color="#FBE3A6"/>
+      <stop offset="30%" stop-color="#EFBB58"/>
+      <stop offset="100%" stop-color="#E5A43B"/>
+    </radialGradient>
+  </defs>
+  <circle cx="60" cy="60" r="46" fill="url(#orbFlat)"/>
+</svg>

@@ -1,4 +1,11 @@
 import './assets/main.css'
+// IBM Plex (bundled locally so it works under the renderer CSP — no CDN).
+import '@fontsource/ibm-plex-sans/400.css'
+import '@fontsource/ibm-plex-sans/500.css'
+import '@fontsource/ibm-plex-sans/600.css'
+import '@fontsource/ibm-plex-sans/700.css'
+import '@fontsource/ibm-plex-mono/400.css'
+import '@fontsource/ibm-plex-mono/500.css'
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

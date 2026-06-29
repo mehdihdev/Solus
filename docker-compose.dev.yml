@@ -1,24 +1,35 @@
+# Local development services for Solus.
+# Postgres for the API (SOLUSDEV-55 integration). Brought up by `pnpm dev:all`.
+#   docker compose -f docker-compose.dev.yml up -d db
+# Uses the pgvector image so the embedding work in later phases needs no swap.
 services:
-  postgres:
+  db:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: solus
       POSTGRES_PASSWORD: solus
       POSTGRES_DB: solus
-    ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
+    ports:
+      - "5432:5432"
+    volumes:
+      - solus-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U solus"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U solus -d solus"]
+      interval: 3s
       timeout: 3s
-      retries: 10
+      retries: 20
+
+  # Redis backs ARQ background jobs (stack: ARQ + Redis). Not yet wired, but
+  # present so the queue work in later phases needs no compose change.
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+
 volumes:
-  pgdata:
+  solus-pgdata:

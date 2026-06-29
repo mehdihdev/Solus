@@ -4,9 +4,15 @@
     <meta charset="UTF-8" />
     <title>Electron</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!--
+      connect-src widened for Supabase Auth (ADR-009): REST over https, realtime
+      over wss. font-src allows the locally-bundled @fontsource files (data: for
+      inlined glyphs). Scripts stay 'self' only. When the live Solus REST client
+      is wired, add its origin here from build env (https in packaged builds).
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co"
     />
   </head>
 

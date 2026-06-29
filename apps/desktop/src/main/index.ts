@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { awaitGithubCallback, getRedirectUrl } from './oauthLoopback'
 
 function createWindow(): void {
   // Create the browser window.
@@ -49,8 +50,12 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.warn('pong'))
+  // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
+  // Supabase authorize URL, then hands it back for the system-browser round-trip.
+  ipcMain.handle('oauth:github:redirect-url', () => getRedirectUrl())
+  ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
+    awaitGithubCallback(authorizeUrl)
+  )
 
   createWindow()
 

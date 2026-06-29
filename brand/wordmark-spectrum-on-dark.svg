@@ -1,0 +1,35 @@
+<svg width="380" height="110" viewBox="0 0 380 110" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SOLUS">
+  <title>Solus wordmark — spectrum orb, light text (dark backgrounds)</title>
+  <defs>
+    <clipPath id="ball"><circle cx="60" cy="60" r="34"/></clipPath>
+    <filter id="b" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="11"/></filter>
+    <filter id="haze" x="-90%" y="-90%" width="280%" height="280%"><feGaussianBlur stdDeviation="9"/></filter>
+    <radialGradient id="spec" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <g id="orb">
+      <g opacity="0.5" filter="url(#haze)">
+        <circle cx="46" cy="50" r="30" fill="#62A9FF"/>
+        <circle cx="76" cy="66" r="30" fill="#E5A43B"/>
+        <circle cx="60" cy="80" r="26" fill="#E87FAE"/>
+      </g>
+      <g clip-path="url(#ball)" style="isolation:isolate">
+        <circle cx="60" cy="60" r="34" fill="#0B0E13"/>
+        <g style="mix-blend-mode:screen">
+          <circle cx="44" cy="40" r="26" fill="#B98BEA" filter="url(#b)"/>
+          <circle cx="39" cy="64" r="26" fill="#62A9FF" filter="url(#b)"/>
+          <circle cx="56" cy="86" r="26" fill="#50D0B4" filter="url(#b)"/>
+          <circle cx="83" cy="74" r="26" fill="#5BCD8C" filter="url(#b)"/>
+          <circle cx="87" cy="47" r="26" fill="#E5A43B" filter="url(#b)"/>
+          <circle cx="68" cy="31" r="24" fill="#E87FAE" filter="url(#b)"/>
+        </g>
+        <circle cx="49" cy="46" r="13" fill="url(#spec)" style="mix-blend-mode:screen"/>
+      </g>
+    </g>
+  </defs>
+
+  <use href="#orb" transform="translate(56 55) scale(0.706) translate(-60 -60)"/>
+  <text x="100" y="55" dominant-baseline="central" fill="#E6E9EE"
+    font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="42" font-weight="700" letter-spacing="5">SOLUS</text>
+</svg>

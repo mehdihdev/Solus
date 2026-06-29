@@ -6,6 +6,10 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev:all": "bash scripts/dev-all.sh",
+    "dev:api": "cd packages/api && uv run uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port 8000 --reload",
+    "db:up": "docker compose -f docker-compose.dev.yml up -d db",
+    "db:down": "docker compose -f docker-compose.dev.yml down",
     "dev:desktop": "pnpm --filter @solus/desktop dev",
     "dev:web": "pnpm --filter @solus/web dev",
     "build:desktop": "pnpm --filter @solus/desktop build",
@@ -17,13 +21,15 @@
     "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
-    "@eslint/js": "^9.18.0",
-    "eslint": "^9.18.0",
-    "eslint-config-prettier": "^9.1.0",
-    "eslint-plugin-react-hooks": "^5.1.0",
-    "globals": "^17.6.0",
-    "prettier": "^3.4.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.20.0"
+    "@eslint/js": "9.18.0",
+    "eslint": "9.18.0",
+    "eslint-config-prettier": "9.1.0",
+    "eslint-plugin-react-hooks": "5.1.0",
+    "globals": "17.7.0",
+    "jsdom": "29.1.1",
+    "prettier": "3.4.0",
+    "typescript": "5.7.3",
+    "typescript-eslint": "8.20.0",
+    "vitest": "3.2.6"
   }
 }

@@ -1,8 +1,23 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-// Custom APIs for renderer
-const api = {}
+interface OAuthCallbackResult {
+  code?: string
+  error?: string
+}
+
+// Custom APIs for renderer. `solus.oauth` drives the loopback GitHub flow:
+// the renderer gets the redirect URL, builds the authorize URL, then asks the
+// main process to open the browser and capture the callback.
+const api = {
+  oauth: {
+    getRedirectUrl: (): Promise<string> => ipcRenderer.invoke('oauth:github:redirect-url'),
+    awaitGithub: (authorizeUrl: string): Promise<OAuthCallbackResult> =>
+      ipcRenderer.invoke('oauth:github:await', authorizeUrl)
+  }
+}
+
+export type SolusBridge = typeof api
 
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
@@ -11,12 +26,15 @@ if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
+    contextBridge.exposeInMainWorld('solus', api)
   } catch (error) {
     console.error(error)
   }
 } else {
-  // @ts-expect-error (define in dts)
-  window.electron = electronAPI
-  // @ts-expect-error (define in dts)
-  window.api = api
+  // Fallback when context isolation is off. The global Window augmentation lives
+  // in the renderer's type scope, not the preload's, so cast locally here.
+  const w = window as unknown as { electron: unknown; api: unknown; solus: unknown }
+  w.electron = electronAPI
+  w.api = api
+  w.solus = api
 }

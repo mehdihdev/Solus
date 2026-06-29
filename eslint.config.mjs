@@ -13,11 +13,26 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/.venv/**",
       "**/coverage/**",
-      "**/release/**"
+      "**/release/**",
+      // Harness assets are linted on their own terms, not by the app config.
+      ".claude/**",
+      // CI sets PNPM_STORE/UV_CACHE_DIR inside the project dir; never lint the
+      // package stores (they contain third-party require()-style sources).
+      "**/.pnpm-store/**",
+      "**/.uv-cache/**"
     ]
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    // Plain JS (config, scripts, Next.js routes, design prototypes) runs in Node
+    // and/or the browser. typescript-eslint already disables no-undef for
+    // .ts/.tsx, so these globals only apply to JS files.
+    files: ["**/*.{js,cjs,mjs}"],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser }
+    }
+  },
   {
     files: ["**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
@@ -30,23 +45,5 @@ export default tseslint.config(
       "no-console": ["warn", { allow: ["warn", "error"] }]
     }
   },
-  {
-    files: ["**/*.js", "**/*.mjs", ".claude/hooks/**/*.js", "apps/web/**/*.js"],
-    languageOptions: {
-      globals: {
-        ...globals.node,      // process, console, etc.
-      },
-    },
-  },
-  {
-    files: ["apps/web/**/*.{js,jsx,ts,tsx}"],
-    languageOptions: {
-      globals: {
-        ...globals.browser,   // Response, fetch, etc. for Next.js
-        ...globals.node,
-      },
-    },
-  },
-  { ignores: ["**/dist/**", "**/.next/**", "**/node_modules/**", ".claude/**"] },
   prettier
 );
