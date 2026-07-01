@@ -17,7 +17,7 @@ db-down:
 	docker compose -f docker-compose.dev.yml down
 
 dev-api:
-	uv run --package solus-api uvicorn solus_api.main:app --reload --port 8000
+	cd packages/api && uv run uvicorn --factory solus_api.main:create_app --reload --port 8000
 
 dev-desktop:
 	pnpm --filter @solus/desktop dev
