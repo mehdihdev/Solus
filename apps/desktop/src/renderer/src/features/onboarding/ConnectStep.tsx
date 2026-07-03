@@ -1,17 +1,25 @@
-// Onboarding step 1 — "Connect your tools". Ported from step 1 in
-// TestDesign/app/onboarding.jsx. Connection is a simulated animation in this
-// prototype slice (no live OAuth/sync); the real flow will POST to
-// /api/v1/projects/{id}/sources and stream sync jobs (API.md §2.5).
+// Onboarding step 1 — "Connect your tools". The four connector tiles share one
+// UI; GitHub drives the REAL backend connector (SOLUSDEV-103) when a project is
+// linked and the Electron OAuth bridge is present, while KiCad/Onshape/ROS stay
+// simulated. On entering this step we ensure a project exists so a real connect
+// has something to attach a source to; if the API/auth is unavailable we fall
+// back to the simulated GitHub tile so onboarding still completes (dev bypass).
 import { useEffect, useRef } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
+import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { ConnectTile } from './ConnectTile'
 import { INTEGRATIONS, MIN_SOURCES_TO_BUILD, type Integration } from './integrations.constants'
 import { useOnboardingStore, connectedCount, canBuildModel } from './onboardingStore'
+import { ensureWorkspace } from './provisioning'
+import { useGithubConnect } from './useGithubConnect'
 
 const CONNECT_STEP_MS = 650
 const COMPLETE_DELAY_MS = 350
+const GITHUB_ID = 'github'
 
 interface ConnectStepProps {
   onBuild: () => void
@@ -22,7 +30,32 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
   const beginConnect = useOnboardingStore((s) => s.beginConnect)
   const setConnectStep = useOnboardingStore((s) => s.setConnectStep)
   const completeConnect = useOnboardingStore((s) => s.completeConnect)
+  const description = useOnboardingStore((s) => s.description)
+  const solMode = useSettingsStore((s) => s.solMode)
+  const workspace = useWorkspaceStore()
+  const github = useGithubConnect()
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+
+  // Ensure a project exists as soon as we reach the connect step, reusing one
+  // already created earlier in the flow. Best-effort; never blocks the UI.
+  useEffect(() => {
+    let cancelled = false
+    void ensureWorkspace({
+      description,
+      solMode,
+      existing: { teamId: workspace.teamId, project: workspace.project }
+    }).then((result) => {
+      if (cancelled) return
+      workspace.setLinked(result.linked)
+      if (result.teamId) workspace.setTeamId(result.teamId)
+      if (result.project) workspace.setProject(result.project)
+    })
+    return () => {
+      cancelled = true
+    }
+    // Run once on mount; workspace setters are stable store actions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     const pending = timers.current
@@ -32,7 +65,7 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
     }
   }, [])
 
-  const connect = (integ: Integration): void => {
+  const simulateConnect = (integ: Integration): void => {
     beginConnect(integ.id)
     integ.steps.forEach((_, i) => {
       if (i > 0) {
@@ -45,6 +78,21 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
         integ.steps.length * CONNECT_STEP_MS + COMPLETE_DELAY_MS
       )
     )
+  }
+
+  const connect = (integ: Integration): void => {
+    // GitHub uses the real connector when we have a linked project + bridge;
+    // otherwise (dev bypass / web build) it degrades to the simulated tile.
+    if (
+      integ.id === GITHUB_ID &&
+      workspace.linked &&
+      workspace.project &&
+      getDesktopOAuthBridge()
+    ) {
+      void github.start(workspace.project.id)
+      return
+    }
+    simulateConnect(integ)
   }
 
   const count = connectedCount(connections)
@@ -66,6 +114,8 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
             integration={integ}
             state={connections[integ.id]}
             onConnect={() => connect(integ)}
+            onChooseRepo={github.chooseRepo}
+            onRetry={() => connect(integ)}
           />
         ))}
       </div>

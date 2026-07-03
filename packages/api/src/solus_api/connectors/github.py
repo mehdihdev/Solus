@@ -1,0 +1,428 @@
+"""The GitHub connector (SOLUSDEV-103) — turns a repo's git tree into graph data.
+
+Implements `OAuthConnector` (CLAUDE.md §9 contract): OAuth authorize/exchange,
+credential validation, repo listing for the picker, a full `sync` that walks one
+branch's tree, and a cheap `detect_changes` probe.
+
+W0-08 — committed design exports: a repo often carries fabrication/CAD outputs
+checked in next to firmware (Gerbers, STEP models, netlists, SPICE decks). The
+connector recognises these by extension and lands them as cross-domain
+`design_export` entities (electrical/mechanical) so the rest of Solus can reason
+across the software boundary.
+
+Security (CLAUDE.md §7): every byte of the tree is *ingested, untrusted data*.
+It is parsed defensively (a bad item becomes a `SyncError`, never a crash) and
+never interpreted as an instruction. The access token is sent only in the
+Authorization header and is never logged.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, ClassVar, Final
+from urllib.parse import quote, urlencode
+
+import httpx
+
+from solus_api.connectors.contracts import (
+    AccountInfo,
+    ConnectorError,
+    Credentials,
+    Domain,
+    EntityOut,
+    OAuthConnector,
+    RelationOut,
+    SyncContext,
+    SyncError,
+    SyncResult,
+)
+
+GITHUB_API: Final = "https://api.github.com"
+GITHUB_OAUTH: Final = "https://github.com/login/oauth"
+REQUEST_TIMEOUT: Final = 30.0
+REPO_ROOT_KEY: Final = ":repo"
+
+# Committed design-export detection (W0-08). Lowercased extension -> (kind, domain).
+_DESIGN_EXPORTS: Final[dict[str, tuple[str, Domain]]] = {
+    # Gerber fabrication outputs.
+    ".gbr": ("gerber", Domain.ELECTRICAL),
+    ".ger": ("gerber", Domain.ELECTRICAL),
+    ".gtl": ("gerber", Domain.ELECTRICAL),
+    ".gbl": ("gerber", Domain.ELECTRICAL),
+    ".gto": ("gerber", Domain.ELECTRICAL),
+    ".gbo": ("gerber", Domain.ELECTRICAL),
+    ".gts": ("gerber", Domain.ELECTRICAL),
+    ".gbs": ("gerber", Domain.ELECTRICAL),
+    ".gtp": ("gerber", Domain.ELECTRICAL),
+    ".gbp": ("gerber", Domain.ELECTRICAL),
+    ".gko": ("gerber", Domain.ELECTRICAL),
+    ".drl": ("gerber", Domain.ELECTRICAL),
+    ".xln": ("gerber", Domain.ELECTRICAL),
+    ".gm1": ("gerber", Domain.ELECTRICAL),
+    # STEP CAD models.
+    ".step": ("step", Domain.MECHANICAL),
+    ".stp": ("step", Domain.MECHANICAL),
+    # Netlists.
+    ".net": ("netlist", Domain.ELECTRICAL),
+    ".netlist": ("netlist", Domain.ELECTRICAL),
+    ".cnl": ("netlist", Domain.ELECTRICAL),
+    # SPICE decks.
+    ".cir": ("spice", Domain.ELECTRICAL),
+    ".sp": ("spice", Domain.ELECTRICAL),
+    ".spice": ("spice", Domain.ELECTRICAL),
+    ".subckt": ("spice", Domain.ELECTRICAL),
+    ".lib": ("spice", Domain.ELECTRICAL),
+}
+
+
+# `repo` and `branch` are user-controlled and interpolated into GitHub API URL
+# paths — validate them at the boundary so a crafted value can't reshape the
+# request (path traversal / endpoint injection). CLAUDE.md §7 (untrusted input).
+_REPO_RE: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_BRANCH_FORBIDDEN: Final = frozenset(" \t\n\r~^:?*[\\")
+
+
+def _safe_repo(repo: str) -> str:
+    if not _REPO_RE.match(repo):
+        raise ConnectorError("invalid_repo", "repo must be in 'owner/name' form")
+    return repo
+
+
+def _safe_branch(branch: str) -> str:
+    if (
+        not branch
+        or ".." in branch
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or any(ch in _BRANCH_FORBIDDEN for ch in branch)
+    ):
+        raise ConnectorError("invalid_branch", "branch name contains illegal characters")
+    return branch
+
+
+def _basename(path: str) -> str:
+    """The trailing path segment, or the path itself when it has no slash."""
+    return path.rsplit("/", 1)[-1] if "/" in path else path
+
+
+def _parent_key(path: str, known_dirs: set[str]) -> str:
+    """The graph parent of `path`: its directory if that directory is an emitted
+    entity, otherwise the repo root. Guards against intermediate trees GitHub
+    elides — relations only ever point at entities we actually land."""
+    if "/" not in path:
+        return REPO_ROOT_KEY
+    parent = path.rsplit("/", 1)[0]
+    return parent if parent in known_dirs else REPO_ROOT_KEY
+
+
+def _design_export_for(path: str) -> tuple[str, Domain] | None:
+    """Return (export_kind, domain) if `path` is a recognised design export."""
+    lowered = path.lower()
+    dot = lowered.rfind(".")
+    if dot == -1:
+        return None
+    return _DESIGN_EXPORTS.get(lowered[dot:])
+
+
+class GitHubConnector(OAuthConnector):
+    """Connector for GitHub repositories (CLAUDE.md §2.1)."""
+
+    provider: ClassVar[str] = "github"
+    scopes: ClassVar[tuple[str, ...]] = ("repo", "read:user")
+    config_fields: ClassVar[tuple[str, ...]] = ("repo", "branch")
+    # A GitHub PAT works against the same REST API, so a directly-supplied token
+    # is an accepted alternative to the OAuth flow (gated in connect_source).
+    supports_token_connect: ClassVar[bool] = True
+
+    def __init__(
+        self, client_id: str | None = None, client_secret: str | None = None
+    ) -> None:
+        self._client_id = client_id
+        self._client_secret = client_secret
+
+    # ----------------------------------------------------------------- OAuth
+
+    def authorize_url(self, *, state: str, redirect_uri: str) -> str:
+        if self._client_id is None:
+            raise ConnectorError(
+                "oauth_not_configured",
+                "GitHub OAuth client_id is not configured.",
+            )
+        query = urlencode(
+            {
+                "client_id": self._client_id,
+                "redirect_uri": redirect_uri,
+                "scope": " ".join(self.scopes),
+                "state": state,
+            }
+        )
+        return f"{GITHUB_OAUTH}/authorize?{query}"
+
+    async def exchange_code(self, *, code: str, redirect_uri: str) -> Credentials:
+        if self._client_id is None or self._client_secret is None:
+            raise ConnectorError(
+                "oauth_not_configured",
+                "GitHub OAuth client_id/client_secret is not configured.",
+            )
+        payload = {
+            "client_id": self._client_id,
+            "client_secret": self._client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }
+        async with self._http() as client:
+            response = await client.post(
+                f"{GITHUB_OAUTH}/access_token",
+                json=payload,
+                headers={"Accept": "application/json"},
+            )
+        body = self._json(response)
+        token = body.get("access_token")
+        if not token:
+            message = body.get("error_description") or body.get("error") or "OAuth exchange failed."
+            raise ConnectorError("oauth_exchange_failed", str(message))
+        return Credentials(
+            token=str(token),
+            metadata={
+                "scope": body.get("scope"),
+                "token_type": body.get("token_type"),
+            },
+        )
+
+    # ----------------------------------------------------- identity & picker
+
+    async def validate_credentials(self, creds: Credentials) -> AccountInfo:
+        async with self._http(creds) as client:
+            response = await client.get(f"{GITHUB_API}/user")
+        if response.status_code == httpx.codes.UNAUTHORIZED:
+            raise ConnectorError("invalid_credentials", "GitHub rejected the access token.")
+        body = self._ok_json(response)
+        if not isinstance(body, dict) or "id" not in body or "login" not in body:
+            raise ConnectorError("github_error", "Unexpected GitHub user response shape.")
+        return AccountInfo(
+            external_id=str(body["id"]),
+            login=str(body["login"]),
+            name=body.get("name"),
+        )
+
+    async def list_repositories(self, creds: Credentials) -> list[dict[str, Any]]:
+        async with self._http(creds) as client:
+            response = await client.get(
+                f"{GITHUB_API}/user/repos",
+                params={"per_page": 100, "sort": "updated"},
+            )
+        body = self._ok_json(response)
+        if not isinstance(body, list):
+            raise ConnectorError("github_error", "Unexpected response shape for /user/repos.")
+        return [
+            {
+                "full_name": repo.get("full_name"),
+                "default_branch": repo.get("default_branch"),
+                "private": repo.get("private"),
+            }
+            for repo in body
+            if isinstance(repo, dict)
+        ]
+
+    # --------------------------------------------------------------- syncing
+
+    async def sync(self, ctx: SyncContext) -> SyncResult:
+        repo = _safe_repo(str(ctx.config["repo"]))
+        configured = ctx.config.get("branch")
+        async with self._http(ctx.credentials) as client:
+            branch = _safe_branch(str(configured)) if configured else await self._default_branch(
+                client, repo
+            )
+            sha = await self._head_sha(client, repo, branch)
+            tree, truncated = await self._tree(client, repo, sha)
+
+        entities, relations, errors = self._build_graph(repo, branch, sha, tree)
+        if truncated:
+            # GitHub caps the recursive tree (~100k objects) and returns a partial
+            # list — surface it so a partial graph isn't mistaken for complete.
+            errors.append(
+                SyncError(
+                    item=repo,
+                    message="GitHub truncated the repository tree; some files were not indexed.",
+                )
+            )
+        return SyncResult(
+            entities=entities,
+            relations=relations,
+            cursor={"branch": branch, "sha": sha},
+            errors=errors,
+        )
+
+    async def detect_changes(self, ctx: SyncContext) -> bool:
+        try:
+            repo = _safe_repo(str(ctx.config["repo"]))
+            configured = ctx.config.get("branch")
+            async with self._http(ctx.credentials) as client:
+                resolved = (
+                    _safe_branch(str(configured))
+                    if configured
+                    else await self._default_branch(client, repo)
+                )
+                sha = await self._head_sha(client, repo, resolved)
+        except ConnectorError:
+            return True  # On any probe failure, be safe and let a full sync decide.
+        return sha != ctx.cursor.get("sha")
+
+    # -------------------------------------------------------- graph building
+
+    def _build_graph(
+        self, repo: str, branch: str, sha: str, tree: list[dict[str, Any]]
+    ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
+        errors: list[SyncError] = []
+        entities_by_key: dict[str, EntityOut] = {
+            REPO_ROOT_KEY: EntityOut(
+                source_key=REPO_ROOT_KEY,
+                type="code_repo",
+                domain=Domain.SOFTWARE,
+                name=repo,
+                properties={"branch": branch, "commit": sha},
+            )
+        }
+        for item in tree:
+            self._land_item(item, entities_by_key, errors)
+
+        known_dirs = {
+            key for key, ent in entities_by_key.items() if ent.type == "code_module"
+        }
+        relations = [
+            RelationOut(
+                from_key=_parent_key(key, known_dirs),
+                to_key=key,
+                type="contains",
+            )
+            for key in entities_by_key
+            if key != REPO_ROOT_KEY
+        ]
+        return list(entities_by_key.values()), relations, errors
+
+    def _land_item(
+        self,
+        item: dict[str, Any],
+        entities: dict[str, EntityOut],
+        errors: list[SyncError],
+    ) -> None:
+        """Land one tree item plus any missing ancestor directories. Defensive:
+        a malformed item is recorded as a SyncError, not raised (CLAUDE.md §7)."""
+        try:
+            path = str(item["path"])
+            item_type = str(item["type"])
+            if not path:
+                raise KeyError("path")
+            self._ensure_ancestors(path, entities)
+            if item_type == "tree":
+                entities[path] = _module_entity(path)
+            elif item_type == "blob":
+                entities[path] = _file_entity(path, item)
+            # Unknown object types (e.g. "commit" submodule refs) are skipped.
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(SyncError(item=str(item.get("path", "<unknown>")), message=str(exc)))
+
+    @staticmethod
+    def _ensure_ancestors(path: str, entities: dict[str, EntityOut]) -> None:
+        """Synthesise code_module entities for any ancestor dirs GitHub elided."""
+        segments = path.split("/")[:-1]
+        accumulated = ""
+        for segment in segments:
+            accumulated = f"{accumulated}/{segment}" if accumulated else segment
+            entities.setdefault(accumulated, _module_entity(accumulated))
+
+    # ------------------------------------------------------- GitHub requests
+
+    async def _default_branch(self, client: httpx.AsyncClient, repo: str) -> str:
+        response = await client.get(f"{GITHUB_API}/repos/{repo}")
+        body = self._repo_json(response)
+        return str(body["default_branch"])
+
+    async def _head_sha(self, client: httpx.AsyncClient, repo: str, branch: str) -> str:
+        ref = quote(branch, safe="")
+        response = await client.get(f"{GITHUB_API}/repos/{repo}/commits/{ref}")
+        body = self._repo_json(response)
+        return str(body["sha"])
+
+    async def _tree(
+        self, client: httpx.AsyncClient, repo: str, sha: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        response = await client.get(
+            f"{GITHUB_API}/repos/{repo}/git/trees/{sha}",
+            params={"recursive": 1},
+        )
+        body = self._repo_json(response)
+        tree = body.get("tree", [])
+        items = list(tree) if isinstance(tree, list) else []
+        return items, bool(body.get("truncated", False))
+
+    # -------------------------------------------------------------- helpers
+
+    def _http(self, creds: Credentials | None = None) -> httpx.AsyncClient:
+        headers = {"Accept": "application/vnd.github+json"}
+        if creds is not None:
+            headers["Authorization"] = f"Bearer {creds.token}"
+        return httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers)
+
+    @staticmethod
+    def _json(response: httpx.Response) -> dict[str, Any]:
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ConnectorError("github_error", "GitHub returned a non-JSON body.") from exc
+        return data if isinstance(data, dict) else {}
+
+    @classmethod
+    def _ok_json(cls, response: httpx.Response) -> Any:
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise ConnectorError(
+                "github_error", f"GitHub request failed ({response.status_code})."
+            )
+        return response.json()
+
+    @staticmethod
+    def _repo_json(response: httpx.Response) -> dict[str, Any]:
+        if response.status_code == httpx.codes.NOT_FOUND:
+            raise ConnectorError("repo_not_found", "Repository, branch, or commit not found.")
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise ConnectorError(
+                "github_error", f"GitHub request failed ({response.status_code})."
+            )
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ConnectorError("github_error", "Unexpected GitHub response shape.")
+        return data
+
+
+def _module_entity(path: str) -> EntityOut:
+    return EntityOut(
+        source_key=path,
+        type="code_module",
+        domain=Domain.SOFTWARE,
+        name=_basename(path),
+    )
+
+
+def _file_entity(path: str, item: dict[str, Any]) -> EntityOut:
+    export = _design_export_for(path)
+    if export is not None:
+        kind, domain = export
+        return EntityOut(
+            source_key=path,
+            type="design_export",
+            domain=domain,
+            name=_basename(path),
+            properties={
+                "export_kind": kind,
+                "path": path,
+                "size": item.get("size"),
+                "sha": item.get("sha"),
+            },
+        )
+    return EntityOut(
+        source_key=path,
+        type="code_file",
+        domain=Domain.SOFTWARE,
+        name=_basename(path),
+        properties={"size": item.get("size"), "sha": item.get("sha"), "path": path},
+    )

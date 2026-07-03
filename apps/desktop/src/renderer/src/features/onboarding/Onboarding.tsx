@@ -10,7 +10,7 @@ import { AboutStep } from './AboutStep'
 import { ConnectStep } from './ConnectStep'
 import { BuildStep } from './BuildStep'
 import { useOnboardingStore } from './onboardingStore'
-import { provisionWorkspace } from './provisioning'
+import { ensureWorkspace } from './provisioning'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -24,12 +24,17 @@ export function Onboarding(): React.JSX.Element {
   const completeOnboarding = useAuthStore((s) => s.completeOnboarding)
   const workspace = useWorkspaceStore()
 
-  // Kick real provisioning when the build begins. Runs alongside the simulated
-  // build animation; best-effort, so a missing/unreachable API never blocks the
-  // flow (the UI just stays in its simulated state).
+  // Ensure the workspace when the build begins. Reuses the project already
+  // created on the Connect step (no double-create). Runs alongside the
+  // simulated build animation; best-effort, so a missing/unreachable API never
+  // blocks the flow (the UI just stays in its simulated state).
   const beginBuild = (): void => {
     store.setStep(2)
-    void provisionWorkspace({ description: store.description, solMode }).then((result) => {
+    void ensureWorkspace({
+      description: store.description,
+      solMode,
+      existing: { teamId: workspace.teamId, project: workspace.project }
+    }).then((result) => {
       workspace.setLinked(result.linked)
       if (result.teamId) workspace.setTeamId(result.teamId)
       if (result.project) workspace.setProject(result.project)

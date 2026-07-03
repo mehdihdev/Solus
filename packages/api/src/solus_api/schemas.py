@@ -9,12 +9,16 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from solus_api.core.config import Settings
 from solus_api.models import (
     Activity,
+    Entity,
     Invite,
     Job,
     Membership,
     Notification,
     Project,
+    Relation,
     Role,
+    Source,
+    Sync,
     Team,
     User,
     ensure_utc,
@@ -79,7 +83,122 @@ class ProjectUpdate(StrictModel):
     _name_not_blank = field_validator("name")(_not_blank)
 
 
+SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros"]
+
+
+class SourceCreate(StrictModel):
+    """Connect a source directly (type + config; non-OAuth / token providers).
+    OAuth providers use the integrations oauth/start flow instead."""
+
+    type: SourceTypeLiteral
+    name: str = Field(min_length=1, max_length=512)
+    config: dict[str, Any] = Field(default_factory=dict)
+    # Optional pre-supplied token (e.g. a PAT). Goes straight to the secret
+    # store, is validated, and is never echoed back (CLAUDE.md §7).
+    token: str | None = Field(default=None, max_length=4096)
+
+    _name_not_blank = field_validator("name")(_not_blank)
+
+
+class SourceUpdate(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=512)
+    config: dict[str, Any] | None = None
+
+    _name_not_blank = field_validator("name")(_not_blank)
+
+
+class SourceDisconnect(StrictModel):
+    retain_entities: bool = False
+
+
+class OAuthStart(StrictModel):
+    project_id: str = Field(min_length=1)
+    # Optional repo to pre-select; the user can also pick after connecting.
+    repo: str | None = Field(default=None, max_length=512)
+    name: str | None = Field(default=None, max_length=512)
+    # Desktop loopback flow supplies its 127.0.0.1 callback here; web defaults
+    # to the API's own callback. Validated against an allowlist server-side.
+    redirect_uri: str | None = Field(default=None, max_length=2048)
+
+
+class OAuthExchange(StrictModel):
+    """Desktop loopback flow: the app captured the code and posts it back with
+    the state from oauth/start, so the server can exchange it for a token."""
+
+    state: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=1, max_length=2048)
+
+
 # --- Response serializers (snake_case dicts inside the §1.4 envelope) ---
+
+
+def serialize_source(source: Source, *, entity_count: int | None = None) -> dict[str, Any]:
+    """Source view for the API — secrets (secret_ref/token) are never included."""
+    data: dict[str, Any] = {
+        "id": source.id,
+        "project_id": source.project_id,
+        "type": source.type.value,
+        "name": source.name,
+        "status": source.status.value,
+        # Defensive: drop any transient/underscore-prefixed config keys.
+        "config": {k: v for k, v in source.config.items() if not k.startswith("_")},
+        "account_login": source.account_login,
+        "last_synced_at": source.last_synced_at,
+        "last_error": source.last_error,
+        "created_at": source.created_at,
+        "updated_at": source.updated_at,
+    }
+    if entity_count is not None:
+        data["entity_count"] = entity_count
+    return data
+
+
+def serialize_entity(entity: Entity) -> dict[str, Any]:
+    return {
+        "id": entity.id,
+        "project_id": entity.project_id,
+        "source_id": entity.source_id,
+        "origin": entity.origin,
+        "source_key": entity.source_key,
+        "type": entity.type,
+        "domain": entity.domain,
+        "name": entity.name,
+        "properties": entity.properties,
+        "version": entity.version,
+        "created_at": entity.created_at,
+        "updated_at": entity.updated_at,
+    }
+
+
+def serialize_relation(relation: Relation) -> dict[str, Any]:
+    return {
+        "id": relation.id,
+        "project_id": relation.project_id,
+        "source_id": relation.source_id,
+        "origin": relation.origin,
+        "type": relation.type,
+        "from_entity_id": relation.from_entity_id,
+        "to_entity_id": relation.to_entity_id,
+        "properties": relation.properties,
+        "created_at": relation.created_at,
+    }
+
+
+def serialize_sync(sync: Sync) -> dict[str, Any]:
+    return {
+        "id": sync.id,
+        "source_id": sync.source_id,
+        "status": sync.status.value,
+        "trigger": sync.trigger.value,
+        "entities_created": sync.entities_created,
+        "entities_updated": sync.entities_updated,
+        "relations_created": sync.relations_created,
+        "relations_deleted": sync.relations_deleted,
+        "errors": sync.errors,
+        "started_at": sync.started_at,
+        "finished_at": sync.finished_at,
+        "created_at": sync.created_at,
+    }
 
 
 def serialize_team_summary(team: Team, role: Role, settings: Settings) -> dict[str, Any]:

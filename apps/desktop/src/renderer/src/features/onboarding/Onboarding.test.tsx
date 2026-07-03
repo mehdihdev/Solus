@@ -10,9 +10,11 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as provisioning from './provisioning'
 
 // Keep provisioning deterministic and offline; its own unit tests cover the API.
+// ConnectStep also calls ensureWorkspace on mount, so both entry points are
+// mocked here.
 vi.mock('./provisioning', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./provisioning')>()
-  return { ...actual, provisionWorkspace: vi.fn() }
+  return { ...actual, ensureWorkspace: vi.fn(), provisionWorkspace: vi.fn() }
 })
 
 function renderOnboarding(): void {
@@ -32,7 +34,7 @@ function setupOnboarding(): void {
     user: { email: 'maya@strider.dev' },
     onboarded: false
   })
-  vi.mocked(provisioning.provisionWorkspace).mockResolvedValue({ linked: false })
+  vi.mocked(provisioning.ensureWorkspace).mockResolvedValue({ linked: false })
 }
 
 describe('Onboarding flow — navigation', () => {
@@ -84,7 +86,7 @@ describe('Onboarding flow — build + provisioning', () => {
   })
 
   it('provisions the real workspace when the build begins (Maximal wiring)', async () => {
-    vi.mocked(provisioning.provisionWorkspace).mockResolvedValue({
+    vi.mocked(provisioning.ensureWorkspace).mockResolvedValue({
       linked: true,
       teamId: 't1',
       project: { id: 'p1', name: 'Strider' }
@@ -95,9 +97,10 @@ describe('Onboarding flow — build + provisioning', () => {
     await userEvent.click(screen.getByText('Quadruped'))
     await userEvent.click(screen.getByRole('button', { name: /Continue/ }))
 
-    expect(provisioning.provisionWorkspace).toHaveBeenCalledWith({
+    expect(provisioning.ensureWorkspace).toHaveBeenCalledWith({
       description: 'Strider quadruped',
-      solMode: 'Guide'
+      solMode: 'Guide',
+      existing: { teamId: null, project: null }
     })
     // The async provision result lands in the workspace store.
     await vi.waitFor(() => {

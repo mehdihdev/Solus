@@ -6,6 +6,16 @@ import {
   getProject,
   solModeToApi,
   personalTeam,
+  listIntegrations,
+  listSources,
+  getSource,
+  listRepos,
+  startGithubOAuth,
+  exchangeGithubOAuth,
+  updateSource,
+  triggerSync,
+  getSyncs,
+  listEntities,
   type Me
 } from './resources'
 import type { ApiClient } from './client'
@@ -59,6 +69,84 @@ describe('resource calls', () => {
     const { client, calls } = stubClient({ id: 'p1', stats: { entities: 0, relations: 0 } })
     await getProject('p1', client)
     expect(calls[0].path).toBe('/projects/p1')
+  })
+})
+
+describe('integration + source calls', () => {
+  it('listIntegrations hits /integrations', async () => {
+    const { client, calls } = stubClient([])
+    await listIntegrations(client)
+    expect(calls[0].path).toBe('/integrations')
+  })
+
+  it('listSources scopes to the project', async () => {
+    const { client, calls } = stubClient([])
+    await listSources('p1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources')
+  })
+
+  it('getSource hits the single-source route', async () => {
+    const { client, calls } = stubClient({ id: 's1' })
+    await getSource('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1')
+  })
+
+  it('listRepos hits the repos route under the source', async () => {
+    const { client, calls } = stubClient([])
+    await listRepos('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/repos')
+  })
+
+  it('startGithubOAuth POSTs project_id plus the redirect uri', async () => {
+    const { client, calls } = stubClient({ authorize_url: 'u', state: 'st', source_id: 's1' })
+    await startGithubOAuth('p1', { redirect_uri: 'http://127.0.0.1:9/cb' }, client)
+    expect(calls[0].path).toBe('/integrations/github/oauth/start')
+    expect(calls[0].options).toMatchObject({
+      method: 'POST',
+      body: { project_id: 'p1', redirect_uri: 'http://127.0.0.1:9/cb' }
+    })
+  })
+
+  it('exchangeGithubOAuth POSTs the state + code', async () => {
+    const { client, calls } = stubClient({ id: 's1', status: 'connected' })
+    await exchangeGithubOAuth({ state: 'st', code: 'cd' }, client)
+    expect(calls[0].path).toBe('/integrations/github/oauth/exchange')
+    expect(calls[0].options).toMatchObject({ method: 'POST', body: { state: 'st', code: 'cd' } })
+  })
+
+  it('updateSource PATCHes the source config', async () => {
+    const { client, calls } = stubClient({ id: 's1' })
+    await updateSource('p1', 's1', { config: { repo: 'o/r', branch: 'main' } }, client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { config: { repo: 'o/r', branch: 'main' } }
+    })
+  })
+
+  it('triggerSync POSTs to the sync route', async () => {
+    const { client, calls } = stubClient({ job_id: 'j1', status: 'queued' })
+    await triggerSync('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/sync')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+  })
+
+  it('getSyncs reads the sync history', async () => {
+    const { client, calls } = stubClient([])
+    await getSyncs('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/syncs')
+  })
+
+  it('listEntities builds a filtered query string', async () => {
+    const { client, calls } = stubClient([])
+    await listEntities('p1', { type: 'code_module', source_id: 's1' }, client)
+    expect(calls[0].path).toBe('/projects/p1/entities?type=code_module&source_id=s1')
+  })
+
+  it('listEntities omits the query when no filters are given', async () => {
+    const { client, calls } = stubClient([])
+    await listEntities('p1', {}, client)
+    expect(calls[0].path).toBe('/projects/p1/entities')
   })
 })
 

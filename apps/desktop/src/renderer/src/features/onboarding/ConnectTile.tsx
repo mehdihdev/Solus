@@ -1,7 +1,11 @@
-// Connect tile, ported from ConnectTile in TestDesign/app/onboarding.jsx.
+// Connect tile, ported from ConnectTile in TestDesign/app/onboarding.jsx. The
+// GitHub tile additionally drives the real connector: a busy state can carry a
+// live `label`, a repo picker (`repos`), or an `error` phase, and the done
+// state shows a real `result` string (SOLUSDEV-103).
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
+import type { GithubRepo } from '../../lib/api/resources'
 import type { Integration } from './integrations.constants'
 import type { ConnectionState } from './onboardingStore'
 
@@ -9,17 +13,32 @@ interface ConnectTileProps {
   integration: Integration
   state?: ConnectionState
   onConnect: () => void
+  /** Resolve the repo picker (GitHub real flow). */
+  onChooseRepo?: (repo: GithubRepo) => void
+  /** Retry after an error (GitHub real flow). */
+  onRetry?: () => void
 }
 
 function TileIndicator({ state }: { state?: ConnectionState }): React.JSX.Element {
   if (!state)
     return <span style={{ color: 'var(--acc)', fontSize: 12, fontWeight: 500 }}>Connect</span>
   if (state.phase === 'busy') return <Spinner />
+  if (state.phase === 'error')
+    return <span style={{ color: 'var(--err)', fontSize: 12, fontWeight: 500 }}>Retry</span>
   return (
     <span style={{ color: 'var(--ok)' }}>
       <Icons.check size={15} />
     </span>
   )
+}
+
+const MONO = { fontFamily: 'var(--font-mono)', fontSize: 10.5 } as const
+
+function busyLabel(
+  integration: Integration,
+  state: Extract<ConnectionState, { phase: 'busy' }>
+): string {
+  return state.label ?? integration.steps[state.stepIdx] ?? integration.steps[0]
 }
 
 function TileFooter({
@@ -29,16 +48,60 @@ function TileFooter({
   integration: Integration
   state?: ConnectionState
 }): React.JSX.Element {
-  const mono = { fontFamily: 'var(--font-mono)', fontSize: 10.5 } as const
   if (!state) return <span style={{ fontSize: 11, color: 'var(--mut)' }}>Not connected</span>
   if (state.phase === 'busy') {
-    return <span style={{ ...mono, color: 'var(--acc)' }}>{integration.steps[state.stepIdx]}</span>
+    return <span style={{ ...MONO, color: 'var(--acc)' }}>{busyLabel(integration, state)}</span>
   }
-  return <span style={{ ...mono, color: 'var(--ok)' }}>{integration.result}</span>
+  if (state.phase === 'error') {
+    return <span style={{ ...MONO, color: 'var(--err)' }}>{state.error}</span>
+  }
+  return <span style={{ ...MONO, color: 'var(--ok)' }}>{state.result ?? integration.result}</span>
+}
+
+function RepoPicker({
+  repos,
+  onChooseRepo
+}: {
+  repos: GithubRepo[]
+  onChooseRepo?: (repo: GithubRepo) => void
+}): React.JSX.Element {
+  return (
+    <select
+      aria-label="Choose a repository"
+      defaultValue=""
+      onChange={(e) => {
+        const repo = repos.find((r) => r.full_name === e.target.value)
+        if (repo) onChooseRepo?.(repo)
+      }}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        marginTop: 8,
+        width: '100%',
+        background: 'var(--sur)',
+        color: 'var(--tx)',
+        border: '1px solid var(--bd)',
+        borderRadius: 3,
+        padding: '7px 9px',
+        fontSize: 11.5,
+        fontFamily: 'var(--font-mono)',
+        outline: 'none'
+      }}
+    >
+      <option value="" disabled>
+        Select a repository…
+      </option>
+      {repos.map((r) => (
+        <option key={r.full_name} value={r.full_name}>
+          {r.full_name}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 function borderFor(state?: ConnectionState): string {
   if (state?.phase === 'done') return 'color-mix(in srgb, var(--ok) 45%, var(--bd))'
+  if (state?.phase === 'error') return 'color-mix(in srgb, var(--err) 45%, var(--bd))'
   if (state?.phase === 'busy') return 'var(--acc)'
   return 'var(--bd)'
 }
@@ -46,15 +109,19 @@ function borderFor(state?: ConnectionState): string {
 export function ConnectTile({
   integration,
   state,
-  onConnect
+  onConnect,
+  onChooseRepo,
+  onRetry
 }: ConnectTileProps): React.JSX.Element {
-  const idle = !state
+  const clickable = !state || state.phase === 'error'
+  const handleClick = !state ? onConnect : state.phase === 'error' ? onRetry : undefined
+  const repos = state?.phase === 'busy' ? state.repos : undefined
   return (
     <Card
       pad={0}
-      onClick={idle ? onConnect : undefined}
+      onClick={clickable ? handleClick : undefined}
       style={{
-        cursor: idle ? 'pointer' : 'default',
+        cursor: clickable ? 'pointer' : 'default',
         overflow: 'hidden',
         borderColor: borderFor(state),
         transition: 'border-color 0.2s'
@@ -95,6 +162,7 @@ export function ConnectTile({
         }}
       >
         <TileFooter integration={integration} state={state} />
+        {repos && repos.length > 0 && <RepoPicker repos={repos} onChooseRepo={onChooseRepo} />}
       </div>
     </Card>
   )

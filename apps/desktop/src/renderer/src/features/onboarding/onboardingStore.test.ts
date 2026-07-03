@@ -45,6 +45,41 @@ describe('onboardingStore', () => {
     expect(useOnboardingStore.getState().connections.github).toEqual({ phase: 'done' })
   })
 
+  it('setConnection replaces a source state wholesale (real github flow)', () => {
+    const store = useOnboardingStore.getState()
+    store.setConnection('github', {
+      phase: 'busy',
+      stepIdx: 0,
+      label: 'Authorizing…',
+      sourceId: 's1'
+    })
+    expect(useOnboardingStore.getState().connections.github).toEqual({
+      phase: 'busy',
+      stepIdx: 0,
+      label: 'Authorizing…',
+      sourceId: 's1'
+    })
+    store.setConnection('github', {
+      phase: 'done',
+      sourceId: 's1',
+      result: 'Connected — 214 entities indexed'
+    })
+    expect(useOnboardingStore.getState().connections.github).toEqual({
+      phase: 'done',
+      sourceId: 's1',
+      result: 'Connected — 214 entities indexed'
+    })
+  })
+
+  it('failConnect marks a source errored and keeps it out of the connected count', () => {
+    const store = useOnboardingStore.getState()
+    store.completeConnect('kicad')
+    store.failConnect('github', 'GitHub sign-in was cancelled.')
+    const conns = useOnboardingStore.getState().connections
+    expect(conns.github).toEqual({ phase: 'error', error: 'GitHub sign-in was cancelled.' })
+    expect(connectedCount(conns)).toBe(1)
+  })
+
   it('connectAll marks every integration done (template path)', () => {
     useOnboardingStore.getState().connectAll()
     const conns = useOnboardingStore.getState().connections

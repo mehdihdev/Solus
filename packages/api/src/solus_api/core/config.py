@@ -35,6 +35,28 @@ class Settings(BaseSettings):
     invite_ttl_days: int = 7
     trial_days: int = 30
 
+    # --- Connector framework (SOLUSDEV-103) ---
+    # Secret store selection. Prod/staging with aws_region set → AWS Secrets
+    # Manager. Otherwise a Fernet key (secrets_key) → local encrypted store.
+    # Neither → in-memory dev fallback (tokens lost on restart; logs a warning).
+    secrets_key: str | None = None
+    aws_region: str | None = None
+    secrets_backend: str | None = None  # force "aws" | "local" | "memory" (optional)
+
+    # GitHub OAuth App (ADR-009 names GitHub OAuth as a supported method).
+    # Registered at github.com/settings/developers; callback must point at
+    # `${api}/api/v1/integrations/github/oauth/callback`.
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+    # Where the OAuth callback sends the user back to (the desktop app deep
+    # link or a local page). Defaults to the renderer dev origin.
+    github_oauth_redirect_app: str = "http://localhost:5173/#/onboarding"
+    # Public base URL the provider redirects to for the callback (this API).
+    public_api_base_url: str = "http://localhost:8000"
+    # Run source syncs inline in the request instead of dispatching to ARQ /
+    # background tasks. For tests and bare local dev only — prod uses the worker.
+    sync_inline: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         """Parsed, non-empty CORS origins."""

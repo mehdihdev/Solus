@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { deriveProjectName, provisionWorkspace } from './provisioning'
+import { deriveProjectName, provisionWorkspace, ensureWorkspace } from './provisioning'
 import * as resources from '../../lib/api/resources'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
@@ -96,5 +96,39 @@ describe('provisionWorkspace', () => {
 
     const result = await provisionWorkspace({ description: 'X', solMode: 'Guide' })
     expect(result.linked).toBe(true)
+  })
+})
+
+describe('ensureWorkspace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('reuses an existing project without creating a second one', async () => {
+    const result = await ensureWorkspace({
+      description: 'whatever',
+      solMode: 'Guide',
+      existing: { teamId: 't1', project: { id: 'p1', name: 'Strider' } }
+    })
+    expect(result).toEqual({ linked: true, teamId: 't1', project: { id: 'p1', name: 'Strider' } })
+    expect(mockedGetMe).not.toHaveBeenCalled()
+    expect(mockedCreateProject).not.toHaveBeenCalled()
+  })
+
+  it('creates the project when none exists yet', async () => {
+    mockedGetMe.mockResolvedValue(personalUser('a@b.dev'))
+    mockedCreateProject.mockResolvedValue(createdProject('Strider'))
+    mockedUpdateSolMode.mockResolvedValue({})
+
+    const result = await ensureWorkspace({ description: 'Strider', solMode: 'Guide' })
+    expect(result.linked).toBe(true)
+    expect(result.project).toEqual({ id: 'p1', name: 'Strider' })
+    expect(mockedCreateProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('degrades to unlinked when the API is unreachable and no project exists', async () => {
+    mockedGetMe.mockRejectedValue(new Error('Failed to fetch'))
+    const result = await ensureWorkspace({ description: 'x', solMode: 'Guide' })
+    expect(result.linked).toBe(false)
   })
 })

@@ -29,16 +29,33 @@ export interface ProvisionResult {
 export interface ProvisionInput {
   description: string
   solMode: SolMode
+  /**
+   * The workspace already resolved earlier in the flow (e.g. on entering the
+   * Connect step). When a project is present we reuse it instead of creating a
+   * second one — onboarding only ever provisions one project.
+   */
+  existing?: { teamId?: string | null; project?: { id: string; name: string } | null }
 }
 
 /**
- * Provision the real workspace via the API. Resolves `linked: false` (never
- * throws) when the backend can't be reached so onboarding still completes.
+ * Resolve the real workspace via the API: find the personal team and create the
+ * project (once) from the description, persisting the chosen SOL mode. If a
+ * project was already created earlier in the flow, reuse it. Resolves
+ * `linked: false` (never throws) when the backend can't be reached so
+ * onboarding still completes against the simulated path.
+ *
+ * This is called when entering the Connect step so a real GitHub connect has a
+ * project to attach a source to, and again (idempotently) when the build
+ * begins.
  */
-export async function provisionWorkspace({
+export async function ensureWorkspace({
   description,
-  solMode
+  solMode,
+  existing
 }: ProvisionInput): Promise<ProvisionResult> {
+  if (existing?.project) {
+    return { linked: true, teamId: existing.teamId ?? undefined, project: existing.project }
+  }
   try {
     const me = await getMe()
     const team = personalTeam(me)
@@ -56,4 +73,12 @@ export async function provisionWorkspace({
   } catch (error) {
     return { linked: false, error: error instanceof Error ? error.message : 'API unreachable' }
   }
+}
+
+/**
+ * Build-time provisioning entry point. Kept for the existing build flow; now a
+ * thin alias over {@link ensureWorkspace} so the project is never created twice.
+ */
+export function provisionWorkspace(input: ProvisionInput): Promise<ProvisionResult> {
+  return ensureWorkspace(input)
 }

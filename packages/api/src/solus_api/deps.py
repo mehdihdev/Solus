@@ -14,6 +14,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.connectors.registry import ConnectorRegistry
+from solus_api.connectors.secrets import SecretStore
 from solus_api.core.config import Settings
 from solus_api.core.db import get_session
 from solus_api.core.errors import APIError
@@ -30,8 +32,20 @@ def get_settings(request: Request) -> Settings:
     return settings
 
 
+def get_connector_registry(request: Request) -> "ConnectorRegistry":
+    registry: ConnectorRegistry = request.app.state.connector_registry
+    return registry
+
+
+def get_secret_store(request: Request) -> "SecretStore":
+    store: SecretStore = request.app.state.secret_store
+    return store
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
+SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
 
 
 async def _provision_user(session: AsyncSession, claims: TokenClaims) -> User:

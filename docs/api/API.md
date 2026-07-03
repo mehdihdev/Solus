@@ -147,20 +147,21 @@ Connector-owned entities/relations are **read-only** through this API (the conne
 
 ### 2.5 Sources & integrations (feature area 1)
 
-| Method | Path                                                                | Description                                                                                                                                   |
-| ------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/integrations`                                              | Catalog of available connector types (github, gitlab, kicad, onshape, ros) + their required config/auth shape                                 |
-| GET    | `/api/v1/projects/{project_id}/sources`                             | Connected sources with status/last-sync                                                                                                       |
-| POST   | `/api/v1/projects/{project_id}/sources`                             | Connect a source (type + config; credentials go to encrypted store, never echoed back)                                                        |
-| GET    | `/api/v1/projects/{project_id}/sources/{source_id}`                 | Source detail (config sans secrets, sync history summary)                                                                                     |
-| PATCH  | `/api/v1/projects/{project_id}/sources/{source_id}`                 | Update config (e.g., watched branch/document)                                                                                                 |
-| DELETE | `/api/v1/projects/{project_id}/sources/{source_id}`                 | Disconnect; body flag `retain_entities: bool`                                                                                                 |
-| POST   | `/api/v1/projects/{project_id}/sources/{source_id}/sync`            | Trigger sync → **202 + Job**                                                                                                                  |
-| GET    | `/api/v1/projects/{project_id}/sources/{source_id}/syncs`           | Sync history (status, entity/relation delta counts, errors)                                                                                   |
-| GET    | `/api/v1/projects/{project_id}/sources/{source_id}/syncs/{sync_id}` | Sync detail incl. per-item errors ("why did this user's sync fail?" answerable)                                                               |
-| POST   | `/api/v1/integrations/{provider}/oauth/start`                       | Begin OAuth (returns provider authorize URL + state)                                                                                          |
-| GET    | `/api/v1/integrations/{provider}/oauth/callback`                    | OAuth redirect target; stores encrypted token, redirects back to app                                                                          |
-| POST   | `/api/v1/webhooks/{provider}`                                       | Inbound change webhooks (signature-verified, unauthenticated otherwise); enqueues incremental sync. Payload treated as untrusted input per §7 |
+| Method | Path                                                                | Description                                                                                                                                                           |
+| ------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/integrations`                                              | Catalog of available connector types (github, gitlab, kicad, onshape, ros) + their required config/auth shape                                                         |
+| GET    | `/api/v1/projects/{project_id}/sources`                             | Connected sources with status/last-sync                                                                                                                               |
+| POST   | `/api/v1/projects/{project_id}/sources`                             | Connect a source (type + config; credentials go to encrypted store, never echoed back)                                                                                |
+| GET    | `/api/v1/projects/{project_id}/sources/{source_id}`                 | Source detail (config sans secrets, sync history summary)                                                                                                             |
+| PATCH  | `/api/v1/projects/{project_id}/sources/{source_id}`                 | Update config (e.g., watched branch/document)                                                                                                                         |
+| DELETE | `/api/v1/projects/{project_id}/sources/{source_id}`                 | Disconnect; body flag `retain_entities: bool`                                                                                                                         |
+| POST   | `/api/v1/projects/{project_id}/sources/{source_id}/sync`            | Trigger sync → **202 + Job**                                                                                                                                          |
+| GET    | `/api/v1/projects/{project_id}/sources/{source_id}/syncs`           | Sync history (status, entity/relation delta counts, errors)                                                                                                           |
+| GET    | `/api/v1/projects/{project_id}/sources/{source_id}/syncs/{sync_id}` | Sync detail incl. per-item errors ("why did this user's sync fail?" answerable)                                                                                       |
+| POST   | `/api/v1/integrations/{provider}/oauth/start`                       | Begin OAuth (returns provider authorize URL + state); optional `redirect_uri` for the desktop loopback flow                                                           |
+| GET    | `/api/v1/integrations/{provider}/oauth/callback`                    | Web OAuth redirect target; stores encrypted token, redirects back to app                                                                                              |
+| POST   | `/api/v1/integrations/{provider}/oauth/exchange`                    | Desktop loopback completion (added SOLUSDEV-103): app posts the captured `{state, code}`; server exchanges + stores the token. State is bound to the requesting user. |
+| POST   | `/api/v1/webhooks/{provider}`                                       | Inbound change webhooks (signature-verified, unauthenticated otherwise); enqueues incremental sync. Payload treated as untrusted input per §7                         |
 
 ### 2.6 Checkers, part compatibility & system proving (feature areas 2, 3)
 
