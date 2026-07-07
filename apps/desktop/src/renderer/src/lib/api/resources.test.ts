@@ -200,3 +200,52 @@ describe('personalTeam', () => {
     expect(team?.team_id).toBe('t9')
   })
 })
+
+describe('team resources', () => {
+  it('lists members and changes a role', async () => {
+    const { listMembers, changeMemberRole } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listMembers('t1', client)
+    expect(calls[0].path).toBe('/teams/t1/members')
+    await changeMemberRole('t1', 'u2', 'admin', client)
+    expect(calls[1].path).toBe('/teams/t1/members/u2')
+    expect(calls[1].options).toMatchObject({ method: 'PATCH', body: { role: 'admin' } })
+  })
+
+  it('creates and revokes invites', async () => {
+    const { createInvite, revokeInvite } = await import('./resources')
+    const { client, calls } = stubClient({})
+    await createInvite('t1', { email: 'x@y.dev', role: 'member' }, client)
+    expect(calls[0].path).toBe('/teams/t1/invites')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    await revokeInvite('t1', 'i9', client)
+    expect(calls[1].path).toBe('/teams/t1/invites/i9')
+    expect(calls[1].options).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('deletes a team', async () => {
+    const { deleteTeam } = await import('./resources')
+    const { client, calls } = stubClient(undefined)
+    await deleteTeam('t1', client)
+    expect(calls[0].path).toBe('/teams/t1')
+    expect(calls[0].options).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('fetches team detail, activity, and notifications', async () => {
+    const { getTeamDetail, listActivity, listNotifications, markNotificationRead, updateTeam } =
+      await import('./resources')
+    const { client, calls } = stubClient([])
+    await getTeamDetail('t1', client)
+    await listActivity('t1', client)
+    await listNotifications(client)
+    await markNotificationRead('n1', client)
+    await updateTeam('t1', { settings: { notify_project_created: false } }, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1',
+      '/teams/t1/activity',
+      '/users/me/notifications',
+      '/users/me/notifications/n1/read',
+      '/teams/t1'
+    ])
+  })
+})

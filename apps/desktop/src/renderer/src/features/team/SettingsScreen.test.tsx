@@ -1,11 +1,26 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from './SettingsScreen'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { INTEGRATIONS } from '../onboarding/integrations.constants'
 import { SOLUS_THEMES } from '../../theme/tokens.constants'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import * as resources from '../../lib/api/resources'
+
+vi.mock('../../lib/api/resources', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources')>()
+  return {
+    ...actual,
+    getMe: vi.fn(),
+    getTeamDetail: vi.fn(),
+    listMembers: vi.fn(),
+    listInvites: vi.fn(),
+    listActivity: vi.fn(),
+    updateTeam: vi.fn()
+  }
+})
 
 function reset(): void {
   useOnboardingStore.getState().reset()
@@ -107,5 +122,65 @@ describe('SettingsScreen — static sections', () => {
     render(<SettingsScreen />)
     expect(screen.queryByText('Orb behavior')).not.toBeInTheDocument()
     expect(screen.queryByText('Orb energy')).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsScreen — live team section', () => {
+  beforeEach(() => {
+    reset()
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getMe).mockResolvedValue({
+      id: 'u1',
+      email: 'maya@strider.dev',
+      name: 'Maya Krishnan',
+      avatar_url: null,
+      created_at: '',
+      teams: []
+    })
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({
+      id: 't1',
+      name: 'Strider Robotics',
+      is_personal: false,
+      plan_status: 'trial',
+      settings: { notify_project_created: true },
+      created_at: '',
+      member_count: 2,
+      role: 'owner'
+    })
+    vi.mocked(resources.listMembers).mockResolvedValue([])
+    vi.mocked(resources.listInvites).mockResolvedValue([])
+    vi.mocked(resources.listActivity).mockResolvedValue([])
+  })
+  afterEach(() => useWorkspaceStore.getState().reset())
+
+  it('replaces the static workspace box with a live, owner-editable team section', async () => {
+    render(<SettingsScreen />)
+    await waitFor(() => expect(screen.getByText('Team')).toBeInTheDocument())
+    expect(screen.getByLabelText('Team name')).toHaveValue('Strider Robotics')
+    expect(screen.getByText('Delete team')).toBeInTheDocument()
+    // The static demo workspace box is gone once live.
+    expect(screen.queryByText('Delete workspace')).not.toBeInTheDocument()
+  })
+
+  it('saves a renamed team through the API', async () => {
+    vi.mocked(resources.updateTeam).mockResolvedValue({
+      id: 't1',
+      name: 'Strider MK3',
+      is_personal: false,
+      plan_status: 'trial',
+      settings: { notify_project_created: true },
+      created_at: '',
+      member_count: 2,
+      role: 'owner'
+    })
+    render(<SettingsScreen />)
+    await waitFor(() => expect(screen.getByLabelText('Team name')).toBeInTheDocument())
+    const input = screen.getByLabelText('Team name')
+    await userEvent.clear(input)
+    await userEvent.type(input, 'Strider MK3')
+    await userEvent.click(screen.getByText('Save'))
+    await waitFor(() =>
+      expect(vi.mocked(resources.updateTeam)).toHaveBeenCalledWith('t1', { name: 'Strider MK3' })
+    )
   })
 })

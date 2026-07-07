@@ -905,6 +905,7 @@ export const SOL_SCRIPTS: Readonly<Record<string, SolScript>> = {
 }
 
 export const SCREEN_TITLES: Readonly<Record<string, string>> = {
+  home: 'Home',
   graph: 'Context Model',
   bench: 'Live Bench',
   sol: 'SOL',

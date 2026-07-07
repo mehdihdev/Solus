@@ -21,7 +21,7 @@ export type ChatMessage =
   // A followup answer, resolved from SOL_SCRIPTS[followupOf].followups[followupIndex].
   | { role: 'sol'; followupOf: string; followupIndex: number }
 
-export type MainScreen = 'graph' | 'bench' | 'sol' | 'team' | 'settings'
+export type MainScreen = 'home' | 'graph' | 'bench' | 'sol' | 'team' | 'settings'
 
 export interface ShellState {
   resolved: Record<string, boolean>

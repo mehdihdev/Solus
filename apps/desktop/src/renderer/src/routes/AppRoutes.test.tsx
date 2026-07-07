@@ -36,11 +36,12 @@ describe('AppRoutes guards', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows the workspace shell to onboarded users', () => {
+  it('shows the workspace shell (landing on Home) to onboarded users', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/')
-    expect(screen.getByText('strider-qd12')).toBeInTheDocument()
-    expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
+    // Shell chrome renders (topbar project name) and lands on the Home screen.
+    expect(screen.getAllByText('strider-qd12').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Home').length).toBeGreaterThan(0)
   })
 
   it('keeps unauthenticated users on /onboarding out (sends to login)', () => {

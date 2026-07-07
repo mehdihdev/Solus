@@ -17,7 +17,10 @@ import { MiniOrb } from '../sol/MiniOrb'
 import { GuideTour, type TourState } from '../sol/GuideTour'
 import { TeamScreen } from '../team/TeamScreen'
 import { SettingsScreen } from '../team/SettingsScreen'
-import { TopBar, NotifPopover, ToastView } from './ShellChrome'
+import { HomeScreen } from './HomeScreen'
+import { useMe, displayName } from './useMe'
+import { useNotifications } from './useNotifications'
+import { TopBar, NotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import {
   ALERTS,
   FALLBACK_PROJECT_NAME,
@@ -95,14 +98,16 @@ function useMagicMomentToast(screenName: string): void {
 
 export function WorkspaceShell(): React.JSX.Element {
   const navigate = useNavigate()
-  const [route, setRoute] = useState<Route>({ name: 'graph' })
+  const [route, setRoute] = useState<Route>({ name: 'home' })
   const [notifOpen, setNotifOpen] = useState(false)
   const [tour, setTour] = useState<TourState | null>(null)
   const resolved = useShellStore((s) => s.resolved)
   const anomaly = useShellStore((s) => s.anomaly)
-  const email = useAuthStore((s) => s.user?.email)
   const signOut = useAuthStore((s) => s.signOut)
   const project = useWorkspaceStore((s) => s.project)
+  const me = useMe()
+  const notifs = useNotifications()
+  const online = notifs.status === 'ready'
 
   const alerts = alertsWithState(ALERTS, resolved)
   const name = route.name
@@ -112,6 +117,10 @@ export function WorkspaceShell(): React.JSX.Element {
     useShellStore.getState().setLastMain(screen)
     setRoute({ name: screen })
     setNotifOpen(false)
+  }
+  const openProject = (p: { id: string; name: string }): void => {
+    useWorkspaceStore.getState().setProject(p)
+    go('graph')
   }
   const openAlert = (alertId: string): void => {
     setRoute({ name: 'alert', alertId })
@@ -148,7 +157,12 @@ export function WorkspaceShell(): React.JSX.Element {
       }}
       onClick={() => notifOpen && setNotifOpen(false)}
     >
-      <Rail name={name} anomaly={anomaly === 'active'} go={go} email={email} />
+      <Rail
+        name={name}
+        anomaly={anomaly === 'active'}
+        go={go}
+        userName={displayName(me.name, me.email)}
+      />
       <div
         style={{
           flex: 1,
@@ -161,13 +175,20 @@ export function WorkspaceShell(): React.JSX.Element {
         <TopBar
           projectName={project?.name ?? FALLBACK_PROJECT_NAME}
           screenTitle={SCREEN_TITLES[name] ?? ''}
-          openCount={openAlertCount(alerts)}
+          openCount={online ? notifs.unreadCount : openAlertCount(alerts)}
           onBell={() => setNotifOpen((o) => !o)}
           onSignOut={() => void onSignOut()}
         />
-        {notifOpen && (
-          <NotifPopover alerts={alerts} onOpen={openAlert} onClose={() => setNotifOpen(false)} />
-        )}
+        {notifOpen &&
+          (online ? (
+            <NotificationsPopover
+              items={notifs.items}
+              onRead={(id) => void notifs.markRead(id)}
+              onClose={() => setNotifOpen(false)}
+            />
+          ) : (
+            <NotifPopover alerts={alerts} onOpen={openAlert} onClose={() => setNotifOpen(false)} />
+          ))}
         <div
           data-screen-label={SCREEN_TITLES[name]}
           style={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative' }}
@@ -176,6 +197,7 @@ export function WorkspaceShell(): React.JSX.Element {
             route={route}
             alerts={alerts}
             openAlert={openAlert}
+            openProject={openProject}
             askSol={askSol}
             startTour={startTour}
             goBack={() => go(useShellStore.getState().lastMain)}
@@ -198,6 +220,7 @@ function ScreenView({
   route,
   alerts,
   openAlert,
+  openProject,
   askSol,
   startTour,
   goBack
@@ -205,11 +228,14 @@ function ScreenView({
   route: Route
   alerts: readonly Alert[]
   openAlert: (id: string) => void
+  openProject: (project: { id: string; name: string }) => void
   askSol: (key: string) => void
   startTour: () => void
   goBack: () => void
 }): React.JSX.Element | null {
   switch (route.name) {
+    case 'home':
+      return <HomeScreen onOpenProject={openProject} />
     case 'graph':
       return <GraphScreen onOpenAlert={openAlert} onAskSol={askSol} />
     case 'bench':
@@ -232,14 +258,13 @@ function Rail({
   name,
   anomaly,
   go,
-  email
+  userName
 }: {
   name: string
   anomaly: boolean
   go: (screen: MainScreen) => void
-  email?: string
+  userName: string
 }): React.JSX.Element {
-  const railName = email ? email.split('@')[0].replace(/[._-]/g, ' ') : 'Maya Krishnan'
   return (
     <div
       style={{
@@ -254,9 +279,16 @@ function Rail({
         background: 'var(--sur)'
       }}
     >
-      <div onClick={() => go('graph')} style={{ marginBottom: 12, cursor: 'pointer' }}>
+      <div onClick={() => go('home')} style={{ marginBottom: 12, cursor: 'pointer' }}>
         <SolOrb size={24} />
       </div>
+      <RailButton
+        id="rail-home"
+        icon={<Icons.box size={17} />}
+        label="Home"
+        active={name === 'home'}
+        onClick={() => go('home')}
+      />
       <RailButton
         id="rail-graph"
         icon={<Icons.graph size={17} />}
@@ -295,7 +327,7 @@ function Rail({
         onClick={() => go('settings')}
       />
       <div style={{ marginTop: 4 }}>
-        <Avatar name={railName} size={26} />
+        <Avatar name={userName} size={26} />
       </div>
     </div>
   )

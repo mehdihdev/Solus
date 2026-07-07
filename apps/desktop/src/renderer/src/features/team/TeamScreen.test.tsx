@@ -1,11 +1,26 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TeamScreen } from './TeamScreen'
 import { TEAM, ACTIVITY } from '../workspace/workspaceData.constants'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import * as resources from '../../lib/api/resources'
+
+vi.mock('../../lib/api/resources', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources')>()
+  return {
+    ...actual,
+    getTeamDetail: vi.fn(),
+    listMembers: vi.fn(),
+    listInvites: vi.fn(),
+    listActivity: vi.fn(),
+    createInvite: vi.fn()
+  }
+})
 
 afterEach(() => {
   vi.useRealTimers()
+  useWorkspaceStore.getState().reset()
 })
 
 describe('TeamScreen — roster', () => {
@@ -102,3 +117,90 @@ describe('TeamScreen — invite flow (visual only)', () => {
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+const LIVE_TEAM: resources.TeamDetail = {
+  id: 't1',
+  name: 'Strider Robotics',
+  is_personal: false,
+  plan_status: 'trial',
+  settings: { notify_project_created: true },
+  created_at: '2026-07-01T00:00:00Z',
+  member_count: 2,
+  role: 'owner'
+}
+const LIVE_MEMBERS: resources.TeamMemberApi[] = [
+  {
+    user_id: 'u1',
+    email: 'maya@strider.dev',
+    name: 'Maya K',
+    role: 'owner',
+    joined_at: '2026-07-01T00:00:00Z'
+  },
+  {
+    user_id: 'u2',
+    email: 'priya@strider.dev',
+    name: 'Priya N',
+    role: 'member',
+    joined_at: '2026-07-02T00:00:00Z'
+  }
+]
+const LIVE_ACTIVITY: resources.ActivityApi[] = [
+  {
+    id: 'ac1',
+    type: 'invite.accepted',
+    domain: null,
+    actor_id: 'u2',
+    project_id: null,
+    payload: { email: 'priya@strider.dev' },
+    created_at: '2026-07-06T00:00:00Z'
+  }
+]
+
+describe('TeamScreen — live (API-backed)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getTeamDetail).mockResolvedValue(LIVE_TEAM)
+    vi.mocked(resources.listMembers).mockResolvedValue(LIVE_MEMBERS)
+    vi.mocked(resources.listInvites).mockResolvedValue([])
+    vi.mocked(resources.listActivity).mockResolvedValue(LIVE_ACTIVITY)
+  })
+
+  it('renders the real team name, roster, and humanized activity', async () => {
+    render(<TeamScreen onOpenAlert={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    expect(screen.getByText('Maya K')).toBeInTheDocument()
+    expect(screen.getByText('priya@strider.dev')).toBeInTheDocument()
+    expect(screen.getByText(/joined the team/)).toBeInTheDocument()
+  })
+
+  it('sends a real invite and reveals the one-time token', async () => {
+    vi.mocked(resources.createInvite).mockResolvedValue({
+      id: 'i1',
+      team_id: 't1',
+      email: 'new@strider.dev',
+      role: 'member',
+      status: 'pending',
+      created_at: '',
+      expires_at: '',
+      token: 'join-tok-once'
+    })
+    render(<TeamScreen onOpenAlert={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    await userEvent.click(screen.getByText('Invite teammate'))
+    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@strider.dev')
+    await userEvent.click(screen.getByText('Send invite'))
+    await waitFor(() => expect(screen.getByText('join-tok-once')).toBeInTheDocument())
+    expect(vi.mocked(resources.createInvite)).toHaveBeenCalledWith('t1', {
+      email: 'new@strider.dev',
+      role: 'member'
+    })
+  })
+
+  it('offers role management to an owner', async () => {
+    render(<TeamScreen onOpenAlert={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    // The member (not the owner) gets a role selector.
+    expect(screen.getByLabelText('Role for priya@strider.dev')).toBeInTheDocument()
+  })
+})

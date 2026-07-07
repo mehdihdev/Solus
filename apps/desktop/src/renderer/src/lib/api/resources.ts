@@ -144,6 +144,11 @@ export function createProject(
   return client.request<Project>(`/teams/${teamId}/projects`, { method: 'POST', body: input })
 }
 
+/** Projects owned by a team (API.md §2.3), newest first per the backend. */
+export function listProjects(teamId: string, client: ApiClient = api): Promise<Project[]> {
+  return client.request<Project[]>(`/teams/${teamId}/projects`)
+}
+
 export function getProject(projectId: string, client: ApiClient = api): Promise<ProjectDetail> {
   return client.request<ProjectDetail>(`/projects/${projectId}`)
 }
@@ -251,4 +256,144 @@ export function listEntities(
   if (filters.source_id) params.set('source_id', filters.source_id)
   const query = params.toString()
   return client.request<Entity[]>(`/projects/${projectId}/entities${query ? `?${query}` : ''}`)
+}
+
+/* ---------------- Teams (§2.2) — members, invites, activity ---------------- */
+
+export type TeamRole = 'owner' | 'admin' | 'member' | 'viewer'
+
+export interface TeamDetail {
+  id: string
+  name: string
+  is_personal: boolean
+  plan_status: string
+  settings: { notify_project_created: boolean }
+  created_at: string
+  member_count: number
+  role: TeamRole
+}
+
+export interface TeamMemberApi {
+  user_id: string
+  email: string
+  name: string | null
+  role: TeamRole
+  joined_at: string
+}
+
+export type InviteStatus = 'pending' | 'accepted' | 'revoked'
+
+export interface InviteApi {
+  id: string
+  team_id: string
+  email: string
+  role: TeamRole
+  status: InviteStatus
+  created_at: string
+  expires_at: string
+  /** Secret shown once at creation — never on listings. */
+  token?: string
+}
+
+export interface ActivityApi {
+  id: string
+  type: string
+  domain: string | null
+  actor_id: string | null
+  project_id: string | null
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface NotificationApi {
+  id: string
+  type: string
+  title: string
+  body: string | null
+  payload: Record<string, unknown>
+  read_at: string | null
+  created_at: string
+}
+
+/** Create a team (API.md §2.2 — also the individual→team upgrade entry point). */
+export function createTeam(name: string, client: ApiClient = api): Promise<TeamDetail> {
+  return client.request<TeamDetail>('/teams', { method: 'POST', body: { name } })
+}
+
+export function getTeamDetail(teamId: string, client: ApiClient = api): Promise<TeamDetail> {
+  return client.request<TeamDetail>(`/teams/${teamId}`)
+}
+
+export function updateTeam(
+  teamId: string,
+  input: { name?: string; settings?: { notify_project_created: boolean } },
+  client: ApiClient = api
+): Promise<TeamDetail> {
+  return client.request<TeamDetail>(`/teams/${teamId}`, { method: 'PATCH', body: input })
+}
+
+/** Delete a team (owner only; API.md §2.2). Irreversible — confirm in the UI first. */
+export function deleteTeam(teamId: string, client: ApiClient = api): Promise<void> {
+  return client.request<void>(`/teams/${teamId}`, { method: 'DELETE' })
+}
+
+export function listMembers(teamId: string, client: ApiClient = api): Promise<TeamMemberApi[]> {
+  return client.request<TeamMemberApi[]>(`/teams/${teamId}/members`)
+}
+
+export function changeMemberRole(
+  teamId: string,
+  userId: string,
+  role: TeamRole,
+  client: ApiClient = api
+): Promise<TeamMemberApi> {
+  return client.request<TeamMemberApi>(`/teams/${teamId}/members/${userId}`, {
+    method: 'PATCH',
+    body: { role }
+  })
+}
+
+export function removeMember(
+  teamId: string,
+  userId: string,
+  client: ApiClient = api
+): Promise<void> {
+  return client.request<void>(`/teams/${teamId}/members/${userId}`, { method: 'DELETE' })
+}
+
+export function listInvites(teamId: string, client: ApiClient = api): Promise<InviteApi[]> {
+  return client.request<InviteApi[]>(`/teams/${teamId}/invites`)
+}
+
+export function createInvite(
+  teamId: string,
+  input: { email: string; role?: Exclude<TeamRole, 'owner'> },
+  client: ApiClient = api
+): Promise<InviteApi> {
+  return client.request<InviteApi>(`/teams/${teamId}/invites`, { method: 'POST', body: input })
+}
+
+export function revokeInvite(
+  teamId: string,
+  inviteId: string,
+  client: ApiClient = api
+): Promise<void> {
+  return client.request<void>(`/teams/${teamId}/invites/${inviteId}`, { method: 'DELETE' })
+}
+
+export function listActivity(teamId: string, client: ApiClient = api): Promise<ActivityApi[]> {
+  return client.request<ActivityApi[]>(`/teams/${teamId}/activity`)
+}
+
+/* ---------------- Notifications (§2.1) ---------------- */
+
+export function listNotifications(client: ApiClient = api): Promise<NotificationApi[]> {
+  return client.request<NotificationApi[]>('/users/me/notifications')
+}
+
+export function markNotificationRead(
+  id: string,
+  client: ApiClient = api
+): Promise<NotificationApi> {
+  return client.request<NotificationApi>(`/users/me/notifications/${id}/read`, { method: 'POST' })
 }

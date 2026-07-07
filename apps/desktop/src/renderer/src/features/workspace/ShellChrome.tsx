@@ -6,6 +6,8 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
 import { dcol, SOLUS_DOMAINS } from '../../theme/tokens.constants'
+import { relativeTime } from '../../lib/relativeTime'
+import type { NotificationApi } from '../../lib/api/resources'
 import { useShellStore } from './shellStore'
 import type { Alert } from './workspaceData.constants'
 
@@ -203,6 +205,81 @@ function NotifRow({
         </div>
       </div>
       <Icons.arrowR size={12} />
+    </div>
+  )
+}
+
+/** Live notifications popover (API.md §2.1). Clicking a row marks it read. */
+export function NotificationsPopover({
+  items,
+  onRead,
+  onClose
+}: {
+  items: readonly NotificationApi[]
+  onRead: (id: string) => void
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      style={{ position: 'absolute', top: 46, right: 12, width: 350, zIndex: 50 }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Card pad={0} style={{ boxShadow: '0 16px 50px rgba(0,0,0,0.5)' }}>
+        <div
+          style={{
+            padding: '11px 14px',
+            borderBottom: '1px solid var(--bd)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}
+        >
+          <Mono size={9.5}>NOTIFICATIONS</Mono>
+          <span onClick={onClose} style={{ color: 'var(--mut)', cursor: 'pointer' }}>
+            <Icons.x size={12} />
+          </span>
+        </div>
+        {items.length === 0 && (
+          <div style={{ padding: '16px 14px', fontSize: 11, color: 'var(--mut)' }}>
+            You&apos;re all caught up.
+          </div>
+        )}
+        {items.map((n) => (
+          <div
+            key={n.id}
+            onClick={() => onRead(n.id)}
+            style={{
+              display: 'flex',
+              gap: 10,
+              padding: '12px 14px',
+              borderBottom: '1px solid var(--bd)',
+              cursor: 'pointer',
+              opacity: n.read_at ? 0.55 : 1
+            }}
+          >
+            {!n.read_at && (
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 99,
+                  background: 'var(--acc)',
+                  marginTop: 5
+                }}
+              />
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{n.title}</div>
+              {n.body && (
+                <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2 }}>{n.body}</div>
+              )}
+              <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 3 }}>
+                {relativeTime(n.created_at)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </Card>
     </div>
   )
 }

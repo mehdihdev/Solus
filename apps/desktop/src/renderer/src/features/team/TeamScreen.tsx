@@ -1,6 +1,8 @@
-// Team screen — roster + cross-domain activity feed, ported verbatim from
-// TeamScreen in TestDesign/app/team-settings.jsx. The invite flow is visual
-// only (no backend call), exactly as the prototype behaves.
+// Team screen. When the workspace is linked to the API it renders live team
+// data (roster, cross-domain activity, pending invites) with working invite /
+// revoke / role-change / remove actions via useTeamData. When offline (dev
+// bypass / unreachable API) it falls back to the prototype mock, ported from
+// TeamScreen in TestDesign/app/team-settings.jsx, so the demo still works.
 import { useState } from 'react'
 import { Avatar } from '../../components/ui/Avatar'
 import { Button } from '../../components/ui/Button'
@@ -8,17 +10,446 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import { dcol } from '../../theme/tokens.constants'
+import { dcol, type DomainId } from '../../theme/tokens.constants'
+import { relativeTime } from '../../lib/relativeTime'
+import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
 import { ACTIVITY, TEAM } from '../workspace/workspaceData.constants'
+import { activityText, actorName } from './activityText'
+import { useTeamData, type TeamData } from './useTeamData'
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const INVITE_SEND_DELAY_MS = 1100
+const MANAGER_ROLES: readonly TeamRole[] = ['owner', 'admin']
+const DOMAIN_IDS: readonly DomainId[] = ['sw', 'ee', 'me', 'rt']
+
+/** A graph-domain color for a known domain id, else null (skip the dot). */
+function domainDot(domain: string | null): string | null {
+  return domain && DOMAIN_IDS.includes(domain as DomainId) ? dcol(domain as DomainId) : null
+}
 
 interface TeamScreenProps {
   onOpenAlert: (id: string) => void
 }
 
+/** Route between live and demo rendering by connection status. */
 export function TeamScreen({ onOpenAlert }: TeamScreenProps): React.JSX.Element {
+  const data = useTeamData()
+  if (data.status === 'loading') {
+    return (
+      <div
+        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        data-testid="team-loading"
+      >
+        <Spinner size={20} />
+      </div>
+    )
+  }
+  if (data.status === 'offline') return <TeamScreenDemo onOpenAlert={onOpenAlert} />
+  return <TeamScreenLive data={data} />
+}
+
+/* ============================ LIVE (API-backed) ============================ */
+
+function TeamScreenLive({ data }: { data: TeamData }): React.JSX.Element {
+  const { team, members, invites, activity, myRole, actions } = data
+  const canManage = myRole !== null && MANAGER_ROLES.includes(myRole)
+  const [inviteOpen, setInviteOpen] = useState(false)
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
+      <div style={{ maxWidth: 920, margin: '0 auto', padding: '22px 24px 48px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
+              {team?.name ?? 'Team'}
+            </h1>
+            <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>
+              {members.length} {members.length === 1 ? 'member' : 'members'}
+              {team && !team.is_personal ? '' : ' · personal workspace'}
+            </div>
+          </div>
+          {canManage && (
+            <Button id="btn-invite" kind="primary" size="sm" onClick={() => setInviteOpen(true)}>
+              <Icons.plus size={13} /> Invite teammate
+            </Button>
+          )}
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) 380px',
+            gap: 16,
+            marginTop: 20,
+            alignItems: 'start'
+          }}
+        >
+          <LiveActivity activity={activity} members={members} />
+          <LiveMembers
+            members={members}
+            invites={invites}
+            myRole={myRole}
+            canManage={canManage}
+            onChangeRole={actions.changeRole}
+            onRemove={actions.remove}
+            onRevoke={actions.revoke}
+          />
+        </div>
+      </div>
+      {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} onInvite={actions.invite} />}
+    </div>
+  )
+}
+
+function LiveActivity({
+  activity,
+  members
+}: {
+  activity: TeamData['activity']
+  members: readonly TeamMemberApi[]
+}): React.JSX.Element {
+  return (
+    <Card pad={0}>
+      <div
+        style={{
+          padding: '13px 16px',
+          borderBottom: '1px solid var(--bd)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}
+      >
+        <Mono size={9.5}>TEAM ACTIVITY</Mono>
+        <Mono size={9}>RECENT</Mono>
+      </div>
+      {activity.length === 0 && (
+        <div style={{ padding: '18px 16px', fontSize: 12, color: 'var(--mut)' }}>
+          No activity yet. Syncs, invites, and project changes will show up here.
+        </div>
+      )}
+      {activity.map((a) => (
+        <div
+          key={a.id}
+          style={{
+            display: 'flex',
+            gap: 12,
+            padding: '12px 16px',
+            borderBottom: '1px solid var(--bd)'
+          }}
+        >
+          <Avatar name={actorName(a.actor_id, members)} size={26} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+              <strong style={{ fontWeight: 600 }}>{actorName(a.actor_id, members)}</strong>{' '}
+              {activityText(a)}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+              {domainDot(a.domain) && (
+                <span
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: 99,
+                    background: domainDot(a.domain) as string
+                  }}
+                />
+              )}
+              <span style={{ fontSize: 10, color: 'var(--mut)' }}>
+                {relativeTime(a.created_at)}
+              </span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </Card>
+  )
+}
+
+function LiveMembers({
+  members,
+  invites,
+  myRole,
+  canManage,
+  onChangeRole,
+  onRemove,
+  onRevoke
+}: {
+  members: readonly TeamMemberApi[]
+  invites: readonly InviteApi[]
+  myRole: TeamRole | null
+  canManage: boolean
+  onChangeRole: TeamData['actions']['changeRole']
+  onRemove: TeamData['actions']['remove']
+  onRevoke: TeamData['actions']['revoke']
+}): React.JSX.Element {
+  return (
+    <Card pad={0}>
+      <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--bd)' }}>
+        <Mono size={9.5}>MEMBERS</Mono>
+      </div>
+      {members.map((m) => (
+        <MemberRow
+          key={m.user_id}
+          member={m}
+          canManage={canManage && m.role !== 'owner'}
+          onChangeRole={onChangeRole}
+          onRemove={onRemove}
+        />
+      ))}
+      {invites.map((inv) => (
+        <div
+          key={inv.id}
+          style={{
+            display: 'flex',
+            gap: 11,
+            alignItems: 'center',
+            padding: '11px 16px',
+            borderBottom: '1px solid var(--bd)',
+            opacity: 0.75
+          }}
+        >
+          <span
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 99,
+              border: '1px dashed var(--bd)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--mut)'
+            }}
+          >
+            <Icons.team size={13} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12.5 }}>{inv.email}</div>
+            <Mono size={8.5} color="var(--warn)">
+              INVITE PENDING · {inv.role.toUpperCase()}
+            </Mono>
+          </div>
+          {canManage && (
+            <button
+              type="button"
+              aria-label={`Revoke invite for ${inv.email}`}
+              onClick={() => void onRevoke(inv.id)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--mut)',
+                cursor: 'pointer',
+                padding: 4
+              }}
+            >
+              <Icons.x size={13} />
+            </button>
+          )}
+        </div>
+      ))}
+      <div style={{ padding: '12px 16px', fontSize: 11, color: 'var(--mut)', lineHeight: 1.55 }}>
+        {myRole === 'viewer'
+          ? 'You have view access to this team.'
+          : 'Teammates are notified when their changes cross into your domains.'}
+      </div>
+    </Card>
+  )
+}
+
+function MemberRow({
+  member,
+  canManage,
+  onChangeRole,
+  onRemove
+}: {
+  member: TeamMemberApi
+  canManage: boolean
+  onChangeRole: TeamData['actions']['changeRole']
+  onRemove: TeamData['actions']['remove']
+}): React.JSX.Element {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 11,
+        alignItems: 'center',
+        padding: '11px 16px',
+        borderBottom: '1px solid var(--bd)'
+      }}
+    >
+      <Avatar name={member.name ?? member.email} size={28} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{member.name ?? member.email}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{member.email}</div>
+      </div>
+      {canManage ? (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select
+            aria-label={`Role for ${member.email}`}
+            value={member.role}
+            onChange={(e) => void onChangeRole(member.user_id, e.target.value as TeamRole)}
+            style={{
+              background: 'var(--bg)',
+              color: 'var(--tx)',
+              border: '1px solid var(--bd)',
+              borderRadius: 3,
+              padding: '4px 6px',
+              fontSize: 11,
+              fontFamily: 'var(--font-ui)'
+            }}
+          >
+            {(['admin', 'member', 'viewer'] as const).map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            aria-label={`Remove ${member.email}`}
+            onClick={() => void onRemove(member.user_id)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--mut)',
+              cursor: 'pointer',
+              padding: 4
+            }}
+          >
+            <Icons.x size={13} />
+          </button>
+        </div>
+      ) : (
+        <Mono size={8.5} color="var(--mut)">
+          ● {member.role.toUpperCase()}
+        </Mono>
+      )}
+    </div>
+  )
+}
+
+function InviteModal({
+  onClose,
+  onInvite
+}: {
+  onClose: () => void
+  onInvite: TeamData['actions']['invite']
+}): React.JSX.Element {
+  const [email, setEmail] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+
+  const send = async (): Promise<void> => {
+    if (!EMAIL_PATTERN.test(email)) {
+      setError('Enter a valid email address.')
+      return
+    }
+    setSending(true)
+    setError(null)
+    const invite = await onInvite(email)
+    setSending(false)
+    if (!invite) {
+      setError('Could not send the invite. Check your role and try again.')
+      return
+    }
+    setToken(invite.token ?? null)
+    setEmail('')
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        zIndex: 70,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      onClick={onClose}
+    >
+      <div onClick={(e) => e.stopPropagation()}>
+        <Card pad={24} style={{ width: 380, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Invite a teammate</div>
+          {token ? (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
+                Invite sent. Share this one-time join link — it&apos;s shown only now:
+              </div>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: '9px 11px',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--bd)',
+                  borderRadius: 3,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  wordBreak: 'break-all'
+                }}
+              >
+                {token}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                <Button kind="primary" size="sm" onClick={onClose}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 4, lineHeight: 1.5 }}>
+                They&apos;ll join with access to this team&apos;s projects.
+              </div>
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="teammate@team.dev"
+                autoFocus
+                onKeyDown={(e) => e.key === 'Enter' && void send()}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  marginTop: 16,
+                  background: 'var(--bg)',
+                  color: 'var(--tx)',
+                  border: '1px solid var(--bd)',
+                  borderRadius: 3,
+                  padding: '10px 12px',
+                  fontSize: 13,
+                  fontFamily: 'var(--font-ui)',
+                  outline: 'none'
+                }}
+              />
+              {error && (
+                <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>
+              )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+                <Button kind="ghost" size="sm" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button kind="primary" size="sm" onClick={() => void send()}>
+                  {sending ? (
+                    <>
+                      <Spinner size={11} color="var(--acc-ink)" /> Sending…
+                    </>
+                  ) : (
+                    'Send invite'
+                  )}
+                </Button>
+              </div>
+            </>
+          )}
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+/* ============================ DEMO (offline) ============================ */
+
+function TeamScreenDemo({ onOpenAlert }: TeamScreenProps): React.JSX.Element {
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [pending, setPending] = useState<readonly string[]>([])
