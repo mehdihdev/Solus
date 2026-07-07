@@ -1,9 +1,12 @@
 // Onboarding container — orchestrates About → Connect → Build (API.md §5
-// /onboarding). Ported from the Onboarding component in
-// TestDesign/app/onboarding.jsx and wired to the onboarding + settings + auth
-// stores. The connect/build steps are simulated in this prototype slice.
+// /onboarding, FND-08). The step state machine is persisted server-side via
+// the settings endpoint: a reload or a login on another machine resumes at the
+// saved step, and a user the server marks done goes straight to the workspace.
+// Connections are always skippable — they never gate reaching the homepage.
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Mono } from '../../components/ui/Mono'
+import { Spinner } from '../../components/ui/Spinner'
 import { Wordmark } from '../../components/ui/Wordmark'
 import { StepDots } from './StepDots'
 import { AboutStep } from './AboutStep'
@@ -11,9 +14,13 @@ import { ConnectStep } from './ConnectStep'
 import { BuildStep } from './BuildStep'
 import { useOnboardingStore } from './onboardingStore'
 import { ensureWorkspace } from './provisioning'
+import { hydrateOnboarding, persistOnboardingStep } from './onboardingSync'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+
+/** Upper bound on waiting for the terminal 'done' write before navigating. */
+const DONE_PERSIST_TIMEOUT_MS = 2000
 
 export function Onboarding(): React.JSX.Element {
   const navigate = useNavigate()
@@ -23,6 +30,35 @@ export function Onboarding(): React.JSX.Element {
   const userEmail = useAuthStore((s) => s.user?.email)
   const completeOnboarding = useAuthStore((s) => s.completeOnboarding)
   const workspace = useWorkspaceStore()
+  const [hydrated, setHydrated] = useState(false)
+
+  // Resume from the server-persisted step (FND-08). Someone the server already
+  // marks done (e.g. onboarded on another machine) skips straight to the
+  // workspace; an unreachable API falls back to the local step so the flow
+  // still completes in dev bypass.
+  // No once-only ref here: under StrictMode the first run's result is
+  // cancelled by cleanup, so EVERY effect run must start its own hydrate or
+  // the splash never resolves in dev (a duplicate GET is harmless).
+  useEffect(() => {
+    let cancelled = false
+    void hydrateOnboarding().then((result) => {
+      if (cancelled) return
+      if (result.status === 'done') {
+        completeOnboarding()
+        navigate('/', { replace: true })
+        return
+      }
+      if (result.status === 'resume' && result.step !== store.step) {
+        store.setStep(result.step)
+      }
+      setHydrated(true)
+    })
+    return () => {
+      cancelled = true
+    }
+    // Run once on mount; store actions are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Ensure the workspace when the build begins. Reuses the project already
   // created on the Connect step (no double-create). Runs alongside the
@@ -30,6 +66,7 @@ export function Onboarding(): React.JSX.Element {
   // blocks the flow (the UI just stays in its simulated state).
   const beginBuild = (): void => {
     store.setStep(2)
+    void persistOnboardingStep('build')
     void ensureWorkspace({
       description: store.description,
       solMode,
@@ -48,12 +85,38 @@ export function Onboarding(): React.JSX.Element {
       beginBuild()
     } else {
       store.setStep(1)
+      void persistOnboardingStep('connect')
     }
   }
 
-  const handleComplete = (): void => {
+  const handleComplete = async (): Promise<void> => {
+    // The terminal transition is the one write where server durability matters
+    // (it's what stops other machines re-showing onboarding), so await it — but
+    // bounded, so a hung network can never hold the user away from their
+    // workspace. On failure the user still completes locally; another device
+    // would resume from the last saved step (explicit tradeoff, FND-08).
+    await Promise.race([
+      persistOnboardingStep('done'),
+      new Promise((resolve) => setTimeout(resolve, DONE_PERSIST_TIMEOUT_MS))
+    ])
     completeOnboarding()
     navigate('/')
+  }
+
+  if (!hydrated) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg)'
+        }}
+      >
+        <Spinner size={22} />
+      </div>
+    )
   }
 
   return (
@@ -84,7 +147,7 @@ export function Onboarding(): React.JSX.Element {
           />
         )}
         {store.step === 1 && <ConnectStep onBuild={beginBuild} />}
-        {store.step === 2 && <BuildStep onComplete={handleComplete} />}
+        {store.step === 2 && <BuildStep onComplete={() => void handleComplete()} />}
       </div>
     </div>
   )

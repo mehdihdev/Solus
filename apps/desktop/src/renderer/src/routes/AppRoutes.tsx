@@ -5,7 +5,7 @@ import { LandingPage } from '../features/auth/LandingPage'
 import { LoginPage } from '../features/auth/LoginPage'
 import { SignupPage } from '../features/auth/SignupPage'
 import { Onboarding } from '../features/onboarding/Onboarding'
-import { WorkspaceHome } from '../features/workspace/WorkspaceHome'
+import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
 import { Spinner } from '../components/ui/Spinner'
 import { useAuthStore } from '../store/authStore'
 
@@ -32,7 +32,7 @@ function RootRoute(): React.JSX.Element {
   if (status === 'loading') return <Splash />
   if (status === 'unauthenticated') return <LandingPage />
   if (!onboarded) return <Navigate to="/onboarding" replace />
-  return <WorkspaceHome />
+  return <WorkspaceShell />
 }
 
 /** Guard for the post-login onboarding flow: must be authed and not yet onboarded. */

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
-from solus_api.deps import CurrentUser, SessionDep, TeamCtx, require_role
+from solus_api.deps import CurrentUser, SecretStoreDep, SessionDep, TeamCtx, require_role
 from solus_api.models import Membership, Role, Team
 from solus_api.routers.users import delete_team_cascade
 from solus_api.schemas import TeamCreate, TeamUpdate, serialize_team_detail
@@ -78,6 +78,18 @@ async def update_team(body: TeamUpdate, ctx: TeamCtx, session: SessionDep) -> di
             actor_id=ctx.user.id,
             payload={"name": updates["name"]},
         )
+    if body.settings is not None:
+        # Full validated snapshot (TeamSettings has defaults for every key),
+        # so stored settings are always complete and schema-shaped (FND-07).
+        ctx.team.settings = body.settings.model_dump()
+        record_activity(
+            session,
+            team_id=ctx.team.id,
+            activity_type="team.settings_updated",
+            actor_id=ctx.user.id,
+            payload={"settings": ctx.team.settings},
+        )
+        emit_event(session, user=ctx.user, event_type="team.settings_updated", team_id=ctx.team.id)
     await session.commit()
     await session.refresh(ctx.team)
     count = await _member_count(session, ctx.team.id)
@@ -88,6 +100,7 @@ async def update_team(body: TeamUpdate, ctx: TeamCtx, session: SessionDep) -> di
 async def delete_team(
     ctx: TeamCtx,
     session: SessionDep,
+    secret_store: SecretStoreDep,
     confirm: Annotated[bool, Query()] = False,
 ) -> Response:
     require_role(ctx, Role.OWNER)
@@ -96,6 +109,6 @@ async def delete_team(
     if ctx.team.is_personal:
         raise APIError(409, "personal_team_undeletable", "Personal teams cannot be deleted")
     emit_event(session, user=ctx.user, event_type="team.deleted", team_id=ctx.team.id)
-    await delete_team_cascade(session, ctx.team.id)
+    await delete_team_cascade(session, ctx.team.id, secret_store)
     await session.commit()
     return Response(status_code=204)

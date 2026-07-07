@@ -56,9 +56,10 @@ class ConnectorRegistry:
 
 
 def build_registry(settings: Settings) -> ConnectorRegistry:
-    """The default registry. GitHub ships first (SOLUSDEV-103); the rest of the
-    roster registers here as each connector lands."""
+    """The default registry. Code hosts shipped (SOLUSDEV-103/104); the rest of
+    the roster (KiCad, Onshape, ROS) registers here as each connector lands."""
     from solus_api.connectors.github import GitHubConnector
+    from solus_api.connectors.gitlab import GitLabConnector
 
     registry = ConnectorRegistry()
     registry.register(
@@ -66,6 +67,14 @@ def build_registry(settings: Settings) -> ConnectorRegistry:
         lambda: GitHubConnector(
             client_id=settings.github_client_id,
             client_secret=settings.github_client_secret,
+        ),
+    )
+    registry.register(
+        "gitlab",
+        lambda: GitLabConnector(
+            client_id=settings.gitlab_client_id,
+            client_secret=settings.gitlab_client_secret,
+            base_url=settings.gitlab_base_url,
         ),
     )
     return registry

@@ -18,7 +18,9 @@ def _settings(**overrides: object) -> Settings:
         "database_url": "sqlite+aiosqlite://",
     }
     base.update(overrides)
-    return Settings(**base)  # type: ignore[arg-type]
+    # _env_file=None keeps the test hermetic: a developer's local .env (e.g.
+    # SOLUS_AUTO_CREATE_TABLES=true for dev) must not leak into defaults tests.
+    return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
 def test_cors_origins_parsed_into_list() -> None:

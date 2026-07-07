@@ -68,6 +68,55 @@ export const Icons = {
   link: makeIcon(
     '0 0 17 17',
     '<path d="M7 10l3-3M5.5 8L3.8 9.7a2.6 2.6 0 003.6 3.6L9 11.6M11.5 9l1.7-1.7a2.6 2.6 0 00-3.6-3.6L8 5.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+  ),
+  bench: makeIcon(
+    '0 0 17 17',
+    '<path d="M1 9h3l2-5 3 9 2-4h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
+  ),
+  sol: makeIcon(
+    '0 0 17 17',
+    '<circle cx="8.5" cy="8.5" r="4" fill="currentColor" opacity="0.85"/><circle cx="8.5" cy="8.5" r="7" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4"/>'
+  ),
+  team: makeIcon(
+    '0 0 17 17',
+    '<circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="11.5" cy="7.5" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 14c.5-2.5 2-3.8 4-3.8s3.5 1.3 4 3.8M10 13.5c.3-1.8 1.4-2.8 2.8-2.8 1 0 1.9.5 2.4 1.6" fill="none" stroke="currentColor" stroke-width="1.3"/>'
+  ),
+  gear: makeIcon(
+    '0 0 17 17',
+    '<circle cx="8.5" cy="8.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8.5" cy="8.5" r="5.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.8 2.4"/>'
+  ),
+  bell: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.5 2a4.2 4.2 0 014.2 4.2c0 3 .9 4.3 1.8 5H2.5c.9-.7 1.8-2 1.8-5A4.2 4.2 0 018.5 2zM7 13.5a1.6 1.6 0 003 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'
+  ),
+  plus: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.5 3v11M3 8.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
+  ),
+  file: makeIcon(
+    '0 0 17 17',
+    '<path d="M4 1.8h6l3.2 3.2v10.2H4V1.8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M10 1.8V5h3.2" fill="none" stroke="currentColor" stroke-width="1.2"/>'
+  ),
+  chip2: makeIcon(
+    '0 0 17 17',
+    '<rect x="4.5" y="4.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.5 4.5v-2.3M10.5 4.5V2.2M6.5 14.8v-2.3M10.5 14.8v-2.3M4.5 6.5H2.2M4.5 10.5H2.2M14.8 6.5h-2.3M14.8 10.5h-2.3" stroke="currentColor" stroke-width="1.1"/>'
+  ),
+  play: makeIcon('0 0 17 17', '<path d="M5 3.5l8 5-8 5v-10z" fill="currentColor"/>'),
+  pause: makeIcon(
+    '0 0 17 17',
+    '<path d="M5.5 3.5v10M11.5 3.5v10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+  ),
+  search: makeIcon(
+    '0 0 17 17',
+    '<circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L15 15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+  ),
+  spark: makeIcon(
+    '0 0 17 17',
+    '<path d="M9.5 1.5L4 9.5h4L7 15.5l6-8.5H8.5l1-5.5z" fill="currentColor"/>'
+  ),
+  box: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.5 1.8l6 3.2v7l-6 3.2-6-3.2v-7l6-3.2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.5 5l6 3.2 6-3.2M8.5 8.2v7" fill="none" stroke="currentColor" stroke-width="1.1"/>'
   )
 } as const
 

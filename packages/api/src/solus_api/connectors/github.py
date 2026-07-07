@@ -24,6 +24,12 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from solus_api.connectors.code_host import (
+    REPO_ROOT_KEY,
+    file_entity,
+    module_entity,
+    parent_key,
+)
 from solus_api.connectors.contracts import (
     AccountInfo,
     ConnectorError,
@@ -40,39 +46,6 @@ from solus_api.connectors.contracts import (
 GITHUB_API: Final = "https://api.github.com"
 GITHUB_OAUTH: Final = "https://github.com/login/oauth"
 REQUEST_TIMEOUT: Final = 30.0
-REPO_ROOT_KEY: Final = ":repo"
-
-# Committed design-export detection (W0-08). Lowercased extension -> (kind, domain).
-_DESIGN_EXPORTS: Final[dict[str, tuple[str, Domain]]] = {
-    # Gerber fabrication outputs.
-    ".gbr": ("gerber", Domain.ELECTRICAL),
-    ".ger": ("gerber", Domain.ELECTRICAL),
-    ".gtl": ("gerber", Domain.ELECTRICAL),
-    ".gbl": ("gerber", Domain.ELECTRICAL),
-    ".gto": ("gerber", Domain.ELECTRICAL),
-    ".gbo": ("gerber", Domain.ELECTRICAL),
-    ".gts": ("gerber", Domain.ELECTRICAL),
-    ".gbs": ("gerber", Domain.ELECTRICAL),
-    ".gtp": ("gerber", Domain.ELECTRICAL),
-    ".gbp": ("gerber", Domain.ELECTRICAL),
-    ".gko": ("gerber", Domain.ELECTRICAL),
-    ".drl": ("gerber", Domain.ELECTRICAL),
-    ".xln": ("gerber", Domain.ELECTRICAL),
-    ".gm1": ("gerber", Domain.ELECTRICAL),
-    # STEP CAD models.
-    ".step": ("step", Domain.MECHANICAL),
-    ".stp": ("step", Domain.MECHANICAL),
-    # Netlists.
-    ".net": ("netlist", Domain.ELECTRICAL),
-    ".netlist": ("netlist", Domain.ELECTRICAL),
-    ".cnl": ("netlist", Domain.ELECTRICAL),
-    # SPICE decks.
-    ".cir": ("spice", Domain.ELECTRICAL),
-    ".sp": ("spice", Domain.ELECTRICAL),
-    ".spice": ("spice", Domain.ELECTRICAL),
-    ".subckt": ("spice", Domain.ELECTRICAL),
-    ".lib": ("spice", Domain.ELECTRICAL),
-}
 
 
 # `repo` and `branch` are user-controlled and interpolated into GitHub API URL
@@ -83,7 +56,9 @@ _BRANCH_FORBIDDEN: Final = frozenset(" \t\n\r~^:?*[\\")
 
 
 def _safe_repo(repo: str) -> str:
-    if not _REPO_RE.match(repo):
+    # The charclass admits dots, so dot-only segments ("."/"..") must be
+    # rejected explicitly — they are path traversal, not repo names.
+    if not _REPO_RE.match(repo) or any(seg in (".", "..") for seg in repo.split("/")):
         raise ConnectorError("invalid_repo", "repo must be in 'owner/name' form")
     return repo
 
@@ -98,30 +73,6 @@ def _safe_branch(branch: str) -> str:
     ):
         raise ConnectorError("invalid_branch", "branch name contains illegal characters")
     return branch
-
-
-def _basename(path: str) -> str:
-    """The trailing path segment, or the path itself when it has no slash."""
-    return path.rsplit("/", 1)[-1] if "/" in path else path
-
-
-def _parent_key(path: str, known_dirs: set[str]) -> str:
-    """The graph parent of `path`: its directory if that directory is an emitted
-    entity, otherwise the repo root. Guards against intermediate trees GitHub
-    elides — relations only ever point at entities we actually land."""
-    if "/" not in path:
-        return REPO_ROOT_KEY
-    parent = path.rsplit("/", 1)[0]
-    return parent if parent in known_dirs else REPO_ROOT_KEY
-
-
-def _design_export_for(path: str) -> tuple[str, Domain] | None:
-    """Return (export_kind, domain) if `path` is a recognised design export."""
-    lowered = path.lower()
-    dot = lowered.rfind(".")
-    if dot == -1:
-        return None
-    return _DESIGN_EXPORTS.get(lowered[dot:])
 
 
 class GitHubConnector(OAuthConnector):
@@ -291,7 +242,7 @@ class GitHubConnector(OAuthConnector):
         }
         relations = [
             RelationOut(
-                from_key=_parent_key(key, known_dirs),
+                from_key=parent_key(key, known_dirs),
                 to_key=key,
                 type="contains",
             )
@@ -315,9 +266,9 @@ class GitHubConnector(OAuthConnector):
                 raise KeyError("path")
             self._ensure_ancestors(path, entities)
             if item_type == "tree":
-                entities[path] = _module_entity(path)
+                entities[path] = module_entity(path)
             elif item_type == "blob":
-                entities[path] = _file_entity(path, item)
+                entities[path] = file_entity(path, item)
             # Unknown object types (e.g. "commit" submodule refs) are skipped.
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(SyncError(item=str(item.get("path", "<unknown>")), message=str(exc)))
@@ -329,7 +280,7 @@ class GitHubConnector(OAuthConnector):
         accumulated = ""
         for segment in segments:
             accumulated = f"{accumulated}/{segment}" if accumulated else segment
-            entities.setdefault(accumulated, _module_entity(accumulated))
+            entities.setdefault(accumulated, module_entity(accumulated))
 
     # ------------------------------------------------------- GitHub requests
 
@@ -392,37 +343,3 @@ class GitHubConnector(OAuthConnector):
         if not isinstance(data, dict):
             raise ConnectorError("github_error", "Unexpected GitHub response shape.")
         return data
-
-
-def _module_entity(path: str) -> EntityOut:
-    return EntityOut(
-        source_key=path,
-        type="code_module",
-        domain=Domain.SOFTWARE,
-        name=_basename(path),
-    )
-
-
-def _file_entity(path: str, item: dict[str, Any]) -> EntityOut:
-    export = _design_export_for(path)
-    if export is not None:
-        kind, domain = export
-        return EntityOut(
-            source_key=path,
-            type="design_export",
-            domain=domain,
-            name=_basename(path),
-            properties={
-                "export_kind": kind,
-                "path": path,
-                "size": item.get("size"),
-                "sha": item.get("sha"),
-            },
-        )
-    return EntityOut(
-        source_key=path,
-        type="code_file",
-        domain=Domain.SOFTWARE,
-        name=_basename(path),
-        properties={"size": item.get("size"), "sha": item.get("sha"), "path": path},
-    )

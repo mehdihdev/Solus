@@ -26,6 +26,7 @@ from solus_api.models import (
 from solus_api.schemas import InviteCreate, serialize_invite
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
+from solus_api.services.notifications import notify_user
 
 team_router = APIRouter(prefix="/api/v1/teams/{team_id}/invites")
 accept_router = APIRouter(prefix="/api/v1/invites")
@@ -92,6 +93,26 @@ async def create_invite(
         payload={"email": email, "role": body.role},
     )
     emit_event(session, user=ctx.user, event_type="invite.created", team_id=ctx.team.id)
+    await session.flush()  # assign the invite id/token before notifying
+
+    # FND-01: the invitation rides the existing notification path. An invitee
+    # with an account gets it in-app; the token is theirs to receive (it is
+    # exactly what the invite email would deliver). Email delivery, when built,
+    # hangs off this same notification row.
+    invitee = await session.scalar(select(User).where(User.email == email))
+    if invitee is not None:
+        notify_user(
+            session,
+            user_id=invitee.id,
+            notification_type="team.invite",
+            title=f'You\'ve been invited to join "{ctx.team.name}"',
+            payload={
+                "team_id": str(ctx.team.id),
+                "invite_id": str(invite.id),
+                "role": body.role,
+                "token": invite.token,
+            },
+        )
     await session.commit()
     await session.refresh(invite)
     return envelope(serialize_invite(invite, include_token=True))
@@ -145,5 +166,13 @@ async def accept_invite(
         payload={"email": invite.email},
     )
     emit_event(session, user=user, event_type="invite.accepted", team_id=invite.team_id)
+    if invite.invited_by is not None and invite.invited_by != user.id:
+        notify_user(
+            session,
+            user_id=invite.invited_by,
+            notification_type="invite.accepted",
+            title=f"{invite.email} accepted your invite",
+            payload={"team_id": str(invite.team_id), "email": invite.email},
+        )
     await session.commit()
     return envelope({"team_id": invite.team_id, "role": invite.role.value})

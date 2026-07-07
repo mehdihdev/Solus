@@ -1,6 +1,7 @@
 """§2.1 Users & settings (api-keys deferred to a later slice per §8 Phase 1)."""
 
 from conftest import ALICE, BOB, add_member, create_team, me
+from fastapi import FastAPI
 from httpx import AsyncClient
 
 
@@ -90,3 +91,91 @@ async def test_users_cannot_read_each_other(
     assert alice["id"] != bob["id"]
     assert alice["email"] == ALICE["email"]
     assert bob["email"] == BOB["email"]
+
+
+async def test_settings_include_and_persist_consent(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """ADR-011: collection is consent-gated, so consent must be a settable
+    setting — defaulting to off."""
+    resp = await client.get("/api/v1/users/me/settings", headers=alice_headers)
+    assert resp.json()["data"]["data_collection_consent"] is False
+
+    resp = await client.patch(
+        "/api/v1/users/me/settings",
+        json={"data_collection_consent": True},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["data_collection_consent"] is True
+    # And it round-trips.
+    resp = await client.get("/api/v1/users/me/settings", headers=alice_headers)
+    assert resp.json()["data"]["data_collection_consent"] is True
+
+    # Revocation: False is an explicit value, not "unset" — opting back out
+    # must work (ADR-011), and must survive a naive truthiness refactor.
+    resp = await client.patch(
+        "/api/v1/users/me/settings",
+        json={"data_collection_consent": False},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["data_collection_consent"] is False
+    resp = await client.get("/api/v1/users/me/settings", headers=alice_headers)
+    assert resp.json()["data"]["data_collection_consent"] is False
+
+
+async def test_consent_gate_actually_opens(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    """Before opt-in no DataEvent rows are written; after opt-in they are."""
+    from solus_api.models import DataEvent
+    from sqlalchemy import func, select
+
+    async def event_count() -> int:
+        async with app.state.sessionmaker() as db:
+            return int(
+                await db.scalar(select(func.count()).select_from(DataEvent)) or 0
+            )
+
+    team = await create_team(client, alice_headers)  # emits team.created (unconsented)
+    assert await event_count() == 0
+
+    await client.patch(
+        "/api/v1/users/me/settings",
+        json={"data_collection_consent": True},
+        headers=alice_headers,
+    )
+    resp = await client.post(
+        f"/api/v1/teams/{team['id']}/projects", json={"name": "Consented"}, headers=alice_headers
+    )
+    assert resp.status_code == 201
+    assert await event_count() >= 1
+
+
+async def test_onboarding_step_defaults_and_round_trips(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """FND-08: onboarding state persists server-side so resume works across
+    reloads and machines."""
+    resp = await client.get("/api/v1/users/me/settings", headers=alice_headers)
+    assert resp.json()["data"]["onboarding_step"] == "about"
+
+    for step in ("connect", "build", "done"):
+        resp = await client.patch(
+            "/api/v1/users/me/settings", json={"onboarding_step": step}, headers=alice_headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["onboarding_step"] == step
+
+    resp = await client.get("/api/v1/users/me/settings", headers=alice_headers)
+    assert resp.json()["data"]["onboarding_step"] == "done"
+
+
+async def test_onboarding_step_rejects_unknown_value(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    resp = await client.patch(
+        "/api/v1/users/me/settings", json={"onboarding_step": "yolo"}, headers=alice_headers
+    )
+    assert resp.status_code == 422

@@ -138,6 +138,9 @@ class User(UuidPkMixin, TimestampMixin, Base):
     sol_mode: Mapped[SolMode] = mapped_column(_enum_column(SolMode), default=SolMode.GUIDE)
     # ADR-011: collection is consent-gated; nothing is recorded until the user opts in.
     data_collection_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # FND-08 first-run state machine: about -> connect -> build -> done.
+    # Server-side so resume works across reloads and machines.
+    onboarding_step: Mapped[str] = mapped_column(String(16), default="about")
 
 
 class Team(UuidPkMixin, TimestampMixin, Base):
@@ -146,6 +149,9 @@ class Team(UuidPkMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255))
     is_personal: Mapped[bool] = mapped_column(Boolean, default=False)
     plan_status: Mapped[str] = mapped_column(String(32), default="trial")
+    # Team preferences (FND-07). Keys are validated by schemas.TeamSettings —
+    # never write unvalidated dicts here.
+    settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class Membership(Base):
@@ -190,6 +196,9 @@ class Project(UuidPkMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, default=None)
+    # Soft delete (FND-04): archived projects keep their graph but leave the
+    # default listing. Hard DELETE remains for true removal.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class Job(UuidPkMixin, TimestampMixin, Base):

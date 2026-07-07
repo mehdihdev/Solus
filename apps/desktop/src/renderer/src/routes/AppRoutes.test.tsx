@@ -27,16 +27,20 @@ describe('AppRoutes guards', () => {
     expect(screen.getByText('Your robot is one system.')).toBeInTheDocument()
   })
 
-  it('redirects authenticated-but-not-onboarded users to onboarding', () => {
+  it('redirects authenticated-but-not-onboarded users to onboarding', async () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: false })
     renderAt('/')
-    expect(screen.getByRole('heading', { name: 'What are you building?' })).toBeInTheDocument()
+    // Onboarding hydrates its server-side step first (FND-08), then renders.
+    expect(
+      await screen.findByRole('heading', { name: 'What are you building?' })
+    ).toBeInTheDocument()
   })
 
-  it('shows the workspace home to onboarded users', () => {
+  it('shows the workspace shell to onboarded users', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/')
-    expect(screen.getByRole('heading', { name: 'Your context model is ready' })).toBeInTheDocument()
+    expect(screen.getByText('strider-qd12')).toBeInTheDocument()
+    expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
   })
 
   it('keeps unauthenticated users on /onboarding out (sends to login)', () => {
@@ -47,18 +51,20 @@ describe('AppRoutes guards', () => {
   it('redirects already-onboarded users away from /onboarding', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/onboarding')
-    expect(screen.getByRole('heading', { name: 'Your context model is ready' })).toBeInTheDocument()
+    expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
   })
 
-  it('lets a not-yet-onboarded user reach /onboarding', () => {
+  it('lets a not-yet-onboarded user reach /onboarding', async () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: false })
     renderAt('/onboarding')
-    expect(screen.getByRole('heading', { name: 'What are you building?' })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: 'What are you building?' })
+    ).toBeInTheDocument()
   })
 
   it('redirects signed-in users away from /login', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/login')
-    expect(screen.getByRole('heading', { name: 'Your context model is ready' })).toBeInTheDocument()
+    expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
   })
 })

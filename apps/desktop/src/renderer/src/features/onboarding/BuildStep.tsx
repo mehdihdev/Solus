@@ -1,7 +1,7 @@
 // Onboarding step 2 — "Building your context model". Ported from step 2 in
 // TestDesign/app/onboarding.jsx. The build log is a simulated animation; the
 // real flow runs sync + checker jobs and streams progress (API.md §2.5/§2.16).
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
@@ -22,11 +22,15 @@ export function BuildStep({ onComplete }: BuildStepProps): React.JSX.Element {
   const buildDone = useOnboardingStore((s) => s.buildDone)
   const appendBuildLine = useOnboardingStore((s) => s.appendBuildLine)
   const finishBuild = useOnboardingStore((s) => s.finishBuild)
-  const started = useRef(false)
+  const resetBuild = useOnboardingStore((s) => s.resetBuild)
 
+  // Every mount restarts the animation from a clean log — no once-only ref:
+  // under StrictMode the first mount's timers are cleared by cleanup, so the
+  // second mount MUST reschedule or the build never finishes. A build that
+  // already completed (resume-to-done) is left as-is.
   useEffect(() => {
-    if (started.current) return
-    started.current = true
+    if (useOnboardingStore.getState().buildDone) return
+    resetBuild()
     const timers: ReturnType<typeof setTimeout>[] = []
     BUILD_LOG_LINES.forEach((line, i) => {
       timers.push(setTimeout(() => appendBuildLine(line), FIRST_LINE_MS + i * PER_LINE_MS))
@@ -35,7 +39,7 @@ export function BuildStep({ onComplete }: BuildStepProps): React.JSX.Element {
       setTimeout(finishBuild, FIRST_LINE_MS + BUILD_LOG_LINES.length * PER_LINE_MS + FINISH_PAD_MS)
     )
     return () => timers.forEach(clearTimeout)
-  }, [appendBuildLine, finishBuild])
+  }, [appendBuildLine, finishBuild, resetBuild])
 
   return (
     <div style={{ width: 560 }}>

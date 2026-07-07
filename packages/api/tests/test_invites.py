@@ -170,3 +170,52 @@ async def test_invite_on_personal_team_triggers_upgrade(
     # The upgrade is also visible on the invite row's team relation in the DB.
     row = await db.scalar(select(Invite).limit(1))
     assert row is not None
+
+
+async def _notifications(client: AsyncClient, headers: dict[str, str]) -> list[dict[str, str]]:
+    resp = await client.get("/api/v1/users/me/notifications", headers=headers)
+    assert resp.status_code == 200, resp.text
+    data: list[dict[str, str]] = resp.json()["data"]
+    return data
+
+
+async def test_invite_notifies_existing_invitee(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """FND-01: the invitation rides the existing notification path — an invitee
+    who already has an account gets an in-app notification carrying the token."""
+    await me(client, bob_headers)  # Bob exists before the invite
+    team = await create_team(client, alice_headers)
+    invite = await invite_bob(client, alice_headers, team["id"])
+
+    notes = await _notifications(client, bob_headers)
+    invite_notes = [n for n in notes if n["type"] == "team.invite"]
+    assert len(invite_notes) == 1
+    assert invite_notes[0]["payload"]["team_id"] == team["id"]
+    assert invite_notes[0]["payload"]["token"] == invite["token"]
+
+
+async def test_invite_to_unregistered_email_creates_no_notification(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    await invite_bob(client, alice_headers, team["id"])  # Bob has no account yet
+
+    await me(client, bob_headers)  # provisions after the fact
+    notes = await _notifications(client, bob_headers)
+    assert [n for n in notes if n["type"] == "team.invite"] == []
+
+
+async def test_accept_notifies_inviter(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    await me(client, bob_headers)
+    team = await create_team(client, alice_headers)
+    invite = await invite_bob(client, alice_headers, team["id"])
+    accept = await client.post(f"/api/v1/invites/{invite['token']}/accept", headers=bob_headers)
+    assert accept.status_code == 200
+
+    notes = await _notifications(client, alice_headers)
+    accepted = [n for n in notes if n["type"] == "invite.accepted"]
+    assert len(accepted) == 1
+    assert accepted[0]["payload"]["team_id"] == team["id"]

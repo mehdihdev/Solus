@@ -128,3 +128,35 @@ describe('ConnectStep — GitHub routing', () => {
     expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
   })
 })
+
+describe('ConnectStep — skip path (FND-08)', () => {
+  beforeEach(reset)
+
+  it('offers Skip for now with zero connections and it triggers the build', async () => {
+    const onBuild = vi.fn()
+    await act(async () => {
+      render(<ConnectStep onBuild={onBuild} />)
+    })
+    const skip = screen.getByRole('button', { name: 'Skip for now' })
+    expect(skip).toBeEnabled()
+    await userEvent.click(skip)
+    expect(onBuild).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the primary build button gated until enough sources connect', async () => {
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    expect(screen.getByRole('button', { name: /Build context model/ })).toBeDisabled()
+  })
+
+  it('hides Skip once the recommended sources are connected', async () => {
+    useOnboardingStore.getState().completeConnect('github')
+    useOnboardingStore.getState().completeConnect('kicad')
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    expect(screen.queryByRole('button', { name: 'Skip for now' })).toBeNull()
+    expect(screen.getByRole('button', { name: /Build context model/ })).toBeEnabled()
+  })
+})

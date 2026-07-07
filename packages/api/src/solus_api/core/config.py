@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # `${api}/api/v1/integrations/github/oauth/callback`.
     github_client_id: str | None = None
     github_client_secret: str | None = None
+
+    # GitLab OAuth application (SOLUSDEV-104). base_url supports self-hosted
+    # instances; the OAuth app is registered on that instance.
+    gitlab_client_id: str | None = None
+    gitlab_client_secret: str | None = None
+    gitlab_base_url: str = "https://gitlab.com"
     # Where the OAuth callback sends the user back to (the desktop app deep
     # link or a local page). Defaults to the renderer dev origin.
     github_oauth_redirect_app: str = "http://localhost:5173/#/onboarding"

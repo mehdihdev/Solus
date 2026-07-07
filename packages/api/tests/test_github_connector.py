@@ -332,3 +332,14 @@ async def test_sync_surfaces_tree_truncation() -> None:
     )
     result = await GitHubConnector().sync(_ctx())
     assert any("truncated" in e.message.lower() for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_sync_rejects_dot_segment_repo() -> None:
+    """`..` satisfies the repo charclass — dot-segments must still be rejected
+    (single-slash traversal like '../evil' slipped past the regex alone)."""
+    for bad_repo in ("../evil", "./evil", "evil/..", "evil/."):
+        ctx = SyncContext(credentials=Credentials(token="t"), config={"repo": bad_repo})
+        with pytest.raises(ConnectorError) as exc:
+            await GitHubConnector().sync(ctx)
+        assert exc.value.code == "invalid_repo", bad_repo

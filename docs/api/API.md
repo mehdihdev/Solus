@@ -87,8 +87,8 @@ User ──member of──▶ Team ──owns──▶ Project ──contains─
 | GET    | `/api/v1/users/me`                                      | Current user profile, teams, trial/subscription status                  |
 | PATCH  | `/api/v1/users/me`                                      | Update profile (name, avatar)                                           |
 | DELETE | `/api/v1/users/me`                                      | Account deletion (cascades per data-retention policy)                   |
-| GET    | `/api/v1/users/me/settings`                             | Settings incl. `sol_mode: "guide"\|"expert"` (ADR-016)                  |
-| PATCH  | `/api/v1/users/me/settings`                             | Update settings (sol_mode switchable at any time)                       |
+| GET    | `/api/v1/users/me/settings`                             | Settings incl. `sol_mode` (ADR-016), `data_collection_consent` (ADR-011), `onboarding_step` (FND-08 resume)                  |
+| PATCH  | `/api/v1/users/me/settings`                             | Update settings (sol_mode switchable anytime; consent opt-in/out — SOLUSDEV-87)                       |
 | GET    | `/api/v1/users/me/notifications`                        | Cross-domain change notifications, cursor-paginated                     |
 | POST   | `/api/v1/users/me/notifications/{notification_id}/read` | Mark read                                                               |
 | POST   | `/api/v1/users/me/notifications/read-all`               | Mark all read                                                           |
@@ -116,13 +116,15 @@ User ──member of──▶ Team ──owns──▶ Project ──contains─
 
 ### 2.3 Projects
 
-| Method | Path                               | Description                                                  |
-| ------ | ---------------------------------- | ------------------------------------------------------------ |
-| GET    | `/api/v1/teams/{team_id}/projects` | List projects                                                |
-| POST   | `/api/v1/teams/{team_id}/projects` | Create project                                               |
-| GET    | `/api/v1/projects/{project_id}`    | Project detail (incl. connected-source summary, graph stats) |
-| PATCH  | `/api/v1/projects/{project_id}`    | Update name/description/settings                             |
-| DELETE | `/api/v1/projects/{project_id}`    | Delete (admin, confirmation required)                        |
+| Method | Path                                      | Description                                                                                                   |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/teams/{team_id}/projects`        | List projects with dashboard summary counts; `?include_archived=true` to include archived (added SOLUSDEV-84) |
+| POST   | `/api/v1/teams/{team_id}/projects`        | Create project (notifies other team members)                                                                  |
+| GET    | `/api/v1/projects/{project_id}`           | Project detail (incl. connected-source summary, graph stats)                                                  |
+| PATCH  | `/api/v1/projects/{project_id}`           | Update name/description/settings                                                                              |
+| POST   | `/api/v1/projects/{project_id}/archive`   | Archive (soft delete; leaves default listing, keeps graph) — added SOLUSDEV-84                                |
+| POST   | `/api/v1/projects/{project_id}/unarchive` | Restore an archived project — added SOLUSDEV-84                                                               |
+| DELETE | `/api/v1/projects/{project_id}`           | Delete (admin, confirmation required)                                                                         |
 
 ### 2.4 Graph — entities & relations (ADR-001, the core)
 

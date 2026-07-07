@@ -46,6 +46,8 @@ export interface OnboardingState {
   connectAll: () => void
   appendBuildLine: (line: BuildLine) => void
   finishBuild: () => void
+  /** Restart the build animation state (used when the Build step (re)mounts). */
+  resetBuild: () => void
   reset: () => void
 }
 
@@ -98,5 +100,6 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
 
   appendBuildLine: (line) => set((s) => ({ buildLog: [...s.buildLog, line] })),
   finishBuild: () => set({ buildDone: true }),
+  resetBuild: () => set({ buildLog: [], buildDone: false }),
   reset: () => set({ ...INITIAL, connections: {}, buildLog: [] })
 }))

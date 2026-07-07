@@ -114,6 +114,28 @@ export function updateSolMode(mode: SolMode, client: ApiClient = api): Promise<u
   })
 }
 
+export type OnboardingStepName = 'about' | 'connect' | 'build' | 'done'
+
+export interface UserSettings {
+  sol_mode: ApiSolMode
+  data_collection_consent: boolean
+  onboarding_step: OnboardingStepName | string
+}
+
+export function getSettings(client: ApiClient = api): Promise<UserSettings> {
+  return client.request<UserSettings>('/users/me/settings')
+}
+
+export function updateOnboardingStep(
+  step: OnboardingStepName,
+  client: ApiClient = api
+): Promise<UserSettings> {
+  return client.request<UserSettings>('/users/me/settings', {
+    method: 'PATCH',
+    body: { onboarding_step: step }
+  })
+}
+
 export function createProject(
   teamId: string,
   input: { name: string; description?: string },

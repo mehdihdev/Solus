@@ -107,3 +107,18 @@ describe('onboardingStore', () => {
     expect(connectedCount(s.connections)).toBe(0)
   })
 })
+
+
+describe('resetBuild', () => {
+  it('clears the build log and done flag without touching other state', () => {
+    const store = useOnboardingStore.getState()
+    store.setDescription('keep me')
+    store.appendBuildLine(['a', 'b'])
+    store.finishBuild()
+    useOnboardingStore.getState().resetBuild()
+    const s = useOnboardingStore.getState()
+    expect(s.buildLog).toEqual([])
+    expect(s.buildDone).toBe(false)
+    expect(s.description).toBe('keep me')
+  })
+})

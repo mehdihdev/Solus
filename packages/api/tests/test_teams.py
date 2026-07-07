@@ -94,3 +94,53 @@ async def test_personal_team_cannot_be_deleted(
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "personal_team_undeletable"
+
+
+async def test_team_settings_default_and_persist(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """FND-07: team settings persist to the DB and come back on detail."""
+    team = await create_team(client, alice_headers)
+    detail = (await client.get(f"/api/v1/teams/{team['id']}", headers=alice_headers)).json()[
+        "data"
+    ]
+    assert detail["settings"] == {"notify_project_created": True}
+
+    resp = await client.patch(
+        f"/api/v1/teams/{team['id']}",
+        json={"settings": {"notify_project_created": False}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["settings"]["notify_project_created"] is False
+
+    detail = (await client.get(f"/api/v1/teams/{team['id']}", headers=alice_headers)).json()[
+        "data"
+    ]
+    assert detail["settings"]["notify_project_created"] is False
+
+
+async def test_team_settings_reject_unknown_keys(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    resp = await client.patch(
+        f"/api/v1/teams/{team['id']}",
+        json={"settings": {"evil_flag": True}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_team_settings_require_admin(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    resp = await client.patch(
+        f"/api/v1/teams/{team['id']}",
+        json={"settings": {"notify_project_created": False}},
+        headers=bob_headers,
+    )
+    assert resp.status_code == 403

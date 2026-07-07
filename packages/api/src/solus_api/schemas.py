@@ -45,6 +45,21 @@ class UserUpdate(StrictModel):
 
 class SettingsUpdate(StrictModel):
     sol_mode: Literal["guide", "expert"] | None = None
+    # ADR-011: data collection is consent-gated; this is the opt-in/out switch.
+    data_collection_consent: bool | None = None
+    # FND-08 onboarding state machine; persisted so resume works anywhere.
+    onboarding_step: Literal["about", "connect", "build", "done"] | None = None
+
+
+class TeamSettings(StrictModel):
+    """Validated team preferences (FND-07). Every key has a default so reads
+    merge cleanly for teams created before a key existed."""
+
+    # Whether project.created fans out to the rest of the team (FND-04/05).
+    notify_project_created: bool = True
+
+
+TEAM_SETTINGS_DEFAULTS: dict[str, Any] = TeamSettings().model_dump()
 
 
 class TeamCreate(StrictModel):
@@ -55,6 +70,7 @@ class TeamCreate(StrictModel):
 
 class TeamUpdate(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
+    settings: TeamSettings | None = None
 
     _name_not_blank = field_validator("name")(_not_blank)
 
@@ -229,6 +245,8 @@ def serialize_team_detail(team: Team, role: Role, member_count: int) -> dict[str
         "name": team.name,
         "is_personal": team.is_personal,
         "plan_status": team.plan_status,
+        # Defaults merged so pre-column teams read complete settings.
+        "settings": {**TEAM_SETTINGS_DEFAULTS, **team.settings},
         "created_at": team.created_at,
         "member_count": member_count,
         "role": role.value,
@@ -261,19 +279,27 @@ def serialize_invite(invite: Invite, *, include_token: bool = False) -> dict[str
     return data
 
 
-def serialize_project(project: Project, *, detail: bool = False) -> dict[str, Any]:
-    data = {
+def serialize_project(
+    project: Project,
+    *,
+    stats: dict[str, int] | None = None,
+    sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Project view. `stats`/`sources` are supplied by the caller (list rows get
+    summary counts, detail gets graph stats + connected sources)."""
+    data: dict[str, Any] = {
         "id": project.id,
         "team_id": project.team_id,
         "name": project.name,
         "description": project.description,
+        "archived_at": project.archived_at,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
-    if detail:
-        # Graph stats and connected sources arrive with Phases 2–3.
-        data["stats"] = {"entities": 0, "relations": 0}
-        data["sources"] = []
+    if stats is not None:
+        data["stats"] = stats
+    if sources is not None:
+        data["sources"] = sources
     return data
 
 

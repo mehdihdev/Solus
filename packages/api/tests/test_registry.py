@@ -54,3 +54,27 @@ def test_catalog_exposes_auth_and_config() -> None:
     assert catalog == [
         {"type": "fake", "auth_kind": "pat", "config_fields": ["repo"], "scopes": []}
     ]
+
+
+def test_build_registry_ships_both_code_hosts() -> None:
+    from solus_api.connectors.github import GitHubConnector
+    from solus_api.connectors.gitlab import GitLabConnector
+    from solus_api.core.config import Settings
+
+    settings = Settings(
+        supabase_jwt_secret="dummy-value-tests-only",
+        database_url="sqlite+aiosqlite://",
+        gitlab_base_url="https://gitlab.example.com",
+    )
+    from solus_api.connectors.registry import build_registry
+
+    registry = build_registry(settings)
+    assert registry.providers() == ["github", "gitlab"]
+    assert isinstance(registry.create("github"), GitHubConnector)
+    gitlab = registry.create("gitlab")
+    assert isinstance(gitlab, GitLabConnector)
+    # Self-hosted base URL threads through from settings.
+    assert gitlab.authorize_url.__self__ is gitlab  # sanity: bound instance
+    catalog = {c["type"]: c for c in registry.catalog()}
+    assert catalog["gitlab"]["auth_kind"] == "oauth"
+    assert "read_api" in catalog["gitlab"]["scopes"]

@@ -129,12 +129,24 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
       >
         <Mono size={10} color={ready ? 'var(--ok)' : 'var(--mut)'}>
           {count} OF {INTEGRATIONS.length} CONNECTED{' '}
-          {ready ? '— READY' : `(NEED ${MIN_SOURCES_TO_BUILD}+)`}
+          {ready ? '— READY' : `(${MIN_SOURCES_TO_BUILD}+ RECOMMENDED)`}
         </Mono>
-        <Button kind="primary" size="lg" disabled={!ready} onClick={onBuild}>
-          Build context model <Icons.arrowR size={14} />
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          {/* Connections never gate the workspace (FND-08): tools can always
+              be connected later from the Sources page. */}
+          {!ready && (
+            <Button kind="ghost" size="lg" onClick={onBuild} aria-label="Skip for now">
+              Skip for now
+            </Button>
+          )}
+          <Button kind="primary" size="lg" disabled={!ready} onClick={onBuild}>
+            Build context model <Icons.arrowR size={14} />
+          </Button>
+        </div>
       </div>
+      <p style={{ color: 'var(--mut)', fontSize: 11.5, marginTop: 10, textAlign: 'right' }}>
+        You can connect tools anytime later — skipping takes you straight to your workspace.
+      </p>
     </div>
   )
 }
