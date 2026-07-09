@@ -58,6 +58,7 @@ class ConnectorRegistry:
 def build_registry(settings: Settings) -> ConnectorRegistry:
     """The default registry. Code hosts shipped (SOLUSDEV-103/104); the rest of
     the roster (KiCad, Onshape, ROS) registers here as each connector lands."""
+    from solus_api.connectors.altium import AltiumConnector
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
 
@@ -77,4 +78,6 @@ def build_registry(settings: Settings) -> ConnectorRegistry:
             base_url=settings.gitlab_base_url,
         ),
     )
+    # Altium (SOLUSDEV-102) — committed-export EDA connector, parse-export scaffold.
+    registry.register("altium", AltiumConnector)
     return registry

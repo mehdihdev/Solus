@@ -179,6 +179,7 @@ class SourceType(enum.StrEnum):
     KICAD = "kicad"
     ONSHAPE = "onshape"
     ROS = "ros"
+    ALTIUM = "altium"  # committed-export EDA connector (SOLUSDEV-102)
 
 
 class SourceStatus(enum.StrEnum):

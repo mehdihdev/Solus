@@ -113,7 +113,7 @@ class ProjectUpdate(StrictModel):
     _name_not_blank = field_validator("name")(_not_blank)
 
 
-SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros"]
+SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros", "altium"]
 
 
 class SourceCreate(StrictModel):

@@ -170,6 +170,25 @@ async def test_token_connect_rejected_for_oauth_only_connector(
     assert resp.json()["error"]["code"] == "token_connect_unsupported"
 
 
+async def test_connect_altium_committed_export_source(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    # SOLUSDEV-102: the `altium` provider is accepted by SourceCreate (Literal),
+    # SourceType, and the DB CHECK constraint. As a committed-export connector it
+    # has no OAuth/token, so it lands PENDING (awaiting the export) — 201, not a
+    # 422 (Literal) or 500 (SourceType) that M2 would have caused.
+    project_id = await _project(client, alice_headers)
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={"type": "altium", "name": "main-board", "config": {}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    source = resp.json()["data"]
+    assert source["type"] == "altium"
+    assert source["status"] == "pending"
+
+
 async def test_sync_debounced_while_in_progress(
     client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
 ) -> None:

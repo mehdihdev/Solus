@@ -56,7 +56,8 @@ def test_catalog_exposes_auth_and_config() -> None:
     ]
 
 
-def test_build_registry_ships_both_code_hosts() -> None:
+def test_build_registry_ships_the_roster() -> None:
+    from solus_api.connectors.altium import AltiumConnector
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
     from solus_api.core.config import Settings
@@ -69,10 +70,15 @@ def test_build_registry_ships_both_code_hosts() -> None:
     from solus_api.connectors.registry import build_registry
 
     registry = build_registry(settings)
-    assert registry.providers() == ["github", "gitlab"]
+    assert registry.providers() == ["altium", "github", "gitlab"]
     assert isinstance(registry.create("github"), GitHubConnector)
     gitlab = registry.create("gitlab")
     assert isinstance(gitlab, GitLabConnector)
+    assert isinstance(registry.create("altium"), AltiumConnector)
     catalog = {c["type"]: c for c in registry.catalog()}
     assert catalog["gitlab"]["auth_kind"] == "oauth"
     assert "read_api" in catalog["gitlab"]["scopes"]
+    # Altium (SOLUSDEV-102) — committed-export EDA connector: no tool credential,
+    # configured with the export content in v1.
+    assert catalog["altium"]["auth_kind"] == "none"
+    assert catalog["altium"]["config_fields"] == ["export"]

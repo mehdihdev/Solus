@@ -1,0 +1,7 @@
+# gitleaks false-positive suppressions (fingerprint = commit:file:rule:startline).
+# Each entry is a documented non-secret; real secrets are still caught everywhere.
+
+# SOLUSDEV-102: generic-api-key matched the prose "orphan/duplicate" in a test
+# docstring (after the word "keys,"). Not a credential. The docstring is also
+# reworded to avoid the heuristic going forward; this pins the historical hit.
+3e9fdba5050b906850a880c33c6150e64d98caf0:packages/api/tests/test_eda.py:generic-api-key:5
