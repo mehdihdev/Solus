@@ -28,6 +28,8 @@ export interface Project {
   team_id: string
   name: string
   description: string | null
+  /** Soft-delete timestamp (SOLUSDEV-84); null when active. */
+  archived_at: string | null
   created_at: string
   updated_at: string
 }
@@ -144,13 +146,43 @@ export function createProject(
   return client.request<Project>(`/teams/${teamId}/projects`, { method: 'POST', body: input })
 }
 
-/** Projects owned by a team (API.md §2.3), newest first per the backend. */
-export function listProjects(teamId: string, client: ApiClient = api): Promise<Project[]> {
-  return client.request<Project[]>(`/teams/${teamId}/projects`)
+/** Projects owned by a team (API.md §2.3), newest first per the backend.
+ *  Pass `includeArchived` to include soft-deleted projects (SOLUSDEV-84). */
+export function listProjects(
+  teamId: string,
+  options: { includeArchived?: boolean } = {},
+  client: ApiClient = api
+): Promise<Project[]> {
+  const query = options.includeArchived ? '?include_archived=true' : ''
+  return client.request<Project[]>(`/teams/${teamId}/projects${query}`)
 }
 
 export function getProject(projectId: string, client: ApiClient = api): Promise<ProjectDetail> {
   return client.request<ProjectDetail>(`/projects/${projectId}`)
+}
+
+/** Rename / re-describe a project (API.md §2.3). Returns the updated detail. */
+export function updateProject(
+  projectId: string,
+  input: { name?: string; description?: string },
+  client: ApiClient = api
+): Promise<ProjectDetail> {
+  return client.request<ProjectDetail>(`/projects/${projectId}`, { method: 'PATCH', body: input })
+}
+
+/** Archive (soft-delete) a project — SOLUSDEV-84. Idempotent; returns the project. */
+export function archiveProject(projectId: string, client: ApiClient = api): Promise<Project> {
+  return client.request<Project>(`/projects/${projectId}/archive`, { method: 'POST' })
+}
+
+/** Restore an archived project — SOLUSDEV-84. Idempotent; returns the project. */
+export function unarchiveProject(projectId: string, client: ApiClient = api): Promise<Project> {
+  return client.request<Project>(`/projects/${projectId}/unarchive`, { method: 'POST' })
+}
+
+/** Permanently delete a project (admin, confirmation required — API.md §2.3). */
+export function deleteProject(projectId: string, client: ApiClient = api): Promise<void> {
+  return client.request<void>(`/projects/${projectId}`, { method: 'DELETE' })
 }
 
 /** The personal team auto-provisioned at first login (API.md §1.3). */
@@ -381,6 +413,21 @@ export function revokeInvite(
   return client.request<void>(`/teams/${teamId}/invites/${inviteId}`, { method: 'DELETE' })
 }
 
+export interface AcceptInviteResult {
+  team_id: string
+  role: TeamRole
+}
+
+/** Redeem a one-time invite token (API.md §2.2). Authed as the invitee; the
+ *  backend enforces the email match. Returns the joined team + granted role. */
+export function acceptInvite(token: string, client: ApiClient = api): Promise<AcceptInviteResult> {
+  // Token is user-pasted free text (not a server-issued id) — encode it so a
+  // stray `/`, `?`, or `..` can't alter the request path (CLAUDE.md §7).
+  return client.request<AcceptInviteResult>(`/invites/${encodeURIComponent(token)}/accept`, {
+    method: 'POST'
+  })
+}
+
 export function listActivity(teamId: string, client: ApiClient = api): Promise<ActivityApi[]> {
   return client.request<ActivityApi[]>(`/teams/${teamId}/activity`)
 }
@@ -415,4 +462,9 @@ export function markNotificationRead(
   client: ApiClient = api
 ): Promise<NotificationApi> {
   return client.request<NotificationApi>(`/users/me/notifications/${id}/read`, { method: 'POST' })
+}
+
+/** Mark every unread notification read (API.md §2.1). Returns the count updated. */
+export function markAllNotificationsRead(client: ApiClient = api): Promise<{ updated: number }> {
+  return client.request<{ updated: number }>('/users/me/notifications/read-all', { method: 'POST' })
 }

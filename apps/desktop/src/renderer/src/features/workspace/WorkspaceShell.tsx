@@ -184,6 +184,7 @@ export function WorkspaceShell(): React.JSX.Element {
             <NotificationsPopover
               items={notifs.items}
               onRead={(id) => void notifs.markRead(id)}
+              onReadAll={() => void notifs.markAllRead()}
               onClose={() => setNotifOpen(false)}
             />
           ) : (

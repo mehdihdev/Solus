@@ -4,11 +4,17 @@
 // bypass / unreachable API) so the shell can show a friendly empty home.
 import { useCallback, useEffect, useState } from 'react'
 import {
+  acceptInvite,
+  archiveProject as archiveProjectApi,
   createProject as createProjectApi,
   createTeam as createTeamApi,
+  deleteProject as deleteProjectApi,
   getMe,
   listActivity,
   listProjects,
+  unarchiveProject as unarchiveProjectApi,
+  updateProject as updateProjectApi,
+  type AcceptInviteResult,
   type ActivityApi,
   type Me,
   type Project,
@@ -26,6 +32,11 @@ export interface TeamProjects {
 export interface HomeActions {
   createProject: (teamId: string, name: string) => Promise<Project | null>
   createTeam: (name: string) => Promise<boolean>
+  joinTeam: (token: string) => Promise<AcceptInviteResult | null>
+  renameProject: (projectId: string, name: string) => Promise<boolean>
+  archiveProject: (projectId: string) => Promise<boolean>
+  unarchiveProject: (projectId: string) => Promise<boolean>
+  deleteProject: (projectId: string) => Promise<boolean>
   refresh: () => Promise<void>
 }
 
@@ -49,7 +60,10 @@ interface HomeSnapshot {
 async function fetchHome(): Promise<HomeSnapshot> {
   const me = await getMe()
   const groups = await Promise.all(
-    me.teams.map(async (team) => ({ team, projects: await listProjects(team.team_id) }))
+    me.teams.map(async (team) => ({
+      team,
+      projects: await listProjects(team.team_id, { includeArchived: true })
+    }))
   )
   const feeds = await Promise.all(me.teams.map((t) => listActivity(t.team_id).catch(() => [])))
   const activity = feeds
@@ -86,6 +100,20 @@ export function useHomeData(): HomeData {
     void load()
   }, [load])
 
+  // Run a mutation, refresh the home snapshot, and report success as a boolean.
+  const runAction = useCallback(
+    async (action: () => Promise<unknown>): Promise<boolean> => {
+      try {
+        await action()
+        await load().catch(() => undefined)
+        return true
+      } catch {
+        return false
+      }
+    },
+    [load]
+  )
+
   const actions: HomeActions = {
     createProject: async (teamId, name) => {
       try {
@@ -96,15 +124,22 @@ export function useHomeData(): HomeData {
         return null
       }
     },
-    createTeam: async (name) => {
+    createTeam: (name) => runAction(() => createTeamApi(name)),
+    joinTeam: async (token) => {
       try {
-        await createTeamApi(name)
+        const result = await acceptInvite(token)
+        // Focus the newly-joined team so it (and its projects) is in view.
+        useWorkspaceStore.getState().setTeamId(result.team_id)
         await load().catch(() => undefined)
-        return true
+        return result
       } catch {
-        return false
+        return null
       }
     },
+    renameProject: (projectId, name) => runAction(() => updateProjectApi(projectId, { name })),
+    archiveProject: (projectId) => runAction(() => archiveProjectApi(projectId)),
+    unarchiveProject: (projectId) => runAction(() => unarchiveProjectApi(projectId)),
+    deleteProject: (projectId) => runAction(() => deleteProjectApi(projectId)),
     refresh: load
   }
 

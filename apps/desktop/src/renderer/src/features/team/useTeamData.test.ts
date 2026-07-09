@@ -54,6 +54,23 @@ beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+  vi.mocked(resources.getMe).mockResolvedValue({
+    id: 'u1',
+    email: 'maya@strider.dev',
+    name: 'Maya',
+    avatar_url: null,
+    created_at: '',
+    teams: [
+      {
+        team_id: 't1',
+        name: 'Strider',
+        role: 'owner',
+        is_personal: false,
+        plan_status: 'trial',
+        trial_ends_at: ''
+      }
+    ]
+  })
   vi.mocked(resources.getTeamDetail).mockResolvedValue(TEAM)
   vi.mocked(resources.listMembers).mockResolvedValue(MEMBERS)
   vi.mocked(resources.listInvites).mockResolvedValue([])
@@ -150,6 +167,39 @@ describe('useTeamData', () => {
     await act(async () => {
       expect(await result.current.actions.deleteTeam()).toBe(false)
     })
+  })
+
+  it('exposes the caller’s teams and switches the active team', async () => {
+    vi.mocked(resources.getMe).mockResolvedValue({
+      id: 'u1',
+      email: 'maya@strider.dev',
+      name: 'Maya',
+      avatar_url: null,
+      created_at: '',
+      teams: [
+        {
+          team_id: 't1',
+          name: 'Strider',
+          role: 'owner',
+          is_personal: false,
+          plan_status: 'trial',
+          trial_ends_at: ''
+        },
+        {
+          team_id: 't2',
+          name: 'Rocket Lab',
+          role: 'member',
+          is_personal: false,
+          plan_status: 'active',
+          trial_ends_at: ''
+        }
+      ]
+    })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.teams.map((t) => t.team_id)).toEqual(['t1', 't2'])
+    act(() => result.current.actions.switchTeam('t2'))
+    expect(useWorkspaceStore.getState().teamId).toBe('t2')
   })
 
   it('role change succeeds and removal surfaces failure as false', async () => {

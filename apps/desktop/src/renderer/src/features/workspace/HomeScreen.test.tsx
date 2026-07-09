@@ -7,6 +7,7 @@ import { HomeScreen } from './HomeScreen'
 import * as homeData from './useHomeData'
 import * as meHook from './useMe'
 import { FALLBACK_PROJECT_NAME } from './workspaceData.constants'
+import { useShellStore } from './shellStore'
 
 vi.mock('./useHomeData', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./useHomeData')>()
@@ -24,8 +25,22 @@ const PROJECT = {
   team_id: 't1',
   name: 'Rover MK2',
   description: 'six-wheel rover',
+  archived_at: null,
   created_at: '',
   updated_at: ''
+}
+
+function homeActions(): homeData.HomeActions {
+  return {
+    createProject: vi.fn(),
+    createTeam: vi.fn(),
+    joinTeam: vi.fn(),
+    renameProject: vi.fn(),
+    archiveProject: vi.fn(),
+    unarchiveProject: vi.fn(),
+    deleteProject: vi.fn(),
+    refresh: vi.fn()
+  }
 }
 
 function mockHome(overrides: Partial<homeData.HomeData> = {}): homeData.HomeData {
@@ -56,7 +71,7 @@ function mockHome(overrides: Partial<homeData.HomeData> = {}): homeData.HomeData
         created_at: '2026-07-06T00:00:00Z'
       }
     ],
-    actions: { createProject: vi.fn(), createTeam: vi.fn(), refresh: vi.fn() },
+    actions: homeActions(),
     ...overrides
   }
   vi.mocked(homeData.useHomeData).mockReturnValue(value)
@@ -107,5 +122,137 @@ describe('HomeScreen', () => {
     mockHome({ status: 'loading', groups: [], activity: [] })
     render(<HomeScreen onOpenProject={vi.fn()} />)
     expect(screen.queryByText('Strider')).not.toBeInTheDocument()
+  })
+
+  it('joins a team by pasting an invite token', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.joinTeam).mockResolvedValue({ team_id: 't9', role: 'member' })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByText('Join team'))
+    await userEvent.type(screen.getByLabelText('Invite token'), 'tok_abc')
+    await userEvent.click(screen.getByRole('button', { name: 'Join' }))
+    expect(vi.mocked(home.actions.joinTeam)).toHaveBeenCalledWith('tok_abc')
+  })
+
+  it('shows an error when the invite token is rejected', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.joinTeam).mockResolvedValue(null)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByText('Join team'))
+    await userEvent.type(screen.getByLabelText('Invite token'), 'bad')
+    await userEvent.click(screen.getByRole('button', { name: 'Join' }))
+    expect(await screen.findByText(/couldn.t join/i)).toBeInTheDocument()
+  })
+
+  it('renames a project through the row menu', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.renameProject).mockResolvedValue(true)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
+    await userEvent.click(screen.getByText('Rename'))
+    const input = screen.getByLabelText('Project name')
+    await userEvent.clear(input)
+    await userEvent.type(input, 'Rover MK3')
+    await userEvent.click(screen.getByText('Save'))
+    expect(vi.mocked(home.actions.renameProject)).toHaveBeenCalledWith('p1', 'Rover MK3')
+  })
+
+  it('archives a project through the row menu', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.archiveProject).mockResolvedValue(true)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
+    await userEvent.click(screen.getByText('Archive'))
+    expect(vi.mocked(home.actions.archiveProject)).toHaveBeenCalledWith('p1')
+  })
+
+  it('deletes a project only after confirming', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.deleteProject).mockResolvedValue(true)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
+    await userEvent.click(screen.getByText('Delete'))
+    expect(vi.mocked(home.actions.deleteProject)).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+    expect(vi.mocked(home.actions.deleteProject)).toHaveBeenCalledWith('p1')
+  })
+
+  it('keeps the rename dialog open and shows an error when rename fails', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.renameProject).mockResolvedValue(false)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
+    await userEvent.click(screen.getByText('Rename'))
+    await userEvent.click(screen.getByText('Save'))
+    expect(await screen.findByText(/couldn.t rename/i)).toBeInTheDocument()
+    // Dialog stays open so the user can retry.
+    expect(screen.getByLabelText('Project name')).toBeInTheDocument()
+  })
+
+  it('keeps the delete dialog open and shows an error when delete fails', async () => {
+    const home = mockHome()
+    vi.mocked(home.actions.deleteProject).mockResolvedValue(false)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
+    await userEvent.click(screen.getByText('Delete'))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete project' }))
+    expect(await screen.findByText(/couldn.t delete/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeInTheDocument()
+  })
+
+  it('shows a toast when archiving fails', async () => {
+    useShellStore.getState().reset()
+    const home = mockHome()
+    vi.mocked(home.actions.archiveProject).mockResolvedValue(false)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
+    await userEvent.click(screen.getByText('Archive'))
+    await vi.waitFor(() => expect(useShellStore.getState().toast).not.toBeNull())
+    expect(useShellStore.getState().toast?.kind).toBe('warn')
+  })
+
+  it('lists archived projects with an unarchive action', async () => {
+    const home = mockHome({
+      groups: [
+        {
+          team: {
+            team_id: 't1',
+            name: 'Strider',
+            role: 'owner',
+            is_personal: false,
+            plan_status: 'trial',
+            trial_ends_at: ''
+          },
+          projects: [{ ...PROJECT, id: 'p2', name: 'Old Rig', archived_at: '2026-01-01T00:00:00Z' }]
+        }
+      ]
+    })
+    vi.mocked(home.actions.unarchiveProject).mockResolvedValue(true)
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByText('Old Rig')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Unarchive Old Rig' }))
+    expect(vi.mocked(home.actions.unarchiveProject)).toHaveBeenCalledWith('p2')
+  })
+
+  it('hides management actions for viewers', () => {
+    mockHome({
+      groups: [
+        {
+          team: {
+            team_id: 't1',
+            name: 'Strider',
+            role: 'viewer',
+            is_personal: false,
+            plan_status: 'trial',
+            trial_ends_at: ''
+          },
+          projects: [PROJECT]
+        }
+      ]
+    })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(
+      screen.queryByRole('button', { name: 'Project actions for Rover MK2' })
+    ).not.toBeInTheDocument()
   })
 })

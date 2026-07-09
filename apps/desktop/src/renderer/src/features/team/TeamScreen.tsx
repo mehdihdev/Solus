@@ -44,15 +44,51 @@ export function TeamScreen({ onOpenAlert }: TeamScreenProps): React.JSX.Element 
 
 /* ============================ LIVE (API-backed) ============================ */
 
+function TeamSwitcher({
+  teams,
+  currentId,
+  onSwitch
+}: {
+  teams: TeamData['teams']
+  currentId: string | undefined
+  onSwitch: TeamData['actions']['switchTeam']
+}): React.JSX.Element | null {
+  if (teams.length < 2) return null
+  return (
+    <select
+      aria-label="Switch team"
+      value={currentId ?? ''}
+      onChange={(e) => onSwitch(e.target.value)}
+      style={{
+        marginTop: 8,
+        background: 'var(--bg)',
+        color: 'var(--tx)',
+        border: '1px solid var(--bd)',
+        borderRadius: 3,
+        padding: '5px 8px',
+        fontSize: 12,
+        fontFamily: 'var(--font-ui)'
+      }}
+    >
+      {teams.map((t) => (
+        <option key={t.team_id} value={t.team_id}>
+          {t.name}
+          {t.is_personal ? ' (personal)' : ''}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function TeamScreenLive({ data }: { data: TeamData }): React.JSX.Element {
-  const { team, members, invites, activity, myRole, actions } = data
+  const { team, members, invites, activity, teams, myRole, actions } = data
   const canManage = myRole !== null && MANAGER_ROLES.includes(myRole)
   const [inviteOpen, setInviteOpen] = useState(false)
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
       <div style={{ maxWidth: 920, margin: '0 auto', padding: '22px 24px 48px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
               {team?.name ?? 'Team'}
@@ -61,6 +97,7 @@ function TeamScreenLive({ data }: { data: TeamData }): React.JSX.Element {
               {members.length} {members.length === 1 ? 'member' : 'members'}
               {team && !team.is_personal ? '' : ' · personal workspace'}
             </div>
+            <TeamSwitcher teams={teams} currentId={team?.id} onSwitch={actions.switchTeam} />
           </div>
           {canManage && (
             <Button id="btn-invite" kind="primary" size="sm" onClick={() => setInviteOpen(true)}>

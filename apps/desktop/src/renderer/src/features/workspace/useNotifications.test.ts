@@ -7,7 +7,12 @@ import * as resources from '../../lib/api/resources'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
-  return { ...actual, listNotificationsPage: vi.fn(), markNotificationRead: vi.fn() }
+  return {
+    ...actual,
+    listNotificationsPage: vi.fn(),
+    markNotificationRead: vi.fn(),
+    markAllNotificationsRead: vi.fn()
+  }
 })
 
 const NOTIFS: resources.NotificationApi[] = [
@@ -55,6 +60,28 @@ describe('useNotifications', () => {
     })
     expect(result.current.unreadCount).toBe(0)
     expect(vi.mocked(resources.markNotificationRead)).toHaveBeenCalledWith('n1')
+  })
+
+  it('marks all read optimistically, zeroing the unread count', async () => {
+    vi.mocked(resources.markAllNotificationsRead).mockResolvedValue({ updated: 1 })
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.markAllRead()
+    })
+    expect(result.current.unreadCount).toBe(0)
+    expect(vi.mocked(resources.markAllNotificationsRead)).toHaveBeenCalled()
+  })
+
+  it('reconciles by refetching if mark-all-read fails', async () => {
+    vi.mocked(resources.markAllNotificationsRead).mockRejectedValue(new Error('500'))
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.markAllRead()
+    })
+    // listNotificationsPage called once on mount, once on reconcile.
+    expect(vi.mocked(resources.listNotificationsPage).mock.calls.length).toBeGreaterThan(1)
   })
 
   it('is offline when not linked', async () => {

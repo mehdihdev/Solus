@@ -267,4 +267,67 @@ describe('team resources', () => {
       '/teams/t1'
     ])
   })
+
+  it('accepts an invite by token', async () => {
+    const { acceptInvite } = await import('./resources')
+    const { client, calls } = stubClient({ team_id: 't1', role: 'member' })
+    const result = await acceptInvite('tok_abc', client)
+    expect(calls[0].path).toBe('/invites/tok_abc/accept')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    expect(result).toMatchObject({ team_id: 't1', role: 'member' })
+  })
+
+  it('percent-encodes an invite token so it cannot alter the path', async () => {
+    const { acceptInvite } = await import('./resources')
+    const { client, calls } = stubClient({ team_id: 't1', role: 'member' })
+    await acceptInvite('a/b?c', client)
+    expect(calls[0].path).toBe('/invites/a%2Fb%3Fc/accept')
+  })
+
+  it('marks all notifications read', async () => {
+    const { markAllNotificationsRead } = await import('./resources')
+    const { client, calls } = stubClient({ updated: 3 })
+    const result = await markAllNotificationsRead(client)
+    expect(calls[0].path).toBe('/users/me/notifications/read-all')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    expect(result).toMatchObject({ updated: 3 })
+  })
+})
+
+describe('project management', () => {
+  it('lists projects and can include archived', async () => {
+    const { listProjects } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listProjects('t1', {}, client)
+    expect(calls[0].path).toBe('/teams/t1/projects')
+    await listProjects('t1', { includeArchived: true }, client)
+    expect(calls[1].path).toBe('/teams/t1/projects?include_archived=true')
+  })
+
+  it('renames a project via PATCH', async () => {
+    const { updateProject } = await import('./resources')
+    const { client, calls } = stubClient({ id: 'p1' })
+    await updateProject('p1', { name: 'Rover MK2' }, client)
+    expect(calls[0].path).toBe('/projects/p1')
+    expect(calls[0].options).toMatchObject({ method: 'PATCH', body: { name: 'Rover MK2' } })
+  })
+
+  it('archives and unarchives a project', async () => {
+    const { archiveProject, unarchiveProject } = await import('./resources')
+    const { client, calls } = stubClient({ id: 'p1' })
+    await archiveProject('p1', client)
+    expect(calls[0].path).toBe('/projects/p1/archive')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    await unarchiveProject('p1', client)
+    expect(calls[1].path).toBe('/projects/p1/unarchive')
+    expect(calls[1].options).toMatchObject({ method: 'POST' })
+  })
+
+  it('deletes a project via DELETE', async () => {
+    const { deleteProject } = await import('./resources')
+    const { client, calls } = stubClient(undefined)
+    await deleteProject('p1', client)
+    expect(calls[0].path).toBe('/projects/p1')
+    expect(calls[0].options).toMatchObject({ method: 'DELETE' })
+  })
 })

@@ -57,7 +57,15 @@ function personalUser(email: string): MeResponse {
 }
 
 function createdProject(name: string): CreatedProject {
-  return { id: 'p1', team_id: 't1', name, description: null, created_at: '', updated_at: '' }
+  return {
+    id: 'p1',
+    team_id: 't1',
+    name,
+    description: null,
+    archived_at: null,
+    created_at: '',
+    updated_at: ''
+  }
 }
 
 describe('provisionWorkspace', () => {

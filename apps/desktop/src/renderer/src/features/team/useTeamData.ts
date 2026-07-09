@@ -21,7 +21,8 @@ import {
   type InviteApi,
   type TeamDetail,
   type TeamMemberApi,
-  type TeamRole
+  type TeamRole,
+  type TeamSummary
 } from '../../lib/api/resources'
 import type { ApiMeta } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -40,6 +41,7 @@ export interface TeamActions {
   remove: (userId: string) => Promise<boolean>
   updateTeam: (input: TeamSettingsInput) => Promise<boolean>
   deleteTeam: () => Promise<boolean>
+  switchTeam: (teamId: string) => void
   refresh: () => Promise<void>
 }
 
@@ -51,6 +53,8 @@ export interface TeamData {
   activity: ActivityApi[]
   activityHasMore: boolean
   loadMoreActivity: () => Promise<void>
+  /** Every team the caller belongs to — powers the team switcher. */
+  teams: TeamSummary[]
   myRole: TeamRole | null
   actions: TeamActions
 }
@@ -59,12 +63,6 @@ interface Setters {
   setMembers: (m: TeamMemberApi[]) => void
   setInvites: (i: InviteApi[]) => void
   setTeam: (t: TeamDetail | null) => void
-}
-
-async function resolveTeamId(storedId: string | null): Promise<string | null> {
-  if (storedId) return storedId
-  const me = await getMe()
-  return personalTeam(me)?.team_id ?? null
 }
 
 /** Run an action, refresh the affected slice, and report success as a boolean. */
@@ -118,6 +116,8 @@ function createTeamActions(
       teamId ? runAction(() => updateTeamApi(teamId, input), load) : Promise.resolve(false),
     deleteTeam: () =>
       teamId ? runAction(() => deleteTeamApi(teamId), load) : Promise.resolve(false),
+    // Point the workspace at another team; the hook re-resolves off storedTeamId.
+    switchTeam: (id) => useWorkspaceStore.getState().setTeamId(id),
     refresh: load
   }
 }
@@ -134,6 +134,7 @@ export function useTeamData(): TeamData {
   const [invites, setInvites] = useState<InviteApi[]>([])
   const [activity, setActivity] = useState<ActivityApi[]>([])
   const [activityMeta, setActivityMeta] = useState<ApiMeta>({})
+  const [teams, setTeams] = useState<TeamSummary[]>([])
 
   const load = useCallback(async (): Promise<void> => {
     if (!linked) {
@@ -141,7 +142,11 @@ export function useTeamData(): TeamData {
       return
     }
     try {
-      const id = await resolveTeamId(storedTeamId)
+      // Fetch the profile first so the team switcher always has the full list,
+      // and resolve the active team from the stored id or the personal team.
+      const me = await getMe().catch(() => null)
+      setTeams(me?.teams ?? [])
+      const id = storedTeamId ?? (me ? (personalTeam(me)?.team_id ?? null) : null)
       if (!id) {
         setStatus('offline')
         return
@@ -189,6 +194,7 @@ export function useTeamData(): TeamData {
     activity,
     activityHasMore: activityMeta.has_next ?? false,
     loadMoreActivity,
+    teams,
     myRole: team?.role ?? null,
     actions
   }

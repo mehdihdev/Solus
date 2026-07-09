@@ -10,6 +10,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
   return {
     ...actual,
+    getMe: vi.fn(),
     getTeamDetail: vi.fn(),
     listMembers: vi.fn(),
     listInvites: vi.fn(),
@@ -17,6 +18,26 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     createInvite: vi.fn()
   }
 })
+
+function meWithTeams(teams: resources.TeamSummary[]): resources.Me {
+  return {
+    id: 'u1',
+    email: 'maya@strider.dev',
+    name: 'Maya K',
+    avatar_url: null,
+    created_at: '',
+    teams
+  }
+}
+
+const SOLO_TEAM: resources.TeamSummary = {
+  team_id: 't1',
+  name: 'Strider Robotics',
+  role: 'owner',
+  is_personal: false,
+  plan_status: 'trial',
+  trial_ends_at: ''
+}
 
 afterEach(() => {
   vi.useRealTimers()
@@ -160,6 +181,7 @@ describe('TeamScreen — live (API-backed)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getMe).mockResolvedValue(meWithTeams([SOLO_TEAM]))
     vi.mocked(resources.getTeamDetail).mockResolvedValue(LIVE_TEAM)
     vi.mocked(resources.listMembers).mockResolvedValue(LIVE_MEMBERS)
     vi.mocked(resources.listInvites).mockResolvedValue([])
@@ -202,5 +224,31 @@ describe('TeamScreen — live (API-backed)', () => {
     await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
     // The member (not the owner) gets a role selector.
     expect(screen.getByLabelText('Role for priya@strider.dev')).toBeInTheDocument()
+  })
+
+  it('hides the team switcher when the user belongs to one team', async () => {
+    render(<TeamScreen onOpenAlert={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    expect(screen.queryByLabelText('Switch team')).not.toBeInTheDocument()
+  })
+
+  it('switches the active team via the switcher', async () => {
+    vi.mocked(resources.getMe).mockResolvedValue(
+      meWithTeams([
+        SOLO_TEAM,
+        {
+          team_id: 't2',
+          name: 'Rocket Lab',
+          role: 'member',
+          is_personal: false,
+          plan_status: 'active',
+          trial_ends_at: ''
+        }
+      ])
+    )
+    render(<TeamScreen onOpenAlert={vi.fn()} />)
+    const switcher = await screen.findByLabelText('Switch team')
+    await userEvent.selectOptions(switcher, 't2')
+    expect(useWorkspaceStore.getState().teamId).toBe('t2')
   })
 })

@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   listNotificationsPage,
+  markAllNotificationsRead,
   markNotificationRead,
   type NotificationApi
 } from '../../lib/api/resources'
@@ -18,6 +19,7 @@ export interface NotificationsData {
   unreadCount: number
   hasMore: boolean
   markRead: (id: string) => Promise<void>
+  markAllRead: () => Promise<void>
   loadMore: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -71,6 +73,17 @@ export function useNotifications(): NotificationsData {
     }
   }
 
+  const markAllRead = async (): Promise<void> => {
+    const stamp = new Date().toISOString()
+    // Optimistic: stamp every unread item, reconcile from the server on failure.
+    setItems((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: stamp })))
+    try {
+      await markAllNotificationsRead()
+    } catch {
+      await load().catch(() => undefined)
+    }
+  }
+
   const unreadCount = items.filter((n) => !n.read_at).length
   return {
     status,
@@ -78,6 +91,7 @@ export function useNotifications(): NotificationsData {
     unreadCount,
     hasMore: meta.has_next ?? false,
     markRead,
+    markAllRead,
     loadMore,
     refresh: load
   }

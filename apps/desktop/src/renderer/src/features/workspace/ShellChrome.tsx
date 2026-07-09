@@ -209,16 +209,20 @@ function NotifRow({
   )
 }
 
-/** Live notifications popover (API.md §2.1). Clicking a row marks it read. */
+/** Live notifications popover (API.md §2.1). Clicking a row marks it read;
+ *  the header offers a bulk mark-all-read when anything is unread. */
 export function NotificationsPopover({
   items,
   onRead,
+  onReadAll,
   onClose
 }: {
   items: readonly NotificationApi[]
   onRead: (id: string) => void
+  onReadAll: () => void
   onClose: () => void
 }): React.JSX.Element {
+  const hasUnread = items.some((n) => !n.read_at)
   return (
     <div
       style={{ position: 'absolute', top: 46, right: 12, width: 350, zIndex: 50 }}
@@ -235,9 +239,27 @@ export function NotificationsPopover({
           }}
         >
           <Mono size={9.5}>NOTIFICATIONS</Mono>
-          <span onClick={onClose} style={{ color: 'var(--mut)', cursor: 'pointer' }}>
-            <Icons.x size={12} />
-          </span>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            {hasUnread && (
+              <button
+                type="button"
+                onClick={onReadAll}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--acc)',
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-ui)',
+                  fontSize: 11
+                }}
+              >
+                Mark all read
+              </button>
+            )}
+            <span onClick={onClose} style={{ color: 'var(--mut)', cursor: 'pointer' }}>
+              <Icons.x size={12} />
+            </span>
+          </div>
         </div>
         {items.length === 0 && (
           <div style={{ padding: '16px 14px', fontSize: 11, color: 'var(--mut)' }}>
