@@ -1,0 +1,450 @@
+{
+  "canonical_parts": [
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110101",
+      "part_number": "LM358",
+      "manufacturer": "Texas Instruments",
+      "datasheet_ref": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+      "confidence": 0.98,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220201",
+            "source_connector": "kicad",
+            "external_ref": "U1"
+          },
+          "confidence": 0.99,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "LM358",
+            "note": "exact BOM string match"
+          }
+        },
+        {
+          "modality": "schematic_symbol",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220202",
+            "source_connector": "kicad",
+            "external_ref": "U1"
+          },
+          "confidence": 0.96,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "symbol",
+            "note": "Amplifier_Operational:LM358 symbol, 8 pins"
+          }
+        },
+        {
+          "modality": "datasheet",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220203",
+            "source_connector": "kicad",
+            "external_ref": "U1"
+          },
+          "confidence": 0.97,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "datasheet_mpn",
+            "note": "datasheet field resolves to TI LM358"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110102",
+      "part_number": "TL072",
+      "manufacturer": "Texas Instruments",
+      "datasheet_ref": "https://www.ti.com/lit/ds/symlink/tl072.pdf",
+      "confidence": 0.95,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220204",
+            "source_connector": "kicad",
+            "external_ref": "U2"
+          },
+          "confidence": 0.97,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "TL072",
+            "note": "exact BOM string match"
+          }
+        },
+        {
+          "modality": "schematic_symbol",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220205",
+            "source_connector": "kicad",
+            "external_ref": "U2"
+          },
+          "confidence": 0.93,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "symbol",
+            "note": "dual op-amp, 8-pin DIP/SOIC"
+          }
+        },
+        {
+          "modality": "cad_model",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220206",
+            "source_connector": "onshape",
+            "external_ref": "JHD-0007-a1b2"
+          },
+          "confidence": 0.9,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "cad_metadata",
+            "note": "Onshape part metadata names TL072"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110103",
+      "part_number": "NE555",
+      "manufacturer": "Texas Instruments",
+      "datasheet_ref": "https://www.ti.com/lit/ds/symlink/ne555.pdf",
+      "confidence": 0.88,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220207",
+            "source_connector": "kicad",
+            "external_ref": "U3"
+          },
+          "confidence": 0.94,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "NE555",
+            "note": "BOM value NE555P normalized to NE555"
+          }
+        },
+        {
+          "modality": "schematic_symbol",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220208",
+            "source_connector": "kicad",
+            "external_ref": "U3"
+          },
+          "confidence": 0.55,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "symbol",
+            "note": "8-pin timer symbol matches but label OCR uncertain; flagged for linking to decide"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110104",
+      "part_number": "AMS1117-3.3",
+      "manufacturer": "Advanced Monolithic Systems",
+      "datasheet_ref": "http://www.advanced-monolithic.com/pdf/ds1117.pdf",
+      "confidence": 0.7,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220209",
+            "source_connector": "kicad",
+            "external_ref": "U4"
+          },
+          "confidence": 0.9,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "AMS1117-3.3",
+            "note": "BOM specifies 3.3V variant"
+          }
+        },
+        {
+          "modality": "schematic_symbol",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220210",
+            "source_connector": "kicad",
+            "external_ref": "U4"
+          },
+          "confidence": 0.5,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "silkscreen_variant",
+            "value": "AMS1117-5.0",
+            "note": "schematic variant (-5.0) DISAGREES with BOM part_number (-3.3); voltage-variant mismatch, linking must reconcile"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110105",
+      "part_number": "MPU-6050",
+      "manufacturer": "InvenSense",
+      "datasheet_ref": "https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf",
+      "confidence": 0.82,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220211",
+            "source_connector": "kicad",
+            "external_ref": "U5"
+          },
+          "confidence": 0.95,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "MPU-6050",
+            "note": "exact BOM match"
+          }
+        },
+        {
+          "modality": "photo",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220212",
+            "source_connector": "github",
+            "external_ref": "assets/photos/imu_top.jpg"
+          },
+          "confidence": 0.58,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "silkscreen",
+            "value": "MPU-6050",
+            "note": "partial OCR from board photo. NOTE: the v1 matcher does NOT populate PHOTO — present here to prove the shape carries it when visual matching arrives"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110106",
+      "part_number": "ATmega328P",
+      "manufacturer": "Microchip Technology",
+      "datasheet_ref": "https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega328P.pdf",
+      "confidence": 0.93,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220213",
+            "source_connector": "kicad",
+            "external_ref": "U6"
+          },
+          "confidence": 0.96,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "ATmega328P",
+            "note": "BOM value ATMEGA328P-AU normalized"
+          }
+        },
+        {
+          "modality": "datasheet",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220214",
+            "source_connector": "kicad",
+            "external_ref": "U6"
+          },
+          "confidence": 0.94,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "datasheet_mpn",
+            "note": "datasheet field resolves to Microchip ATmega328P"
+          }
+        },
+        {
+          "modality": "cad_model",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220215",
+            "source_connector": "onshape",
+            "external_ref": "JHD-0088-mcu"
+          },
+          "confidence": 0.88,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "cad_metadata",
+            "note": "Onshape TQFP-32 body metadata names ATmega328P"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110107",
+      "part_number": "STM32F103C8T6",
+      "manufacturer": "STMicroelectronics",
+      "datasheet_ref": "https://www.st.com/resource/en/datasheet/stm32f103c8.pdf",
+      "confidence": 0.91,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220216",
+            "source_connector": "kicad",
+            "external_ref": "U7"
+          },
+          "confidence": 0.95,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "STM32F103C8T6",
+            "note": "exact BOM match"
+          }
+        },
+        {
+          "modality": "schematic_symbol",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220217",
+            "source_connector": "kicad",
+            "external_ref": "U7"
+          },
+          "confidence": 0.9,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "symbol",
+            "note": "LQFP-48 MCU symbol match"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110108",
+      "part_number": "LM7805",
+      "manufacturer": "STMicroelectronics",
+      "datasheet_ref": "https://www.st.com/resource/en/datasheet/l7805.pdf",
+      "confidence": 0.9,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220218",
+            "source_connector": "kicad",
+            "external_ref": "U8"
+          },
+          "confidence": 0.93,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "LM7805",
+            "note": "BOM value L7805CV normalized to LM7805 family"
+          }
+        },
+        {
+          "modality": "cad_model",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220219",
+            "source_connector": "onshape",
+            "external_ref": "JHD-0102-reg"
+          },
+          "confidence": 0.86,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "cad_metadata",
+            "note": "Onshape TO-220 body metadata names 7805"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110109",
+      "part_number": "BME280",
+      "manufacturer": "Bosch Sensortec",
+      "datasheet_ref": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf",
+      "confidence": 0.89,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220220",
+            "source_connector": "kicad",
+            "external_ref": "U10"
+          },
+          "confidence": 0.94,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "BME280",
+            "note": "exact BOM match"
+          }
+        },
+        {
+          "modality": "datasheet",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220221",
+            "source_connector": "kicad",
+            "external_ref": "U10"
+          },
+          "confidence": 0.88,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "datasheet_mpn",
+            "note": "datasheet field resolves to Bosch BME280"
+          }
+        }
+      ]
+    },
+    {
+      "canonical_id": "11111111-1111-1111-1111-111111110110",
+      "part_number": "74HC595",
+      "manufacturer": "Nexperia",
+      "datasheet_ref": "https://assets.nexperia.com/documents/data-sheet/74HC_HCT595.pdf",
+      "confidence": 0.92,
+      "modalities": [
+        {
+          "modality": "part_number",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220222",
+            "source_connector": "kicad",
+            "external_ref": "U11"
+          },
+          "confidence": 0.95,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "part_number",
+            "value": "74HC595",
+            "note": "exact BOM match"
+          }
+        },
+        {
+          "modality": "schematic_symbol",
+          "source_ref": {
+            "graph_entity_id": "22222222-2222-2222-2222-222222220223",
+            "source_connector": "kicad",
+            "external_ref": "U11"
+          },
+          "confidence": 0.9,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "symbol",
+            "note": "8-bit shift register, 16-pin symbol match"
+          }
+        }
+      ]
+    }
+  ],
+  "unmatched": [
+    { "source_connector": "kicad", "external_ref": "U9" },
+    {
+      "graph_entity_id": "22222222-2222-2222-2222-222222220299",
+      "source_connector": "onshape",
+      "external_ref": "JHD-0199-unknown"
+    }
+  ],
+  "ambiguous": [
+    {
+      "source_ref": {
+        "graph_entity_id": "22222222-2222-2222-2222-222222220250",
+        "source_connector": "kicad",
+        "external_ref": "U12"
+      },
+      "candidate_canonical_ids": [
+        "11111111-1111-1111-1111-111111110101",
+        "11111111-1111-1111-1111-111111110102"
+      ],
+      "note": "8-pin dual op-amp footprint + generic symbol match both LM358 and TL072; part-number silkscreen illegible, matcher cannot disambiguate"
+    }
+  ]
+}

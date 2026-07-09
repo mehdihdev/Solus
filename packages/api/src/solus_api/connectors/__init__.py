@@ -1,10 +1,54 @@
-"""Connector framework (SOLUSDEV-103).
+"""Connectors — the canonical connector interface (W0-05, ratified by Decision B).
 
-The runtime that registers connectors, runs syncs, persists connector state,
-and schedules change detection — plus the concrete connectors that translate
-external tools into graph entities/relations (CLAUDE.md §2.1, ADR-001).
+`solus_api.connectors` is the single import surface for connector development: the
+`Connector`/`OAuthConnector` ABCs and their normalized `EntityOut`/`RelationOut`/`SyncResult`
+output shapes, the per-sync `SyncContext`, resolved `Credentials`/`AccountInfo`, the
+`SecretStore` credential seam, and the package-importable `assert_connector_contract`
+conformance suite. Every connector (GitHub, GitLab, and future KiCad/Onshape/ROS) implements
+`Connector`, sources credentials through the secret store, and its own test runs
+`assert_connector_contract`.
 
-`contracts` holds the W0-05 connector interface. It is DRAFTED here so this
-ticket is unblocked; per CLAUDE.md §9 the finalized interface belongs in
-`packages/contracts/python/` and should be promoted there under human review.
+The shipped framework shape won the SOLUSDEV-72 reconciliation (Decision B): flat, stateless
+connectors driven by the ARQ runtime, with `detect_changes(ctx) -> bool` + a JSON `cursor`
+(the `Delta`/incremental path is a documented forward extension, not built yet). The interface
+is human-owned and mirrored to `packages/contracts/python/` (CLAUDE.md §9, ADR-028); this
+module re-exports it so every implementation imports the one canonical shape.
 """
+
+from solus_api.connectors.conformance import assert_connector_contract
+from solus_api.connectors.contracts import (
+    AccountInfo,
+    AuthKind,
+    Connector,
+    ConnectorError,
+    Credentials,
+    EntityOut,
+    OAuthConnector,
+    RelationOut,
+    SyncContext,
+    SyncError,
+    SyncResult,
+)
+from solus_api.connectors.secrets import (
+    SecretNotFoundError,
+    SecretStore,
+    build_secret_store,
+)
+
+__all__ = [
+    "AccountInfo",
+    "AuthKind",
+    "Connector",
+    "ConnectorError",
+    "Credentials",
+    "EntityOut",
+    "OAuthConnector",
+    "RelationOut",
+    "SecretNotFoundError",
+    "SecretStore",
+    "SyncContext",
+    "SyncError",
+    "SyncResult",
+    "assert_connector_contract",
+    "build_secret_store",
+]

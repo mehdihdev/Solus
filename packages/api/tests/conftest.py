@@ -1,22 +1,29 @@
-"""Shared fixtures for the solus-api Phase 1 test suite.
+"""Shared fixtures for the solus-api test suite (SOLUSDEV-72).
 
-Tests run against an in-memory SQLite database (StaticPool) and a dummy JWT
-signing value that exists only in tests. Production uses PostgreSQL + the
-Supabase secret from the environment (ADR-003 / ADR-009).
+Tests run against a real PostgreSQL + pgvector database — pgvector's `Vector`
+columns and ivfflat indexes cannot run on SQLite. The schema is built once per
+session by running the Alembic migration (so every run also proves the migration
+applies on a fresh database), and each test is isolated by truncating all tables
+afterwards. Point tests at a throwaway database via SOLUS_TEST_DATABASE_URL; it
+defaults to the local docker-compose Postgres (`make db-up`).
 """
 
-import json
+import asyncio
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
+import asyncpg
 import jwt
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from solus_api.connectors.contracts import (
     AccountInfo,
-    Connector,
     ConnectorError,
     Credentials,
     Domain,
@@ -30,19 +37,48 @@ from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.core.config import Settings
 from solus_api.main import create_app
 from solus_api.models import Base
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import StaticPool
+
+API_DIR = Path(__file__).resolve().parent.parent
+TEST_DATABASE_URL = os.environ.get(
+    "SOLUS_TEST_DATABASE_URL",
+    "postgresql+asyncpg://solus:solus@localhost:5432/solus_test",
+)
+_ALL_TABLES = ", ".join(t.name for t in Base.metadata.sorted_tables)
 
 TEST_JWT_SECRET = "dummy-jwt-signing-value-tests-only"  # placeholder, not a real secret
 TEST_AUDIENCE = "authenticated"
 
 ALICE = {"sub": "00000000-0000-0000-0000-00000000a11c", "email": "alice@example.com"}
 BOB = {"sub": "00000000-0000-0000-0000-0000000000b0", "email": "bob@example.com"}
+
+
+async def _ensure_test_database() -> None:
+    """Create the throwaway test database if it does not exist yet."""
+    name = TEST_DATABASE_URL.rsplit("/", 1)[1]
+    admin_dsn = TEST_DATABASE_URL.rsplit("/", 1)[0].replace("+asyncpg", "") + "/postgres"
+    conn = await asyncpg.connect(admin_dsn)
+    try:
+        if not await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name):
+            await conn.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await conn.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _schema() -> None:
+    """Build the schema once per session by running the migration to head."""
+    asyncio.run(_ensure_test_database())
+    os.environ["SOLUS_DATABASE_URL"] = TEST_DATABASE_URL
+    cfg = Config(str(API_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(API_DIR / "migrations"))
+    command.upgrade(cfg, "head")
 
 
 def make_token(
@@ -71,7 +107,7 @@ def settings() -> Settings:
     return Settings(
         supabase_jwt_secret=TEST_JWT_SECRET,
         supabase_jwt_audience=TEST_AUDIENCE,
-        database_url="sqlite+aiosqlite://",
+        database_url=TEST_DATABASE_URL,
         rate_limit_per_minute=100_000,
         sync_inline=True,  # deterministic syncs in tests (no ARQ/background)
         public_api_base_url="http://testserver",
@@ -105,11 +141,11 @@ class FakeGitHub(OAuthConnector):
         repo = str(ctx.config.get("repo", "octocat/strider-fw"))
         return SyncResult(
             entities=[
-                EntityOut(source_key=":repo", type="code_repo", domain=Domain.SOFTWARE, name=repo),
+                EntityOut(source_key=":repo", type="code_repo", domain=Domain.CODE, name=repo),
                 EntityOut(
                     source_key="src/main.py",
                     type="code_file",
-                    domain=Domain.SOFTWARE,
+                    domain=Domain.CODE,
                     name="main.py",
                 ),
                 EntityOut(
@@ -145,16 +181,18 @@ def fake_registry() -> ConnectorRegistry:
 
 
 @pytest.fixture
-async def engine() -> AsyncIterator[AsyncEngine]:
-    eng = create_async_engine(
-        "sqlite+aiosqlite://",
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-    async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield eng
-    await eng.dispose()
+async def engine(_schema: None) -> AsyncIterator[AsyncEngine]:
+    eng = create_async_engine(TEST_DATABASE_URL)
+    try:
+        yield eng
+    finally:
+        # Isolate tests: wipe every table (CASCADE handles FK order) after each one,
+        # and always dispose the pool even if truncation or the test body raised.
+        try:
+            async with eng.begin() as conn:
+                await conn.execute(text(f"TRUNCATE {_ALL_TABLES} RESTART IDENTITY CASCADE"))
+        finally:
+            await eng.dispose()
 
 
 @pytest.fixture
@@ -186,32 +224,9 @@ def bob_headers() -> dict[str, str]:
     return bearer(BOB["sub"], BOB["email"])
 
 
-async def assert_connector_contract(connector: Connector, ctx: SyncContext) -> SyncResult:
-    """Reusable contract suite every connector must pass (CLAUDE.md §6/§9).
-
-    Imported by each connector's test (test_contracts FakeConnector,
-    test_github_connector, …) so the invariants are checked identically.
-    """
-    account = await connector.validate_credentials(ctx.credentials)
-    assert isinstance(account, AccountInfo)
-    assert account.login
-
-    result = await connector.sync(ctx)
-    assert isinstance(result, SyncResult)
-
-    keys = [entity.source_key for entity in result.entities]
-    assert len(keys) == len(set(keys)), "entity source_keys must be unique within a sync"
-    key_set = set(keys)
-    for relation in result.relations:
-        assert relation.from_key in key_set, f"relation from unknown key: {relation.from_key}"
-        assert relation.to_key in key_set, f"relation to unknown key: {relation.to_key}"
-
-    # The cursor is persisted as JSON between syncs — it must round-trip.
-    assert json.loads(json.dumps(result.cursor)) == result.cursor
-
-    changed = await connector.detect_changes(ctx)
-    assert isinstance(changed, bool)
-    return result
+# The reusable conformance suite now ships in the package
+# (`solus_api.connectors.conformance.assert_connector_contract`, W0-05 §10 / Decision B),
+# so every connector's test imports it from there rather than from this conftest.
 
 
 async def me(client: AsyncClient, headers: dict[str, str]) -> dict[str, Any]:

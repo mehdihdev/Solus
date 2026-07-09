@@ -1,6 +1,12 @@
 // REST response envelopes, per API.md §1.4.
 // Success: { data, meta?, links? }   Error: { error: { code, message, details? } }
 
+// Route/schema types generated from the backend's OpenAPI (`pnpm gen:api`,
+// regenerated on build). Re-exported here so the typed client can reference
+// backend-derived shapes without hand-maintaining them. The envelope wrappers
+// below stay hand-written; per-route `data` shapes come from `components`.
+export type { paths, components, operations } from './schema'
+
 export interface ApiMeta {
   has_next?: boolean
   next_cursor?: string | null

@@ -20,6 +20,7 @@ yarn-error.log*
 .env.*
 !.env.example
 .aws_env
+*.env
 
 # Dependencies / build output (safety net across any sub-folder)
 node_modules/
@@ -29,7 +30,19 @@ out/
 .next/
 .npm-cache/
 
+# Claude harness runtime state (CLAUDE.md §3 — gitignored). The old `./claude/state`
+# entry was malformed (missing the dot) and never matched.
+.claude/state/
+
 
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Tool caches / daemon state (never commit)
+.dmypy.json
+dmypy.json
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.eslintcache

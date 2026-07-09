@@ -8,7 +8,7 @@ W0-08 — committed design exports: a repo often carries fabrication/CAD outputs
 checked in next to firmware (Gerbers, STEP models, netlists, SPICE decks). The
 connector recognises these by extension and lands them as cross-domain
 `design_export` entities (electrical/mechanical) so the rest of Solus can reason
-across the software boundary.
+across the code boundary.
 
 Security (CLAUDE.md §7): every byte of the tree is *ingested, untrusted data*.
 It is parsed defensively (a bad item becomes a `SyncError`, never a crash) and
@@ -85,9 +85,7 @@ class GitHubConnector(OAuthConnector):
     # is an accepted alternative to the OAuth flow (gated in connect_source).
     supports_token_connect: ClassVar[bool] = True
 
-    def __init__(
-        self, client_id: str | None = None, client_secret: str | None = None
-    ) -> None:
+    def __init__(self, client_id: str | None = None, client_secret: str | None = None) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
 
@@ -181,8 +179,10 @@ class GitHubConnector(OAuthConnector):
         repo = _safe_repo(str(ctx.config["repo"]))
         configured = ctx.config.get("branch")
         async with self._http(ctx.credentials) as client:
-            branch = _safe_branch(str(configured)) if configured else await self._default_branch(
-                client, repo
+            branch = (
+                _safe_branch(str(configured))
+                if configured
+                else await self._default_branch(client, repo)
             )
             sha = await self._head_sha(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
@@ -229,7 +229,7 @@ class GitHubConnector(OAuthConnector):
             REPO_ROOT_KEY: EntityOut(
                 source_key=REPO_ROOT_KEY,
                 type="code_repo",
-                domain=Domain.SOFTWARE,
+                domain=Domain.CODE,
                 name=repo,
                 properties={"branch": branch, "commit": sha},
             )
@@ -237,9 +237,7 @@ class GitHubConnector(OAuthConnector):
         for item in tree:
             self._land_item(item, entities_by_key, errors)
 
-        known_dirs = {
-            key for key, ent in entities_by_key.items() if ent.type == "code_module"
-        }
+        known_dirs = {key for key, ent in entities_by_key.items() if ent.type == "code_module"}
         relations = [
             RelationOut(
                 from_key=parent_key(key, known_dirs),
@@ -326,9 +324,7 @@ class GitHubConnector(OAuthConnector):
     @classmethod
     def _ok_json(cls, response: httpx.Response) -> Any:
         if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ConnectorError(
-                "github_error", f"GitHub request failed ({response.status_code})."
-            )
+            raise ConnectorError("github_error", f"GitHub request failed ({response.status_code}).")
         return response.json()
 
     @staticmethod
@@ -336,9 +332,7 @@ class GitHubConnector(OAuthConnector):
         if response.status_code == httpx.codes.NOT_FOUND:
             raise ConnectorError("repo_not_found", "Repository, branch, or commit not found.")
         if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ConnectorError(
-                "github_error", f"GitHub request failed ({response.status_code})."
-            )
+            raise ConnectorError("github_error", f"GitHub request failed ({response.status_code}).")
         data = response.json()
         if not isinstance(data, dict):
             raise ConnectorError("github_error", "Unexpected GitHub response shape.")

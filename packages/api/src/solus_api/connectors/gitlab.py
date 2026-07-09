@@ -56,9 +56,7 @@ _BRANCH_FORBIDDEN: Final = frozenset(" \t\n\r~^:?*[\\")
 def _safe_repo(repo: str) -> str:
     # The charclass admits dots, so dot-only segments ("."/"..") must be
     # rejected explicitly — they are path traversal, not project names.
-    if not _REPO_RE.match(repo) or any(
-        seg in (".", "..") for seg in repo.split("/")
-    ):
+    if not _REPO_RE.match(repo) or any(seg in (".", "..") for seg in repo.split("/")):
         raise ConnectorError(
             "invalid_repo", "repo must be a GitLab project path like 'group/project'"
         )
@@ -134,9 +132,7 @@ class GitLabConnector(OAuthConnector):
         body = self._json(response)
         token = body.get("access_token")
         if not token:
-            message = (
-                body.get("error_description") or body.get("error") or "OAuth exchange failed."
-            )
+            message = body.get("error_description") or body.get("error") or "OAuth exchange failed."
             raise ConnectorError("oauth_exchange_failed", str(message))
         refresh = body.get("refresh_token")
         return Credentials(
@@ -242,7 +238,7 @@ class GitLabConnector(OAuthConnector):
             REPO_ROOT_KEY: EntityOut(
                 source_key=REPO_ROOT_KEY,
                 type="code_repo",
-                domain=Domain.SOFTWARE,
+                domain=Domain.CODE,
                 name=repo,
                 properties={"branch": branch, "commit": sha},
             )
@@ -361,9 +357,7 @@ class GitLabConnector(OAuthConnector):
     @classmethod
     def _ok_json(cls, response: httpx.Response) -> Any:
         if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ConnectorError(
-                "gitlab_error", f"GitLab request failed ({response.status_code})."
-            )
+            raise ConnectorError("gitlab_error", f"GitLab request failed ({response.status_code}).")
         return response.json()
 
     @staticmethod
@@ -371,9 +365,7 @@ class GitLabConnector(OAuthConnector):
         if response.status_code == httpx.codes.NOT_FOUND:
             raise ConnectorError("repo_not_found", "Repository, branch, or commit not found.")
         if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ConnectorError(
-                "gitlab_error", f"GitLab request failed ({response.status_code})."
-            )
+            raise ConnectorError("gitlab_error", f"GitLab request failed ({response.status_code}).")
         data = response.json()
         if not isinstance(data, dict):
             raise ConnectorError("gitlab_error", "Unexpected GitLab response shape.")

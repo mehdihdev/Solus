@@ -78,7 +78,7 @@ def module_entity(path: str) -> EntityOut:
     return EntityOut(
         source_key=path,
         type="code_module",
-        domain=Domain.SOFTWARE,
+        domain=Domain.CODE,
         name=basename(path),
     )
 
@@ -102,7 +102,7 @@ def file_entity(path: str, item: dict[str, Any]) -> EntityOut:
     return EntityOut(
         source_key=path,
         type="code_file",
-        domain=Domain.SOFTWARE,
+        domain=Domain.CODE,
         name=basename(path),
         properties={"size": item.get("size"), "sha": item.get("sha"), "path": path},
     )

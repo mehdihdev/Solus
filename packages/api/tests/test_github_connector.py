@@ -11,7 +11,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-from conftest import assert_connector_contract
 from fixtures.github_sample import (
     COMMIT_BODY,
     DEFAULT_BRANCH,
@@ -25,6 +24,7 @@ from fixtures.github_sample import (
     TREE_BODY,
     USER_BODY,
 )
+from solus_api.connectors import assert_connector_contract
 from solus_api.connectors.contracts import (
     ConnectorError,
     Credentials,
@@ -105,7 +105,7 @@ async def test_design_exports_detected_by_extension() -> None:
     # Ordinary source stays a code_file in the software domain.
     py = by_key["src/main.py"]
     assert py.type == "code_file"
-    assert py.domain == Domain.SOFTWARE
+    assert py.domain == Domain.CODE
     assert py.properties == {"size": 800, "sha": "bb02", "path": "src/main.py"}
 
 
@@ -216,9 +216,7 @@ async def test_list_repositories() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_exchange_code_happy_path() -> None:
-    respx.post(f"{OAUTH}/access_token").mock(
-        return_value=httpx.Response(200, json=TOKEN_BODY)
-    )
+    respx.post(f"{OAUTH}/access_token").mock(return_value=httpx.Response(200, json=TOKEN_BODY))
     creds = await GitHubConnector(client_id="cid", client_secret="sec").exchange_code(
         code="abc", redirect_uri="https://app.solus.dev/cb"
     )

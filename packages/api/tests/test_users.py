@@ -134,9 +134,7 @@ async def test_consent_gate_actually_opens(
 
     async def event_count() -> int:
         async with app.state.sessionmaker() as db:
-            return int(
-                await db.scalar(select(func.count()).select_from(DataEvent)) or 0
-            )
+            return int(await db.scalar(select(func.count()).select_from(DataEvent)) or 0)
 
     team = await create_team(client, alice_headers)  # emits team.created (unconsented)
     assert await event_count() == 0

@@ -9,25 +9,27 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.models import Membership, Notification
+from solus_api.models import Membership, Notification, NotificationType
 
 
 def notify_user(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
-    notification_type: str,
+    notification_type: NotificationType | str,
     title: str,
     body: str | None = None,
-    payload: dict[str, Any] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> None:
     session.add(
         Notification(
             user_id=user_id,
-            type=notification_type,
+            # Validate at the seam: an unknown type string fails loudly here,
+            # not as an unreadable row at query time.
+            type=NotificationType(notification_type),
             title=title,
             body=body,
-            payload=payload or {},
+            attrs=attrs or {},
         )
     )
 
@@ -36,15 +38,22 @@ async def notify_team(
     session: AsyncSession,
     *,
     team_id: uuid.UUID,
-    notification_type: str,
+    notification_type: NotificationType | str,
     title: str,
     exclude_user_id: uuid.UUID | None = None,
     body: str | None = None,
-    payload: dict[str, Any] | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> int:
     """Notify every member of a team (minus the actor). Returns the count."""
     member_ids = (
-        await session.scalars(select(Membership.user_id).where(Membership.team_id == team_id))
+        await session.scalars(
+            select(Membership.user_id).where(
+                Membership.team_id == team_id,
+                # Live members only — a removed/soft-deleted member must not keep
+                # receiving the team's notifications (matches deps.live_membership).
+                Membership.deleted_at.is_(None),
+            )
+        )
     ).all()
     recipients = [uid for uid in member_ids if uid != exclude_user_id]
     for uid in recipients:
@@ -54,6 +63,6 @@ async def notify_team(
             notification_type=notification_type,
             title=title,
             body=body,
-            payload=payload,
+            attrs=attrs,
         )
     return len(recipients)

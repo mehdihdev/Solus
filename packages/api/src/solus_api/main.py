@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from solus_api.connectors.registry import build_registry
@@ -31,8 +32,12 @@ from solus_api.routers import (
 
 
 async def create_all_tables(engine: AsyncEngine) -> None:
-    """Create tables from ORM metadata (dev only — production uses migrations)."""
+    """Create tables from ORM metadata (dev only — production uses migrations).
+
+    The pgvector extension must exist before the embedding columns can be created.
+    """
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
 
 

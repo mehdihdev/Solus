@@ -1,5 +1,6 @@
 """Error envelope per API.md §1.4: `{"error": {"code", "message", "details"}}`."""
 
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -7,6 +8,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger("solus_api")
 
 _STATUS_CODES: dict[int, str] = {
     400: "bad_request",
@@ -62,3 +65,11 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _http_error(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code = _STATUS_CODES.get(exc.status_code, "error")
         return error_response(exc.status_code, code, str(exc.detail))
+
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        # Catch-all so a truly uncaught error still returns the §1.4 envelope
+        # instead of FastAPI's default (unenveloped) 500. Log with full context
+        # server-side; never leak the exception text to the client.
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return error_response(500, "internal_error", "Internal server error")

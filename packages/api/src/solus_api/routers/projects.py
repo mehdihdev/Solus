@@ -8,9 +8,19 @@ from fastapi import APIRouter, Query, Response
 from sqlalchemy import func, select
 
 from solus_api.core.errors import APIError
+from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SecretStoreDep, SessionDep, TeamCtx, require_role
-from solus_api.models import Entity, Project, Relation, Role, Source, utcnow
+from solus_api.models import (
+    GraphEdge,
+    GraphEntity,
+    Membership,
+    Project,
+    ProjectMembership,
+    Role,
+    Source,
+    utcnow,
+)
 from solus_api.routers.users import delete_projects_cascade
 from solus_api.schemas import (
     TEAM_SETTINGS_DEFAULTS,
@@ -21,6 +31,7 @@ from solus_api.schemas import (
 )
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
+from solus_api.services.limits import check_can_create_project
 from solus_api.services.notifications import notify_team
 
 team_router = APIRouter(prefix="/api/v1/teams/{team_id}/projects")
@@ -28,15 +39,15 @@ project_router = APIRouter(prefix="/api/v1/projects")
 
 
 async def _count_by_project(
-    session: SessionDep, model: type[Entity] | type[Source], project_ids: list[uuid.UUID]
+    session: SessionDep, model: type[GraphEntity] | type[Source], project_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, int]:
     if not project_ids:
         return {}
-    rows = await session.execute(
-        select(model.project_id, func.count())
-        .where(model.project_id.in_(project_ids))
-        .group_by(model.project_id)
-    )
+    stmt = select(model.project_id, func.count()).where(model.project_id.in_(project_ids))
+    deleted_at = getattr(model, "deleted_at", None)  # Source is not soft-deletable
+    if deleted_at is not None:
+        stmt = stmt.where(deleted_at.is_(None))
+    rows = await session.execute(stmt.group_by(model.project_id))
     return {pid: int(count) for pid, count in rows.all()}
 
 
@@ -45,14 +56,19 @@ async def list_projects(
     ctx: TeamCtx,
     session: SessionDep,
     include_archived: Annotated[bool, Query()] = False,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
 ) -> dict[str, Any]:
     stmt = select(Project).where(Project.team_id == ctx.team.id)
     if not include_archived:
         stmt = stmt.where(Project.archived_at.is_(None))
-    rows = (await session.scalars(stmt.order_by(Project.created_at.desc()))).all()
+    if cursor:
+        stmt = stmt.where(cursor_filter(Project.created_at, Project.id, cursor))
+    stmt = stmt.order_by(Project.created_at.desc(), Project.id.desc()).limit(limit + 1)
+    visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
     # Dashboard summary counts in two grouped queries, not N+1 (FND-04).
-    ids = [p.id for p in rows]
-    entity_counts = await _count_by_project(session, Entity, ids)
+    ids = [p.id for p in visible]
+    entity_counts = await _count_by_project(session, GraphEntity, ids)
     source_counts = await _count_by_project(session, Source, ids)
     return envelope(
         [
@@ -63,17 +79,34 @@ async def list_projects(
                     "sources": source_counts.get(p.id, 0),
                 },
             )
-            for p in rows
-        ]
+            for p in visible
+        ],
+        meta=meta,
     )
 
 
 @team_router.post("", status_code=201)
 async def create_project(body: ProjectCreate, ctx: TeamCtx, session: SessionDep) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
-    project = Project(team_id=ctx.team.id, name=body.name, description=body.description)
+    await check_can_create_project(session, ctx.user)
+    project = Project(
+        team_id=ctx.team.id,
+        name=body.name,
+        description=body.description,
+        created_by=ctx.user.id,
+    )
     session.add(project)
     await session.flush()
+    # ADR-025 dual-source access: auto-grant every current team member a ProjectMembership
+    # (the creator included). Later joiners are seeded on accept_invite.
+    member_ids = (
+        await session.scalars(
+            select(Membership.user_id).where(
+                Membership.team_id == ctx.team.id, Membership.deleted_at.is_(None)
+            )
+        )
+    ).all()
+    session.add_all(ProjectMembership(project_id=project.id, user_id=uid) for uid in member_ids)
     record_activity(
         session,
         team_id=ctx.team.id,
@@ -99,7 +132,7 @@ async def create_project(body: ProjectCreate, ctx: TeamCtx, session: SessionDep)
             notification_type="project.created",
             title=f'New project "{project.name}"',
             exclude_user_id=ctx.user.id,
-            payload={"project_id": str(project.id), "team_id": str(ctx.team.id)},
+            attrs={"project_id": str(project.id), "team_id": str(ctx.team.id)},
         )
     await session.commit()
     await session.refresh(project)
@@ -109,10 +142,14 @@ async def create_project(body: ProjectCreate, ctx: TeamCtx, session: SessionDep)
 async def _project_detail(ctx: ProjectCtx, session: SessionDep) -> dict[str, Any]:
     """Detail payload with real graph stats + connected-source summary (§2.3)."""
     entity_count = await session.scalar(
-        select(func.count()).select_from(Entity).where(Entity.project_id == ctx.project.id)
+        select(func.count())
+        .select_from(GraphEntity)
+        .where(GraphEntity.project_id == ctx.project.id, GraphEntity.deleted_at.is_(None))
     )
     relation_count = await session.scalar(
-        select(func.count()).select_from(Relation).where(Relation.project_id == ctx.project.id)
+        select(func.count())
+        .select_from(GraphEdge)
+        .where(GraphEdge.project_id == ctx.project.id, GraphEdge.deleted_at.is_(None))
     )
     sources = (
         await session.scalars(
@@ -207,7 +244,7 @@ async def delete_project(
     secret_store: SecretStoreDep,
     confirm: Annotated[bool, Query()] = False,
 ) -> Response:
-    require_role(ctx, Role.ADMIN)
+    require_role(ctx, Role.OWNER)  # ADR-025: only an OWNER can delete a project
     if not confirm:
         raise APIError(400, "confirmation_required", "Pass ?confirm=true to delete this project")
     record_activity(

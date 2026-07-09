@@ -6,8 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from solus_api.core.config import Settings
 from solus_api.main import create_all_tables, create_app
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 SECRET = "dummy-jwt-signing-value-tests-only"  # placeholder, not a real secret
 
@@ -20,7 +19,7 @@ def _settings(**overrides: object) -> Settings:
     base.update(overrides)
     # _env_file=None keeps the test hermetic: a developer's local .env (e.g.
     # SOLUS_AUTO_CREATE_TABLES=true for dev) must not leak into defaults tests.
-    return Settings(_env_file=None, **base)  # type: ignore[arg-type]
+    return Settings(_env_file=None, **base)  # type: ignore[call-arg, arg-type]
 
 
 def test_cors_origins_parsed_into_list() -> None:
@@ -38,18 +37,14 @@ async def test_cors_header_present_for_allowed_origin() -> None:
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
-@pytest.mark.asyncio
-async def test_create_all_tables_builds_schema() -> None:
-    engine = create_async_engine(
-        "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+async def test_create_all_tables_builds_schema(engine: AsyncEngine) -> None:
+    # Dev bootstrap path on Postgres (models use pgvector columns SQLite cannot host).
+    # Idempotent against the already-migrated test DB; also exercises the
+    # CREATE EXTENSION step the embedding columns require.
     await create_all_tables(engine)
     async with engine.connect() as conn:
         tables = await conn.run_sync(lambda c: inspect(c).get_table_names())
-    assert "users" in tables
-    assert "teams" in tables
-    assert "projects" in tables
-    await engine.dispose()
+    assert {"users", "teams", "projects", "graph_entity"} <= set(tables)
 
 
 def test_auto_create_tables_defaults_off() -> None:

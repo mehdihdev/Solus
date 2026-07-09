@@ -1,6 +1,7 @@
 """Error envelope per §1.4: {"error": {"code", "message", "details"}}."""
 
-from httpx import AsyncClient
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from solus_api.core.errors import APIError
 
 
@@ -35,3 +36,24 @@ async def test_validation_error_envelope(
     body = resp.json()
     assert body["error"]["code"] == "validation_error"
     assert body["error"]["details"]
+
+
+async def test_uncaught_exception_returns_enveloped_500(app: FastAPI) -> None:
+    """An uncaught error hits the catch-all handler and still returns the §1.4
+    envelope (not FastAPI's default 500). `raise_app_exceptions=False` lets httpx
+    return the handler's response instead of re-raising what ServerErrorMiddleware
+    re-throws for the server log."""
+
+    async def _boom() -> None:
+        raise RuntimeError("intentional test failure")
+
+    app.add_api_route("/api/v1/_boom", _boom, methods=["GET"])
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.get("/api/v1/_boom")
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == "Internal server error"
+    assert "details" in body["error"]

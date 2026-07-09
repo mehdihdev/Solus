@@ -4,7 +4,7 @@
 //
 // In this onboarding slice the flows are simulated (no live source/graph calls),
 // but the client is the single seam every future feature talks through.
-import { ApiError, type ApiSuccess } from './envelope.types'
+import { ApiError, type ApiMeta, type ApiSuccess } from './envelope.types'
 
 export interface ApiClientOptions {
   baseUrl: string
@@ -37,13 +37,32 @@ function extractError(body: unknown): ParsedError {
   return {}
 }
 
+/** A list page: the `data` payload plus the envelope's pagination `meta`. */
+export interface Page<T> {
+  data: T
+  meta: ApiMeta
+}
+
 /** Normalize a parsed JSON body + status into data or a thrown ApiError. */
 export function unwrapEnvelope<T>(status: number, body: unknown): T {
   if (status >= 200 && status < 300) {
     return (body as ApiSuccess<T>).data
   }
+  throw envelopeError(status, body)
+}
+
+/** Like `unwrapEnvelope` but keeps the pagination `meta` (for cursor lists). */
+export function unwrapEnvelopePage<T>(status: number, body: unknown): Page<T> {
+  if (status >= 200 && status < 300) {
+    const ok = body as ApiSuccess<T>
+    return { data: ok.data, meta: ok.meta ?? {} }
+  }
+  throw envelopeError(status, body)
+}
+
+function envelopeError(status: number, body: unknown): ApiError {
   const err = extractError(body)
-  throw new ApiError(
+  return new ApiError(
     status,
     err.code ?? 'unknown_error',
     err.message ?? `Request failed with status ${status}`,
@@ -53,26 +72,40 @@ export function unwrapEnvelope<T>(status: number, body: unknown): T {
 
 export interface ApiClient {
   request<T>(path: string, options?: RequestOptions): Promise<T>
+  /** Like `request`, but returns the pagination `meta` alongside `data`. */
+  requestPage<T>(path: string, options?: RequestOptions): Promise<Page<T>>
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
+
+  async function send(
+    path: string,
+    req: RequestOptions
+  ): Promise<{ status: number; body: unknown }> {
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (req.body !== undefined) headers['Content-Type'] = 'application/json'
+    const token = typeof options.getToken === 'function' ? await options.getToken() : null
+    if (token) headers.Authorization = `Bearer ${token}`
+
+    const res = await fetchImpl(joinUrl(options.baseUrl, path), {
+      method: req.method ?? 'GET',
+      headers,
+      body: req.body !== undefined ? JSON.stringify(req.body) : undefined,
+      signal: req.signal
+    })
+    const text = await res.text()
+    return { status: res.status, body: text ? JSON.parse(text) : null }
+  }
+
   return {
     async request<T>(path: string, req: RequestOptions = {}): Promise<T> {
-      const headers: Record<string, string> = { Accept: 'application/json' }
-      if (req.body !== undefined) headers['Content-Type'] = 'application/json'
-      const token = typeof options.getToken === 'function' ? await options.getToken() : null
-      if (token) headers.Authorization = `Bearer ${token}`
-
-      const res = await fetchImpl(joinUrl(options.baseUrl, path), {
-        method: req.method ?? 'GET',
-        headers,
-        body: req.body !== undefined ? JSON.stringify(req.body) : undefined,
-        signal: req.signal
-      })
-      const text = await res.text()
-      const parsed = text ? JSON.parse(text) : null
-      return unwrapEnvelope<T>(res.status, parsed)
+      const { status, body } = await send(path, req)
+      return unwrapEnvelope<T>(status, body)
+    },
+    async requestPage<T>(path: string, req: RequestOptions = {}): Promise<Page<T>> {
+      const { status, body } = await send(path, req)
+      return unwrapEnvelopePage<T>(status, body)
     }
   }
 }

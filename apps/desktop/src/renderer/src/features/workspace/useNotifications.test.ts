@@ -7,7 +7,7 @@ import * as resources from '../../lib/api/resources'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
-  return { ...actual, listNotifications: vi.fn(), markNotificationRead: vi.fn() }
+  return { ...actual, listNotificationsPage: vi.fn(), markNotificationRead: vi.fn() }
 })
 
 const NOTIFS: resources.NotificationApi[] = [
@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true })
-  vi.mocked(resources.listNotifications).mockResolvedValue(NOTIFS)
+  vi.mocked(resources.listNotificationsPage).mockResolvedValue({ data: NOTIFS, meta: {} })
   vi.mocked(resources.markNotificationRead).mockResolvedValue(NOTIFS[0])
 })
 
@@ -61,6 +61,21 @@ describe('useNotifications', () => {
     useWorkspaceStore.setState({ linked: false })
     const { result } = renderHook(() => useNotifications())
     await waitFor(() => expect(result.current.status).toBe('offline'))
-    expect(resources.listNotifications).not.toHaveBeenCalled()
+    expect(resources.listNotificationsPage).not.toHaveBeenCalled()
+  })
+
+  it('exposes hasMore and appends the next cursor page via loadMore', async () => {
+    const more: resources.NotificationApi = { ...NOTIFS[0], id: 'n3' }
+    vi.mocked(resources.listNotificationsPage)
+      .mockResolvedValueOnce({ data: NOTIFS, meta: { has_next: true, next_cursor: 'c2' } })
+      .mockResolvedValueOnce({ data: [more], meta: { has_next: false } })
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+    await act(async () => {
+      await result.current.loadMore()
+    })
+    expect(result.current.items.map((n) => n.id)).toEqual(['n1', 'n2', 'n3'])
+    expect(result.current.hasMore).toBe(false)
+    expect(vi.mocked(resources.listNotificationsPage)).toHaveBeenLastCalledWith('c2')
   })
 })

@@ -41,7 +41,7 @@ def test_file_entity_marks_design_export() -> None:
 
     code = file_entity("src/a.py", {"size": 5, "sha": "y"})
     assert code.type == "code_file"
-    assert code.domain == Domain.SOFTWARE
+    assert code.domain == Domain.CODE
 
 
 def test_module_entity_shape() -> None:

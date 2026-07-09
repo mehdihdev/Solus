@@ -4,13 +4,14 @@ import uuid
 
 import pytest
 from solus_api.models import (
-    Entity,
+    Domain,
+    GraphEdge,
+    GraphEntity,
     Job,
     JobKind,
     JobStatus,
     Membership,
     Project,
-    Relation,
     Role,
     SolMode,
     Source,
@@ -27,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_user_defaults(db: AsyncSession) -> None:
-    user = User(auth_id="auth-sub-1", email="u@example.com")
+    user = User(supabase_user_id="auth-sub-1", email="u@example.com")
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -39,8 +40,8 @@ async def test_user_defaults(db: AsyncSession) -> None:
 
 
 async def test_membership_links_user_and_team(db: AsyncSession) -> None:
-    user = User(auth_id="auth-sub-2", email="m@example.com")
-    team = Team(name="T", is_personal=False)
+    user = User(supabase_user_id="auth-sub-2", email="m@example.com")
+    team = Team(name="T")
     db.add_all([user, team])
     await db.flush()
     db.add(Membership(user_id=user.id, team_id=team.id, role=Role.OWNER))
@@ -52,8 +53,8 @@ async def test_membership_links_user_and_team(db: AsyncSession) -> None:
 
 
 async def test_job_defaults(db: AsyncSession) -> None:
-    user = User(auth_id="auth-sub-3", email="j@example.com")
-    team = Team(name="T2", is_personal=False)
+    user = User(supabase_user_id="auth-sub-3", email="j@example.com")
+    team = Team(name="T2")
     db.add_all([user, team])
     await db.flush()
     from solus_api.models import Project
@@ -72,7 +73,7 @@ async def test_job_defaults(db: AsyncSession) -> None:
 
 
 async def _project(db: AsyncSession, suffix: str) -> Project:
-    team = Team(name=f"T-{suffix}", is_personal=False)
+    team = Team(name=f"T-{suffix}")
     db.add(team)
     await db.flush()
     project = Project(team_id=team.id, name=f"P-{suffix}")
@@ -108,24 +109,24 @@ async def test_entity_unique_per_source_key(db: AsyncSession) -> None:
     db.add(source)
     await db.flush()
     db.add(
-        Entity(
+        GraphEntity(
             project_id=project.id,
             source_id=source.id,
-            source_key="src/main.py",
-            type="code_file",
-            domain="software",
+            external_ref="src/main.py",
+            kind="code_file",
+            domain=Domain.CODE,
             name="main.py",
         )
     )
     await db.commit()
 
     db.add(
-        Entity(
+        GraphEntity(
             project_id=project.id,
             source_id=source.id,
-            source_key="src/main.py",
-            type="code_file",
-            domain="software",
+            external_ref="src/main.py",
+            kind="code_file",
+            domain=Domain.CODE,
             name="main.py",
         )
     )
@@ -136,11 +137,11 @@ async def test_entity_unique_per_source_key(db: AsyncSession) -> None:
 
 async def test_entity_defaults_origin_and_version(db: AsyncSession) -> None:
     project = await _project(db, "ent2")
-    entity = Entity(
+    entity = GraphEntity(
         project_id=project.id,
-        source_key="manual:motor-1",
-        type="motor",
-        domain="mechanical",
+        external_ref="manual:motor-1",
+        kind="motor",
+        domain=Domain.MECHANICAL,
         name="Drive motor",
     )
     db.add(entity)
@@ -148,27 +149,39 @@ async def test_entity_defaults_origin_and_version(db: AsyncSession) -> None:
     await db.refresh(entity)
     assert entity.origin == "connector"
     assert entity.version == 1
-    assert entity.properties == {}
+    assert entity.attrs == {}
 
 
 async def test_relation_links_entities(db: AsyncSession) -> None:
     project = await _project(db, "rel")
-    a = Entity(
-        project_id=project.id, source_key="pkg", type="code_module", domain="software", name="pkg"
+    a = GraphEntity(
+        project_id=project.id,
+        external_ref="pkg",
+        kind="code_module",
+        domain=Domain.CODE,
+        name="pkg",
     )
-    b = Entity(
-        project_id=project.id, source_key="a.py", type="code_file", domain="software", name="a.py"
+    b = GraphEntity(
+        project_id=project.id,
+        external_ref="a.py",
+        kind="code_file",
+        domain=Domain.CODE,
+        name="a.py",
     )
     db.add_all([a, b])
     await db.flush()
-    relation = Relation(
-        project_id=project.id, from_entity_id=a.id, to_entity_id=b.id, type="contains"
+    relation = GraphEdge(
+        project_id=project.id,
+        src_id=a.id,
+        dst_id=b.id,
+        relation_type="contains",
+        domain_pair="code<->code",
     )
     db.add(relation)
     await db.commit()
     await db.refresh(relation)
-    assert relation.type == "contains"
-    assert relation.properties == {}
+    assert relation.relation_type == "contains"
+    assert relation.attrs == {}
 
 
 async def test_sync_defaults(db: AsyncSession) -> None:

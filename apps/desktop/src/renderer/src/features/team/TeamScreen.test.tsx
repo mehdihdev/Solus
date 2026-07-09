@@ -13,7 +13,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     getTeamDetail: vi.fn(),
     listMembers: vi.fn(),
     listInvites: vi.fn(),
-    listActivity: vi.fn(),
+    listActivityPage: vi.fn(),
     createInvite: vi.fn()
   }
 })
@@ -163,7 +163,7 @@ describe('TeamScreen — live (API-backed)', () => {
     vi.mocked(resources.getTeamDetail).mockResolvedValue(LIVE_TEAM)
     vi.mocked(resources.listMembers).mockResolvedValue(LIVE_MEMBERS)
     vi.mocked(resources.listInvites).mockResolvedValue([])
-    vi.mocked(resources.listActivity).mockResolvedValue(LIVE_ACTIVITY)
+    vi.mocked(resources.listActivityPage).mockResolvedValue({ data: LIVE_ACTIVITY, meta: {} })
   })
 
   it('renders the real team name, roster, and humanized activity', async () => {

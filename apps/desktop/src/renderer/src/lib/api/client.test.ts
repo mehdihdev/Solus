@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { joinUrl, unwrapEnvelope, createApiClient } from './client'
+import { joinUrl, unwrapEnvelope, unwrapEnvelopePage, createApiClient } from './client'
 import { ApiError } from './envelope.types'
 
 describe('joinUrl', () => {
@@ -27,6 +27,20 @@ describe('unwrapEnvelope', () => {
 
   it('falls back to a generic error when body has no error envelope', () => {
     expect(() => unwrapEnvelope(500, null)).toThrowError(/status 500/)
+  })
+})
+
+describe('unwrapEnvelopePage', () => {
+  it('returns data and meta on 2xx, defaulting meta to {}', () => {
+    expect(unwrapEnvelopePage<number[]>(200, { data: [1], meta: { has_next: true } })).toEqual({
+      data: [1],
+      meta: { has_next: true }
+    })
+    expect(unwrapEnvelopePage<number[]>(200, { data: [] })).toEqual({ data: [], meta: {} })
+  })
+
+  it('throws a typed ApiError on failure', () => {
+    expect(() => unwrapEnvelopePage(500, null)).toThrowError(ApiError)
   })
 })
 
@@ -58,5 +72,23 @@ describe('createApiClient', () => {
     await client.request('/version')
     const call = fetchImpl.mock.calls[0]
     expect(call[1]?.headers).not.toHaveProperty('Authorization')
+  })
+
+  it('requestPage returns the data payload and the pagination meta', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ data: [{ id: 'a' }], meta: { has_next: true, next_cursor: 'c2' } }),
+          { status: 200 }
+        )
+      )
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const page = await client.requestPage<{ id: string }[]>('/users/me/notifications')
+    expect(page.data).toEqual([{ id: 'a' }])
+    expect(page.meta).toEqual({ has_next: true, next_cursor: 'c2' })
   })
 })

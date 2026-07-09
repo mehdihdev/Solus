@@ -58,6 +58,15 @@ typecheck:node:
 test:python:
   extends: .python-base
   stage: test
+  services:
+   - name: pgvector/pgvector:pg16
+     alias: postgres
+  variables:
+    FF_NETWORK_PER_BUILD: "true"
+    POSTGRES_USER: solus
+    POSTGRES_PASSWORD: solus
+    POSTGRES_DB: solus
+    SOLUS_TEST_DATABASE_URL: "postgresql+asyncpg://solus:solus@postgres:5432/solus_test"
   script: uv run pytest -q
 
 test:node:

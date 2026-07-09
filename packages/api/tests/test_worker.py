@@ -51,7 +51,7 @@ def maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
 async def _source(maker: async_sessionmaker[AsyncSession], store: InMemorySecretStore) -> Source:
     async with maker() as db:
-        team = Team(name="T", is_personal=False)
+        team = Team(name="T")
         db.add(team)
         await db.flush()
         project = Project(team_id=team.id, name="P")

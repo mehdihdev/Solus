@@ -28,9 +28,7 @@ async def _project_with_graph(client: AsyncClient, headers: dict[str, str]) -> s
             headers=headers,
         )
     ).json()["data"]
-    await client.post(
-        f"/api/v1/projects/{project_id}/sources/{source['id']}/sync", headers=headers
-    )
+    await client.post(f"/api/v1/projects/{project_id}/sources/{source['id']}/sync", headers=headers)
     return project_id
 
 
@@ -62,9 +60,7 @@ async def test_entity_detail_and_relations(
 ) -> None:
     project_id = await _project_with_graph(client, alice_headers)
     repo = next(
-        e
-        for e in await _entities(client, alice_headers, project_id)
-        if e["source_key"] == ":repo"
+        e for e in await _entities(client, alice_headers, project_id) if e["source_key"] == ":repo"
     )
     detail = (
         await client.get(

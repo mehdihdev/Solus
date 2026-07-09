@@ -20,6 +20,7 @@ from solus_api.connectors.runtime import source_entity_count, source_entity_coun
 from solus_api.connectors.worker import execute_source_sync
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
+from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     ProjectCtx,
@@ -30,11 +31,11 @@ from solus_api.deps import (
     require_role,
 )
 from solus_api.models import (
-    Entity,
+    GraphEdge,
+    GraphEntity,
     Job,
     JobKind,
     JobStatus,
-    Relation,
     Role,
     Source,
     SourceStatus,
@@ -49,6 +50,7 @@ from solus_api.schemas import (
 )
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
+from solus_api.services.limits import check_can_add_integration
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -75,17 +77,24 @@ def _resolve_connector(registry: RegistryDep, provider: str) -> Any:
 
 
 @router.get("")
-async def list_sources(ctx: ProjectCtx, session: SessionDep) -> dict[str, Any]:
-    rows = (
-        await session.scalars(
-            select(Source)
-            .where(Source.project_id == ctx.project.id)
-            .order_by(Source.created_at.desc())
-        )
-    ).all()
-    counts = await source_entity_counts(session, [s.id for s in rows])
-    out = [serialize_source(s, entity_count=counts.get(s.id, 0)) for s in rows]
-    return envelope(out)
+async def list_sources(
+    ctx: ProjectCtx,
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict[str, Any]:
+    stmt = (
+        select(Source)
+        .where(Source.project_id == ctx.project.id)
+        .order_by(Source.created_at.desc(), Source.id.desc())
+        .limit(limit + 1)
+    )
+    if cursor:
+        stmt = stmt.where(cursor_filter(Source.created_at, Source.id, cursor))
+    visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
+    counts = await source_entity_counts(session, [s.id for s in visible])
+    out = [serialize_source(s, entity_count=counts.get(s.id, 0)) for s in visible]
+    return envelope(out, meta=meta)
 
 
 @router.post("", status_code=201)
@@ -97,6 +106,7 @@ async def connect_source(
     secret_store: SecretStoreDep,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    await check_can_add_integration(session, ctx.user)
     provider = body.type
     connector = _resolve_connector(registry, provider)
 
@@ -153,9 +163,7 @@ async def connect_source(
 
 
 @router.get("/{source_id}")
-async def get_source(
-    source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep
-) -> dict[str, Any]:
+async def get_source(source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep) -> dict[str, Any]:
     source = await _scoped_source(session, ctx, source_id)
     count = await source_entity_count(session, source.id)
     return envelope(serialize_source(source, entity_count=count))
@@ -195,20 +203,20 @@ async def disconnect_source(
         # Orphan the graph data into manual, user-owned entities rather than
         # removing it with the source.
         await session.execute(
-            update(Entity)
-            .where(Entity.source_id == source.id)
+            update(GraphEntity)
+            .where(GraphEntity.source_id == source.id)
             .values(source_id=None, origin="manual")
         )
         await session.execute(
-            update(Relation)
-            .where(Relation.source_id == source.id)
+            update(GraphEdge)
+            .where(GraphEdge.source_id == source.id)
             .values(source_id=None, origin="manual")
         )
     else:
         # Explicit removal (don't rely on DB-level cascade — not enforced on
-        # SQLite). Relations first to satisfy the FK ordering.
-        await session.execute(delete(Relation).where(Relation.source_id == source.id))
-        await session.execute(delete(Entity).where(Entity.source_id == source.id))
+        # SQLite). Edges first to satisfy the FK ordering.
+        await session.execute(delete(GraphEdge).where(GraphEdge.source_id == source.id))
+        await session.execute(delete(GraphEntity).where(GraphEntity.source_id == source.id))
     record_activity(
         session,
         team_id=ctx.team.id,
@@ -279,18 +287,23 @@ async def trigger_sync(
 
 @router.get("/{source_id}/syncs")
 async def list_syncs(
-    source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep
+    source_id: uuid.UUID,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=SYNC_HISTORY_LIMIT)] = SYNC_HISTORY_LIMIT,
 ) -> dict[str, Any]:
     source = await _scoped_source(session, ctx, source_id)
-    rows = (
-        await session.scalars(
-            select(Sync)
-            .where(Sync.source_id == source.id)
-            .order_by(Sync.created_at.desc())
-            .limit(SYNC_HISTORY_LIMIT)
-        )
-    ).all()
-    return envelope([serialize_sync(s) for s in rows])
+    stmt = (
+        select(Sync)
+        .where(Sync.source_id == source.id)
+        .order_by(Sync.created_at.desc(), Sync.id.desc())
+        .limit(limit + 1)
+    )
+    if cursor:
+        stmt = stmt.where(cursor_filter(Sync.created_at, Sync.id, cursor))
+    visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
+    return envelope([serialize_sync(s) for s in visible], meta=meta)
 
 
 @router.get("/{source_id}/syncs/{sync_id}")

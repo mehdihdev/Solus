@@ -33,9 +33,9 @@ from solus_api.deps import (
     SecretStoreDep,
     SessionDep,
     SettingsDep,
+    live_membership,
 )
 from solus_api.models import (
-    Membership,
     OAuthState,
     Project,
     Role,
@@ -47,6 +47,7 @@ from solus_api.models import (
 )
 from solus_api.schemas import OAuthExchange, OAuthStart, serialize_source
 from solus_api.services.events import emit_event
+from solus_api.services.limits import check_can_add_integration
 
 router = APIRouter(prefix="/api/v1/integrations")
 
@@ -101,13 +102,12 @@ async def oauth_start(
         raise APIError(422, "validation_error", "project_id is not a valid id") from exc
 
     project = await session.get(Project, project_uuid)
-    membership = (
-        await session.get(Membership, (project.team_id, user.id)) if project else None
-    )
+    membership = await live_membership(session, project.team_id, user.id) if project else None
     if project is None or membership is None:
         raise APIError(404, "not_found", "Project not found")
     if membership.role == Role.VIEWER:
         raise APIError(403, "forbidden", "Requires member role on this team")
+    await check_can_add_integration(session, user)
 
     try:
         connector = registry.create(provider)
@@ -155,9 +155,7 @@ async def oauth_start(
         payload={"provider": provider},
     )
     await session.commit()
-    return envelope(
-        {"authorize_url": authorize_url, "state": state, "source_id": str(source.id)}
-    )
+    return envelope({"authorize_url": authorize_url, "state": state, "source_id": str(source.id)})
 
 
 def _app_redirect(base: str, **params: str) -> str:

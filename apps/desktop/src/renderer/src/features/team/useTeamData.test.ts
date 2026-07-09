@@ -13,7 +13,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     getTeamDetail: vi.fn(),
     listMembers: vi.fn(),
     listInvites: vi.fn(),
-    listActivity: vi.fn(),
+    listActivityPage: vi.fn(),
     createInvite: vi.fn(),
     revokeInvite: vi.fn(),
     changeMemberRole: vi.fn(),
@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.mocked(resources.getTeamDetail).mockResolvedValue(TEAM)
   vi.mocked(resources.listMembers).mockResolvedValue(MEMBERS)
   vi.mocked(resources.listInvites).mockResolvedValue([])
-  vi.mocked(resources.listActivity).mockResolvedValue([])
+  vi.mocked(resources.listActivityPage).mockResolvedValue({ data: [], meta: {} })
 })
 
 describe('useTeamData', () => {
@@ -163,5 +163,30 @@ describe('useTeamData', () => {
     await act(async () => {
       expect(await result.current.actions.remove('u2')).toBe(false)
     })
+  })
+
+  it('pages the activity feed via loadMoreActivity', async () => {
+    const a1: resources.ActivityApi = {
+      id: 'act1',
+      type: 'project.created',
+      domain: null,
+      actor_id: 'u1',
+      project_id: 'p1',
+      payload: {},
+      created_at: '2026-07-03T00:00:00Z'
+    }
+    const a2: resources.ActivityApi = { ...a1, id: 'act2' }
+    vi.mocked(resources.listActivityPage)
+      .mockResolvedValueOnce({ data: [a1], meta: { has_next: true, next_cursor: 'c2' } })
+      .mockResolvedValueOnce({ data: [a2], meta: { has_next: false } })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.activityHasMore).toBe(true)
+    await act(async () => {
+      await result.current.loadMoreActivity()
+    })
+    expect(result.current.activity.map((a) => a.id)).toEqual(['act1', 'act2'])
+    expect(result.current.activityHasMore).toBe(false)
+    expect(vi.mocked(resources.listActivityPage)).toHaveBeenLastCalledWith('t1', 'c2')
   })
 })

@@ -2,7 +2,7 @@
 // (API.md §2.1/§2.3). Each takes an injectable client (defaults to the app
 // singleton) so callers and tests stay decoupled from transport. Field names
 // are snake_case to match the backend envelope (API.md §1.4).
-import { api, type ApiClient } from './client'
+import { api, type ApiClient, type Page } from './client'
 import type { SolMode } from '../../store/settingsStore'
 
 export interface TeamSummary {
@@ -385,10 +385,29 @@ export function listActivity(teamId: string, client: ApiClient = api): Promise<A
   return client.request<ActivityApi[]>(`/teams/${teamId}/activity`)
 }
 
+/** One cursor page of the team activity feed (§2.2) — carries pagination meta. */
+export function listActivityPage(
+  teamId: string,
+  cursor?: string,
+  client: ApiClient = api
+): Promise<Page<ActivityApi[]>> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  return client.requestPage<ActivityApi[]>(`/teams/${teamId}/activity${query}`)
+}
+
 /* ---------------- Notifications (§2.1) ---------------- */
 
 export function listNotifications(client: ApiClient = api): Promise<NotificationApi[]> {
   return client.request<NotificationApi[]>('/users/me/notifications')
+}
+
+/** One cursor page of the current user's notifications (§2.1) — with meta. */
+export function listNotificationsPage(
+  cursor?: string,
+  client: ApiClient = api
+): Promise<Page<NotificationApi[]>> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  return client.requestPage<NotificationApi[]>(`/users/me/notifications${query}`)
 }
 
 export function markNotificationRead(

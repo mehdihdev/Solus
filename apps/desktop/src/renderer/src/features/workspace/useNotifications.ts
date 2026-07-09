@@ -3,10 +3,11 @@
 // back to the scripted demo alerts and the guided tour still works.
 import { useCallback, useEffect, useState } from 'react'
 import {
-  listNotifications,
+  listNotificationsPage,
   markNotificationRead,
   type NotificationApi
 } from '../../lib/api/resources'
+import type { ApiMeta } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 
 export type NotificationsStatus = 'loading' | 'ready' | 'offline'
@@ -15,7 +16,9 @@ export interface NotificationsData {
   status: NotificationsStatus
   items: NotificationApi[]
   unreadCount: number
+  hasMore: boolean
   markRead: (id: string) => Promise<void>
+  loadMore: () => Promise<void>
   refresh: () => Promise<void>
 }
 
@@ -23,6 +26,7 @@ export function useNotifications(): NotificationsData {
   const linked = useWorkspaceStore((s) => s.linked)
   const [status, setStatus] = useState<NotificationsStatus>(linked ? 'loading' : 'offline')
   const [items, setItems] = useState<NotificationApi[]>([])
+  const [meta, setMeta] = useState<ApiMeta>({})
 
   const load = useCallback(async (): Promise<void> => {
     if (!linked) {
@@ -30,12 +34,27 @@ export function useNotifications(): NotificationsData {
       return
     }
     try {
-      setItems(await listNotifications())
+      const page = await listNotificationsPage()
+      setItems(page.data)
+      setMeta(page.meta)
       setStatus('ready')
     } catch {
       setStatus('offline')
     }
   }, [linked])
+
+  // Append the next cursor page. No-op when there's nothing more; keeps the
+  // current page on failure so the bell never regresses to empty.
+  const loadMore = async (): Promise<void> => {
+    if (!meta.has_next || !meta.next_cursor) return
+    try {
+      const page = await listNotificationsPage(meta.next_cursor)
+      setItems((prev) => [...prev, ...page.data])
+      setMeta(page.meta)
+    } catch {
+      /* keep the current page */
+    }
+  }
 
   useEffect(() => {
     void load()
@@ -53,5 +72,13 @@ export function useNotifications(): NotificationsData {
   }
 
   const unreadCount = items.filter((n) => !n.read_at).length
-  return { status, items, unreadCount, markRead, refresh: load }
+  return {
+    status,
+    items,
+    unreadCount,
+    hasMore: meta.has_next ?? false,
+    markRead,
+    loadMore,
+    refresh: load
+  }
 }

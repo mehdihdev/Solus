@@ -19,6 +19,11 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# The graph's Domain vocabulary is owned by models.py (ADR-027 canonical set:
+# code/electrical/mechanical/simulation/runtime). Re-exported (explicit alias for
+# mypy) so connectors and the EntityOut contract share one enum (Decision A).
+from solus_api.models import Domain as Domain
+
 
 class AuthKind(enum.StrEnum):
     """How a connector authenticates. Fixed by Solus code, never by user data."""
@@ -27,15 +32,6 @@ class AuthKind(enum.StrEnum):
     PAT = "pat"
     APP = "app"
     NONE = "none"
-
-
-class Domain(enum.StrEnum):
-    """The four worlds a robot lives in (CLAUDE.md §1) + cross-domain exports."""
-
-    SOFTWARE = "software"
-    ELECTRICAL = "electrical"
-    MECHANICAL = "mechanical"
-    RUNTIME = "runtime"
 
 
 class FrozenModel(BaseModel):
@@ -55,6 +51,12 @@ class EntityOut(FrozenModel):
     domain: Domain
     name: str = Field(min_length=1, max_length=512)
     properties: dict[str, Any] = Field(default_factory=dict)
+    #: The dedicated channel into the multimodal fingerprint matcher (W0-06) —
+    #: manufacturer part numbers, schematic symbols, datasheet refs, CAD model ids.
+    #: Kept separate from `properties` so the matcher queries it directly; the
+    #: runtime persists it to `graph_entity.modality_hints`. Empty for connectors
+    #: (GitHub/GitLab) that have no cross-modal identity signal yet.
+    modality_hints: dict[str, Any] = Field(default_factory=dict)
 
 
 class RelationOut(FrozenModel):

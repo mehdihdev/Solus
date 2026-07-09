@@ -17,7 +17,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     getTeamDetail: vi.fn(),
     listMembers: vi.fn(),
     listInvites: vi.fn(),
-    listActivity: vi.fn(),
+    listActivityPage: vi.fn(),
     updateTeam: vi.fn()
   }
 })
@@ -149,7 +149,7 @@ describe('SettingsScreen — live team section', () => {
     })
     vi.mocked(resources.listMembers).mockResolvedValue([])
     vi.mocked(resources.listInvites).mockResolvedValue([])
-    vi.mocked(resources.listActivity).mockResolvedValue([])
+    vi.mocked(resources.listActivityPage).mockResolvedValue({ data: [], meta: {} })
   })
   afterEach(() => useWorkspaceStore.getState().reset())
 

@@ -4,12 +4,12 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
-from solus_api.deps import SessionDep, TeamCtx, require_role
-from solus_api.models import Membership, Role, User
+from solus_api.deps import SessionDep, TeamCtx, live_membership, require_role
+from solus_api.models import Membership, Project, ProjectMembership, Role, User, utcnow
 from solus_api.schemas import MemberRoleUpdate, serialize_member
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1/teams/{team_id}/members")
 
 
 async def _get_target(session: SessionDep, team_id: uuid.UUID, user_id: uuid.UUID) -> Membership:
-    membership = await session.get(Membership, (team_id, user_id))
+    membership = await live_membership(session, team_id, user_id)
     if membership is None:
         raise APIError(404, "not_found", "Member not found")
     return membership
@@ -95,6 +95,24 @@ async def remove_member(user_id: uuid.UUID, ctx: TeamCtx, session: SessionDep) -
         raise APIError(409, "last_owner", "A team must retain at least one owner")
 
     await session.delete(target)
+    # Dual-source revocation (ADR-025 / CLAUDE.md §7): losing team membership must also revoke the
+    # team-project shares seeded from it — otherwise get_project_context's ProjectMembership
+    # fallback would keep granting the removed user read access to the team's projects.
+    project_ids = (
+        await session.scalars(
+            select(Project.id).where(Project.team_id == ctx.team.id, Project.deleted_at.is_(None))
+        )
+    ).all()
+    if project_ids:
+        await session.execute(
+            update(ProjectMembership)
+            .where(
+                ProjectMembership.user_id == user_id,
+                ProjectMembership.project_id.in_(project_ids),
+                ProjectMembership.deleted_at.is_(None),
+            )
+            .values(deleted_at=utcnow())
+        )
     record_activity(
         session,
         team_id=ctx.team.id,

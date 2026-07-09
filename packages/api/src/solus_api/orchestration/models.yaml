@@ -1,0 +1,79 @@
+# ============================================================================
+# Model-orchestration config (ADR-026 / ADR-024). Validated by
+# solus_api.orchestration.config.OrchestrationConfig.
+#
+# ILLUSTRATIVE — the model names, prices, and credit conversion below are
+# PROVISIONAL (ADR-024: no real cost-per-op data yet). Verify every price
+# against the provider's current pricing before production, and calibrate
+# `credits_per_dollar` from pilot data. Model identity lives ONLY here — never
+# hardcoded in code. Swapping which model serves a role is a config edit.
+#
+# Roles are named `<strength>_<tier>`. A role must be filled by exactly ONE
+# catalog entry (enforced) so routing is deterministic.
+# ============================================================================
+version: 1
+
+# --- Model catalog: concrete models + the role(s) each fills -----------------
+# prices are USD per 1,000,000 tokens (price_unit below).
+catalog:
+  - provider: anthropic
+    name: claude-haiku-4-5
+    price_in: 1.0
+    price_out: 5.0
+    context_window: 200000
+    roles: [general_trivial]
+
+  - provider: anthropic
+    name: claude-sonnet-5
+    price_in: 3.0
+    price_out: 15.0
+    context_window: 200000
+    roles: [general_standard, code_standard]
+
+  - provider: anthropic
+    name: claude-opus-4-8
+    price_in: 15.0
+    price_out: 75.0
+    context_window: 200000
+    roles: [general_hard, code_hard]
+
+  - provider: google
+    name: gemini-2.5-flash
+    price_in: 0.3
+    price_out: 2.5
+    context_window: 1000000
+    roles: [visual_standard, longctx_standard]
+
+  - provider: google
+    name: gemini-2.5-pro
+    price_in: 1.25
+    price_out: 10.0
+    context_window: 1000000
+    roles: [visual_hard, longctx_hard]
+
+# --- (complexity × type) → role matrix ---------------------------------------
+# May be partial; a missing cell falls back to `default_role`.
+matrix:
+  trivial:
+    general: general_trivial
+    code: general_trivial # trivial code = cheapest fast model
+    visual_log: general_trivial
+    long_context: general_trivial
+  standard:
+    general: general_standard
+    code: code_standard # Claude-class: strong CODE reasoning
+    visual_log: visual_standard # Gemini-class: strong for logs/telemetry/images
+    long_context: longctx_standard # Gemini-class: large context window
+  hard:
+    general: general_hard
+    code: code_hard
+    visual_log: visual_hard
+    long_context: longctx_hard
+
+default_role: general_standard
+
+# --- Cost / credit conversion (ADR-024, all calibratable) --------------------
+cost:
+  margin_multiplier: 2.0 # infra + failed calls + trial grants + profit (not pure profit)
+  credits_per_dollar: 100.0 # PROVISIONAL — calibrate from pilot data
+  price_unit: usd_per_million_tokens

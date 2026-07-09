@@ -13,6 +13,7 @@ CWD="$(jqr '.cwd')"; CWD="${CWD:-$PWD}"
 ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || echo "$CWD")"
 case "$FILE" in /*) REL="${FILE#"$ROOT"/}";; *) REL="$FILE";; esac
 cd "$ROOT" 2>/dev/null || true
+R=""; command -v uv >/dev/null 2>&1 && [[ -f "$ROOT/pyproject.toml" ]] && R="uv run"
 TO="$(command -v timeout || command -v gtimeout || echo "")"
 twrap() { if [[ -n "$TO" ]]; then "$TO" "$@"; else shift; "$@"; fi; }
 
@@ -48,8 +49,8 @@ FAIL=""
 for t in $TESTS; do
   case "$t" in
     *.py)
-      command -v pytest >/dev/null 2>&1 || continue
-      OUT="$(twrap 90 pytest -q "$t" 2>&1)" || FAIL+="--- $t ---"$'\n'"$(printf '%s\n' "$OUT" | tail -25)"$'\n';;
+      [[ -n "$R" ]] || command -v pytest >/dev/null 2>&1 || continue
+      OUT="$(twrap 90 $R pytest -q "$t" 2>&1)" || FAIL+="--- $t ---"$'\n'"$(printf '%s\n' "$OUT" | tail -25)"$'\n';;
     *.ts|*.tsx)
       OUT="$(twrap 120 npx --no-install vitest run --silent "$t" 2>&1)" || FAIL+="--- $t ---"$'\n'"$(printf '%s\n' "$OUT" | tail -25)"$'\n';;
   esac

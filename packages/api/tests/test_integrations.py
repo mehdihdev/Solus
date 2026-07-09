@@ -34,9 +34,7 @@ async def _start(client: AsyncClient, headers: dict[str, str], project_id: str) 
     return data
 
 
-async def test_catalog_lists_github(
-    client: AsyncClient, alice_headers: dict[str, str]
-) -> None:
+async def test_catalog_lists_github(client: AsyncClient, alice_headers: dict[str, str]) -> None:
     await me(client, alice_headers)
     resp = await client.get("/api/v1/integrations", headers=alice_headers)
     assert resp.status_code == 200

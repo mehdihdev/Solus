@@ -33,9 +33,7 @@ async def _connect(
     }
     if token is not None:
         body["token"] = token
-    resp = await client.post(
-        f"/api/v1/projects/{project_id}/sources", json=body, headers=headers
-    )
+    resp = await client.post(f"/api/v1/projects/{project_id}/sources", json=body, headers=headers)
     assert resp.status_code == 201, resp.text
     data: dict[str, Any] = resp.json()["data"]
     return data

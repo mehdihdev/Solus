@@ -5,8 +5,8 @@ the suite itself is proven before any real connector relies on it.
 """
 
 import pytest
-from conftest import assert_connector_contract
 from pydantic import ValidationError
+from solus_api.connectors import assert_connector_contract
 from solus_api.connectors.contracts import (
     AccountInfo,
     AuthKind,
@@ -32,8 +32,8 @@ class FakeConnector(Connector):
     async def sync(self, ctx: SyncContext) -> SyncResult:
         return SyncResult(
             entities=[
-                EntityOut(source_key="a.py", type="code_file", domain=Domain.SOFTWARE, name="a.py"),
-                EntityOut(source_key="pkg", type="code_module", domain=Domain.SOFTWARE, name="pkg"),
+                EntityOut(source_key="a.py", type="code_file", domain=Domain.CODE, name="a.py"),
+                EntityOut(source_key="pkg", type="code_module", domain=Domain.CODE, name="pkg"),
             ],
             relations=[RelationOut(from_key="pkg", to_key="a.py", type="contains")],
             cursor={"sha": "abc123"},
@@ -50,7 +50,7 @@ def ctx() -> SyncContext:
 
 def test_entity_rejects_blank_source_key() -> None:
     with pytest.raises(ValidationError):
-        EntityOut(source_key="", type="code_file", domain=Domain.SOFTWARE, name="a")
+        EntityOut(source_key="", type="code_file", domain=Domain.CODE, name="a")
 
 
 def test_entity_rejects_unknown_field() -> None:
@@ -58,16 +58,16 @@ def test_entity_rejects_unknown_field() -> None:
         EntityOut(
             source_key="a",
             type="code_file",
-            domain=Domain.SOFTWARE,
+            domain=Domain.CODE,
             name="a",
             sneaky="x",  # type: ignore[call-arg]
         )
 
 
 def test_entity_is_frozen() -> None:
-    entity = EntityOut(source_key="a", type="code_file", domain=Domain.SOFTWARE, name="a")
+    entity = EntityOut(source_key="a", type="code_file", domain=Domain.CODE, name="a")
     with pytest.raises(ValidationError):
-        entity.name = "b"  # type: ignore[misc]
+        entity.name = "b"
 
 
 def test_relation_defaults_empty_properties() -> None:

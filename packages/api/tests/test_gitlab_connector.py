@@ -12,7 +12,6 @@ from urllib.parse import quote
 import httpx
 import pytest
 import respx
-from conftest import assert_connector_contract
 from fixtures.gitlab_sample import (
     COMMIT_BODY,
     DEFAULT_BRANCH,
@@ -27,6 +26,7 @@ from fixtures.gitlab_sample import (
     TREE_PAGE_2,
     USER_BODY,
 )
+from solus_api.connectors import assert_connector_contract
 from solus_api.connectors.contracts import (
     ConnectorError,
     Credentials,
@@ -57,9 +57,7 @@ def _mock_gitlab_api() -> None:
     )
 
 
-def _ctx(
-    branch: str | None = DEFAULT_BRANCH, cursor: dict[str, str] | None = None
-) -> SyncContext:
+def _ctx(branch: str | None = DEFAULT_BRANCH, cursor: dict[str, str] | None = None) -> SyncContext:
     config: dict[str, str] = {"repo": REPO_PATH}
     if branch is not None:
         config["branch"] = branch
@@ -124,9 +122,7 @@ async def test_exchange_code_round_trip() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_exchange_code_failure_raises() -> None:
-    respx.post(f"{BASE}/oauth/token").mock(
-        return_value=httpx.Response(400, json=TOKEN_ERROR_BODY)
-    )
+    respx.post(f"{BASE}/oauth/token").mock(return_value=httpx.Response(400, json=TOKEN_ERROR_BODY))
     with pytest.raises(ConnectorError) as exc:
         await GitLabConnector(client_id="cid", client_secret="cs").exchange_code(
             code="bad", redirect_uri="http://127.0.0.1:53682/auth/callback"

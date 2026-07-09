@@ -8,6 +8,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
+    "gen:api": "npx --yes openapi-typescript@7.13.0 ../../packages/api/openapi.json -o src/renderer/src/lib/api/schema.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -15,7 +16,7 @@
     "test:watch": "vitest",
     "start": "electron-vite preview",
     "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run gen:api && npm run typecheck && electron-vite build",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",

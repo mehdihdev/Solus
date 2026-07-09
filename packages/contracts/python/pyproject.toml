@@ -1,0 +1,13 @@
+[project]
+name = "solus-contracts"
+version = "0.1.0"
+description = "Human-owned Solus interface contracts (CLAUDE.md §9, ADR-028) — Python."
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["solus_contracts"]

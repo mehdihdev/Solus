@@ -10,7 +10,7 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import { dcol, type DomainId } from '../../theme/tokens.constants'
+import { dcol } from '../../theme/tokens.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
 import { ACTIVITY, TEAM } from '../workspace/workspaceData.constants'
@@ -20,12 +20,6 @@ import { useTeamData, type TeamData } from './useTeamData'
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const INVITE_SEND_DELAY_MS = 1100
 const MANAGER_ROLES: readonly TeamRole[] = ['owner', 'admin']
-const DOMAIN_IDS: readonly DomainId[] = ['sw', 'ee', 'me', 'rt']
-
-/** A graph-domain color for a known domain id, else null (skip the dot). */
-function domainDot(domain: string | null): string | null {
-  return domain && DOMAIN_IDS.includes(domain as DomainId) ? dcol(domain as DomainId) : null
-}
 
 interface TeamScreenProps {
   onOpenAlert: (id: string) => void
@@ -144,16 +138,6 @@ function LiveActivity({
               {activityText(a)}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
-              {domainDot(a.domain) && (
-                <span
-                  style={{
-                    width: 5,
-                    height: 5,
-                    borderRadius: 99,
-                    background: domainDot(a.domain) as string
-                  }}
-                />
-              )}
               <span style={{ fontSize: 10, color: 'var(--mut)' }}>
                 {relativeTime(a.created_at)}
               </span>

@@ -35,9 +35,10 @@ FAIL=""
 run() { local label="$1"; shift; local out; out="$("$@" 2>&1)" || FAIL+="### $label"$'\n'"$(printf '%s\n' "$out" | tail -30)"$'\n\n'; }
 
 if [[ -n "$PY" ]]; then
-  command -v ruff  >/dev/null 2>&1 && run "ruff (changed .py)"  ruff check -q $PY
-  command -v mypy  >/dev/null 2>&1 && run "mypy (changed .py)"  mypy --no-error-summary $PY
-  command -v pytest >/dev/null 2>&1 && run "pytest (full suite)" twrap 600 pytest -q
+  R=""; command -v uv >/dev/null 2>&1 && [[ -f "$ROOT/pyproject.toml" ]] && R="uv run"
+  run "ruff (changed .py)"  $R ruff check -q $PY
+  run "mypy (changed .py)"  $R mypy --no-error-summary $PY
+  run "pytest (full suite)" twrap 600 $R pytest -q
 fi
 if [[ -n "$TS" ]]; then
   run "eslint (changed .ts)" npx --no-install eslint $TS

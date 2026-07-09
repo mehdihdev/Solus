@@ -1,8 +1,11 @@
-"""SQLAlchemy ORM models for Phase 1 (Foundation) — API.md §2.1–§2.3, §2.16.
+"""SQLAlchemy ORM models — the canonical Solus data contract (SOLUSDEV-72).
 
-UUIDv7 primary keys (§1.4, index locality). Enum columns store values, not
-names, and use portable VARCHAR storage (no native PG enums before Alembic
-baselines land).
+UUIDv7 primary keys (§1.4 index locality). Enum columns store values, not names,
+via portable VARCHAR (`_enum_column`). Soft-deletable tables carry `deleted_at`;
+the intended remove path sets it rather than hard-deleting rows, though wiring the
+delete routes to do so is a downstream ticket. The append-only credit ledger,
+notifications and the data-collection log are exempt. The cross-domain graph
+(entities, relations, embeddings) lives in Postgres + pgvector — no separate graph DB.
 """
 
 import enum
@@ -11,21 +14,33 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
-    UniqueConstraint,
     Uuid,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from uuid6 import uuid7
+
+# Embedding width shared by every pgvector column (OpenAI/Voyage-class models).
+# NOTE: pgvector returns embeddings as numpy.ndarray on read, not list — call
+# .tolist() before any list-only or truthiness operation on a loaded embedding.
+EMBEDDING_DIM = 1536
+# ivfflat centroid-list count. Placeholder: retune toward ~sqrt(rows) once corpus
+# size is known, and REINDEX after the first large load (ivfflat clusters existing
+# rows, so an index built on an empty table has no useful centroids yet).
+IVFFLAT_LISTS = 100
 
 
 def utcnow() -> datetime:
@@ -33,7 +48,7 @@ def utcnow() -> datetime:
 
 
 def ensure_utc(value: datetime) -> datetime:
-    """Normalize DB-returned datetimes (naive on SQLite) to aware UTC."""
+    """Normalize DB-returned datetimes (naive on some drivers) to aware UTC."""
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
@@ -45,6 +60,7 @@ class Base(DeclarativeBase):
     pass
 
 
+# ------------------------------------------------------------------------- enums
 class Role(enum.StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
@@ -60,10 +76,67 @@ class SolMode(enum.StrEnum):
     EXPERT = "expert"
 
 
+class TeamKind(enum.StrEnum):
+    PERSONAL = "personal"
+    COLLABORATIVE = "collaborative"
+
+
+class MembershipStatus(enum.StrEnum):
+    ACTIVE = "active"
+    INVITED = "invited"
+    SUSPENDED = "suspended"
+
+
 class InviteStatus(enum.StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REVOKED = "revoked"
+
+
+class PlanType(enum.StrEnum):
+    BASIC = "basic"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+
+class SubscriptionStatus(enum.StrEnum):
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    CANCELED = "canceled"
+    TRIALING = "trialing"
+
+
+class CreditTxnType(enum.StrEnum):
+    PURCHASE = "purchase"
+    USAGE = "usage"
+    TRIAL_GRANT = "trial_grant"
+    REFUND = "refund"
+    ADJUSTMENT = "adjustment"
+
+
+class NotificationType(enum.StrEnum):
+    # Dotted values match the repo-wide activity/event type convention and the
+    # values main's notification flows already persist (SOLUSDEV-72 merge sweep;
+    # flagged in the reconciliation report — W0-01 originally used underscores).
+    TEAM_INVITE = "team.invite"
+    INVITE_ACCEPTED = "invite.accepted"
+    PROJECT_CREATED = "project.created"
+    PAYMENT_FAILED = "payment.failed"
+    PROJECT_SHARED = "project.shared"
+    CREDIT_LOW = "credit.low"
+
+
+class Domain(enum.StrEnum):
+    """The domains the graph spans (ADR-027). NOTE: `graph_entity.kind` and
+    `graph_edge.relation_type` are free strings, NOT enums — connector kinds
+    (code_repo, code_module, design_export, ros_node, ...) and relations
+    (contains, part_of, mates_with, connected_to) exceed any closed set."""
+
+    CODE = "code"
+    ELECTRICAL = "electrical"
+    MECHANICAL = "mechanical"
+    SIMULATION = "simulation"
+    RUNTIME = "runtime"
 
 
 class JobStatus(enum.StrEnum):
@@ -80,6 +153,22 @@ class JobKind(enum.StrEnum):
     PROVING = "proving"
     FINGERPRINT_SCAN = "fingerprint_scan"
     SIM_REBUILD = "sim_rebuild"
+
+
+class ArtifactScope(enum.StrEnum):
+    """Who may fetch an artifact's bytes. PROJECT (default) → any project member;
+    PRIVATE → the creator only. Extensible (TEAM/PUBLIC later)."""
+
+    PROJECT = "project"
+    PRIVATE = "private"
+
+
+class ArtifactStorage(enum.StrEnum):
+    """Where an artifact's bytes physically live (the metadata always lives here)."""
+
+    S3 = "s3"
+    LOCAL = "local"
+    CLIENT = "client"
 
 
 class SourceType(enum.StrEnum):
@@ -103,18 +192,24 @@ class SourceStatus(enum.StrEnum):
 class SyncTrigger(enum.StrEnum):
     MANUAL = "manual"
     SCHEDULED = "scheduled"  # change-detection scheduler
+    # ponytail: enum value reserved; the inbound webhook receiver + signature auth is a future
+    # ticket (ADR-030). Not produced anywhere yet — sync is manual/scheduled only for now.
     WEBHOOK = "webhook"  # inbound provider webhook
 
 
 def _enum_column(enum_cls: type[enum.StrEnum]) -> Enum:
+    # native_enum=False + create_constraint=True → VARCHAR with a DB CHECK on the
+    # allowed values (portable, and validity enforced in the database, not just app code).
     return Enum(
         enum_cls,
         native_enum=False,
         length=32,
+        create_constraint=True,
         values_callable=lambda e: [member.value for member in e],
     )
 
 
+# ------------------------------------------------------------------------ mixins
 class UuidPkMixin:
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
 
@@ -128,12 +223,39 @@ class TimestampMixin:
     )
 
 
-class User(UuidPkMixin, TimestampMixin, Base):
+class SoftDeleteMixin:
+    # Soft delete: set deleted_at instead of removing the row; live queries filter
+    # deleted_at IS NULL (partial unique indexes below rely on this).
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, index=True
+    )
+
+
+def _partial_unique(name: str, *columns: str) -> Index:
+    """Unique only among live (not soft-deleted) rows, so a re-add after soft
+    delete does not collide."""
+    return Index(name, *columns, unique=True, postgresql_where=text("deleted_at IS NULL"))
+
+
+def _ivfflat(name: str, column: str) -> Index:
+    """Approximate-nearest-neighbour index for a pgvector column (cosine)."""
+    return Index(
+        name,
+        column,
+        postgresql_using="ivfflat",
+        postgresql_with={"lists": IVFFLAT_LISTS},
+        postgresql_ops={column: "vector_cosine_ops"},
+    )
+
+
+# ----------------------------------------------------------------------- tenancy
+class User(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "users"
 
-    auth_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    # Supabase JWT `sub` claim — the bridge between Supabase Auth and the app user.
+    supabase_user_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(320), index=True)
-    name: Mapped[str | None] = mapped_column(String(255), default=None)
+    display_name: Mapped[str | None] = mapped_column(String(255), default=None)
     avatar_url: Mapped[str | None] = mapped_column(String(2048), default=None)
     sol_mode: Mapped[SolMode] = mapped_column(_enum_column(SolMode), default=SolMode.GUIDE)
     # ADR-011: collection is consent-gated; nothing is recorded until the user opts in.
@@ -143,29 +265,37 @@ class User(UuidPkMixin, TimestampMixin, Base):
     onboarding_step: Mapped[str] = mapped_column(String(16), default="about")
 
 
-class Team(UuidPkMixin, TimestampMixin, Base):
+class Team(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "teams"
 
     name: Mapped[str] = mapped_column(String(255))
-    is_personal: Mapped[bool] = mapped_column(Boolean, default=False)
+    slug: Mapped[str | None] = mapped_column(String(255), default=None)
+    # PERSONAL teams are solo-only and exempt from plan limits; COLLABORATIVE are
+    # the real teams that count toward limits (ADR-015).
+    kind: Mapped[TeamKind] = mapped_column(_enum_column(TeamKind), default=TeamKind.COLLABORATIVE)
+    # Interim plan marker, retained until subscriptions drive the API surface.
     plan_status: Mapped[str] = mapped_column(String(32), default="trial")
     # Team preferences (FND-07). Keys are validated by schemas.TeamSettings —
     # never write unvalidated dicts here.
     settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
-class Membership(Base):
+class Membership(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "memberships"
+    __table_args__ = (_partial_unique("uq_membership_team_user", "team_id", "user_id"),)
 
     team_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("teams.id", ondelete="CASCADE"), index=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     role: Mapped[Role] = mapped_column(_enum_column(Role), default=Role.MEMBER)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow
+    status: Mapped[MembershipStatus] = mapped_column(
+        _enum_column(MembershipStatus), default=MembershipStatus.ACTIVE
+    )
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
     )
 
 
@@ -188,7 +318,7 @@ class Invite(UuidPkMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class Project(UuidPkMixin, TimestampMixin, Base):
+class Project(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "projects"
 
     team_id: Mapped[uuid.UUID] = mapped_column(
@@ -196,11 +326,233 @@ class Project(UuidPkMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, default=None)
-    # Soft delete (FND-04): archived projects keep their graph but leave the
-    # default listing. Hard DELETE remains for true removal.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # Archive (FND-04): archived projects keep their graph but leave the default
+    # listing. Distinct from soft delete (`deleted_at`) — archive is user-visible
+    # and reversible; delete is the remove path. Both kept through the merge.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class ProjectMembership(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """Per-project access within a team. Seeded with the team's members on project
+    creation (that seeding is a downstream ticket)."""
+
+    __tablename__ = "project_memberships"
+    __table_args__ = (_partial_unique("uq_project_member_project_user", "project_id", "user_id"),)
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+
+# --------------------------------------------------------------------- billing
+class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """Per-USER billing (ADR-023/032, SOLUSDEV-72 Decisions C-E). Each user has their own
+    subscription with their own `limits`; teams is a feature, not a plan tier, and the
+    personal team is exempt from limits. Created as a 14-day trial during onboarding.
+    The only multi-user case is Enterprise (an owner provisions seats), which the per-user
+    model does not preclude."""
+
+    __tablename__ = "subscriptions"
+    # One live subscription per user.
+    __table_args__ = (_partial_unique("uq_subscription_user", "user_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    plan: Mapped[PlanType] = mapped_column(_enum_column(PlanType))
+    status: Mapped[SubscriptionStatus] = mapped_column(
+        _enum_column(SubscriptionStatus), default=SubscriptionStatus.TRIALING
+    )
+    # Plan limits AS DATA (null/absent key = unlimited). Enforcement reads this, never plan names.
+    limits: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Trial/period end — stored only; charge/downgrade-at-expiry is the future Stripe work.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Stripe wiring is deferred; a trial has no customer yet (nullable).
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    seat_count: Mapped[int | None] = mapped_column(Integer, default=None)  # Enterprise (future)
+    custom_price_per_seat: Mapped[int | None] = mapped_column(Integer, default=None)  # cents
+
+
+class CreditBalance(UuidPkMixin, TimestampMixin, Base):
+    """Cached per-user balance (no pooling). The ledger is the source of truth."""
+
+    __tablename__ = "credit_balance"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class CreditLedger(UuidPkMixin, Base):
+    """Immutable, append-only credit transaction log — the source of truth."""
+
+    __tablename__ = "credit_ledger"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    amount: Mapped[int] = mapped_column(Integer)  # signed: + grant/purchase, - usage
+    type: Mapped[CreditTxnType] = mapped_column(_enum_column(CreditTxnType))
+    balance_after: Mapped[int] = mapped_column(Integer)  # snapshot for auditability
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+PLAN_LIMITS: dict[PlanType, dict[str, int | None]] = {
+    PlanType.BASIC: {"max_integrations": 4, "max_projects": 3, "max_teams": 2},
+    PlanType.PRO: {"max_integrations": None, "max_projects": None, "max_teams": None},
+    PlanType.ENTERPRISE: {},  # custom per deal; set explicitly at creation.
+}
+
+
+def default_limits(plan: PlanType) -> dict[str, int | None]:
+    """Plan-default limits for a new subscription (ADR-018/019). null = unlimited."""
+    return dict(PLAN_LIMITS[plan])
+
+
+# ----------------------------------------------------------------------- graph
+class GraphEntity(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A node in the cross-domain graph (ADR-027). Observations of one physical part
+    collapse to a canonical entity via `canonical_part_id` (the fingerprint's output).
+    Connector-owned when `source_id` is set (origin "connector", read-only via the API);
+    "manual" entities are user-editable; `version` powers optimistic concurrency
+    (API.md §2.4). `external_ref` is the identity linchpin — it equals the connector's
+    `EntityOut.source_key` and the fingerprint `SourceRef.external_ref`."""
+
+    __tablename__ = "graph_entity"
+    __table_args__ = (
+        _ivfflat("ix_graph_entity_embedding", "embedding"),
+        # Idempotent re-sync: one live row per (source, external id).
+        _partial_unique("uq_graph_entity_source_ref", "source_id", "external_ref"),
+        Index("ix_graph_entity_project_kind", "project_id", "kind"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(64), index=True)  # free string (see Domain docstring)
+    domain: Mapped[Domain] = mapped_column(_enum_column(Domain))
+    name: Mapped[str] = mapped_column(String(512))
+    canonical_part_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("graph_entity.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # Provenance: `source_id` is the connector-runtime FK (idempotency + cascade);
+    # `source_connector`/`external_ref` are the fingerprint-facing mirror (W0-06).
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), default=None, index=True
+    )
+    source_connector: Mapped[str | None] = mapped_column(String(64), default=None)
+    external_ref: Mapped[str | None] = mapped_column(String(512), default=None)  # id in source tool
+    origin: Mapped[str] = mapped_column(String(16), default="connector")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # The multimodal fingerprint channel (W0-06): part numbers, schematic symbols,
+    # datasheet refs, CAD model ids — kept separate from `attrs` so the matcher
+    # queries it directly. Mirrors the connector's `EntityOut.modality_hints`.
+    modality_hints: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Nullable: entities are often created by a connector before an embedding exists.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), default=None)
+
+
+class GraphEdge(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A typed relation between two entities. `same_as` is the cross-domain identity
+    link. `relation_type` is a free string (see Domain docstring). Connector-owned
+    when `source_id` is set."""
+
+    __tablename__ = "graph_edge"
+    __table_args__ = (
+        # Idempotent re-sync: one live edge per (source, src, dst, type).
+        _partial_unique(
+            "uq_graph_edge_source_edge", "source_id", "src_id", "dst_id", "relation_type"
+        ),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), default=None, index=True
+    )
+    src_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("graph_entity.id", ondelete="CASCADE"), index=True
+    )
+    dst_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("graph_entity.id", ondelete="CASCADE"), index=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(64))  # free string
+    domain_pair: Mapped[str] = mapped_column(String(64))  # e.g. "code<->electrical"
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    origin: Mapped[str] = mapped_column(String(16), default="connector")
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+class ErrorSolution(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """RAG source for SOL: an error seen in a project and (optionally) its fix."""
+
+    __tablename__ = "error_solution"
+    __table_args__ = (_ivfflat("ix_error_solution_embedding", "embedding"),)
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    error_text: Mapped[str] = mapped_column(Text)
+    solution_text: Mapped[str | None] = mapped_column(Text, default=None)
+    domain: Mapped[Domain] = mapped_column(_enum_column(Domain))
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), default=None)
+
+
+# --------------------------------------------------------------------- artifacts
+class Artifact(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """Registry row for a large/binary tool output (image, point cloud, screenshot).
+    The bytes live in S3/on a client; only this metadata lives in Postgres, so the
+    reasoning path carries a lightweight `ArtifactRef`, never the bytes (W0-04)."""
+
+    __tablename__ = "artifacts"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    scope: Mapped[ArtifactScope] = mapped_column(
+        _enum_column(ArtifactScope), default=ArtifactScope.PROJECT
+    )
+    uri: Mapped[str] = mapped_column(String(2048))
+    media_type: Mapped[str] = mapped_column(String(255))
+    size_bytes: Mapped[int | None] = mapped_column(Integer, default=None)
+    storage_location: Mapped[ArtifactStorage] = mapped_column(_enum_column(ArtifactStorage))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
+    )
+    source_tool: Mapped[str | None] = mapped_column(String(64), default=None)  # producing tool
+
+
+def artifact_is_accessible(
+    *,
+    scope: ArtifactScope,
+    created_by: uuid.UUID | None,
+    requester_id: uuid.UUID,
+    requester_has_project_access: bool,
+) -> bool:
+    """Pure access rule for fetching an artifact's bytes (W0-04). PRIVATE → only the
+    creator; PROJECT (and future TEAM/PUBLIC) → anyone with project access. The caller
+    computes `requester_has_project_access` via the same project-scoping query as every
+    other read, so this stays a pure decision (no DB, no user prompt)."""
+    if scope == ArtifactScope.PRIVATE:
+        return requester_id == created_by
+    return requester_has_project_access
+
+
+# ------------------------------------------------------------------ operational
 class Job(UuidPkMixin, TimestampMixin, Base):
     __tablename__ = "jobs"
 
@@ -215,7 +567,7 @@ class Job(UuidPkMixin, TimestampMixin, Base):
     status: Mapped[JobStatus] = mapped_column(_enum_column(JobStatus), default=JobStatus.QUEUED)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     result_ref: Mapped[str | None] = mapped_column(String(1024), default=None)
-    error: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
@@ -226,10 +578,11 @@ class Notification(UuidPkMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    type: Mapped[str] = mapped_column(String(64))
+    type: Mapped[NotificationType] = mapped_column(_enum_column(NotificationType))
     title: Mapped[str] = mapped_column(String(512))
     body: Mapped[str | None] = mapped_column(Text, default=None)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    action_url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
@@ -246,7 +599,7 @@ class Activity(UuidPkMixin, Base):
     actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
     type: Mapped[str] = mapped_column(String(64), index=True)
     domain: Mapped[str | None] = mapped_column(String(32), default=None)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -285,57 +638,10 @@ class Source(UuidPkMixin, TimestampMixin, Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
 
 
-class Entity(UuidPkMixin, TimestampMixin, Base):
-    """A typed graph node (ADR-001). Connector-owned when `source_id` is set
-    (origin "connector", read-only via the API); `origin` "manual" entities are
-    user-editable. `version` powers optimistic concurrency (API.md §2.4)."""
-
-    __tablename__ = "entities"
-    __table_args__ = (
-        UniqueConstraint("source_id", "source_key", name="uq_entity_source_key"),
-        Index("ix_entities_project_type", "project_id", "type"),
-    )
-
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), index=True
-    )
-    source_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("sources.id", ondelete="CASCADE"), default=None, index=True
-    )
-    origin: Mapped[str] = mapped_column(String(16), default="connector")
-    source_key: Mapped[str] = mapped_column(String(1024))
-    type: Mapped[str] = mapped_column(String(64), index=True)
-    domain: Mapped[str] = mapped_column(String(32), index=True)
-    name: Mapped[str] = mapped_column(String(512))
-    properties: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    version: Mapped[int] = mapped_column(Integer, default=1)
-
-
-class Relation(UuidPkMixin, TimestampMixin, Base):
-    """A typed graph edge between two entities (ADR-001)."""
-
-    __tablename__ = "relations"
-    __table_args__ = (
-        UniqueConstraint(
-            "source_id", "from_entity_id", "to_entity_id", "type", name="uq_relation_edge"
-        ),
-    )
-
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), index=True
-    )
-    source_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("sources.id", ondelete="CASCADE"), default=None, index=True
-    )
-    from_entity_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("entities.id", ondelete="CASCADE"), index=True
-    )
-    to_entity_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("entities.id", ondelete="CASCADE"), index=True
-    )
-    origin: Mapped[str] = mapped_column(String(16), default="connector")
-    type: Mapped[str] = mapped_column(String(64), index=True)
-    properties: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+# The connector graph writes to graph_entity/graph_edge (unified in Decision A,
+# SOLUSDEV-72). The former standalone `entities`/`relations` tables were removed —
+# their operational columns (source_id/external_ref/origin/version) now live on
+# GraphEntity/GraphEdge above.
 
 
 class Sync(UuidPkMixin, Base):
@@ -420,7 +726,7 @@ class DataEvent(UuidPkMixin, Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
     team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
     project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )

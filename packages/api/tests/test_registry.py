@@ -73,8 +73,6 @@ def test_build_registry_ships_both_code_hosts() -> None:
     assert isinstance(registry.create("github"), GitHubConnector)
     gitlab = registry.create("gitlab")
     assert isinstance(gitlab, GitLabConnector)
-    # Self-hosted base URL threads through from settings.
-    assert gitlab.authorize_url.__self__ is gitlab  # sanity: bound instance
     catalog = {c["type"]: c for c in registry.catalog()}
     assert catalog["gitlab"]["auth_kind"] == "oauth"
     assert "read_api" in catalog["gitlab"]["scopes"]

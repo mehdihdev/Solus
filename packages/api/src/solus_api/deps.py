@@ -7,6 +7,7 @@ insufficient role within a team receives 403.
 
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -20,9 +21,25 @@ from solus_api.core.config import Settings
 from solus_api.core.db import get_session
 from solus_api.core.errors import APIError
 from solus_api.core.security import TokenClaims, decode_token
-from solus_api.models import ROLE_RANK, Membership, Project, Role, Team, User
+from solus_api.models import (
+    ROLE_RANK,
+    Membership,
+    PlanType,
+    Project,
+    ProjectMembership,
+    Role,
+    Subscription,
+    SubscriptionStatus,
+    Team,
+    TeamKind,
+    User,
+    default_limits,
+    utcnow,
+)
 
 PERSONAL_TEAM_NAME = "Personal"
+# Every user starts on a 14-day trial of their chosen plan (ADR-032); onboarding picks it.
+TRIAL_DAYS = 14
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -51,11 +68,22 @@ SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
 async def _provision_user(session: AsyncSession, claims: TokenClaims) -> User:
     """First authenticated request: create the user and their personal team
     (§1.3 — this is what makes individual→team an upgrade, not a migration)."""
-    user = User(auth_id=claims.sub, email=claims.email or "")
-    team = Team(name=PERSONAL_TEAM_NAME, is_personal=True)
+    user = User(supabase_user_id=claims.sub, email=claims.email or "")
+    team = Team(name=PERSONAL_TEAM_NAME, kind=TeamKind.PERSONAL)
     session.add_all([user, team])
     await session.flush()
     session.add(Membership(team_id=team.id, user_id=user.id, role=Role.OWNER))
+    # Start every user on a 14-day BASIC trial (ADR-032). Enforcement reads `limits` as
+    # data; the plan is chosen/changed via PATCH /users/me/subscription during onboarding.
+    session.add(
+        Subscription(
+            user_id=user.id,
+            plan=PlanType.BASIC,
+            status=SubscriptionStatus.TRIALING,
+            limits=default_limits(PlanType.BASIC),
+            expires_at=utcnow() + timedelta(days=TRIAL_DAYS),
+        )
+    )
     await session.commit()
     await session.refresh(user)
     return user
@@ -69,7 +97,7 @@ async def get_current_user(
     if credentials is None:
         raise APIError(401, "unauthorized", "Missing bearer token")
     claims = decode_token(credentials.credentials, settings)
-    user = await session.scalar(select(User).where(User.auth_id == claims.sub))
+    user = await session.scalar(select(User).where(User.supabase_user_id == claims.sub))
     if user is None:
         user = await _provision_user(session, claims)
     return user
@@ -89,20 +117,36 @@ class TeamContext:
 class ProjectContext:
     project: Project
     team: Team
-    membership: Membership
+    # None for a share-only user (direct ProjectMembership, no team role) — read-only.
+    membership: Membership | None
     user: User
 
 
 def require_role(context: "TeamContext | ProjectContext", minimum: Role) -> None:
-    if ROLE_RANK[context.membership.role] < ROLE_RANK[minimum]:
+    membership = context.membership
+    if membership is None or ROLE_RANK[membership.role] < ROLE_RANK[minimum]:
         raise APIError(403, "forbidden", f"Requires {minimum.value} role on this team")
+
+
+async def live_membership(
+    session: AsyncSession, team_id: uuid.UUID, user_id: uuid.UUID
+) -> Membership | None:
+    """The user's non-deleted membership in a team, or None."""
+    membership: Membership | None = await session.scalar(
+        select(Membership).where(
+            Membership.team_id == team_id,
+            Membership.user_id == user_id,
+            Membership.deleted_at.is_(None),
+        )
+    )
+    return membership
 
 
 async def get_team_context(
     team_id: uuid.UUID, user: CurrentUser, session: SessionDep
 ) -> TeamContext:
     team = await session.get(Team, team_id)
-    membership = await session.get(Membership, (team_id, user.id)) if team else None
+    membership = await live_membership(session, team_id, user.id) if team else None
     if team is None or membership is None:
         raise APIError(404, "not_found", "Team not found")
     return TeamContext(team=team, membership=membership, user=user)
@@ -115,9 +159,21 @@ async def get_project_context(
     project_id: uuid.UUID, user: CurrentUser, session: SessionDep
 ) -> ProjectContext:
     project = await session.get(Project, project_id)
-    membership = await session.get(Membership, (project.team_id, user.id)) if project else None
-    if project is None or membership is None:
+    if project is None:
         raise APIError(404, "not_found", "Project not found")
+    membership = await live_membership(session, project.team_id, user.id)
+    if membership is None:
+        # Dual-source access (ADR-025): a direct project share grants access even without team
+        # membership. Share-only users have no team role → read-only (require_role fails on None).
+        share = await session.scalar(
+            select(ProjectMembership).where(
+                ProjectMembership.project_id == project.id,
+                ProjectMembership.user_id == user.id,
+                ProjectMembership.deleted_at.is_(None),
+            )
+        )
+        if share is None:
+            raise APIError(404, "not_found", "Project not found")
     team = await session.get(Team, project.team_id)
     if team is None:
         raise APIError(404, "not_found", "Project not found")

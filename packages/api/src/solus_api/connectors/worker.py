@@ -74,9 +74,7 @@ async def run_change_detection(
     "needs sync" so a transient error never silently stalls a source."""
     async with sessionmaker() as session:
         sources = (
-            await session.scalars(
-                select(Source).where(Source.status == SourceStatus.CONNECTED)
-            )
+            await session.scalars(select(Source).where(Source.status == SourceStatus.CONNECTED))
         ).all()
         snapshot = [
             (s.id, s.type.value, s.secret_ref, dict(s.config), dict(s.cursor)) for s in sources
@@ -89,9 +87,7 @@ async def run_change_detection(
                 continue
             token = await secret_store.get(secret_ref)
             connector = registry.create(provider)
-            ctx = SyncContext(
-                credentials=Credentials(token=token), config=config, cursor=cursor
-            )
+            ctx = SyncContext(credentials=Credentials(token=token), config=config, cursor=cursor)
             changed = await connector.detect_changes(ctx)
         except SecretNotFoundError:
             logger.warning("change-detection: no credentials for source=%s", source_id)

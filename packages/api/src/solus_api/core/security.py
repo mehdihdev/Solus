@@ -21,6 +21,10 @@ def decode_token(token: str, settings: Settings) -> TokenClaims:
     the error handler, never leaked to the client beyond the generic message.
     """
     try:
+        # Signature IS cryptographically verified here (HMAC-SHA256 against the
+        # shared secret; `algorithms` pinned blocks alg-confusion) and exp+aud are
+        # checked. Hardening deferred (tracked on ADR-009): migrate to Supabase
+        # JWKS/RS256 asymmetric verification and add an issuer check.
         payload = jwt.decode(
             token,
             settings.supabase_jwt_secret,

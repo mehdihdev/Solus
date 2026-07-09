@@ -1,8 +1,13 @@
 """§2.3 Projects — CRUD under team, detail, cross-tenant isolation."""
 
+import uuid
+
 from conftest import BOB, add_member, create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
+from solus_api.models import ProjectMembership
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_create_and_list_projects(client: AsyncClient, alice_headers: dict[str, str]) -> None:
@@ -43,21 +48,22 @@ async def test_update_project(client: AsyncClient, alice_headers: dict[str, str]
     assert resp.json()["data"]["description"] == "Six-wheel autonomous rover"
 
 
-async def test_delete_project_requires_admin_and_confirmation(
+async def test_delete_project_requires_owner_and_confirmation(
     client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
 ) -> None:
     team = await create_team(client, alice_headers)
     project = await create_project(client, alice_headers, team["id"])
     await me(client, bob_headers)
-    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    # Bob is an ADMIN — enough under the old rule, NOT enough under ADR-025 (OWNER-only).
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="admin")
 
     no_confirm = await client.delete(f"/api/v1/projects/{project['id']}", headers=alice_headers)
     assert no_confirm.status_code == 400
 
-    not_admin = await client.delete(
+    not_owner = await client.delete(
         f"/api/v1/projects/{project['id']}?confirm=true", headers=bob_headers
     )
-    assert not_admin.status_code == 403
+    assert not_owner.status_code == 403  # ADR-025: only an OWNER can delete a project
 
     ok = await client.delete(
         f"/api/v1/projects/{project['id']}?confirm=true", headers=alice_headers
@@ -118,7 +124,7 @@ async def test_project_create_notifies_other_members(
     ]
     created = [n for n in bob_notes if n["type"] == "project.created"]
     assert len(created) == 1
-    assert created[0]["payload"]["project_id"] == project["id"]
+    assert created[0]["attrs"]["project_id"] == project["id"]
 
     alice_notes = (
         await client.get("/api/v1/users/me/notifications", headers=alice_headers)
@@ -193,7 +199,7 @@ async def test_dashboard_list_and_detail_have_real_stats(
     graph stats + connected-source summary (not the Phase-1 placeholder zeros)."""
     import uuid as _uuid
 
-    from solus_api.models import Entity, Relation, Source, SourceStatus, SourceType
+    from solus_api.models import Domain, GraphEdge, GraphEntity, Source, SourceStatus, SourceType
 
     team = await create_team(client, alice_headers)
     project = await create_project(client, alice_headers, team["id"], "Statful")
@@ -208,31 +214,32 @@ async def test_dashboard_list_and_detail_have_real_stats(
         )
         db.add(source)
         await db.flush()
-        a = Entity(
+        a = GraphEntity(
             project_id=_uuid.UUID(project["id"]),
             source_id=source.id,
-            source_key=":repo",
-            type="code_repo",
-            domain="software",
+            external_ref=":repo",
+            kind="code_repo",
+            domain=Domain.CODE,
             name="octo/r",
         )
-        b = Entity(
+        b = GraphEntity(
             project_id=_uuid.UUID(project["id"]),
             source_id=source.id,
-            source_key="main.py",
-            type="code_file",
-            domain="software",
+            external_ref="main.py",
+            kind="code_file",
+            domain=Domain.CODE,
             name="main.py",
         )
         db.add_all([a, b])
         await db.flush()
         db.add(
-            Relation(
+            GraphEdge(
                 project_id=_uuid.UUID(project["id"]),
                 source_id=source.id,
-                from_entity_id=a.id,
-                to_entity_id=b.id,
-                type="contains",
+                src_id=a.id,
+                dst_id=b.id,
+                relation_type="contains",
+                domain_pair="code<->code",
             )
         )
         await db.commit()
@@ -260,7 +267,7 @@ async def test_delete_project_removes_graph_data(
     enforce FK cascade; PG shouldn't be relied on either)."""
     import uuid as _uuid
 
-    from solus_api.models import Entity, Relation, Source, SourceType, Sync
+    from solus_api.models import Domain, GraphEdge, GraphEntity, Source, SourceType, Sync
     from sqlalchemy import func, select
 
     team = await create_team(client, alice_headers)
@@ -273,25 +280,33 @@ async def test_delete_project_removes_graph_data(
         )
         db.add(source)
         await db.flush()
-        a = Entity(
+        a = GraphEntity(
             project_id=pid,
             source_id=source.id,
-            source_key="a",
-            type="code_file",
-            domain="software",
+            external_ref="a",
+            kind="code_file",
+            domain=Domain.CODE,
             name="a",
         )
-        b = Entity(
+        b = GraphEntity(
             project_id=pid,
             source_id=source.id,
-            source_key="b",
-            type="code_file",
-            domain="software",
+            external_ref="b",
+            kind="code_file",
+            domain=Domain.CODE,
             name="b",
         )
         db.add_all([a, b])
         await db.flush()
-        db.add(Relation(project_id=pid, from_entity_id=a.id, to_entity_id=b.id, type="contains"))
+        db.add(
+            GraphEdge(
+                project_id=pid,
+                src_id=a.id,
+                dst_id=b.id,
+                relation_type="contains",
+                domain_pair="code<->code",
+            )
+        )
         db.add(Sync(source_id=source.id, project_id=pid))
         await db.commit()
 
@@ -301,7 +316,7 @@ async def test_delete_project_removes_graph_data(
     assert resp.status_code == 204
 
     async with app.state.sessionmaker() as db:
-        for model in (Entity, Relation, Source, Sync):
+        for model in (GraphEntity, GraphEdge, Source, Sync):
             count = await db.scalar(
                 select(func.count()).select_from(model).where(model.project_id == pid)
             )
@@ -315,7 +330,7 @@ async def test_delete_project_leaves_sibling_graph_intact(
     project in the same team keeps its graph and its stored credential."""
     import uuid as _uuid
 
-    from solus_api.models import Entity, Source, SourceStatus, SourceType, Sync
+    from solus_api.models import Domain, GraphEntity, Source, SourceStatus, SourceType, Sync
     from sqlalchemy import func, select
 
     team = await create_team(client, alice_headers)
@@ -335,12 +350,12 @@ async def test_delete_project_leaves_sibling_graph_intact(
             db.add(source)
             await db.flush()
             db.add(
-                Entity(
+                GraphEntity(
                     project_id=_uuid.UUID(project_id),
                     source_id=source.id,
-                    source_key="a",
-                    type="code_file",
-                    domain="software",
+                    external_ref="a",
+                    kind="code_file",
+                    domain=Domain.CODE,
                     name="a",
                 )
             )
@@ -359,7 +374,7 @@ async def test_delete_project_leaves_sibling_graph_intact(
     assert resp.status_code == 204
 
     async with app.state.sessionmaker() as db:
-        for model in (Entity, Source, Sync):
+        for model in (GraphEntity, Source, Sync):
             count = await db.scalar(
                 select(func.count())
                 .select_from(model)
@@ -413,7 +428,113 @@ async def test_team_setting_suppresses_project_created_notification(
     assert resp.status_code == 200
 
     await create_project(client, alice_headers, team["id"], "Quiet Rover")
-    bob_notes = (
-        await client.get("/api/v1/users/me/notifications", headers=bob_headers)
-    ).json()["data"]
+    bob_notes = (await client.get("/api/v1/users/me/notifications", headers=bob_headers)).json()[
+        "data"
+    ]
     assert [n for n in bob_notes if n["type"] == "project.created"] == []
+
+
+async def test_create_project_seeds_membership_for_all_team_members(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    team = await create_team(client, alice_headers)
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    project = await create_project(client, alice_headers, team["id"])
+    rows = (
+        await db.scalars(
+            select(ProjectMembership).where(
+                ProjectMembership.project_id == uuid.UUID(project["id"]),
+                ProjectMembership.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    assert len(rows) == 2  # ADR-025: alice (creator) + bob both auto-granted
+
+
+async def test_later_joiner_seeded_for_existing_projects(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])  # exists before Bob joins
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    row = await db.scalar(
+        select(ProjectMembership).where(
+            ProjectMembership.project_id == uuid.UUID(project["id"]),
+            ProjectMembership.user_id == uuid.UUID(bob["id"]),
+            ProjectMembership.deleted_at.is_(None),
+        )
+    )
+    assert row is not None  # later joiner is granted the pre-existing project
+
+
+async def test_dual_source_access_via_direct_share(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    bob = await me(client, bob_headers)  # NOT a team member
+    denied = await client.get(f"/api/v1/projects/{project['id']}", headers=bob_headers)
+    assert denied.status_code == 404  # no access without team membership or a share
+
+    # Directly share the project with Bob (no share endpoint exists yet — seed the row).
+    db.add(ProjectMembership(project_id=uuid.UUID(project["id"]), user_id=uuid.UUID(bob["id"])))
+    await db.commit()
+
+    ok = await client.get(f"/api/v1/projects/{project['id']}", headers=bob_headers)
+    assert ok.status_code == 200  # dual-source: read access via the direct share
+    write = await client.patch(
+        f"/api/v1/projects/{project['id']}", json={"name": "X"}, headers=bob_headers
+    )
+    assert write.status_code == 403  # share-only user has no team role → read-only
+
+
+async def test_removed_member_loses_project_access(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """§7 isolation: removing a member revokes their seeded ProjectMemberships too, so the
+    dual-source fallback does not keep granting them read access to the team's projects."""
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    assert (
+        await client.get(f"/api/v1/projects/{project['id']}", headers=bob_headers)
+    ).status_code == 200
+
+    removed = await client.delete(
+        f"/api/v1/teams/{team['id']}/members/{bob['id']}", headers=alice_headers
+    )
+    assert removed.status_code == 204
+    denied = await client.get(f"/api/v1/projects/{project['id']}", headers=bob_headers)
+    assert denied.status_code == 404  # ProjectMembership revoked with the team membership
+
+
+async def test_reinvite_after_removal_does_not_collide(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """Re-inviting a removed member must not hit the ProjectMembership live-unique index."""
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    bob = await me(client, bob_headers)
+    await client.delete(f"/api/v1/teams/{team['id']}/members/{bob['id']}", headers=alice_headers)
+    # Re-invite + accept — must succeed (no 500 from a duplicate live ProjectMembership).
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="member")
+    regained = await client.get(f"/api/v1/projects/{project['id']}", headers=bob_headers)
+    assert regained.status_code == 200

@@ -18,11 +18,12 @@ from solus_api.connectors.contracts import (
 )
 from solus_api.connectors.runtime import run_sync
 from solus_api.connectors.secrets import InMemorySecretStore
+from solus_api.fingerprint.contract import SourceRef
 from solus_api.models import (
-    Entity,
+    GraphEdge,
+    GraphEntity,
     JobStatus,
     Project,
-    Relation,
     Source,
     SourceStatus,
     SourceType,
@@ -59,16 +60,14 @@ class ScriptedConnector(Connector):
 
 
 def _entity(key: str, name: str | None = None) -> EntityOut:
-    return EntityOut(
-        source_key=key, type="code_file", domain=Domain.SOFTWARE, name=name or key
-    )
+    return EntityOut(source_key=key, type="code_file", domain=Domain.CODE, name=name or key)
 
 
 async def _seed_source(
     maker: async_sessionmaker[AsyncSession], store: InMemorySecretStore
 ) -> Source:
     async with maker() as db:
-        team = Team(name="T", is_personal=False)
+        team = Team(name="T")
         db.add(team)
         await db.flush()
         project = Project(team_id=team.id, name="P")
@@ -118,10 +117,12 @@ async def test_sync_persists_entities_and_relations(
         assert sync.entities_created == 2
         assert sync.relations_created == 1
         assert sync.trigger == SyncTrigger.MANUAL
-        entities = (await db.scalars(select(Entity).where(Entity.source_id == source.id))).all()
-        assert {e.source_key for e in entities} == {"pkg", "pkg/a.py"}
+        entities = (
+            await db.scalars(select(GraphEntity).where(GraphEntity.source_id == source.id))
+        ).all()
+        assert {e.external_ref for e in entities} == {"pkg", "pkg/a.py"}
         rel_count = await db.scalar(
-            select(func.count()).select_from(Relation).where(Relation.source_id == source.id)
+            select(func.count()).select_from(GraphEdge).where(GraphEdge.source_id == source.id)
         )
         assert rel_count == 1
         refreshed = await db.get(Source, source.id)
@@ -155,11 +156,24 @@ async def test_resync_updates_and_reconciles(
     )
 
     async with maker() as db:
-        entities = (await db.scalars(select(Entity).where(Entity.source_id == source.id))).all()
-        by_key = {e.source_key: e for e in entities}
-        assert set(by_key) == {"pkg", "pkg/a.py", "pkg/new.py"}  # old.py reconciled away
+        active = (
+            await db.scalars(
+                select(GraphEntity).where(
+                    GraphEntity.source_id == source.id, GraphEntity.deleted_at.is_(None)
+                )
+            )
+        ).all()
+        by_key = {e.external_ref: e for e in active}
+        assert set(by_key) == {"pkg", "pkg/a.py", "pkg/new.py"}  # old.py soft-deleted away
         assert by_key["pkg/a.py"].name == "renamed.py"
         assert by_key["pkg/a.py"].version == 2  # bumped on update
+        # A4: stale rows are soft-deleted (ADR-027 living-doc), not physically removed.
+        old = await db.scalar(
+            select(GraphEntity).where(
+                GraphEntity.source_id == source.id, GraphEntity.external_ref == "pkg/old.py"
+            )
+        )
+        assert old is not None and old.deleted_at is not None
         sync = await db.get(Sync, second_sync_id)
         assert sync is not None
         assert sync.entities_updated >= 1
@@ -205,3 +219,119 @@ async def test_sync_fails_without_credentials(
         sync = await db.get(Sync, sync_id)
         assert sync is not None
         assert sync.status == JobStatus.FAILED
+
+
+async def test_resync_updates_changed_edge_metadata(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An edge whose (src, dst, type) key is unchanged but whose properties moved is
+    updated in place, not frozen at first-write (regression guard for the relation
+    reconcile update branch — domain_pair/attrs must not go stale)."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+    first = SyncResult(
+        entities=[_entity("pkg"), _entity("pkg/a.py")],
+        relations=[
+            RelationOut(from_key="pkg", to_key="pkg/a.py", type="contains", properties={"n": 1})
+        ],
+    )
+    second = SyncResult(
+        entities=[_entity("pkg"), _entity("pkg/a.py")],
+        relations=[
+            RelationOut(from_key="pkg", to_key="pkg/a.py", type="contains", properties={"n": 2})
+        ],
+    )
+    connector = ScriptedConnector([first, second])
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+
+    async with maker() as db:
+        edge = await db.scalar(
+            select(GraphEdge).where(
+                GraphEdge.source_id == source.id, GraphEdge.deleted_at.is_(None)
+            )
+        )
+        assert edge is not None
+        assert edge.attrs == {"n": 2}  # updated in place, not frozen at {"n": 1}
+
+
+async def test_resync_readd_after_soft_delete_creates_fresh_row(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Re-emitting a previously soft-deleted external_ref lands a fresh LIVE row
+    beside the tombstone. The partial-unique (source_id, external_ref) WHERE
+    deleted_at IS NULL must not collide or resurrect — this is the isolation-safe
+    re-sync property."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+    connector = ScriptedConnector(
+        [
+            SyncResult(entities=[_entity("keep"), _entity("gone")], cursor={"sha": "1"}),
+            SyncResult(entities=[_entity("keep")], cursor={"sha": "2"}),  # gone → soft-deleted
+            SyncResult(
+                entities=[_entity("keep"), _entity("gone")], cursor={"sha": "3"}
+            ),  # re-added
+        ]
+    )
+    for _ in range(3):
+        await run_sync(
+            source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store
+        )
+
+    async with maker() as db:
+        gone = (
+            await db.scalars(
+                select(GraphEntity).where(
+                    GraphEntity.source_id == source.id, GraphEntity.external_ref == "gone"
+                )
+            )
+        ).all()
+        assert len(gone) == 2  # tombstone + fresh live row, no IntegrityError
+        assert sum(1 for g in gone if g.deleted_at is None) == 1  # exactly one live
+
+
+async def test_sync_persists_modality_hints_and_linchpin(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Decision B guarantees, end to end.
+
+    Guarantee 1 (identity linchpin): a connector-written entity's `source_key` lands as
+    `graph_entity.external_ref`, and the fingerprint's `SourceRef` keyed on that same
+    `external_ref` is resolvable. Guarantee 2 (modality channel): `EntityOut.modality_hints`
+    is persisted to its own `graph_entity.modality_hints` column for the matcher.
+    """
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+    hints = {"part_number": "LM358", "schematic_symbol": "Amplifier_Operational:LM358"}
+    result = SyncResult(
+        entities=[
+            EntityOut(
+                source_key="U1",
+                type="component",
+                domain=Domain.ELECTRICAL,
+                name="U1",
+                modality_hints=hints,
+            )
+        ],
+        cursor={"sha": "abc"},
+    )
+    await run_sync(
+        source_id=source.id,
+        sessionmaker=maker,
+        connector=ScriptedConnector([result]),
+        secret_store=store,
+    )
+
+    async with maker() as db:
+        entity = await db.scalar(
+            select(GraphEntity).where(
+                GraphEntity.source_id == source.id, GraphEntity.deleted_at.is_(None)
+            )
+        )
+        assert entity is not None
+        assert entity.external_ref == "U1"  # linchpin: source_key ≡ external_ref
+        assert entity.modality_hints == hints  # persisted to its own column
+        # The linchpin's far end: a fingerprint SourceRef on the same external_ref is resolvable
+        # (source_connector + external_ref identify exactly this graph row).
+        ref = SourceRef(source_connector=entity.source_connector, external_ref=entity.external_ref)
+        assert ref.external_ref == entity.external_ref

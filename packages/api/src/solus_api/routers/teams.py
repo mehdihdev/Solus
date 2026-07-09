@@ -8,11 +8,12 @@ from sqlalchemy import func, select
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import CurrentUser, SecretStoreDep, SessionDep, TeamCtx, require_role
-from solus_api.models import Membership, Role, Team
+from solus_api.models import Membership, Role, Team, TeamKind
 from solus_api.routers.users import delete_team_cascade
 from solus_api.schemas import TeamCreate, TeamUpdate, serialize_team_detail
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
+from solus_api.services.limits import check_can_create_team
 
 router = APIRouter(prefix="/api/v1/teams")
 
@@ -36,7 +37,7 @@ async def list_teams(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
         {
             "id": team.id,
             "name": team.name,
-            "is_personal": team.is_personal,
+            "is_personal": team.kind == TeamKind.PERSONAL,
             "plan_status": team.plan_status,
             "role": role.value,
             "created_at": team.created_at,
@@ -48,7 +49,8 @@ async def list_teams(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
 
 @router.post("", status_code=201)
 async def create_team(body: TeamCreate, user: CurrentUser, session: SessionDep) -> dict[str, Any]:
-    team = Team(name=body.name, is_personal=False)
+    await check_can_create_team(session, user)
+    team = Team(name=body.name)  # kind defaults to COLLABORATIVE
     session.add(team)
     await session.flush()
     session.add(Membership(team_id=team.id, user_id=user.id, role=Role.OWNER))
@@ -106,7 +108,7 @@ async def delete_team(
     require_role(ctx, Role.OWNER)
     if not confirm:
         raise APIError(400, "confirmation_required", "Pass ?confirm=true to delete this team")
-    if ctx.team.is_personal:
+    if ctx.team.kind == TeamKind.PERSONAL:
         raise APIError(409, "personal_team_undeletable", "Personal teams cannot be deleted")
     emit_event(session, user=ctx.user, event_type="team.deleted", team_id=ctx.team.id)
     await delete_team_cascade(session, ctx.team.id, secret_store)

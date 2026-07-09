@@ -1,6 +1,7 @@
 """§2.1 Users & settings — /users/me, /users/me/settings, account deletion."""
 
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Response
@@ -10,26 +11,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
-from solus_api.deps import CurrentUser, SecretStoreDep, SessionDep, SettingsDep
+from solus_api.deps import TRIAL_DAYS, CurrentUser, SecretStoreDep, SessionDep, SettingsDep
 from solus_api.models import (
     Activity,
-    Entity,
+    GraphEdge,
+    GraphEntity,
     Invite,
     Job,
     Membership,
     Notification,
     OAuthState,
     Project,
-    Relation,
     Role,
     SolMode,
     Source,
+    Subscription,
+    SubscriptionStatus,
     Sync,
     Team,
     User,
+    default_limits,
+    utcnow,
 )
 from solus_api.schemas import (
     SettingsUpdate,
+    SubscriptionRead,
+    SubscriptionUpdate,
     UserUpdate,
     serialize_team_summary,
     serialize_user,
@@ -62,8 +69,11 @@ async def get_me(user: CurrentUser, session: SessionDep, settings: SettingsDep) 
 async def update_me(
     body: UserUpdate, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ) -> dict[str, Any]:
-    for field, value in body.model_dump(exclude_unset=True).items():
-        setattr(user, field, value)
+    updates = body.model_dump(exclude_unset=True)
+    if "name" in updates:
+        user.display_name = updates["name"]
+    if "avatar_url" in updates:
+        user.avatar_url = updates["avatar_url"]
     await session.commit()
     await session.refresh(user)
     teams = [
@@ -111,8 +121,8 @@ async def delete_projects_cascade(
     if source_ids:
         await session.execute(delete(OAuthState).where(OAuthState.source_id.in_(source_ids)))
     await session.execute(delete(Sync).where(Sync.project_id.in_(project_ids)))
-    await session.execute(delete(Relation).where(Relation.project_id.in_(project_ids)))
-    await session.execute(delete(Entity).where(Entity.project_id.in_(project_ids)))
+    await session.execute(delete(GraphEdge).where(GraphEdge.project_id.in_(project_ids)))
+    await session.execute(delete(GraphEntity).where(GraphEntity.project_id.in_(project_ids)))
     await session.execute(delete(Source).where(Source.project_id.in_(project_ids)))
     await session.execute(delete(Job).where(Job.project_id.in_(project_ids)))
     await session.execute(delete(Project).where(Project.id.in_(project_ids)))
@@ -194,3 +204,39 @@ async def update_settings(
     await session.commit()
     await session.refresh(user)
     return envelope(_settings_payload(user))
+
+
+async def _live_subscription(session: AsyncSession, user: User) -> Subscription:
+    sub = await session.scalar(
+        select(Subscription).where(
+            Subscription.user_id == user.id, Subscription.deleted_at.is_(None)
+        )
+    )
+    if sub is None:
+        raise APIError(404, "not_found", "No subscription")
+    return sub
+
+
+@router.get("/subscription")
+async def get_subscription(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    sub = await _live_subscription(session, user)
+    return envelope(SubscriptionRead.model_validate(sub).model_dump(mode="json"))
+
+
+@router.patch("/subscription")
+async def update_subscription(
+    body: SubscriptionUpdate, user: CurrentUser, session: SessionDep
+) -> dict[str, Any]:
+    """Pick/change the plan during onboarding: (re)starts a 14-day trial of the chosen plan
+    with that plan's limits (ADR-032). Enforcement reads `limits`; real billing is deferred."""
+    sub = await _live_subscription(session, user)
+    sub.plan = body.plan
+    sub.limits = default_limits(body.plan)
+    sub.status = SubscriptionStatus.TRIALING
+    sub.expires_at = utcnow() + timedelta(days=TRIAL_DAYS)
+    emit_event(
+        session, user=user, event_type="subscription.updated", payload={"plan": body.plan.value}
+    )
+    await session.commit()
+    await session.refresh(sub)
+    return envelope(SubscriptionRead.model_validate(sub).model_dump(mode="json"))

@@ -3,8 +3,9 @@ the graph (SOLUSDEV-103). The shared seam every connector flows through.
 
 State persistence: each run creates a Sync record, updates the Source's status
 /cursor/last_error, and (when driven by an endpoint) resolves a linked Job.
-Graph writes are upserts keyed on (source_id, source_key) so re-syncs update
-rather than duplicate, and stale connector-owned entities are reconciled away.
+Graph writes are upserts keyed on (source_id, external_ref) so re-syncs update
+rather than duplicate, and stale connector-owned rows are soft-deleted (ADR-027
+graph-as-living-documentation), never physically removed.
 
 Heavy work runs as a background job (ADR-005), never in the request path —
 the API enqueues this; the ARQ worker (and a dev inline fallback) invokes it.
@@ -27,10 +28,10 @@ from solus_api.connectors.contracts import (
 )
 from solus_api.connectors.secrets import SecretStore
 from solus_api.models import (
-    Entity,
+    GraphEdge,
+    GraphEntity,
     Job,
     JobStatus,
-    Relation,
     Source,
     SourceStatus,
     Sync,
@@ -56,57 +57,72 @@ async def apply_sync_result(
 ) -> tuple[_Counts, list[dict[str, str]]]:
     """Reconcile a connector's output into the graph for one source.
 
-    Entities are upserted by source_key (stale ones deleted); relations are
-    diffed by (from, to, type). Returns counts + non-fatal per-item errors.
+    Entities are upserted by external_ref (== the connector's source_key); stale
+    ones are soft-deleted (ADR-027 living documentation). Relations are diffed by
+    (src, dst, type). Returns counts + non-fatal per-item errors.
     """
     counts = _Counts()
     errors: list[dict[str, str]] = [dict(e) for e in _as_error_dicts(result)]
 
     existing = (
-        await session.scalars(select(Entity).where(Entity.source_id == source.id))
+        await session.scalars(
+            select(GraphEntity).where(
+                GraphEntity.source_id == source.id, GraphEntity.deleted_at.is_(None)
+            )
+        )
     ).all()
-    by_key: dict[str, Entity] = {e.source_key: e for e in existing}
+    by_key: dict[str, GraphEntity] = {e.external_ref: e for e in existing if e.external_ref}
     seen: set[str] = set()
 
     for out in result.entities:
         seen.add(out.source_key)
         row = by_key.get(out.source_key)
         props = dict(out.properties)
+        hints = dict(out.modality_hints)  # W0-06 fingerprint channel → its own column
         if row is None:
-            row = Entity(
+            row = GraphEntity(
                 project_id=source.project_id,
                 source_id=source.id,
+                source_connector=source.type.value,
                 origin="connector",
-                source_key=out.source_key,
-                type=out.type,
-                domain=out.domain.value,
+                external_ref=out.source_key,
+                kind=out.type,
+                domain=out.domain,
                 name=out.name,
-                properties=props,
+                attrs=props,
+                modality_hints=hints,
             )
             session.add(row)
             by_key[out.source_key] = row
             counts.entities_created += 1
         elif (
             row.name != out.name
-            or row.type != out.type
-            or row.domain != out.domain.value
-            or row.properties != props
+            or row.kind != out.type
+            or row.domain != out.domain
+            or row.attrs != props
+            or row.modality_hints != hints
         ):
             row.name = out.name
-            row.type = out.type
-            row.domain = out.domain.value
-            row.properties = props
+            row.kind = out.type
+            row.domain = out.domain
+            row.attrs = props
+            row.modality_hints = hints
             row.version += 1
             counts.entities_updated += 1
 
     await session.flush()  # assign ids to newly inserted entities
     key_to_id = {key: row.id for key, row in by_key.items() if key in seen}
+    key_to_domain = {key: row.domain.value for key, row in by_key.items() if key in seen}
 
-    await _reconcile_relations(session, source, result, key_to_id, counts, errors)
+    await _reconcile_relations(session, source, result, key_to_id, key_to_domain, counts, errors)
 
+    # ponytail: soft-deletes THIS source's own stale entities. Cross-source edges
+    # (e.g. the fingerprint's same_as links, not built yet) that point at a
+    # tombstoned endpoint are not reconciled here — revisit when Feature Area 4
+    # starts creating cross-source edges.
     stale = [row for key, row in by_key.items() if key not in seen]
     for row in stale:
-        await session.delete(row)
+        row.deleted_at = utcnow()
     if stale:
         await session.flush()
     return counts, errors
@@ -121,15 +137,21 @@ async def _reconcile_relations(
     source: Source,
     result: SyncResult,
     key_to_id: dict[str, uuid.UUID],
+    key_to_domain: dict[str, str],
     counts: _Counts,
     errors: list[dict[str, str]],
 ) -> None:
     existing_rels = (
-        await session.scalars(select(Relation).where(Relation.source_id == source.id))
+        await session.scalars(
+            select(GraphEdge).where(
+                GraphEdge.source_id == source.id, GraphEdge.deleted_at.is_(None)
+            )
+        )
     ).all()
-    existing_map = {(r.from_entity_id, r.to_entity_id, r.type): r for r in existing_rels}
+    existing_map = {(r.src_id, r.dst_id, r.relation_type): r for r in existing_rels}
 
     desired: dict[tuple[uuid.UUID, uuid.UUID, str], dict[str, object]] = {}
+    domain_pairs: dict[tuple[uuid.UUID, uuid.UUID, str], str] = {}
     for rel in result.relations:
         from_id = key_to_id.get(rel.from_key)
         to_id = key_to_id.get(rel.to_key)
@@ -141,25 +163,37 @@ async def _reconcile_relations(
                 }
             )
             continue
-        desired[(from_id, to_id, rel.type)] = dict(rel.properties)
+        edge = (from_id, to_id, rel.type)
+        desired[edge] = dict(rel.properties)
+        # domain_pair is derived from the endpoints' domains at write time (W0-05).
+        domain_pairs[edge] = f"{key_to_domain[rel.from_key]}<->{key_to_domain[rel.to_key]}"
 
     for edge, props in desired.items():
-        if edge not in existing_map:
+        row = existing_map.get(edge)
+        if row is None:
             session.add(
-                Relation(
+                GraphEdge(
                     project_id=source.project_id,
                     source_id=source.id,
                     origin="connector",
-                    from_entity_id=edge[0],
-                    to_entity_id=edge[1],
-                    type=edge[2],
-                    properties=props,
+                    src_id=edge[0],
+                    dst_id=edge[1],
+                    relation_type=edge[2],
+                    domain_pair=domain_pairs[edge],
+                    confidence=1.0,
+                    attrs=props,
                 )
             )
             counts.relations_created += 1
+        elif row.attrs != props or row.domain_pair != domain_pairs[edge]:
+            # Same edge key, but its metadata moved: an endpoint's domain changed
+            # (→ domain_pair) or RelationOut.properties changed. Keep it current
+            # instead of freezing it at first-write.
+            row.attrs = props
+            row.domain_pair = domain_pairs[edge]
     for edge, row in existing_map.items():
         if edge not in desired:
-            await session.delete(row)
+            row.deleted_at = utcnow()
             counts.relations_deleted += 1
     await session.flush()
 
@@ -323,7 +357,9 @@ async def _mark_job(
 async def source_entity_count(session: AsyncSession, source_id: uuid.UUID) -> int:
     """Total entities a source owns — used in source detail summaries."""
     total = await session.scalar(
-        select(func.count()).select_from(Entity).where(Entity.source_id == source_id)
+        select(func.count())
+        .select_from(GraphEntity)
+        .where(GraphEntity.source_id == source_id, GraphEntity.deleted_at.is_(None))
     )
     return int(total or 0)
 
@@ -336,8 +372,8 @@ async def source_entity_counts(
     if not source_ids:
         return {}
     rows = await session.execute(
-        select(Entity.source_id, func.count())
-        .where(Entity.source_id.in_(source_ids))
-        .group_by(Entity.source_id)
+        select(GraphEntity.source_id, func.count())
+        .where(GraphEntity.source_id.in_(source_ids), GraphEntity.deleted_at.is_(None))
+        .group_by(GraphEntity.source_id)
     )
     return {sid: int(count) for sid, count in rows.all() if sid is not None}

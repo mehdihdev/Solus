@@ -29,6 +29,10 @@ function stubClient(result: unknown): {
     request: vi.fn(async (path: string, options?: unknown) => {
       calls.push({ path, options })
       return result as never
+    }),
+    requestPage: vi.fn(async (path: string, options?: unknown) => {
+      calls.push({ path, options })
+      return { data: result, meta: {} } as never
     })
   }
   return { client, calls }
@@ -229,6 +233,21 @@ describe('team resources', () => {
     await deleteTeam('t1', client)
     expect(calls[0].path).toBe('/teams/t1')
     expect(calls[0].options).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('paginated list variants pass the cursor through as a query param', async () => {
+    const { listActivityPage, listNotificationsPage } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listActivityPage('t1', 'cur9', client)
+    await listActivityPage('t1', undefined, client)
+    await listNotificationsPage('cur9', client)
+    await listNotificationsPage(undefined, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1/activity?cursor=cur9',
+      '/teams/t1/activity',
+      '/users/me/notifications?cursor=cur9',
+      '/users/me/notifications'
+    ])
   })
 
   it('fetches team detail, activity, and notifications', async () => {

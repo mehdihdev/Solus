@@ -101,9 +101,7 @@ async def test_team_settings_default_and_persist(
 ) -> None:
     """FND-07: team settings persist to the DB and come back on detail."""
     team = await create_team(client, alice_headers)
-    detail = (await client.get(f"/api/v1/teams/{team['id']}", headers=alice_headers)).json()[
-        "data"
-    ]
+    detail = (await client.get(f"/api/v1/teams/{team['id']}", headers=alice_headers)).json()["data"]
     assert detail["settings"] == {"notify_project_created": True}
 
     resp = await client.patch(
@@ -114,9 +112,7 @@ async def test_team_settings_default_and_persist(
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["settings"]["notify_project_created"] is False
 
-    detail = (await client.get(f"/api/v1/teams/{team['id']}", headers=alice_headers)).json()[
-        "data"
-    ]
+    detail = (await client.get(f"/api/v1/teams/{team['id']}", headers=alice_headers)).json()["data"]
     assert detail["settings"]["notify_project_created"] is False
 
 

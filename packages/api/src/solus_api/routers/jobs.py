@@ -11,9 +11,10 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from solus_api.core.errors import APIError
+from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
-from solus_api.deps import CurrentUser, ProjectCtx, SessionDep
-from solus_api.models import Job, JobKind, JobStatus, Membership, utcnow
+from solus_api.deps import CurrentUser, ProjectCtx, SessionDep, live_membership
+from solus_api.models import Job, JobKind, JobStatus, utcnow
 from solus_api.schemas import serialize_job
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
@@ -25,7 +26,7 @@ CANCELLABLE = (JobStatus.QUEUED, JobStatus.RUNNING)
 
 async def _get_scoped_job(session: SessionDep, user: CurrentUser, job_id: uuid.UUID) -> Job:
     job = await session.get(Job, job_id)
-    membership = await session.get(Membership, (job.team_id, user.id)) if job else None
+    membership = await live_membership(session, job.team_id, user.id) if job else None
     if job is None or membership is None:
         raise APIError(404, "not_found", "Job not found")
     return job
@@ -43,18 +44,24 @@ async def list_project_jobs(
     session: SessionDep,
     kind: Annotated[JobKind | None, Query()] = None,
     status: Annotated[JobStatus | None, Query()] = None,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict[str, Any]:
     stmt = (
         select(Job)
         .where(Job.project_id == ctx.project.id)
         .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(limit + 1)
     )
     if kind is not None:
         stmt = stmt.where(Job.kind == kind)
     if status is not None:
         stmt = stmt.where(Job.status == status)
-    rows = await session.scalars(stmt)
-    return envelope([serialize_job(j) for j in rows.all()])
+    if cursor:
+        stmt = stmt.where(cursor_filter(Job.created_at, Job.id, cursor))
+    rows = list((await session.scalars(stmt)).all())
+    visible, meta = page_meta(rows, limit)
+    return envelope([serialize_job(j) for j in visible], meta=meta)
 
 
 @router.post("/jobs/{job_id}/cancel")
