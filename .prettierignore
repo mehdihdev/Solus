@@ -1,0 +1,4 @@
+# Dotenv-style files have no Prettier parser (SOLUSDEV-147).
+env.mega.example
+*.env
+.env.mega

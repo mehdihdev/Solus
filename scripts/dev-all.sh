@@ -14,9 +14,10 @@ require uv
 require pnpm
 
 if [ ! -f packages/api/.env ]; then
-  echo "[dev:all] packages/api/.env not found."
-  echo "          cp packages/api/.env.example packages/api/.env  and set SOLUS_SUPABASE_JWT_SECRET"
-  echo "          (Supabase dashboard → Project Settings → API → JWT Secret)."
+  echo "[dev:all] packages/api/.env not found — env files are generated from .env.mega (SOLUSDEV-147)."
+  echo "          First time:  cp env.mega.example .env.mega  (or: pnpm env:gather)  then fill it in."
+  echo "          Then:        pnpm env:sync   (regenerates every per-package .env, incl. SOLUS_SUPABASE_JWT_SECRET)."
+  echo "          JWT secret:  Supabase dashboard → Project Settings → API → JWT Secret."
   exit 1
 fi
 if [ ! -f apps/desktop/.env ]; then
