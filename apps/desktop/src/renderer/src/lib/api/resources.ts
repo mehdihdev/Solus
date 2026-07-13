@@ -105,6 +105,10 @@ export function solModeToApi(mode: SolMode): ApiSolMode {
   return mode === 'Expert' ? 'expert' : 'guide'
 }
 
+export function apiToSolMode(mode: ApiSolMode): SolMode {
+  return mode === 'expert' ? 'Expert' : 'Guide'
+}
+
 export function getMe(client: ApiClient = api): Promise<Me> {
   return client.request<Me>('/users/me')
 }
@@ -126,6 +130,41 @@ export interface UserSettings {
 
 export function getSettings(client: ApiClient = api): Promise<UserSettings> {
   return client.request<UserSettings>('/users/me/settings')
+}
+
+/** Toggle data-collection consent (ADR-011 opt-in/out). Returns the fresh settings. */
+export function updateConsent(consent: boolean, client: ApiClient = api): Promise<UserSettings> {
+  return client.request<UserSettings>('/users/me/settings', {
+    method: 'PATCH',
+    body: { data_collection_consent: consent }
+  })
+}
+
+/** Update the current user's profile (display name / avatar) — PATCH /users/me. */
+export function updateProfile(
+  input: { name?: string; avatar_url?: string },
+  client: ApiClient = api
+): Promise<Me> {
+  return client.request<Me>('/users/me', { method: 'PATCH', body: input })
+}
+
+export type PlanType = 'basic' | 'pro' | 'enterprise' | string
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | string
+
+/** Billing summary source (API.md §2.14 / GET /users/me/subscription). No secrets.
+ *  `limits` values are `null` when unlimited (models.PLAN_LIMITS). */
+export interface Subscription {
+  user_id: string
+  plan: PlanType
+  status: SubscriptionStatus
+  limits: Record<string, number | null>
+  expires_at: string | null
+  seat_count: number | null
+}
+
+/** The current user's live subscription (plan, trial state, seats, plan limits). */
+export function getSubscription(client: ApiClient = api): Promise<Subscription> {
+  return client.request<Subscription>('/users/me/subscription')
 }
 
 export function updateOnboardingStep(

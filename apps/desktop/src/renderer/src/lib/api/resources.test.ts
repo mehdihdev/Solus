@@ -45,6 +45,14 @@ describe('solModeToApi', () => {
   })
 })
 
+describe('apiToSolMode', () => {
+  it('maps the API enum back to the UI labels', async () => {
+    const { apiToSolMode } = await import('./resources')
+    expect(apiToSolMode('guide')).toBe('Guide')
+    expect(apiToSolMode('expert')).toBe('Expert')
+  })
+})
+
 describe('resource calls', () => {
   it('getMe hits /users/me', async () => {
     const { client, calls } = stubClient({ id: 'u1', teams: [] })
@@ -329,5 +337,60 @@ describe('project management', () => {
     await deleteProject('p1', client)
     expect(calls[0].path).toBe('/projects/p1')
     expect(calls[0].options).toMatchObject({ method: 'DELETE' })
+  })
+})
+
+describe('settings surfaces (SOLUSDEV-86)', () => {
+  it('getSettings reads /users/me/settings', async () => {
+    const { getSettings } = await import('./resources')
+    const { client, calls } = stubClient({
+      sol_mode: 'guide',
+      data_collection_consent: true,
+      onboarding_step: 'done'
+    })
+    const s = await getSettings(client)
+    expect(calls[0].path).toBe('/users/me/settings')
+    expect(s.data_collection_consent).toBe(true)
+  })
+
+  it('updateConsent PATCHes the consent flag on /users/me/settings', async () => {
+    const { updateConsent } = await import('./resources')
+    const { client, calls } = stubClient({
+      sol_mode: 'guide',
+      data_collection_consent: false,
+      onboarding_step: 'done'
+    })
+    const s = await updateConsent(false, client)
+    expect(calls[0].path).toBe('/users/me/settings')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { data_collection_consent: false }
+    })
+    expect(s.data_collection_consent).toBe(false)
+  })
+
+  it('updateProfile PATCHes the display name on /users/me', async () => {
+    const { updateProfile } = await import('./resources')
+    const { client, calls } = stubClient({ id: 'u1', name: 'Ada Lovelace', teams: [] })
+    const me = await updateProfile({ name: 'Ada Lovelace' }, client)
+    expect(calls[0].path).toBe('/users/me')
+    expect(calls[0].options).toMatchObject({ method: 'PATCH', body: { name: 'Ada Lovelace' } })
+    expect(me.name).toBe('Ada Lovelace')
+  })
+
+  it('getSubscription reads /users/me/subscription', async () => {
+    const { getSubscription } = await import('./resources')
+    const { client, calls } = stubClient({
+      user_id: 'u1',
+      plan: 'pro',
+      status: 'trialing',
+      limits: { max_integrations: null, max_projects: null, max_teams: null },
+      expires_at: '2026-07-22T00:00:00Z',
+      seat_count: 3
+    })
+    const sub = await getSubscription(client)
+    expect(calls[0].path).toBe('/users/me/subscription')
+    expect(sub.plan).toBe('pro')
+    expect(sub.limits.max_projects).toBeNull()
   })
 })

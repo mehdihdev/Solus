@@ -1,0 +1,125 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { SettingsScreen } from './SettingsScreen'
+import type { SettingsData } from './useSettingsData'
+import type { TeamData } from '../team/useTeamData'
+
+const settingsData = vi.fn<() => SettingsData>()
+const teamData = vi.fn<() => TeamData>()
+
+vi.mock('./useSettingsData', () => ({ useSettingsData: () => settingsData() }))
+vi.mock('../team/useTeamData', () => ({ useTeamData: () => teamData() }))
+
+function settings(overrides: Partial<SettingsData> = {}): SettingsData {
+  return {
+    status: 'ready',
+    profile: {
+      id: 'u1',
+      email: 'maya@strider.dev',
+      name: 'Maya K',
+      avatar_url: null,
+      created_at: '',
+      teams: []
+    },
+    consent: true,
+    subscription: {
+      user_id: 'u1',
+      plan: 'basic',
+      status: 'trialing',
+      limits: { max_projects: 3, max_teams: 2 },
+      expires_at: null,
+      seat_count: 1
+    },
+    errors: { sol_mode: null, consent: null, name: null },
+    actions: {
+      setSolMode: vi.fn(async () => true),
+      setConsent: vi.fn(async () => true),
+      updateName: vi.fn(async () => true),
+      refresh: vi.fn(async () => undefined)
+    },
+    ...overrides
+  }
+}
+
+function team(status: TeamData['status'] = 'ready'): TeamData {
+  return {
+    status,
+    team: {
+      id: 't1',
+      name: 'Strider Robotics',
+      is_personal: false,
+      plan_status: 'trial',
+      settings: { notify_project_created: true },
+      created_at: '',
+      member_count: 1,
+      role: 'owner'
+    },
+    members: [
+      { user_id: 'u1', email: 'maya@strider.dev', name: 'Maya K', role: 'owner', joined_at: '' }
+    ],
+    invites: [],
+    activity: [],
+    activityHasMore: false,
+    loadMoreActivity: vi.fn(async () => undefined),
+    teams: [],
+    myRole: 'owner',
+    actions: {
+      invite: vi.fn(async () => null),
+      revoke: vi.fn(async () => true),
+      changeRole: vi.fn(async () => true),
+      remove: vi.fn(async () => true),
+      updateTeam: vi.fn(async () => true),
+      deleteTeam: vi.fn(async () => true),
+      switchTeam: vi.fn(),
+      refresh: vi.fn(async () => undefined)
+    }
+  } as TeamData
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  settingsData.mockReturnValue(settings())
+  teamData.mockReturnValue(team())
+})
+
+describe('SettingsScreen', () => {
+  it('shows a spinner while settings load', () => {
+    settingsData.mockReturnValue(settings({ status: 'loading' }))
+    render(<SettingsScreen />)
+    expect(screen.getByTestId('settings-loading')).toBeInTheDocument()
+  })
+
+  it('renders every section when online', () => {
+    render(<SettingsScreen />)
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByText('Profile')).toBeInTheDocument()
+    expect(screen.getByText('SOL')).toBeInTheDocument()
+    expect(screen.getByText('Appearance')).toBeInTheDocument()
+    expect(screen.getByText('Privacy')).toBeInTheDocument()
+    expect(screen.getByText('Billing')).toBeInTheDocument()
+    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    expect(screen.getByText('Members')).toBeInTheDocument()
+    expect(screen.getByText('Team')).toBeInTheDocument()
+  })
+
+  it('hides account + team sections and shows a sign-in notice when offline', () => {
+    settingsData.mockReturnValue(settings({ status: 'offline', profile: null, subscription: null }))
+    teamData.mockReturnValue(team('offline'))
+    render(<SettingsScreen />)
+    // Local sections still render.
+    expect(screen.getByText('Appearance')).toBeInTheDocument()
+    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    // Account/team sections are gated.
+    expect(screen.queryByText('Profile')).not.toBeInTheDocument()
+    expect(screen.queryByText('Billing')).not.toBeInTheDocument()
+    expect(screen.queryByText('Members')).not.toBeInTheDocument()
+    expect(screen.getByText(/Sign in/)).toBeInTheDocument()
+  })
+
+  it('omits members + team while the team is still loading', () => {
+    teamData.mockReturnValue(team('loading'))
+    render(<SettingsScreen />)
+    expect(screen.queryByText('Members')).not.toBeInTheDocument()
+    expect(screen.getByText('Profile')).toBeInTheDocument()
+  })
+})
