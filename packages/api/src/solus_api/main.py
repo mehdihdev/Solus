@@ -25,6 +25,7 @@ from solus_api.routers import (
     members,
     meta,
     notifications,
+    orchestration,
     projects,
     sources,
     teams,
@@ -79,7 +80,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         allow_headers=["*"],
     )
     app.add_middleware(
-        RateLimitMiddleware, limit_per_minute=resolved_settings.rate_limit_per_minute
+        RateLimitMiddleware,
+        limit_per_minute=resolved_settings.rate_limit_per_minute,
+        # MO-04: the classify preview fires on typing pauses — its own generous
+        # bucket, never counted against the shared budget.
+        path_limits={
+            "/api/v1/orchestration/classify": resolved_settings.classify_rate_limit_per_minute
+        },
     )
 
     app.include_router(meta.router)
@@ -97,4 +104,5 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(billing.router)
     app.include_router(sources.router)
     app.include_router(entities.router)
+    app.include_router(orchestration.router)
     return app

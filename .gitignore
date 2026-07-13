@@ -19,8 +19,9 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
-.aws_env
+.aws.env
 *.env
+.aws_env
 
 # Dependencies / build output (safety net across any sub-folder)
 node_modules/

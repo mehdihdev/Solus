@@ -18,6 +18,7 @@ def limited_app(engine: AsyncEngine) -> FastAPI:
         supabase_jwt_audience=TEST_AUDIENCE,
         database_url="sqlite+aiosqlite://",
         rate_limit_per_minute=3,
+        classify_rate_limit_per_minute=5,
     )
     return create_app(settings=settings, engine=engine)
 
@@ -50,3 +51,35 @@ async def test_health_probes_exempt_from_rate_limit(limited_client: AsyncClient)
     for _ in range(10):
         resp = await limited_client.get("/healthz")
         assert resp.status_code == 200
+
+
+_CLASSIFY = "/api/v1/orchestration/classify"
+
+
+async def test_classify_has_its_own_bucket_not_the_global_one(
+    limited_client: AsyncClient,
+) -> None:
+    """MO-04: classify fires on typing pauses — exhausting the GLOBAL budget
+    must not block it, and hitting classify must not consume the global budget.
+    (Unauthenticated 401s still exercise the middleware, which runs first.)"""
+    for _ in range(3):
+        assert (await limited_client.get("/api/v1/version")).status_code == 200
+    # Global budget (3) is spent: normal routes are 429...
+    assert (await limited_client.get("/api/v1/version")).status_code == 429
+    # ...but classify still gets through the limiter (401 = reached auth).
+    resp = await limited_client.post(_CLASSIFY, json={"query": "hi"})
+    assert resp.status_code == 401
+    assert resp.headers["x-ratelimit-limit"] == "5"  # its own limit, not 3
+
+
+async def test_classify_bucket_blocks_at_its_own_limit(
+    limited_client: AsyncClient,
+) -> None:
+    for _ in range(5):
+        resp = await limited_client.post(_CLASSIFY, json={"query": "hi"})
+        assert resp.status_code == 401  # through the limiter, stopped at auth
+    blocked = await limited_client.post(_CLASSIFY, json={"query": "hi"})
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "rate_limited"
+    # And the classify traffic did NOT consume the global budget:
+    assert (await limited_client.get("/api/v1/version")).status_code == 200

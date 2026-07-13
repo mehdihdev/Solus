@@ -6,9 +6,22 @@ session by running the Alembic migration (so every run also proves the migration
 applies on a fresh database), and each test is isolated by truncating all tables
 afterwards. Point tests at a throwaway database via SOLUS_TEST_DATABASE_URL; it
 defaults to the local docker-compose Postgres (`make db-up`).
+
+Concurrent-suite isolation (MO-02b): the default database NAME is derived from
+this checkout's path (plus the xdist worker id when running `pytest -n`), so
+suites running in DIFFERENT worktrees/checkouts get different databases and
+never collide — two agents/branches can test in parallel out of the box.
+Two suites in the SAME checkout still share a database; give one of them its
+own via the env override, e.g.:
+
+    SOLUS_TEST_DATABASE_URL=postgresql+asyncpg://solus:solus@localhost:5432/solus_test_b \\
+        uv run pytest -q
+
+The SOLUS_TEST_DATABASE_URL override is always respected verbatim (CI sets it).
 """
 
 import asyncio
+import hashlib
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -46,10 +59,18 @@ from sqlalchemy.ext.asyncio import (
 )
 
 API_DIR = Path(__file__).resolve().parent.parent
-TEST_DATABASE_URL = os.environ.get(
-    "SOLUS_TEST_DATABASE_URL",
-    "postgresql+asyncpg://solus:solus@localhost:5432/solus_test",
-)
+
+
+def _default_test_db_url() -> str:
+    """Per-checkout (path hash) + per-xdist-worker database name — see the
+    module docstring's concurrent-suite isolation notes."""
+    checkout = hashlib.sha1(str(API_DIR).encode()).hexdigest()[:8]
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    name = f"solus_test_{checkout}" + (f"_{worker}" if worker else "")
+    return f"postgresql+asyncpg://solus:solus@localhost:5432/{name}"
+
+
+TEST_DATABASE_URL = os.environ.get("SOLUS_TEST_DATABASE_URL", _default_test_db_url())
 _ALL_TABLES = ", ".join(t.name for t in Base.metadata.sorted_tables)
 
 TEST_JWT_SECRET = "dummy-jwt-signing-value-tests-only"  # placeholder, not a real secret

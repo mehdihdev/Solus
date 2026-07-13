@@ -507,3 +507,51 @@ export function markNotificationRead(
 export function markAllNotificationsRead(client: ApiClient = api): Promise<{ updated: number }> {
   return client.request<{ updated: number }>('/users/me/notifications/read-all', { method: 'POST' })
 }
+
+// --- MO-04: pre-flight classification preview --------------------------------
+
+export type CostTier = 'low' | 'standard' | 'premium'
+// Closed sets mirroring the backend enums (orchestration/enums.py) and the
+// resolution Source literal — compile-time protection at the request boundary.
+export type ComplexityValue = 'trivial' | 'standard' | 'hard'
+export type RouteTypeValue = 'general' | 'code' | 'visual_log' | 'long_context'
+export type ClassifySource = 'explicit' | 'context' | 'estimator'
+
+export interface ClassifyOption<V extends string = string> {
+  value: V
+  viable: boolean
+  /** Short factual note when not viable, e.g. "Too many tokens for this tier (340K > 200K)". */
+  reason: string | null
+  model: string
+  cost_tier: CostTier
+}
+
+export interface ClassifyPreview {
+  complexity: ComplexityValue
+  type: RouteTypeValue
+  model: { name: string; provider: string }
+  cost_tier: CostTier
+  source: { complexity: ClassifySource; type: ClassifySource }
+  tokens_estimate: number
+  viable: boolean
+  reason: string | null
+  escalated: boolean
+  options: {
+    complexities: ClassifyOption<ComplexityValue>[]
+    types: ClassifyOption<RouteTypeValue>[]
+  }
+}
+
+export interface ClassifyRequestBody {
+  query: string
+  complexity?: ComplexityValue
+  type?: RouteTypeValue
+}
+
+/** Routing preview — no model call, no credits, its own generous rate bucket. */
+export function classifyQuery(
+  body: ClassifyRequestBody,
+  client: ApiClient = api
+): Promise<ClassifyPreview> {
+  return client.request<ClassifyPreview>('/orchestration/classify', { method: 'POST', body })
+}

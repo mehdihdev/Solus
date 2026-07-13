@@ -25,6 +25,7 @@ const MEGA = resolve(ROOT, ".env.mega");
 
 // Files gather reads. sync is data-driven from the mega's headers instead.
 const TARGET_FILES = [
+  ".env",
   ".aws.env",
   "apps/desktop/.env",
   "apps/desktop/.env.claude",

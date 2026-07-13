@@ -120,6 +120,12 @@ async def _apply(
         )
     )
     bal_row.balance = new_balance
+    if txn_type is CreditTxnType.USAGE and delta < 0:
+        # Rolling all-time USAGE total (MO-03): the trial cap's pre-flight
+        # (cost.account_spend / gates.assert_can_spend) reads this O(1) instead
+        # of scanning the ledger. Maintained here so inline debits AND
+        # reconciliation sweeps both keep it truthful.
+        bal_row.spent_total += -delta
     await session.commit()
     return CreditResult(applied=True, balance=new_balance)
 

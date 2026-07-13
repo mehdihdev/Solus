@@ -14,6 +14,8 @@ import { Icons } from '../../components/ui/icons.constants'
 import { useSettingsStore, type SolMode } from '../../store/settingsStore'
 import { SOL_SCRIPTS, type SolScript } from '../workspace/workspaceData.constants'
 import { useShellStore, type ChatMessage } from '../workspace/shellStore'
+import { ClassifyIndicator } from './ClassifyIndicator'
+import { useClassifyPreview, type ClassifyPreviewState } from './useClassifyPreview'
 
 const THINK_MS = 1700
 const FOLLOWUP_THINK_MS = 1400
@@ -73,10 +75,15 @@ export function SolScreen({ onOpenAlert, onStartTour }: SolScreenProps): React.J
       useShellStore.getState().appendChat({ role: 'sol', followupOf: scriptKey, followupIndex })
     }, FOLLOWUP_THINK_MS)
   }
+  const classify = useClassifyPreview(input)
   const sendFree = (): void => {
     const q = input.trim()
     if (!q) return
     send(routeQuestion(q), q)
+    // MO-04: overrides are this-call-only — the next message re-estimates.
+    // (When the real completion endpoint lands, the shown complexity/type are
+    // transmitted as explicit args here, so preview == actual by construction.)
+    classify.resetOverride()
   }
   const flash = (): void => {
     setFlashState('busy')
@@ -126,6 +133,7 @@ export function SolScreen({ onOpenAlert, onStartTour }: SolScreenProps): React.J
         onSendScript={send}
         onSendFollowup={sendFollowup}
         onStartTour={onStartTour}
+        classify={classify}
       />
     </div>
   )
@@ -510,7 +518,8 @@ function InputBar({
   chat,
   onSendScript,
   onSendFollowup,
-  onStartTour
+  onStartTour,
+  classify
 }: {
   input: string
   setInput: (v: string) => void
@@ -519,6 +528,7 @@ function InputBar({
   onSendScript: (key: string, text: string) => void
   onSendFollowup: (scriptKey: string, followupIndex: number, q: string) => void
   onStartTour: () => void
+  classify: ClassifyPreviewState
 }): React.JSX.Element {
   const chips = buildChips(chat, onSendScript, onSendFollowup, onStartTour)
   return (
@@ -567,6 +577,12 @@ function InputBar({
             Send
           </Button>
         </div>
+        <ClassifyIndicator
+          preview={classify.preview}
+          override={classify.override}
+          onOverride={classify.setOverride}
+          onReset={classify.resetOverride}
+        />
       </div>
     </div>
   )

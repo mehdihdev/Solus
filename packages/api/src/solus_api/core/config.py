@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     # Interim in-process limiter until the ADR-019 budget system lands (Phase 5).
     rate_limit_per_minute: int = 120
+    # MO-04 classify preview: fired on typing pauses, so it gets its own
+    # generous separate bucket (never counts against the global budget above).
+    classify_rate_limit_per_minute: int = 600
 
     invite_ttl_days: int = 7
     trial_days: int = 30
@@ -80,6 +83,21 @@ class Settings(BaseSettings):
     # Run source syncs inline in the request instead of dispatching to ARQ /
     # background tasks. For tests and bare local dev only — prod uses the worker.
     sync_inline: bool = False
+    # FP-01 LLM escalation (spec Part E). Off by default: the deterministic
+    # matcher is fully functional without it. Read by the CALLER (FP-02 wiring)
+    # to decide whether to build+pass an escalator — match() never reads this.
+    fingerprint_llm_enabled: bool = False
+    # FP-02 embedding write. Off by default and keyless-safe: ingestion is fully
+    # functional with embedding NULL. Read by the CALLER (the future trigger
+    # router) to decide whether to build+pass an EmbedFn — scan_project() never
+    # reads this. The provider-backed EmbedFn awaits the MO-01 gateway embedding
+    # extension (temp-PROPOSAL-gateway-embeddings.md).
+    fingerprint_embedding_enabled: bool = False
+    # FP-03 vision extraction (STRETCH/SCAFFOLD). Off by default and keyless-
+    # inert. Read by the CALLER (the future trigger router) to decide whether to
+    # run identify_from_image over photo artifacts and merge photo_observations
+    # into the scan — visual.py and match() never read this.
+    fingerprint_vision_enabled: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

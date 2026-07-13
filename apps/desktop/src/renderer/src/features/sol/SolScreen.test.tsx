@@ -157,3 +157,55 @@ describe('SolScreen — input', () => {
     expect(onStartTour).toHaveBeenCalled()
   })
 })
+
+describe('SolScreen — classify indicator (MO-04)', () => {
+  it('shows the preview while typing and resets the override after send', async () => {
+    vi.useFakeTimers()
+    const { classifyQuery } = await import('../../lib/api/resources')
+    const spy = vi.spyOn(await import('../../lib/api/resources'), 'classifyQuery')
+    void classifyQuery
+    spy.mockResolvedValue({
+      complexity: 'standard',
+      type: 'code',
+      model: { name: 'claude-sonnet-5', provider: 'anthropic' },
+      cost_tier: 'standard',
+      source: { complexity: 'estimator', type: 'estimator' },
+      tokens_estimate: 9,
+      viable: true,
+      reason: null,
+      escalated: false,
+      options: {
+        complexities: [
+          { value: 'hard', viable: true, reason: null, model: 'claude-opus-4-8', cost_tier: 'premium' }
+        ],
+        types: []
+      }
+    })
+    renderSol()
+    const input = screen.getByPlaceholderText(/Ask about a signal/)
+    fireEvent.change(input, { target: { value: 'why is the knee oscillating' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    const indicator = screen.getByTestId('classify-indicator')
+    expect(indicator.textContent).toContain('standard · code · claude-sonnet-5')
+    // Override via the popover, then send: the override must not survive the send.
+    fireEvent.click(indicator)
+    fireEvent.click(screen.getByRole('button', { name: /hard/ }))
+    expect(screen.getByTestId('classify-indicator').textContent).toContain('(you)')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000) // scripted THINK_MS drains
+    })
+    // Input cleared -> preview gone; a fresh message starts from the estimate.
+    expect(screen.queryByTestId('classify-indicator')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText(/Ask about a signal/), {
+      target: { value: 'another question' }
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(screen.getByTestId('classify-indicator').textContent).not.toContain('(you)')
+    spy.mockRestore()
+  })
+})

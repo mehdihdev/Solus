@@ -104,6 +104,25 @@ test("gather seeds .env.mega from existing files and round-trips via sync", () =
   );
 });
 
+test("gather includes the root .env (REDIS_URL & friends reach the mega)", () => {
+  rmSync(join(root, ".env.mega"), { force: true });
+  write(".env", "REDIS_URL=redis://localhost:6379\nDB_USER=solus\n");
+  write(".aws.env", "AWS_ACCOUNT=123\n");
+
+  const out = run(["gather"]);
+  assert.match(out, /\.env/);
+  const mega = read(".env.mega");
+  assert.match(mega, /# >>> \.env\n/);
+  assert.match(mega, /REDIS_URL=redis:\/\/localhost:6379/);
+  assert.match(mega, /DB_USER=solus/);
+
+  // Round-trip: sync regenerates the root .env from its mega block.
+  write(".env", "STALE=1\n");
+  run(["sync"]);
+  assert.match(read(".env"), /REDIS_URL=redis:\/\/localhost:6379/);
+  assert.doesNotMatch(read(".env"), /STALE/);
+});
+
 test("gather refuses to clobber an existing .env.mega without --force", () => {
   writeFileSync(join(root, ".env.mega"), "# >>> .aws.env\nAWS_ACCOUNT=keep\n");
   const out = runExpectFail(["gather"]);

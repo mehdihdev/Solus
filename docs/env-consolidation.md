@@ -55,8 +55,9 @@ values (no secrets). Update it whenever a new env var is introduced.
 
 ### Commands
 
-- **`pnpm env:gather`** — one-time bootstrap. Reads the existing per-package env files
-  and writes `.env.mega` from their current values, so you never retype secrets you
+- **`pnpm env:gather`** — one-time bootstrap. Reads the existing env files — the repo
+  root `.env`, `.aws.env`, and the per-package `.env` / `.env.claude` files — and
+  writes `.env.mega` from their current values, so you never retype secrets you
   already have. Refuses to overwrite an existing `.env.mega` without `--force`.
 - **`pnpm env:sync`** — the normal forward direction. Reads `.env.mega` and regenerates
   every target file (`.env.mega` is authoritative — a full overwrite). Logs the files

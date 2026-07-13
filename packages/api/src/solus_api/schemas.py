@@ -37,10 +37,32 @@ from solus_api.models import (
     User,
     ensure_utc,
 )
+from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class AttachmentIn(StrictModel):
+    """A measurable attachment fact for classify/completion requests (MO-04):
+    what kind of artifact and how many tokens it contributes."""
+
+    kind: str = Field(min_length=1, max_length=32)
+    # Bounded well above any context window — cheap insurance against absurd
+    # hints; the gateway/billing never trust this number for money anyway.
+    tokens: int = Field(default=0, ge=0, le=10_000_000)
+
+
+class ClassifyRequest(StrictModel):
+    """MO-04 pre-flight preview input. `complexity`/`type` let the override UI
+    preview a user's pick; extra fields (e.g. a raw model name) are rejected."""
+
+    query: str = Field(max_length=1_000_000)
+    context: InteractionContext | None = None
+    complexity: Complexity | None = None
+    type: RouteType | None = None
+    attachments: list[AttachmentIn] = Field(default_factory=list, max_length=64)
 
 
 def _not_blank(value: str | None) -> str | None:

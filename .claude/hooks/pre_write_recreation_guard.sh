@@ -13,6 +13,7 @@ CWD="$(jqr '.cwd')"; CWD="${CWD:-$PWD}"
 ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || echo "$CWD")"
 case "$FILE" in /*) REL="${FILE#"$ROOT"/}";; *) REL="$FILE";; esac
 BASE="$(basename "$REL")"; NAME="${BASE%.*}"
+case "$REL" in */migrations/*) exit 0;; esac  # alembic files legitimately repeat def upgrade/downgrade (mirrors post_edit_tests.sh:27)
 
 # Shadow-version filenames
 if [[ "$NAME" =~ (_v[0-9]+|_new|_copy|_old|_final|_backup|_fixed|2)$ && ! "$NAME" =~ ^test ]]; then

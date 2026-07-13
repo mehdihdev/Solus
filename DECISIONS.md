@@ -205,28 +205,10 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 - **Team membership is many-to-many** — a user belongs to multiple teams.
 - Every user gets exactly **one auto-created PERSONAL team** on signup (`kind: PERSONAL`). It owns their solo projects and their subscription, is **solo-only** (never has other members), and is **exempt from plan limits** (does not count toward the team limit). This is the mechanism that lets solo users and teams share one code path — everything belongs to a team.
 - **COLLABORATIVE teams** (`kind: COLLABORATIVE`) are the real teams users create/join; these **count toward limits** (ADR-023).
-- **Roles:** OWNER / ADMIN / MEMBER / **VIEWER** (read-only). **Only an OWNER can delete a
-  project.** VIEWER is a ratified read-only tier — it is enforced in code (`ROLE_RANK`, and the
-  role gates on OAuth/source/project writes) and documented in `docs/api/API.md` (roles are
-  `owner|admin|member|viewer`); this amendment blesses it as part of the contract. A natural fit
-  for the education segment's high member churn (read-only teammates).
-
+- **Roles:** OWNER / ADMIN / MEMBER. **Only an OWNER can delete a project.**
 - **Project = Workspace** — one single concept, not two layers.
 - A project belongs to a team (**`project.team_id`**) — the scoping anchor for all access.
 - **Per-project access:** on project creation, **all current team members are auto-granted access** (`project_memberships`), adjustable afterward.
-**Decision:** The `NotificationType` vocabulary uses **dotted** values, matching the
-activity/event-type convention (W0-01 originally drafted underscores). The ratified set:
-
-- `team.invite`
-- `invite.accepted`
-- `project.created`
-- `project.shared`
-- `payment.failed`
-- `credit.low`
-
-Enforced at the model seam (`models.NotificationType`), validated when a notification row is
-written. New notification kinds follow the `domain.event` dotted form.
-
 
 **Rejected:** One-team-per-user (kills the shared solo/team code path); separate Workspace and Project layers (needless nesting); team-wide implicit project access with no per-project record (blocks later access tightening).
 **Revisit when:** Per-project roles need to diverge from team roles, or nested/sub-teams are required.
@@ -260,56 +242,65 @@ written. New notification kinds follow the `domain.event` dotted form.
 - The cross-domain **graph lives in Postgres** — relations as rows (**`graph_entity`, `graph_edge`**), embeddings in **pgvector** (`Vector(1536)`, ivfflat index). **No separate graph database** (Neo4j was evaluated and **deferred** — Postgres + pgvector is sufficient for the shallow traversal we need now; revisit only if deep multi-hop traversal proves a **measured** bottleneck, and do it behind a graph-access seam).
 - **`graph_entity` carries `canonical_part_id`** (self-reference) — the multimodal fingerprint (ADR-012) collapses cross-domain observations of one physical part to a single canonical entity.
 - **`graph_edge` carries** `(src, dst, relation_type, domain_pair, confidence)`.
+- The Week-0 tree carried two parallel graph schemas: `graph_entity`/`graph_edge` (this ADR's
+ shape, read by the SOL `get_entity` tool and mirrored by the fingerprint `SourceRef`) and a
+ second `entities`/`relations` pair (added by the connector-runtime work, the only tables any
+ connector actually wrote). Readers and writers never met, so `get_entity` on a synced project
+ always returned `not_found`. This amendment collapses them into ONE pair on the canonical
+ `graph_entity`/`graph_edge` names, absorbing the operationally-proven connector columns.
+- **`entities`/`relations` are removed.** They were never sanctioned by an ADR. Their columns
+   move onto `graph_entity`/`graph_edge`; the connector runtime now writes the canonical tables.
+- **`graph_entity` gains** `source_id` (FK → `sources`, nullable — manual/fingerprint rows have
+   none), `origin` (`connector` | `manual`, default `connector`), and `version` (int, optimistic
+   concurrency per API.md §2.4). It keeps `source_connector`/`external_ref` (the fingerprint-facing
+   provenance mirror). A partial-unique index `(source_id, external_ref) WHERE deleted_at IS NULL`
+   gives idempotent re-sync.
+- **`external_ref` is the identity linchpin**, made explicit: `graph_entity.external_ref` ==
+   the connector's `EntityOut.source_key` == the fingerprint's `SourceRef.external_ref`. One value,
+   three names; the write seam maps `source_key → external_ref`. (The fingerprint contract W0-06 is
+   unchanged — it already keys on `external_ref`.)
+- **`graph_edge` gains** `source_id` (FK → `sources`, nullable) and `origin`, with a partial-unique
+   `(source_id, src_id, dst_id, relation_type) WHERE deleted_at IS NULL`. `domain_pair` is derived
+   from the two endpoints' domains at write time; connector edges default `confidence = 1.0`.
+- **`kind` and `relation_type` become free strings, not enums.** Connectors legitimately emit kinds
+   (`code_repo`, `code_module`, `design_export`, and future `ros_node`, `cad_assembly`, …) and
+   relations (`contains`, `part_of`, `mates_with`, `connected_to`) that no closed enum can hold.
+   This resolves the `RelationType`-is-too-small gap already flagged in metadata-extraction.md §7a.
+   The former `EntityKind` and `RelationType` enums are removed. `domain` stays enum-constrained.
+- **`Domain` vocabulary reconciled to one canonical set:** `code`, `electrical`, `mechanical`,
+   `simulation`, `runtime`. The connector layer previously used a rival enum (`software`,
+   `electrical`, `mechanical`, `runtime`); `software` is reconciled to `code` (same world), and
+   `runtime` is added. `runtime`/`simulation` are kept distinct (telemetry ≠ sim) and neither is
+   emitted by a connector yet. `error_solution.domain` shares this enum; its DB CHECK is updated.
+- **Soft-delete now covers connector-written graph rows.** The old `entities`/`relations` runtime
+   HARD-deleted stale rows on re-sync — directly against this ADR's "graph-as-living-documentation"
+   rejection of hard deletes. The unified runtime sets `deleted_at` instead. (Project/team/source
+   _teardown_ still hard-deletes, since the parent row is physically removed.)
 
-**Amended — 2026-07-08, SOLUSDEV-72 Decision A (graph-store unification):**
+**Amended — 2026-07-12, SOLUSDEV-59 Decision C (origin vocabulary):**
 
-The two rival graph schemas that had drifted apart (the ADR-027 `graph_entity`/`graph_edge`
-pair and the connector runtime's parallel `entities`/`relations` pair) are unified onto the
-single `graph_entity`/`graph_edge` pair under the ADR-027 names. The `entities`/`relations`
-tables and the closed `EntityKind`/`RelationType` enums are dropped. Concretely:
+`origin="fingerprint"` is a blessed well-known value of `graph_entity.origin`, alongside
+`"connector"` (default) and `"manual"`. It marks DERIVED canonical entities materialized
+by fingerprint ingestion (FP-02) — `kind="canonical_part"` rows aggregating cross-source
+observations of one physical part — not rows synced from any external source. Concretely:
 
-- **`graph_entity.kind` and `graph_edge.relation_type` are free strings** (`String(64)`), not
-  closed enums. Connector-emitted kinds (`code_repo`, `code_module`, `code_file`,
-  `design_export`, and future `ros_node`/`cad_assembly`/…) and relation types (`contains`,
-  `part_of`, `mates_with`, `connected_to`/`net`, …) are valid values directly, with no
-  per-kind migration. "Well-known values, documented but not enforced by the type system."
-- **`graph_entity` absorbs the operationally-proven connector columns** from the retired
-  `entities` table: `source_id` (FK → `sources`), `source_connector`, `external_ref` (the
-  connector's stable per-source id), `origin` (default `"connector"`, or `"manual"`), and
-  `version` (default 1). A partial-unique `(source_id, external_ref)` where live makes
-  re-sync idempotent (upsert). `canonical_part_id` and the `Vector(1536)` ivfflat embedding
-  are retained.
-- **`graph_edge` carries `(src_id, dst_id, relation_type, domain_pair, confidence)`** and
-  additionally `source_id` + `origin`; a partial-unique `(source_id, src_id, dst_id,
-relation_type)` where live. `confidence` defaults to 1.0 for connector edges (the
-  fingerprint's SAME_AS still uses it).
-- **Soft-delete applies to connector-owned graph rows.** `graph_entity`/`graph_edge` use the
-  shared `deleted_at` mixin; the sync runtime reconciles stale rows by setting `deleted_at`
-  (never hard-deleting), preserving the graph-as-living-documentation invariant.
-  - **Soft-delete via `deleted_at`** on a shared base mixin. **Exempt as a class:** (a) _append-only
-  logs_ whose history is the record (e.g. `credit_ledger`) and (b) _ephemeral operational rows_
-  whose lifecycle is a status/queue, not a document (e.g. `notifications`, OAuth-state, sync-job
-  rows). These are hard-deleted or aged out, never soft-deleted. Everything that is
-  graph-as-living-documentation (entities, edges, projects, teams, memberships, sources) keeps
-  `deleted_at`. New tables inherit the mixin unless they clearly fall in one of the two exempt
-  classes.
-- **The `Domain` enum is the single canonical vocabulary** owned by `models.py`:
-  `code`, `electrical`, `mechanical`, `simulation`, `runtime`. `Domain.SOFTWARE` is removed
-  (the code domain is `code`); `runtime` is added (runtime/telemetry). The connector layer's
-  former rival `Domain` (`software`/…) is gone and `connectors/contracts.py` re-exports the
-  `models.py` enum.
-- **Identity linchpin:** the connector's `EntityOut.source_key` is persisted to
-  `graph_entity.external_ref` and is the SAME value the multimodal fingerprint reads as
-  `SourceRef.external_ref` — i.e. `source_key` (output field) ≡ `external_ref` (graph/
-  fingerprint column). The runtime maps `source_key → external_ref` at write time. The public
-  API preserves the legacy wire keys via serializers (`type`←`kind`, `source_key`←
-  `external_ref`, `properties`←`attrs`), so downstream consumers are unaffected by the rename.
-
-Sub-decisions confirmed by this amendment: free-string `kind`/`relation_type` (A1/A3); one
-`Domain` vocabulary incl. `runtime` (A2); soft-delete for connector-owned rows (A4). The
-`RelationOut` metadata channel (§7b) is deliberately left open for the connector-contract
-reconciliation (Decision B), not this amendment.
-
+- Fingerprint-derived rows carry `origin="fingerprint"` with `source_id` and
+  `external_ref` NULL; idempotency is keyed by the partial-unique
+  `(project_id, canonical_key)` (`canonical_key` = the matcher's normalized base
+  identity, `String(64)`, length-guarded — never truncated), NOT by
+  `(source_id, external_ref)`. Canonical entities are PROJECT-scoped by design: the
+  matcher's uuid5 canonical id is project-agnostic and lives in `attrs` for
+  traceability only; the uuid7 PK convention is unchanged.
+- Connector reconciliation/soft-delete sweeps never touch `origin="fingerprint"` rows;
+  their lifecycle belongs to fingerprint ingestion (run-support staleness + the
+  CLEAR+STAMP retraction sweep). Any future graph mutation surface must treat edit
+  rights as an `origin == "manual"` ALLOWLIST so fingerprint rows are born read-only.
+- Decision A's stance stands: `origin` remains a free `String(16)` — this amendment
+  documents the third well-known value, it adds no enum.
+- Re-key note: a normalization-policy change (e.g. the 2026-07-12 separator stripping:
+  bases `MPU-6050`→`MPU6050`, `AMS1117-3.3`→`AMS11173.3`) changes the affected uuid5
+  canonical ids and `canonical_key` values; orphaned old-base rows are accepted for
+  dev-only data. Post-launch, such a policy change requires a keyed data migration.
 
 
 **Rejected:** Auto-increment integer PKs (leak counts, poor for distributed/merge); hard deletes as default (loses history/undo, breaks the graph-as-living-documentation value); a dedicated graph DB now (premature; Postgres handles current scale — mirrors ADR-003).
@@ -376,93 +367,7 @@ or a target tool has no usable committed export format — then a live-plugin or
 evaluated behind the same `Connector` interface (the interface does not change; only the extraction
 mechanism does).
 
-## ADR-031: Connector interface — the shipped framework shape is ratified and relocated
 
-**Status:** Accepted — 2026-07-08, SOLUSDEV-72 Decision B. Extends ADR-028 (Week-0 contracts are
-human-owned), ADR-001 (the graph), ADR-027 (graph conventions / Decision A).
-
-**Context:** Two rival connector interfaces coexisted under `packages/api/.../connectors/`: the
-Week-0 contract-doc shape (`base.py` — `Integration`/`Connector`/`Session`, `detect_changes ->
-Delta`) and the shipped ARQ-runtime framework shape (`contracts.py` — flat stateless
-`Connector`/`OAuthConnector`, `SyncContext`, `SecretStore`, `detect_changes -> bool` + cursor).
-`connectors/__init__.py` re-exported neither, blocking every future connector.
-
-**Decision:**
-
-- The **shipped framework shape wins** and is ratified as the contract (a deliberate inversion of
-  "code fits contract" — the flat stateless chassis is correct for syncs that run in ARQ workers
-  with no place for a long-lived session). The `Integration`/`Session`/`Delta` design is retired.
-- Two guarantees the winning shape had dropped are **grafted back in**: (1) the identity linchpin
-  `EntityOut.source_key` ≡ `graph_entity.external_ref` ≡ fingerprint `SourceRef.external_ref`
-  (already chained by Decision A); (2) the `EntityOut.modality_hints` channel to the W0-06
-  fingerprint matcher, persisted to a dedicated `graph_entity.modality_hints` JSONB column.
-- The **incremental `Delta` path is a documented forward extension**, not built now (v1 is
-  full-sync + cursor).
-- The reusable **conformance suite is package-importable** (`solus_api.connectors.assert_connector_contract`),
-  merging the shipped checks with the credential-hygiene scan and the negative-path proof.
-- The single surviving interface is **relocated to `packages/contracts/python/`** (the human-owned
-  contract home, per ADR-028 / CLAUDE.md §9) and re-exported from `solus_api.connectors`. The
-  contract doc `docs/contracts/connector-interface.md` is amended to match (see the Decision B
-  amendment).
-
-**Rejected:** Keeping the `Integration`/`Session` lifecycle (no home for a live session in the
-worker model); keeping both shapes (interface drift; blocks parallel connector work); dropping
-`modality_hints` (cheap now, painful when EDA/CAD connectors land without the seam).
-
-**Revisit when:** a connector genuinely needs incremental sync (promote the `Delta` forward
-extension), or the contract set stabilizes enough to publish `packages/contracts/python/` as a
-versioned SDK.
-
-**Open placement note (for the relocation MR):** `connectors/contracts.py` currently imports the
-`Domain` enum from `solus_api.models` (ADR-027 owns the vocabulary). A standalone
-`packages/contracts/python/` package must not depend on `solus_api`. Resolve before wiring:
-either relocate the `Domain` enum into the contracts package (and have `models.py` import it
-back), or keep the canonical implementation in `solus_api.connectors` and treat
-`packages/contracts/python/` as the published mirror. See `temp-contracts-python/README.md`.
-
-## ADR-032: Per-user subscriptions & plan-limit enforcement
-
-**Status:** Accepted — 2026-07-08, SOLUSDEV-72 Decisions C-E. Supersedes the per-team/personal-team
-billing notion in ADR-015/ADR-023's early framing; extends ADR-025 (teams/projects).
-
-**Context:** Limits must be enforced (teams, projects, integrations) without foreclosing the future
-Stripe/Enterprise work, and the earlier "personal team owns the subscription" model conflated
-teams with billing.
-
-**Decision:**
-
-- **Subscription is PER-USER.** Each user has one subscription (`subscriptions.user_id`, one live
-  row per user). Not per-team; creating a team never pools billing.
-- **Plans BASIC/PRO/ENTERPRISE set LIMITS, not features.** Limits are stored **as data** on the
-  subscription (`limits` JSONB; a null/absent key = unlimited). **Enforcement reads `limits` and
-  NEVER branches on plan name** (ADR-023). BASIC = `{max_teams:2, max_projects:3, max_integrations:4}`;
-  PRO = all unlimited; ENTERPRISE = custom (set explicitly).
-- **Teams is a feature on every plan.** The auto-provisioned **PERSONAL team always survives**
-  (solo-only, one per user) and is **exempt from the team-count limit** — it was decoupled from
-  billing, not removed. Inviting from a personal team spins up a new COLLABORATIVE team and issues
-  the invite there (the personal team + its solo projects are untouched).
-- **Every check is against the ACTING USER'S own subscription.** Team-count = the user's
-  COLLABORATIVE memberships (excl. personal); projects = projects the user created (`created_by`);
-  integrations = sources the user connected (`created_by`). The **cross-plan invite block** fires at
-  ACCEPTANCE against the invitee's own team-count — a hard block (not overflow) with leave/upgrade
-  destinations in the error `details`.
-- **Race-safety:** the count and the insert run in one transaction with the acting user's
-  subscription row locked `FOR UPDATE`, so concurrent creates cannot exceed the limit.
-- **Onboarding:** a 14-day BASIC trial is provisioned at first auth; `PATCH /users/me/subscription`
-  picks/changes the plan (sets `limits`, `status=trialing`, `expires_at=now+14d`). Trial expiry is
-  **stored only** (`status`, `expires_at`) — no downgrade/lock/charge logic yet (future Stripe).
-- **Project access is DUAL-SOURCE** (ADR-025): access = team membership **OR** a direct
-  `ProjectMembership` share. Share-only users (no team role) are read-only.
-- **Enterprise (not built, not precluded):** the only multi-user-subscription case is an Enterprise
-  owner provisioning employee accounts under the enterprise subscription. The per-user model leaves
-  room for it (no per-team billing assumption baked in).
-
-**Rejected:** per-team subscriptions (conflates teams with billing); branching enforcement on plan
-name (ADR-023 — limits are data); removing the personal team; overflow-and-warn on invite (must be
-a hard block at acceptance).
-
-**Revisit when:** Stripe integration lands (trial→active→past_due transitions, downgrade/lock at
-expiry) and Enterprise provisioning is built.
 ---
 
 ## How to add or change a decision

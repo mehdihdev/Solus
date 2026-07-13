@@ -21,9 +21,20 @@ MAX_TRACKED_KEYS = 10_000
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app: ASGIApp, limit_per_minute: int) -> None:
+    """`path_limits` gives named paths their OWN per-client fixed-window bucket
+    (with its own limit), fully separate from the global budget — e.g. the
+    MO-04 classify preview, which is called on every typing pause and must
+    neither starve nor consume the shared per-minute allowance."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        limit_per_minute: int,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
         super().__init__(app)
         self._limit = limit_per_minute
+        self._path_limits = dict(path_limits or {})
         self._counters: dict[str, tuple[int, int]] = {}
 
     @staticmethod
@@ -52,17 +63,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         now = int(time.time())
         window = now // WINDOW_SECONDS
-        count = self._bump(self._client_key(request), window)
+        path_limit = self._path_limits.get(request.url.path)
+        limit = path_limit if path_limit is not None else self._limit
+        key = self._client_key(request)
+        if path_limit is not None:
+            key = f"{key}|{request.url.path}"  # separate bucket, separate budget
+        count = self._bump(key, window)
         reset = (window + 1) * WINDOW_SECONDS
 
         response: Response
-        if count > self._limit:
+        if count > limit:
             response = error_response(429, "rate_limited", "Rate limit exceeded")
             response.headers["Retry-After"] = str(max(1, reset - now))
         else:
             response = await call_next(request)
 
-        response.headers["X-RateLimit-Limit"] = str(self._limit)
-        response.headers["X-RateLimit-Remaining"] = str(max(0, self._limit - count))
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(max(0, limit - count))
         response.headers["X-RateLimit-Reset"] = str(reset)
         return response

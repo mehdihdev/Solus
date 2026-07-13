@@ -22,6 +22,9 @@ dependencies = [
     "httpx>=0.28",
     "cryptography>=43.0",
     "boto3>=1.35",
+    "anthropic>=0.116.0",
+    "openai>=2.45.0",
+    "google-genai>=2.11.0",
     "stripe>=11.0",
 ]
 

@@ -385,7 +385,9 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):
-    """Cached per-user balance (no pooling). The ledger is the source of truth."""
+    """Cached per-user balance (no pooling). The ledger is the source of truth.
+    `spent_total` is a rolling all-time USAGE total maintained atomically with
+    each debit (MO-03) so spend-cap pre-flights read O(1), never ledger scans."""
 
     __tablename__ = "credit_balance"
 
@@ -393,6 +395,7 @@ class CreditBalance(UuidPkMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
     )
     balance: Mapped[int] = mapped_column(Integer, default=0)
+    spent_total: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class CreditLedger(UuidPkMixin, Base):
@@ -400,7 +403,8 @@ class CreditLedger(UuidPkMixin, Base):
 
     `idempotency_key` makes a debit/credit once-only (SOLUSDEV-83): a per-operation
     key (usage call_id, Stripe event id, …). The partial-unique index rejects a
-    duplicate write for the same operation, so retries / replays never double-apply."""
+    duplicate write for the same operation, so retries / replays never double-apply.
+    It supersedes MO-03's `call_id` column (dropped in the merge migration)."""
 
     __tablename__ = "credit_ledger"
     __table_args__ = (
@@ -493,6 +497,20 @@ class GraphEntity(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
         # Idempotent re-sync: one live row per (source, external id).
         _partial_unique("uq_graph_entity_source_ref", "source_id", "external_ref"),
         Index("ix_graph_entity_project_kind", "project_id", "kind"),
+        # FP-02 idempotent canonical-part upsert: one live canonical entity per
+        # (project, normalized identity). Raw Index (not _partial_unique): the
+        # composite needs the extra canonical_key guard because project_id is
+        # always present, so two same-project rows with NULL canonical_key would
+        # otherwise both be indexed. Canonical entities are PROJECT-scoped by
+        # design — the matcher's uuid5 is project-agnostic and would collide as
+        # a PK; it lives in attrs for traceability only (uuid7 PK per ADR-027).
+        Index(
+            "uq_graph_entity_project_canonical_key",
+            "project_id",
+            "canonical_key",
+            unique=True,
+            postgresql_where=text("canonical_key IS NOT NULL AND deleted_at IS NULL"),
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -511,6 +529,10 @@ class GraphEntity(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     source_connector: Mapped[str | None] = mapped_column(String(64), default=None)
     external_ref: Mapped[str | None] = mapped_column(String(512), default=None)  # id in source tool
+    # FP-02 canonical-part identity: the normalized MPN base (matcher part_number,
+    # bounded by matching.yaml max_mpn_len=64). Set ONLY on kind="canonical_part"
+    # rows written by fingerprint ingestion (origin "fingerprint", source_id NULL).
+    canonical_key: Mapped[str | None] = mapped_column(String(64), default=None)
     origin: Mapped[str] = mapped_column(String(16), default="connector")
     version: Mapped[int] = mapped_column(Integer, default=1)
     attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

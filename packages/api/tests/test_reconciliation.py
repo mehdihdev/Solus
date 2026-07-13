@@ -90,3 +90,22 @@ async def test_reconcile_is_idempotent_when_already_debited(
     )
     assert row is not None
     assert row.status is DebitReconcileStatus.RECONCILED
+
+
+def test_reconcile_job_is_registered_on_the_worker() -> None:
+    """The sweep is wired as an ARQ function AND a 1-minute cron — a dead-letter
+    row is retried even when no caller enqueues an immediate sweep."""
+    from typing import Any
+
+    from solus_api.connectors.worker import build_worker_settings
+    from solus_api.core.config import Settings
+
+    # build_worker_settings returns a bare `type` (the class is built lazily);
+    # Any-typed access mirrors how ARQ itself consumes it.
+    worker_settings: Any = build_worker_settings(
+        Settings(supabase_jwt_secret="test-only", redis_url="redis://localhost:6379")
+    )
+    names = {fn.__name__ for fn in worker_settings.functions}
+    assert "reconcile_credit_debits" in names
+    cron_names = {job.coroutine.__name__ for job in worker_settings.cron_jobs}
+    assert "reconcile_credit_debits" in cron_names

@@ -164,7 +164,8 @@ def build_worker_settings(settings: Settings) -> type:
 
     class WorkerSettings:
         # reconcile_credit_debits (SOLUSDEV-83) sweeps the credit dead-letter every
-        # minute and is also enqueueable on-demand after an inline debit fails.
+        # minute and is also enqueueable on-demand after an inline debit fails
+        # (cost.track_cost enqueues it by name after recording the dead-letter row).
         functions = [sync_source, reconcile_credit_debits]
         cron_jobs = [
             cron(scheduled_change_detection, minute=None, run_at_startup=False),

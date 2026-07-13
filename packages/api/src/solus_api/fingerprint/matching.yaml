@@ -1,0 +1,121 @@
+# FP-01 structured-modality matcher config (SOLUSDEV-59).
+#
+# TAXONOMY IS A STARTER SET — INCOMPLETE AND EXTENSIBLE. The fail-safe is
+# structural: an MPN that matches no family rule, or whose tail is not an
+# exact member of its family's suffix lists, is NEVER stripped — it stays
+# identity as-is. Worst case of a missing rule is a missed merge (safe);
+# a wrong rule here is a false merge (catastrophic) — review additions like
+# code. Tune labels in tests/fixtures/fingerprint_labels.py, then tune THIS
+# file until the eval reproduces them. Never tune code.
+#
+# THE GENERALIZED RULE (human-adjudicated 2026-07-12) — suffix meaning is
+# STEM-scoped, not manufacturer-scoped, and one test decides every case:
+#   Strip ONLY what leaves the part electrically DROP-IN (package, temp range,
+#   performance grade — the stripped token is recorded as evidence).
+#   NEVER strip what changes FUNCTION or CAPABILITY (voltage variant,
+#   memory/flash code, die revision).
+# Every taxonomy addition needs (1) domain review and (2) a confusable eval
+# case in the hard gate. The hard gate is ZERO false merges.
+#
+# Policy decisions baked in (human-adjudicated 2026-07-11 and 2026-07-12):
+# - Voltage-selecting suffixes are identity-bearing: no rule strips them
+#   (AMS1117-3.3 and AMS1117-5.0 are two parts — deliberately NO ams family).
+# - No cross-prefix family aliasing (no family_aliases section in v1).
+# - Separators are typography (2026-07-12): the final base is de-hyphenated
+#   (MPU-6050 ≡ MPU6050) and must re-pass the plausibility gate; a
+#   post-separator token is NEVER strippable unless a family rule lists it
+#   (AMS11173.3 ≠ AMS11175.0 ≠ AMS1117 all survive as distinct identities).
+# - Nordic nRF (2026-07-12): NO suffix is strippable — QFAA/QFAB encode
+#   flash+RAM (capability = identity; nRF52832-QFAA is 512K/64K, -QFAB is
+#   256K/32K). Deliberately NO nordic family rule, ever.
+
+version: 1
+
+# Global vendor prefixes: literal, must include their separator, stripped once.
+vendor_prefixes: ["TI-", "ST-", "NXP-", "ON-", "ONSEMI-", "MICROCHIP-"]
+
+# MPN plausibility gate (applies to part_number values AND extracted tokens).
+placeholder_tokens: ["TBD", "DNP", "DNI", "N/A", "NC", "NONE", "TODO", "X"]
+value_patterns: # passive-component values are not identities
+  - "^[0-9]+(\\.[0-9]+)?(K|M|R|NF|PF|UF|UH|MH|OHM|OHMS|V|KV|A|MA|UA|W|MW|HZ|KHZ|MHZ)$"
+  - "^[0-9]+(K|M|R)[0-9]+$" # 4K7-style R notation
+min_mpn_len: 4
+max_mpn_len: 64
+
+# Symbol/datasheet token extraction.
+extraction:
+  min_token_len: 4
+  max_text_len: 256
+  generic_symbol_patterns:
+    ["_GENERIC$", "^OPAMP_", "^GENERIC_", "_DUAL$", "_SINGLE$"]
+  datasheet_extensions: [".PDF", ".HTML", ".HTM"]
+
+# Family rules: an input is stripped ONLY if it decomposes exactly as
+# [strip_prefix] + stem + [suffix], stem fullmatching stem_pattern and the
+# suffix an exact member of the lists below (package, grade, grade+package
+# compound, or "-"+hyphen_suffix). Patterns are anchored via re.fullmatch and
+# must stay linear (no nested quantifiers) — ReDoS discipline.
+families:
+  # NOTE the ti_linear / ti_jfet split: on LM/NE stems a trailing "B" is TI's
+  # 2019+ NEXT-GENERATION DIE designator (LM358B is a redesigned part sold
+  # alongside LM358 — different Vos/GBW/Iq), NOT a grade, so "B" must never
+  # strip there. On TL/LF stems "B" is a genuine tighter-spec grade (TL072B,
+  # LF347B). Pinned by eval cases C18 (LM358≠LM358B) and M14 (TL072≡TL072B).
+  - name: ti_linear
+    stem_pattern: "(LM|NE|UA|LMV|LMC)[0-9]{3,4}"
+    package_suffixes: [D, DR, N, P, PW, PWR, DGK, DGKR, DBV]
+    grade_suffixes: [A, C, I]
+  - name: ti_jfet
+    stem_pattern: "(TL|LF)[0-9]{3,4}"
+    package_suffixes: [D, DR, N, P, PW, PWR, DGK, DGKR, DBV]
+    grade_suffixes: [A, B, C, I]
+  - name: ti_logic_74xx
+    stem_pattern: "74(HC|HCT|LS|AHC|AHCT)[0-9]{2,4}"
+    strip_prefixes: [SN]
+    package_suffixes: [N, D, DR, PW, PWR, DB]
+  - name: st_l78xx
+    stem_pattern: "L78[0-9]{2}"
+    package_suffixes: [V, T, P, D2T]
+    grade_suffixes: [C, A]
+  - name: microchip_avr
+    stem_pattern: "ATMEGA[0-9]{2,4}(P|PB)?"
+    hyphen_suffixes: [AU, PU, MU, AN, PN, MN, MMH]
+  - name: st_stm32
+    stem_pattern: "STM32[FLGHWU][0-9]{3}[A-Z][468BCDEFG]"
+    # Positional ST ordering suffix (A2, 2026-07-12): package letter (T=LQFP,
+    # U=U/VFQFPN, H=TFBGA/UFBGA, K/V=BGA variants, Y=WLCSP; R retained from the
+    # reviewed v1 list; P=TSSOP deliberately deferred until a labeled case pins
+    # it) + temp digit (6=-40..85C, 7=-40..105C, 3=-40..125C). The stem keeps
+    # pin-count AND FLASH SIZE (C8 vs CB are different parts). An unrecognized
+    # tail strips NOTHING. Pinned by M4/M12/C13.
+    suffix_pattern: "[HKRTUVY][367]"
+
+# Evidence-strength rules table (spec Part B). Guarantees enforced at load:
+# datasheet < thresholds.matched (a datasheet can never be sufficient alone),
+# generic_symbol < thresholds.low_confidence (a generic symbol never attaches),
+# llm.confidence_cap < thresholds.matched (an LLM signal can never decide),
+# photo < thresholds.matched (a vision reading can never assert identity).
+weights:
+  exact_mpn: 0.95
+  base_known_suffix: 0.90
+  specific_symbol: 0.85
+  generic_symbol: 0.05
+  datasheet: 0.55
+  # FP-03 (STRETCH/SCAFFOLD): photo-marking corroboration. Load-validated
+  # < thresholds.matched — a vision signal can only ever be LOW_CONFIDENCE, so
+  # FP-02 never sets canonical_part_id from a photo.
+  photo: 0.55
+  corroboration_bonus: 0.03
+
+penalties:
+  package_conflict: 0.10
+  footprint_conflict: 0.10
+  manufacturer_conflict: 0.05
+
+thresholds:
+  matched: 0.80
+  low_confidence: 0.50
+
+llm:
+  confidence_cap: 0.70
+  max_input_chars: 64

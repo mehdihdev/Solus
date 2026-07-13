@@ -2,14 +2,26 @@
 # Model-orchestration config (ADR-026 / ADR-024). Validated by
 # solus_api.orchestration.config.OrchestrationConfig.
 #
-# ILLUSTRATIVE — the model names, prices, and credit conversion below are
-# PROVISIONAL (ADR-024: no real cost-per-op data yet). Verify every price
-# against the provider's current pricing before production, and calibrate
-# `credits_per_dollar` from pilot data. Model identity lives ONLY here — never
-# hardcoded in code. Swapping which model serves a role is a config edit.
+# PROVISIONAL — calibrate `credits_per_dollar` / `margin_multiplier` from pilot
+# data (ADR-024). Model identity lives ONLY here — never hardcoded in code.
+# Swapping which model serves a role is a config edit.
+#
+# Model IDs & prices VERIFIED 2026-07-11 against provider docs:
+#   - platform.claude.com/docs/en/about-claude/pricing (Anthropic)
+#   - ai.google.dev/gemini-api/docs/pricing (Google)
+#   - developers.openai.com/api/docs/models/gpt-5.6-sol (OpenAI)
+# Exceptions are marked UNVERIFIED inline. Re-verify before production.
 #
 # Roles are named `<strength>_<tier>`. A role must be filled by exactly ONE
-# catalog entry (enforced) so routing is deterministic.
+# catalog entry (enforced) so routing is deterministic. The `openai_*` bench
+# roles are deliberately NOT referenced by the matrix — they exist so pointing
+# any matrix cell at OpenAI is a one-line edit here.
+#
+# Long-context (breakpoint) pricing: models whose provider charges more above
+# an input-token threshold carry `long_context_threshold_tokens` +
+# `price_in_long`/`price_out_long` (all three or none). Flat-priced models
+# simply omit them. `cost.compute_call_credits` bills the long rates when
+# tokens_in exceeds the threshold.
 # ============================================================================
 version: 1
 
@@ -25,40 +37,87 @@ catalog:
 
   - provider: anthropic
     name: claude-sonnet-5
+    # Intro pricing $2/$10 through 2026-08-31; pinned at the standard rate that
+    # starts 2026-09-01 so credit billing never under-charges after the switch.
     price_in: 3.0
     price_out: 15.0
-    context_window: 200000
+    context_window: 1000000 # full 1M window at standard pricing (verified)
     roles: [general_standard, code_standard]
 
   - provider: anthropic
     name: claude-opus-4-8
-    price_in: 15.0
-    price_out: 75.0
-    context_window: 200000
+    price_in: 5.0 # was wrongly 15/75 (Opus 4.1-era prices) before 2026-07-11
+    price_out: 25.0
+    context_window: 1000000 # full 1M window at standard pricing (verified)
     roles: [general_hard, code_hard]
 
   - provider: google
-    name: gemini-2.5-flash
-    price_in: 0.3
-    price_out: 2.5
-    context_window: 1000000
+    name: gemini-3.1-flash-lite
+    price_in: 0.25 # cheapest model in the catalog, ~1M window: the trivial
+    price_out: 1.5 # visual/long-context workhorse
+    context_window: 1048576
+    roles: [visual_trivial, longctx_trivial]
+
+  - provider: google
+    name: gemini-3.5-flash
+    price_in: 1.5
+    price_out: 9.0
+    context_window: 1048576
     roles: [visual_standard, longctx_standard]
 
   - provider: google
-    name: gemini-2.5-pro
-    price_in: 1.25
-    price_out: 10.0
-    context_window: 1000000
+    # GA rename to `gemini-3.1-pro` expected; `-preview` is the live ID today.
+    name: gemini-3.1-pro-preview
+    price_in: 2.0
+    price_out: 12.0
+    context_window: 1048576
+    long_context_threshold_tokens: 200000 # input above this bills the long rates
+    price_in_long: 4.0
+    price_out_long: 18.0
     roles: [visual_hard, longctx_hard]
+
+  # --- OpenAI GPT-5.6 ladder (GA 2026-07-09): bench roles, not matrix-assigned.
+  # `gpt-5.6` is an alias for -sol; explicit IDs preferred. Family rule: >272K
+  # input tokens -> 2x input / 1.5x output for the full request (long_* below).
+  # Windows for terra/luna are family-assumed from sol — UNVERIFIED per-variant.
+  - provider: openai
+    name: gpt-5.6-sol
+    price_in: 5.0
+    price_out: 30.0
+    context_window: 1050000
+    long_context_threshold_tokens: 272000
+    price_in_long: 10.0
+    price_out_long: 45.0
+    roles: [openai_frontier]
+
+  - provider: openai
+    name: gpt-5.6-terra
+    price_in: 2.5
+    price_out: 15.0
+    context_window: 1050000 # UNVERIFIED — family-assumed
+    long_context_threshold_tokens: 272000
+    price_in_long: 5.0
+    price_out_long: 22.5
+    roles: [openai_mid]
+
+  - provider: openai
+    name: gpt-5.6-luna
+    price_in: 1.0
+    price_out: 6.0
+    context_window: 1050000 # UNVERIFIED — family-assumed
+    long_context_threshold_tokens: 272000
+    price_in_long: 2.0
+    price_out_long: 9.0
+    roles: [openai_cheap]
 
 # --- (complexity × type) → role matrix ---------------------------------------
 # May be partial; a missing cell falls back to `default_role`.
 matrix:
   trivial:
     general: general_trivial
-    code: general_trivial # trivial code = cheapest fast model
-    visual_log: general_trivial
-    long_context: general_trivial
+    code: general_trivial # cheap fast model with a code-quality floor (flash-lite/luna are cheaper — config lever)
+    visual_log: visual_trivial # Flash-Lite: cheaper than Haiku AND ~1M window
+    long_context: longctx_trivial # MUST be a large-window model — a long-but-simple input still needs to FIT
   standard:
     general: general_standard
     code: code_standard # Claude-class: strong CODE reasoning
@@ -71,6 +130,224 @@ matrix:
     long_context: longctx_hard
 
 default_role: general_standard
+
+# --- Query-based complexity estimator (MO-02, patterns MO-02b) ----------------
+# Fallback tier estimation when the caller supplies neither an explicit
+# complexity nor an InteractionContext. Deterministic text heuristics — NO
+# model call. Algorithm in orchestration/complexity.py; the FROZEN labeled spec
+# it is tuned against lives in packages/api/tests/fixtures/complexity_labels.py.
+# Every knob here is tunable WITHOUT a code change.
+#
+# Keyword entries are EXPLICIT REGEX PATTERNS (case-insensitive, validated at
+# config load — a bad regex fails fast). The pattern spells out its own anchors
+# and morphology: '\bdrift(s|ing|ed)?\b' hits "drifting" but never "adrift";
+# "currently"/"framework"/"wireless"/"escape"/"ARM64" cannot fire the
+# current/frame/wire/esc/arm markers.
+#
+# score = long_query·[words >= hard_min_words]
+#       + tool_signal·(distinct tool pattern hits)
+#       + reasoning_signal·(distinct reasoning pattern hits)
+#       + extra_domain·(domain groups matched - 1)
+# score >= hard_threshold -> hard; >= standard_threshold -> standard;
+# else trivial if words <= trivial_max_words, otherwise standard.
+# Empty/blank queries -> standard (the safe default — never a crash, never
+# expensive-by-default).
+#
+# NOTE (deliberate): "how do i"/"how to" are NOT signals — phrasing is not
+# complexity; plain lookups must reach the trivial tier. Two diagnostic hits
+# (e.g. "why" + a malfunction phrase) reach HARD by design: diagnosis is the
+# product's core value, even for short queries.
+estimator:
+  trivial_max_words: 12 # <= this many words + zero signals -> trivial
+  hard_min_words: 35 # >= this many words adds the long_query weight
+  standard_threshold: 1 # score >= this -> at least standard
+  hard_threshold: 4 # score >= this -> hard
+  weights:
+    long_query: 2 # one-shot bump for very long queries
+    tool_signal: 1 # per distinct work-implying pattern (compare/calculate/...)
+    reasoning_signal: 2 # per distinct diagnostic pattern (debugging trends hard)
+    extra_domain: 2 # per matched domain beyond the first (cross-domain = harder)
+  tool_keywords: # work-implying actions (NOT bare question phrasing)
+    - '\bcompar(e|es|ed|ing|ison|isons)\b'
+    - '\bset(ting)?\s+up\b'
+    - '\blook(ing)?\s+up\b'
+    - '\bcheck(s|ed|ing)?\b'
+    - '\bcalculat(e|es|ed|ing|ion|ions)\b'
+    - '\bcalibrat(e|es|ed|ing|ion)\b'
+    - '\bconvert(s|ed|ing)?\b'
+    - '\bchoos(e|es|ing)\b'
+    - '\bpick(s|ed|ing)?\b'
+    - '\brecommend(s|ed|ing|ation|ations)?\b'
+    - '\bconfigur(e|es|ed|ing|ation)\b'
+    - '\btun(e|es|ed|ing)\b'
+    - '\bwire\s+(a|an|the|up|it|this)\b' # wiring-as-task ("wire a limit switch"), not the noun
+    - '\bmount(ing)?\s+(a|an|the|it|this)\b' # mounting-as-task ("mount this lidar")
+  reasoning_keywords: # diagnosis / anomaly language -> real reasoning needed
+    - '\bwhy\b'
+    - '\bdebug(s|ged|ging|ger)?\b'
+    - '\btrac(e|es|ed|ing)\b'
+    - '\bdiagnos(e|es|ed|ing|is|tic|tics)\b'
+    - '\broot\s+cause(s)?\b'
+    - '\bwrong\b'
+    - '\bconflict(s|ed|ing)?\b'
+    - '\bintermittent(ly)?\b'
+    - '\bdrift(s|ed|ing)?\b'
+    - '\bveer(s|ed|ing)?\b'
+    - '\bjitter(s|y|ing)?\b'
+    - '\bstall(s|ed|ing)?\b'
+    - '\bbrownout(s)?\b'
+    - '\boverheat(s|ed|ing)?\b'
+    - '\boscillat(e|es|ed|ing|ion|ions)\b'
+    - '\bovershoot(s|ing)?\b'
+    - '\bovershot\b'
+    - '\breset(s|ting)\b' # deliberately NOT bare "reset" (the command, not a symptom)
+    - '\bcrash(es|ed|ing)?\b'
+    # Malfunction/negation family: "not working", "doesn't work", "won't turn",
+    # "isn't responding", "fails to boot", "stopped moving" — one pattern so
+    # equivalent phrasings tier identically.
+    - '\b(not|isn[''’]?t|is\s+not|doesn[''’]?t|does\s+not|won[''’]?t|will\s+not|can[''’]?t|cannot|never|fail(s|ing)?\s+to|stopped|stops)\s+(\w+\s+){0,2}(work(s|ing)?|match(es|ing)?|respond(s|ing)?|mov(e|es|ing)|turn(s|ing)?|spin(s|ning)?|boot(s|ing)?|start(s|ing)?|connect(s|ing)?|read(s|ing)?|detect(s|ing)?|initializ\w*)\b'
+  domain_keywords: # breadth signal: >= 2 groups matched = cross-domain query
+    code:
+      - '\bfirmware\b'
+      - '\bcode(base|bases)?\b'
+      - '\bros2?\b'
+      - '\bnode(s)?\b'
+      - '\bfunction(s)?\b'
+      - '\bcompil(e|es|ed|ing|er|ation)\b'
+      - '\bscript(s|ed|ing)?\b'
+      - '\bpython\b'
+      - '\blibrar(y|ies)\b'
+      - '\bsketch(es)?\b'
+      - '\bprogram(s|med|ming)?\b'
+      - '\bsoftware\b'
+      - '\bslam\b'
+      - '\bpid\b'
+      - '\balgorithm(s)?\b'
+      - '\burdf\b'
+    electrical:
+      - '\bpcb(s)?\b'
+      - '\bschematic(s)?\b'
+      - '\bwir(e|es|ed|ing)\b' # not "wireless"
+      - '\bsolder(ed|ing)?\b'
+      - '\bi2c\b'
+      - '\bspi\b'
+      - '\buart\b'
+      - '\bcan\s+bus\b'
+      - '\bvolt(s|age|ages)?\b'
+      - '\bresistor(s)?\b'
+      - '\bcapacitor(s)?\b'
+      - '\bregulator(s)?\b'
+      - '\bservo(s)?\b'
+      - '\bmotor(s)?\b'
+      - '\besc(s)?\b' # not "escape"
+      - '\bcurrent(s)?\b' # not "currently" (the bare adjective "current version" can still hit — review)
+      - '\bamp(s|erage)?\b'
+      - '\bpower(ed)?\b' # not "powerful"
+      - '\bbatter(y|ies)\b'
+      - '\bsensor(s)?\b'
+      - '\bimu(s)?\b'
+      - '\bencoder(s)?\b'
+      - '\badc\b'
+      - '\bpwm\b'
+      - '\bgpio\b'
+      - '\bpin(s|out|outs)?\b'
+    mechanical:
+      - '\bcad\b'
+      - '\bonshape\b'
+      - '\bmount(s|ed|ing)?\b'
+      - '\bcasing(s)?\b'
+      - '\benclosure(s)?\b'
+      - '\bchassis\b'
+      - '\btorque(s)?\b'
+      - '\bjoint(s)?\b'
+      # robot arms yes; ARM the CPU architecture no ("arm64" has no word
+      # boundary so it never matches; "ARM <cpu-word>" is killed by lookahead)
+      - '\barm(s)?\b(?!\s+(processor|cpu|core|cortex|architecture|chip|soc|board|build|binar\w*|instruction\w*|v\d))'
+      - '\bbracket(s)?\b'
+      - '\bgear(s|box|boxes)?\b'
+      - '\blinkage(s)?\b'
+      - '\bframe(s)?\b' # not "framework"
+      - '\b3d[\s-]?print(s|ed|ing|er|ers)?\b'
+      - '\bbearing(s)?\b'
+      - '\bbacklash\b'
+      - '\bclearance(s)?\b'
+      - '\btolerance(s)?\b'
+
+# --- Query-TYPE estimator (MO-04) ---------------------------------------------
+# Fallback RouteType inference when the caller supplies neither an explicit
+# type nor an InteractionContext (chain: explicit -> derive_type(context) ->
+# estimate_type -> GENERAL — deliberately symmetric with the complexity chain).
+# Deterministic, NO model call. Patterns are explicit regexes (IGNORECASE,
+# validated at load) like the estimator: section. The labeled spec lives in
+# packages/api/tests/fixtures/type_labels.py — REVIEW ME.
+#
+# PRECEDENCE (hard constraints beat soft preferences):
+#   LONG_CONTEXT (measured tokens >= long_context_min_tokens — it must FIT)
+#   > VISUAL_LOG (attached image/log, or plainly about logs/telemetry — the
+#     model must be able to SEE it)
+#   > CODE (a strength preference)
+#   > GENERAL.
+# Token measurement is len(text)/chars_per_token + attachment token hints — a
+# deliberate heuristic (no tokenizer dependency); calibrate the divisor if it
+# drifts.
+type_estimator:
+  chars_per_token: 4
+  long_context_min_tokens: 100000 # ~half a 200K window: forces 1M-window routing
+  code_min_hits: 1
+  visual_min_hits: 1
+  visual_attachment_kinds: [image, screenshot, plot, log, telemetry, video]
+  code_patterns:
+    - "```"
+    - '\.(py|cpp|cc|c|h|hpp|ino|rs|go|ts|js|json|ya?ml|xml|launch|urdf|xacro|srdf|sh)\b'
+    - '\btraceback\b'
+    - '\bsegfault(s|ed)?\b'
+    - '\bsegmentation\s+fault\b'
+    - '\bundefined\s+reference\b'
+    - '\bcompil(e|er|ation)\s+(error|fail\w*|warning)s?\b'
+    - '\blinker\s+error(s)?\b'
+    - '\bstack\s+trace(s)?\b'
+    - '\bnullptr\b'
+    - '\bnull\s+pointer\b'
+    - '\bcolcon\b'
+    - '\bcatkin\b'
+    - '\broslaunch\b'
+    - '\b(def|fn|func|void|int|bool)\s+\w+\s*\(' # function definitions
+    # bare call syntax like init_pwm(). Lookbehind, NOT '\w+\(\)': the greedy
+    # form is O(n²) on paren-less word runs (security C1 — 15min on a 1MB
+    # query); this is linear and semantically identical.
+    - '(?<=\w)\(\)'
+    - '\bwrite\s+(a\s+|the\s+)?(function|script|driver|node|code|firmware)\b'
+    - '\bunit\s+test(s)?\b'
+    - '\bimport\s*error\b'
+  visual_log_patterns:
+    - '\blogs\b' # plural only — "log IMU data" (the verb) is a code task
+    - '\blog\s?file(s)?\b'
+    - '\btelemetry\b'
+    - '\bplot(s|ted|ting)?\b'
+    - '\bgraph\s+of\b'
+    - '\bwaveform(s)?\b'
+    - '\bscreenshot(s)?\b'
+    - '\bdmesg\b'
+    - '\bserial\s+(monitor|output|console)\b'
+    - '\boscilloscope\b'
+    - '\btrace\s+file(s)?\b'
+
+# --- Pre-flight limits + provider retry (MO-03, all tunable) ------------------
+# trial_credit_cap: PROVISIONAL single trial allowance in CREDITS (~$5 of
+#   provider spend at the current cost knobs). Pre-flight check only — a call
+#   that pushes spend slightly past the cap is accepted by design (Q9: block
+#   when already at/over, bill the actual after; no cost pre-authorization).
+# max_calls_per_minute: FLAT per-user frequency cap (abuse insurance, same for
+#   every plan; Redis-backed sliding window). Exceeding it is a transient
+#   "try again shortly", NOT the trial cap's "upgrade to continue".
+# retry_*: OUR exponential backoff for provider 429/overload (SDK retries are
+#   pinned to 0 in the adapters). retry_max_attempts counts total tries.
+limits:
+  trial_credit_cap: 1000 # PROVISIONAL — calibrate with pricing
+  max_calls_per_minute: 20
+  frequency_window_seconds: 60
+  retry_max_attempts: 3
+  retry_backoff_seconds: 0.5 # base; doubles per retry
 
 # --- Cost / credit conversion (ADR-024, all calibratable) --------------------
 cost:
