@@ -5,13 +5,17 @@ contract). `has_sufficient_credits` (pre-flight) and `track_cost` (the ledger
 debit + reconciliation) are STUBS implemented in MO-01.
 """
 
+import logging
 import math
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.billing import credits, reconciliation
 from solus_api.orchestration.choice import ModelChoice
 from solus_api.orchestration.config import CostConfig
+
+logger = logging.getLogger("solus.orchestration.cost")
 
 
 def compute_call_credits(
@@ -34,9 +38,10 @@ async def has_sufficient_credits(
     user_id: uuid.UUID, estimated_credits: int, *, session: AsyncSession
 ) -> bool:
     """PRE-FLIGHT check, run BEFORE `route()` by the caller/middleware — NOT part of
-    route (route stays pure selection). Reads the cached `credit_balance` for the user
-    and compares against the estimate. STUB → MO-01."""
-    raise NotImplementedError("has_sufficient_credits() is implemented in MO-01")
+    route (route stays pure selection). Delegates to the billing gate: blocks when
+    the balance can't cover the estimate, and blocks at balance 0 (the free-trial
+    hard cost cap, ADR-024 / SOLUSDEV-83)."""
+    return await credits.check_spend_allowed(session, user_id, estimated_credits)
 
 
 async def track_cost(
@@ -65,4 +70,26 @@ async def track_cost(
 
     `user_id` is required — the ledger is per-user and `call_id` alone can't identify it.
     """
-    raise NotImplementedError("track_cost() is implemented in MO-01")
+    amount = compute_call_credits(model, tokens_in, tokens_out, cost)
+    if amount <= 0:
+        return
+    attrs = {
+        "call_id": call_id,
+        "model": model.model_name,
+        "role": model.role,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+    }
+    try:
+        # `call_id` is the idempotency key: a retried post-call hook debits once.
+        await credits.debit_credits(session, user_id, amount, idempotency_key=call_id, attrs=attrs)
+    except Exception:  # noqa: BLE001 — ADR-024 W0-03: never fail a paid result on accounting
+        logger.exception("credit debit failed call=%s; deferring to reconciliation", call_id)
+        # The failed transaction is poisoned — reset before recording the dead-letter.
+        await session.rollback()
+        try:
+            await reconciliation.record_failed_debit(
+                session, user_id, amount, idempotency_key=call_id, attrs=attrs
+            )
+        except Exception:  # noqa: BLE001 — even the dead-letter write is best-effort
+            logger.exception("could not record pending debit call=%s", call_id)

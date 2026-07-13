@@ -15,6 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.billing.credits import grant_trial_credits
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.config import Settings
@@ -65,7 +66,9 @@ RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
 SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
 
 
-async def _provision_user(session: AsyncSession, claims: TokenClaims) -> User:
+async def _provision_user(
+    session: AsyncSession, claims: TokenClaims, *, trial_credit_grant: int = 0
+) -> User:
     """First authenticated request: create the user and their personal team
     (§1.3 — this is what makes individual→team an upgrade, not a migration)."""
     user = User(supabase_user_id=claims.sub, email=claims.email or "")
@@ -86,6 +89,10 @@ async def _provision_user(session: AsyncSession, claims: TokenClaims) -> User:
     )
     await session.commit()
     await session.refresh(user)
+    # Bounded free-trial credit allowance — the trial's hard cost cap (ADR-024,
+    # SOLUSDEV-83). Idempotent, so a retried provision never double-grants.
+    if trial_credit_grant:
+        await grant_trial_credits(session, user.id, trial_credit_grant)
     return user
 
 
@@ -99,7 +106,9 @@ async def get_current_user(
     claims = decode_token(credentials.credentials, settings)
     user = await session.scalar(select(User).where(User.supabase_user_id == claims.sub))
     if user is None:
-        user = await _provision_user(session, claims)
+        user = await _provision_user(
+            session, claims, trial_credit_grant=settings.trial_credit_grant
+        )
     return user
 
 

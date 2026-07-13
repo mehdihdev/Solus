@@ -158,11 +158,18 @@ def build_worker_settings(settings: Settings) -> type:
     from arq import cron
     from arq.connections import RedisSettings
 
+    from solus_api.billing.reconciliation import reconcile_credit_debits
+
     redis_url = settings.redis_url or "redis://localhost:6379"
 
     class WorkerSettings:
-        functions = [sync_source]
-        cron_jobs = [cron(scheduled_change_detection, minute=None, run_at_startup=False)]
+        # reconcile_credit_debits (SOLUSDEV-83) sweeps the credit dead-letter every
+        # minute and is also enqueueable on-demand after an inline debit fails.
+        functions = [sync_source, reconcile_credit_debits]
+        cron_jobs = [
+            cron(scheduled_change_detection, minute=None, run_at_startup=False),
+            cron(reconcile_credit_debits, minute=None, run_at_startup=False),
+        ]
         on_startup = _on_startup
         on_shutdown = _on_shutdown
         redis_settings = RedisSettings.from_dsn(redis_url)

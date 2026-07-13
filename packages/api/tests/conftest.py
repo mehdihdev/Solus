@@ -111,6 +111,7 @@ def settings() -> Settings:
         rate_limit_per_minute=100_000,
         sync_inline=True,  # deterministic syncs in tests (no ARQ/background)
         public_api_base_url="http://testserver",
+        stripe_webhook_secret="whsec_test",  # SOLUSDEV-83 webhook signature tests
     )
 
 

@@ -379,6 +379,9 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), default=None)
     seat_count: Mapped[int | None] = mapped_column(Integer, default=None)  # Enterprise (future)
     custom_price_per_seat: Mapped[int | None] = mapped_column(Integer, default=None)  # cents
+    # `created` timestamp of the last Stripe event applied to this row (SOLUSDEV-83).
+    # Out-of-order/replayed webhooks only apply when newer, so state converges.
+    stripe_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):
@@ -393,9 +396,21 @@ class CreditBalance(UuidPkMixin, TimestampMixin, Base):
 
 
 class CreditLedger(UuidPkMixin, Base):
-    """Immutable, append-only credit transaction log — the source of truth."""
+    """Immutable, append-only credit transaction log — the source of truth.
+
+    `idempotency_key` makes a debit/credit once-only (SOLUSDEV-83): a per-operation
+    key (usage call_id, Stripe event id, …). The partial-unique index rejects a
+    duplicate write for the same operation, so retries / replays never double-apply."""
 
     __tablename__ = "credit_ledger"
+    __table_args__ = (
+        Index(
+            "uq_credit_ledger_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
@@ -403,10 +418,52 @@ class CreditLedger(UuidPkMixin, Base):
     amount: Mapped[int] = mapped_column(Integer)  # signed: + grant/purchase, - usage
     type: Mapped[CreditTxnType] = mapped_column(_enum_column(CreditTxnType))
     balance_after: Mapped[int] = mapped_column(Integer)  # snapshot for auditability
+    # Per-operation dedupe key (usage call id / Stripe event id). Null for entries
+    # that are not idempotent-guarded (e.g. one-off adjustments).
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), default=None)
     attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+
+
+class ProcessedStripeEvent(UuidPkMixin, Base):
+    """Dedupe log for Stripe webhook events (SOLUSDEV-83). A `stripe_event_id` is
+    recorded once; a duplicate delivery is a no-op. Never deleted (audit)."""
+
+    __tablename__ = "processed_stripe_events"
+
+    stripe_event_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(128))
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class DebitReconcileStatus(enum.StrEnum):
+    PENDING = "pending"
+    RECONCILED = "reconciled"
+    FAILED = "failed"
+
+
+class PendingCreditDebit(UuidPkMixin, TimestampMixin, Base):
+    """Dead-letter for a credit debit that could not be applied inline (ADR-024
+    W0-03: never fail the user's already-paid result on the accounting write).
+    An ARQ worker retries these idempotently until reconciled (SOLUSDEV-83)."""
+
+    __tablename__ = "pending_credit_debits"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    credits: Mapped[int] = mapped_column(Integer)  # positive amount to debit
+    idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    status: Mapped[DebitReconcileStatus] = mapped_column(
+        _enum_column(DebitReconcileStatus), default=DebitReconcileStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(1024), default=None)
 
 
 PLAN_LIMITS: dict[PlanType, dict[str, int | None]] = {

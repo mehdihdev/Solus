@@ -35,6 +35,24 @@ class Settings(BaseSettings):
     invite_ttl_days: int = 7
     trial_days: int = 30
 
+    # --- Billing (SOLUSDEV-83 / ADR-024) ---
+    # Stripe keys are highly privileged secrets — env / Secrets Manager only,
+    # never logged or returned. Absent ⇒ the webhook rejects (503) and no live
+    # billing happens; the credit primitives still run locally for tests/dev.
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    # Bounded free-trial credit grant written at signup — the trial's hard cost
+    # cap (ADR-024: "bounded credit grant, never unlimited"). PROVISIONAL: at the
+    # models.yaml default of 100 credits/$ and margin 2.0, 1000 credits ≈ $5 of
+    # real model spend. Calibrate from pilot data before production.
+    trial_credit_grant: int = 1000
+    # Stripe price-id → credits granted, for credit-pack purchases
+    # (checkout.session.completed). Provisional; empty until real Stripe prices
+    # exist. Parsed from a JSON env var, e.g. SOLUS_STRIPE_PACK_CREDITS='{"price_x":1000}'.
+    stripe_pack_credits: dict[str, int] = {}
+    # Max Stripe webhook body we will parse, bytes — bound untrusted input.
+    stripe_webhook_max_bytes: int = 262144
+
     # --- Connector framework (SOLUSDEV-103) ---
     # Secret store selection. Prod/staging with aws_region set → AWS Secrets
     # Manager. Otherwise a Fernet key (secrets_key) → local encrypted store.

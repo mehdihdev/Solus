@@ -17,6 +17,7 @@ from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.models import Base
 from solus_api.routers import (
     activity,
+    billing,
     entities,
     integrations,
     invites,
@@ -93,6 +94,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(projects.project_router)
     app.include_router(jobs.router)
     app.include_router(integrations.router)
+    app.include_router(billing.router)
     app.include_router(sources.router)
     app.include_router(entities.router)
     return app

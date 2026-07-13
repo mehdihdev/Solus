@@ -606,14 +606,15 @@ limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the 
 
 ## 9. Not implemented in this slice (and why)
 
-| Surface                                                                  | Status                                                                                                                                                                    |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §2.1 API keys (`/users/me/api-keys`)                                     | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                          |
-| §2.4–§2.15, WS/SSE                                                       | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                  |
-| `POST /graph/query`, billing provider routes, MCP server, presence topic | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                               |
-| Alembic migrations                                                       | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all` |
-| ARQ/Redis worker wiring                                                  | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                 |
-| Data-collection consent endpoints (§2.13)                                | Phase 6; until then `data_collection_consent` defaults to **false** and ADR-011 events are not recorded                                                                   |
+| Surface                                                   | Status                                                                                                                                                                                                                                        |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §2.1 API keys (`/users/me/api-keys`)                      | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                              |
+| §2.4–§2.15, WS/SSE                                        | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                      |
+| `POST /graph/query`, MCP server, presence topic           | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                   |
+| Stripe **webhook** route (`POST /api/v1/webhooks/stripe`) | **Built (SOLUSDEV-83)** — the §7.2 billing-route deferral was lifted for this one route by human decision. See §10 Billing below. Checkout-session _creation_ + the customer-facing subscription/credit-pack purchase routes remain deferred. |
+| Alembic migrations                                        | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                     |
+| ARQ/Redis worker wiring                                   | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                     |
+| Data-collection consent endpoints (§2.13)                 | Phase 6; until then `data_collection_consent` defaults to **false** and ADR-011 events are not recorded                                                                                                                                       |
 
 ### Implementation decisions made under delegated judgment (CLAUDE.md §10)
 
@@ -622,3 +623,44 @@ limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the 
 - **Invite tokens** are returned once in the creation response since no email delivery exists this cycle.
 - **Deletion confirmations** use `?confirm=true` (API.md says "confirmation required" without specifying a mechanism).
 - **Trial state:** `plan_status: "trial"`, `trial_ends_at = team.created_at + 30d` — placeholder until ADR-017 billing lands (Phase 5).
+
+---
+
+## 10. Billing money-path (SOLUSDEV-83 / SOLUS-FND-03)
+
+Hardened money-moving surface. The webhook route below was authorized by a human
+decision that lifts the §7.2 billing-route deferral **for this route only**;
+checkout-session creation and customer-facing purchase routes stay deferred.
+
+### POST /api/v1/webhooks/stripe — Stripe events (unauthenticated; signed)
+
+No bearer token (Stripe can't send one). Trust comes from the **Stripe signature**:
+the raw body is size-bounded, then `stripe.Webhook.construct_event` verifies the
+`Stripe-Signature` HMAC against `SOLUS_STRIPE_WEBHOOK_SECRET`.
+
+- Missing/invalid signature → `400 invalid_signature`. Webhook secret unset →
+  `503 billing_unconfigured`. Oversized body → `413 payload_too_large`.
+- `200 {"data": {"processed": true|false}}` — `false` means the event id was
+  already processed (deduped via `processed_stripe_events`).
+- Idempotent + out-of-order safe: subscription state is last-write-wins by the
+  event's `created` time (`subscriptions.stripe_event_at`); credit-pack grants
+  are keyed by the Stripe event id.
+- Handled events: `customer.subscription.created/updated/deleted` (upsert local
+  subscription status), `checkout.session.completed` (link Stripe customer in
+  subscription mode; grant a configured credit pack in payment mode — pack →
+  credits map from `SOLUS_STRIPE_PACK_CREDITS`), `invoice.payment_failed`
+  (mark `past_due` + `payment.failed` notification). Other types are ignored.
+
+### Credit money-path (internal, no public routes)
+
+- **Trial cost cap:** first login grants a bounded credit allowance
+  (`SOLUS_TRIAL_CREDIT_GRANT`, provisional). The pre-flight gate
+  (`cost.has_sufficient_credits`) blocks paid model operations when the balance
+  can't cover the estimate — at balance 0 this is the free-trial hard cap.
+- **Deduction:** `cost.track_cost` (post-call) debits the actual credits
+  atomically and idempotently (per-call key). Per ADR-024 W0-03 it never fails
+  the user's already-paid result; a failed debit is recorded to
+  `pending_credit_debits` and reconciled by an ARQ cron worker.
+- **Conversion + prices are PROVISIONAL** (`orchestration/models.yaml`:
+  `margin_multiplier`, `credits_per_dollar`; `SOLUS_STRIPE_PACK_CREDITS`) —
+  calibrate post-pilot (ADR-024).
