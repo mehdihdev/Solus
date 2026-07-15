@@ -7,6 +7,7 @@
 import type { GithubRepo, OAuthStartResponse, Source, Sync } from '../../lib/api/resources'
 import type { OAuthBridge } from '../auth/githubOAuth'
 import type { ConnectionState } from './onboardingStore'
+import { pollSync, syncErrorMessage } from './sourceSync'
 
 /** The slice of the typed API surface this orchestration depends on. */
 export interface GithubConnectApi {
@@ -55,47 +56,10 @@ export interface GithubConnectResult {
   error?: string
 }
 
-const POLL_INTERVAL_MS = 1000
-const POLL_MAX_TRIES = 30
 const NO_BRIDGE_ERROR = 'GitHub connect needs the desktop app.'
-
-const defaultSleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms))
 
 function busy(label: string, sourceId?: string, repos?: GithubRepo[]): ConnectionState {
   return { phase: 'busy', stepIdx: 0, label, sourceId, repos }
-}
-
-/** The latest sync is the most relevant; backend returns history ordered. */
-function latestSync(syncs: Sync[]): Sync | undefined {
-  return syncs[syncs.length - 1]
-}
-
-/**
- * Poll the source's syncs until the latest reaches a terminal state or we run
- * out of tries. Returns the terminal sync, or undefined on timeout.
- */
-async function pollSync(
-  deps: GithubConnectDeps,
-  projectId: string,
-  sourceId: string
-): Promise<Sync | undefined> {
-  const sleep = deps.sleep ?? defaultSleep
-  for (let attempt = 0; attempt < POLL_MAX_TRIES; attempt += 1) {
-    const syncs = await deps.api.getSyncs(projectId, sourceId)
-    const latest = latestSync(syncs)
-    if (latest && (latest.status === 'succeeded' || latest.status === 'failed')) {
-      return latest
-    }
-    await sleep(POLL_INTERVAL_MS)
-  }
-  return undefined
-}
-
-function syncErrorMessage(sync: Sync): string {
-  const first = sync.errors[0]
-  if (typeof first === 'string' && first) return first
-  return 'Sync failed.'
 }
 
 /**
@@ -179,7 +143,7 @@ async function indexRepo(
   })
   await deps.api.triggerSync(projectId, sourceId)
 
-  const sync = await pollSync(deps, projectId, sourceId)
+  const sync = await pollSync(deps.api, projectId, sourceId, deps.sleep)
   if (!sync) {
     const error = 'Sync timed out.'
     deps.onProgress({ phase: 'error', error, sourceId })

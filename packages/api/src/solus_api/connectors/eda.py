@@ -51,6 +51,12 @@ from solus_api.connectors.contracts import (
 #: message sizes; never let a malformed/huge artifact exhaust the worker).
 MAX_EXPORT_BYTES: Final = 8 * 1024 * 1024
 
+#: Cap on per-sync `SyncError`s (§7 — bound message sizes): an adversarial export
+#: full of duplicates must not amplify into megabytes of error objects persisted
+#: on one Sync row and echoed by every sync-history read. Overflow collapses
+#: into a single truncation note.
+MAX_SYNC_ERRORS: Final = 100
+
 #: `net` entity keys are namespaced so a net named like a designator can't collide
 #: with a component's key (source_keys must be unique within a sync — W0-05 §10).
 NET_KEY_PREFIX: Final = "net:"
@@ -71,12 +77,16 @@ class Node:
 
 @dataclass(frozen=True)
 class Component:
-    """A placed part. `part_number`, when a tool carries it, feeds the fingerprint."""
+    """A placed part. The three optional identity fields — `part_number`,
+    `schematic_symbol_name`, `datasheet_ref` — are the W0-08 §5.2 fingerprint
+    channels; a tool's parser fills whichever its format carries."""
 
     designator: str
     footprint: str | None = None
     value: str | None = None
     part_number: str | None = None
+    schematic_symbol_name: str | None = None
+    datasheet_ref: str | None = None
     properties: dict[str, Any] = field(default_factory=dict)
 
 
@@ -112,8 +122,16 @@ def component_entity(component: Component) -> EntityOut:
         "value": component.value,
         **component.properties,
     }
-    # Supply-chain identity is the fingerprint's channel, kept out of properties.
-    modality_hints = {"part_number": component.part_number} if component.part_number else {}
+    # Identity signals are the fingerprint's channel, kept out of properties.
+    modality_hints = {
+        hint: value
+        for hint, value in (
+            ("part_number", component.part_number),
+            ("schematic_symbol_name", component.schematic_symbol_name),
+            ("datasheet_ref", component.datasheet_ref),
+        )
+        if value
+    }
     return EntityOut(
         source_key=component.designator,
         type="component",
@@ -150,61 +168,86 @@ def build_graph(
     unknown component are dropped with a `SyncError`, and any parser `warnings`
     are surfaced too — so "why is this part/edge missing?" is answerable rather
     than a silent gap (keeping source_keys unique and relations intra-source,
-    W0-05 §10).
+    W0-05 §10). The errors list is capped at `MAX_SYNC_ERRORS` (§7).
     """
-    errors: list[SyncError] = [
-        SyncError(item="parse", message=warning) for warning in netlist.warnings
-    ]
+    recorder = _ErrorRecorder()
+    for warning in netlist.warnings:
+        recorder.record("parse", warning)
 
+    components = _map_components(netlist, recorder)
+    nets, relations = _map_nets(netlist, components, recorder)
+
+    entities = [*components.values(), *nets.values()]
+    return entities, relations, recorder.finish()
+
+
+class _ErrorRecorder:
+    """Collects SyncErrors under the `MAX_SYNC_ERRORS` cap (§7): overflow is
+    counted and collapsed into one truncation note by `finish`."""
+
+    def __init__(self) -> None:
+        self._errors: list[SyncError] = []
+        self._suppressed = 0
+
+    def record(self, item: str, message: str) -> None:
+        if len(self._errors) < MAX_SYNC_ERRORS:
+            self._errors.append(SyncError(item=item, message=message))
+        else:
+            self._suppressed += 1
+
+    def finish(self) -> list[SyncError]:
+        if self._suppressed:
+            return [
+                *self._errors,
+                SyncError(
+                    item="parse",
+                    message=f"{self._suppressed} further issue(s) truncated",
+                ),
+            ]
+        return self._errors
+
+
+def _map_components(netlist: Netlist, recorder: _ErrorRecorder) -> dict[str, EntityOut]:
     components: dict[str, EntityOut] = {}
     for component in netlist.components:
         if component.designator in components:
-            errors.append(
-                SyncError(
-                    item=_label(component.designator), message="duplicate component designator"
-                )
-            )
+            recorder.record(_label(component.designator), "duplicate component designator")
             continue
         try:
             # Adversarial exports can carry an over-long token (a designator up to
             # the byte cap) that overflows EntityOut's field bounds. Drop that one
             # item with a SyncError rather than letting the whole sync fail (§7 —
             # a compromised repo must not be able to break a team's every sync).
-            entity = component_entity(component)
+            components[component.designator] = component_entity(component)
         except ValidationError:
-            errors.append(
-                SyncError(
-                    item=_label(component.designator),
-                    message="component exceeds field bounds; dropped",
-                )
-            )
-            continue
-        components[component.designator] = entity
+            recorder.record(_label(component.designator), "component exceeds field bounds; dropped")
+    return components
 
+
+def _map_nets(
+    netlist: Netlist,
+    components: dict[str, EntityOut],
+    recorder: _ErrorRecorder,
+) -> tuple[dict[str, EntityOut], list[RelationOut]]:
     nets: dict[str, EntityOut] = {}
     relations: list[RelationOut] = []
     for net in netlist.nets:
         net_key = f"{NET_KEY_PREFIX}{net.name}"
         if net_key in nets:
-            errors.append(SyncError(item=_label(net.name), message="duplicate net name"))
+            recorder.record(_label(net.name), "duplicate net name")
             continue
         try:
             nets[net_key] = net_entity(net)
         except ValidationError:
-            errors.append(
-                SyncError(item=_label(net.name), message="net name exceeds field bounds; dropped")
-            )
+            recorder.record(_label(net.name), "net name exceeds field bounds; dropped")
             continue
         # Group this net's nodes by component so a part gets one edge to the net
         # carrying all its pins (order-preserving), not one colliding edge per pin.
         pins_by_designator: dict[str, list[str]] = {}
         for node in net.nodes:
             if node.designator not in components:
-                errors.append(
-                    SyncError(
-                        item=f"{net.name}:{node.designator}",
-                        message="net node references unknown component",
-                    )
+                recorder.record(
+                    f"{net.name}:{node.designator}", "net node references unknown component"
                 )
                 continue
             pins = pins_by_designator.setdefault(node.designator, [])
@@ -219,9 +262,7 @@ def build_graph(
             )
             for designator, pins in pins_by_designator.items()
         )
-
-    entities = [*components.values(), *nets.values()]
-    return entities, relations, errors
+    return nets, relations
 
 
 # --------------------------------------------------------- family connector

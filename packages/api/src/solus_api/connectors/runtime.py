@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.connectors.contracts import (
+    AuthKind,
     Connector,
     ConnectorError,
     Credentials,
@@ -220,10 +221,15 @@ async def run_sync(
         return None
 
     try:
-        if not secret_ref:
+        if connector.auth_kind is AuthKind.NONE:
+            # Committed-export connectors (EDA family) carry no tool credential
+            # by design (SOLUSDEV-100) — sync runs with empty credentials.
+            credentials = Credentials(token="")
+        elif not secret_ref:
             raise ConnectorError("no_credentials", "Source has no stored credentials")
-        token = await secret_store.get(secret_ref)
-        ctx = SyncContext(credentials=Credentials(token=token), config=config, cursor=cursor)
+        else:
+            credentials = Credentials(token=await secret_store.get(secret_ref))
+        ctx = SyncContext(credentials=credentials, config=config, cursor=cursor)
         result = await connector.sync(ctx)
     except Exception as exc:
         await _record_failure(sessionmaker, source_id, sync_id, job_id, exc)

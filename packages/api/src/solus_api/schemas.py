@@ -184,6 +184,12 @@ class OAuthExchange(StrictModel):
 # --- Response serializers (snake_case dicts inside the §1.4 envelope) ---
 
 
+#: Bulk config keys (committed-export scaffold content, up to 8MB of untrusted
+#: netlist text) are stored but never echoed by the API — a source list must not
+#: round-trip megabytes of ingested content (§7 — bound message sizes).
+_BULK_CONFIG_KEYS = frozenset({"export"})
+
+
 def serialize_source(source: Source, *, entity_count: int | None = None) -> dict[str, Any]:
     """Source view for the API — secrets (secret_ref/token) are never included."""
     data: dict[str, Any] = {
@@ -192,8 +198,12 @@ def serialize_source(source: Source, *, entity_count: int | None = None) -> dict
         "type": source.type.value,
         "name": source.name,
         "status": source.status.value,
-        # Defensive: drop any transient/underscore-prefixed config keys.
-        "config": {k: v for k, v in source.config.items() if not k.startswith("_")},
+        # Defensive: drop transient/underscore-prefixed and bulk config keys.
+        "config": {
+            k: v
+            for k, v in source.config.items()
+            if not k.startswith("_") and k not in _BULK_CONFIG_KEYS
+        },
         "account_login": source.account_login,
         "last_synced_at": source.last_synced_at,
         "last_error": source.last_error,

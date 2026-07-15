@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConnectStep } from './ConnectStep'
 import { useOnboardingStore } from './onboardingStore'
@@ -7,6 +7,9 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import * as provisioning from './provisioning'
 import * as githubConnect from './githubConnect'
+import * as edaConnect from './edaConnect'
+import * as catalogModule from './integrationCatalog'
+import { FALLBACK_CATALOG } from './integrationCatalog'
 import * as bridgeModule from '../../lib/desktopBridge'
 import type { GithubRepo } from '../../lib/api/resources'
 
@@ -20,8 +23,20 @@ vi.mock('./githubConnect', async (importOriginal) => {
   return { ...actual, runGithubConnect: vi.fn() }
 })
 
+vi.mock('./edaConnect', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./edaConnect')>()
+  return { ...actual, runEdaConnect: vi.fn() }
+})
+
+vi.mock('./integrationCatalog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./integrationCatalog')>()
+  return { ...actual, loadIntegrationCatalog: vi.fn() }
+})
+
 const mockedEnsure = vi.mocked(provisioning.ensureWorkspace)
 const mockedRun = vi.mocked(githubConnect.runGithubConnect)
+const mockedEda = vi.mocked(edaConnect.runEdaConnect)
+const mockedCatalog = vi.mocked(catalogModule.loadIntegrationCatalog)
 
 function reset(): void {
   useOnboardingStore.getState().reset()
@@ -30,6 +45,8 @@ function reset(): void {
   vi.clearAllMocks()
   mockedEnsure.mockResolvedValue({ linked: false })
   mockedRun.mockResolvedValue({ ok: true })
+  mockedEda.mockResolvedValue({ ok: true })
+  mockedCatalog.mockResolvedValue(FALLBACK_CATALOG)
 }
 
 afterEach(() => {
@@ -126,6 +143,56 @@ describe('ConnectStep — GitHub routing', () => {
     const picker = await screen.findByLabelText('Choose a repository')
     expect(picker).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
+  })
+})
+
+describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
+  beforeEach(reset)
+
+  it('drives the REAL export connect from the picked netlist when linked', async () => {
+    mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
+
+    // Clicking the tile opens the (hidden) netlist picker; picking a file
+    // hands its CONTENT to the orchestration.
+    await userEvent.click(screen.getByText('KiCad'))
+    const input = screen.getByLabelText('Choose a committed netlist export')
+    const netlist = '<export version="E"><components/><nets/></export>'
+    const file = new File([netlist], 'power-board.xml', { type: 'text/xml' })
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } })
+    })
+
+    await vi.waitFor(() => expect(mockedEda).toHaveBeenCalledTimes(1))
+    const [, projectId, provider, picked] = mockedEda.mock.calls[0]
+    expect(projectId).toBe('p1')
+    expect(provider).toBe('kicad')
+    expect(picked).toEqual({ fileName: 'power-board.xml', content: netlist })
+  })
+
+  it('falls back to the simulated tile when the workspace never linked', async () => {
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    await userEvent.click(screen.getByText('KiCad'))
+
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad?.phase).toBe('busy')
+  })
+
+  it('lists live extra export providers (altium) as connectable tiles', async () => {
+    mockedCatalog.mockResolvedValue([
+      ...FALLBACK_CATALOG,
+      { ...FALLBACK_CATALOG[1], id: 'altium', name: 'Altium', mark: 'Al', mode: 'export-file' }
+    ])
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    expect(await screen.findByText('Altium')).toBeInTheDocument()
+    expect(screen.getByText(/OF 5 CONNECTED/)).toBeInTheDocument()
   })
 })
 

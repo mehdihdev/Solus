@@ -16,6 +16,7 @@ from solus_api.connectors import assert_connector_contract
 from solus_api.connectors.contracts import ConnectorError, Credentials, Domain, SyncContext
 from solus_api.connectors.eda import (
     MAX_EXPORT_BYTES,
+    MAX_SYNC_ERRORS,
     Component,
     EdaExportConnector,
     Net,
@@ -54,6 +55,25 @@ def test_component_entity_carries_props_and_part_number_hint() -> None:
 
 def test_component_without_mpn_has_empty_modality_hints() -> None:
     assert component_entity(NETLIST.components[1]).modality_hints == {}
+
+
+def test_component_entity_carries_all_three_fingerprint_channels() -> None:
+    # W0-08 §5.2: part_number + schematic_symbol_name + datasheet_ref are the
+    # fingerprint's channels; each appears only when the tool carried it.
+    entity = component_entity(
+        Component(
+            designator="U2",
+            value="OV9281",
+            part_number="OV09281-H64A",
+            schematic_symbol_name="OV9281_Module",
+            datasheet_ref="https://example.com/ov9281.pdf",
+        )
+    )
+    assert entity.modality_hints == {
+        "part_number": "OV09281-H64A",
+        "schematic_symbol_name": "OV9281_Module",
+        "datasheet_ref": "https://example.com/ov9281.pdf",
+    }
 
 
 def test_net_entity_is_namespaced_first_class_node() -> None:
@@ -125,6 +145,21 @@ def test_byte_len_counts_surrogates_rather_than_dropping_them() -> None:
     # Lossy "ignore" would count a lone surrogate as 0 bytes, letting an
     # adversarial payload slip past the size bound; surrogatepass counts it.
     assert _byte_len("\ud800") == 3
+
+
+def test_sync_error_amplification_is_capped() -> None:
+    # Security review (SOLUSDEV-100 Phase 4): an adversarial export full of
+    # duplicate designators must not amplify into an unbounded errors list on
+    # the Sync record (§7 — bound message sizes). First MAX_SYNC_ERRORS are
+    # kept; the rest collapse into one truncation note.
+    duplicates = tuple(Component(designator="U1") for _ in range(MAX_SYNC_ERRORS + 500))
+    entities, _, errors = build_graph(Netlist(components=duplicates))
+
+    assert len(entities) == 1  # the first U1 survives
+    assert len(errors) == MAX_SYNC_ERRORS + 1
+    assert "truncated" in errors[-1].message
+    # MAX+500 comps → 1 entity + MAX+499 duplicate errors → 499 over the cap.
+    assert "499" in errors[-1].message
 
 
 def test_parser_warnings_are_surfaced_as_errors() -> None:

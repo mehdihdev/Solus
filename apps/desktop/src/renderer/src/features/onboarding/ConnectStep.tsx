@@ -1,9 +1,11 @@
-// Onboarding step 1 — "Connect your tools". The four connector tiles share one
-// UI; GitHub drives the REAL backend connector (SOLUSDEV-103) when a project is
-// linked and the Electron OAuth bridge is present, while KiCad/Onshape/ROS stay
-// simulated. On entering this step we ensure a project exists so a real connect
-// has something to attach a source to; if the API/auth is unavailable we fall
-// back to the simulated GitHub tile so onboarding still completes (dev bypass).
+// Onboarding step 1 — "Connect your tools". The connector tiles share one UI,
+// listed from the LIVE backend catalog (SOLUSDEV-100; curated fallback offline).
+// GitHub drives the REAL OAuth connector (SOLUSDEV-103) when a project is
+// linked and the Electron OAuth bridge is present; committed-export EDA
+// connectors (KiCad, Altium) drive the REAL file-pick connect; everything else
+// stays simulated. On entering this step we ensure a project exists so a real
+// connect has something to attach a source to; if the API/auth is unavailable
+// we fall back to the simulated tiles so onboarding still completes (dev bypass).
 import { useEffect, useRef } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -12,14 +14,18 @@ import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import { ConnectTile } from './ConnectTile'
-import { INTEGRATIONS, MIN_SOURCES_TO_BUILD, type Integration } from './integrations.constants'
+import { MIN_SOURCES_TO_BUILD, type Integration } from './integrations.constants'
+import { type CatalogEntry } from './integrationCatalog'
+import { useIntegrationCatalog } from './useIntegrationCatalog'
 import { useOnboardingStore, connectedCount, canBuildModel } from './onboardingStore'
 import { ensureWorkspace } from './provisioning'
+import { useEdaConnect } from './useEdaConnect'
 import { useGithubConnect } from './useGithubConnect'
 
 const CONNECT_STEP_MS = 650
 const COMPLETE_DELAY_MS = 350
-const GITHUB_ID = 'github'
+/** Committed netlist exports a user can pick (KiCad XML netlist first). */
+const EXPORT_FILE_ACCEPT = '.xml,.net'
 
 interface ConnectStepProps {
   onBuild: () => void
@@ -33,8 +39,13 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
   const description = useOnboardingStore((s) => s.description)
   const solMode = useSettingsStore((s) => s.solMode)
   const workspace = useWorkspaceStore()
+  const catalog = useIntegrationCatalog()
   const github = useGithubConnect()
+  const eda = useEdaConnect()
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+  const exportInput = useRef<HTMLInputElement | null>(null)
+  // Which export-file provider's picker is open (set on tile click).
+  const pendingProvider = useRef<string | null>(null)
 
   // Ensure a project exists as soon as we reach the connect step, reusing one
   // already created earlier in the flow. Best-effort; never blocks the UI.
@@ -80,11 +91,11 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
     )
   }
 
-  const connect = (integ: Integration): void => {
-    // GitHub uses the real connector when we have a linked project + bridge;
-    // otherwise (dev bypass / web build) it degrades to the simulated tile.
+  const connect = (integ: CatalogEntry): void => {
+    // Real flows need a linked project (and GitHub the OAuth bridge); otherwise
+    // (dev bypass / web build) the tile degrades to the simulated animation.
     if (
-      integ.id === GITHUB_ID &&
+      integ.mode === 'github-oauth' &&
       workspace.linked &&
       workspace.project &&
       getDesktopOAuthBridge()
@@ -92,7 +103,23 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
       void github.start(workspace.project.id)
       return
     }
+    if (integ.mode === 'export-file' && workspace.linked && workspace.project) {
+      // Committed-export EDA connect: pick the netlist export, then sync it.
+      pendingProvider.current = integ.id
+      exportInput.current?.click()
+      return
+    }
     simulateConnect(integ)
+  }
+
+  const onExportPicked = async (input: HTMLInputElement): Promise<void> => {
+    const provider = pendingProvider.current
+    pendingProvider.current = null
+    const file = input.files?.[0]
+    input.value = ''
+    if (!provider || !file || !workspace.project) return
+    const content = await file.text()
+    await eda.start(workspace.project.id, provider, { fileName: file.name, content })
   }
 
   const count = connectedCount(connections)
@@ -107,8 +134,16 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
         Each source becomes a domain in your context model. Connect at least two — cross-domain
         checks need something to cross.
       </p>
+      <input
+        ref={exportInput}
+        type="file"
+        accept={EXPORT_FILE_ACCEPT}
+        aria-label="Choose a committed netlist export"
+        style={{ display: 'none' }}
+        onChange={(e) => void onExportPicked(e.currentTarget)}
+      />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 24 }}>
-        {INTEGRATIONS.map((integ) => (
+        {catalog.map((integ) => (
           <ConnectTile
             key={integ.id}
             integration={integ}
@@ -128,7 +163,7 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
         }}
       >
         <Mono size={10} color={ready ? 'var(--ok)' : 'var(--mut)'}>
-          {count} OF {INTEGRATIONS.length} CONNECTED{' '}
+          {count} OF {catalog.length} CONNECTED{' '}
           {ready ? '— READY' : `(${MIN_SOURCES_TO_BUILD}+ RECOMMENDED)`}
         </Mono>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>

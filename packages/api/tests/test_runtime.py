@@ -221,6 +221,49 @@ async def test_sync_fails_without_credentials(
         assert sync.status == JobStatus.FAILED
 
 
+async def test_auth_none_connector_syncs_without_stored_credentials(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    # SOLUSDEV-100 (Phase 4 review): a committed-export source (auth_kind NONE)
+    # has no secret_ref by design — run_sync must not demand one.
+    from fixtures.kicad_sample import KICAD_XML
+    from solus_api.connectors.kicad import KicadConnector
+
+    async with maker() as db:
+        team = Team(name="T")
+        db.add(team)
+        await db.flush()
+        project = Project(team_id=team.id, name="P")
+        db.add(project)
+        await db.flush()
+        source = Source(
+            project_id=project.id,
+            team_id=team.id,
+            type=SourceType.KICAD,
+            name="power-board",
+            status=SourceStatus.CONNECTED,
+            config={"export": KICAD_XML},
+            secret_ref=None,
+        )
+        db.add(source)
+        await db.commit()
+        await db.refresh(source)
+
+    sync_id = await run_sync(
+        source_id=source.id,
+        sessionmaker=maker,
+        connector=KicadConnector(),
+        secret_store=InMemorySecretStore(),
+    )
+
+    async with maker() as db:
+        sync = await db.get(Sync, sync_id)
+        assert sync is not None
+        assert sync.status == JobStatus.SUCCEEDED
+        assert sync.entities_created == 6  # 3 components + 3 nets
+        assert sync.relations_created == 6
+
+
 async def test_resync_updates_changed_edge_metadata(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:

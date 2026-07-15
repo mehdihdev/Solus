@@ -173,10 +173,10 @@ async def test_token_connect_rejected_for_oauth_only_connector(
 async def test_connect_altium_committed_export_source(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
-    # SOLUSDEV-102: the `altium` provider is accepted by SourceCreate (Literal),
-    # SourceType, and the DB CHECK constraint. As a committed-export connector it
-    # has no OAuth/token, so it lands PENDING (awaiting the export) — 201, not a
-    # 422 (Literal) or 500 (SourceType) that M2 would have caused.
+    # SOLUSDEV-102/100: a committed-export connector has no OAuth/token — there
+    # is nothing to authenticate, so it lands CONNECTED on creation with the
+    # connector's synthetic identity (previously it landed PENDING forever,
+    # which made it permanently unsyncable — Phase 4 review finding).
     project_id = await _project(client, alice_headers)
     resp = await client.post(
         f"/api/v1/projects/{project_id}/sources",
@@ -186,7 +186,38 @@ async def test_connect_altium_committed_export_source(
     assert resp.status_code == 201, resp.text
     source = resp.json()["data"]
     assert source["type"] == "altium"
-    assert source["status"] == "pending"
+    assert source["status"] == "connected"
+    assert source["account_login"] == "altium-export"
+
+
+async def test_connect_kicad_source_and_sync_it(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    # SOLUSDEV-100 end-to-end: connect a kicad source with the committed netlist
+    # CONTENT in config.export (the v1 scaffold), then trigger a real sync.
+    from fixtures.kicad_sample import KICAD_XML
+
+    project_id = await _project(client, alice_headers)
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={"type": "kicad", "name": "power-board", "config": {"export": KICAD_XML}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    source = resp.json()["data"]
+    assert source["type"] == "kicad"
+    assert source["status"] == "connected"
+    assert source["account_login"] == "kicad-export"
+    # Security review (Phase 4): the bulk export content is stored, but never
+    # echoed back by source serialization (§7 — response bloat, untrusted
+    # content round-tripping on a hot endpoint).
+    assert "export" not in source["config"]
+
+    sync_resp = await client.post(
+        f"/api/v1/projects/{project_id}/sources/{source['id']}/sync",
+        headers=alice_headers,
+    )
+    assert sync_resp.status_code == 202, sync_resp.text
 
 
 async def test_sync_debounced_while_in_progress(

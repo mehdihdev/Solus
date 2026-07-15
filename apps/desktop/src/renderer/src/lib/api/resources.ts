@@ -282,6 +282,18 @@ export function exchangeGithubOAuth(
   })
 }
 
+/** Connect a source directly (non-OAuth providers, e.g. committed-export EDA). */
+export function createSource(
+  projectId: string,
+  input: { type: string; name: string; config?: Record<string, unknown> },
+  client: ApiClient = api
+): Promise<Source> {
+  return client.request<Source>(`/projects/${projectId}/sources`, {
+    method: 'POST',
+    body: input
+  })
+}
+
 /** Update a source's name and/or config (e.g. select the repo + branch). */
 export function updateSource(
   projectId: string,

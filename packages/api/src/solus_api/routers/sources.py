@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from sqlalchemy import delete, select, update
 
-from solus_api.connectors.contracts import ConnectorError, Credentials
+from solus_api.connectors.contracts import AuthKind, ConnectorError, Credentials
 from solus_api.connectors.runtime import source_entity_count, source_entity_counts
 from solus_api.connectors.worker import execute_source_sync
 from solus_api.core.config import Settings
@@ -139,6 +139,14 @@ async def connect_source(
         source.status = SourceStatus.CONNECTED
         source.account_login = account.login
         source.account_external_id = account.external_id
+    elif connector.auth_kind is AuthKind.NONE:
+        # Committed-export connectors (EDA family, SOLUSDEV-100/102) carry no
+        # tool credential — nothing to authenticate, so the source is connected
+        # on creation, labeled with the connector's synthetic identity.
+        account = await connector.validate_credentials(Credentials(token=""))
+        source.status = SourceStatus.CONNECTED
+        source.account_login = account.login
+        source.account_external_id = account.external_id
 
     record_activity(
         session,
@@ -239,11 +247,17 @@ async def trigger_sync(
     request: Request,
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
+    registry: RegistryDep,
     response: Response,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id)
-    if source.status == SourceStatus.PENDING or not source.secret_ref:
+    # auth-NONE connectors (committed exports) never hold a secret_ref — only
+    # credentialed connectors must prove one before a sync (SOLUSDEV-100).
+    needs_credentials = (
+        _resolve_connector(registry, source.type.value).auth_kind is not AuthKind.NONE
+    )
+    if source.status == SourceStatus.PENDING or (needs_credentials and not source.secret_ref):
         raise APIError(409, "not_connected", "Source is not connected yet")
     # Debounce: don't stack a second sync while one is in flight (a cheap
     # per-source guard; per-team budget/concurrency is ADR-019). The scheduled

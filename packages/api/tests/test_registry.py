@@ -60,6 +60,7 @@ def test_build_registry_ships_the_roster() -> None:
     from solus_api.connectors.altium import AltiumConnector
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
+    from solus_api.connectors.kicad import KicadConnector
     from solus_api.core.config import Settings
 
     settings = Settings(
@@ -70,15 +71,17 @@ def test_build_registry_ships_the_roster() -> None:
     from solus_api.connectors.registry import build_registry
 
     registry = build_registry(settings)
-    assert registry.providers() == ["altium", "github", "gitlab"]
+    assert registry.providers() == ["altium", "github", "gitlab", "kicad"]
     assert isinstance(registry.create("github"), GitHubConnector)
     gitlab = registry.create("gitlab")
     assert isinstance(gitlab, GitLabConnector)
     assert isinstance(registry.create("altium"), AltiumConnector)
+    assert isinstance(registry.create("kicad"), KicadConnector)
     catalog = {c["type"]: c for c in registry.catalog()}
     assert catalog["gitlab"]["auth_kind"] == "oauth"
     assert "read_api" in catalog["gitlab"]["scopes"]
-    # Altium (SOLUSDEV-102) — committed-export EDA connector: no tool credential,
-    # configured with the export content in v1.
-    assert catalog["altium"]["auth_kind"] == "none"
-    assert catalog["altium"]["config_fields"] == ["export"]
+    # The committed-export EDA family (Altium SOLUSDEV-102, KiCad SOLUSDEV-100):
+    # no tool credential, configured with the export content in v1.
+    for eda_provider in ("altium", "kicad"):
+        assert catalog[eda_provider]["auth_kind"] == "none"
+        assert catalog[eda_provider]["config_fields"] == ["export"]

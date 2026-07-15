@@ -61,6 +61,7 @@ def build_registry(settings: Settings) -> ConnectorRegistry:
     from solus_api.connectors.altium import AltiumConnector
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
+    from solus_api.connectors.kicad import KicadConnector
 
     registry = ConnectorRegistry()
     registry.register(
@@ -80,4 +81,6 @@ def build_registry(settings: Settings) -> ConnectorRegistry:
     )
     # Altium (SOLUSDEV-102) — committed-export EDA connector, parse-export scaffold.
     registry.register("altium", AltiumConnector)
+    # KiCad (SOLUSDEV-100) — committed-export EDA connector, XML netlist parse.
+    registry.register("kicad", KicadConnector)
     return registry

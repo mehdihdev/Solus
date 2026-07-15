@@ -198,12 +198,15 @@ class FakeGitHub(OAuthConnector):
 @pytest.fixture
 def fake_registry() -> ConnectorRegistry:
     from solus_api.connectors.altium import AltiumConnector
+    from solus_api.connectors.kicad import KicadConnector
 
     registry = ConnectorRegistry()
     registry.register("github", FakeGitHub)
-    # Altium (SOLUSDEV-102) is a real committed-export connector — no external
-    # calls to fake — so the roster's EDA member is available in source tests.
+    # The EDA family (Altium SOLUSDEV-102, KiCad SOLUSDEV-100) is real
+    # committed-export connectors — no external calls to fake — so the roster's
+    # EDA members are available in source tests.
     registry.register("altium", AltiumConnector)
+    registry.register("kicad", KicadConnector)
     return registry
 
 
