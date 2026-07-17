@@ -198,6 +198,17 @@ class SyncTrigger(enum.StrEnum):
     WEBHOOK = "webhook"  # inbound provider webhook
 
 
+class TurnRole(enum.StrEnum):
+    """Who authored a conversation turn (SOLUS-SYS-01). `user` = the person,
+    `assistant` = SOL's final reply, `tool` = a recorded tool call + its result
+    (the plumbing SOL invoked mid-turn). No `system` turn is persisted — system
+    instructions are authored by Solus per-request and never stored as data."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
 def _enum_column(enum_cls: type[enum.StrEnum]) -> Enum:
     # native_enum=False + create_constraint=True → VARCHAR with a DB CHECK on the
     # allowed values (portable, and validity enforced in the database, not just app code).
@@ -810,3 +821,48 @@ class DataEvent(UuidPkMixin, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+
+
+# --------------------------------------------------------------------- SOL chat
+class Conversation(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A SOL chat session (SOLUS-SYS-01). PROJECT-scoped (the tenant boundary) and
+    OWNED by its creator: only `created_by` reaches it, so one teammate's thread never
+    leaks to another within the same project. `team_id` is denormalized for one-hop
+    team scoping (mirrors Source/Job)."""
+
+    __tablename__ = "conversations"
+    __table_args__ = (Index("ix_conversations_project_owner", "project_id", "created_by"),)
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
+    )
+    title: Mapped[str | None] = mapped_column(String(512), default=None)
+
+
+class ConversationTurn(UuidPkMixin, TimestampMixin, Base):
+    """One turn in a conversation (SOLUS-SYS-01). Append-only; deleted with its
+    conversation via CASCADE. `content` is the message text (or a tool summary);
+    `attrs` carries the structured detail — tool call/result envelope, model
+    metadata, the sol_mode the turn ran under. `project_id` is denormalized so a
+    turn read is team-scopable without joining through the conversation."""
+
+    __tablename__ = "conversation_turns"
+    __table_args__ = (
+        Index("ix_conversation_turns_conversation_created", "conversation_id", "created_at"),
+    )
+
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[TurnRole] = mapped_column(_enum_column(TurnRole))
+    content: Mapped[str] = mapped_column(Text, default="")
+    attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

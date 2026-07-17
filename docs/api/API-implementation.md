@@ -664,3 +664,45 @@ the raw body is size-bounded, then `stripe.Webhook.construct_event` verifies the
 - **Conversion + prices are PROVISIONAL** (`orchestration/models.yaml`:
   `margin_multiplier`, `credits_per_dollar`; `SOLUS_STRIPE_PACK_CREDITS`) —
   calibrate post-pilot (ADR-024).
+
+---
+
+## 11. SOL chat (SOLUSDEV-135 / SOLUS-SYS-01) — PROPOSED, pending human approval
+
+The SOL agent surface was listed as a later phase (§9, "§2.4–§2.15, WS/SSE"). SOLUSDEV-135
+introduces the following **project-scoped, owner-private** routes as the systems-side of the
+reasoning↔systems seam. They are documented here for the design review; the route plan is not
+yet blessed in the authoritative API design — flagged in the completion report for approval.
+
+All routes are under `/api/v1/projects/{project_id}/sol` and resolve through `ProjectCtx`
+(tenant isolation). A conversation is owned by its creator: only `(project_id, created_by)`
+reaches it, so another tenant OR another teammate in the same project gets `404`. Writes
+require the `member` role; reads need only a resolvable project.
+
+| Method | Path                               | Purpose                                                        | Success |
+| ------ | ---------------------------------- | -------------------------------------------------------------- | ------- |
+| GET    | `/sol/tools`                       | List the W0-04 tool descriptors SOL may invoke (fixed by code) | `200`   |
+| POST   | `/sol/conversations`               | Create a conversation (`{title?}`)                             | `201`   |
+| GET    | `/sol/conversations`               | List the caller's conversations (cursor-paginated)             | `200`   |
+| GET    | `/sol/conversations/{id}`          | Get one owned conversation                                     | `200`   |
+| DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                              | `204`   |
+| GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                 | `200`   |
+| POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)         | `200`   |
+
+**Streaming turn (`POST …/messages`).** Returns `text/event-stream`. The user turn is persisted
+(and `sol.message` logged) before streaming; assistant/tool turns are persisted as the stream
+completes. SSE `event:` names and their `data` payloads:
+
+- `token` — `{"text": "…"}` incremental reply delta
+- `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
+- `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
+- `message` — `{"role":"assistant","content":"…"}` the finished reply
+- `error` — `{"code","message"}` a generic, author-safe failure (never a traceback, §7)
+- `done` — `{"conversation_id","turn_id"}` terminal marker
+
+The reasoning loop runs behind the `agent.runtime.AgentRunner` seam. This cycle ships a
+deterministic, model-free `ScaffoldRunner` (mock-and-swap, like `FakeSolSystems`) that proves
+the plumbing end to end — lists tools, invokes the reference `get_entity` tool through the
+per-request registry, pulls W0-07 graph context, and honors a bounded tool-call loop guard.
+Model routing / credit metering (W0-03 `route()`/`track_cost`) remain MO-01 stubs, so no live
+model call is made yet; per-team model-budget enforcement lands with MO-01.

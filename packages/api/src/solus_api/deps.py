@@ -13,8 +13,10 @@ from typing import Annotated
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.interfaces import SolSystems
+from solus_api.agent.runtime import AgentRunner
 from solus_api.billing.credits import grant_trial_credits
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.secrets import SecretStore
@@ -60,10 +62,33 @@ def get_secret_store(request: Request) -> "SecretStore":
     return store
 
 
+def get_sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
+    """The app's session factory — for code that must open its OWN session outside a
+    request scope (the SOL SSE generator streams after the request session closes)."""
+    maker: async_sessionmaker[AsyncSession] = request.app.state.sessionmaker
+    return maker
+
+
+def get_sol_systems(request: Request) -> SolSystems:
+    """The W0-07 systems impl (mock-and-swap): `FakeSolSystems` now, the real impl later
+    — swapped on app.state with no endpoint change."""
+    systems: SolSystems = request.app.state.sol_systems
+    return systems
+
+
+def get_agent_runner(request: Request) -> AgentRunner:
+    """The reasoning-loop runner behind the seam: the scaffold now, SOL-01/02 later."""
+    runner: AgentRunner = request.app.state.agent_runner
+    return runner
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
 SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
+SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
+AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
 
 
 async def _provision_user(

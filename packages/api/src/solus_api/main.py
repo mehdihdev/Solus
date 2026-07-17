@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from solus_api.agent.fake_systems import FakeSolSystems
+from solus_api.agent.runtime import ScaffoldRunner
 from solus_api.connectors.registry import build_registry
 from solus_api.connectors.secrets import build_secret_store
 from solus_api.core.config import Settings
@@ -27,6 +29,7 @@ from solus_api.routers import (
     notifications,
     orchestration,
     projects,
+    sol,
     sources,
     teams,
     users,
@@ -68,6 +71,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     app.state.connector_registry = build_registry(resolved_settings)
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
+    # SOL chat seam (SOLUSDEV-135, mock-and-swap): the W0-07 systems impl and the
+    # reasoning-loop runner. Swap these for the real systems impl / SOL-01/02 reasoning
+    # with a one-line change here and no endpoint edit.
+    app.state.sol_systems = FakeSolSystems()
+    app.state.agent_runner = ScaffoldRunner()
 
     register_error_handlers(app)
     # CORS for the Electron renderer / browser dev server (must precede the
@@ -104,5 +112,6 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(billing.router)
     app.include_router(sources.router)
     app.include_router(entities.router)
+    app.include_router(sol.router)
     app.include_router(orchestration.router)
     return app
