@@ -26,6 +26,7 @@ from solus_api.core.errors import APIError
 from solus_api.core.security import TokenClaims, decode_token
 from solus_api.models import (
     ROLE_RANK,
+    DeletedAccount,
     Membership,
     PlanType,
     Project,
@@ -39,6 +40,7 @@ from solus_api.models import (
     default_limits,
     utcnow,
 )
+from solus_api.services.supabase_admin import SupabaseAdmin
 
 PERSONAL_TEAM_NAME = "Personal"
 # Every user starts on a 14-day trial of their chosen plan (ADR-032); onboarding picks it.
@@ -60,6 +62,11 @@ def get_connector_registry(request: Request) -> "ConnectorRegistry":
 def get_secret_store(request: Request) -> "SecretStore":
     store: SecretStore = request.app.state.secret_store
     return store
+
+
+def get_supabase_admin(request: Request) -> "SupabaseAdmin":
+    admin: SupabaseAdmin = request.app.state.supabase_admin
+    return admin
 
 
 def get_sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
@@ -87,6 +94,7 @@ SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessio
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
 SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
+SupabaseAdminDep = Annotated["SupabaseAdmin", Depends(get_supabase_admin)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
 AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
 
@@ -121,16 +129,30 @@ async def _provision_user(
     return user
 
 
-async def get_current_user(
+def get_current_claims(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    session: SessionDep,
     settings: SettingsDep,
-) -> User:
+) -> TokenClaims:
+    """Decode the bearer token to identity claims. Cached per-request by FastAPI,
+    so `get_current_user` and `require_verified` share a single decode."""
     if credentials is None:
         raise APIError(401, "unauthorized", "Missing bearer token")
-    claims = decode_token(credentials.credentials, settings)
+    return decode_token(credentials.credentials, settings)
+
+
+ClaimsDep = Annotated[TokenClaims, Depends(get_current_claims)]
+
+
+async def get_current_user(claims: ClaimsDep, session: SessionDep, settings: SettingsDep) -> User:
     user = await session.scalar(select(User).where(User.supabase_user_id == claims.sub))
     if user is None:
+        # A deleted identity must not silently re-provision on a still-valid token
+        # (SOLUSDEV-82). The tombstone makes account deletion durable.
+        tombstoned = await session.scalar(
+            select(DeletedAccount).where(DeletedAccount.supabase_user_id == claims.sub)
+        )
+        if tombstoned is not None:
+            raise APIError(401, "account_deleted", "This account has been deleted")
         user = await _provision_user(
             session, claims, trial_credit_grant=settings.trial_credit_grant
         )
@@ -138,6 +160,20 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_verified(claims: ClaimsDep) -> None:
+    """Gate for sensitive write actions (SOLUSDEV-82, ADR-009): the caller's email
+    must be verified. Applied as a route dependency alongside team/project scoping."""
+    if not claims.email_verified:
+        raise APIError(
+            403,
+            "email_not_verified",
+            "Verify your email address before performing this action",
+        )
+
+
+RequireVerified = Annotated[None, Depends(require_verified)]
 
 
 @dataclass(frozen=True)

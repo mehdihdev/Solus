@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useAuthStore } from './authStore'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
+import { useAuthStore, toAuthUser } from './authStore'
 
 // With no Supabase env in the test environment, the store runs its dev-bypass
 // path — exactly what keeps the prototype demoable offline.
@@ -62,5 +63,41 @@ describe('authStore (dev bypass)', () => {
 
   it('teardown is safe to call (no Supabase listener in dev bypass)', () => {
     expect(() => useAuthStore.getState().teardown()).not.toThrow()
+  })
+
+  it('requestPasswordReset resolves without error in dev bypass', async () => {
+    const result = await useAuthStore.getState().requestPasswordReset('a@b.dev')
+    expect(result.error).toBeUndefined()
+  })
+
+  it('confirmPasswordReset resolves without error in dev bypass', async () => {
+    const result = await useAuthStore
+      .getState()
+      .confirmPasswordReset('a@b.dev', '123456', 'newpass1')
+    expect(result.error).toBeUndefined()
+  })
+})
+
+describe('toAuthUser', () => {
+  const base = { id: 'u1', app_metadata: {}, user_metadata: {}, aud: '', created_at: '' }
+
+  it('returns null when there is no email', () => {
+    expect(toAuthUser(null)).toBeNull()
+    expect(toAuthUser({ ...base, email: undefined } as unknown as SupabaseUser)).toBeNull()
+  })
+
+  it('marks a confirmed email verified', () => {
+    const user = { ...base, email: 'a@b.dev', email_confirmed_at: '2026-01-01T00:00:00Z' }
+    expect(toAuthUser(user as SupabaseUser)?.emailVerified).toBe(true)
+  })
+
+  it('marks an unconfirmed email unverified', () => {
+    const user = { ...base, email: 'a@b.dev' }
+    expect(toAuthUser(user as SupabaseUser)?.emailVerified).toBe(false)
+  })
+
+  it('honors an email_verified flag in user_metadata', () => {
+    const user = { ...base, email: 'a@b.dev', user_metadata: { email_verified: true } }
+    expect(toAuthUser(user as SupabaseUser)?.emailVerified).toBe(true)
   })
 })

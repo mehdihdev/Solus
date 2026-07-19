@@ -25,6 +25,7 @@ from solus_api.core.responses import envelope
 from solus_api.deps import (
     ProjectCtx,
     RegistryDep,
+    RequireVerified,
     SecretStoreDep,
     SessionDep,
     SettingsDep,
@@ -104,6 +105,7 @@ async def connect_source(
     session: SessionDep,
     registry: RegistryDep,
     secret_store: SecretStoreDep,
+    _verified: RequireVerified,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     await check_can_add_integration(session, ctx.user)

@@ -34,6 +34,7 @@ from solus_api.routers import (
     teams,
     users,
 )
+from solus_api.services.supabase_admin import build_supabase_admin
 
 
 async def create_all_tables(engine: AsyncEngine) -> None:
@@ -71,6 +72,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     app.state.connector_registry = build_registry(resolved_settings)
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
+    # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
+    app.state.supabase_admin = build_supabase_admin(resolved_settings)
     # SOL chat seam (SOLUSDEV-135, mock-and-swap): the W0-07 systems impl and the
     # reasoning-loop runner. Swap these for the real systems impl / SOL-01/02 reasoning
     # with a one-line change here and no endpoint edit.

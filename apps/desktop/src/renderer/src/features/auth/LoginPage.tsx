@@ -139,6 +139,13 @@ export function LoginPage(): React.JSX.Element {
           <Icons.mail size={14} /> Email me a magic link instead
         </Button>
       )}
+      <Button
+        kind="bare"
+        onClick={() => navigate('/reset-password')}
+        style={{ width: '100%', marginTop: 6, fontSize: 12 }}
+      >
+        Forgot password?
+      </Button>
     </AuthCard>
   )
 }

@@ -14,6 +14,7 @@ import { BillingSection } from './sections/BillingSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
 import { MembersSection } from './sections/MembersSection'
 import { TeamSection } from './sections/TeamSection'
+import { AccountSection } from './sections/AccountSection'
 
 function OfflineNotice(): React.JSX.Element {
   return (
@@ -63,6 +64,7 @@ export function SettingsScreen(): React.JSX.Element {
             <TeamSection team={team} />
           </>
         )}
+        {online && <AccountSection />}
         {!online && <OfflineNotice />}
       </div>
     </div>

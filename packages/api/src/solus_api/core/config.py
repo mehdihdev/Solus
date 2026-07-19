@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str
     supabase_jwt_audience: str = "authenticated"
 
+    # Supabase Admin API (service-role) for account-lifecycle actions
+    # (SOLUSDEV-82): revoke sessions + delete the auth user on account deletion.
+    # The service-role key is highly privileged — env/Secrets Manager only, never
+    # logged or returned. Absent ⇒ the admin client no-ops (dev/tests): local data
+    # is still removed, but the Supabase session/auth-user is left intact.
+    supabase_url: str | None = None
+    supabase_service_role_key: str | None = None
+
     # Interim in-process limiter until the ADR-019 budget system lands (Phase 5).
     rate_limit_per_minute: int = 120
     # MO-04 classify preview: fired on typing pauses, so it gets its own

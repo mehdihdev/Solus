@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   getMe,
+  deleteMe,
   updateSolMode,
   createProject,
   getProject,
@@ -58,6 +59,13 @@ describe('resource calls', () => {
     const { client, calls } = stubClient({ id: 'u1', teams: [] })
     await getMe(client)
     expect(calls[0].path).toBe('/users/me')
+  })
+
+  it('deleteMe DELETEs /users/me', async () => {
+    const { client, calls } = stubClient(undefined)
+    await deleteMe(client)
+    expect(calls[0].path).toBe('/users/me')
+    expect((calls[0].options as { method?: string }).method).toBe('DELETE')
   })
 
   it('updateSolMode PATCHes settings with the mapped enum', async () => {

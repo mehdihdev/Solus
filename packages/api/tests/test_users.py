@@ -59,16 +59,16 @@ async def test_settings_patch_rejects_invalid_mode(
 async def test_delete_me_removes_account_and_personal_team(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
-    before = await me(client, alice_headers)
-    old_team_id = before["teams"][0]["team_id"]
+    await me(client, alice_headers)
 
     resp = await client.delete("/api/v1/users/me", headers=alice_headers)
     assert resp.status_code == 204
 
-    # Re-auth re-provisions a fresh account; the old personal team is gone.
-    after = await me(client, alice_headers)
-    assert after["id"] != before["id"]
-    assert after["teams"][0]["team_id"] != old_team_id
+    # Deletion is durable (SOLUSDEV-82): a still-valid token for the deleted
+    # identity is refused, not silently re-provisioned into a zombie account.
+    after = await client.get("/api/v1/users/me", headers=alice_headers)
+    assert after.status_code == 401
+    assert after.json()["error"]["code"] == "account_deleted"
 
 
 async def test_delete_me_blocked_while_sole_owner_of_shared_team(

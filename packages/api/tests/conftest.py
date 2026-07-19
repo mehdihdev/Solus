@@ -109,13 +109,19 @@ def make_token(
     secret: str = TEST_JWT_SECRET,
     audience: str = TEST_AUDIENCE,
     expires_in: int = 3600,
+    email_verified: bool | None = None,
 ) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "sub": sub,
         "email": email,
         "aud": audience,
         "exp": datetime.now(UTC) + timedelta(seconds=expires_in),
     }
+    # Only emit the claim when a test cares about it. Absent ⇒ the decoder treats
+    # the user as verified (SOLUSDEV-82: Supabase may omit the claim), so existing
+    # tokens keep passing the require_verified gate unchanged.
+    if email_verified is not None:
+        payload["email_verified"] = email_verified
     return jwt.encode(payload, secret, algorithm="HS256")
 
 

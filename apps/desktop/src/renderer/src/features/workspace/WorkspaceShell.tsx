@@ -179,6 +179,7 @@ export function WorkspaceShell(): React.JSX.Element {
           onBell={() => setNotifOpen((o) => !o)}
           onSignOut={() => void onSignOut()}
         />
+        <VerifyEmailBanner />
         {notifOpen &&
           (online ? (
             <NotificationsPopover
@@ -213,6 +214,66 @@ export function WorkspaceShell(): React.JSX.Element {
       />
       <MiniOrb hidden={name === 'sol' || !!tour} onClick={() => go('sol')} />
       {tour && <GuideTour tour={tour} onEnd={() => setTour(null)} />}
+    </div>
+  )
+}
+
+/** Persistent nudge for an unverified email (SOLUSDEV-82). Sensitive actions
+ * (create team, invite, connect a source) are blocked server-side until the
+ * address is confirmed; this explains why and offers a resend. Shows only when
+ * the session explicitly reports the email as unverified. */
+function VerifyEmailBanner(): React.JSX.Element | null {
+  const user = useAuthStore((s) => s.user)
+  const resend = useAuthStore((s) => s.resendConfirmation)
+  const [sent, setSent] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  if (!user || user.emailVerified !== false) return null
+
+  const onResend = async (): Promise<void> => {
+    setBusy(true)
+    await resend(user.email)
+    setBusy(false)
+    setSent(true)
+  }
+
+  return (
+    <div
+      role="alert"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '8px 16px',
+        background: 'color-mix(in srgb, var(--warn, #d9822b) 16%, var(--bg))',
+        borderBottom: '1px solid var(--bd)',
+        fontSize: 12.5
+      }}
+    >
+      <Icons.mail size={14} />
+      <span style={{ flex: 1 }}>
+        Verify your email to create teams, invite members, and connect sources.
+      </span>
+      {sent ? (
+        <span style={{ color: 'var(--mut)' }}>Verification email sent.</span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void onResend()}
+          disabled={busy}
+          style={{
+            background: 'transparent',
+            border: '1px solid var(--bd)',
+            borderRadius: 4,
+            color: 'var(--tx)',
+            padding: '3px 10px',
+            fontSize: 12,
+            cursor: 'pointer'
+          }}
+        >
+          {busy ? 'Sending…' : 'Resend email'}
+        </button>
+      )}
     </div>
   )
 }

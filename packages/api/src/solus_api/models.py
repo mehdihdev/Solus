@@ -124,6 +124,7 @@ class NotificationType(enum.StrEnum):
     PAYMENT_FAILED = "payment.failed"
     PROJECT_SHARED = "project.shared"
     CREDIT_LOW = "credit.low"
+    MEMBER_LEFT = "member.left"
 
 
 class Domain(enum.StrEnum):
@@ -412,6 +413,10 @@ class CreditBalance(UuidPkMixin, TimestampMixin, Base):
 class CreditLedger(UuidPkMixin, Base):
     """Immutable, append-only credit transaction log — the source of truth.
 
+    The ledger outlives the user (ADR-024: never deleted). On account deletion
+    the FK is SET NULL — the financial record is retained but anonymized; the
+    deleted user's id is preserved in `attrs` on the forfeiture entry (SOLUSDEV-82).
+
     `idempotency_key` makes a debit/credit once-only (SOLUSDEV-83): a per-operation
     key (usage call_id, Stripe event id, …). The partial-unique index rejects a
     duplicate write for the same operation, so retries / replays never double-apply.
@@ -427,8 +432,8 @@ class CreditLedger(UuidPkMixin, Base):
         ),
     )
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
     )
     amount: Mapped[int] = mapped_column(Integer)  # signed: + grant/purchase, - usage
     type: Mapped[CreditTxnType] = mapped_column(_enum_column(CreditTxnType))
@@ -438,6 +443,20 @@ class CreditLedger(UuidPkMixin, Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(255), default=None)
     attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class DeletedAccount(UuidPkMixin, Base):
+    """Tombstone for a deleted identity (SOLUSDEV-82). Account deletion removes
+    the user row and the Supabase auth user; this row makes deletion DURABLE —
+    a still-valid access token for a deleted `sub` is refused (401) instead of
+    silently re-provisioning a zombie account before the token expires."""
+
+    __tablename__ = "deleted_accounts"
+
+    supabase_user_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    deleted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
 

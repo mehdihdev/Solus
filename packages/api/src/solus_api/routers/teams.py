@@ -7,7 +7,14 @@ from sqlalchemy import func, select
 
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
-from solus_api.deps import CurrentUser, SecretStoreDep, SessionDep, TeamCtx, require_role
+from solus_api.deps import (
+    CurrentUser,
+    RequireVerified,
+    SecretStoreDep,
+    SessionDep,
+    TeamCtx,
+    require_role,
+)
 from solus_api.models import Membership, Role, Team, TeamKind
 from solus_api.routers.users import delete_team_cascade
 from solus_api.schemas import TeamCreate, TeamUpdate, serialize_team_detail
@@ -48,7 +55,9 @@ async def list_teams(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
 
 
 @router.post("", status_code=201)
-async def create_team(body: TeamCreate, user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+async def create_team(
+    body: TeamCreate, user: CurrentUser, session: SessionDep, _verified: RequireVerified
+) -> dict[str, Any]:
     await check_can_create_team(session, user)
     team = Team(name=body.name)  # kind defaults to COLLABORATIVE
     session.add(team)

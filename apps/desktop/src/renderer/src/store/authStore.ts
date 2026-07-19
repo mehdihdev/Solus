@@ -4,6 +4,7 @@
 // app will derive it from the user's team/project state via the API.
 import { create, type StateCreator } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from '../lib/supabase'
 import { getDesktopOAuthBridge } from '../lib/desktopBridge'
 import { runGithubOAuth } from '../features/auth/githubOAuth'
@@ -12,12 +13,23 @@ export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated'
 
 export interface AuthUser {
   email: string
+  /** Whether Supabase has confirmed the email. Undefined ⇒ treat as verified
+   * (dev bypass / OAuth); only an explicit `false` drives the verify gate
+   * (SOLUSDEV-82), mirroring the backend's "absent claim ⇒ verified". */
+  emailVerified?: boolean
 }
 
 export interface AuthResult {
   error?: string
   /** True when signup succeeded but the email must be confirmed before a session exists. */
   needsConfirmation?: boolean
+}
+
+/** Derive our AuthUser from a Supabase session user, reading verification state. */
+export function toAuthUser(user: SupabaseUser | null | undefined): AuthUser | null {
+  if (!user?.email) return null
+  const verified = Boolean(user.email_confirmed_at) || Boolean(user.user_metadata?.email_verified)
+  return { email: user.email, emailVerified: verified }
 }
 
 export interface AuthState {
@@ -32,6 +44,10 @@ export interface AuthState {
   sendMagicLink: (email: string) => Promise<AuthResult>
   /** Re-send the signup confirmation email. */
   resendConfirmation: (email: string) => Promise<AuthResult>
+  /** Start password recovery: Supabase emails a recovery code (SOLUSDEV-82). */
+  requestPasswordReset: (email: string) => Promise<AuthResult>
+  /** Finish recovery: verify the emailed code, then set the new password. */
+  confirmPasswordReset: (email: string, code: string, newPassword: string) => Promise<AuthResult>
   signOut: () => Promise<void>
   completeOnboarding: () => void
   setSession: (user: AuthUser | null, accessToken: string | null) => void
@@ -74,14 +90,14 @@ function sessionActions(
         const { data } = await supabase.auth.getSession()
         const session = data.session
         set({
-          user: session?.user?.email ? { email: session.user.email } : null,
+          user: toAuthUser(session?.user),
           accessToken: session?.access_token ?? null,
           status: session ? 'authenticated' : 'unauthenticated'
         })
         // Replace any prior listener so bootstrap is idempotent (StrictMode/HMR).
         authSubscription?.unsubscribe()
         const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => {
-          get().setSession(s?.user?.email ? { email: s.user.email } : null, s?.access_token ?? null)
+          get().setSession(toAuthUser(s?.user), s?.access_token ?? null)
         })
         authSubscription = listener.subscription
       } catch {
@@ -115,6 +131,8 @@ function credentialActions(
   | 'resendConfirmation'
   | 'signInWithGitHub'
   | 'sendMagicLink'
+  | 'requestPasswordReset'
+  | 'confirmPasswordReset'
 > {
   void set
   return {
@@ -128,7 +146,7 @@ function credentialActions(
       // With email confirmation on, Supabase returns no session until the user
       // clicks the link. The confirm screen then polls signInWithPassword.
       if (data.session) {
-        get().setSession({ email }, data.session.access_token)
+        get().setSession(toAuthUser(data.user) ?? { email }, data.session.access_token)
         return {}
       }
       return { needsConfirmation: true }
@@ -142,10 +160,7 @@ function credentialActions(
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) return { error: errorMessage(error) }
       if (data.session) {
-        get().setSession(
-          data.user?.email ? { email: data.user.email } : { email },
-          data.session.access_token
-        )
+        get().setSession(toAuthUser(data.user) ?? { email }, data.session.access_token)
       }
       return {}
     },
@@ -154,6 +169,27 @@ function credentialActions(
       if (!supabase) return {}
       const { error } = await supabase.auth.resend({ type: 'signup', email })
       return error ? { error: errorMessage(error) } : {}
+    },
+
+    requestPasswordReset: async (email) => {
+      // Dev bypass: no Supabase project — report success so the UI flow is demoable.
+      if (!supabase) return {}
+      const { error } = await supabase.auth.resetPasswordForEmail(email)
+      return error ? { error: errorMessage(error) } : {}
+    },
+
+    confirmPasswordReset: async (email, code, newPassword) => {
+      if (!supabase) return {}
+      // The emailed recovery code establishes a short-lived session, which
+      // authorizes the password update (SOLUSDEV-82 — in-app, no browser redirect).
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        email,
+        token: code,
+        type: 'recovery'
+      })
+      if (verifyError) return { error: errorMessage(verifyError) }
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+      return updateError ? { error: errorMessage(updateError) } : {}
     },
 
     signInWithGitHub: async () => {

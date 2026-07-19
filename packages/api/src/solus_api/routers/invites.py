@@ -16,6 +16,7 @@ from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     CurrentUser,
+    RequireVerified,
     SessionDep,
     SettingsDep,
     TeamCtx,
@@ -67,7 +68,11 @@ async def list_invites(
 
 @team_router.post("", status_code=201)
 async def create_invite(
-    body: InviteCreate, ctx: TeamCtx, session: SessionDep, settings: SettingsDep
+    body: InviteCreate,
+    ctx: TeamCtx,
+    session: SessionDep,
+    settings: SettingsDep,
+    _verified: RequireVerified,
 ) -> dict[str, Any]:
     require_role(ctx, Role.ADMIN)
     email = body.email.lower()

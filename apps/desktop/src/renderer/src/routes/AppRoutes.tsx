@@ -4,6 +4,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { LandingPage } from '../features/auth/LandingPage'
 import { LoginPage } from '../features/auth/LoginPage'
 import { SignupPage } from '../features/auth/SignupPage'
+import { ResetPasswordPage } from '../features/auth/ResetPasswordPage'
 import { Onboarding } from '../features/onboarding/Onboarding'
 import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
 import { Spinner } from '../components/ui/Spinner'
@@ -69,6 +70,14 @@ export function AppRoutes(): React.JSX.Element {
         element={
           <PublicOnly>
             <SignupPage />
+          </PublicOnly>
+        }
+      />
+      <Route
+        path="/reset-password"
+        element={
+          <PublicOnly>
+            <ResetPasswordPage />
           </PublicOnly>
         }
       />

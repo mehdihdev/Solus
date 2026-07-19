@@ -11,15 +11,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
-from solus_api.deps import TRIAL_DAYS, CurrentUser, SecretStoreDep, SessionDep, SettingsDep
+from solus_api.deps import (
+    TRIAL_DAYS,
+    CurrentUser,
+    RequireVerified,
+    SecretStoreDep,
+    SessionDep,
+    SettingsDep,
+    SupabaseAdminDep,
+)
 from solus_api.models import (
     Activity,
+    CreditBalance,
+    CreditLedger,
+    CreditTxnType,
+    DeletedAccount,
     GraphEdge,
     GraphEntity,
     Invite,
     Job,
     Membership,
     Notification,
+    NotificationType,
     OAuthState,
     Project,
     Role,
@@ -42,6 +55,7 @@ from solus_api.schemas import (
     serialize_user,
 )
 from solus_api.services.events import emit_event
+from solus_api.services.notifications import notify_team
 
 router = APIRouter(prefix="/api/v1/users/me")
 
@@ -50,10 +64,19 @@ async def _team_memberships(session: AsyncSession, user: User) -> list[tuple[Tea
     rows = await session.execute(
         select(Team, Membership)
         .join(Membership, Membership.team_id == Team.id)
-        .where(Membership.user_id == user.id)
+        .where(Membership.user_id == user.id, Membership.deleted_at.is_(None))
         .order_by(Team.created_at)
     )
     return [(team, membership) for team, membership in rows.all()]
+
+
+async def _live_members(session: AsyncSession, team_id: uuid.UUID) -> list[Membership]:
+    """Live (non-soft-deleted) members of a team — the set that counts for the
+    sole-owner guard and the leave-vs-cascade decision (SOLUSDEV-82 sec review M1)."""
+    rows = await session.scalars(
+        select(Membership).where(Membership.team_id == team_id, Membership.deleted_at.is_(None))
+    )
+    return list(rows.all())
 
 
 @router.get("")
@@ -89,9 +112,7 @@ async def _sole_owner_blockers(session: AsyncSession, user: User) -> list[uuid.U
     for team, membership in await _team_memberships(session, user):
         if membership.role is not Role.OWNER:
             continue
-        members = (
-            await session.scalars(select(Membership).where(Membership.team_id == team.id))
-        ).all()
+        members = await _live_members(session, team.id)
         owners = [m for m in members if m.role is Role.OWNER]
         if len(owners) == 1 and len(members) > 1:
             blockers.append(team.id)
@@ -142,9 +163,34 @@ async def delete_team_cascade(
     await session.execute(delete(Team).where(Team.id == team_id))
 
 
+async def _forfeit_credits(session: AsyncSession, user: User) -> None:
+    """Forfeit the user's credits on deletion (ADR-024). The append-only ledger is
+    preserved (its user_id is nulled by the FK on delete); a forfeiture ADJUSTMENT
+    entry records the zeroing, retaining the user id in `attrs`. The cached balance
+    row is removed."""
+    balance = await session.scalar(select(CreditBalance).where(CreditBalance.user_id == user.id))
+    current = balance.balance if balance is not None else 0
+    if current:
+        session.add(
+            CreditLedger(
+                user_id=user.id,
+                amount=-current,
+                type=CreditTxnType.ADJUSTMENT,
+                balance_after=0,
+                attrs={"reason": "account_deleted", "user_id": str(user.id)},
+            )
+        )
+    if balance is not None:
+        await session.delete(balance)
+
+
 @router.delete("", status_code=204)
 async def delete_me(
-    user: CurrentUser, session: SessionDep, secret_store: SecretStoreDep
+    user: CurrentUser,
+    session: SessionDep,
+    secret_store: SecretStoreDep,
+    supabase_admin: SupabaseAdminDep,
+    _verified: RequireVerified,
 ) -> Response:
     blockers = await _sole_owner_blockers(session, user)
     if blockers:
@@ -155,22 +201,38 @@ async def delete_me(
             [{"team_id": str(team_id)} for team_id in blockers],
         )
 
+    display = user.display_name or user.email.split("@")[0] or "A teammate"
     emit_event(session, user=user, event_type="user.deleted")
     for team, _membership in await _team_memberships(session, user):
-        members = (
-            await session.scalars(select(Membership).where(Membership.team_id == team.id))
-        ).all()
+        members = await _live_members(session, team.id)
         if len(members) == 1:
             await delete_team_cascade(session, team.id, secret_store)
         else:
+            # Let the remaining members know a teammate left before we drop the row.
+            await notify_team(
+                session,
+                team_id=team.id,
+                notification_type=NotificationType.MEMBER_LEFT,
+                title=f"{display} left {team.name}",
+                exclude_user_id=user.id,
+                attrs={"team_id": str(team.id)},
+            )
             await session.execute(
                 delete(Membership).where(
                     Membership.team_id == team.id, Membership.user_id == user.id
                 )
             )
+    await _forfeit_credits(session, user)
+    # Tombstone the identity so a still-valid token cannot re-provision (durable delete).
+    session.add(DeletedAccount(supabase_user_id=user.supabase_user_id))
     await session.execute(delete(Notification).where(Notification.user_id == user.id))
+    supabase_user_id = user.supabase_user_id
     await session.execute(delete(User).where(User.id == user.id))
     await session.commit()
+    # Best-effort remote revoke AFTER the local commit: kills the Supabase session /
+    # auth user. A failure here is logged, not fatal — the tombstone already blocks
+    # re-provision and local data is gone.
+    await supabase_admin.delete_user(supabase_user_id)
     return Response(status_code=204)
 
 

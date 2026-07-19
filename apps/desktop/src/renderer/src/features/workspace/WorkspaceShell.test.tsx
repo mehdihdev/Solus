@@ -107,3 +107,37 @@ describe('WorkspaceShell — magic-moment toast', () => {
     }
   })
 })
+
+describe('WorkspaceShell — email verification banner', () => {
+  it('shows the verify-email banner when the email is unverified', () => {
+    useAuthStore.setState({
+      status: 'authenticated',
+      user: { email: 'maya@strider.dev', emailVerified: false },
+      onboarded: true
+    })
+    renderShell()
+    expect(screen.getByRole('alert')).toHaveTextContent(/Verify your email/)
+    expect(screen.getByText('Resend email')).toBeInTheDocument()
+  })
+
+  it('hides the banner for a verified email', () => {
+    useAuthStore.setState({
+      status: 'authenticated',
+      user: { email: 'maya@strider.dev', emailVerified: true },
+      onboarded: true
+    })
+    renderShell()
+    expect(screen.queryByText(/Verify your email/)).not.toBeInTheDocument()
+  })
+
+  it('resends the verification email on request', async () => {
+    useAuthStore.setState({
+      status: 'authenticated',
+      user: { email: 'maya@strider.dev', emailVerified: false },
+      onboarded: true
+    })
+    renderShell()
+    await userEvent.click(screen.getByText('Resend email'))
+    expect(screen.getByText('Verification email sent.')).toBeInTheDocument()
+  })
+})

@@ -113,6 +113,13 @@ export function getMe(client: ApiClient = api): Promise<Me> {
   return client.request<Me>('/users/me')
 }
 
+/** Permanently delete the caller's account (API.md §1.3, SOLUSDEV-82). Rejects
+ * with a 409 `ownership_transfer_required` (blocking team ids in the error
+ * details) when the caller is the sole owner of a shared team. */
+export function deleteMe(client: ApiClient = api): Promise<void> {
+  return client.request<void>('/users/me', { method: 'DELETE' })
+}
+
 export function updateSolMode(mode: SolMode, client: ApiClient = api): Promise<unknown> {
   return client.request('/users/me/settings', {
     method: 'PATCH',
