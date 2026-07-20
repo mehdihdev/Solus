@@ -23,12 +23,25 @@ async def healthz() -> dict[str, Any]:
 
 @router.get("/readyz")
 async def readyz(request: Request) -> JSONResponse:
+    """Readiness. 503 only when the database is unreachable.
+
+    Redis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a
+    live ping: the API holds no persistent Redis connection, so a ping would
+    add a fresh TCP connect — new latency and a new crash surface — to every
+    load-balancer probe. And a missing queue is an ACCEPTED degraded state this
+    cycle (infrastructure/aws/README.md): it must be visible here without
+    failing readiness, so a reachability result could never change the status
+    code anyway.
+    """
     settings = request.app.state.settings
+    # The ARQ queue rides on the same DSN (ADR-005): when it is unset/empty,
+    # sync dispatch falls back to in-process background tasks and scheduled
+    # work (auto-resync, credit-debit reconciliation) does not run.
+    queue_state = "configured" if settings.redis_url else "not_configured"
     checks = {
         "database": "ok",
-        # ARQ/Redis wiring arrives with the first job-producing endpoint (Phase 3).
-        "redis": "configured" if settings.redis_url else "not_configured",
-        "queue": "not_configured",
+        "redis": queue_state,
+        "queue": queue_state,
     }
     try:
         maker: async_sessionmaker[AsyncSession] = request.app.state.sessionmaker

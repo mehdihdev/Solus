@@ -1,52 +1,52 @@
-// Onboarding flow state machine. Mirrors the three-step flow in
-// TestDesign/app/onboarding.jsx (About → Connect → Build). Connection and build
-// are simulated in this prototype slice; the timed animations live in the
-// component and drive these pure transitions.
+// Onboarding flow state machine (About → Connect → Build). Every state here is
+// driven by REAL flows only (SOLUSDEV-152 de-simulation): connections carry the
+// live connector progress, and the build log mirrors actual source syncs.
 import { create } from 'zustand'
 import type { GithubRepo } from '../../lib/api/resources'
-import { INTEGRATIONS, MIN_SOURCES_TO_BUILD } from './integrations.constants'
+import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 
 export type OnboardingStep = 0 | 1 | 2
-export type StartingPoint = 'connect' | 'template'
 
 /**
- * Per-source connection state. The simulated connectors only ever use
- * `stepIdx`; the real GitHub connector also carries its `sourceId`, the
- * discovered `repos` (when a repo picker is needed), a real `result` string,
- * and a `label` override for live progress copy. The `error` phase is new and
- * reachable only by the real flow (OAuth cancel, sync failure, no Electron).
+ * Per-source connection state, fed by the real connectors (GitHub OAuth,
+ * committed-export EDA): a live `label` for progress copy, the `sourceId` once
+ * one exists, discovered `repos` when a picker is needed, and a real `result`
+ * string on completion. `error` is reachable via OAuth cancel, sync failure,
+ * missing Electron bridge, or an unlinked workspace.
  */
 export type ConnectionState =
-  | { phase: 'busy'; stepIdx: number; label?: string; sourceId?: string; repos?: GithubRepo[] }
+  | { phase: 'busy'; label?: string; sourceId?: string; repos?: GithubRepo[] }
   | { phase: 'done'; sourceId?: string; result?: string }
   | { phase: 'error'; error: string; sourceId?: string }
 
-export type BuildLine = readonly [string, string]
+export type BuildLineState = 'pending' | 'ok' | 'failed' | 'idle'
+
+/** One real source's sync status shown on the Build step. */
+export interface BuildLine {
+  readonly name: string
+  readonly detail: string
+  readonly state: BuildLineState
+}
 
 export interface OnboardingState {
   step: OnboardingStep
   description: string
-  path: StartingPoint
-  templateId: string | null
   connections: Record<string, ConnectionState>
-  buildLog: BuildLine[]
+  buildLog: readonly BuildLine[]
   buildDone: boolean
+  /** Real entity count from the graph after the build, or null if unknown. */
+  buildEntityCount: number | null
 
   setStep: (step: OnboardingStep) => void
   setDescription: (description: string) => void
-  setPath: (path: StartingPoint) => void
-  setTemplate: (templateId: string) => void
-  beginConnect: (id: string) => void
-  setConnectStep: (id: string, stepIdx: number) => void
-  completeConnect: (id: string) => void
   /** Replace a source's connection state wholesale (real-connect flow). */
   setConnection: (id: string, state: ConnectionState) => void
   /** Mark a source's connect attempt as failed with a message. */
   failConnect: (id: string, error: string) => void
-  connectAll: () => void
-  appendBuildLine: (line: BuildLine) => void
-  finishBuild: () => void
-  /** Restart the build animation state (used when the Build step (re)mounts). */
+  /** Replace the build log with the latest real sync lines. */
+  setBuildLog: (lines: readonly BuildLine[]) => void
+  finishBuild: (entityCount?: number) => void
+  /** Restart the build progress state (used when the Build step (re)mounts). */
   resetBuild: () => void
   reset: () => void
 }
@@ -64,11 +64,10 @@ export function canBuildModel(connections: Record<string, ConnectionState>): boo
 const INITIAL = {
   step: 0 as OnboardingStep,
   description: '',
-  path: 'connect' as StartingPoint,
-  templateId: null,
   connections: {} as Record<string, ConnectionState>,
-  buildLog: [] as BuildLine[],
-  buildDone: false
+  buildLog: [] as readonly BuildLine[],
+  buildDone: false,
+  buildEntityCount: null as number | null
 }
 
 export const useOnboardingStore = create<OnboardingState>((set) => ({
@@ -76,30 +75,14 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
 
   setStep: (step) => set({ step }),
   setDescription: (description) => set({ description }),
-  setPath: (path) => set({ path }),
-  setTemplate: (templateId) => set({ templateId }),
-
-  beginConnect: (id) =>
-    set((s) => ({ connections: { ...s.connections, [id]: { phase: 'busy', stepIdx: 0 } } })),
-
-  setConnectStep: (id, stepIdx) =>
-    set((s) => ({ connections: { ...s.connections, [id]: { phase: 'busy', stepIdx } } })),
-
-  completeConnect: (id) =>
-    set((s) => ({ connections: { ...s.connections, [id]: { phase: 'done' } } })),
 
   setConnection: (id, state) => set((s) => ({ connections: { ...s.connections, [id]: state } })),
 
   failConnect: (id, error) =>
     set((s) => ({ connections: { ...s.connections, [id]: { phase: 'error', error } } })),
 
-  connectAll: () =>
-    set(() => ({
-      connections: Object.fromEntries(INTEGRATIONS.map((i) => [i.id, { phase: 'done' as const }]))
-    })),
-
-  appendBuildLine: (line) => set((s) => ({ buildLog: [...s.buildLog, line] })),
-  finishBuild: () => set({ buildDone: true }),
-  resetBuild: () => set({ buildLog: [], buildDone: false }),
+  setBuildLog: (lines) => set({ buildLog: lines }),
+  finishBuild: (entityCount) => set({ buildDone: true, buildEntityCount: entityCount ?? null }),
+  resetBuild: () => set({ buildLog: [], buildDone: false, buildEntityCount: null }),
   reset: () => set({ ...INITIAL, connections: {}, buildLog: [] })
 }))

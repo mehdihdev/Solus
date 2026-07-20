@@ -39,8 +39,9 @@ describe('AppRoutes guards', () => {
   it('shows the workspace shell (landing on Home) to onboarded users', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/')
-    // Shell chrome renders (topbar project name) and lands on the Home screen.
-    expect(screen.getAllByText('strider-qd12').length).toBeGreaterThan(0)
+    // Shell chrome renders with the honest no-project fallback (SOLUSDEV-152 —
+    // no fabricated project name) and lands on the Home screen.
+    expect(screen.getByText('No project')).toBeInTheDocument()
     expect(screen.getAllByText('Home').length).toBeGreaterThan(0)
   })
 

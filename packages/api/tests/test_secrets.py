@@ -63,6 +63,22 @@ def test_build_prefers_local_when_key_set(engine: AsyncEngine) -> None:
     assert isinstance(store, LocalEncryptedSecretStore)
 
 
+def test_build_treats_blank_backend_as_unset(engine: AsyncEngine) -> None:
+    """SOLUSDEV-152: `SOLUS_SECRETS_BACKEND=` (blank) reaches Settings as "",
+    which must behave exactly like unset — otherwise a blank env line silently
+    disables AWS/Fernet auto-selection and credentials land in the in-memory
+    store."""
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    settings = Settings(
+        supabase_jwt_secret=SECRET,
+        database_url="sqlite+aiosqlite://",
+        secrets_key=Fernet.generate_key().decode(),
+        secrets_backend="",
+    )
+    store = build_secret_store(settings, maker)
+    assert isinstance(store, LocalEncryptedSecretStore)
+
+
 def test_build_falls_back_to_inmemory_in_dev(engine: AsyncEngine) -> None:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     settings = Settings(supabase_jwt_secret=SECRET, database_url="sqlite+aiosqlite://")

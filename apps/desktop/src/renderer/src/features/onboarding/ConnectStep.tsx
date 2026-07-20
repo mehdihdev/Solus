@@ -1,11 +1,11 @@
-// Onboarding step 1 — "Connect your tools". The connector tiles share one UI,
-// listed from the LIVE backend catalog (SOLUSDEV-100; curated fallback offline).
-// GitHub drives the REAL OAuth connector (SOLUSDEV-103) when a project is
-// linked and the Electron OAuth bridge is present; committed-export EDA
-// connectors (KiCad, Altium) drive the REAL file-pick connect; everything else
-// stays simulated. On entering this step we ensure a project exists so a real
-// connect has something to attach a source to; if the API/auth is unavailable
-// we fall back to the simulated tiles so onboarding still completes (dev bypass).
+// Onboarding step 1 — "Connect your tools". Tiles are listed from the LIVE
+// backend catalog (SOLUSDEV-100; curated drivable fallback offline). GitHub
+// drives the REAL OAuth connector (SOLUSDEV-103); committed-export EDA
+// connectors (KiCad, Altium) drive the REAL file-pick connect. There is no
+// simulated connect (SOLUSDEV-152): when a real connect can't run (workspace
+// unlinked / no Electron bridge) the tile reports an honest, retryable error.
+// On entering this step we ensure a project exists so a real connect has
+// something to attach a source to.
 import { useEffect, useRef } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -14,7 +14,7 @@ import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import { ConnectTile } from './ConnectTile'
-import { MIN_SOURCES_TO_BUILD, type Integration } from './integrations.constants'
+import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 import { type CatalogEntry } from './integrationCatalog'
 import { useIntegrationCatalog } from './useIntegrationCatalog'
 import { useOnboardingStore, connectedCount, canBuildModel } from './onboardingStore'
@@ -22,10 +22,10 @@ import { ensureWorkspace } from './provisioning'
 import { useEdaConnect } from './useEdaConnect'
 import { useGithubConnect } from './useGithubConnect'
 
-const CONNECT_STEP_MS = 650
-const COMPLETE_DELAY_MS = 350
 /** Committed netlist exports a user can pick (KiCad XML netlist first). */
 const EXPORT_FILE_ACCEPT = '.xml,.net'
+const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
+const NO_BRIDGE_ERROR = 'GitHub connect needs the Solus desktop app.'
 
 interface ConnectStepProps {
   onBuild: () => void
@@ -33,16 +33,13 @@ interface ConnectStepProps {
 
 export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
   const connections = useOnboardingStore((s) => s.connections)
-  const beginConnect = useOnboardingStore((s) => s.beginConnect)
-  const setConnectStep = useOnboardingStore((s) => s.setConnectStep)
-  const completeConnect = useOnboardingStore((s) => s.completeConnect)
+  const failConnect = useOnboardingStore((s) => s.failConnect)
   const description = useOnboardingStore((s) => s.description)
   const solMode = useSettingsStore((s) => s.solMode)
   const workspace = useWorkspaceStore()
   const catalog = useIntegrationCatalog()
   const github = useGithubConnect()
   const eda = useEdaConnect()
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
   const exportInput = useRef<HTMLInputElement | null>(null)
   // Which export-file provider's picker is open (set on tile click).
   const pendingProvider = useRef<string | null>(null)
@@ -68,48 +65,25 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    const pending = timers.current
-    return () => {
-      pending.forEach(clearTimeout)
-      pending.length = 0
-    }
-  }, [])
-
-  const simulateConnect = (integ: Integration): void => {
-    beginConnect(integ.id)
-    integ.steps.forEach((_, i) => {
-      if (i > 0) {
-        timers.current.push(setTimeout(() => setConnectStep(integ.id, i), i * CONNECT_STEP_MS))
-      }
-    })
-    timers.current.push(
-      setTimeout(
-        () => completeConnect(integ.id),
-        integ.steps.length * CONNECT_STEP_MS + COMPLETE_DELAY_MS
-      )
-    )
-  }
-
   const connect = (integ: CatalogEntry): void => {
-    // Real flows need a linked project (and GitHub the OAuth bridge); otherwise
-    // (dev bypass / web build) the tile degrades to the simulated animation.
-    if (
-      integ.mode === 'github-oauth' &&
-      workspace.linked &&
-      workspace.project &&
-      getDesktopOAuthBridge()
-    ) {
+    // Real flows need a linked project (and GitHub the OAuth bridge). When a
+    // precondition is missing the tile errors honestly and stays retryable —
+    // nothing is ever faked.
+    if (!workspace.linked || !workspace.project) {
+      failConnect(integ.id, NOT_LINKED_ERROR)
+      return
+    }
+    if (integ.mode === 'github-oauth') {
+      if (!getDesktopOAuthBridge()) {
+        failConnect(integ.id, NO_BRIDGE_ERROR)
+        return
+      }
       void github.start(workspace.project.id)
       return
     }
-    if (integ.mode === 'export-file' && workspace.linked && workspace.project) {
-      // Committed-export EDA connect: pick the netlist export, then sync it.
-      pendingProvider.current = integ.id
-      exportInput.current?.click()
-      return
-    }
-    simulateConnect(integ)
+    // Committed-export EDA connect: pick the netlist export, then sync it.
+    pendingProvider.current = integ.id
+    exportInput.current?.click()
   }
 
   const onExportPicked = async (input: HTMLInputElement): Promise<void> => {

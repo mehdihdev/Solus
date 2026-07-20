@@ -1,15 +1,34 @@
-"""models.yaml config contract (ADR-026/024) — schema + deterministic-role checks."""
+"""models.yaml config contract (ADR-026/024) — schema + deterministic-role checks.
+
+Also pins the `Settings` env surface (core/config.py) where a field's
+presence/absence is itself the contract."""
 
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from solus_api.core.config import Settings
 from solus_api.orchestration.config import (
     ModelCatalogEntry,
     OrchestrationConfig,
     load_orchestration_config,
 )
 from solus_api.orchestration.enums import Complexity, RouteType
+
+
+def test_settings_has_no_dead_stripe_secret_key_field() -> None:
+    """SOLUSDEV-152: `stripe_secret_key` was never read anywhere (webhook trust
+    comes from `stripe_webhook_secret` HMAC verification, and no checkout /
+    Stripe-client code exists this cycle) — the dead field is removed and
+    Settings still validates without it."""
+    assert "stripe_secret_key" not in Settings.model_fields
+    settings = Settings(
+        supabase_jwt_secret="dummy-jwt-signing-value-tests-only",
+        database_url="sqlite+aiosqlite://",
+    )
+    # The consumed Stripe fields survive the removal.
+    assert settings.stripe_webhook_secret is None
+    assert settings.stripe_pack_credits == {}
 
 
 def test_shipped_models_yaml_validates() -> None:

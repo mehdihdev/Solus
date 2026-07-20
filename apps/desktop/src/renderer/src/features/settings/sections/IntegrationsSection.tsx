@@ -1,17 +1,21 @@
-// Integrations overview: the connector catalog with each source's connection
-// state (from the onboarding store). Read-only here — connect/sync lives in the
-// onboarding + graph flows; this mirrors the current status. The catalog is the
+// Integrations overview: the connector catalog Solus can pull into the graph.
+// This is a CATALOG, not a live connection ledger — sources are connected per
+// PROJECT (in a project's Context Model), so a global settings list cannot
+// truthfully show a single connected/disconnected state (SOLUSDEV-152: it
+// previously read an un-hydrated local onboarding flag and wrongly showed every
+// tool as "NOT CONNECTED" for real signed-in users). The catalog itself is the
 // live backend registry (SOLUSDEV-100) so new connectors appear without edits.
 import { Mono } from '../../../components/ui/Mono'
-import { useOnboardingStore } from '../../onboarding/onboardingStore'
 import { useIntegrationCatalog } from '../../onboarding/useIntegrationCatalog'
 import { Section, Row } from '../settingsUi'
 
 export function IntegrationsSection(): React.JSX.Element {
-  const connections = useOnboardingStore((s) => s.connections)
   const catalog = useIntegrationCatalog()
   return (
-    <Section title="Integrations" sub="Connected tools feeding your cross-domain graph.">
+    <Section
+      title="Integrations"
+      sub="Tools Solus can connect into your graph. Connect a tool inside a project's Context Model."
+    >
       {catalog.map((i) => (
         <Row
           key={i.id}
@@ -37,15 +41,9 @@ export function IntegrationsSection(): React.JSX.Element {
             </span>
           }
         >
-          {connections[i.id]?.phase === 'done' ? (
-            <Mono size={9} color="var(--ok)">
-              ● CONNECTED
-            </Mono>
-          ) : (
-            <Mono size={9} color="var(--mut)">
-              ○ NOT CONNECTED
-            </Mono>
-          )}
+          <Mono size={9} color="var(--mut)">
+            AVAILABLE
+          </Mono>
         </Row>
       ))}
     </Section>

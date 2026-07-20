@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: desktop
+appId: com.solusforge.solus
+productName: Solus
 directories:
   buildResources: build
 files:
@@ -12,9 +12,9 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: desktop
+  executableName: Solus
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: solus-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -25,19 +25,20 @@ mac:
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+  # Signing + notarization are a release requirement scheduled with SOLUSDEV-148/149
+  # (needs Apple Developer certs). Flip once certs are provisioned.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: solus-${version}.${ext}
 linux:
   target:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
-  category: Utility
+  maintainer: Solus Forge <mhussain@solusforge.com>
+  category: Development
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: solus-${version}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates
+# No `publish` block: auto-update is not wired (electron-updater is unused) and no
+# update feed exists yet. Adding a feed is a release decision for SOLUSDEV-148/149.

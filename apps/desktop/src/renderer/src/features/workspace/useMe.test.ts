@@ -48,7 +48,20 @@ describe('useMe', () => {
     expect(result.current.email).toBe('maya@strider.dev')
   })
 
-  it('is offline with the auth email when not linked', async () => {
+  it('loads the real profile when authenticated even if not linked', async () => {
+    // A signed-in user who skipped onboarding must still get their real name,
+    // not the email-local-part fallback (SOLUSDEV-152).
+    useWorkspaceStore.setState({ linked: false })
+    useAuthStore.setState({ user: { email: 'maya@strider.dev' }, status: 'authenticated' })
+    vi.mocked(resources.getMe).mockResolvedValue(ME)
+    const { result } = renderHook(() => useMe())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.name).toBe('Maya Krishnan')
+    expect(resources.getMe).toHaveBeenCalled()
+  })
+
+  it('is offline with the auth email when neither authenticated nor linked', async () => {
+    useAuthStore.setState({ user: { email: 'fallback@solus.local' }, status: 'unauthenticated' })
     const { result } = renderHook(() => useMe())
     await waitFor(() => expect(result.current.status).toBe('offline'))
     expect(result.current.email).toBe('fallback@solus.local')

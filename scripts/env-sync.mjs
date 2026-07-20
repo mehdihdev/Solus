@@ -24,11 +24,13 @@ const ROOT = process.env.ENV_SYNC_ROOT
 const MEGA = resolve(ROOT, ".env.mega");
 
 // Files gather reads. sync is data-driven from the mega's headers instead.
+// .aws.env was removed (SOLUSDEV-152): nothing in-repo consumed it — the
+// deploy pipeline reads GitLab CI-scoped variables, not a local env file.
 const TARGET_FILES = [
   ".env",
-  ".aws.env",
   "apps/desktop/.env",
   "apps/desktop/.env.claude",
+  "apps/web/.env",
   "packages/api/.env",
   "packages/api/.env.claude",
 ];

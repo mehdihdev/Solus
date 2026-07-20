@@ -137,19 +137,14 @@ def openai_content(
     return blocks
 
 
-def gemini_contents(
-    query: str, images: Sequence[ImageBlock] | None, types_module: Any
-) -> object:
+def gemini_contents(query: str, images: Sequence[ImageBlock] | None, types_module: Any) -> object:
     """Gemini contents: Part.from_bytes entries, then the raw query string.
     The SDK types module is injected so this stays testable without the SDK
     (the import-ratchet keeps SDK imports inside the adapters)."""
     if not images:
         return query
     return [
-        *(
-            types_module.Part.from_bytes(data=img.data, mime_type=img.media_type)
-            for img in images
-        ),
+        *(types_module.Part.from_bytes(data=img.data, mime_type=img.media_type) for img in images),
         query,
     ]
 

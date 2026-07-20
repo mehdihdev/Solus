@@ -9,7 +9,8 @@ candidate evidence), `scan_project()` (pipeline entry: gather → pure match →
 sweeps), `resolve()` (the entity-collapse API LNK-01 consumes), `EmbedFn` seam,
 `IngestResult`/`ScanSummary`. Plus `graph_entity.canonical_key` (migration
 `9b0d77b7acd2`), one Settings flag, package exports, and
-`temp-PROPOSAL-gateway-embeddings.md`. FP-01 matcher/contract/eval and the W0-06 mock
+the gateway `embed()` proposal (now `docs/api/gateway-embeddings.md`; folded
+from the root temp file in SOLUSDEV-152). FP-01 matcher/contract/eval and the W0-06 mock
 are untouched; ADR-027 untouched.
 
 **The integration acceptance (verify 5) holds**: a part observed as netlist `LM358` +
@@ -83,7 +84,7 @@ vectors are written once per canonical (1536-dim validated) and are RETRIEVAL-ON
 link outcomes are identical with and without (`test_scan_with_embedder_writes_
 embedding_same_links`); an embedder that raises degrades to NULL
 (`test_embedder_raising_is_best_effort`). The provider-backed path is PROPOSED as an
-MO-01 gateway `embed()` extension in `temp-PROPOSAL-gateway-embeddings.md` — no
+MO-01 gateway `embed()` extension in `docs/api/gateway-embeddings.md` — no
 provider code was built outside the gateway.
 
 ## Migration

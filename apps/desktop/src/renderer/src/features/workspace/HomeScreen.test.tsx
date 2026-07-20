@@ -1,12 +1,12 @@
 // Home screen: greeting, projects across teams, recent activity, create flows,
-// and the offline demo fallback. The data hooks are mocked to drive each state.
+// and the honest offline sign-in state (SOLUSDEV-152 removed the demo project
+// card). The data hooks are mocked to drive each state.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeScreen } from './HomeScreen'
 import * as homeData from './useHomeData'
 import * as meHook from './useMe'
-import { FALLBACK_PROJECT_NAME } from './workspaceData.constants'
 import { useShellStore } from './shellStore'
 
 vi.mock('./useHomeData', async (importOriginal) => {
@@ -18,7 +18,7 @@ vi.mock('./useMe', async (importOriginal) => {
   return { ...actual, useMe: vi.fn() }
 })
 
-const READY_ME = { status: 'ready' as const, me: null, name: 'Maya', email: 'maya@strider.dev' }
+const READY_ME = { status: 'ready' as const, me: null, name: 'Maya', email: 'maya@example.dev' }
 
 const PROJECT = {
   id: 'p1',
@@ -111,11 +111,15 @@ describe('HomeScreen', () => {
     expect(vi.mocked(home.actions.createProject)).toHaveBeenCalledWith('t1', 'Rover MK2')
   })
 
-  it('shows the offline demo project when not linked', () => {
+  it('shows an honest sign-in state when not linked — never a demo project', () => {
     mockHome({ status: 'offline', groups: [], activity: [] })
     vi.mocked(meHook.useMe).mockReturnValue({ ...READY_ME, status: 'offline' })
-    render(<HomeScreen onOpenProject={vi.fn()} />)
-    expect(screen.getByText(FALLBACK_PROJECT_NAME)).toBeInTheDocument()
+    const { container } = render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByText(/Sign in to Solus to see your teams, projects/)).toBeInTheDocument()
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/strider/i)
+    expect(text).not.toMatch(/Six-wheel autonomous rover/)
+    expect(text).not.toMatch(/YOUR PROJECT/)
   })
 
   it('renders a spinner while loading', () => {

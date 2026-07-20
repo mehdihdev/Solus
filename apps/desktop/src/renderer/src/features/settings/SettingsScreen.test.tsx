@@ -61,6 +61,7 @@ function team(status: TeamData['status'] = 'ready'): TeamData {
     activity: [],
     activityHasMore: false,
     loadMoreActivity: vi.fn(async () => undefined),
+    projects: [],
     teams: [],
     myRole: 'owner',
     actions: {
@@ -71,6 +72,9 @@ function team(status: TeamData['status'] = 'ready'): TeamData {
       updateTeam: vi.fn(async () => true),
       deleteTeam: vi.fn(async () => true),
       switchTeam: vi.fn(),
+      createTeam: vi.fn(async () => true),
+      joinTeam: vi.fn(async () => null),
+      createProject: vi.fn(async () => null),
       refresh: vi.fn(async () => undefined)
     }
   } as TeamData

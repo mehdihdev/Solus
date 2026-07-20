@@ -165,5 +165,7 @@ over.
 1. Paste `temp-ADR-027-origin-fingerprint.md` into DECISIONS.md (ADR-027, after
    Decision A); delete the temp file.
 2. Mehdi: ADR-028 second-founder sign-off on the FP-02 `models.py` edit.
-3. Adjudicate `temp-PROPOSAL-gateway-embeddings.md` (still pending from FP-02).
+3. Adjudicate the gateway-embeddings proposal (still pending from FP-02).
+   _Resolved in SOLUSDEV-152: accepted in principle, folded into
+   `docs/api/gateway-embeddings.md`; implementation deferred to MO-01._
 4. Review both prior completion reports if not yet done; then push + MR.

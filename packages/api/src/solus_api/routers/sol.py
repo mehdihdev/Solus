@@ -319,9 +319,10 @@ async def post_message(
     # BUDGET GATE (MO-01 seam): once a model-backed runner is wired, a pre-flight
     # `orchestration.cost.has_sufficient_credits(ctx.user.id, estimate, session=session)`
     # gate goes HERE, and `track_cost(...)` runs after the runner reports usage. Both are
-    # NotImplementedError stubs today and the ScaffoldRunner makes no paid call, so there is
-    # nothing to meter yet — but the enforcement point must live at this seam so the model
-    # spend path can never ship unmetered (CLAUDE.md §7 rate/budget; ADR-019/024).
+    # IMPLEMENTED (orchestration/cost.py) — MO-01 wires them at this seam, it does not
+    # rebuild them. The ScaffoldRunner makes no paid call, so nothing is metered yet — but
+    # the enforcement point must live here so the model spend path can never ship
+    # unmetered (CLAUDE.md §7 rate/budget; ADR-019/024).
     prior = await SERVICE.history(
         session, conversation_id=conversation_id, project_id=ctx.project.id
     )

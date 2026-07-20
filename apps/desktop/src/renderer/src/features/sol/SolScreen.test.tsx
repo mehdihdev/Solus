@@ -1,211 +1,51 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+// SOL screen (SOLUSDEV-152): the scripted prototype conversation, fake
+// think-delays, fabricated grounding footer, and fake apply-&-flash flow are
+// gone. Chat wiring to the real SOL backend is SOLUSDEV-132/134; until then
+// the screen is an honest not-connected state that keeps the orb identity
+// and the universal Guide/Expert mode setting (ADR-016).
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { SolScreen } from './SolScreen'
-import { useShellStore } from '../workspace/shellStore'
 import { useSettingsStore } from '../../store/settingsStore'
 
-function renderSol(overrides?: { onOpenAlert?: () => void; onStartTour?: () => void }): {
-  onOpenAlert: ReturnType<typeof vi.fn>
-  onStartTour: ReturnType<typeof vi.fn>
-} {
-  const onOpenAlert = vi.fn()
-  const onStartTour = vi.fn()
-  render(
-    <SolScreen
-      onOpenAlert={overrides?.onOpenAlert ?? onOpenAlert}
-      onStartTour={overrides?.onStartTour ?? onStartTour}
-    />
-  )
-  return { onOpenAlert, onStartTour }
-}
-
 beforeEach(() => {
-  useShellStore.getState().reset()
+  vi.clearAllMocks()
   useSettingsStore.setState({ solMode: 'Guide' })
 })
 
-afterEach(() => {
-  vi.useRealTimers()
+describe('SolScreen — honest not-connected state', () => {
+  it('keeps the SOL identity and explains it is not wired yet', () => {
+    render(<SolScreen />)
+    expect(screen.getByText('SOL')).toBeInTheDocument()
+    expect(screen.getByText('NOT CONNECTED')).toBeInTheDocument()
+    expect(screen.getByText(/SOL isn't wired to this workspace yet/)).toBeInTheDocument()
+    expect(screen.getByText(/evidence from the graph/)).toBeInTheDocument()
+  })
+
+  it('contains no scripted replies, fake grounding, or flash flow', () => {
+    const { container } = render(<SolScreen />)
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/247 NODES|GROUNDED IN/)
+    expect(text).not.toMatch(/STM32H743|Apply & flash/)
+    expect(text).not.toMatch(/τ_FL_knee|U4|DRV/)
+    expect(text).not.toMatch(/strider/i)
+  })
+
+  it('renders no chat input until the backend is wired', () => {
+    render(<SolScreen />)
+    expect(
+      screen.queryByPlaceholderText('Ask about a signal, a change, a part…')
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument()
+  })
 })
 
-describe('SolScreen — messages', () => {
-  it('shows the empty-state prompt when there is no chat', () => {
-    renderSol()
-    expect(screen.getByText(/Ask SOL anything about your robot/)).toBeInTheDocument()
-  })
-
-  it('renders a scripted sol message with Guide text and the diagnosis card', () => {
-    useShellStore.getState().appendChat({ role: 'sol', scriptKey: 'anomaly' })
-    renderSol()
-    expect(screen.getByText(/chain I followed/)).toBeInTheDocument()
-    expect(screen.getByText('DIAGNOSIS')).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        'FL knee torque ripple driven by a firmware ↔ gate-driver interface mismatch'
-      )
-    ).toBeInTheDocument()
-  })
-
-  it('re-renders the Expert text when the mode is switched', () => {
-    useShellStore.getState().appendChat({ role: 'sol', scriptKey: 'anomaly' })
-    renderSol()
+describe('SolScreen — mode setting (ADR-016)', () => {
+  it('switches the universal SOL mode from the header', () => {
+    render(<SolScreen />)
+    expect(screen.getByText('explains and teaches')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Expert' }))
     expect(useSettingsStore.getState().solMode).toBe('Expert')
-    expect(screen.getByText(/per-rev disturbance, not loop instability/)).toBeInTheDocument()
-    expect(screen.queryByText(/chain I followed/)).not.toBeInTheDocument()
-  })
-
-  it('renders the cross-domain evidence chips', () => {
-    useShellStore.getState().appendChat({ role: 'sol', scriptKey: 'anomaly' })
-    renderSol()
-    expect(screen.getByText('EVIDENCE FROM THE GRAPH')).toBeInTheDocument()
-    for (const label of ['ELECTRICAL', 'SOFTWARE', 'RUNTIME', 'MECHANICAL']) {
-      expect(screen.getByText(label)).toBeInTheDocument()
-    }
-    expect(screen.getByText('motor_driver.c L84–112')).toBeInTheDocument()
-  })
-})
-
-describe('SolScreen — followups', () => {
-  it('appends the followup question and answer to the chat', () => {
-    vi.useFakeTimers()
-    const shell = useShellStore.getState()
-    shell.appendChat({ role: 'sol', scriptKey: 'alertq' })
-    shell.appendChat({ role: 'sol', scriptKey: 'hello' })
-    shell.appendChat({ role: 'sol', scriptKey: 'anomaly' })
-    renderSol()
-    fireEvent.click(screen.getByText(/Why exactly 4\.2 Hz/))
-    expect(useShellStore.getState().chat).toHaveLength(4)
-    act(() => {
-      vi.advanceTimersByTime(1400)
-    })
-    expect(useShellStore.getState().chat).toHaveLength(5)
-    expect(screen.getByText(/Each stride loads the knee twice/)).toBeInTheDocument()
-  })
-})
-
-describe('SolScreen — apply fix / flash', () => {
-  it('runs the flash steps then resolves alert a1 and the anomaly', () => {
-    vi.useFakeTimers()
-    useShellStore.getState().setAnomaly('active')
-    useShellStore.getState().appendChat({ role: 'sol', scriptKey: 'anomaly' })
-    renderSol()
-    fireEvent.click(screen.getByRole('button', { name: 'Apply & flash to robot' }))
-    expect(screen.getByText(/Compiling firmware/)).toBeInTheDocument()
-    act(() => {
-      vi.advanceTimersByTime(3 * 1100 + 600)
-    })
-    expect(screen.getByText(/alert resolved/)).toBeInTheDocument()
-    expect(useShellStore.getState().resolved.a1).toBe(true)
-    expect(useShellStore.getState().anomaly).toBe('resolved')
-  })
-
-  it('opens alert a1 from Review diff', () => {
-    useShellStore.getState().appendChat({ role: 'sol', scriptKey: 'anomaly' })
-    const { onOpenAlert } = renderSol()
-    fireEvent.click(screen.getByRole('button', { name: 'Review diff' }))
-    expect(onOpenAlert).toHaveBeenCalledWith('a1')
-  })
-})
-
-describe('SolScreen — input', () => {
-  it('routes free text matching a script to that script', () => {
-    vi.useFakeTimers()
-    renderSol()
-    fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
-      target: { value: 'why is the knee oscillating?' }
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(screen.getByText('why is the knee oscillating?')).toBeInTheDocument()
-    expect(screen.getByText(/tracing FL knee through 4 domains…/)).toBeInTheDocument()
-    act(() => {
-      vi.advanceTimersByTime(1700)
-    })
-    expect(
-      screen.getByText(
-        'FL knee torque ripple driven by a firmware ↔ gate-driver interface mismatch'
-      )
-    ).toBeInTheDocument()
-  })
-
-  it('falls back to the hello script for unmatched text', () => {
-    vi.useFakeTimers()
-    renderSol()
-    fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
-      target: { value: 'good morning' }
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    act(() => {
-      vi.advanceTimersByTime(1700)
-    })
-    expect(screen.getByText(/I sit on top of your project/)).toBeInTheDocument()
-  })
-
-  it('sends a suggested question chip as a scripted exchange', () => {
-    vi.useFakeTimers()
-    renderSol()
-    fireEvent.click(screen.getByText(/τ_FL_knee is oscillating at ~4\.2 Hz/))
-    act(() => {
-      vi.advanceTimersByTime(1700)
-    })
-    expect(screen.getByText(/chain I followed/)).toBeInTheDocument()
-  })
-
-  it('starts the guided tour from the tour chip', () => {
-    const { onStartTour } = renderSol()
-    fireEvent.click(screen.getByText(/Show me how to investigate the U4 alert/))
-    expect(onStartTour).toHaveBeenCalled()
-  })
-})
-
-describe('SolScreen — classify indicator (MO-04)', () => {
-  it('shows the preview while typing and resets the override after send', async () => {
-    vi.useFakeTimers()
-    const { classifyQuery } = await import('../../lib/api/resources')
-    const spy = vi.spyOn(await import('../../lib/api/resources'), 'classifyQuery')
-    void classifyQuery
-    spy.mockResolvedValue({
-      complexity: 'standard',
-      type: 'code',
-      model: { name: 'claude-sonnet-5', provider: 'anthropic' },
-      cost_tier: 'standard',
-      source: { complexity: 'estimator', type: 'estimator' },
-      tokens_estimate: 9,
-      viable: true,
-      reason: null,
-      escalated: false,
-      options: {
-        complexities: [
-          { value: 'hard', viable: true, reason: null, model: 'claude-opus-4-8', cost_tier: 'premium' }
-        ],
-        types: []
-      }
-    })
-    renderSol()
-    const input = screen.getByPlaceholderText(/Ask about a signal/)
-    fireEvent.change(input, { target: { value: 'why is the knee oscillating' } })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400)
-    })
-    const indicator = screen.getByTestId('classify-indicator')
-    expect(indicator.textContent).toContain('standard · code · claude-sonnet-5')
-    // Override via the popover, then send: the override must not survive the send.
-    fireEvent.click(indicator)
-    fireEvent.click(screen.getByRole('button', { name: /hard/ }))
-    expect(screen.getByTestId('classify-indicator').textContent).toContain('(you)')
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000) // scripted THINK_MS drains
-    })
-    // Input cleared -> preview gone; a fresh message starts from the estimate.
-    expect(screen.queryByTestId('classify-indicator')).not.toBeInTheDocument()
-    fireEvent.change(screen.getByPlaceholderText(/Ask about a signal/), {
-      target: { value: 'another question' }
-    })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400)
-    })
-    expect(screen.getByTestId('classify-indicator').textContent).not.toContain('(you)')
-    spy.mockRestore()
+    expect(screen.getByText('terse, direct')).toBeInTheDocument()
   })
 })

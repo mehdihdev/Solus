@@ -70,6 +70,8 @@ b = lambda s: (normalize_mpn(s, cfg) or None) and normalize_mpn(s, cfg).base
 - [ ] `temp-ADR-027-origin-fingerprint.md` pasted into DECISIONS.md by a human.
 - [ ] H6 hook: already applied + verified in-session (migrations exemption at
       pre_write_recreation_guard.sh:16).
-- [ ] `temp-PROPOSAL-gateway-embeddings.md` still awaits adjudication (FP-02).
+- [ ] Gateway-embeddings proposal adjudication (FP-02) — resolved in
+      SOLUSDEV-152: accepted in principle, folded into
+      `docs/api/gateway-embeddings.md`; implementation deferred to MO-01.
 - [ ] Real silkscreen photos for the manual vision demo await provider keys
       (two-liner in visual.py's docstring).

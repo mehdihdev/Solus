@@ -155,7 +155,9 @@ def build_secret_store(
     settings: Settings, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> SecretStore:
     """Select a backend from settings (explicit `secrets_backend` wins)."""
-    backend = settings.secrets_backend
+    # `SOLUS_SECRETS_BACKEND=` (blank) reaches Settings as "" — normalize to
+    # None so a blank env line never disables auto-selection (SOLUSDEV-152).
+    backend = settings.secrets_backend or None
     if backend == "aws" or (backend is None and settings.aws_region and settings.app_env != "dev"):
         if not settings.aws_region:
             raise RuntimeError("secrets_backend=aws requires SOLUS_AWS_REGION")

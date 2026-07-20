@@ -1,112 +1,95 @@
+// Context Model screen (SOLUSDEV-152): the prototype demo graph is gone.
+// The screen keeps its layout shell (canvas backdrop + inspector rail),
+// renders an honest empty state, and shows REAL counts from the graph API
+// where the prototype displayed fabricated ones.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen, waitFor } from '@testing-library/react'
 import { GraphScreen } from './GraphScreen'
-import { GRAPH } from '../workspace/workspaceData.constants'
-import { useShellStore } from '../workspace/shellStore'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import * as resources from '../../lib/api/resources'
 
-interface Overrides {
-  onOpenAlert?: (id: string) => void
-  onAskSol?: (key: string) => void
+vi.mock('../../lib/api/resources', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources')>()
+  return { ...actual, getProject: vi.fn(), listSources: vi.fn() }
+})
+
+function detailWith(entities: number, relations: number): resources.ProjectDetail {
+  return {
+    id: 'p1',
+    team_id: 't1',
+    name: 'Rover MK2',
+    description: null,
+    archived_at: null,
+    created_at: '',
+    updated_at: '',
+    stats: { entities, relations },
+    sources: []
+  }
 }
 
-function renderGraph(overrides: Overrides = {}): ReturnType<typeof render> {
-  return render(
-    <GraphScreen
-      onOpenAlert={overrides.onOpenAlert ?? vi.fn()}
-      onAskSol={overrides.onAskSol ?? vi.fn()}
-    />
-  )
-}
-
-function filterChipFor(label: string): HTMLElement {
-  const chip = screen.getAllByText(label).find((el) => el.tagName === 'SPAN')
-  if (!chip) throw new Error(`filter chip ${label} missing`)
-  return chip
+function linkProject(): void {
+  useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover MK2' } })
 }
 
 beforeEach(() => {
-  useShellStore.getState().reset()
+  vi.clearAllMocks()
+  useWorkspaceStore.getState().reset()
 })
 
-describe('GraphScreen — canvas', () => {
-  it('renders every node of the context model', () => {
-    renderGraph()
-    for (const node of GRAPH.nodes) {
-      expect(screen.getAllByText(node.l).length).toBeGreaterThan(0)
-    }
+describe('GraphScreen — unlinked (dev bypass)', () => {
+  it('shows the honest sign-in/connect empty state', () => {
+    render(<GraphScreen />)
+    expect(screen.getByText('Your context model will live here')).toBeInTheDocument()
+    expect(
+      screen.getByText(/connect a source to start building your robot's graph/i)
+    ).toBeInTheDocument()
   })
 
-  it('shows the loading state before the model settles', () => {
-    renderGraph()
+  it('contains no fabricated nodes, alerts, or counts', () => {
+    const { container } = render(<GraphScreen />)
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/247 NODES/)
+    expect(text).not.toMatch(/leg_ik\.c|DRV8316C|motor_driver\.c/)
+    expect(text).not.toMatch(/strider/i)
+    expect(text).not.toMatch(/SYNCED 2 MIN AGO/)
+  })
+})
+
+describe('GraphScreen — linked', () => {
+  it('prompts to connect a source when none are connected', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0))
+    vi.mocked(resources.listSources).mockResolvedValue([])
+    render(<GraphScreen />)
+    expect(
+      await screen.findByText("Connect a source to start building your robot's graph")
+    ).toBeInTheDocument()
+  })
+
+  it('prompts to sync when sources exist but no entities do', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0))
+    vi.mocked(resources.listSources).mockResolvedValue([{ id: 's1' } as resources.Source])
+    render(<GraphScreen />)
+    expect(await screen.findByText('Waiting for your first sync')).toBeInTheDocument()
+  })
+
+  it('shows real entity and relation counts once the graph has data', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(12, 30))
+    vi.mocked(resources.listSources).mockResolvedValue([{ id: 's1' } as resources.Source])
+    render(<GraphScreen />)
+    await waitFor(() =>
+      expect(screen.getByText('12 ENTITIES · 30 RELATIONS · 1 SOURCE')).toBeInTheDocument()
+    )
+    expect(screen.getByText('Your graph is taking shape')).toBeInTheDocument()
+  })
+
+  it('shows a loading line while the summary fetches', () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockReturnValue(new Promise(() => undefined))
+    vi.mocked(resources.listSources).mockReturnValue(new Promise(() => undefined))
+    render(<GraphScreen />)
     expect(screen.getByText(/LOADING CONTEXT MODEL/)).toBeInTheDocument()
-  })
-
-  it('shows the sync status line and zoom readout', () => {
-    renderGraph()
-    expect(screen.getByText(/247 NODES · 31 CROSS-DOMAIN LINKS/)).toBeInTheDocument()
-    expect(screen.getByText('100%')).toBeInTheDocument()
-  })
-})
-
-describe('GraphScreen — selection & inspector', () => {
-  it('opens the inspector with the clicked node’s properties', async () => {
-    renderGraph()
-    await userEvent.click(screen.getByText('leg_ik.c'))
-    expect(screen.getByText('firmware/src/leg_ik.c')).toBeInTheDocument()
-    expect(screen.getByText('Inverse kinematics, per-leg')).toBeInTheDocument()
-  })
-
-  it('exposes the open alert of an alert-badged node to onOpenAlert', async () => {
-    const onOpenAlert = vi.fn()
-    renderGraph({ onOpenAlert })
-    // 'drv' is the default selection and carries open alert a1.
-    await userEvent.click(screen.getByText('Motor driver swap breaks firmware pin map'))
-    expect(onOpenAlert).toHaveBeenCalledWith('a1')
-  })
-
-  it('hides the alert chip once the alert is resolved in the shell store', () => {
-    useShellStore.getState().resolveAlert('a1')
-    renderGraph()
-    expect(screen.queryByText('Motor driver swap breaks firmware pin map')).toBeNull()
-  })
-
-  it('routes Ask SOL through the alert script for alerted nodes', async () => {
-    const onAskSol = vi.fn()
-    renderGraph({ onAskSol })
-    await userEvent.click(screen.getByRole('button', { name: 'Ask SOL' }))
-    expect(onAskSol).toHaveBeenCalledWith('alertq')
-  })
-})
-
-describe('GraphScreen — domain filter', () => {
-  it('toggles a domain off, hiding its nodes', async () => {
-    renderGraph()
-    expect(screen.getByText('leg_ik.c')).toBeInTheDocument()
-    await userEvent.click(filterChipFor('SOFTWARE'))
-    expect(screen.queryByText('leg_ik.c')).toBeNull()
-    await userEvent.click(filterChipFor('SOFTWARE'))
-    expect(screen.getByText('leg_ik.c')).toBeInTheDocument()
-  })
-})
-
-describe('GraphScreen — view controls', () => {
-  it('zooms in, out, and resets', async () => {
-    renderGraph()
-    await userEvent.click(screen.getByText('+'))
-    expect(screen.getByText('118%')).toBeInTheDocument()
-    await userEvent.click(screen.getByText('⛶'))
-    expect(screen.getByText('100%')).toBeInTheDocument()
-    await userEvent.click(screen.getByText('−'))
-    expect(screen.getByText('85%')).toBeInTheDocument()
-  })
-
-  it('drops same-domain edges in cross-domain-only mode', async () => {
-    const { container } = renderGraph()
-    const before = container.querySelectorAll('line').length
-    await userEvent.click(screen.getByText('CROSS-DOMAIN ONLY'))
-    const after = container.querySelectorAll('line').length
-    expect(after).toBeLessThan(before)
-    expect(after).toBeGreaterThan(0)
   })
 })

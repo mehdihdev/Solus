@@ -1,3 +1,5 @@
+// UNWIRED since SOLUSDEV-152 removed the scripted chat composer: no production
+// caller until SOLUSDEV-132/134 rebuilds the real SOL chat input around it.
 // MO-04: the subtle pre-flight routing indicator. Deliberately quiet — small
 // muted text the user can ignore (`standard · code · claude-sonnet-5`).
 // Clicking opens a small popover to override tier/type FOR THIS CALL ONLY;

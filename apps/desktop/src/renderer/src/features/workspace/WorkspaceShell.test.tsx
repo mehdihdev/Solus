@@ -1,4 +1,6 @@
-// Workspace shell: rail navigation, topbar, notifications, toast, screens.
+// Workspace shell: rail navigation, topbar, notifications, toast plumbing,
+// and the verify-email banner. SOLUSDEV-152: no demo alerts, no scripted
+// magic-moment toast, no fabricated project name.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -8,17 +10,12 @@ import { useShellStore } from './shellStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 
-function renderShell(): void {
-  render(
+function renderShell(): ReturnType<typeof render> {
+  return render(
     <MemoryRouter>
       <WorkspaceShell />
     </MemoryRouter>
   )
-}
-
-/** Navigate to the Context Model (graph) screen via the rail. */
-function goToGraph(): void {
-  fireEvent.click(screen.getByText('Context Model'))
 }
 
 beforeEach(() => {
@@ -26,81 +23,76 @@ beforeEach(() => {
   useWorkspaceStore.getState().reset()
   useAuthStore.setState({
     status: 'authenticated',
-    user: { email: 'maya@strider.dev' },
+    user: { email: 'dev@example.dev' },
     onboarded: true
   })
 })
 
 describe('WorkspaceShell — chrome', () => {
-  it('opens on the Home screen with the workspace project name in the topbar', () => {
+  it('opens on Home with an honest no-project topbar fallback', async () => {
     renderShell()
-    expect(screen.getByText(/Welcome back/)).toBeInTheDocument()
-    // Fallback project name shows in the topbar (and the offline home card).
-    expect(screen.getAllByText('strider-qd12').length).toBeGreaterThan(0)
+    // Authenticated sessions now attempt a real fetch first (spinner), then
+    // settle offline in jsdom where the API is unreachable.
+    expect(await screen.findByText(/Welcome back/)).toBeInTheDocument()
+    expect(screen.getByText('No project')).toBeInTheDocument()
+    // Signed-in + unreachable API must never read as "sign in".
+    expect(screen.getByText(/can't reach its API/)).toBeInTheDocument()
+    expect(screen.queryByText(/Sign in to Solus/)).not.toBeInTheDocument()
   })
 
   it('shows the real project name when one is linked', () => {
-    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider MK3' }, linked: true })
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
     renderShell()
-    expect(screen.getByText('Strider MK3')).toBeInTheDocument()
+    expect(screen.getByText('Rover MK3')).toBeInTheDocument()
   })
 
   it('navigates between screens from the rail', async () => {
     renderShell()
     await userEvent.click(screen.getByText('Live Bench'))
-    expect(
-      screen.getByText('Live Bench', { selector: 'span[style*="font-size: 13"]' })
-    ).toBeDefined()
+    expect(useShellStore.getState().lastMain).toBe('bench')
     await userEvent.click(screen.getByText('Team'))
     expect(useShellStore.getState().lastMain).toBe('team')
   })
 
-  it('shows the open-alert badge count on the bell (offline demo)', () => {
+  it('shows no unread badge when offline — alerts are never fabricated', () => {
     renderShell()
-    expect(screen.getByText('2')).toBeInTheDocument() // a1 + a2 open
+    expect(screen.queryByText('2')).not.toBeInTheDocument()
   })
 
-  it('opens the notifications popover and routes to an alert', async () => {
+  it('offline bell opens an honest popover instead of demo alerts', async () => {
     renderShell()
-    goToGraph()
     await userEvent.click(screen.getByTestId('rail-bell'))
     expect(screen.getByText('NOTIFICATIONS')).toBeInTheDocument()
-    // The graph screen behind the popover lists the same alert; click the
-    // popover's row (inside #notif-a1) specifically.
-    const popoverRow = document.querySelector('#notif-a1')
-    expect(popoverRow).not.toBeNull()
-    await userEvent.click(popoverRow as HTMLElement)
-    // Alert screen mounts (topbar title flips to Alert; the alert view may
-    // repeat the word, so assert at least one).
-    expect(screen.getAllByText('Alert').length).toBeGreaterThan(0)
+    // Signed in (beforeEach) + unreachable API → the honest unreachable note.
+    expect(screen.getByText(/can't reach its API right now/)).toBeInTheDocument()
+    expect(screen.queryByText(/Motor driver swap/)).not.toBeInTheDocument()
+  })
+
+  it('offline bell shows the sign-in nudge for signed-out sessions', async () => {
+    useAuthStore.setState({ status: 'unauthenticated', user: null })
+    renderShell()
+    await userEvent.click(screen.getByTestId('rail-bell'))
+    expect(screen.getByText(/Sign in to Solus to see notifications/)).toBeInTheDocument()
+  })
+
+  it('renders no fabricated robot data anywhere in the shell', () => {
+    const { container } = renderShell()
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/strider/i)
+    expect(text).not.toMatch(/Priya|DRV8316C|U4 swap/)
   })
 })
 
-describe('WorkspaceShell — magic-moment toast', () => {
-  it('fires the SOL toast once after landing on the graph', async () => {
+describe('WorkspaceShell — no scripted magic-moment toast', () => {
+  it('fires no toast after landing on the graph', async () => {
     vi.useFakeTimers()
     try {
       renderShell()
-      goToGraph()
-      await act(async () => {
-        vi.advanceTimersByTime(5200)
-      })
-      expect(screen.getByText('SOL caught a cross-domain break')).toBeInTheDocument()
-      expect(useShellStore.getState().toastShown).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('does not fire the toast twice', async () => {
-    vi.useFakeTimers()
-    try {
-      useShellStore.getState().markToastShown()
-      renderShell()
-      goToGraph()
+      fireEvent.click(screen.getByText('Context Model'))
       await act(async () => {
         vi.advanceTimersByTime(6000)
       })
+      expect(useShellStore.getState().toast).toBeNull()
       expect(screen.queryByText('SOL caught a cross-domain break')).toBeNull()
     } finally {
       vi.useRealTimers()
@@ -112,7 +104,7 @@ describe('WorkspaceShell — email verification banner', () => {
   it('shows the verify-email banner when the email is unverified', () => {
     useAuthStore.setState({
       status: 'authenticated',
-      user: { email: 'maya@strider.dev', emailVerified: false },
+      user: { email: 'dev@example.dev', emailVerified: false },
       onboarded: true
     })
     renderShell()
@@ -123,7 +115,7 @@ describe('WorkspaceShell — email verification banner', () => {
   it('hides the banner for a verified email', () => {
     useAuthStore.setState({
       status: 'authenticated',
-      user: { email: 'maya@strider.dev', emailVerified: true },
+      user: { email: 'dev@example.dev', emailVerified: true },
       onboarded: true
     })
     renderShell()
@@ -133,7 +125,7 @@ describe('WorkspaceShell — email verification banner', () => {
   it('resends the verification email on request', async () => {
     useAuthStore.setState({
       status: 'authenticated',
-      user: { email: 'maya@strider.dev', emailVerified: false },
+      user: { email: 'dev@example.dev', emailVerified: false },
       onboarded: true
     })
     renderShell()

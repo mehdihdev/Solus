@@ -174,6 +174,15 @@ export function getSubscription(client: ApiClient = api): Promise<Subscription> 
   return client.request<Subscription>('/users/me/subscription')
 }
 
+/** Pick/change the plan (API.md §2.14 / PATCH /users/me/subscription). No Stripe
+ *  call — (re)starts a 14-day trial of the chosen plan with its limits (ADR-032). */
+export function updateSubscription(plan: PlanType, client: ApiClient = api): Promise<Subscription> {
+  return client.request<Subscription>('/users/me/subscription', {
+    method: 'PATCH',
+    body: { plan }
+  })
+}
+
 export function updateOnboardingStep(
   step: OnboardingStepName,
   client: ApiClient = api

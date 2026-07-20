@@ -19,9 +19,23 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     changeMemberRole: vi.fn(),
     removeMember: vi.fn(),
     updateTeam: vi.fn(),
-    deleteTeam: vi.fn()
+    deleteTeam: vi.fn(),
+    listProjects: vi.fn(),
+    createTeam: vi.fn(),
+    createProject: vi.fn(),
+    acceptInvite: vi.fn()
   }
 })
+
+const PROJECT: resources.Project = {
+  id: 'p1',
+  team_id: 't1',
+  name: 'Rover',
+  description: null,
+  archived_at: null,
+  created_at: '2026-07-02T00:00:00Z',
+  updated_at: '2026-07-02T00:00:00Z'
+}
 
 const TEAM: resources.TeamDetail = {
   id: 't1',
@@ -43,8 +57,8 @@ const MEMBERS: resources.TeamMemberApi[] = [
   },
   {
     user_id: 'u2',
-    email: 'priya@strider.dev',
-    name: 'Priya',
+    email: 'noor@example.dev',
+    name: 'Noor',
     role: 'member',
     joined_at: '2026-07-02T00:00:00Z'
   }
@@ -75,6 +89,7 @@ beforeEach(() => {
   vi.mocked(resources.listMembers).mockResolvedValue(MEMBERS)
   vi.mocked(resources.listInvites).mockResolvedValue([])
   vi.mocked(resources.listActivityPage).mockResolvedValue({ data: [], meta: {} })
+  vi.mocked(resources.listProjects).mockResolvedValue([PROJECT])
 })
 
 describe('useTeamData', () => {
@@ -213,6 +228,64 @@ describe('useTeamData', () => {
     await act(async () => {
       expect(await result.current.actions.remove('u2')).toBe(false)
     })
+  })
+
+  it('loads the active team’s projects', async () => {
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(vi.mocked(resources.listProjects)).toHaveBeenCalledWith('t1')
+    expect(result.current.projects.map((p) => p.id)).toEqual(['p1'])
+  })
+
+  it('stays ready even if the projects fetch fails', async () => {
+    vi.mocked(resources.listProjects).mockRejectedValue(new Error('down'))
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.projects).toEqual([])
+  })
+
+  it('createTeam switches the workspace to the new team', async () => {
+    vi.mocked(resources.createTeam).mockResolvedValue({ ...TEAM, id: 't5', name: 'New Team' })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.createTeam('New Team')).toBe(true)
+    })
+    expect(vi.mocked(resources.createTeam)).toHaveBeenCalledWith('New Team')
+    expect(useWorkspaceStore.getState().teamId).toBe('t5')
+  })
+
+  it('joinTeam redeems the token and switches to the joined team', async () => {
+    vi.mocked(resources.acceptInvite).mockResolvedValue({ team_id: 't7', role: 'member' })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      const joined = await result.current.actions.joinTeam('tok-abc')
+      expect(joined?.team_id).toBe('t7')
+    })
+    expect(vi.mocked(resources.acceptInvite)).toHaveBeenCalledWith('tok-abc')
+    expect(useWorkspaceStore.getState().teamId).toBe('t7')
+  })
+
+  it('joinTeam returns null when the token is rejected', async () => {
+    vi.mocked(resources.acceptInvite).mockRejectedValue(new Error('invalid'))
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.joinTeam('bad')).toBeNull()
+    })
+  })
+
+  it('createProject posts to the active team then refreshes projects', async () => {
+    vi.mocked(resources.createProject).mockResolvedValue({ ...PROJECT, id: 'p2', name: 'Arm' })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      const created = await result.current.actions.createProject('Arm')
+      expect(created?.id).toBe('p2')
+    })
+    expect(vi.mocked(resources.createProject)).toHaveBeenCalledWith('t1', { name: 'Arm' })
+    expect(vi.mocked(resources.listProjects).mock.calls.length).toBeGreaterThan(1)
   })
 
   it('pages the activity feed via loadMoreActivity', async () => {

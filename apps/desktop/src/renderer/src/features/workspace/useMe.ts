@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { getMe, type Me } from '../../lib/api/resources'
 import { useAuthStore } from '../../store/authStore'
-import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 export type IdentityStatus = 'loading' | 'ready' | 'offline'
 
@@ -23,13 +23,17 @@ export function displayName(name: string | null, email: string): string {
 }
 
 export function useMe(): Identity {
-  const linked = useWorkspaceStore((s) => s.linked)
+  // An authenticated session always loads the real profile; `linked` alone only
+  // unlocks the fetch for non-authenticated (dev-bypass) sessions. A signed-in
+  // user who skipped onboarding must still get their real name/teams, not just
+  // the auth-email fallback (SOLUSDEV-152 — matches Home/Team/notifications).
+  const fetchEnabled = useWorkspaceFetchEnabled()
   const authEmail = useAuthStore((s) => s.user?.email ?? '')
   const [me, setMe] = useState<Me | null>(null)
-  const [status, setStatus] = useState<IdentityStatus>(linked ? 'loading' : 'offline')
+  const [status, setStatus] = useState<IdentityStatus>(fetchEnabled ? 'loading' : 'offline')
 
   useEffect(() => {
-    if (!linked) {
+    if (!fetchEnabled) {
       setStatus('offline')
       return
     }
@@ -46,7 +50,7 @@ export function useMe(): Identity {
     return () => {
       cancelled = true
     }
-  }, [linked])
+  }, [fetchEnabled])
 
   return { status, me, name: me?.name ?? null, email: me?.email ?? authEmail }
 }

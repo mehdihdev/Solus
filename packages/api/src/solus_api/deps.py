@@ -12,6 +12,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -69,6 +70,13 @@ def get_supabase_admin(request: Request) -> "SupabaseAdmin":
     return admin
 
 
+def get_jwks_client(request: Request) -> "PyJWKClient | None":
+    """The JWKS client for verifying Supabase ES256 tokens (SOLUSDEV-152), or None
+    when supabase_url is unconfigured (only legacy HS256 tokens validate then)."""
+    client: PyJWKClient | None = request.app.state.jwks_client
+    return client
+
+
 def get_sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
     """The app's session factory — for code that must open its OWN session outside a
     request scope (the SOL SSE generator streams after the request session closes)."""
@@ -95,6 +103,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
 SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
 SupabaseAdminDep = Annotated["SupabaseAdmin", Depends(get_supabase_admin)]
+JwksClientDep = Annotated[PyJWKClient | None, Depends(get_jwks_client)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
 AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
 
@@ -132,12 +141,13 @@ async def _provision_user(
 def get_current_claims(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     settings: SettingsDep,
+    jwks_client: JwksClientDep,
 ) -> TokenClaims:
     """Decode the bearer token to identity claims. Cached per-request by FastAPI,
     so `get_current_user` and `require_verified` share a single decode."""
     if credentials is None:
         raise APIError(401, "unauthorized", "Missing bearer token")
-    return decode_token(credentials.credentials, settings)
+    return decode_token(credentials.credentials, settings, jwks_client)
 
 
 ClaimsDep = Annotated[TokenClaims, Depends(get_current_claims)]

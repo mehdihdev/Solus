@@ -83,8 +83,9 @@ async with maker() as s:
       the SAME link outcomes as the keyless run.
 - [ ] Pass an embedder that raises → scan still succeeds; embedding NULL.
 - [ ] `grep -rn "SOLUS_FINGERPRINT_EMBEDDING_ENABLED\|fingerprint_embedding_enabled" packages/api/src` — flag exists, default False, zero library readers (caller-owned).
-- [ ] `temp-PROPOSAL-gateway-embeddings.md` exists at repo root (the gateway
-      extension proposal — no provider code in `orchestration/` was touched:
+- [ ] `docs/api/gateway-embeddings.md` exists (the gateway extension proposal —
+      folded from the root temp proposal file in SOLUSDEV-152; no provider
+      code in `orchestration/` was touched:
       `git diff main -- packages/api/src/solus_api/orchestration/` is empty).
 
 ## Flow 6 — Frozen surfaces intact

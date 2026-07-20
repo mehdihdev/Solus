@@ -94,21 +94,23 @@ describe('ConnectStep — GitHub routing', () => {
     expect(options).toEqual({ redirectUri: 'http://127.0.0.1:9/cb' })
   })
 
-  it('falls back to the SIMULATED tile when there is no bridge (dev/web)', async () => {
+  it('reports an honest error when there is no bridge (dev/web) — never a fake connect', async () => {
     vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
     mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
 
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
     await userEvent.click(screen.getByText('GitHub'))
 
     expect(mockedRun).not.toHaveBeenCalled()
-    // The simulated flow marks the tile busy immediately.
-    expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
+    const github = useOnboardingStore.getState().connections.github
+    expect(github?.phase).toBe('error')
+    expect(github).toMatchObject({ error: expect.stringMatching(/desktop app/i) })
   })
 
-  it('falls back to simulated when the workspace never linked', async () => {
+  it('reports an honest error when the workspace never linked', async () => {
     const bridge = {
       getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
       awaitGithub: vi.fn(async () => ({ code: 'cd' }))
@@ -122,7 +124,9 @@ describe('ConnectStep — GitHub routing', () => {
     await userEvent.click(screen.getByText('GitHub'))
 
     expect(mockedRun).not.toHaveBeenCalled()
-    expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
+    const github = useOnboardingStore.getState().connections.github
+    expect(github?.phase).toBe('error')
+    expect(github).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
   })
 
   it('renders a repo picker when a busy github state carries repos', async () => {
@@ -132,7 +136,6 @@ describe('ConnectStep — GitHub routing', () => {
     ]
     useOnboardingStore.getState().setConnection('github', {
       phase: 'busy',
-      stepIdx: 0,
       label: 'Choose a repository to index…',
       sourceId: 's1',
       repos
@@ -173,14 +176,16 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
     expect(picked).toEqual({ fileName: 'power-board.xml', content: netlist })
   })
 
-  it('falls back to the simulated tile when the workspace never linked', async () => {
+  it('reports an honest error when the workspace never linked', async () => {
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     await userEvent.click(screen.getByText('KiCad'))
 
     expect(mockedEda).not.toHaveBeenCalled()
-    expect(useOnboardingStore.getState().connections.kicad?.phase).toBe('busy')
+    const kicad = useOnboardingStore.getState().connections.kicad
+    expect(kicad?.phase).toBe('error')
+    expect(kicad).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
   })
 
   it('lists live extra export providers (altium) as connectable tiles', async () => {
@@ -192,7 +197,7 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     expect(await screen.findByText('Altium')).toBeInTheDocument()
-    expect(screen.getByText(/OF 5 CONNECTED/)).toBeInTheDocument()
+    expect(screen.getByText(/OF 3 CONNECTED/)).toBeInTheDocument()
   })
 })
 
@@ -218,8 +223,8 @@ describe('ConnectStep — skip path (FND-08)', () => {
   })
 
   it('hides Skip once the recommended sources are connected', async () => {
-    useOnboardingStore.getState().completeConnect('github')
-    useOnboardingStore.getState().completeConnect('kicad')
+    useOnboardingStore.getState().setConnection('github', { phase: 'done' })
+    useOnboardingStore.getState().setConnection('kicad', { phase: 'done' })
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })

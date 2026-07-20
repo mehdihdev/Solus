@@ -1,7 +1,7 @@
-// Connect tile, ported from ConnectTile in TestDesign/app/onboarding.jsx. The
-// GitHub tile additionally drives the real connector: a busy state can carry a
-// live `label`, a repo picker (`repos`), or an `error` phase, and the done
-// state shows a real `result` string (SOLUSDEV-103).
+// Connect tile for the real connectors (SOLUSDEV-103/-100, de-simulated in
+// SOLUSDEV-152): a busy state carries the live `label` from the flow, a repo
+// picker (`repos`), or an `error` phase; the done state shows the real
+// `result` string. No copy here is ever fabricated.
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
@@ -34,28 +34,15 @@ function TileIndicator({ state }: { state?: ConnectionState }): React.JSX.Elemen
 
 const MONO = { fontFamily: 'var(--font-mono)', fontSize: 10.5 } as const
 
-function busyLabel(
-  integration: Integration,
-  state: Extract<ConnectionState, { phase: 'busy' }>
-): string {
-  return state.label ?? integration.steps[state.stepIdx] ?? integration.steps[0]
-}
-
-function TileFooter({
-  integration,
-  state
-}: {
-  integration: Integration
-  state?: ConnectionState
-}): React.JSX.Element {
+function TileFooter({ state }: { state?: ConnectionState }): React.JSX.Element {
   if (!state) return <span style={{ fontSize: 11, color: 'var(--mut)' }}>Not connected</span>
   if (state.phase === 'busy') {
-    return <span style={{ ...MONO, color: 'var(--acc)' }}>{busyLabel(integration, state)}</span>
+    return <span style={{ ...MONO, color: 'var(--acc)' }}>{state.label ?? 'Connecting…'}</span>
   }
   if (state.phase === 'error') {
     return <span style={{ ...MONO, color: 'var(--err)' }}>{state.error}</span>
   }
-  return <span style={{ ...MONO, color: 'var(--ok)' }}>{state.result ?? integration.result}</span>
+  return <span style={{ ...MONO, color: 'var(--ok)' }}>{state.result ?? 'Connected'}</span>
 }
 
 function RepoPicker({
@@ -161,7 +148,7 @@ export function ConnectTile({
           background: 'var(--bg)'
         }}
       >
-        <TileFooter integration={integration} state={state} />
+        <TileFooter state={state} />
         {repos && repos.length > 0 && <RepoPicker repos={repos} onChooseRepo={onChooseRepo} />}
       </div>
     </Card>

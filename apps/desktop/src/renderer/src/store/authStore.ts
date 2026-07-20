@@ -1,11 +1,15 @@
 // Auth session store. Bridges Supabase Auth (ADR-009) into app state, with a
-// dev bypass when Supabase env is absent so the onboarding prototype stays
-// demoable. The `onboarded` flag is persisted locally for this slice; the real
-// app will derive it from the user's team/project state via the API.
+// dev-build-only bypass when Supabase env is absent so the onboarding prototype
+// stays demoable. The bypass is unreachable in production bundles (SOLUSDEV-152
+// WS-D): every bypass branch is gated on the literal `import.meta.env.DEV`,
+// which Vite folds to `false` and dead-code-eliminates in prod builds; a prod
+// build missing config surfaces an explicit error instead. The `onboarded`
+// flag is persisted locally for this slice; the real app will derive it from
+// the user's team/project state via the API.
 import { create, type StateCreator } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
-import { supabase, supabaseConfigured } from '../lib/supabase'
+import { supabase, supabaseConfigured, devBypassActive } from '../lib/supabase'
 import { getDesktopOAuthBridge } from '../lib/desktopBridge'
 import { runGithubOAuth } from '../features/auth/githubOAuth'
 
@@ -71,6 +75,30 @@ type AuthCreator = StateCreator<AuthState, [['zustand/persist', unknown]], []>
 type AuthSet = Parameters<AuthCreator>[0]
 type AuthGet = Parameters<AuthCreator>[1]
 
+/** Reaching auth without a Supabase client outside the dev bypass means the
+ * SOLUSDEV-152 build guard was defeated — fail loud, never fake a session. */
+const NOT_CONFIGURED_RESULT: AuthResult = {
+  error:
+    'Sign-in is unavailable: this build is missing its authentication configuration. ' +
+    'Please reinstall Solus or contact support.'
+}
+
+/** Dev-only fake sign-in. The literal `import.meta.env.DEV` folds to `false`
+ * in production bundles, so Vite dead-code-eliminates this branch — the bypass
+ * token and dev email cannot exist in prod output (SOLUSDEV-152 WS-D). */
+function devBypassSignIn(get: AuthGet, email?: string): AuthResult | null {
+  if (import.meta.env.DEV && devBypassActive) {
+    get().setSession({ email: email ?? 'dev@solus.local' }, 'dev-bypass-token')
+    return {}
+  }
+  return null
+}
+
+/** Dev-only success for email-side flows (resend/reset) with no Supabase project. */
+function devBypassAck(): AuthResult | null {
+  return import.meta.env.DEV && devBypassActive ? {} : null
+}
+
 /** Session lifecycle: bootstrap, the Supabase listener, sign-out, onboarding flag. */
 function sessionActions(
   set: AuthSet,
@@ -82,8 +110,13 @@ function sessionActions(
 
     bootstrap: async () => {
       if (!supabase) {
-        // Dev bypass: trust any locally-persisted session.
-        set((s) => ({ status: s.user ? 'authenticated' : 'unauthenticated' }))
+        if (import.meta.env.DEV && devBypassActive) {
+          // Dev bypass: trust any locally-persisted session.
+          set((s) => ({ status: s.user ? 'authenticated' : 'unauthenticated' }))
+        } else {
+          // Misconfigured production build: never trust a persisted session.
+          set({ user: null, accessToken: null, status: 'unauthenticated' })
+        }
         return
       }
       try {
@@ -120,26 +153,21 @@ function sessionActions(
   }
 }
 
-/** Credential entry points: password, GitHub OAuth, magic link, confirmation resend. */
-function credentialActions(
-  set: AuthSet,
+/** Password credential flows: signup, sign-in, confirmation resend, password reset. */
+function passwordActions(
   get: AuthGet
 ): Pick<
   AuthState,
   | 'signUpWithPassword'
   | 'signInWithPassword'
   | 'resendConfirmation'
-  | 'signInWithGitHub'
-  | 'sendMagicLink'
   | 'requestPasswordReset'
   | 'confirmPasswordReset'
 > {
-  void set
   return {
     signUpWithPassword: async (email, password) => {
       if (!supabase) {
-        get().setSession({ email }, 'dev-bypass-token')
-        return {}
+        return devBypassSignIn(get, email) ?? NOT_CONFIGURED_RESULT
       }
       const { data, error } = await supabase.auth.signUp({ email, password })
       if (error) return { error: errorMessage(error) }
@@ -154,8 +182,7 @@ function credentialActions(
 
     signInWithPassword: async (email, password) => {
       if (!supabase) {
-        get().setSession({ email }, 'dev-bypass-token')
-        return {}
+        return devBypassSignIn(get, email) ?? NOT_CONFIGURED_RESULT
       }
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) return { error: errorMessage(error) }
@@ -166,20 +193,20 @@ function credentialActions(
     },
 
     resendConfirmation: async (email) => {
-      if (!supabase) return {}
+      if (!supabase) return devBypassAck() ?? NOT_CONFIGURED_RESULT
       const { error } = await supabase.auth.resend({ type: 'signup', email })
       return error ? { error: errorMessage(error) } : {}
     },
 
     requestPasswordReset: async (email) => {
       // Dev bypass: no Supabase project — report success so the UI flow is demoable.
-      if (!supabase) return {}
+      if (!supabase) return devBypassAck() ?? NOT_CONFIGURED_RESULT
       const { error } = await supabase.auth.resetPasswordForEmail(email)
       return error ? { error: errorMessage(error) } : {}
     },
 
     confirmPasswordReset: async (email, code, newPassword) => {
-      if (!supabase) return {}
+      if (!supabase) return devBypassAck() ?? NOT_CONFIGURED_RESULT
       // The emailed recovery code establishes a short-lived session, which
       // authorizes the password update (SOLUSDEV-82 — in-app, no browser redirect).
       const { error: verifyError } = await supabase.auth.verifyOtp({
@@ -190,12 +217,16 @@ function credentialActions(
       if (verifyError) return { error: errorMessage(verifyError) }
       const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
       return updateError ? { error: errorMessage(updateError) } : {}
-    },
+    }
+  }
+}
 
+/** Link-style credential flows: GitHub OAuth and magic link. */
+function linkActions(get: AuthGet): Pick<AuthState, 'signInWithGitHub' | 'sendMagicLink'> {
+  return {
     signInWithGitHub: async () => {
       if (!supabase) {
-        get().setSession({ email: 'dev@solus.local' }, 'dev-bypass-token')
-        return {}
+        return devBypassSignIn(get) ?? NOT_CONFIGURED_RESULT
       }
       const bridge = getDesktopOAuthBridge()
       if (!bridge) {
@@ -208,8 +239,7 @@ function credentialActions(
 
     sendMagicLink: async (email) => {
       if (!supabase) {
-        get().setSession({ email }, 'dev-bypass-token')
-        return {}
+        return devBypassSignIn(get, email) ?? NOT_CONFIGURED_RESULT
       }
       const { error } = await supabase.auth.signInWithOtp({ email })
       return error ? { error: errorMessage(error) } : {}
@@ -225,7 +255,8 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       onboarded: false,
       ...sessionActions(set, get),
-      ...credentialActions(set, get)
+      ...passwordActions(get),
+      ...linkActions(get)
     }),
     {
       name: AUTH_STORAGE_KEY,

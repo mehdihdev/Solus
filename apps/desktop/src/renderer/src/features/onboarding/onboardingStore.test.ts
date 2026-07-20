@@ -3,23 +3,23 @@ import {
   useOnboardingStore,
   connectedCount,
   canBuildModel,
+  type BuildLine,
   type ConnectionState
 } from './onboardingStore'
-import { INTEGRATIONS } from './integrations.constants'
 
 describe('onboarding selectors', () => {
   it('connectedCount counts only done sources', () => {
     const conns: Record<string, ConnectionState> = {
       github: { phase: 'done' },
-      kicad: { phase: 'busy', stepIdx: 1 },
-      onshape: { phase: 'done' }
+      kicad: { phase: 'busy', label: 'Parsing netlist…' },
+      altium: { phase: 'done' }
     }
     expect(connectedCount(conns)).toBe(2)
   })
 
   it('canBuildModel needs at least two connected', () => {
     expect(canBuildModel({ github: { phase: 'done' } })).toBe(false)
-    expect(canBuildModel({ github: { phase: 'done' }, ros: { phase: 'done' } })).toBe(true)
+    expect(canBuildModel({ github: { phase: 'done' }, kicad: { phase: 'done' } })).toBe(true)
   })
 })
 
@@ -28,34 +28,24 @@ describe('onboardingStore', () => {
     useOnboardingStore.getState().reset()
   })
 
-  it('starts on the About step with the connect path', () => {
+  it('starts on the About step with nothing connected or built', () => {
     const s = useOnboardingStore.getState()
     expect(s.step).toBe(0)
-    expect(s.path).toBe('connect')
+    expect(s.connections).toEqual({})
+    expect(s.buildLog).toEqual([])
     expect(s.buildDone).toBe(false)
+    expect(s.buildEntityCount).toBeNull()
   })
 
-  it('walks a source through busy → done', () => {
-    const store = useOnboardingStore.getState()
-    store.beginConnect('github')
-    expect(useOnboardingStore.getState().connections.github).toEqual({ phase: 'busy', stepIdx: 0 })
-    store.setConnectStep('github', 2)
-    expect(useOnboardingStore.getState().connections.github).toEqual({ phase: 'busy', stepIdx: 2 })
-    store.completeConnect('github')
-    expect(useOnboardingStore.getState().connections.github).toEqual({ phase: 'done' })
-  })
-
-  it('setConnection replaces a source state wholesale (real github flow)', () => {
+  it('setConnection walks a source through the real busy → done states', () => {
     const store = useOnboardingStore.getState()
     store.setConnection('github', {
       phase: 'busy',
-      stepIdx: 0,
       label: 'Authorizing…',
       sourceId: 's1'
     })
     expect(useOnboardingStore.getState().connections.github).toEqual({
       phase: 'busy',
-      stepIdx: 0,
       label: 'Authorizing…',
       sourceId: 's1'
     })
@@ -73,52 +63,64 @@ describe('onboardingStore', () => {
 
   it('failConnect marks a source errored and keeps it out of the connected count', () => {
     const store = useOnboardingStore.getState()
-    store.completeConnect('kicad')
+    store.setConnection('kicad', { phase: 'done' })
     store.failConnect('github', 'GitHub sign-in was cancelled.')
     const conns = useOnboardingStore.getState().connections
     expect(conns.github).toEqual({ phase: 'error', error: 'GitHub sign-in was cancelled.' })
     expect(connectedCount(conns)).toBe(1)
   })
 
-  it('connectAll marks every integration done (template path)', () => {
-    useOnboardingStore.getState().connectAll()
-    const conns = useOnboardingStore.getState().connections
-    expect(connectedCount(conns)).toBe(INTEGRATIONS.length)
+  it('setBuildLog replaces the real sync lines wholesale', () => {
+    const store = useOnboardingStore.getState()
+    const first: BuildLine[] = [{ name: 'strider-fw', detail: 'checking sync…', state: 'pending' }]
+    store.setBuildLog(first)
+    expect(useOnboardingStore.getState().buildLog).toEqual(first)
+    const second: BuildLine[] = [
+      { name: 'strider-fw', detail: '214 entities · 12 relations', state: 'ok' }
+    ]
+    store.setBuildLog(second)
+    expect(useOnboardingStore.getState().buildLog).toEqual(second)
   })
 
-  it('accumulates build log lines and finishes', () => {
-    const store = useOnboardingStore.getState()
-    store.appendBuildLine(['Indexing strider-fw', '214 files'])
-    store.appendBuildLine(['Resolving links', '31 links'])
-    expect(useOnboardingStore.getState().buildLog).toHaveLength(2)
-    store.finishBuild()
+  it('finishBuild records the real entity count when one is known', () => {
+    useOnboardingStore.getState().finishBuild(12)
     expect(useOnboardingStore.getState().buildDone).toBe(true)
+    expect(useOnboardingStore.getState().buildEntityCount).toBe(12)
+  })
+
+  it('finishBuild without a count leaves the count unknown, never fabricated', () => {
+    useOnboardingStore.getState().finishBuild()
+    expect(useOnboardingStore.getState().buildDone).toBe(true)
+    expect(useOnboardingStore.getState().buildEntityCount).toBeNull()
   })
 
   it('reset returns to the initial state', () => {
     const store = useOnboardingStore.getState()
     store.setStep(2)
     store.setDescription('a quadruped')
-    store.connectAll()
+    store.setConnection('github', { phase: 'done' })
+    store.finishBuild(5)
     store.reset()
     const s = useOnboardingStore.getState()
     expect(s.step).toBe(0)
     expect(s.description).toBe('')
     expect(connectedCount(s.connections)).toBe(0)
+    expect(s.buildDone).toBe(false)
+    expect(s.buildEntityCount).toBeNull()
   })
 })
 
-
 describe('resetBuild', () => {
-  it('clears the build log and done flag without touching other state', () => {
+  it('clears the build log, done flag and entity count without touching other state', () => {
     const store = useOnboardingStore.getState()
     store.setDescription('keep me')
-    store.appendBuildLine(['a', 'b'])
-    store.finishBuild()
+    store.setBuildLog([{ name: 'a', detail: 'b', state: 'ok' }])
+    store.finishBuild(7)
     useOnboardingStore.getState().resetBuild()
     const s = useOnboardingStore.getState()
     expect(s.buildLog).toEqual([])
     expect(s.buildDone).toBe(false)
+    expect(s.buildEntityCount).toBeNull()
     expect(s.description).toBe('keep me')
   })
 })

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { useAuthStore, toAuthUser } from './authStore'
 
@@ -75,6 +75,87 @@ describe('authStore (dev bypass)', () => {
       .getState()
       .confirmPasswordReset('a@b.dev', '123456', 'newpass1')
     expect(result.error).toBeUndefined()
+  })
+})
+
+// SOLUSDEV-152 WS-D: the bypass branch is gated on the literal `import.meta.env.DEV`
+// read at call time. Stubbing DEV=false exercises exactly the gate a production
+// bundle folds to `false` (and then dead-code-eliminates — see the build proof).
+describe('authStore (production build gate, SOLUSDEV-152)', () => {
+  beforeEach(() => {
+    vi.stubEnv('DEV', false)
+    useAuthStore.setState({
+      status: 'loading',
+      user: null,
+      accessToken: null,
+      onboarded: false
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  function expectNoSession(): void {
+    const s = useAuthStore.getState()
+    expect(s.user).toBeNull()
+    expect(s.accessToken).toBeNull()
+    expect(s.status).not.toBe('authenticated')
+  }
+
+  it('signUpWithPassword surfaces a configuration error instead of fake auth', async () => {
+    const result = await useAuthStore.getState().signUpWithPassword('a@b.dev', 'hunter22')
+    expect(result.error).toMatch(/configuration/i)
+    expectNoSession()
+  })
+
+  it('signInWithPassword surfaces a configuration error instead of fake auth', async () => {
+    const result = await useAuthStore.getState().signInWithPassword('a@b.dev', 'hunter22')
+    expect(result.error).toMatch(/configuration/i)
+    expectNoSession()
+  })
+
+  it('signInWithGitHub surfaces a configuration error instead of fake auth', async () => {
+    const result = await useAuthStore.getState().signInWithGitHub()
+    expect(result.error).toMatch(/configuration/i)
+    expectNoSession()
+  })
+
+  it('sendMagicLink surfaces a configuration error instead of fake auth', async () => {
+    const result = await useAuthStore.getState().sendMagicLink('a@b.dev')
+    expect(result.error).toMatch(/configuration/i)
+    expectNoSession()
+  })
+
+  it('resendConfirmation surfaces a configuration error instead of silent success', async () => {
+    const result = await useAuthStore.getState().resendConfirmation('a@b.dev')
+    expect(result.error).toMatch(/configuration/i)
+  })
+
+  it('requestPasswordReset surfaces a configuration error instead of silent success', async () => {
+    const result = await useAuthStore.getState().requestPasswordReset('a@b.dev')
+    expect(result.error).toMatch(/configuration/i)
+  })
+
+  it('confirmPasswordReset surfaces a configuration error instead of silent success', async () => {
+    const result = await useAuthStore
+      .getState()
+      .confirmPasswordReset('a@b.dev', '123456', 'newpass1')
+    expect(result.error).toMatch(/configuration/i)
+  })
+
+  it('bootstrap never trusts a locally-persisted session', async () => {
+    useAuthStore.setState({
+      user: { email: 'ghost@solus.local' },
+      accessToken: 'stale-token',
+      status: 'loading',
+      onboarded: true
+    })
+    await useAuthStore.getState().bootstrap()
+    const s = useAuthStore.getState()
+    expect(s.status).toBe('unauthenticated')
+    expect(s.user).toBeNull()
+    expect(s.accessToken).toBeNull()
   })
 })
 

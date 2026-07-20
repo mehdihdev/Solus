@@ -8,8 +8,9 @@ Test plan for the single source-of-truth env system. You need only a checkout of
 
 1. `git checkout SOLUSDEV-147-env-consolidation`
 2. `node --version` → 22.x or newer; `pnpm --version` → 9.x.
-3. Before you start, note whether real env files exist:
-   `ls -la .aws.env apps/desktop/.env apps/desktop/.env.claude packages/api/.env packages/api/.env.claude`
+3. Before you start, note whether real env files exist (`.aws.env` was removed in
+   SOLUSDEV-152):
+   `ls -la apps/desktop/.env apps/desktop/.env.claude packages/api/.env packages/api/.env.claude`
    If you have real secrets in them, **back them up** (`cp .env .env.bak`) — `sync`
    overwrites them.
 
@@ -24,9 +25,10 @@ Test plan for the single source-of-truth env system. You need only a checkout of
 
 ## Path 2 — Template is present and secret-free
 
-- [ ] `cat env.mega.example` shows blocks for `.aws.env`, `apps/desktop/.env`,
-      `apps/desktop/.env.claude`, `packages/api/.env`, `packages/api/.env.claude`,
-      and a `# >>> common` block.
+- [ ] `cat env.mega.example` shows blocks for `apps/desktop/.env`,
+      `apps/desktop/.env.claude`, `apps/web/.env`, `packages/api/.env`,
+      `packages/api/.env.claude`, and a `# >>> common` block. (The `.aws.env`
+      block was removed in SOLUSDEV-152 — GitLab CI variables, not in-repo env.)
 - [ ] No real secret values appear in `env.mega.example` (all secret RHS are blank).
 - [ ] `git check-ignore env.mega.example` prints **nothing** (it is tracked).
 

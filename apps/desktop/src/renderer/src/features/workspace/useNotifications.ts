@@ -1,6 +1,6 @@
 // Real notifications for the shell bell (API.md §2.1): unread badge + mark-read.
-// Degrades to `offline` (dev bypass / unreachable API) so the shell can fall
-// back to the scripted demo alerts and the guided tour still works.
+// Degrades to `offline` (dev bypass / unreachable API) so the shell can show
+// its honest sign-in popover instead.
 import { useCallback, useEffect, useState } from 'react'
 import {
   listNotificationsPage,
@@ -9,7 +9,7 @@ import {
   type NotificationApi
 } from '../../lib/api/resources'
 import type { ApiMeta } from '../../lib/api/envelope.types'
-import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 export type NotificationsStatus = 'loading' | 'ready' | 'offline'
 
@@ -25,13 +25,17 @@ export interface NotificationsData {
 }
 
 export function useNotifications(): NotificationsData {
-  const linked = useWorkspaceStore((s) => s.linked)
-  const [status, setStatus] = useState<NotificationsStatus>(linked ? 'loading' : 'offline')
+  // An authenticated session always fetches; the persisted `linked` onboarding
+  // flag only unlocks fetches for non-authenticated (dev-bypass) sessions. A
+  // signed-in user who skipped onboarding must still see notifications
+  // (SOLUSDEV-152 — matches Home/Team fetch enablement).
+  const fetchEnabled = useWorkspaceFetchEnabled()
+  const [status, setStatus] = useState<NotificationsStatus>(fetchEnabled ? 'loading' : 'offline')
   const [items, setItems] = useState<NotificationApi[]>([])
   const [meta, setMeta] = useState<ApiMeta>({})
 
   const load = useCallback(async (): Promise<void> => {
-    if (!linked) {
+    if (!fetchEnabled) {
       setStatus('offline')
       return
     }
@@ -43,7 +47,7 @@ export function useNotifications(): NotificationsData {
     } catch {
       setStatus('offline')
     }
-  }, [linked])
+  }, [fetchEnabled])
 
   // Append the next cursor page. No-op when there's nothing more; keeps the
   // current page on failure so the bell never regresses to empty.

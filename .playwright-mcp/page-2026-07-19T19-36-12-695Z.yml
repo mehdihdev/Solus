@@ -1,0 +1,30 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]: SOLUS // CROSS-DOMAIN INTEGRITY FOR ROBOTICS TEAMS
+    - generic [ref=e6]: v0.9
+  - generic [ref=e7]:
+    - generic [ref=e8]: SOLUS
+    - generic [ref=e11]:
+      - generic [ref=e12] [cursor=pointer]: Product
+      - generic [ref=e13] [cursor=pointer]: Docs
+      - generic [ref=e14] [cursor=pointer]: Pricing
+    - generic [ref=e15]:
+      - generic [ref=e16] [cursor=pointer]: Sign in
+      - button "Get started" [ref=e17] [cursor=pointer]
+  - generic [ref=e18]:
+    - generic [ref=e19]: CODE · PCB · CAD · HARDWARE — ONE GRAPH
+    - heading "Your robot is one system. Your tools aren't." [level=1] [ref=e20]: Your robot is one system.Your tools aren't.
+    - paragraph [ref=e21]: Solus connects firmware, schematics, CAD, and live telemetry into one context model — and catches the integration bugs that only exist between them, before they break the robot.
+    - generic [ref=e22]:
+      - button "Create account" [ref=e23] [cursor=pointer]
+      - button "See it catch a bug" [ref=e24] [cursor=pointer]
+    - generic [ref=e27]:
+      - generic [ref=e28]: motor_driver.c
+      - generic [ref=e31]: M3_PWM
+      - generic [ref=e34]: DRV8316C · U4
+      - generic [ref=e37]: knee gearbox 9:1
+      - generic [ref=e40]: τ3 torque
+    - generic [ref=e42]: one broken assumption, traced across four domains — in 90 ms
+  - generic [ref=e43]:
+    - generic [ref=e44]: WORKS WITH GITHUB · KICAD · ONSHAPE · ROS 2
+    - generic [ref=e45]: SOC 2 · SELF-HOST AVAILABLE

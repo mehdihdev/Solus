@@ -7,8 +7,11 @@
     <!--
       connect-src widened for Supabase Auth (ADR-009): REST over https, realtime
       over wss. font-src allows the locally-bundled @fontsource files (data: for
-      inlined glyphs). Scripts stay 'self' only. When the live Solus REST client
-      is wired, add its origin here from build env (https in packaged builds).
+      inlined glyphs). Scripts stay 'self' only. The Solus REST API origin is
+      appended to connect-src at build/serve time by the `solus-api-csp` plugin
+      (electron.vite.config.ts), derived from VITE_API_BASE_URL — so it is scoped
+      per environment (http loopback in dev, https in packaged builds) and never
+      hardcoded here (SOLUSDEV-152).
     -->
     <meta
       http-equiv="Content-Security-Policy"

@@ -44,7 +44,7 @@ export interface EdaConnectResult {
 export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 
 function busy(label: string, sourceId?: string): ConnectionState {
-  return { phase: 'busy', stepIdx: 0, label, sourceId }
+  return { phase: 'busy', label, sourceId }
 }
 
 /** "power-board.xml" → "power-board"; falls back to the provider id. */

@@ -300,7 +300,8 @@ def _pack_checkout(event_id: str, user_id: uuid.UUID, *, payment_status: str) ->
 async def test_unpaid_checkout_does_not_grant(client: AsyncClient, db: AsyncSession) -> None:
     user_id = await _provision(client)
     await process_event(
-        db, _pack_checkout("evt_unpaid", user_id, payment_status="unpaid"),
+        db,
+        _pack_checkout("evt_unpaid", user_id, payment_status="unpaid"),
         pack_credits={"price_small": 500},
     )
     bal = await db.scalar(select(CreditBalance.balance).where(CreditBalance.user_id == user_id))
@@ -310,7 +311,8 @@ async def test_unpaid_checkout_does_not_grant(client: AsyncClient, db: AsyncSess
 async def test_checkout_for_unknown_user_is_noop(client: AsyncClient, db: AsyncSession) -> None:
     ghost = uuid.uuid4()
     processed = await process_event(
-        db, _pack_checkout("evt_ghost", ghost, payment_status="paid"),
+        db,
+        _pack_checkout("evt_ghost", ghost, payment_status="paid"),
         pack_credits={"price_small": 500},
     )
     assert processed is True  # recorded, but no crash / no grant
@@ -322,7 +324,8 @@ async def test_webhook_isolation_between_users(client: AsyncClient, db: AsyncSes
     user_a = await _provision(client, "a-billing@example.com")
     user_b = await _provision(client, "b-billing@example.com")
     await process_event(
-        db, _pack_checkout("evt_b_pack", user_b, payment_status="paid"),
+        db,
+        _pack_checkout("evt_b_pack", user_b, payment_status="paid"),
         pack_credits={"price_small": 500},
     )
     bal_b = await db.scalar(select(CreditBalance.balance).where(CreditBalance.user_id == user_b))

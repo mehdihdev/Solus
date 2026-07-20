@@ -1,3 +1,5 @@
+// UNWIRED since SOLUSDEV-152 removed the scripted chat composer: no production
+// caller until SOLUSDEV-132/134 rebuilds the real SOL chat input around it.
 // MO-04: debounced pre-flight classification for the composer. Calls the real
 // classify endpoint ~400ms after typing pauses (never per keystroke), drops
 // stale responses (latest-wins), and treats failures as "show nothing" — a

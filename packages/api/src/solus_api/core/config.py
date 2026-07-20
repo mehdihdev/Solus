@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     trial_days: int = 30
 
     # --- Billing (SOLUSDEV-83 / ADR-024) ---
-    # Stripe keys are highly privileged secrets — env / Secrets Manager only,
-    # never logged or returned. Absent ⇒ the webhook rejects (503) and no live
-    # billing happens; the credit primitives still run locally for tests/dev.
-    stripe_secret_key: str | None = None
+    # The webhook secret is a highly privileged secret — env / Secrets Manager
+    # only, never logged or returned. Absent ⇒ the webhook rejects (503) and no
+    # live billing happens; the credit primitives still run locally for
+    # tests/dev. No Stripe API key yet: it arrives with checkout-session
+    # creation (deferred); the never-read stripe_secret_key field was removed
+    # in SOLUSDEV-152.
     stripe_webhook_secret: str | None = None
     # Bounded free-trial credit grant written at signup — the trial's hard cost
     # cap (ADR-024: "bounded credit grant, never unlimited"). PROVISIONAL: at the
@@ -99,7 +101,7 @@ class Settings(BaseSettings):
     # functional with embedding NULL. Read by the CALLER (the future trigger
     # router) to decide whether to build+pass an EmbedFn — scan_project() never
     # reads this. The provider-backed EmbedFn awaits the MO-01 gateway embedding
-    # extension (temp-PROPOSAL-gateway-embeddings.md).
+    # extension (docs/api/gateway-embeddings.md).
     fingerprint_embedding_enabled: bool = False
     # FP-03 vision extraction (STRETCH/SCAFFOLD). Off by default and keyless-
     # inert. Read by the CALLER (the future trigger router) to decide whether to

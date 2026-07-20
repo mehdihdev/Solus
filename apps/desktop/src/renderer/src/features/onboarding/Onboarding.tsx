@@ -79,14 +79,8 @@ export function Onboarding(): React.JSX.Element {
   }
 
   const handleContinue = (): void => {
-    if (store.path === 'template') {
-      // Template path pre-connects simulated sources, then builds.
-      store.connectAll()
-      beginBuild()
-    } else {
-      store.setStep(1)
-      void persistOnboardingStep('connect')
-    }
+    store.setStep(1)
+    void persistOnboardingStep('connect')
   }
 
   const handleComplete = async (): Promise<void> => {
@@ -137,10 +131,6 @@ export function Onboarding(): React.JSX.Element {
           <AboutStep
             description={store.description}
             onDescription={store.setDescription}
-            path={store.path}
-            onPath={store.setPath}
-            templateId={store.templateId}
-            onTemplate={store.setTemplate}
             solMode={solMode}
             onSolMode={setSolMode}
             onContinue={handleContinue}

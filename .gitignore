@@ -1,6 +1,9 @@
 # Repo-wide rules. Tech-specific rules live in per-folder .gitignore
 # files (e.g. landing-page/.gitignore for the Next.js app).
 
+# Local scratch space at the repo root (SOLUSDEV-152 F.2) — never tracked
+tmp/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db

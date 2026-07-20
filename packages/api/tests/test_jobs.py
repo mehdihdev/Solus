@@ -78,6 +78,38 @@ async def test_cancel_queued_job(
     assert resp.json()["data"]["status"] == "cancelled"
 
 
+async def test_cancel_running_job_marks_record_cancelled_without_aborting_task(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    """Cancellation is record-level (see cancel_job docstring): the Job row is
+    marked cancelled and finished, but no running task is aborted — the response
+    reflects the store, not the fate of any in-flight work."""
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    job = await seed_job(db, project["id"], team["id"], status=JobStatus.RUNNING)
+
+    resp = await client.post(f"/api/v1/jobs/{job.id}/cancel", headers=alice_headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "cancelled"
+    assert data["finished_at"] is not None
+
+
+async def test_cancel_is_not_idempotent_second_cancel_conflicts(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    job = await seed_job(db, project["id"], team["id"])
+
+    first = await client.post(f"/api/v1/jobs/{job.id}/cancel", headers=alice_headers)
+    assert first.status_code == 200
+
+    second = await client.post(f"/api/v1/jobs/{job.id}/cancel", headers=alice_headers)
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "job_not_cancellable"
+
+
 async def test_cancel_finished_job_conflicts(
     client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
 ) -> None:

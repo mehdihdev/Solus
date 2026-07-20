@@ -1,9 +1,10 @@
+// Shell chrome (SOLUSDEV-152): topbar, live notifications popover, the honest
+// offline popover (no demo alerts), and the toast.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { TopBar, NotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
+import { TopBar, OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { useShellStore } from './shellStore'
-import { ALERTS } from './workspaceData.constants'
 import type { NotificationApi } from '../../lib/api/resources'
 
 beforeEach(() => useShellStore.getState().reset())
@@ -14,14 +15,14 @@ describe('TopBar', () => {
     const onSignOut = vi.fn()
     render(
       <TopBar
-        projectName="strider-qd12"
+        projectName="Rover MK2"
         screenTitle="Context Model"
         openCount={2}
         onBell={onBell}
         onSignOut={onSignOut}
       />
     )
-    expect(screen.getByText('strider-qd12')).toBeInTheDocument()
+    expect(screen.getByText('Rover MK2')).toBeInTheDocument()
     expect(screen.getByText('Context Model')).toBeInTheDocument()
     expect(screen.getByText('2')).toBeInTheDocument()
     await userEvent.click(screen.getByTestId('rail-bell'))
@@ -29,14 +30,29 @@ describe('TopBar', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(onSignOut).toHaveBeenCalled()
   })
+
+  it('hides the badge at zero unread', () => {
+    render(
+      <TopBar
+        projectName="Rover MK2"
+        screenTitle="Home"
+        openCount={0}
+        onBell={vi.fn()}
+        onSignOut={vi.fn()}
+      />
+    )
+    expect(screen.queryByText('0')).not.toBeInTheDocument()
+  })
 })
 
-describe('NotifPopover', () => {
-  it('lists alerts with cross-domain chips and opens one', async () => {
-    const onOpen = vi.fn()
-    render(<NotifPopover alerts={ALERTS} onOpen={onOpen} onClose={vi.fn()} />)
-    await userEvent.click(screen.getByText('Motor driver swap breaks firmware pin map'))
-    expect(onOpen).toHaveBeenCalledWith('a1')
+describe('OfflineNotifPopover', () => {
+  it('shows an honest sign-in message instead of demo alerts', async () => {
+    const onClose = vi.fn()
+    render(<OfflineNotifPopover onClose={onClose} />)
+    expect(screen.getByText('NOTIFICATIONS')).toBeInTheDocument()
+    expect(screen.getByText(/Sign in to Solus to see notifications/)).toBeInTheDocument()
+    await userEvent.click(screen.getByLabelText('Close notifications'))
+    expect(onClose).toHaveBeenCalled()
   })
 })
 
@@ -54,7 +70,7 @@ describe('NotificationsPopover', () => {
     {
       id: 'n2',
       type: 'invite.accepted',
-      title: 'Priya joined',
+      title: 'Noor joined',
       body: null,
       payload: {},
       read_at: '2026-07-05T00:00:00Z',
@@ -95,15 +111,15 @@ describe('NotificationsPopover', () => {
 describe('ToastView', () => {
   it('renders the shell toast and fires the action', async () => {
     useShellStore.getState().setToast({
-      title: 'SOL caught a cross-domain break',
+      title: 'Action needed',
       body: 'body',
-      action: 'View alert',
-      alertId: 'a1'
+      action: 'View',
+      alertId: 'n1'
     })
     const onView = vi.fn()
     render(<ToastView onView={onView} />)
-    await userEvent.click(screen.getByRole('button', { name: 'View alert' }))
-    expect(onView).toHaveBeenCalledWith('a1')
+    await userEvent.click(screen.getByRole('button', { name: 'View' }))
+    expect(onView).toHaveBeenCalledWith('n1')
   })
 
   it('renders nothing without a toast', () => {

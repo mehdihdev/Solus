@@ -117,6 +117,10 @@ export const Icons = {
   box: makeIcon(
     '0 0 17 17',
     '<path d="M8.5 1.8l6 3.2v7l-6 3.2-6-3.2v-7l6-3.2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.5 5l6 3.2 6-3.2M8.5 8.2v7" fill="none" stroke="currentColor" stroke-width="1.1"/>'
+  ),
+  card: makeIcon(
+    '0 0 17 17',
+    '<rect x="1.8" y="3.5" width="13.4" height="10" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.8 6.8h13.4" stroke="currentColor" stroke-width="1.3"/><path d="M4 11h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
   )
 } as const
 

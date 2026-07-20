@@ -1,7 +1,7 @@
 // Workspace home (API.md §5 "/"): the signed-in user's projects across their
 // teams, plus a recent cross-team activity feed and create-project / create-team
-// actions. Falls back to a friendly single-project card when offline (dev
-// bypass) so the demo still lands somewhere useful.
+// actions. Offline (dev bypass / unreachable API) shows an honest sign-in
+// state — SOLUSDEV-152 removed the fabricated demo project card.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -11,10 +11,11 @@ import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { Project } from '../../lib/api/resources'
 import { activityText } from '../team/activityText'
-import { FALLBACK_PROJECT_NAME } from './workspaceData.constants'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
+import { useOfflineReason } from './workspaceOnline'
 import { useShellStore } from './shellStore'
+import { NameModal, JoinTeamModal, DeleteConfirmModal } from './modals'
 
 export interface HomeScreenProps {
   onOpenProject: (project: { id: string; name: string }) => void
@@ -48,7 +49,7 @@ export function HomeScreen({ onOpenProject }: HomeScreenProps): React.JSX.Elemen
           Your robots across every team.
         </div>
         {home.status === 'offline' ? (
-          <OfflineHome onOpenProject={onOpenProject} />
+          <OfflineHome />
         ) : (
           <LiveHome home={home} onOpenProject={onOpenProject} />
         )}
@@ -513,228 +514,16 @@ function RecentActivity({ activity }: { activity: HomeData['activity'] }): React
   )
 }
 
-function OfflineHome({
-  onOpenProject
-}: {
-  onOpenProject: HomeScreenProps['onOpenProject']
-}): React.JSX.Element {
+/** Honest offline state (dev bypass / unreachable API) — never a demo project. */
+function OfflineHome(): React.JSX.Element {
+  const reason = useOfflineReason()
   return (
-    <Card pad={0} style={{ marginTop: 16 }}>
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--bd)' }}>
-        <Mono size={9.5}>YOUR PROJECT</Mono>
-      </div>
-      <ProjectRow
-        project={{
-          id: 'demo',
-          name: FALLBACK_PROJECT_NAME,
-          team_id: 'demo',
-          description: 'Six-wheel autonomous rover',
-          archived_at: null,
-          created_at: '',
-          updated_at: ''
-        }}
-        onOpen={onOpenProject}
-      />
-      <div style={{ padding: '12px 16px', fontSize: 11, color: 'var(--mut)', lineHeight: 1.5 }}>
-        Connect the workspace to your account to see every team and project here.
+    <Card pad={20} style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+        {reason === 'api_unreachable'
+          ? "You're signed in, but Solus can't reach its API. Make sure the backend is running, then reload — your teams, projects, and recent activity will appear here."
+          : 'Sign in to Solus to see your teams, projects, and recent activity here.'}
       </div>
     </Card>
-  )
-}
-
-/** Shared modal chrome: dim backdrop, centered card, click-out to close. */
-function ModalShell({
-  onClose,
-  children
-}: {
-  onClose: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        zIndex: 70,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-      onClick={onClose}
-    >
-      <div onClick={(e) => e.stopPropagation()}>
-        <Card pad={24} style={{ width: 360, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
-          {children}
-        </Card>
-      </div>
-    </div>
-  )
-}
-
-const MODAL_INPUT_STYLE: React.CSSProperties = {
-  width: '100%',
-  boxSizing: 'border-box',
-  marginTop: 16,
-  background: 'var(--bg)',
-  color: 'var(--tx)',
-  border: '1px solid var(--bd)',
-  borderRadius: 3,
-  padding: '10px 12px',
-  fontSize: 13,
-  fontFamily: 'var(--font-ui)',
-  outline: 'none'
-}
-
-function NameModal({
-  title,
-  label,
-  submitLabel = 'Create',
-  initial = '',
-  errorText = 'Something went wrong. Please try again.',
-  onClose,
-  onSubmit
-}: {
-  title: string
-  label: string
-  submitLabel?: string
-  initial?: string
-  errorText?: string
-  onClose: () => void
-  /** Resolve true on success (modal closes) or false to keep it open with an error. */
-  onSubmit: (name: string) => Promise<boolean>
-}): React.JSX.Element {
-  const [name, setName] = useState(initial)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const submit = async (): Promise<void> => {
-    if (!name.trim()) return
-    setBusy(true)
-    setError(null)
-    const ok = await onSubmit(name.trim())
-    if (ok) {
-      onClose()
-      return
-    }
-    setBusy(false)
-    setError(errorText)
-  }
-  return (
-    <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div>
-      <input
-        aria-label={label}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder={label}
-        autoFocus
-        onKeyDown={(e) => e.key === 'Enter' && void submit()}
-        style={MODAL_INPUT_STYLE}
-      />
-      {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-        <Button kind="ghost" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button kind="primary" size="sm" onClick={() => void submit()}>
-          {busy ? <Spinner size={11} color="var(--acc-ink)" /> : submitLabel}
-        </Button>
-      </div>
-    </ModalShell>
-  )
-}
-
-function JoinTeamModal({
-  onClose,
-  onJoin
-}: {
-  onClose: () => void
-  onJoin: HomeData['actions']['joinTeam']
-}): React.JSX.Element {
-  const [token, setToken] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const submit = async (): Promise<void> => {
-    if (!token.trim()) return
-    setBusy(true)
-    setError(null)
-    const joined = await onJoin(token.trim())
-    setBusy(false)
-    if (!joined) {
-      setError("Couldn't join with that token. It may be invalid, expired, or for another email.")
-      return
-    }
-    onClose()
-  }
-
-  return (
-    <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Join a team</div>
-      <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 4, lineHeight: 1.5 }}>
-        Paste the one-time invite token a teammate shared with you.
-      </div>
-      <input
-        aria-label="Invite token"
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        placeholder="invite token"
-        autoFocus
-        onKeyDown={(e) => e.key === 'Enter' && void submit()}
-        style={{ ...MODAL_INPUT_STYLE, fontFamily: 'var(--font-mono)' }}
-      />
-      {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-        <Button kind="ghost" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button kind="primary" size="sm" onClick={() => void submit()}>
-          {busy ? <Spinner size={11} color="var(--acc-ink)" /> : 'Join'}
-        </Button>
-      </div>
-    </ModalShell>
-  )
-}
-
-function DeleteConfirmModal({
-  name,
-  onClose,
-  onConfirm
-}: {
-  name: string
-  onClose: () => void
-  /** Resolve true on success (modal closes) or false to keep it open with an error. */
-  onConfirm: () => Promise<boolean>
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const confirm = async (): Promise<void> => {
-    setBusy(true)
-    setError(null)
-    const ok = await onConfirm()
-    if (ok) {
-      onClose()
-      return
-    }
-    setBusy(false)
-    setError("Couldn't delete this project. Check your access and try again.")
-  }
-  return (
-    <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Delete project</div>
-      <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        Permanently delete <strong style={{ color: 'var(--tx)' }}>{name}</strong> and its graph.
-        This cannot be undone.
-      </div>
-      {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
-        <Button kind="ghost" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button kind="danger" size="sm" onClick={() => void confirm()}>
-          {busy ? <Spinner size={11} /> : 'Delete project'}
-        </Button>
-      </div>
-    </ModalShell>
   )
 }

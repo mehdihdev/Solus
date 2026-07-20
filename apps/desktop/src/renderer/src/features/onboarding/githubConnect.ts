@@ -59,7 +59,7 @@ export interface GithubConnectResult {
 const NO_BRIDGE_ERROR = 'GitHub connect needs the desktop app.'
 
 function busy(label: string, sourceId?: string, repos?: GithubRepo[]): ConnectionState {
-  return { phase: 'busy', stepIdx: 0, label, sourceId, repos }
+  return { phase: 'busy', label, sourceId, repos }
 }
 
 /**

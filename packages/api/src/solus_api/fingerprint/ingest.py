@@ -23,7 +23,7 @@ SUSPECT. Persistence-layer precision rules (spec decisions, human-adjudicated
 - Keyless-safe: no API key anywhere in this path. `embed` is an optional
   best-effort seam (None → `embedding` stays NULL, nothing raises, match
   outcomes unaffected); the provider-backed implementation is proposed as an
-  MO-01 gateway extension (temp-PROPOSAL-gateway-embeddings.md), never a
+  MO-01 gateway extension (docs/api/gateway-embeddings.md), never a
   second provider stack.
 
 Concurrency: `scan_project` takes a per-project Postgres advisory lock

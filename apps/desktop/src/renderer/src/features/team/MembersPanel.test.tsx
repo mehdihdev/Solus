@@ -6,14 +6,14 @@ import type { TeamData } from './useTeamData'
 import type { InviteApi, TeamMemberApi } from '../../lib/api/resources'
 
 const MEMBERS: TeamMemberApi[] = [
-  { user_id: 'u1', email: 'maya@strider.dev', name: 'Maya K', role: 'owner', joined_at: '' },
-  { user_id: 'u2', email: 'priya@strider.dev', name: 'Priya N', role: 'member', joined_at: '' }
+  { user_id: 'u1', email: 'maya@example.dev', name: 'Maya K', role: 'owner', joined_at: '' },
+  { user_id: 'u2', email: 'noor@example.dev', name: 'Noor A', role: 'member', joined_at: '' }
 ]
 const INVITES: InviteApi[] = [
   {
     id: 'i1',
     team_id: 't1',
-    email: 'new@strider.dev',
+    email: 'new@example.dev',
     role: 'member',
     status: 'pending',
     created_at: '',
@@ -40,7 +40,7 @@ function stubData(overrides: Partial<TeamData> = {}): TeamData {
     status: 'ready',
     team: {
       id: 't1',
-      name: 'Strider Robotics',
+      name: 'Vector Robotics',
       is_personal: false,
       plan_status: 'trial',
       settings: { notify_project_created: true },
@@ -81,7 +81,7 @@ describe('LiveMembers', () => {
       />
     )
     expect(screen.getByText('Maya K')).toBeInTheDocument()
-    expect(screen.getByText('priya@strider.dev')).toBeInTheDocument()
+    expect(screen.getByText('noor@example.dev')).toBeInTheDocument()
     expect(screen.getByText('● OWNER')).toBeInTheDocument()
     expect(screen.getByText('● MEMBER')).toBeInTheDocument()
   })
@@ -99,8 +99,8 @@ describe('LiveMembers', () => {
       />
     )
     // Owner row stays static; the member gets a role selector + remove button.
-    expect(screen.getByLabelText('Role for priya@strider.dev')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Role for maya@strider.dev')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Role for noor@example.dev')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Role for maya@example.dev')).not.toBeInTheDocument()
   })
 
   it('changes a role and removes a member through the callbacks', async () => {
@@ -117,9 +117,9 @@ describe('LiveMembers', () => {
         onRevoke={vi.fn()}
       />
     )
-    await userEvent.selectOptions(screen.getByLabelText('Role for priya@strider.dev'), 'admin')
+    await userEvent.selectOptions(screen.getByLabelText('Role for noor@example.dev'), 'admin')
     expect(onChangeRole).toHaveBeenCalledWith('u2', 'admin')
-    await userEvent.click(screen.getByLabelText('Remove priya@strider.dev'))
+    await userEvent.click(screen.getByLabelText('Remove noor@example.dev'))
     expect(onRemove).toHaveBeenCalledWith('u2')
   })
 
@@ -136,9 +136,9 @@ describe('LiveMembers', () => {
         onRevoke={onRevoke}
       />
     )
-    expect(screen.getByText('new@strider.dev')).toBeInTheDocument()
+    expect(screen.getByText('new@example.dev')).toBeInTheDocument()
     expect(screen.getByText(/INVITE PENDING/)).toBeInTheDocument()
-    await userEvent.click(screen.getByLabelText('Revoke invite for new@strider.dev'))
+    await userEvent.click(screen.getByLabelText('Revoke invite for new@example.dev'))
     expect(onRevoke).toHaveBeenCalledWith('i1')
   })
 })
@@ -157,7 +157,7 @@ describe('InviteModal', () => {
     const onInvite = vi.fn(async () => ({
       id: 'i9',
       team_id: 't1',
-      email: 'new@strider.dev',
+      email: 'new@example.dev',
       role: 'member' as const,
       status: 'pending' as const,
       created_at: '',
@@ -165,7 +165,7 @@ describe('InviteModal', () => {
       token: 'join-tok-once'
     }))
     render(<InviteModal onClose={vi.fn()} onInvite={onInvite} />)
-    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@strider.dev')
+    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@example.dev')
     await userEvent.click(screen.getByText('Send invite'))
     await waitFor(() => expect(screen.getByText('join-tok-once')).toBeInTheDocument())
   })
@@ -173,7 +173,7 @@ describe('InviteModal', () => {
   it('surfaces a failure when the invite is rejected', async () => {
     const onInvite = vi.fn(async () => null)
     render(<InviteModal onClose={vi.fn()} onInvite={onInvite} />)
-    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@strider.dev')
+    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@example.dev')
     await userEvent.click(screen.getByText('Send invite'))
     await waitFor(() => expect(screen.getByText(/Could not send the invite/)).toBeInTheDocument())
   })

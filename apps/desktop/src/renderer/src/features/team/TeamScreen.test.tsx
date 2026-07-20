@@ -1,8 +1,10 @@
+// Team screen (SOLUSDEV-152): the prototype's fabricated roster/activity demo
+// is gone. Linked workspaces render live API data; offline (dev bypass) shows
+// an honest sign-in state instead of a mock team.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TeamScreen } from './TeamScreen'
-import { TEAM, ACTIVITY } from '../workspace/workspaceData.constants'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
 
@@ -15,14 +17,28 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     listMembers: vi.fn(),
     listInvites: vi.fn(),
     listActivityPage: vi.fn(),
-    createInvite: vi.fn()
+    createInvite: vi.fn(),
+    listProjects: vi.fn(),
+    createTeam: vi.fn(),
+    createProject: vi.fn(),
+    acceptInvite: vi.fn()
   }
 })
+
+const LIVE_PROJECT: resources.Project = {
+  id: 'p1',
+  team_id: 't1',
+  name: 'Rover Nav',
+  description: null,
+  archived_at: null,
+  created_at: '2026-07-02T00:00:00Z',
+  updated_at: '2026-07-02T00:00:00Z'
+}
 
 function meWithTeams(teams: resources.TeamSummary[]): resources.Me {
   return {
     id: 'u1',
-    email: 'maya@strider.dev',
+    email: 'maya@example.dev',
     name: 'Maya K',
     avatar_url: null,
     created_at: '',
@@ -32,7 +48,7 @@ function meWithTeams(teams: resources.TeamSummary[]): resources.Me {
 
 const SOLO_TEAM: resources.TeamSummary = {
   team_id: 't1',
-  name: 'Strider Robotics',
+  name: 'Vector Robotics',
   role: 'owner',
   is_personal: false,
   plan_status: 'trial',
@@ -44,104 +60,26 @@ afterEach(() => {
   useWorkspaceStore.getState().reset()
 })
 
-describe('TeamScreen — roster', () => {
-  it('renders all four members with their roles', () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    for (const member of TEAM) {
-      expect(screen.getByText(member.name)).toBeInTheDocument()
-      expect(screen.getByText(`● ${member.role.toUpperCase()}`)).toBeInTheDocument()
-      expect(screen.getByText(member.email)).toBeInTheDocument()
-    }
+describe('TeamScreen — offline (dev bypass)', () => {
+  it('shows an honest sign-in state instead of a mock roster', () => {
+    render(<TeamScreen />)
+    expect(screen.getByText(/Sign in to Solus to see your team/)).toBeInTheDocument()
   })
 
-  it('marks the current user with a YOU badge', () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    expect(screen.getByText('(you)')).toBeInTheDocument()
-  })
-
-  it('shows member last-active times', () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    expect(screen.getByText('12 min ago')).toBeInTheDocument()
-    expect(screen.getByText('1h ago')).toBeInTheDocument()
+  it('renders no fabricated members, activity, or invite controls', () => {
+    const { container } = render(<TeamScreen />)
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/Maya Krishnan|Jonas Weber|Marcus Hale/)
+    expect(text).not.toMatch(/strider/i)
+    expect(text).not.toMatch(/AFFECTS YOUR CODE/)
+    expect(text).not.toMatch(/swapped U4/)
+    expect(screen.queryByText('Invite teammate')).not.toBeInTheDocument()
   })
 })
-
-describe('TeamScreen — activity feed', () => {
-  it('renders every activity row', () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    for (const item of ACTIVITY) {
-      expect(screen.getByText(new RegExp(escapeRegExp(item.what)))).toBeInTheDocument()
-    }
-  })
-
-  it('flags cross-domain rows with an AFFECTS YOUR CODE badge', () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    const affected = ACTIVITY.filter((a) => a.affects).length
-    expect(screen.getAllByText('AFFECTS YOUR CODE')).toHaveLength(affected)
-  })
-
-  it('opens the linked alert when an affects-row is clicked', async () => {
-    const onOpenAlert = vi.fn()
-    render(<TeamScreen onOpenAlert={onOpenAlert} />)
-    await userEvent.click(screen.getByText(/swapped U4: DRV8833 → DRV8316C/))
-    expect(onOpenAlert).toHaveBeenCalledWith('a1')
-  })
-
-  it('does nothing when a row without an alert is clicked', async () => {
-    const onOpenAlert = vi.fn()
-    render(<TeamScreen onOpenAlert={onOpenAlert} />)
-    await userEvent.click(screen.getByText(/tuned standing-gait stride/))
-    expect(onOpenAlert).not.toHaveBeenCalled()
-  })
-})
-
-describe('TeamScreen — invite flow (visual only)', () => {
-  it('opens and closes the invite modal', async () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    await userEvent.click(screen.getByText('Invite teammate'))
-    expect(screen.getByPlaceholderText('teammate@team.dev')).toBeInTheDocument()
-    await userEvent.click(screen.getByText('Cancel'))
-    expect(screen.queryByPlaceholderText('teammate@team.dev')).not.toBeInTheDocument()
-  })
-
-  it('ignores an invalid email', () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    fireEvent.click(screen.getByText('Invite teammate'))
-    fireEvent.change(screen.getByPlaceholderText('teammate@team.dev'), {
-      target: { value: 'not-an-email' }
-    })
-    fireEvent.click(screen.getByText('Send invite'))
-    // Modal stays open, no pending row appears.
-    expect(screen.getByPlaceholderText('teammate@team.dev')).toBeInTheDocument()
-    expect(screen.queryByText('INVITE PENDING')).not.toBeInTheDocument()
-  })
-
-  it('adds a pending member after sending a valid invite', () => {
-    vi.useFakeTimers()
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    fireEvent.click(screen.getByText('Invite teammate'))
-    fireEvent.change(screen.getByPlaceholderText('teammate@team.dev'), {
-      target: { value: 'new@strider.dev' }
-    })
-    fireEvent.click(screen.getByText('Send invite'))
-    expect(screen.getByText(/Sending…/)).toBeInTheDocument()
-    act(() => {
-      vi.advanceTimersByTime(1200)
-    })
-    expect(screen.getByText('new@strider.dev')).toBeInTheDocument()
-    expect(screen.getByText('INVITE PENDING')).toBeInTheDocument()
-    // Modal closed after send.
-    expect(screen.queryByPlaceholderText('teammate@team.dev')).not.toBeInTheDocument()
-  })
-})
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
 const LIVE_TEAM: resources.TeamDetail = {
   id: 't1',
-  name: 'Strider Robotics',
+  name: 'Vector Robotics',
   is_personal: false,
   plan_status: 'trial',
   settings: { notify_project_created: true },
@@ -152,15 +90,15 @@ const LIVE_TEAM: resources.TeamDetail = {
 const LIVE_MEMBERS: resources.TeamMemberApi[] = [
   {
     user_id: 'u1',
-    email: 'maya@strider.dev',
+    email: 'maya@example.dev',
     name: 'Maya K',
     role: 'owner',
     joined_at: '2026-07-01T00:00:00Z'
   },
   {
     user_id: 'u2',
-    email: 'priya@strider.dev',
-    name: 'Priya N',
+    email: 'noor@example.dev',
+    name: 'Noor A',
     role: 'member',
     joined_at: '2026-07-02T00:00:00Z'
   }
@@ -172,7 +110,7 @@ const LIVE_ACTIVITY: resources.ActivityApi[] = [
     domain: null,
     actor_id: 'u2',
     project_id: null,
-    payload: { email: 'priya@strider.dev' },
+    payload: { email: 'noor@example.dev' },
     created_at: '2026-07-06T00:00:00Z'
   }
 ]
@@ -186,13 +124,14 @@ describe('TeamScreen — live (API-backed)', () => {
     vi.mocked(resources.listMembers).mockResolvedValue(LIVE_MEMBERS)
     vi.mocked(resources.listInvites).mockResolvedValue([])
     vi.mocked(resources.listActivityPage).mockResolvedValue({ data: LIVE_ACTIVITY, meta: {} })
+    vi.mocked(resources.listProjects).mockResolvedValue([LIVE_PROJECT])
   })
 
   it('renders the real team name, roster, and humanized activity', async () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
     expect(screen.getByText('Maya K')).toBeInTheDocument()
-    expect(screen.getByText('priya@strider.dev')).toBeInTheDocument()
+    expect(screen.getByText('noor@example.dev')).toBeInTheDocument()
     expect(screen.getByText(/joined the team/)).toBeInTheDocument()
   })
 
@@ -200,35 +139,35 @@ describe('TeamScreen — live (API-backed)', () => {
     vi.mocked(resources.createInvite).mockResolvedValue({
       id: 'i1',
       team_id: 't1',
-      email: 'new@strider.dev',
+      email: 'new@example.dev',
       role: 'member',
       status: 'pending',
       created_at: '',
       expires_at: '',
       token: 'join-tok-once'
     })
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
     await userEvent.click(screen.getByText('Invite teammate'))
-    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@strider.dev')
+    await userEvent.type(screen.getByPlaceholderText('teammate@team.dev'), 'new@example.dev')
     await userEvent.click(screen.getByText('Send invite'))
     await waitFor(() => expect(screen.getByText('join-tok-once')).toBeInTheDocument())
     expect(vi.mocked(resources.createInvite)).toHaveBeenCalledWith('t1', {
-      email: 'new@strider.dev',
+      email: 'new@example.dev',
       role: 'member'
     })
   })
 
   it('offers role management to an owner', async () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
     // The member (not the owner) gets a role selector.
-    expect(screen.getByLabelText('Role for priya@strider.dev')).toBeInTheDocument()
+    expect(screen.getByLabelText('Role for noor@example.dev')).toBeInTheDocument()
   })
 
   it('hides the team switcher when the user belongs to one team', async () => {
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
-    await waitFor(() => expect(screen.getByText('Strider Robotics')).toBeInTheDocument())
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
     expect(screen.queryByLabelText('Switch team')).not.toBeInTheDocument()
   })
 
@@ -246,9 +185,59 @@ describe('TeamScreen — live (API-backed)', () => {
         }
       ])
     )
-    render(<TeamScreen onOpenAlert={vi.fn()} />)
+    render(<TeamScreen />)
     const switcher = await screen.findByLabelText('Switch team')
     await userEvent.selectOptions(switcher, 't2')
     expect(useWorkspaceStore.getState().teamId).toBe('t2')
+  })
+
+  it('lists the active team’s projects', async () => {
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Rover Nav')).toBeInTheDocument())
+    expect(screen.getByText('PROJECTS')).toBeInTheDocument()
+  })
+
+  it('creates a team from the Team page and switches to it', async () => {
+    vi.mocked(resources.createTeam).mockResolvedValue({ ...LIVE_TEAM, id: 't9', name: 'New Co' })
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
+    await userEvent.click(screen.getByText('New team'))
+    await userEvent.type(screen.getByLabelText('Team name'), 'New Co')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(vi.mocked(resources.createTeam)).toHaveBeenCalledWith('New Co'))
+    await waitFor(() => expect(useWorkspaceStore.getState().teamId).toBe('t9'))
+  })
+
+  it('joins a team with an invite token from the Team page', async () => {
+    vi.mocked(resources.acceptInvite).mockResolvedValue({ team_id: 't7', role: 'member' })
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
+    await userEvent.click(screen.getByText('Join team'))
+    await userEvent.type(screen.getByLabelText('Invite token'), 'tok-xyz')
+    await userEvent.click(screen.getByRole('button', { name: 'Join' }))
+    await waitFor(() => expect(vi.mocked(resources.acceptInvite)).toHaveBeenCalledWith('tok-xyz'))
+    await waitFor(() => expect(useWorkspaceStore.getState().teamId).toBe('t7'))
+  })
+
+  it('creates a project and opens it', async () => {
+    const onOpen = vi.fn()
+    vi.mocked(resources.createProject).mockResolvedValue({ ...LIVE_PROJECT, id: 'p2', name: 'Arm' })
+    render(<TeamScreen onOpenProject={onOpen} />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
+    await userEvent.click(screen.getByText('New project'))
+    await userEvent.type(screen.getByLabelText('Project name'), 'Arm')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() =>
+      expect(vi.mocked(resources.createProject)).toHaveBeenCalledWith('t1', { name: 'Arm' })
+    )
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith({ id: 'p2', name: 'Arm' }))
+  })
+
+  it('opens an existing project when its row is clicked', async () => {
+    const onOpen = vi.fn()
+    render(<TeamScreen onOpenProject={onOpen} />)
+    await waitFor(() => expect(screen.getByText('Rover Nav')).toBeInTheDocument())
+    await userEvent.click(screen.getByText('Rover Nav'))
+    expect(onOpen).toHaveBeenCalledWith({ id: 'p1', name: 'Rover Nav' })
   })
 })

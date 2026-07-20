@@ -1,15 +1,14 @@
-// Shell chrome pieces, ported from TestDesign/app/shell-main.jsx: the topbar
-// (project / screen / search / bell / sign out), the notifications popover,
-// and the magic-moment toast.
+// Shell chrome pieces: the topbar (project / screen / search / bell / sign
+// out), the live notifications popover, the honest offline popover, and the
+// toast. SOLUSDEV-152 removed the demo-alert popover.
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
-import { dcol, SOLUS_DOMAINS } from '../../theme/tokens.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { NotificationApi } from '../../lib/api/resources'
 import { useShellStore } from './shellStore'
-import type { Alert } from './workspaceData.constants'
+import { useOfflineReason } from './workspaceOnline'
 
 export function TopBar({
   projectName,
@@ -120,15 +119,10 @@ function BellButton({
   )
 }
 
-export function NotifPopover({
-  alerts,
-  onOpen,
-  onClose
-}: {
-  alerts: readonly Alert[]
-  onOpen: (id: string) => void
-  onClose: () => void
-}): React.JSX.Element {
+/** Bell popover when the workspace isn't linked (dev bypass / unreachable
+ *  API): an honest sign-in nudge — never fabricated alerts (SOLUSDEV-152). */
+export function OfflineNotifPopover({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const reason = useOfflineReason()
   return (
     <div
       style={{ position: 'absolute', top: 46, right: 12, width: 350, zIndex: 50 }}
@@ -145,66 +139,20 @@ export function NotifPopover({
           }}
         >
           <Mono size={9.5}>NOTIFICATIONS</Mono>
-          <span onClick={onClose} style={{ color: 'var(--mut)', cursor: 'pointer' }}>
+          <span
+            aria-label="Close notifications"
+            onClick={onClose}
+            style={{ color: 'var(--mut)', cursor: 'pointer' }}
+          >
             <Icons.x size={12} />
           </span>
         </div>
-        {alerts.map((a) => (
-          <NotifRow key={a.id} alert={a} onOpen={onOpen} />
-        ))}
-        <div style={{ padding: '10px 14px', fontSize: 10.5, color: 'var(--mut)' }}>
-          SOL checks every change across domains, automatically.
+        <div style={{ padding: '16px 14px', fontSize: 11, color: 'var(--mut)', lineHeight: 1.5 }}>
+          {reason === 'api_unreachable'
+            ? "Solus can't reach its API right now — notifications will resume once it's back."
+            : 'Sign in to Solus to see notifications about your teams and projects.'}
         </div>
       </Card>
-    </div>
-  )
-}
-
-function NotifRow({
-  alert,
-  onOpen
-}: {
-  alert: Alert
-  onOpen: (id: string) => void
-}): React.JSX.Element {
-  const resolved = alert.state === 'resolved'
-  return (
-    <div
-      id={`notif-${alert.id}`}
-      onClick={() => onOpen(alert.id)}
-      style={{
-        display: 'flex',
-        gap: 10,
-        padding: '12px 14px',
-        borderBottom: '1px solid var(--bd)',
-        cursor: 'pointer',
-        opacity: resolved ? 0.55 : 1
-      }}
-    >
-      <span
-        style={{
-          color: resolved ? 'var(--ok)' : alert.sev === 'critical' ? 'var(--err)' : 'var(--warn)',
-          marginTop: 1
-        }}
-      >
-        {resolved ? <Icons.check size={14} /> : <Icons.warn size={14} />}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{alert.title}</div>
-        <div style={{ display: 'flex', gap: 7, alignItems: 'center', marginTop: 4 }}>
-          <Mono size={8.5} color={dcol(alert.fromD)}>
-            {SOLUS_DOMAINS[alert.fromD].label}
-          </Mono>
-          <span style={{ color: 'var(--mut)', fontSize: 9 }}>→</span>
-          <Mono size={8.5} color={dcol(alert.toD)}>
-            {SOLUS_DOMAINS[alert.toD].label}
-          </Mono>
-          <span style={{ fontSize: 10, color: 'var(--mut)', whiteSpace: 'nowrap' }}>
-            · {alert.actor} · {alert.time}
-          </span>
-        </div>
-      </div>
-      <Icons.arrowR size={12} />
     </div>
   )
 }

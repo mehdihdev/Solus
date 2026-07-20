@@ -16,15 +16,20 @@ describe('ConnectTile', () => {
     expect(onConnect).toHaveBeenCalledTimes(1)
   })
 
-  it('shows the live busy label over the simulated step copy', () => {
+  it('shows the live busy label from the real flow', () => {
     render(
       <ConnectTile
         integration={github}
-        state={{ phase: 'busy', stepIdx: 0, label: 'Linking your GitHub account…' }}
+        state={{ phase: 'busy', label: 'Linking your GitHub account…' }}
         onConnect={vi.fn()}
       />
     )
     expect(screen.getByText('Linking your GitHub account…')).toBeInTheDocument()
+  })
+
+  it('falls back to plain "Connecting…" while busy with no live label yet', () => {
+    render(<ConnectTile integration={github} state={{ phase: 'busy' }} onConnect={vi.fn()} />)
+    expect(screen.getByText('Connecting…')).toBeInTheDocument()
   })
 
   it('shows the real result string on done', () => {
@@ -36,6 +41,11 @@ describe('ConnectTile', () => {
       />
     )
     expect(screen.getByText('Connected — 214 entities indexed')).toBeInTheDocument()
+  })
+
+  it('shows plain "Connected" when done carries no result copy — never fabricated stats', () => {
+    render(<ConnectTile integration={github} state={{ phase: 'done' }} onConnect={vi.fn()} />)
+    expect(screen.getByText('Connected')).toBeInTheDocument()
   })
 
   it('shows the error and offers a retry that calls onRetry', async () => {
@@ -62,7 +72,7 @@ describe('ConnectTile', () => {
     render(
       <ConnectTile
         integration={github}
-        state={{ phase: 'busy', stepIdx: 0, label: 'Choose…', repos }}
+        state={{ phase: 'busy', label: 'Choose…', repos }}
         onConnect={vi.fn()}
         onChooseRepo={onChooseRepo}
       />

@@ -8,8 +8,9 @@ centralized auth + team-scoping middleware.
 **Code:** `packages/api` (FastAPI, Python 3.12). 94 tests passing; ruff + mypy strict clean.
 
 All example responses below are **real captured output** from a locally running instance
-(2026-06-13). UUIDs/timestamps will differ on your machine. Live secrets (invite tokens) are
-replaced with `<placeholders>`.
+(2026-06-13; the `/readyz` note and the settings/subscription examples were re-captured
+2026-07-19, SOLUSDEV-152). UUIDs/timestamps will differ on your machine. Live secrets
+(invite tokens) are replaced with `<placeholders>`.
 
 ---
 
@@ -113,7 +114,12 @@ GET http://localhost:8000/readyz
 }
 ```
 
-Redis/ARQ report `not_configured` until the first job-producing endpoint lands (Phase 3).
+`redis` and `queue` report **config-level truth, not a live ping** (SOLUSDEV-152):
+both say `configured` when `SOLUS_REDIS_URL` is set and `not_configured` otherwise
+(the ARQ queue rides on the same DSN, ADR-005). A missing queue is an accepted
+degraded state — sync dispatch falls back to in-process background tasks and
+scheduled work does not run — and never fails readiness; only an unreachable
+database returns the `503`.
 
 ### GET /api/v1/version
 
@@ -192,8 +198,18 @@ the **sole owner of a shared team** — transfer ownership first.
 `200`
 
 ```json
-{ "data": { "sol_mode": "guide" } }
+{
+  "data": {
+    "sol_mode": "guide",
+    "data_collection_consent": false,
+    "onboarding_step": "about"
+  }
+}
 ```
+
+`data_collection_consent` is the ADR-011 opt-in/out switch (default **false**; see §9 —
+events are recorded only while consented). `onboarding_step`
+(`about|connect|build|done`) is the FND-08 resume point.
 
 ### PATCH /api/v1/users/me/settings
 
@@ -201,7 +217,43 @@ the **sole owner of a shared team** — transfer ownership first.
 { "sol_mode": "expert" }
 ```
 
-`200 {"data":{"sol_mode":"expert"}}` — ADR-016: switchable any time. `"sol_mode":"yolo"` → `422`.
+`200` — same shape as GET with the change applied. All three fields are patchable
+independently; ADR-016: `sol_mode` switchable any time. `"sol_mode":"yolo"` → `422`.
+
+### GET /api/v1/users/me/subscription
+
+`200` — auto-provisioned on first auth (ADR-032: every user starts a 14-day `basic` trial;
+`limits` is what enforcement reads, `null` = unlimited):
+
+```json
+{
+  "data": {
+    "id": "019f7a25-76a1-74b4-a6ee-c557ea1cf15f",
+    "created_at": "2026-07-19T11:31:43.393859Z",
+    "updated_at": "2026-07-19T11:31:43.393860Z",
+    "deleted_at": null,
+    "user_id": "019f7a25-769c-7888-80df-a7dc58fd7761",
+    "plan": "basic",
+    "status": "trialing",
+    "limits": { "max_teams": 2, "max_projects": 3, "max_integrations": 4 },
+    "expires_at": "2026-08-02T11:31:43.390521Z",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "seat_count": null,
+    "custom_price_per_seat": null
+  }
+}
+```
+
+### PATCH /api/v1/users/me/subscription
+
+```json
+{ "plan": "pro" }
+```
+
+`200` — picks/changes the plan during onboarding: (re)starts a 14-day trial of the chosen
+plan with that plan's default limits (ADR-032). `plan` ∈ `basic|pro|enterprise`; anything
+else → `422`. No Stripe call is made — real billing/checkout stays deferred (§9).
 
 ### GET /api/v1/users/me/notifications?limit=2
 
@@ -606,15 +658,15 @@ limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the 
 
 ## 9. Not implemented in this slice (and why)
 
-| Surface                                                   | Status                                                                                                                                                                                                                                        |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §2.1 API keys (`/users/me/api-keys`)                      | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                              |
-| §2.4–§2.15, WS/SSE                                        | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                      |
-| `POST /graph/query`, MCP server, presence topic           | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                   |
-| Stripe **webhook** route (`POST /api/v1/webhooks/stripe`) | **Built (SOLUSDEV-83)** — the §7.2 billing-route deferral was lifted for this one route by human decision. See §10 Billing below. Checkout-session _creation_ + the customer-facing subscription/credit-pack purchase routes remain deferred. |
-| Alembic migrations                                        | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                     |
-| ARQ/Redis worker wiring                                   | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                     |
-| Data-collection consent endpoints (§2.13)                 | Phase 6; until then `data_collection_consent` defaults to **false** and ADR-011 events are not recorded                                                                                                                                       |
+| Surface                                                   | Status                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| §2.1 API keys (`/users/me/api-keys`)                      | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                                                                                                                           |
+| §2.4–§2.15, WS/SSE                                        | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                                                                                                                   |
+| `POST /graph/query`, MCP server, presence topic           | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                                                                                                                |
+| Stripe **webhook** route (`POST /api/v1/webhooks/stripe`) | **Built (SOLUSDEV-83)** — the §7.2 billing-route deferral was lifted for this one route by human decision. See §10 Billing below. Checkout-session _creation_ + credit-pack purchase routes remain deferred; the plan-selection subscription routes (`GET`/`PATCH /users/me/subscription`, no Stripe call — ADR-032) are **live**, see §3. |
+| Alembic migrations                                        | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                                                                                                                  |
+| ARQ/Redis worker wiring                                   | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                                                                                                                  |
+| Data-collection consent (§2.13)                           | **Live** — the ADR-011 opt-in/out ships as `data_collection_consent` on `GET`/`PATCH /users/me/settings` (see §3), not as dedicated §2.13 routes. Default remains **false**; events are recorded only while consented.                                                                                                                     |
 
 ### Implementation decisions made under delegated judgment (CLAUDE.md §10)
 
@@ -667,12 +719,13 @@ the raw body is size-bounded, then `stripe.Webhook.construct_event` verifies the
 
 ---
 
-## 11. SOL chat (SOLUSDEV-135 / SOLUS-SYS-01) — PROPOSED, pending human approval
+## 11. SOL chat (SOLUSDEV-135 / SOLUS-SYS-01) — LIVE; route-plan blessing still pending
 
 The SOL agent surface was listed as a later phase (§9, "§2.4–§2.15, WS/SSE"). SOLUSDEV-135
-introduces the following **project-scoped, owner-private** routes as the systems-side of the
-reasoning↔systems seam. They are documented here for the design review; the route plan is not
-yet blessed in the authoritative API design — flagged in the completion report for approval.
+introduced the following **project-scoped, owner-private** routes as the systems-side of the
+reasoning↔systems seam, and has since merged to main, so the routes below are live. Formal
+blessing of the route plan in the authoritative API design is still pending — flagged in that
+ticket's completion report for approval.
 
 All routes are under `/api/v1/projects/{project_id}/sol` and resolve through `ProjectCtx`
 (tenant isolation). A conversation is owned by its creator: only `(project_id, created_by)`

@@ -1,24 +1,30 @@
 // Live team data for the Team screen and Settings team section: loads the
 // team detail, roster, pending invites, and activity feed in parallel, and
 // exposes the mutations (invite/revoke/role-change/remove/rename/delete) with
-// re-fetch. Degrades to `offline` when the workspace isn't linked or the API is
-// unreachable, so the prototype mock rendering can take over (dev bypass).
+// re-fetch. Degrades to `offline` when the workspace isn't linked or the API
+// is unreachable, so callers render an honest sign-in state (dev bypass).
 import { useCallback, useEffect, useState } from 'react'
 import {
+  acceptInvite,
   changeMemberRole,
   createInvite,
+  createProject as createProjectApi,
+  createTeam as createTeamApi,
   deleteTeam as deleteTeamApi,
   getMe,
   getTeamDetail,
   listActivityPage,
   listInvites,
   listMembers,
+  listProjects,
   personalTeam,
   removeMember,
   revokeInvite,
   updateTeam as updateTeamApi,
+  type AcceptInviteResult,
   type ActivityApi,
   type InviteApi,
+  type Project,
   type TeamDetail,
   type TeamMemberApi,
   type TeamRole,
@@ -26,6 +32,7 @@ import {
 } from '../../lib/api/resources'
 import type { ApiMeta } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 export type TeamDataStatus = 'loading' | 'ready' | 'offline'
 
@@ -42,6 +49,12 @@ export interface TeamActions {
   updateTeam: (input: TeamSettingsInput) => Promise<boolean>
   deleteTeam: () => Promise<boolean>
   switchTeam: (teamId: string) => void
+  /** Create a new team and switch the workspace to it (individual→team upgrade). */
+  createTeam: (name: string) => Promise<boolean>
+  /** Redeem a one-time invite token and switch to the joined team. */
+  joinTeam: (token: string) => Promise<AcceptInviteResult | null>
+  /** Create a project under the active team, then refresh the projects list. */
+  createProject: (name: string) => Promise<Project | null>
   refresh: () => Promise<void>
 }
 
@@ -53,6 +66,8 @@ export interface TeamData {
   activity: ActivityApi[]
   activityHasMore: boolean
   loadMoreActivity: () => Promise<void>
+  /** Active (non-archived) projects owned by the current team. */
+  projects: Project[]
   /** Every team the caller belongs to — powers the team switcher. */
   teams: TeamSummary[]
   myRole: TeamRole | null
@@ -63,6 +78,7 @@ interface Setters {
   setMembers: (m: TeamMemberApi[]) => void
   setInvites: (i: InviteApi[]) => void
   setTeam: (t: TeamDetail | null) => void
+  setProjects: (p: Project[]) => void
 }
 
 /** Run an action, refresh the affected slice, and report success as a boolean. */
@@ -89,6 +105,8 @@ function createTeamActions(
     setters.setInvites(await listInvites(teamId as string))
   const refreshMembers = async (): Promise<void> =>
     setters.setMembers(await listMembers(teamId as string))
+  const refreshProjects = async (): Promise<void> =>
+    setters.setProjects(await listProjects(teamId as string))
   return {
     invite: async (email, role = 'member') => {
       if (!teamId) return null
@@ -118,26 +136,56 @@ function createTeamActions(
       teamId ? runAction(() => deleteTeamApi(teamId), load) : Promise.resolve(false),
     // Point the workspace at another team; the hook re-resolves off storedTeamId.
     switchTeam: (id) => useWorkspaceStore.getState().setTeamId(id),
+    createTeam: async (name) => {
+      try {
+        const created = await createTeamApi(name)
+        // Switch to the new team; the load effect re-resolves off storedTeamId.
+        useWorkspaceStore.getState().setTeamId(created.id)
+        return true
+      } catch {
+        return false
+      }
+    },
+    joinTeam: async (token) => {
+      try {
+        const result = await acceptInvite(token)
+        useWorkspaceStore.getState().setTeamId(result.team_id)
+        return result
+      } catch {
+        return null
+      }
+    },
+    createProject: async (name) => {
+      if (!teamId) return null
+      try {
+        const project = await createProjectApi(teamId, { name })
+        await refreshProjects().catch(() => undefined)
+        return project
+      } catch {
+        return null
+      }
+    },
     refresh: load
   }
 }
 
 export function useTeamData(): TeamData {
-  const linked = useWorkspaceStore((s) => s.linked)
+  const fetchEnabled = useWorkspaceFetchEnabled()
   const storedTeamId = useWorkspaceStore((s) => s.teamId)
-  // Init from `linked` so an offline workspace renders the demo synchronously
-  // (no loading flash) and stays deterministic in tests.
-  const [status, setStatus] = useState<TeamDataStatus>(linked ? 'loading' : 'offline')
+  // Init synchronously so an offline workspace renders its offline state
+  // without a loading flash and stays deterministic in tests.
+  const [status, setStatus] = useState<TeamDataStatus>(fetchEnabled ? 'loading' : 'offline')
   const [teamId, setTeamId] = useState<string | null>(null)
   const [team, setTeam] = useState<TeamDetail | null>(null)
   const [members, setMembers] = useState<TeamMemberApi[]>([])
   const [invites, setInvites] = useState<InviteApi[]>([])
   const [activity, setActivity] = useState<ActivityApi[]>([])
   const [activityMeta, setActivityMeta] = useState<ApiMeta>({})
+  const [projects, setProjects] = useState<Project[]>([])
   const [teams, setTeams] = useState<TeamSummary[]>([])
 
   const load = useCallback(async (): Promise<void> => {
-    if (!linked) {
+    if (!fetchEnabled) {
       setStatus('offline')
       return
     }
@@ -151,11 +199,13 @@ export function useTeamData(): TeamData {
         setStatus('offline')
         return
       }
-      const [detail, roster, pending, feed] = await Promise.all([
+      const [detail, roster, pending, feed, teamProjects] = await Promise.all([
         getTeamDetail(id),
         listMembers(id),
         listInvites(id),
-        listActivityPage(id)
+        listActivityPage(id),
+        // Projects are secondary — a failure here must not blank the whole screen.
+        listProjects(id).catch(() => [] as Project[])
       ])
       setTeamId(id)
       setTeam(detail)
@@ -163,11 +213,12 @@ export function useTeamData(): TeamData {
       setInvites(pending)
       setActivity(feed.data)
       setActivityMeta(feed.meta)
+      setProjects(teamProjects)
       setStatus('ready')
     } catch {
       setStatus('offline')
     }
-  }, [linked, storedTeamId])
+  }, [fetchEnabled, storedTeamId])
 
   useEffect(() => {
     void load()
@@ -185,7 +236,7 @@ export function useTeamData(): TeamData {
     }
   }
 
-  const actions = createTeamActions(teamId, { setMembers, setInvites, setTeam }, load)
+  const actions = createTeamActions(teamId, { setMembers, setInvites, setTeam, setProjects }, load)
   return {
     status,
     team,
@@ -194,6 +245,7 @@ export function useTeamData(): TeamData {
     activity,
     activityHasMore: activityMeta.has_next ?? false,
     loadMoreActivity,
+    projects,
     teams,
     myRole: team?.role ?? null,
     actions

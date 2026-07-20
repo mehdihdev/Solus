@@ -17,7 +17,7 @@ import {
   type UserSettings
 } from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
-import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 import { useSettingsStore, type SolMode } from '../../store/settingsStore'
 
 export type SettingsStatus = 'loading' | 'ready' | 'offline'
@@ -63,10 +63,10 @@ async function loadSettings(): Promise<LoadResult> {
 }
 
 export function useSettingsData(): SettingsData {
-  const linked = useWorkspaceStore((s) => s.linked)
+  const fetchEnabled = useWorkspaceFetchEnabled()
   const setStoreSolMode = useSettingsStore((s) => s.setSolMode)
 
-  const [status, setStatus] = useState<SettingsStatus>(linked ? 'loading' : 'offline')
+  const [status, setStatus] = useState<SettingsStatus>(fetchEnabled ? 'loading' : 'offline')
   const [profile, setProfile] = useState<Me | null>(null)
   const [consent, setConsentState] = useState<boolean>(true)
   const [subscription, setSubscription] = useState<Subscription | null>(null)
@@ -83,7 +83,7 @@ export function useSettingsData(): SettingsData {
   )
 
   useEffect(() => {
-    if (!linked) {
+    if (!fetchEnabled) {
       setStatus('offline')
       return
     }
@@ -101,7 +101,7 @@ export function useSettingsData(): SettingsData {
     return () => {
       cancelled = true
     }
-  }, [linked, apply])
+  }, [fetchEnabled, apply])
 
   const setError = useCallback((field: SettingsField, message: string | null): void => {
     setErrors((prev) => ({ ...prev, [field]: message }))

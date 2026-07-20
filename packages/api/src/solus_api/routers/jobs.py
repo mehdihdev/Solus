@@ -66,6 +66,22 @@ async def list_project_jobs(
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    """Mark a QUEUED or RUNNING job cancelled. Record-level only — no abort.
+
+    Precise semantics (SOLUSDEV-152 audit item 4):
+    - Sets ``status=cancelled`` + ``finished_at`` on the Job row and emits the
+      activity/data events; the response is the updated record.
+    - Does NOT abort the underlying work: no task-handle registry exists, so an
+      ARQ task the worker already picked up (or an in-process fallback task)
+      runs to completion, and its completion path (``connectors.runtime
+      ._mark_job``) then overwrites this status with succeeded/failed.
+    - A QUEUED job's task is not dequeued either; the worker does not consult
+      job status before starting, so a race with pickup ends the same way.
+
+    Treat cancellation as advisory intent: truthful at response time, not
+    guaranteed to stick for jobs whose task is (or gets) in flight. Real
+    abort/dequeue needs worker-side cooperation and is out of scope this cycle.
+    """
     job = await _get_scoped_job(session, user, job_id)
     if job.status not in CANCELLABLE:
         raise APIError(

@@ -1,12 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { IntegrationsSection } from './IntegrationsSection'
-import { useOnboardingStore } from '../../onboarding/onboardingStore'
 import { INTEGRATIONS } from '../../onboarding/integrations.constants'
-
-beforeEach(() => {
-  useOnboardingStore.getState().reset()
-})
 
 describe('IntegrationsSection', () => {
   it('lists every connector in the catalog', () => {
@@ -16,11 +11,11 @@ describe('IntegrationsSection', () => {
     }
   })
 
-  it('marks a connected source as CONNECTED and others as not', () => {
-    useOnboardingStore.getState().setConnection('github', { phase: 'done' })
+  it('presents the catalog as available (not a fabricated connection state)', () => {
+    // Honest catalog: connection is per-project, so no global CONNECTED/NOT
+    // CONNECTED is shown (SOLUSDEV-152). Every connector reads "AVAILABLE".
     render(<IntegrationsSection />)
-    expect(screen.getByText('● CONNECTED')).toBeInTheDocument()
-    // The remaining connectors are not connected.
-    expect(screen.getAllByText('○ NOT CONNECTED')).toHaveLength(INTEGRATIONS.length - 1)
+    expect(screen.getAllByText('AVAILABLE')).toHaveLength(INTEGRATIONS.length)
+    expect(screen.queryByText('○ NOT CONNECTED')).not.toBeInTheDocument()
   })
 })

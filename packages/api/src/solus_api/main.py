@@ -16,6 +16,7 @@ from solus_api.core.config import Settings
 from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.core.errors import register_error_handlers
 from solus_api.core.ratelimit import RateLimitMiddleware
+from solus_api.core.security import build_jwks_client
 from solus_api.models import Base
 from solus_api.routers import (
     activity,
@@ -74,6 +75,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
     # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
     app.state.supabase_admin = build_supabase_admin(resolved_settings)
+    # JWKS client for verifying Supabase's asymmetric (ES256) access tokens
+    # (SOLUSDEV-152, ADR-009). None when supabase_url is unset — then only legacy
+    # HS256 tokens validate. Keys are cached in-process; the auth path never fetches
+    # per request once warm.
+    app.state.jwks_client = build_jwks_client(resolved_settings)
     # SOL chat seam (SOLUSDEV-135, mock-and-swap): the W0-07 systems impl and the
     # reasoning-loop runner. Swap these for the real systems impl / SOL-01/02 reasoning
     # with a one-line change here and no endpoint edit.

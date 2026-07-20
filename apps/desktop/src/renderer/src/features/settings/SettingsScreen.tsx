@@ -15,13 +15,16 @@ import { IntegrationsSection } from './sections/IntegrationsSection'
 import { MembersSection } from './sections/MembersSection'
 import { TeamSection } from './sections/TeamSection'
 import { AccountSection } from './sections/AccountSection'
+import { useOfflineReason } from '../workspace/workspaceOnline'
 
 function OfflineNotice(): React.JSX.Element {
+  const reason = useOfflineReason()
   return (
     <Card pad={20} style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-        Sign in to Solus to manage your profile, privacy, billing, and team. Appearance and
-        connected-tool status are available offline.
+        {reason === 'api_unreachable'
+          ? "You're signed in, but Solus can't reach its API — profile, privacy, billing, and team management need it. Appearance and connected-tool status still work."
+          : 'Sign in to Solus to manage your profile, privacy, billing, and team. Appearance and connected-tool status are available offline.'}
       </div>
     </Card>
   )

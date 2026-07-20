@@ -1,29 +1,27 @@
-// Live integration catalog (SOLUSDEV-100, design review Q1=B). The tile list is
-// driven by GET /integrations (the backend connector registry) so new
-// connectors appear without frontend edits — the drift that left Altium
-// invisible after SOLUSDEV-102. Curated display metadata + still-simulated
-// roster members come from integrations.constants; the API is unreachable in
-// dev bypass / offline, where we degrade to the curated static list.
+// Live integration catalog (SOLUSDEV-100, de-simulated in SOLUSDEV-152). The
+// tile list is driven by GET /integrations (the backend connector registry) so
+// new connectors appear without frontend edits. Only providers the app can
+// REALLY drive are listed — a tile that cannot connect is hidden, never faked.
+// When the API is unreachable (dev bypass / offline) we degrade to the curated
+// drivable pair; click-time guards report honest errors if connect can't run.
 import { listIntegrations, type Integration as ApiIntegration } from '../../lib/api/resources'
 import { INTEGRATIONS, type Integration } from './integrations.constants'
 
-/** How a tile connects: the real GitHub OAuth bridge, a real committed-export
- * file pick, or the prototype's simulated animation. */
-export type ConnectMode = 'github-oauth' | 'export-file' | 'simulated'
+/** How a tile really connects: the GitHub OAuth bridge or a committed-export
+ * file pick. There is no simulated mode — undrivable providers are hidden. */
+export type ConnectMode = 'github-oauth' | 'export-file'
 
 export interface CatalogEntry extends Integration {
   readonly mode: ConnectMode
 }
 
-/** Display metadata for live providers outside the curated onboarding four. */
+/** Display metadata for live providers outside the curated onboarding pair. */
 const EXTRA_DISPLAY: readonly Integration[] = [
   {
     id: 'altium',
     name: 'Altium',
-    kind: 'PCB / Schematic',
-    mark: 'Al',
-    steps: ['Reading committed export…', 'Parsing Protel netlist…', 'Building electrical graph…'],
-    result: 'Connected — components, nets, connectivity'
+    kind: 'PCB / Schematic — committed netlist export',
+    mark: 'Al'
   }
 ]
 
@@ -35,39 +33,39 @@ function displayFor(type: string): Integration {
     id: type,
     name: type.charAt(0).toUpperCase() + type.slice(1),
     kind: 'Connector',
-    mark: type.slice(0, 2).toUpperCase(),
-    steps: ['Connecting…', 'Syncing…'],
-    result: 'Connected'
+    mark: type.slice(0, 2).toUpperCase()
   }
 }
 
-function modeFor(type: string, live: ApiIntegration | undefined): ConnectMode {
-  if (!live) return 'simulated'
+/** The real connect mode for a live provider, or null when the app cannot
+ * drive it yet (e.g. GitLab OAuth has no bridge flow) — null hides the tile. */
+function modeFor(type: string, live: ApiIntegration | undefined): ConnectMode | null {
+  if (!live) return null
   if (type === 'github') return 'github-oauth'
   // Committed-export connectors (KiCad, Altium, …): no tool credential, the
   // export content is the config — drivable with a file pick.
   if (live.auth_kind === 'none' && live.config_fields.includes('export')) return 'export-file'
-  // Live but not drivable in-app yet (e.g. GitLab OAuth has no bridge flow).
-  return 'simulated'
+  return null
 }
 
-/** Offline/dev-bypass catalog: the curated four, optimistically connectable —
- * the click-time guards (linked project, bridge) decide real vs simulated. */
+const CURATED_MODES: Readonly<Record<string, ConnectMode>> = {
+  github: 'github-oauth',
+  kicad: 'export-file'
+}
+
+/** Offline/dev-bypass catalog: the curated drivable pair, optimistically
+ * connectable — click-time guards (linked project, bridge) report honest
+ * errors when a real connect can't run. */
 export const FALLBACK_CATALOG: readonly CatalogEntry[] = INTEGRATIONS.map((display) => ({
   ...display,
-  mode:
-    display.id === 'github'
-      ? ('github-oauth' as const)
-      : display.id === 'kicad'
-        ? ('export-file' as const)
-        : ('simulated' as const)
+  mode: CURATED_MODES[display.id]
 }))
 
 /**
  * Build the tile list from the live connector registry: curated tiles first
- * (real when the backend has them, simulated placeholders otherwise), then any
- * additional drivable live providers. Falls back to the static curated list
- * when the API is unreachable.
+ * (only when the backend registers them), then any additional drivable live
+ * providers. Falls back to the curated drivable pair when the API is
+ * unreachable. Undrivable providers are never listed.
  */
 export async function loadIntegrationCatalog(
   fetchIntegrations: () => Promise<ApiIntegration[]> = listIntegrations
@@ -80,19 +78,16 @@ export async function loadIntegrationCatalog(
   }
   const byType = new Map(live.map((integration) => [integration.type, integration]))
 
-  const curated = INTEGRATIONS.map((display) => ({
-    ...display,
-    mode: modeFor(display.id, byType.get(display.id))
-  }))
+  const curated = INTEGRATIONS.flatMap((display) => {
+    const mode = modeFor(display.id, byType.get(display.id))
+    return mode ? [{ ...display, mode }] : []
+  })
   const extras = live
     .filter((integration) => !INTEGRATIONS.some((c) => c.id === integration.type))
-    .map((integration) => ({
-      ...displayFor(integration.type),
-      mode: modeFor(integration.type, integration)
-    }))
-    // A non-curated provider we cannot drive would render a dishonest
-    // fake-connect tile — hide it until its real flow lands.
-    .filter((entry) => entry.mode !== 'simulated')
+    .flatMap((integration) => {
+      const mode = modeFor(integration.type, integration)
+      return mode ? [{ ...displayFor(integration.type), mode }] : []
+    })
 
   return [...curated, ...extras]
 }

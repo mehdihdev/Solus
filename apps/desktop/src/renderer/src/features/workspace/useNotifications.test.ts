@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { useNotifications } from './useNotifications'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useAuthStore } from '../../store/authStore'
 import * as resources from '../../lib/api/resources'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
@@ -28,7 +29,7 @@ const NOTIFS: resources.NotificationApi[] = [
   {
     id: 'n2',
     type: 'invite.accepted',
-    title: 'Priya joined',
+    title: 'Noor joined',
     body: null,
     payload: {},
     read_at: '2026-07-05T00:00:00Z',
@@ -40,6 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true })
+  useAuthStore.setState({ status: 'unauthenticated', user: null })
   vi.mocked(resources.listNotificationsPage).mockResolvedValue({ data: NOTIFS, meta: {} })
   vi.mocked(resources.markNotificationRead).mockResolvedValue(NOTIFS[0])
 })
@@ -84,11 +86,23 @@ describe('useNotifications', () => {
     expect(vi.mocked(resources.listNotificationsPage).mock.calls.length).toBeGreaterThan(1)
   })
 
-  it('is offline when not linked', async () => {
+  it('is offline when neither authenticated nor linked', async () => {
     useWorkspaceStore.setState({ linked: false })
+    useAuthStore.setState({ status: 'unauthenticated', user: null })
     const { result } = renderHook(() => useNotifications())
     await waitFor(() => expect(result.current.status).toBe('offline'))
     expect(resources.listNotificationsPage).not.toHaveBeenCalled()
+  })
+
+  it('fetches when authenticated even if the workspace is not linked', async () => {
+    // A signed-in user who skipped onboarding has linked=false; notifications
+    // must still load (SOLUSDEV-152 — matches Home/Team fetch enablement).
+    useWorkspaceStore.setState({ linked: false })
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.com' } })
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.items).toHaveLength(2)
+    expect(resources.listNotificationsPage).toHaveBeenCalled()
   })
 
   it('exposes hasMore and appends the next cursor page via loadMore', async () => {

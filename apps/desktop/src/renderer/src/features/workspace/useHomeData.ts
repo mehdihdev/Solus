@@ -21,6 +21,7 @@ import {
   type TeamSummary
 } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 export type HomeStatus = 'loading' | 'ready' | 'offline'
 
@@ -74,14 +75,14 @@ async function fetchHome(): Promise<HomeSnapshot> {
 }
 
 export function useHomeData(): HomeData {
-  const linked = useWorkspaceStore((s) => s.linked)
-  const [status, setStatus] = useState<HomeStatus>(linked ? 'loading' : 'offline')
+  const fetchEnabled = useWorkspaceFetchEnabled()
+  const [status, setStatus] = useState<HomeStatus>(fetchEnabled ? 'loading' : 'offline')
   const [me, setMe] = useState<Me | null>(null)
   const [groups, setGroups] = useState<TeamProjects[]>([])
   const [activity, setActivity] = useState<ActivityApi[]>([])
 
   const load = useCallback(async (): Promise<void> => {
-    if (!linked) {
+    if (!fetchEnabled) {
       setStatus('offline')
       return
     }
@@ -94,7 +95,7 @@ export function useHomeData(): HomeData {
     } catch {
       setStatus('offline')
     }
-  }, [linked])
+  }, [fetchEnabled])
 
   useEffect(() => {
     void load()
