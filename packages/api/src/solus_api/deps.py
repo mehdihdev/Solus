@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from solus_api.agent.interfaces import SolSystems
 from solus_api.agent.runtime import AgentRunner
 from solus_api.billing.credits import grant_trial_credits
+from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.config import Settings
@@ -97,6 +98,12 @@ def get_agent_runner(request: Request) -> AgentRunner:
     return runner
 
 
+def get_stripe_gateway(request: Request) -> "StripeGateway":
+    """The outbound Stripe wrapper, keyed from the SecretStore. Overridable in
+    tests via app.dependency_overrides to avoid real Stripe calls."""
+    return StripeGateway(get_secret_store(request))
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -106,6 +113,7 @@ SupabaseAdminDep = Annotated["SupabaseAdmin", Depends(get_supabase_admin)]
 JwksClientDep = Annotated[PyJWKClient | None, Depends(get_jwks_client)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
 AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
+StripeGatewayDep = Annotated[StripeGateway, Depends(get_stripe_gateway)]
 
 
 async def _provision_user(

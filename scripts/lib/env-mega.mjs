@@ -5,38 +5,37 @@
 // nothing, so it is fully unit-testable and safe to reason about (CLAUDE.md §7:
 // secret values never touch logs). The CLI wrapper (env-sync.mjs) does the I/O.
 //
-// Format: `# >>> <path>` headers split the file into blocks; each block's
-// KEY=VALUE lines are written verbatim to <path>. The special `# >>> common`
-// block is never written — it exists only so shared secrets can be defined once
-// and referenced via ${VAR} interpolation from later blocks.
+// Format (flat model): `.env.mega` is a flat list of KEY=VALUE lines. There are
+// no per-file routing headers — `pnpm env:sync` writes the ENTIRE resolved file
+// verbatim into every target env file, and each consumer reads only the keys it
+// recognises (pydantic Settings ignores non-SOLUS_ keys; Vite exposes only
+// VITE_*; the waitlist route reads only GOOGLE_*). Shared values are defined
+// once and reused via ${VAR}: any key may reference an earlier key.
+//
+// Lines beginning with `#` are comments (this includes any legacy `# >>> path`
+// routing headers, which are now ignored). Single-quoted values are literal;
+// bare and "double-quoted" values interpolate ${VAR}.
 
-const HEADER_RE = /^#\s*>>>\s*(.+?)\s*$/;
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const COMMON = "common";
 
 // Characters that force a target value to be quoted. Anything outside this set
 // (commas, spaces, '#', quotes, backslashes, ...) triggers double-quoting.
 const BARE_SAFE_RE = /^[A-Za-z0-9_.\-:/@]*$/;
 
 /**
- * Parse `.env.mega` text into ordered blocks. Raw values are preserved exactly;
- * quote/comment/interpolation handling happens later in {@link splitToTargets}.
- * @returns {{blocks: {path: string, isCommon: boolean, entries: {key: string, value: string}[]}[]}}
+ * Parse `.env.mega` text into an ordered, de-duplicated list of raw entries.
+ * Raw values are preserved exactly; quote/comment/interpolation handling
+ * happens later in {@link resolveMega}. Duplicate keys keep first-seen order
+ * with the LAST value winning (standard dotenv semantics).
+ * @returns {{entries: {key: string, value: string}[]}}
  */
 export function parseMega(text) {
-  const blocks = [];
-  let current = null;
+  const order = [];
+  const values = new Map();
 
   text.split(/\r?\n/).forEach((line, i) => {
-    const header = line.match(HEADER_RE);
-    if (header) {
-      const path = header[1];
-      current = { path, isCommon: path === COMMON, entries: [] };
-      blocks.push(current);
-      return;
-    }
     const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) return; // blank / comment
+    if (trimmed === "" || trimmed.startsWith("#")) return; // blank / comment (incl. legacy `# >>>`)
 
     const eq = line.indexOf("=");
     if (eq === -1) {
@@ -45,18 +44,14 @@ export function parseMega(text) {
       );
     }
     const key = line.slice(0, eq).trim();
-    if (!current) {
-      throw new Error(
-        `env.mega line ${i + 1}: "${key}" appears before any "# >>> <path>" header`,
-      );
-    }
     if (!KEY_RE.test(key)) {
       throw new Error(`env.mega line ${i + 1}: invalid key name "${key}"`);
     }
-    current.entries.push({ key, value: line.slice(eq + 1) });
+    if (!values.has(key)) order.push(key);
+    values.set(key, line.slice(eq + 1));
   });
 
-  return { blocks };
+  return { entries: order.map((key) => ({ key, value: values.get(key) })) };
 }
 
 /**
@@ -111,31 +106,19 @@ function interpolate(value, scope) {
 }
 
 /**
- * Parse + resolve interpolation + serialize. Returns the concrete files to
- * write ({path, content}), excluding the non-emitted `common` block.
- * Scope for a block = resolved common values + its own earlier keys.
+ * Parse + resolve interpolation for the whole flat file. Every key is emitted;
+ * a key may reference any earlier key via ${VAR}. Returns the resolved
+ * {key, value} entries in file order.
+ * @returns {{key: string, value: string}[]}
  */
-export function splitToTargets(text) {
-  const { blocks } = parseMega(text);
-
-  const common = {};
-  for (const block of blocks.filter((b) => b.isCommon)) {
-    for (const { key, value } of block.entries) {
-      common[key] = resolveValue(value, common); // may reference earlier common keys
-    }
-  }
-
-  return blocks
-    .filter((b) => !b.isCommon)
-    .map((block) => {
-      const scope = { ...common };
-      const entries = block.entries.map(({ key, value }) => {
-        const resolved = resolveValue(value, scope);
-        scope[key] = resolved; // later keys may reference earlier ones
-        return { key, value: resolved };
-      });
-      return { path: block.path, content: serializeEntries(entries) };
-    });
+export function resolveMega(text) {
+  const { entries } = parseMega(text);
+  const scope = {};
+  return entries.map(({ key, value }) => {
+    const resolved = resolveValue(value, scope);
+    scope[key] = resolved; // later keys may reference earlier ones
+    return { key, value: resolved };
+  });
 }
 
 /** Parse a real `.env` file (for gather). Tolerates `export ` and quotes. */
@@ -199,18 +182,42 @@ function serializeMegaValue(v) {
 }
 
 /**
- * Render a `.env.mega` from concrete files (for gather). Produces one block per
- * file with a `# >>> <path>` header; round-trips through {@link splitToTargets}.
+ * Merge entries gathered from several existing env files into one de-duplicated
+ * list (first file wins, preserving first-seen order). Returns the merged
+ * entries plus any conflicts (same key, differing value) for the caller to warn
+ * about — never the values themselves are logged by callers (CLAUDE.md §7).
+ * @returns {{entries: {key: string, value: string}[], conflicts: string[]}}
  */
-export function renderMega(files, { header = DEFAULT_MEGA_HEADER } = {}) {
-  const blocks = files.map(({ path, entries }) => {
-    const lines = [
-      `# >>> ${path}`,
-      ...entries.map(({ key, value }) => `${key}=${serializeMegaValue(value)}`),
-    ];
-    return lines.join("\n");
-  });
-  return `${header}\n${blocks.join("\n\n")}\n`;
+export function mergeEnvFiles(files) {
+  const order = [];
+  const chosen = new Map();
+  const conflicts = new Set();
+  for (const { entries } of files) {
+    for (const { key, value } of entries) {
+      if (!chosen.has(key)) {
+        order.push(key);
+        chosen.set(key, value);
+      } else if (chosen.get(key) !== value) {
+        conflicts.add(key); // keep the first value; flag the divergence
+      }
+    }
+  }
+  return {
+    entries: order.map((key) => ({ key, value: chosen.get(key) })),
+    conflicts: [...conflicts],
+  };
+}
+
+/**
+ * Render a flat `.env.mega` from resolved entries (for gather). Round-trips
+ * through {@link resolveMega}: a literal `$` is escaped so it is not treated as
+ * an interpolation on the next sync.
+ */
+export function renderMega(entries, { header = DEFAULT_MEGA_HEADER } = {}) {
+  const body = entries
+    .map(({ key, value }) => `${key}=${serializeMegaValue(value)}`)
+    .join("\n");
+  return `${header}\n\n${body}\n`;
 }
 
 /** Keys present in the existing target but absent from the mega (would be lost). */
@@ -224,8 +231,9 @@ export const DEFAULT_MEGA_HEADER = [
   "# Fill this in, then run:  pnpm env:sync",
   "# Bootstrap from existing files:  pnpm env:gather",
   "#",
-  "# `# >>> <path>` starts a block written to <path>. `# >>> common` is not",
-  "# written; use it + ${VAR} to define shared secrets once. Single-quoted",
-  "# values are literal; bare/double-quoted values interpolate ${VAR}.",
-  "# NEVER commit this file — it holds secrets (.gitignore covers it).",
+  "# Flat KEY=VALUE list. `pnpm env:sync` writes this ENTIRE file (with ${VAR}",
+  "# interpolation resolved) verbatim into every target env file; each consumer",
+  "# reads only the keys it recognises. Define a shared value once and reference",
+  "# it later via ${VAR}. Single-quoted values are literal; bare/double-quoted",
+  "# values interpolate. NEVER commit this file — it holds secrets (.gitignore).",
 ].join("\n");

@@ -658,15 +658,15 @@ limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the 
 
 ## 9. Not implemented in this slice (and why)
 
-| Surface                                                   | Status                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| §2.1 API keys (`/users/me/api-keys`)                      | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                                                                                                                           |
-| §2.4–§2.15, WS/SSE                                        | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                                                                                                                   |
-| `POST /graph/query`, MCP server, presence topic           | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                                                                                                                |
-| Stripe **webhook** route (`POST /api/v1/webhooks/stripe`) | **Built (SOLUSDEV-83)** — the §7.2 billing-route deferral was lifted for this one route by human decision. See §10 Billing below. Checkout-session _creation_ + credit-pack purchase routes remain deferred; the plan-selection subscription routes (`GET`/`PATCH /users/me/subscription`, no Stripe call — ADR-032) are **live**, see §3. |
-| Alembic migrations                                        | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                                                                                                                  |
-| ARQ/Redis worker wiring                                   | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                                                                                                                  |
-| Data-collection consent (§2.13)                           | **Live** — the ADR-011 opt-in/out ships as `data_collection_consent` on `GET`/`PATCH /users/me/settings` (see §3), not as dedicated §2.13 routes. Default remains **false**; events are recorded only while consented.                                                                                                                     |
+| Surface                                                                                                                                                                                             | Status                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §2.1 API keys (`/users/me/api-keys`)                                                                                                                                                                | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                                                                                                                                                    |
+| §2.4–§2.15, WS/SSE                                                                                                                                                                                  | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                                                                                                                                            |
+| `POST /graph/query`, MCP server, presence topic                                                                                                                                                     | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                                                                                                                                         |
+| Stripe billing routes (`POST /api/v1/webhooks/stripe`, `POST /api/v1/billing/checkout-session`, `POST /api/v1/billing/portal-session`, `GET /api/v1/billing/packs`, `GET /api/v1/users/me/credits`) | **Built** — webhook (SOLUSDEV-83) + the checkout/portal/packs/credits routes (SOLUSDEV-83 follow-up) lift the §7.2 deferral by human decision. Full "select plan → Stripe Checkout → webhook confirms" flow. See §10. The trial-only `PATCH /users/me/subscription` (no Stripe call — ADR-032) remains live for onboarding, see §3. Enterprise stays contact-sales. |
+| Alembic migrations                                                                                                                                                                                  | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                                                                                                                                           |
+| ARQ/Redis worker wiring                                                                                                                                                                             | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                                                                                                                                           |
+| Data-collection consent (§2.13)                                                                                                                                                                     | **Live** — the ADR-011 opt-in/out ships as `data_collection_consent` on `GET`/`PATCH /users/me/settings` (see §3), not as dedicated §2.13 routes. Default remains **false**; events are recorded only while consented.                                                                                                                                              |
 
 ### Implementation decisions made under delegated judgment (CLAUDE.md §10)
 
@@ -680,9 +680,14 @@ limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the 
 
 ## 10. Billing money-path (SOLUSDEV-83 / SOLUS-FND-03)
 
-Hardened money-moving surface. The webhook route below was authorized by a human
-decision that lifts the §7.2 billing-route deferral **for this route only**;
-checkout-session creation and customer-facing purchase routes stay deferred.
+Hardened money-moving surface. The webhook route was authorized by a human
+decision that lifted the §7.2 billing-route deferral for it (SOLUSDEV-83); the
+**customer-facing checkout + portal routes below** (SOLUSDEV-83 follow-up) were
+authorized by a subsequent human decision to complete the "select plan →
+Stripe Checkout → webhook confirms → plan/credits active" flow. Enterprise stays
+contact-sales (ADR-023). The Stripe **secret API key** is not a setting — it is
+read from the SecretStore under `stripe_api_key` (like the LLM provider keys),
+never from config, env, responses, or logs.
 
 ### POST /api/v1/webhooks/stripe — Stripe events (unauthenticated; signed)
 
@@ -702,6 +707,49 @@ the raw body is size-bounded, then `stripe.Webhook.construct_event` verifies the
   subscription mode; grant a configured credit pack in payment mode — pack →
   credits map from `SOLUS_STRIPE_PACK_CREDITS`), `invoice.payment_failed`
   (mark `past_due` + `payment.failed` notification). Other types are ignored.
+
+### POST /api/v1/billing/checkout-session — start Stripe Checkout (authenticated)
+
+Body: `{ "kind": "subscription", "plan": "basic|pro", "interval": "month|year" }`
+or `{ "kind": "pack", "price_id": "<configured pack price id>" }`.
+
+- `200 {"data": {"url": "<hosted Stripe Checkout URL>"}}`. The renderer opens the
+  URL in the system browser; entitlement is applied only by the webhook once
+  Stripe confirms payment — never from this request.
+- Subscription mode uses the plan+interval → Price map (`SOLUS_STRIPE_PLAN_PRICES`)
+  and applies `SOLUS_STRIPE_TRIAL_DAYS` as `trial_period_days`. Pack mode uses a
+  `price_id` present in `SOLUS_STRIPE_PACK_CREDITS`.
+- Reuses the caller's `stripe_customer_id` or creates one (persisted on their
+  subscription); `client_reference_id` + `metadata.solus_user_id` carry identity
+  to the webhook, `metadata.price_id` lets the webhook grant the right pack.
+- Errors: `enterprise` or unknown plan → `400 plan_not_checkoutable`; missing/bad
+  interval → `400 invalid_interval`; unknown pack → `400 invalid_pack`; plan with
+  no configured Price → `503 billing_unconfigured`; no Stripe key → `503
+billing_unconfigured`; Stripe API error → `502 billing_provider_error`.
+
+### POST /api/v1/billing/portal-session — Stripe billing portal (authenticated)
+
+- `200 {"data": {"url": "<Stripe billing-portal URL>"}}` — manage payment method,
+  cancel, or switch plan. Requires an existing `stripe_customer_id` (a prior
+  checkout): none → `409 no_billing_customer`. No key → `503`, Stripe error → `502`.
+
+### GET /api/v1/billing/packs — purchasable credit packs (authenticated)
+
+- `200 {"data": {"packs": [{"price_id": "...", "credits": 1000}, ...]}}` from
+  `SOLUS_STRIPE_PACK_CREDITS`, sorted by credits. Price ids are not secrets; this
+  keeps the UI from hard-coding environment-specific Stripe ids.
+
+### GET /api/v1/users/me/credits — credit balance (authenticated)
+
+- `200 {"data": {"user_id": "...", "balance": <int>}}`. Always answerable — `0`
+  before any ledger row exists. Team-scoping N/A: credits are per-user (ADR-024).
+
+### Webhook plan derivation (SOLUSDEV-83 follow-up)
+
+On `customer.subscription.created/updated`, the local `plan` + `limits` are now
+set from the purchased Stripe **Price** (reverse `SOLUS_STRIPE_PLAN_PRICES`
+lookup), so entitlement always reflects what was actually paid for — never a
+client-supplied plan name. An unmapped price leaves the plan unchanged.
 
 ### Credit money-path (internal, no public routes)
 

@@ -23,12 +23,33 @@ def test_settings_has_no_dead_stripe_secret_key_field() -> None:
     Settings still validates without it."""
     assert "stripe_secret_key" not in Settings.model_fields
     settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]  # hermetic: ignore local .env (matches CI)
         supabase_jwt_secret="dummy-jwt-signing-value-tests-only",
         database_url="sqlite+aiosqlite://",
     )
     # The consumed Stripe fields survive the removal.
     assert settings.stripe_webhook_secret is None
     assert settings.stripe_pack_credits == {}
+
+
+def test_stripe_checkout_settings_defaults_and_shape() -> None:
+    """SOLUSDEV-83 follow-up: the checkout settings default safely and the plan
+    price map is a dict. The Stripe SECRET key is deliberately NOT a setting (it
+    lives in the SecretStore under 'stripe_api_key')."""
+    s = Settings(_env_file=None, supabase_jwt_secret="dummy", database_url="sqlite+aiosqlite://")  # type: ignore[call-arg]
+    assert s.stripe_plan_prices == {}
+    assert s.stripe_trial_days == 14
+    assert s.stripe_checkout_success_url.endswith("checkout=success")
+    assert "stripe_api_key" not in Settings.model_fields
+    assert "stripe_secret_key" not in Settings.model_fields
+
+    configured = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        supabase_jwt_secret="dummy",
+        database_url="sqlite+aiosqlite://",
+        stripe_plan_prices={"basic:month": "price_bm", "pro:year": "price_py"},
+    )
+    assert configured.stripe_plan_prices["pro:year"] == "price_py"
 
 
 def test_shipped_models_yaml_validates() -> None:

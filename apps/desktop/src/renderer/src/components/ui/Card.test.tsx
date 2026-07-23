@@ -15,4 +15,11 @@ describe('Card', () => {
     await userEvent.click(screen.getByText('clickable'))
     expect(onClick).toHaveBeenCalledOnce()
   })
+
+  it('reads as clickable (interactive affordance) only when it has an onClick (SOLUSDEV-164)', () => {
+    const { rerender } = render(<Card>static</Card>)
+    expect(screen.getByText('static').closest('div')).not.toHaveClass('interactive')
+    rerender(<Card onClick={vi.fn()}>clickable</Card>)
+    expect(screen.getByText('clickable').closest('div')).toHaveClass('interactive')
+  })
 })

@@ -14,6 +14,7 @@ import {
   startGithubOAuth,
   exchangeGithubOAuth,
   updateSource,
+  disconnectSource,
   triggerSync,
   getSyncs,
   listEntities,
@@ -142,6 +143,19 @@ describe('integration + source calls', () => {
       method: 'PATCH',
       body: { config: { repo: 'o/r', branch: 'main' } }
     })
+  })
+
+  it('disconnectSource DELETEs the source, retaining entities by default', async () => {
+    const { client, calls } = stubClient({ id: 's1', retained_entities: true })
+    await disconnectSource('p1', 's1', {}, client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1?retain_entities=true')
+    expect((calls[0].options as { method?: string }).method).toBe('DELETE')
+  })
+
+  it('disconnectSource can remove entities when asked', async () => {
+    const { client, calls } = stubClient({ id: 's1', retained_entities: false })
+    await disconnectSource('p1', 's1', { retainEntities: false }, client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1?retain_entities=false')
   })
 
   it('triggerSync POSTs to the sync route', async () => {

@@ -481,6 +481,32 @@ class SubscriptionUpdate(StrictModel):
     plan: PlanType
 
 
+class CheckoutSessionCreate(StrictModel):
+    """Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,
+    month/year); `pack` needs a price_id that maps to a configured credit pack."""
+
+    kind: Literal["subscription", "pack"]
+    plan: PlanType | None = None
+    interval: Literal["month", "year"] | None = None
+    price_id: str | None = None
+
+
+class CheckoutSessionRead(BaseModel):
+    url: str
+
+
+class PortalSessionRead(BaseModel):
+    url: str
+
+
+class CreditBalanceView(BaseModel):
+    """Lightweight credit-balance response for the UI (always answerable, even
+    before any ledger row exists — balance is then 0)."""
+
+    user_id: UUID
+    balance: int
+
+
 class CreditBalanceRead(_Timestamped):
     user_id: UUID
     balance: int

@@ -12,7 +12,16 @@ export interface ShellToast {
   alertId?: string
 }
 
-export type MainScreen = 'home' | 'graph' | 'bench' | 'sol' | 'team' | 'billing' | 'settings'
+export type MainScreen =
+  | 'home'
+  | 'overview'
+  | 'graph'
+  | 'sources'
+  | 'bench'
+  | 'sol'
+  | 'team'
+  | 'billing'
+  | 'settings'
 
 export interface ShellState {
   toast: ShellToast | null

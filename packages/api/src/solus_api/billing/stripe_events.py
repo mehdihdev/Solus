@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits
+from solus_api.billing.plans import plan_for_price_id
 from solus_api.models import (
     CreditTxnType,
     NotificationType,
@@ -28,6 +29,7 @@ from solus_api.models import (
     Subscription,
     SubscriptionStatus,
     User,
+    default_limits,
 )
 from solus_api.services.notifications import notify_user
 
@@ -80,8 +82,22 @@ async def _sub_by(
     return None
 
 
+def _subscription_price_id(obj: dict[str, Any]) -> str | None:
+    """The first line item's Stripe Price id on a subscription object, or None."""
+    items = (obj.get("items") or {}).get("data") or []
+    if not items:
+        return None
+    price = items[0].get("price") or {}
+    pid = price.get("id")
+    return str(pid) if pid else None
+
+
 async def _apply_subscription(
-    session: AsyncSession, obj: dict[str, Any], etype: str, created: datetime
+    session: AsyncSession,
+    obj: dict[str, Any],
+    etype: str,
+    created: datetime,
+    plan_prices: dict[str, str],
 ) -> None:
     sub_id = obj.get("id")
     customer = obj.get("customer")
@@ -102,6 +118,14 @@ async def _apply_subscription(
         local.status = SubscriptionStatus.CANCELED
     else:
         local.status = _STATUS_MAP.get(str(obj.get("status")), local.status)
+        # Entitlement is derived from what was actually purchased (the Stripe
+        # Price on the subscription) — never from a client-supplied plan name.
+        price_id = _subscription_price_id(obj)
+        if price_id:
+            plan = plan_for_price_id(plan_prices, price_id)
+            if plan is not None:
+                local.plan = plan
+                local.limits = default_limits(plan)
     local.stripe_event_at = created
 
 
@@ -200,10 +224,16 @@ async def _apply_invoice_failed(session: AsyncSession, obj: dict[str, Any]) -> N
 
 
 async def process_event(
-    session: AsyncSession, event: dict[str, Any], *, pack_credits: dict[str, int]
+    session: AsyncSession,
+    event: dict[str, Any],
+    *,
+    pack_credits: dict[str, int],
+    plan_prices: dict[str, str] | None = None,
 ) -> bool:
     """Dispatch one Stripe event. Returns True if newly processed, False if it was
-    a duplicate (already recorded). Idempotent and out-of-order safe."""
+    a duplicate (already recorded). Idempotent and out-of-order safe. `plan_prices`
+    maps Stripe Price ids → plan (for deriving entitlement from a subscription)."""
+    plan_prices = plan_prices or {}
     event_id = str(event["id"])
     etype = str(event["type"])
 
@@ -217,7 +247,7 @@ async def process_event(
     created = _event_dt(int(event.get("created") or 0))
 
     if etype in _SUBSCRIPTION_EVENTS:
-        await _apply_subscription(session, obj, etype, created)
+        await _apply_subscription(session, obj, etype, created, plan_prices)
     elif etype == "checkout.session.completed":
         await _apply_checkout(session, obj, event_id, pack_credits)
     elif etype == "invoice.payment_failed":

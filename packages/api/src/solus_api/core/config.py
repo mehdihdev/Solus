@@ -66,6 +66,23 @@ class Settings(BaseSettings):
     # Max Stripe webhook body we will parse, bytes — bound untrusted input.
     stripe_webhook_max_bytes: int = 262144
 
+    # --- Stripe Checkout (SOLUSDEV-83 follow-up) — the outbound money-in surface.
+    # The Stripe SECRET API KEY is NOT a setting: it lives in the SecretStore under
+    # "stripe_api_key" (like the LLM provider keys), never in config, env, or logs.
+    # Maps "<plan>:<interval>" → Stripe recurring Price id, e.g.
+    # {"basic:month": "price_...", "pro:year": "price_..."}. Empty until real
+    # Prices exist; checkout for an unmapped plan returns 503 billing_unconfigured.
+    stripe_plan_prices: dict[str, str] = {}
+    # Free-trial length applied to a NEW Stripe subscription (trial_period_days).
+    # Config, not hardcoded — this is the single place that resolves the ADR-024
+    # "one month" vs the 14-day code/API drift; calibrate here. 0 disables it.
+    stripe_trial_days: int = 14
+    # Where Stripe returns the user after Checkout / the billing portal. Points at
+    # the desktop renderer route; the app refetches subscription+credits on return.
+    stripe_checkout_success_url: str = "http://localhost:5173/#/billing?checkout=success"
+    stripe_checkout_cancel_url: str = "http://localhost:5173/#/billing?checkout=cancel"
+    stripe_billing_portal_return_url: str = "http://localhost:5173/#/billing"
+
     # --- Connector framework (SOLUSDEV-103) ---
     # Secret store selection. Prod/staging with aws_region set → AWS Secrets
     # Manager. Otherwise a Fernet key (secrets_key) → local encrypted store.

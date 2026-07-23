@@ -1,117 +1,107 @@
-// SOLUSDEV-147 — unit tests for the .env.mega parser/renderer (pure, no FS).
-// Run: node --test scripts/lib/env-mega.test.mjs
+// SOLUSDEV-147 / SOLUSDEV-164 — unit tests for the flat .env.mega parser/
+// renderer (pure, no FS). Run: node --test scripts/lib/env-mega.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseMega,
-  splitToTargets,
+  resolveMega,
   parseEnvFile,
   serializeEntries,
+  mergeEnvFiles,
   renderMega,
   diffKeys,
 } from "./env-mega.mjs";
 
 // ---------------------------------------------------------------------------
-// parseMega — structure
+// parseMega — flat structure
 // ---------------------------------------------------------------------------
-test("parseMega groups KEY=VALUE lines under their >>> header", () => {
+test("parseMega reads a flat KEY=VALUE list in order", () => {
   const mega = [
     "# a file-level comment, ignored",
     "",
-    "# >>> apps/desktop/.env",
     "VITE_API_BASE_URL=http://127.0.0.1:8000",
-    "VITE_SUPABASE_URL=https://x.supabase.co",
-    "",
-    "# >>> packages/api/.env",
     "SOLUS_DATABASE_URL=postgres://a/b",
   ].join("\n");
 
-  const { blocks } = parseMega(mega);
-  assert.equal(blocks.length, 2);
-  assert.equal(blocks[0].path, "apps/desktop/.env");
-  assert.equal(blocks[0].isCommon, false);
+  const { entries } = parseMega(mega);
   assert.deepEqual(
-    blocks[0].entries.map((e) => e.key),
-    ["VITE_API_BASE_URL", "VITE_SUPABASE_URL"],
+    entries.map((e) => e.key),
+    ["VITE_API_BASE_URL", "SOLUS_DATABASE_URL"],
   );
-  assert.equal(blocks[1].entries[0].value, "postgres://a/b");
+  assert.equal(entries[1].value, "postgres://a/b");
 });
 
-test("parseMega marks the common block and keeps its order", () => {
-  const { blocks } = parseMega("# >>> common\nA=1\nB=2\n");
-  assert.equal(blocks[0].isCommon, true);
-  assert.equal(blocks[0].path, "common");
+test("parseMega treats a legacy `# >>> path` header as an ignored comment", () => {
+  const { entries } = parseMega(
+    "# >>> apps/desktop/.env\nVITE_X=1\n# >>> common\nSHARED=2\n",
+  );
+  assert.deepEqual(
+    entries.map((e) => e.key),
+    ["VITE_X", "SHARED"],
+  );
 });
 
-test("parseMega throws when a KEY=VALUE appears before any header", () => {
-  assert.throws(() => parseMega("STRAY=1\n# >>> .env\nA=2\n"), /before any/i);
+test("parseMega de-duplicates keys, last value winning, keeping first-seen order", () => {
+  const { entries } = parseMega("A=1\nB=2\nA=3\n");
+  assert.deepEqual(entries, [
+    { key: "A", value: "3" },
+    { key: "B", value: "2" },
+  ]);
 });
 
 test("parseMega throws on an invalid key name", () => {
-  assert.throws(() => parseMega("# >>> .env\n1BAD=x\n"), /invalid/i);
+  assert.throws(() => parseMega("1BAD=x\n"), /invalid/i);
 });
 
 test("parseMega throws on a non-comment line with no '='", () => {
-  assert.throws(() => parseMega("# >>> .env\nnonsense line\n"), /KEY=VALUE/);
+  assert.throws(() => parseMega("nonsense line\n"), /KEY=VALUE/);
 });
 
 // ---------------------------------------------------------------------------
-// splitToTargets — interpolation + emission
+// resolveMega — interpolation + emission (every key is emitted)
 // ---------------------------------------------------------------------------
-test("splitToTargets resolves ${VAR} from the common block", () => {
-  const mega = [
-    "# >>> common",
-    "SUPABASE_URL=https://x.supabase.co",
-    "# >>> apps/desktop/.env",
-    "VITE_SUPABASE_URL=${SUPABASE_URL}",
-  ].join("\n");
-
-  const targets = splitToTargets(mega);
-  assert.equal(targets.length, 1); // common is not emitted
-  assert.equal(targets[0].path, "apps/desktop/.env");
-  assert.equal(
-    targets[0].content.trim(),
-    "VITE_SUPABASE_URL=https://x.supabase.co",
+test("resolveMega resolves ${VAR} from an earlier key and emits both", () => {
+  const entries = resolveMega(
+    [
+      "SUPABASE_URL=https://x.supabase.co",
+      "VITE_SUPABASE_URL=${SUPABASE_URL}",
+    ].join("\n"),
   );
+  assert.deepEqual(entries, [
+    { key: "SUPABASE_URL", value: "https://x.supabase.co" },
+    { key: "VITE_SUPABASE_URL", value: "https://x.supabase.co" },
+  ]);
 });
 
-test("splitToTargets resolves an earlier key within the same block", () => {
-  const mega = [
-    "# >>> .aws.env",
-    "AWS_ACCOUNT=1234",
-    "ECR_URI=${AWS_ACCOUNT}.dkr.ecr",
-  ].join("\n");
-  const [t] = splitToTargets(mega);
-  assert.match(t.content, /ECR_URI=1234\.dkr\.ecr/);
+test("resolveMega resolves a chain of references", () => {
+  const entries = resolveMega(
+    "AWS_ACCOUNT=1234\nECR_URI=${AWS_ACCOUNT}.dkr.ecr\n",
+  );
+  assert.equal(entries.find((e) => e.key === "ECR_URI").value, "1234.dkr.ecr");
 });
 
-test("splitToTargets throws on an unresolved reference, naming the var", () => {
-  const mega = "# >>> .env\nA=${MISSING}\n";
-  assert.throws(() => splitToTargets(mega), /MISSING/);
+test("resolveMega throws on an unresolved reference, naming the var", () => {
+  assert.throws(() => resolveMega("A=${MISSING}\n"), /MISSING/);
 });
 
-test("splitToTargets treats single-quoted values as literal (no interpolation)", () => {
-  const mega = "# >>> .env\nPASS='literal_${NOPE}_kept'\n";
-  const [t] = splitToTargets(mega);
-  assert.match(t.content, /PASS=.*literal_\$\{NOPE\}_kept/);
+test("resolveMega treats single-quoted values as literal (no interpolation)", () => {
+  const [t] = resolveMega("PASS='literal_${NOPE}_kept'\n");
+  assert.equal(t.value, "literal_${NOPE}_kept");
 });
 
-test("splitToTargets strips inline comments from bare values but keeps '#' with no leading space", () => {
-  const mega = [
-    "# >>> .env",
-    "URL=http://h:8000    # trailing comment",
-    "FRAG=http://h/#section",
-  ].join("\n");
-  const [t] = splitToTargets(mega);
-  assert.match(t.content, /URL=http:\/\/h:8000\n/); // trailing comment stripped
-  // '#' with no leading space is kept in the value (quoted for safe re-parsing).
-  assert.match(t.content, /FRAG="http:\/\/h\/#section"/);
+test("resolveMega strips inline comments from bare values but keeps '#' with no leading space", () => {
+  const entries = resolveMega(
+    ["URL=http://h:8000    # trailing comment", "FRAG=http://h/#section"].join(
+      "\n",
+    ),
+  );
+  assert.equal(entries[0].value, "http://h:8000");
+  assert.equal(entries[1].value, "http://h/#section");
 });
 
-test("splitToTargets keeps '#' inside a quoted value", () => {
-  const mega = '# >>> .env\nKEY="a #b"\n';
-  const [t] = splitToTargets(mega);
-  assert.match(t.content, /KEY="a #b"/);
+test("resolveMega keeps '#' inside a quoted value", () => {
+  const [t] = resolveMega('KEY="a #b"\n');
+  assert.equal(t.value, "a #b");
 });
 
 // ---------------------------------------------------------------------------
@@ -126,8 +116,9 @@ test("parseEnvFile reads KEY=VALUE, ignoring comments and blanks", () => {
 });
 
 test("parseEnvFile strips an optional leading 'export'", () => {
-  const entries = parseEnvFile("export AWS_REGION=us-east-1\n");
-  assert.deepEqual(entries, [{ key: "AWS_REGION", value: "us-east-1" }]);
+  assert.deepEqual(parseEnvFile("export AWS_REGION=us-east-1\n"), [
+    { key: "AWS_REGION", value: "us-east-1" },
+  ]);
 });
 
 test("parseEnvFile keeps '=' inside the value", () => {
@@ -160,52 +151,67 @@ test("serializeEntries escapes quotes and backslashes", () => {
 });
 
 // ---------------------------------------------------------------------------
-// renderMega — for gather output; must round-trip through splitToTargets
+// mergeEnvFiles — gather de-dup + conflict detection
 // ---------------------------------------------------------------------------
-test("renderMega emits one block per file with headers, round-tripping values", () => {
-  const files = [
-    { path: ".aws.env", entries: [{ key: "AWS_REGION", value: "us-east-1" }] },
+test("mergeEnvFiles keeps the first occurrence and flags divergent values", () => {
+  const { entries, conflicts } = mergeEnvFiles([
     {
-      path: "apps/desktop/.env",
-      entries: [{ key: "VITE_API_BASE_URL", value: "http://h:8000" }],
+      path: ".env",
+      entries: [
+        { key: "A", value: "1" },
+        { key: "B", value: "x" },
+      ],
     },
-  ];
-  const mega = renderMega(files);
-  assert.match(mega, /# >>> \.aws\.env/);
-  assert.match(mega, /# >>> apps\/desktop\/\.env/);
+    {
+      path: "packages/api/.env",
+      entries: [
+        { key: "A", value: "1" },
+        { key: "B", value: "y" },
+        { key: "C", value: "z" },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    entries.map((e) => e.key),
+    ["A", "B", "C"],
+  );
+  assert.equal(entries.find((e) => e.key === "B").value, "x"); // first wins
+  assert.deepEqual(conflicts, ["B"]);
+});
 
-  const targets = splitToTargets(mega);
-  assert.equal(targets.length, 2);
-  assert.match(targets[0].content, /AWS_REGION=us-east-1/);
+// ---------------------------------------------------------------------------
+// renderMega — for gather output; must round-trip through resolveMega
+// ---------------------------------------------------------------------------
+test("renderMega emits a flat body that round-trips through resolveMega", () => {
+  const entries = [
+    { key: "AWS_REGION", value: "us-east-1" },
+    { key: "VITE_API_BASE_URL", value: "http://h:8000" },
+  ];
+  const mega = renderMega(entries);
+  assert.doesNotMatch(mega, /# >>>/); // no legacy routing headers
+  const round = resolveMega(mega);
+  assert.deepEqual(round, entries);
 });
 
 test("renderMega round-trips a value containing '$' without interpolating it", () => {
-  const files = [{ path: ".env", entries: [{ key: "P", value: "a${b}c" }] }];
-  const mega = renderMega(files);
+  const mega = renderMega([{ key: "P", value: "a${b}c" }]);
   assert.match(mega, /P="a\\\$\{b\}c"/); // escaped $ in the mega
-  const [t] = splitToTargets(mega);
-  assert.match(t.content, /P=.*a\$\{b\}c/); // survived literally
+  assert.equal(resolveMega(mega)[0].value, "a${b}c"); // survived literally
 });
 
 test("renderMega round-trips a value with both '$' and a single quote (no data loss)", () => {
   const secret = "p$a'ss${X}"; // has $, a literal ', and a ${...}
-  const files = [{ path: ".env", entries: [{ key: "PW", value: secret }] }];
-  const [t] = splitToTargets(renderMega(files));
-  // The target value must equal the original secret byte-for-byte.
-  const line = t.content.split("\n").find((l) => l.startsWith("PW="));
-  const written = line
-    .slice("PW=".length)
-    .replace(/^"|"$/g, "")
-    .replace(/\\(.)/g, "$1");
-  assert.equal(written, secret);
+  assert.equal(
+    resolveMega(renderMega([{ key: "PW", value: secret }]))[0].value,
+    secret,
+  );
 });
 
 // ---------------------------------------------------------------------------
 // diffKeys — drift/loss guard for sync
 // ---------------------------------------------------------------------------
 test("diffKeys reports keys present in the target but missing from the mega", () => {
-  const dropped = diffKeys(["A", "B", "C"], ["A", "C"]);
-  assert.deepEqual(dropped, ["B"]);
+  assert.deepEqual(diffKeys(["A", "B", "C"], ["A", "C"]), ["B"]);
 });
 
 test("diffKeys returns [] when the mega covers every existing key", () => {

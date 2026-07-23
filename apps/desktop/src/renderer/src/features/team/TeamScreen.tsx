@@ -268,6 +268,7 @@ function ProjectsPanel({
             tabIndex={0}
             onClick={() => onOpenProject?.({ id: p.id, name: p.name })}
             onKeyDown={(e) => e.key === 'Enter' && onOpenProject?.({ id: p.id, name: p.name })}
+            className={onOpenProject ? 'interactive' : undefined}
             style={{
               display: 'flex',
               gap: 12,

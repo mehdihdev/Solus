@@ -1,20 +1,22 @@
-// Billing screen (SOLUSDEV-152): a first-class rail surface for the current
-// plan and self-serve plan changes. Reads the live subscription (GET
-// /users/me/subscription) and switches plans via PATCH — no Stripe call this
-// cycle (ADR-032); Enterprise is inbound-only (contact sales). Credit balance
-// and checkout are deferred (no public routes yet), so we don't fabricate them.
+// Billing screen (SOLUSDEV-83 follow-up): a first-class rail surface for the
+// current plan, real Stripe Checkout, credit packs, and the billing portal.
+// Reads the live subscription + credit balance; "Subscribe" opens Stripe
+// Checkout in the browser and the plan is applied by the webhook on payment.
+// Enterprise stays contact-sales. When Stripe isn't configured yet, actions
+// surface a notice rather than failing silently.
+import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Row } from '../settings/settingsUi'
 import { planLabel, statusLabel, trialDaysLeft, limitLabel } from '../settings/billingFormat'
-import type { PlanType, Subscription } from '../../lib/api/resources'
+import type { CheckoutInterval, CreditPack, PlanType, Subscription } from '../../lib/api/resources'
 import { useOfflineReason } from '../workspace/workspaceOnline'
 import { useBillingData, type BillingData } from './useBillingData'
 
 /** Self-serve plans and their limits (mirrors models.PLAN_LIMITS). Enterprise is
- *  inbound-only this cycle, so it carries no self-serve switch. */
+ *  inbound-only this cycle, so it carries no self-serve checkout. */
 interface PlanCardDef {
   plan: PlanType
   tagline: string
@@ -73,7 +75,7 @@ export function BillingScreen(): React.JSX.Element {
           Billing
         </h1>
         <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>
-          Your plan and its limits. Payment is managed in the billing portal.
+          Your plan, credits, and payment — managed securely through Stripe.
         </div>
         {data.status === 'offline' ? <BillingOffline /> : <BillingLive data={data} />}
       </div>
@@ -95,27 +97,98 @@ function BillingOffline(): React.JSX.Element {
 }
 
 function BillingLive({ data }: { data: BillingData }): React.JSX.Element {
-  const { subscription, changing, changePlan } = data
+  const { subscription, credits, packs, busy, notice, startCheckout, buyPack, openPortal } = data
+  const [interval, setInterval] = useState<CheckoutInterval>('month')
+  // A live Stripe subscriber changes plans in the portal, never via a new Checkout
+  // (which would double-bill). A canceled subscription is not "live".
+  const hasLiveStripeSub =
+    !!subscription?.stripe_subscription_id && subscription.status !== 'canceled'
   return (
     <>
-      <CurrentPlanCard sub={subscription} />
-      <div style={{ marginTop: 18, marginBottom: 10, fontSize: 13, fontWeight: 600 }}>Plans</div>
+      {notice && (
+        <Card pad={14} style={{ marginTop: 16, borderColor: 'var(--warn, var(--bd))' }}>
+          <div style={{ fontSize: 12.5, color: 'var(--mut)' }} role="alert">
+            {notice}
+          </div>
+        </Card>
+      )}
+      <CurrentPlanCard sub={subscription} credits={credits} busy={busy} onManage={openPortal} />
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginTop: 18,
+          marginBottom: 10
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Plans</div>
+        <IntervalToggle value={interval} onChange={setInterval} />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
         {PLAN_CARDS.map((def) => (
           <PlanCard
             key={def.plan}
             def={def}
-            current={subscription?.plan === def.plan}
-            changing={changing}
-            onSwitch={() => void changePlan(def.plan)}
+            interval={interval}
+            current={subscription?.plan === def.plan && subscription?.status !== 'canceled'}
+            manageInPortal={hasLiveStripeSub}
+            busy={busy}
+            onSubscribe={() => void startCheckout(def.plan, interval)}
+            onManage={() => void openPortal()}
           />
         ))}
       </div>
+
+      {packs.length > 0 && <CreditPacks packs={packs} busy={busy} onBuy={buyPack} />}
     </>
   )
 }
 
-function CurrentPlanCard({ sub }: { sub: Subscription | null }): React.JSX.Element {
+function IntervalToggle({
+  value,
+  onChange
+}: {
+  value: CheckoutInterval
+  onChange: (v: CheckoutInterval) => void
+}): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', gap: 6 }} role="group" aria-label="Billing interval">
+      {(['month', 'year'] as const).map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          onClick={() => onChange(opt)}
+          aria-pressed={value === opt}
+          style={{
+            fontSize: 11,
+            padding: '3px 10px',
+            borderRadius: 6,
+            border: `1px solid ${value === opt ? 'var(--acc)' : 'var(--bd)'}`,
+            background: value === opt ? 'var(--acc)' : 'transparent',
+            color: value === opt ? 'var(--acc-ink)' : 'var(--mut)',
+            cursor: 'pointer'
+          }}
+        >
+          {opt === 'month' ? 'Monthly' : 'Yearly'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CurrentPlanCard({
+  sub,
+  credits,
+  busy,
+  onManage
+}: {
+  sub: Subscription | null
+  credits: number | null
+  busy: boolean
+  onManage: () => void
+}): React.JSX.Element {
   if (!sub) {
     return (
       <Card pad={20} style={{ marginTop: 20 }}>
@@ -128,12 +201,19 @@ function CurrentPlanCard({ sub }: { sub: Subscription | null }): React.JSX.Eleme
   const days = sub.status === 'trialing' ? trialDaysLeft(sub.expires_at) : null
   return (
     <Card pad={20} style={{ marginTop: 20 }}>
-      <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>You&apos;re on the</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
-        <span style={{ fontSize: 18, fontWeight: 600 }}>{planLabel(sub.plan)} plan</span>
-        <Mono size={9} color="var(--mut)">
-          {statusLabel(sub.status).toUpperCase()}
-        </Mono>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>You&apos;re on the</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
+            <span style={{ fontSize: 18, fontWeight: 600 }}>{planLabel(sub.plan)} plan</span>
+            <Mono size={9} color="var(--mut)">
+              {statusLabel(sub.status).toUpperCase()}
+            </Mono>
+          </div>
+        </div>
+        <Button kind="ghost" size="sm" disabled={busy} onClick={onManage}>
+          Manage billing
+        </Button>
       </div>
       <div style={{ marginTop: 12 }}>
         {days !== null && (
@@ -143,6 +223,11 @@ function CurrentPlanCard({ sub }: { sub: Subscription | null }): React.JSX.Eleme
             </span>
           </Row>
         )}
+        <Row label="Credits">
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            {credits === null ? '—' : credits.toLocaleString()}
+          </span>
+        </Row>
         <Row label="Seats">
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {sub.seat_count ?? 1}
@@ -155,14 +240,20 @@ function CurrentPlanCard({ sub }: { sub: Subscription | null }): React.JSX.Eleme
 
 function PlanCard({
   def,
+  interval,
   current,
-  changing,
-  onSwitch
+  manageInPortal,
+  busy,
+  onSubscribe,
+  onManage
 }: {
   def: PlanCardDef
+  interval: CheckoutInterval
   current: boolean
-  changing: boolean
-  onSwitch: () => void
+  manageInPortal: boolean
+  busy: boolean
+  onSubscribe: () => void
+  onManage: () => void
 }): React.JSX.Element {
   return (
     <Card
@@ -196,7 +287,15 @@ function PlanCard({
         ))}
       </div>
       <div style={{ marginTop: 12 }}>
-        <PlanAction def={def} current={current} changing={changing} onSwitch={onSwitch} />
+        <PlanAction
+          def={def}
+          interval={interval}
+          current={current}
+          manageInPortal={manageInPortal}
+          busy={busy}
+          onSubscribe={onSubscribe}
+          onManage={onManage}
+        />
       </div>
     </Card>
   )
@@ -204,14 +303,20 @@ function PlanCard({
 
 function PlanAction({
   def,
+  interval,
   current,
-  changing,
-  onSwitch
+  manageInPortal,
+  busy,
+  onSubscribe,
+  onManage
 }: {
   def: PlanCardDef
+  interval: CheckoutInterval
   current: boolean
-  changing: boolean
-  onSwitch: () => void
+  manageInPortal: boolean
+  busy: boolean
+  onSubscribe: () => void
+  onManage: () => void
 }): React.JSX.Element {
   if (current) {
     return (
@@ -222,14 +327,62 @@ function PlanAction({
   }
   if (def.contactSales) {
     return (
-      <Mono size={9} color="var(--mut)">
-        CONTACT SALES
-      </Mono>
+      <a href="mailto:sales@solus.dev?subject=Enterprise%20plan" style={{ textDecoration: 'none' }}>
+        <Mono size={9} color="var(--mut)">
+          CONTACT SALES
+        </Mono>
+      </a>
+    )
+  }
+  // An existing live Stripe subscriber switches plans through the portal, not a
+  // second Checkout (double-billing guard — the backend also enforces this).
+  if (manageInPortal) {
+    return (
+      <Button kind="soft" size="sm" disabled={busy} onClick={onManage}>
+        Switch in portal
+      </Button>
     )
   }
   return (
-    <Button kind="primary" size="sm" disabled={changing} onClick={onSwitch}>
-      {changing ? <Spinner size={11} color="var(--acc-ink)" /> : `Switch to ${planLabel(def.plan)}`}
+    <Button kind="primary" size="sm" disabled={busy} onClick={onSubscribe}>
+      {busy ? (
+        <Spinner size={11} color="var(--acc-ink)" />
+      ) : (
+        `Subscribe · ${interval === 'year' ? 'Yearly' : 'Monthly'}`
+      )}
     </Button>
+  )
+}
+
+function CreditPacks({
+  packs,
+  busy,
+  onBuy
+}: {
+  packs: readonly CreditPack[]
+  busy: boolean
+  onBuy: (priceId: string) => void
+}): React.JSX.Element {
+  return (
+    <>
+      <div style={{ marginTop: 22, marginBottom: 10, fontSize: 13, fontWeight: 600 }}>
+        Buy credits
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        {packs.map((pack) => (
+          <Card key={pack.price_id} pad={14} style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600 }}>
+              {pack.credits.toLocaleString()}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2, flex: 1 }}>credits</div>
+            <div style={{ marginTop: 10 }}>
+              <Button kind="soft" size="sm" disabled={busy} onClick={() => onBuy(pack.price_id)}>
+                Buy
+              </Button>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
   )
 }

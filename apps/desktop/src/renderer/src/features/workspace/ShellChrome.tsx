@@ -11,15 +11,19 @@ import { useShellStore } from './shellStore'
 import { useOfflineReason } from './workspaceOnline'
 
 export function TopBar({
-  projectName,
+  projectSlot,
   screenTitle,
   openCount,
+  onHome,
   onBell,
   onSignOut
 }: {
-  projectName: string
+  /** The project identity control (the SOLUSDEV-164 project switcher). */
+  projectSlot: React.ReactNode
   screenTitle: string
   openCount: number
+  /** Return to the workspace home from any screen (SOLUSDEV-164 breadcrumb). */
+  onHome: () => void
   onBell: () => void
   onSignOut: () => void
 }): React.JSX.Element {
@@ -38,7 +42,25 @@ export function TopBar({
         background: 'var(--bg)'
       }}
     >
-      <span style={{ fontSize: 13, fontWeight: 600 }}>{projectName}</span>
+      <button
+        type="button"
+        onClick={onHome}
+        className="interactive"
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--mut)',
+          cursor: 'pointer',
+          fontFamily: 'var(--font-ui)',
+          fontSize: 13,
+          padding: '2px 6px',
+          borderRadius: 3
+        }}
+      >
+        Home
+      </button>
+      <span style={{ color: 'var(--mut)', fontSize: 12 }}>/</span>
+      {projectSlot}
       <span style={{ color: 'var(--mut)', fontSize: 12 }}>/</span>
       <span style={{ fontSize: 13, color: 'var(--mut)' }}>{screenTitle}</span>
       <div style={{ flex: 1 }} />
@@ -91,7 +113,14 @@ function BellButton({
         e.stopPropagation()
         onBell()
       }}
-      style={{ position: 'relative', cursor: 'pointer', padding: 6, color: 'var(--mut)' }}
+      className="interactive"
+      style={{
+        position: 'relative',
+        cursor: 'pointer',
+        padding: 6,
+        borderRadius: 3,
+        color: 'var(--mut)'
+      }}
     >
       <Icons.bell size={17} />
       {openCount > 0 && (
@@ -218,6 +247,7 @@ export function NotificationsPopover({
           <div
             key={n.id}
             onClick={() => onRead(n.id)}
+            className="interactive"
             style={{
               display: 'flex',
               gap: 10,

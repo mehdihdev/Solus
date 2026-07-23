@@ -6,14 +6,31 @@ interface OAuthCallbackResult {
   error?: string
 }
 
+interface CloneResult {
+  path?: string
+  error?: string
+}
+
 // Custom APIs for renderer. `solus.oauth` drives the loopback GitHub flow:
 // the renderer gets the redirect URL, builds the authorize URL, then asks the
-// main process to open the browser and capture the callback.
+// main process to open the browser and capture the callback. `solus.folder`
+// links a project to a local directory (pick / clone / reveal) — SOLUSDEV-164.
 const api = {
   oauth: {
     getRedirectUrl: (): Promise<string> => ipcRenderer.invoke('oauth:github:redirect-url'),
     awaitGithub: (authorizeUrl: string): Promise<OAuthCallbackResult> =>
       ipcRenderer.invoke('oauth:github:await', authorizeUrl)
+  },
+  folder: {
+    pick: (): Promise<string | null> => ipcRenderer.invoke('folder:pick'),
+    reveal: (path: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('folder:reveal', path),
+    clone: (input: { repoUrl: string; parentDir: string }): Promise<CloneResult> =>
+      ipcRenderer.invoke('git:clone', input)
+  },
+  billing: {
+    // Open a Stripe Checkout / billing-portal URL (from our API) in the browser.
+    openExternal: (url: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('billing:open-external', url)
   }
 }
 

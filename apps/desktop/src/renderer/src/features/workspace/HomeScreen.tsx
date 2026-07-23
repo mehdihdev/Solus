@@ -247,6 +247,7 @@ function ProjectRow({
       tabIndex={0}
       onClick={() => onOpen({ id: project.id, name: project.name })}
       onKeyDown={(e) => e.key === 'Enter' && onOpen({ id: project.id, name: project.name })}
+      className="interactive"
       style={{
         display: 'flex',
         gap: 12,
@@ -474,6 +475,7 @@ function MenuItem({
       type="button"
       role="menuitem"
       onClick={onClick}
+      className="interactive"
       style={{
         display: 'block',
         width: '100%',

@@ -18,10 +18,12 @@ export function Card({
   onClick,
   id
 }: CardProps): React.JSX.Element {
+  // A card with a click handler reads as clickable (hover tint + pointer).
+  const classes = [className, onClick ? 'interactive' : null].filter(Boolean).join(' ')
   return (
     <div
       id={id}
-      className={className}
+      className={classes || undefined}
       onClick={onClick}
       style={{
         background: 'var(--sur)',

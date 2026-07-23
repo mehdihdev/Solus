@@ -131,7 +131,10 @@ def bearer(sub: str, email: str, **kwargs: Any) -> dict[str, str]:
 
 @pytest.fixture
 def settings() -> Settings:
+    # `_env_file=None` keeps the suite hermetic: a developer's local packages/api/.env
+    # must not leak into tests (it makes them diverge from CI, which has no .env).
     return Settings(
+        _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
         supabase_jwt_secret=TEST_JWT_SECRET,
         supabase_jwt_audience=TEST_AUDIENCE,
         database_url=TEST_DATABASE_URL,

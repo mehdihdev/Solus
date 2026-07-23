@@ -8,6 +8,7 @@ from fastapi import APIRouter, Response
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.billing import credits
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
@@ -47,6 +48,7 @@ from solus_api.models import (
     utcnow,
 )
 from solus_api.schemas import (
+    CreditBalanceView,
     SettingsUpdate,
     SubscriptionRead,
     SubscriptionUpdate,
@@ -302,3 +304,11 @@ async def update_subscription(
     await session.commit()
     await session.refresh(sub)
     return envelope(SubscriptionRead.model_validate(sub).model_dump(mode="json"))
+
+
+@router.get("/credits")
+async def get_credits(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    """Current credit balance (ADR-024). Always answerable — 0 before any ledger row
+    exists. The desktop Billing screen reads this to reflect credit-pack purchases."""
+    balance = await credits.get_balance(session, user.id)
+    return envelope(CreditBalanceView(user_id=user.id, balance=balance).model_dump(mode="json"))

@@ -29,6 +29,7 @@ export function Button({
   size = 'md',
   disabled = false,
   style,
+  className,
   children,
   type = 'button',
   ...rest
@@ -42,15 +43,18 @@ export function Button({
     alignItems: 'center',
     gap: 7,
     justifyContent: 'center',
-    transition: 'background 0.12s, border-color 0.12s, opacity 0.12s',
+    transition: 'box-shadow 0.12s, background 0.12s, border-color 0.12s, opacity 0.12s',
     opacity: disabled ? 0.45 : 1,
     whiteSpace: 'nowrap',
     ...SIZE_STYLE[size],
     ...KIND_STYLE[kind],
     ...style
   }
+  // The `interactive` class supplies the hover/active tint + focus ring; it is
+  // omitted while disabled so a dead button gives no clickable feedback.
+  const classes = [className, disabled ? null : 'interactive'].filter(Boolean).join(' ')
   return (
-    <button type={type} disabled={disabled} style={base} {...rest}>
+    <button type={type} disabled={disabled} style={base} className={classes || undefined} {...rest}>
       {children}
     </button>
   )

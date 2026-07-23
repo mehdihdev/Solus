@@ -15,9 +15,10 @@ describe('TopBar', () => {
     const onSignOut = vi.fn()
     render(
       <TopBar
-        projectName="Rover MK2"
+        projectSlot={<span>Rover MK2</span>}
         screenTitle="Context Model"
         openCount={2}
+        onHome={vi.fn()}
         onBell={onBell}
         onSignOut={onSignOut}
       />
@@ -31,12 +32,29 @@ describe('TopBar', () => {
     expect(onSignOut).toHaveBeenCalled()
   })
 
+  it('offers a Home breadcrumb back to the workspace home (SOLUSDEV-164)', async () => {
+    const onHome = vi.fn()
+    render(
+      <TopBar
+        projectSlot={<span>Rover MK2</span>}
+        screenTitle="Sources"
+        openCount={0}
+        onHome={onHome}
+        onBell={vi.fn()}
+        onSignOut={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Home' }))
+    expect(onHome).toHaveBeenCalled()
+  })
+
   it('hides the badge at zero unread', () => {
     render(
       <TopBar
-        projectName="Rover MK2"
+        projectSlot={<span>Rover MK2</span>}
         screenTitle="Home"
         openCount={0}
+        onHome={vi.fn()}
         onBell={vi.fn()}
         onSignOut={vi.fn()}
       />

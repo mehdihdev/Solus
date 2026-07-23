@@ -17,7 +17,10 @@ import { MiniOrb } from '../sol/MiniOrb'
 import { TeamScreen } from '../team/TeamScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
+import { ProjectOverview } from '../project/ProjectOverview'
+import { SourcesScreen } from '../project/SourcesScreen'
 import { HomeScreen } from './HomeScreen'
+import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
 import { useNotifications } from './useNotifications'
 import { TopBar, OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
@@ -28,7 +31,9 @@ type Route = { name: MainScreen } | { name: 'alert'; alertId: string }
 /** Topbar title per screen (also the data-screen-label hook for tests). */
 const SCREEN_TITLES: Readonly<Record<string, string>> = {
   home: 'Home',
+  overview: 'Overview',
   graph: 'Context Model',
+  sources: 'Sources',
   bench: 'Live Bench',
   sol: 'SOL',
   team: 'Team',
@@ -37,15 +42,11 @@ const SCREEN_TITLES: Readonly<Record<string, string>> = {
   alert: 'Alert'
 }
 
-/** Honest topbar fallback while no project is linked (SOLUSDEV-152). */
-const NO_PROJECT_LABEL = 'No project'
-
 export function WorkspaceShell(): React.JSX.Element {
   const navigate = useNavigate()
   const [route, setRoute] = useState<Route>({ name: 'home' })
   const [notifOpen, setNotifOpen] = useState(false)
   const signOut = useAuthStore((s) => s.signOut)
-  const project = useWorkspaceStore((s) => s.project)
   const me = useMe()
   const notifs = useNotifications()
   const online = notifs.status === 'ready'
@@ -59,7 +60,15 @@ export function WorkspaceShell(): React.JSX.Element {
   }
   const openProject = (p: { id: string; name: string }): void => {
     useWorkspaceStore.getState().setProject(p)
-    go('graph')
+    // Opening a project from Home/Team lands on the project hub (SOLUSDEV-164)
+    // — an orienting overview — rather than the Context Model canvas.
+    go('overview')
+  }
+  const switchProject = (p: { id: string; name: string }): void => {
+    // Switching from the topbar only re-scopes the CURRENT screen to the new
+    // project — it must not navigate away and interrupt the user's flow.
+    useWorkspaceStore.getState().setProject(p)
+    setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {
     setRoute({ name: 'alert', alertId })
@@ -95,7 +104,8 @@ export function WorkspaceShell(): React.JSX.Element {
         }}
       >
         <TopBar
-          projectName={project?.name ?? NO_PROJECT_LABEL}
+          projectSlot={<ProjectSwitcher onSwitch={switchProject} onHome={() => go('home')} />}
+          onHome={() => go('home')}
           screenTitle={SCREEN_TITLES[name] ?? ''}
           openCount={online ? notifs.unreadCount : 0}
           onBell={() => setNotifOpen((o) => !o)}
@@ -120,6 +130,7 @@ export function WorkspaceShell(): React.JSX.Element {
           <ScreenView
             route={route}
             openProject={openProject}
+            navigate={go}
             goBack={() => go(useShellStore.getState().lastMain)}
           />
         </div>
@@ -195,33 +206,69 @@ function VerifyEmailBanner(): React.JSX.Element | null {
   )
 }
 
+/** Screens that take no props, keyed by name (keeps ScreenView's branching low). */
+const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
+  graph: GraphScreen,
+  sources: SourcesScreen,
+  bench: BenchScreen,
+  sol: SolScreen,
+  billing: BillingScreen,
+  settings: SettingsScreen
+}
+
 function ScreenView({
   route,
   openProject,
+  navigate,
   goBack
 }: {
   route: Route
   openProject: (project: { id: string; name: string }) => void
+  navigate: (screen: MainScreen) => void
   goBack: () => void
 }): React.JSX.Element | null {
   switch (route.name) {
     case 'home':
       return <HomeScreen onOpenProject={openProject} />
-    case 'graph':
-      return <GraphScreen />
-    case 'bench':
-      return <BenchScreen />
-    case 'sol':
-      return <SolScreen />
+    case 'overview':
+      return <ProjectOverview onNavigate={navigate} />
     case 'team':
       return <TeamScreen onOpenProject={openProject} />
-    case 'billing':
-      return <BillingScreen />
-    case 'settings':
-      return <SettingsScreen />
     case 'alert':
       return <AlertScreen onBack={goBack} />
+    default: {
+      const Screen = SIMPLE_SCREENS[route.name]
+      return Screen ? <Screen /> : null
+    }
   }
+}
+
+interface RailItem {
+  screen: MainScreen
+  icon: React.ReactNode
+  label: string
+}
+
+/** Top rail: Home + the project-scoped screens (Overview → Sources) in flow order. */
+const RAIL_TOP: readonly RailItem[] = [
+  { screen: 'home', icon: <Icons.box size={17} />, label: 'Home' },
+  { screen: 'overview', icon: <Icons.spark size={17} />, label: 'Overview' },
+  { screen: 'graph', icon: <Icons.graph size={17} />, label: 'Context Model' },
+  { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
+  { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
+  { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
+  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' }
+]
+
+/** Bottom rail: account-level screens pinned below the spacer. */
+const RAIL_BOTTOM: readonly RailItem[] = [
+  { screen: 'billing', icon: <Icons.card size={17} />, label: 'Billing' },
+  { screen: 'settings', icon: <Icons.gear size={17} />, label: 'Settings' }
+]
+
+/** Whether a rail item is the active screen (Context Model also owns Alert). */
+function isRailActive(item: RailItem, name: string): boolean {
+  return name === item.screen || (item.screen === 'graph' && name === 'alert')
 }
 
 function Rail({
@@ -233,6 +280,16 @@ function Rail({
   go: (screen: MainScreen) => void
   userName: string
 }): React.JSX.Element {
+  const renderItem = (item: RailItem): React.JSX.Element => (
+    <RailButton
+      key={item.screen}
+      id={`rail-${item.screen}`}
+      icon={item.icon}
+      label={item.label}
+      active={isRailActive(item, name)}
+      onClick={() => go(item.screen)}
+    />
+  )
   return (
     <div
       style={{
@@ -250,56 +307,9 @@ function Rail({
       <div onClick={() => go('home')} style={{ marginBottom: 12, cursor: 'pointer' }}>
         <SolOrb size={24} />
       </div>
-      <RailButton
-        id="rail-home"
-        icon={<Icons.box size={17} />}
-        label="Home"
-        active={name === 'home'}
-        onClick={() => go('home')}
-      />
-      <RailButton
-        id="rail-graph"
-        icon={<Icons.graph size={17} />}
-        label="Context Model"
-        active={name === 'graph' || name === 'alert'}
-        onClick={() => go('graph')}
-      />
-      <RailButton
-        id="rail-bench"
-        icon={<Icons.bench size={17} />}
-        label="Live Bench"
-        active={name === 'bench'}
-        onClick={() => go('bench')}
-      />
-      <RailButton
-        id="rail-sol"
-        icon={<Icons.sol size={17} />}
-        label="SOL"
-        active={name === 'sol'}
-        onClick={() => go('sol')}
-      />
-      <RailButton
-        id="rail-team"
-        icon={<Icons.team size={17} />}
-        label="Team"
-        active={name === 'team'}
-        onClick={() => go('team')}
-      />
+      {RAIL_TOP.map(renderItem)}
       <div style={{ flex: 1 }} />
-      <RailButton
-        id="rail-billing"
-        icon={<Icons.card size={17} />}
-        label="Billing"
-        active={name === 'billing'}
-        onClick={() => go('billing')}
-      />
-      <RailButton
-        id="rail-settings"
-        icon={<Icons.gear size={17} />}
-        label="Settings"
-        active={name === 'settings'}
-        onClick={() => go('settings')}
-      />
+      {RAIL_BOTTOM.map(renderItem)}
       <div style={{ marginTop: 4 }}>
         <Avatar name={userName} size={26} />
       </div>
@@ -328,6 +338,7 @@ function RailButton({
       onClick={onClick}
       title={label}
       aria-label={label}
+      className="interactive"
       style={{
         position: 'relative',
         width: 36,

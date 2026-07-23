@@ -1,8 +1,8 @@
-// SOLUSDEV-147 — integration tests for the env CLI against a temp tree.
-// Exercises sync/gather I/O without ever touching the real .env files.
-// SOLUSDEV-152 adds the template-completeness suite: env.mega.example is the
-// single onboarding checklist, so its required shape is asserted executably.
-import { test, before, after } from "node:test";
+// SOLUSDEV-147 / SOLUSDEV-164 — integration tests for the env CLI against a
+// temp tree. Exercises the flat sync/gather I/O without touching real .env
+// files, plus the template-completeness suite: env.mega.example is the single
+// onboarding checklist, so its required shape is asserted executably.
+import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
@@ -10,17 +10,24 @@ import {
   rmSync,
   writeFileSync,
   readFileSync,
-  existsSync,
   mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { splitToTargets, parseEnvFile } from "./lib/env-mega.mjs";
+import { resolveMega } from "./lib/env-mega.mjs";
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(SCRIPTS_DIR, "env-sync.mjs");
 const EXAMPLE = resolve(SCRIPTS_DIR, "..", "env.mega.example");
+
+// The files sync writes / gather reads, mirrored from env-sync.mjs TARGET_FILES.
+const TARGETS = [
+  ".env",
+  "apps/desktop/.env",
+  "apps/web/.env",
+  "packages/api/.env",
+];
 let root;
 
 const run = (args, extraEnv = {}) =>
@@ -45,37 +52,40 @@ const write = (rel, text) => {
 };
 const read = (rel) => readFileSync(join(root, rel), "utf8");
 
-before(() => {
+beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "envsync-"));
 });
-after(() => {
+afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("sync writes target files and resolves ${common}", () => {
+test("sync writes the WHOLE resolved mega into every target file", () => {
   write(
     ".env.mega",
     [
-      "# >>> common",
       "SUPABASE_URL=https://x.supabase.co",
-      "# >>> apps/desktop/.env",
       "VITE_SUPABASE_URL=${SUPABASE_URL}",
-      "VITE_API_BASE_URL=http://127.0.0.1:8000",
+      "SOLUS_DATABASE_URL=postgres://a/b",
     ].join("\n"),
   );
 
   const out = run(["sync"]);
-  assert.match(out, /apps\/desktop\/\.env/);
+  for (const t of TARGETS)
+    assert.match(out, new RegExp(t.replace(/[.\\/]/g, "\\$&")));
   assert.match(out, /VITE_SUPABASE_URL/); // key is logged
   assert.doesNotMatch(out, /supabase\.co/); // value is NOT logged (§7)
 
-  const written = read("apps/desktop/.env");
-  assert.match(written, /VITE_SUPABASE_URL=https:\/\/x\.supabase\.co/);
+  // Every target gets the full set — no per-file routing anymore.
+  for (const t of TARGETS) {
+    const written = read(t);
+    assert.match(written, /VITE_SUPABASE_URL=https:\/\/x\.supabase\.co/);
+    assert.match(written, /SOLUS_DATABASE_URL=postgres:\/\/a\/b/);
+  }
 });
 
-test("sync warns about keys that exist in the target but not the mega", () => {
+test("sync warns about keys that exist in a target but not the mega", () => {
   write("packages/api/.env", "SOLUS_DATABASE_URL=old\nSOLUS_LEGACY=drop_me\n");
-  write(".env.mega", "# >>> packages/api/.env\nSOLUS_DATABASE_URL=new\n");
+  write(".env.mega", "SOLUS_DATABASE_URL=new\n");
 
   const out = run(["sync"]);
   assert.match(out, /SOLUS_LEGACY/);
@@ -85,11 +95,10 @@ test("sync warns about keys that exist in the target but not the mega", () => {
 
 test("sync fails clearly when .env.mega is absent", () => {
   rmSync(join(root, ".env.mega"), { force: true });
-  const out = runExpectFail(["sync"]);
-  assert.match(out, /env\.mega not found/i);
+  assert.match(runExpectFail(["sync"]), /env\.mega not found/i);
 });
 
-test("gather seeds .env.mega from existing files and round-trips via sync", () => {
+test("gather merges existing files into one flat mega and round-trips via sync", () => {
   rmSync(join(root, ".env.mega"), { force: true });
   write(
     "apps/web/.env",
@@ -100,10 +109,11 @@ test("gather seeds .env.mega from existing files and round-trips via sync", () =
   const out = run(["gather"]);
   assert.match(out, /apps\/web\/\.env/);
   const mega = read(".env.mega");
-  assert.match(mega, /# >>> apps\/web\/\.env/);
+  assert.doesNotMatch(mega, /# >>>/); // flat, no routing headers
   assert.match(mega, /GOOGLE_SHEETS_SPREADSHEET_ID=sheet123/);
+  assert.match(mega, /SOLUS_DATABASE_URL="postgres:\/\/a b\/c"/);
 
-  // The gathered mega must sync back to valid files.
+  // The gathered mega must sync back to valid files (whole file → each target).
   run(["sync"]);
   assert.match(read("apps/web/.env"), /GOOGLE_SHEETS_RANGE=WaitlistA:C/);
   assert.match(
@@ -112,43 +122,19 @@ test("gather seeds .env.mega from existing files and round-trips via sync", () =
   );
 });
 
-test("gather ignores .aws.env — deploy vars are GitLab CI variables (SOLUSDEV-152)", () => {
+test("gather flags keys whose value differs across files (keeps the first)", () => {
   rmSync(join(root, ".env.mega"), { force: true });
-  write(".aws.env", "AWS_ACCOUNT=123\n");
-  write("packages/api/.env", "SOLUS_DATABASE_URL=x\n");
+  write(".env", "SOLUS_TRIAL_DAYS=30\n");
+  write("packages/api/.env", "SOLUS_TRIAL_DAYS=14\n");
 
   const out = run(["gather"]);
-  assert.doesNotMatch(out, /\.aws\.env/);
-  const mega = read(".env.mega");
-  assert.doesNotMatch(mega, /# >>> \.aws\.env/);
-  assert.doesNotMatch(mega, /AWS_ACCOUNT/);
-});
-
-test("gather includes the root .env (REDIS_URL & friends reach the mega)", () => {
-  rmSync(join(root, ".env.mega"), { force: true });
-  write(".env", "REDIS_URL=redis://localhost:6379\nDB_USER=solus\n");
-
-  const out = run(["gather"]);
-  assert.match(out, /\.env/);
-  const mega = read(".env.mega");
-  assert.match(mega, /# >>> \.env\n/);
-  assert.match(mega, /REDIS_URL=redis:\/\/localhost:6379/);
-  assert.match(mega, /DB_USER=solus/);
-
-  // Round-trip: sync regenerates the root .env from its mega block.
-  write(".env", "STALE=1\n");
-  run(["sync"]);
-  assert.match(read(".env"), /REDIS_URL=redis:\/\/localhost:6379/);
-  assert.doesNotMatch(read(".env"), /STALE/);
+  assert.match(out, /SOLUS_TRIAL_DAYS/);
+  assert.match(read(".env.mega"), /SOLUS_TRIAL_DAYS=30/); // first (root .env) wins
 });
 
 test("gather refuses to clobber an existing .env.mega without --force", () => {
-  writeFileSync(
-    join(root, ".env.mega"),
-    "# >>> packages/api/.env\nSOLUS_DATABASE_URL=keep\n",
-  );
-  const out = runExpectFail(["gather"]);
-  assert.match(out, /already exists/i);
+  writeFileSync(join(root, ".env.mega"), "SOLUS_DATABASE_URL=keep\n");
+  assert.match(runExpectFail(["gather"]), /already exists/i);
   assert.match(read(".env.mega"), /SOLUS_DATABASE_URL=keep/); // untouched
 
   write("packages/api/.env", "SOLUS_DATABASE_URL=fresh\n");
@@ -156,25 +142,17 @@ test("gather refuses to clobber an existing .env.mega without --force", () => {
   assert.match(read(".env.mega"), /SOLUS_DATABASE_URL=fresh/);
 });
 
-test("sync refuses a path that escapes the repo root", () => {
-  writeFileSync(join(root, ".env.mega"), "# >>> ../escape.env\nX=1\n");
-  const out = runExpectFail(["sync"]);
-  assert.match(out, /outside the repo/i);
-  assert.equal(existsSync(resolve(root, "../escape.env")), false);
-});
-
 test("unknown subcommand fails with usage", () => {
-  const out = runExpectFail(["frobnicate"]);
-  assert.match(out, /unknown command/i);
+  assert.match(runExpectFail(["frobnicate"]), /unknown command/i);
 });
 
-// --- SOLUSDEV-152 WS-C: env.mega.example completeness ------------------------
+// --- WS-C: env.mega.example completeness -------------------------------------
 // The committed template IS the onboarding checklist: cp → fill → env:sync must
 // yield a boot-ready backend + desktop + web. These tests pin the template to
 // the consuming code (config.py Settings, client.ts, waitlist route.js).
 
-// Every SOLUS_* key the backend Settings consumes (core/config.py). Deliberately
-// excludes SOLUS_STRIPE_SECRET_KEY: dead field, removed in SOLUSDEV-152.
+// Every SOLUS_* key the backend Settings consumes (core/config.py). The backend
+// keeps env_prefix="SOLUS_", so these prefixes MUST survive into the template.
 const REQUIRED_API_KEYS = [
   "SOLUS_APP_ENV",
   "SOLUS_API_VERSION",
@@ -208,76 +186,32 @@ const REQUIRED_API_KEYS = [
   "SOLUS_FINGERPRINT_VISION_ENABLED",
 ];
 
-const exampleTargets = () => {
-  const targets = splitToTargets(readFileSync(EXAMPLE, "utf8"));
-  return Object.fromEntries(targets.map((t) => [t.path, t.content]));
-};
-const keyNames = (content) => parseEnvFile(content).map((e) => e.key);
+const exampleEntries = () => resolveMega(readFileSync(EXAMPLE, "utf8"));
+const exampleKeys = () => new Set(exampleEntries().map((e) => e.key));
+const exampleValue = (key) =>
+  exampleEntries().find((e) => e.key === key)?.value;
 
-test("env.mega.example parses and declares every app target (no dead .aws.env)", () => {
-  const byPath = exampleTargets();
-
-  assert.equal(byPath[".aws.env"], undefined); // GitLab CI variables, not in-repo env
-  for (const path of [
-    "apps/desktop/.env",
-    "apps/desktop/.env.claude",
-    "apps/web/.env",
-    "packages/api/.env",
-    "packages/api/.env.claude",
-  ]) {
-    assert.ok(byPath[path], `missing block: # >>> ${path}`);
-  }
-});
-
-test("env.mega.example api blocks carry every consumed SOLUS_* key", () => {
-  const byPath = exampleTargets();
-  for (const path of ["packages/api/.env", "packages/api/.env.claude"]) {
-    const keys = new Set(keyNames(byPath[path]));
-    for (const key of REQUIRED_API_KEYS) {
-      assert.ok(keys.has(key), `${path} is missing ${key}`);
-    }
-    assert.ok(
-      !keys.has("SOLUS_STRIPE_SECRET_KEY"),
-      `${path} must not add SOLUS_STRIPE_SECRET_KEY`,
-    );
-  }
-});
-
-test("env.mega.example matches code semantics (no drifted defaults)", () => {
-  const byPath = exampleTargets();
-
-  // client.ts:113 falls back to http://localhost:8000/api/v1 — the template
-  // value must keep the /api/v1 suffix or every API call 404s.
-  for (const path of ["apps/desktop/.env", "apps/desktop/.env.claude"]) {
-    assert.match(byPath[path], /VITE_API_BASE_URL=\S*\/api\/v1\b/);
-  }
-
-  for (const path of ["packages/api/.env", "packages/api/.env.claude"]) {
-    // Schema is owned by Alembic migrations; create_all stays off.
-    assert.match(byPath[path], /SOLUS_AUTO_CREATE_TABLES=false/);
-    // api_version is a semver reported by /meta, not a route prefix.
-    assert.match(byPath[path], /SOLUS_API_VERSION=0\.1\.0/);
-  }
-});
-
-test("env.mega.example documents SOLUS_SECRETS_BACKEND but ships it commented", () => {
-  // build_secret_store auto-selects a backend only when secrets_backend is
-  // None (unset). pydantic-settings turns `SOLUS_SECRETS_BACKEND=` (blank)
-  // into "", which is NOT None and silently disables auto-selection — so the
-  // template must document the key without emitting it.
+test("env.mega.example parses as a flat file (no dead routing headers)", () => {
   const raw = readFileSync(EXAMPLE, "utf8");
-  assert.match(raw, /SOLUS_SECRETS_BACKEND/);
-  for (const path of ["packages/api/.env", "packages/api/.env.claude"]) {
-    const keys = new Set(keyNames(exampleTargets()[path]));
-    assert.ok(
-      !keys.has("SOLUS_SECRETS_BACKEND"),
-      `${path}: SOLUS_SECRETS_BACKEND must stay commented (blank breaks backend auto-selection)`,
-    );
-  }
+  assert.doesNotMatch(raw, /# >>>/);
+  assert.ok(exampleEntries().length > 0);
 });
 
-test("env.mega.example web block covers the waitlist route env", () => {
-  const keys = new Set(keyNames(exampleTargets()["apps/web/.env"]));
+test("env.mega.example carries every consumed SOLUS_* key with its prefix", () => {
+  const keys = exampleKeys();
+  for (const key of REQUIRED_API_KEYS)
+    assert.ok(keys.has(key), `template is missing ${key}`);
+});
+
+test("env.mega.example covers the desktop VITE_* and web GOOGLE_* keys", () => {
+  const keys = exampleKeys();
+  for (const key of [
+    "VITE_API_BASE_URL",
+    "VITE_SUPABASE_URL",
+    "VITE_SUPABASE_ANON_KEY",
+  ]) {
+    assert.ok(keys.has(key), `template is missing ${key}`);
+  }
   for (const key of [
     "GOOGLE_SERVICE_ACCOUNT_JSON",
     "GOOGLE_SERVICE_ACCOUNT_EMAIL",
@@ -285,13 +219,34 @@ test("env.mega.example web block covers the waitlist route env", () => {
     "GOOGLE_SHEETS_SPREADSHEET_ID",
     "GOOGLE_SHEETS_RANGE",
   ]) {
-    assert.ok(keys.has(key), `apps/web/.env block is missing ${key}`);
+    assert.ok(keys.has(key), `template is missing ${key}`);
   }
+});
+
+test("env.mega.example matches code semantics (no drifted defaults)", () => {
+  // client.ts falls back to http://localhost:8000/api/v1 — the template value
+  // must keep the /api/v1 suffix or every API call 404s.
+  assert.match(exampleValue("VITE_API_BASE_URL") ?? "", /\/api\/v1$/);
+  // Schema is owned by Alembic migrations; create_all stays off.
+  assert.equal(exampleValue("SOLUS_AUTO_CREATE_TABLES"), "false");
+  // api_version is a semver reported by /meta, not a route prefix.
+  assert.equal(exampleValue("SOLUS_API_VERSION"), "0.1.0");
+});
+
+test("env.mega.example documents SOLUS_SECRETS_BACKEND but ships it commented", () => {
+  // build_secret_store auto-selects a backend only when secrets_backend is None
+  // (unset). A blank `SOLUS_SECRETS_BACKEND=` becomes "" — not None — and
+  // silently disables auto-selection. So the template documents it without emitting it.
+  const raw = readFileSync(EXAMPLE, "utf8");
+  assert.match(raw, /SOLUS_SECRETS_BACKEND/);
+  assert.ok(
+    !exampleKeys().has("SOLUS_SECRETS_BACKEND"),
+    "SOLUS_SECRETS_BACKEND must stay commented",
+  );
 });
 
 test("env.mega.example documents the SecretStore provisioning step for LLM keys", () => {
   const raw = readFileSync(EXAMPLE, "utf8");
-  // providers.py reads these from the SecretStore — they are NOT env vars.
   for (const ref of ["anthropic_api_key", "openai_api_key", "google_api_key"]) {
     assert.ok(raw.includes(ref), `template must name SecretStore ref ${ref}`);
   }
@@ -299,14 +254,11 @@ test("env.mega.example documents the SecretStore provisioning step for LLM keys"
 });
 
 test("env.mega.example holds no real-looking secret values", () => {
-  const byPath = exampleTargets();
-  for (const [path, content] of Object.entries(byPath)) {
-    for (const { key, value } of parseEnvFile(content)) {
-      if (!/(KEY|SECRET|TOKEN|PRIVATE)/.test(key)) continue;
-      assert.ok(
-        value === "" || /CHANGE_ME|changeme|\$\{/.test(value),
-        `${path}: ${key} must be blank or an obvious placeholder`,
-      );
-    }
+  for (const { key, value } of exampleEntries()) {
+    if (!/(KEY|SECRET|TOKEN|PRIVATE)/.test(key)) continue;
+    assert.ok(
+      value === "" || /CHANGE_ME|changeme|\$\{/.test(value),
+      `${key} must be blank or an obvious placeholder`,
+    );
   }
 });

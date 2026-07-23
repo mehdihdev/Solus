@@ -1,8 +1,18 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, dialog, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { awaitGithubCallback, getRedirectUrl } from './oauthLoopback'
+import { cloneRepo, cloneDeps, type CloneInput } from './projectFolder'
+import { isAllowedBillingUrl } from './billingUrl'
+
+/** Open a Stripe Checkout / billing-portal URL in the system browser, refusing
+ *  anything that isn't an https Stripe URL (see billingUrl.ts). */
+async function openBillingUrl(url: string): Promise<{ ok: boolean }> {
+  if (!isAllowedBillingUrl(url)) return { ok: false }
+  await shell.openExternal(url)
+  return { ok: true }
+}
 
 function createWindow(): void {
   // Create the browser window.
@@ -56,6 +66,23 @@ app.whenReady().then(() => {
   ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
     awaitGithubCallback(authorizeUrl)
   )
+
+  // Local project folder (SOLUSDEV-164): pick an existing directory, clone a
+  // repo into a chosen parent, or reveal a linked folder in the OS file manager.
+  // The clone input is untrusted renderer data — cloneRepo validates it.
+  ipcMain.handle('folder:pick', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+  })
+  ipcMain.handle('folder:reveal', async (_event, path: string) => {
+    const error = await shell.openPath(path)
+    return { ok: error === '' }
+  })
+  ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
+
+  // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
+  // portal URL (returned by our API) in the system browser.
+  ipcMain.handle('billing:open-external', (_event, url: string) => openBillingUrl(url))
 
   createWindow()
 

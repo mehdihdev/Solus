@@ -9,6 +9,11 @@ import { WorkspaceShell } from './WorkspaceShell'
 import { useShellStore } from './shellStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import * as switcherHook from './useProjectSwitcher'
+
+// Populate the topbar project switcher deterministically (its live fetch is
+// offline in jsdom). Other tests don't open the switcher, so this is inert.
+vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
 
 function renderShell(): ReturnType<typeof render> {
   return render(
@@ -26,6 +31,25 @@ beforeEach(() => {
     user: { email: 'dev@example.dev' },
     onboarded: true
   })
+  vi.mocked(switcherHook.useProjectSwitcher).mockReturnValue({
+    status: 'ready',
+    groups: [
+      {
+        team: { team_id: 't1', name: 'Acme', role: 'member', is_personal: false },
+        projects: [
+          {
+            id: 'p2',
+            team_id: 't1',
+            name: 'Rover MK3',
+            description: null,
+            archived_at: null,
+            created_at: '',
+            updated_at: ''
+          }
+        ]
+      }
+    ]
+  } as ReturnType<typeof switcherHook.useProjectSwitcher>)
 })
 
 describe('WorkspaceShell — chrome', () => {
@@ -52,6 +76,36 @@ describe('WorkspaceShell — chrome', () => {
     expect(useShellStore.getState().lastMain).toBe('bench')
     await userEvent.click(screen.getByText('Team'))
     expect(useShellStore.getState().lastMain).toBe('team')
+  })
+
+  it('exposes the project hub and sources in the rail (SOLUSDEV-164)', async () => {
+    renderShell()
+    await userEvent.click(screen.getByText('Overview'))
+    expect(useShellStore.getState().lastMain).toBe('overview')
+    // With no project open the hub honestly asks the user to pick one.
+    expect(await screen.findByText(/select a project/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByText('Sources'))
+    expect(useShellStore.getState().lastMain).toBe('sources')
+  })
+
+  it('offers a project switcher in the topbar (SOLUSDEV-164)', () => {
+    renderShell()
+    expect(screen.getByRole('button', { name: /switch project/i })).toBeInTheDocument()
+  })
+
+  it('switching project from the topbar re-scopes the current screen without navigating', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
+    renderShell()
+    // Move to a project-scoped screen, then switch project from the topbar.
+    await userEvent.click(screen.getByText('Live Bench'))
+    expect(useShellStore.getState().lastMain).toBe('bench')
+    await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
+    await userEvent.click(await screen.findByText('Rover MK3'))
+    // Context changed, but we stayed on Live Bench (no jump to Overview).
+    expect(useWorkspaceStore.getState().project).toEqual({ id: 'p2', name: 'Rover MK3' })
+    expect(useShellStore.getState().lastMain).toBe('bench')
+    // The topbar now shows the switched-to project as the active context.
+    expect(screen.getByText('Rover MK3')).toBeInTheDocument()
   })
 
   it('shows no unread badge when offline — alerts are never fabricated', () => {

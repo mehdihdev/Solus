@@ -14,7 +14,7 @@ export function IntegrationsSection(): React.JSX.Element {
   return (
     <Section
       title="Integrations"
-      sub="Tools Solus can connect into your graph. Connect a tool inside a project's Context Model."
+      sub="Tools Solus can connect into your graph. Connect and manage them per project on the project's Sources page."
     >
       {catalog.map((i) => (
         <Row

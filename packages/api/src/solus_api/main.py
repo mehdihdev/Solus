@@ -119,6 +119,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(jobs.router)
     app.include_router(integrations.router)
     app.include_router(billing.router)
+    app.include_router(billing.actions_router)
     app.include_router(sources.router)
     app.include_router(entities.router)
     app.include_router(sol.router)

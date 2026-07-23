@@ -2,16 +2,23 @@
 // SOLUSDEV-147 — the env CLI. Run by a human via pnpm; agents cannot touch
 // .env* files (hooks H1/read_hook) but this script, run by you, does the I/O.
 //
-//   pnpm env:sync     .env.mega  ->  every per-package env file (overwrite)
+//   pnpm env:sync     .env.mega  ->  every target env file (whole file, overwrite)
 //   pnpm env:gather   existing env files  ->  .env.mega (one-time bootstrap)
+//
+// Flat model (SOLUSDEV-164): sync writes the ENTIRE resolved .env.mega verbatim
+// into each target below — no per-file key routing. Each consumer reads only
+// the keys it recognises (pydantic ignores non-SOLUS_ keys; Vite exposes VITE_*
+// only; the web waitlist route reads GOOGLE_* only).
 //
 // Prints file paths and KEY names only — never a secret value (CLAUDE.md §7).
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  splitToTargets,
+  resolveMega,
   parseEnvFile,
+  serializeEntries,
+  mergeEnvFiles,
   renderMega,
   diffKeys,
   DEFAULT_MEGA_HEADER,
@@ -23,16 +30,15 @@ const ROOT = process.env.ENV_SYNC_ROOT
   : resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MEGA = resolve(ROOT, ".env.mega");
 
-// Files gather reads. sync is data-driven from the mega's headers instead.
-// .aws.env was removed (SOLUSDEV-152): nothing in-repo consumed it — the
-// deploy pipeline reads GitLab CI-scoped variables, not a local env file.
+// The files sync writes and gather reads. The whole mega goes to each.
+// Dropped vs the old block model (SOLUSDEV-164): the `.env.claude` agent-run
+// profiles (whole-file sync makes them byte-identical to `.env`, and no code
+// reads them) and `.aws.env` (deploy vars are GitLab CI-scoped, not in-repo).
 const TARGET_FILES = [
   ".env",
   "apps/desktop/.env",
-  "apps/desktop/.env.claude",
   "apps/web/.env",
   "packages/api/.env",
-  "packages/api/.env.claude",
 ];
 
 const log = (m) => process.stdout.write(`${m}\n`);
@@ -41,7 +47,7 @@ const die = (m) => {
   process.exit(1);
 };
 
-/** Resolve a mega-declared path and refuse anything escaping the repo root. */
+/** Resolve a target path and refuse anything escaping the repo root. */
 function safeResolve(relPath) {
   const abs = resolve(ROOT, relPath);
   const rel = relative(ROOT, abs);
@@ -61,14 +67,14 @@ function sync() {
       `.env.mega not found. Run "pnpm env:gather" to bootstrap it, or "cp env.mega.example .env.mega" and fill it in.`,
     );
   }
-  const targets = splitToTargets(readFileSync(MEGA, "utf8"));
-  if (targets.length === 0)
-    die(".env.mega has no `# >>> <path>` blocks to write.");
+  const entries = resolveMega(readFileSync(MEGA, "utf8"));
+  if (entries.length === 0) die(".env.mega has no KEY=VALUE lines to write.");
 
-  for (const { path, content } of targets) {
+  const content = serializeEntries(entries);
+  const megaKeys = entries.map((e) => e.key);
+
+  for (const path of TARGET_FILES) {
     const abs = safeResolve(path);
-    const megaKeys = keysOf(content);
-
     if (existsSync(abs)) {
       const dropped = diffKeys(keysOf(readFileSync(abs, "utf8")), megaKeys);
       if (dropped.length) {
@@ -79,9 +85,11 @@ function sync() {
     }
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content);
-    log(`  ✓ ${path} (${megaKeys.length} keys: ${megaKeys.join(", ")})`);
+    log(`  ✓ ${path}`);
   }
-  log(`Synced ${targets.length} file(s) from .env.mega.`);
+  log(
+    `Synced ${megaKeys.length} keys → ${TARGET_FILES.length} file(s): ${megaKeys.join(", ")}`,
+  );
 }
 
 function gather() {
@@ -105,9 +113,15 @@ function gather() {
   }
   if (files.length === 0) die("no existing env files found to gather.");
 
-  writeFileSync(MEGA, renderMega(files, { header: DEFAULT_MEGA_HEADER }));
+  const { entries, conflicts } = mergeEnvFiles(files);
+  if (conflicts.length) {
+    log(
+      `  ! keys with differing values across files (kept the first occurrence): ${conflicts.join(", ")}`,
+    );
+  }
+  writeFileSync(MEGA, renderMega(entries, { header: DEFAULT_MEGA_HEADER }));
   log(
-    `Wrote .env.mega from ${files.length} file(s). Review it, then use "pnpm env:sync" going forward.`,
+    `Wrote .env.mega with ${entries.length} keys from ${files.length} file(s). Review it, then use "pnpm env:sync" going forward.`,
   );
 }
 

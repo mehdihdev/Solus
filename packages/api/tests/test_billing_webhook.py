@@ -334,6 +334,68 @@ async def test_webhook_isolation_between_users(client: AsyncClient, db: AsyncSes
     assert bal_a == 1000  # A untouched
 
 
+async def test_subscription_event_derives_plan_and_limits_from_price(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Entitlement follows what was purchased: a subscription event carrying a
+    Stripe Price that maps to PRO sets the local plan + limits from that price,
+    never from any client-supplied plan name (SOLUSDEV-83 follow-up)."""
+    user_id = await _provision(client, "plan-derive@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_derive"  # let the webhook match this local sub
+    await db.commit()
+
+    event = {
+        "id": "evt_plan_derive",
+        "type": "customer.subscription.updated",
+        "created": 5000,
+        "data": {
+            "object": {
+                "id": "sub_derive",
+                "customer": "cus_derive",
+                "status": "active",
+                "items": {"data": [{"price": {"id": "price_pro_year"}}]},
+            }
+        },
+    }
+    processed = await process_event(
+        db, event, pack_credits={}, plan_prices={"pro:year": "price_pro_year"}
+    )
+    assert processed is True
+    await db.refresh(sub)
+    assert sub.plan.value == "pro"
+    assert sub.status is SubscriptionStatus.ACTIVE
+    # PRO is unlimited — its limits map to None (ADR-023).
+    assert sub.limits.get("max_projects") is None
+
+
+async def test_subscription_event_with_unknown_price_leaves_plan(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    user_id = await _provision(client, "plan-unknown@example.com")
+    sub = await _subscription(db, user_id)
+    original_plan = sub.plan.value
+    sub.stripe_customer_id = "cus_unknown"
+    await db.commit()
+
+    event = {
+        "id": "evt_plan_unknown",
+        "type": "customer.subscription.updated",
+        "created": 5000,
+        "data": {
+            "object": {
+                "id": "sub_unknown",
+                "customer": "cus_unknown",
+                "status": "active",
+                "items": {"data": [{"price": {"id": "price_not_mapped"}}]},
+            }
+        },
+    }
+    await process_event(db, event, pack_credits={}, plan_prices={"pro:year": "price_pro_year"})
+    await db.refresh(sub)
+    assert sub.plan.value == original_plan  # unchanged when the price isn't ours
+
+
 async def test_oversized_body_rejected(client: AsyncClient) -> None:
     # 300 KB exceeds the default 256 KB cap; rejected before signature checks.
     resp = await client.post(

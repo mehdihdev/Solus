@@ -31,4 +31,21 @@ describe('Button', () => {
     render(<Button>Go</Button>)
     expect(screen.getByRole('button')).toHaveAttribute('type', 'button')
   })
+
+  it('carries the interactive affordance class when enabled (SOLUSDEV-164)', () => {
+    render(<Button>Go</Button>)
+    expect(screen.getByRole('button')).toHaveClass('interactive')
+  })
+
+  it('drops the interactive class when disabled so a dead button gives no feedback', () => {
+    render(<Button disabled>Go</Button>)
+    expect(screen.getByRole('button')).not.toHaveClass('interactive')
+  })
+
+  it('preserves a caller-provided className alongside the affordance class', () => {
+    render(<Button className="custom">Go</Button>)
+    const button = screen.getByRole('button')
+    expect(button).toHaveClass('custom')
+    expect(button).toHaveClass('interactive')
+  })
 })

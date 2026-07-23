@@ -167,6 +167,9 @@ export interface Subscription {
   limits: Record<string, number | null>
   expires_at: string | null
   seat_count: number | null
+  /** Set once the user has a live Stripe subscription — plan changes then go
+   *  through the billing portal, not a new Checkout (avoids double-billing). */
+  stripe_subscription_id?: string | null
 }
 
 /** The current user's live subscription (plan, trial state, seats, plan limits). */
@@ -181,6 +184,65 @@ export function updateSubscription(plan: PlanType, client: ApiClient = api): Pro
     method: 'PATCH',
     body: { plan }
   })
+}
+
+export type CheckoutInterval = 'month' | 'year'
+
+/** A Stripe-hosted redirect URL (Checkout or billing portal). */
+export interface CheckoutSession {
+  url: string
+}
+
+/** Current credit balance (GET /users/me/credits). */
+export interface CreditBalance {
+  user_id: string
+  balance: number
+}
+
+/** A purchasable credit pack (GET /billing/packs) — price id + credits granted. */
+export interface CreditPack {
+  price_id: string
+  credits: number
+}
+
+/** Start a Stripe Checkout for a subscription plan → hosted redirect URL
+ *  (POST /billing/checkout-session). The plan is applied by the webhook once
+ *  Stripe confirms payment, never from this call. */
+export function createSubscriptionCheckout(
+  plan: PlanType,
+  interval: CheckoutInterval,
+  client: ApiClient = api
+): Promise<CheckoutSession> {
+  return client.request<CheckoutSession>('/billing/checkout-session', {
+    method: 'POST',
+    body: { kind: 'subscription', plan, interval }
+  })
+}
+
+/** Start a Stripe Checkout for a one-off credit pack → hosted redirect URL. */
+export function createPackCheckout(
+  priceId: string,
+  client: ApiClient = api
+): Promise<CheckoutSession> {
+  return client.request<CheckoutSession>('/billing/checkout-session', {
+    method: 'POST',
+    body: { kind: 'pack', price_id: priceId }
+  })
+}
+
+/** Open the Stripe billing portal (manage payment method / cancel) → URL. */
+export function createBillingPortal(client: ApiClient = api): Promise<CheckoutSession> {
+  return client.request<CheckoutSession>('/billing/portal-session', { method: 'POST' })
+}
+
+/** The current user's credit balance. */
+export function getCredits(client: ApiClient = api): Promise<CreditBalance> {
+  return client.request<CreditBalance>('/users/me/credits')
+}
+
+/** The credit packs available for purchase (server-configured Stripe prices). */
+export function getCreditPacks(client: ApiClient = api): Promise<CreditPack[]> {
+  return client.request<{ packs: CreditPack[] }>('/billing/packs').then((r) => r.packs)
 }
 
 export function updateOnboardingStep(
@@ -321,6 +383,26 @@ export function updateSource(
     method: 'PATCH',
     body: input
   })
+}
+
+/**
+ * Disconnect a source from a project (API.md §2.5 — DELETE source). By default
+ * the source's already-synced graph data is RETAINED: entities/relations it
+ * produced are orphaned into manual, user-owned nodes rather than deleted, so
+ * disconnecting never destroys graph history. Pass `retainEntities: false` to
+ * also remove that data. The source row is removed either way (reconnectable).
+ */
+export function disconnectSource(
+  projectId: string,
+  sourceId: string,
+  options: { retainEntities?: boolean } = {},
+  client: ApiClient = api
+): Promise<{ id: string; retained_entities: boolean }> {
+  const retain = options.retainEntities ?? true
+  return client.request<{ id: string; retained_entities: boolean }>(
+    `/projects/${projectId}/sources/${sourceId}?retain_entities=${retain}`,
+    { method: 'DELETE' }
+  )
 }
 
 /** Queue a sync for a source. Returns the accepted job descriptor. */
