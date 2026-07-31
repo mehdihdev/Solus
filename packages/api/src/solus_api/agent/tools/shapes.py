@@ -24,6 +24,11 @@ class ToolErrorCode(enum.StrEnum):
     TOOL_ERROR = "tool_error"
     TIMEOUT = "timeout"
     UNAUTHORIZED = "unauthorized"
+    # SOLUSDEV-154 (BRG-03): the tool's backing channel has no live session —
+    # "bridge offline". Wire-compatible StrEnum addition, pre-sanctioned by the
+    # bridge contract §3; flagged as a contract change in the paste file for
+    # docs/contracts/agent-tool.md (ratification = humans).
+    UNAVAILABLE = "unavailable"
 
 
 class ToolDescriptor(BaseModel):

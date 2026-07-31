@@ -20,6 +20,7 @@ from solus_api.agent.interfaces import SolSystems
 from solus_api.agent.runtime import AgentRunner
 from solus_api.billing.credits import grant_trial_credits
 from solus_api.billing.stripe_gateway import StripeGateway
+from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.config import Settings
@@ -49,6 +50,12 @@ PERSONAL_TEAM_NAME = "Personal"
 TRIAL_DAYS = 14
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def get_bridge_sessions(request: Request) -> "BridgeSessionRegistry":
+    """The live companion-session registry (SOLUSDEV-154), one per app."""
+    registry: BridgeSessionRegistry = request.app.state.bridge_sessions
+    return registry
 
 
 def get_settings(request: Request) -> Settings:
@@ -107,6 +114,7 @@ def get_stripe_gateway(request: Request) -> "StripeGateway":
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+BridgeSessionsDep = Annotated["BridgeSessionRegistry", Depends(get_bridge_sessions)]
 RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
 SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
 SupabaseAdminDep = Annotated["SupabaseAdmin", Depends(get_supabase_admin)]

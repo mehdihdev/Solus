@@ -1,0 +1,3 @@
+server: kicad
+tools:
+  - name: list_footprints

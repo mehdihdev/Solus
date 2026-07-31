@@ -9,11 +9,13 @@ import { relativeTime } from '../../lib/relativeTime'
 import type { NotificationApi } from '../../lib/api/resources'
 import { useShellStore } from './shellStore'
 import { useOfflineReason } from './workspaceOnline'
+import { BridgePill } from './BridgePill'
 
 export function TopBar({
   projectSlot,
   screenTitle,
   openCount,
+  projectId,
   onHome,
   onBell,
   onSignOut
@@ -22,6 +24,8 @@ export function TopBar({
   projectSlot: React.ReactNode
   screenTitle: string
   openCount: number
+  /** Linked project id for the bridge pill; null/absent ⇒ pill shows offline. */
+  projectId?: string | null
   /** Return to the workspace home from any screen (SOLUSDEV-164 breadcrumb). */
   onHome: () => void
   onBell: () => void
@@ -64,6 +68,7 @@ export function TopBar({
       <span style={{ color: 'var(--mut)', fontSize: 12 }}>/</span>
       <span style={{ fontSize: 13, color: 'var(--mut)' }}>{screenTitle}</span>
       <div style={{ flex: 1 }} />
+      <BridgePill projectId={projectId ?? null} />
       <SearchBox />
       <BellButton openCount={openCount} onBell={onBell} />
       <Button kind="bare" size="sm" onClick={onSignOut}>

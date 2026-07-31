@@ -23,7 +23,7 @@ The SOLUS_TEST_DATABASE_URL override is always respected verbatim (CI sets it).
 import asyncio
 import hashlib
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 API_DIR = Path(__file__).resolve().parent.parent
 
@@ -319,3 +320,50 @@ async def add_member(
     assert accept.status_code == 200, accept.text
     data: dict[str, Any] = accept.json()["data"]
     return data
+
+
+# --- Bridge (SOLUSDEV-154) WS-test fixtures — shared by test_bridge*.py ---
+
+BRIDGE_ALLOWLIST_ROOT = str(Path(__file__).parent / "fixtures" / "bridge_allowlist")
+
+
+def bridge_settings(**overrides: Any) -> Settings:
+    fields: dict[str, Any] = {
+        "supabase_jwt_secret": TEST_JWT_SECRET,
+        "supabase_jwt_audience": TEST_AUDIENCE,
+        "database_url": TEST_DATABASE_URL,
+        "rate_limit_per_minute": 100_000,
+        "sync_inline": True,
+        "bridge_allowlist_root": BRIDGE_ALLOWLIST_ROOT,
+    }
+    fields.update(overrides)
+    return Settings(**fields)
+
+
+@pytest.fixture
+def make_app() -> Iterator[Callable[..., FastAPI]]:
+    """App factory for sync WS tests (starlette TestClient). TestClient runs
+    its own event loop, so the shared async `engine` fixture (bound to the
+    pytest-asyncio loop) cannot be used; each app gets a NullPool engine —
+    every connection opens and closes inside TestClient's loop."""
+
+    def _make(**overrides: Any) -> FastAPI:
+        engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+        return create_app(settings=bridge_settings(**overrides), engine=engine)
+
+    yield _make
+
+    async def _truncate() -> None:
+        engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"TRUNCATE {_ALL_TABLES} RESTART IDENTITY CASCADE"))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_truncate())
+
+
+@pytest.fixture
+def bridge_app(make_app: Callable[..., FastAPI]) -> FastAPI:
+    return make_app()

@@ -3,6 +3,12 @@
 // callers can degrade gracefully instead of crashing.
 import type { OAuthBridge } from '../features/auth/githubOAuth'
 
+/** Preload's `solus.bridge` namespace: relays the Supabase access token to the
+ *  local companion (SOLUSDEV-154 / BRG-04). Null token means signout. */
+export interface CompanionBridge {
+  setToken: (token: string | null) => Promise<void>
+}
+
 /** Machine-local folder bridge (SOLUSDEV-164): pick a directory, clone a repo,
  *  or reveal a linked folder. Only present under the Electron desktop app. */
 export interface FolderBridge {
@@ -15,12 +21,17 @@ export interface FolderBridge {
 }
 
 interface SolusWindow {
-  solus?: { oauth?: OAuthBridge; folder?: FolderBridge }
+  solus?: { oauth?: OAuthBridge; bridge?: CompanionBridge; folder?: FolderBridge }
 }
 
 export function getDesktopOAuthBridge(): OAuthBridge | null {
   const w = window as unknown as SolusWindow
   return w.solus?.oauth ?? null
+}
+
+export function getDesktopCompanionBridge(): CompanionBridge | null {
+  const w = window as unknown as SolusWindow
+  return w.solus?.bridge ?? null
 }
 
 export function getDesktopFolderBridge(): FolderBridge | null {

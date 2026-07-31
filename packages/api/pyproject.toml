@@ -26,6 +26,7 @@ dependencies = [
     "openai>=2.45.0",
     "google-genai>=2.11.0",
     "stripe>=11.0",
+    "mcp>=1.28.1,<2.0",
 ]
 
 [dependency-groups]
@@ -39,7 +40,12 @@ dev = [
     "types-jsonschema>=4.20",
     "respx>=0.21",
     "boto3-stubs[secretsmanager]>=1.35",
+    # The uvicorn E2E drives a real companion against a real socket (BRG-01/02).
+    "solus-companion",
 ]
+
+[tool.uv.sources]
+solus-companion = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -126,6 +126,30 @@ class Settings(BaseSettings):
     # into the scan — visual.py and match() never read this.
     fingerprint_vision_enabled: bool = False
 
+    # --- Local bridge channel (SOLUSDEV-154 / BRG-02) ---
+    # Every contract tunable is config, never hardcoded (bridge-protocol §6/§7).
+    # Allowlist root: one allowlist.yaml per vendored fork (ADR-031); tests
+    # point this at a fixture directory.
+    bridge_allowlist_root: str = "integrations/mcp"
+    bridge_control_frame_max_bytes: int = 16_384
+    bridge_tool_call_max_bytes: int = 262_144
+    bridge_tool_result_max_bytes: int = 1_048_576
+    bridge_msg_rate_per_second: float = 20.0
+    bridge_msg_burst: int = 100
+    # MCP-05: credential_submit writes hit Secrets Manager — bucket them well
+    # below the general frame rate so one companion can't burn write quota.
+    bridge_credential_submit_rate_per_minute: float = 6.0
+    bridge_credential_submit_burst: int = 3
+    bridge_connect_rate_per_minute: int = 30
+    bridge_max_inflight: int = 8
+    bridge_max_team_sessions: int = 10
+    bridge_idle_timeout_seconds: float = 60.0
+    bridge_hello_timeout_seconds: float = 10.0
+    # Membership re-check cadence per live session — satisfies the contract's
+    # ≤30 s revocation bound by polling; a Redis push seam replaces it when the
+    # API goes multi-instance.
+    bridge_revocation_poll_seconds: float = 15.0
+
     @property
     def cors_origin_list(self) -> list[str]:
         """Parsed, non-empty CORS origins."""

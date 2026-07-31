@@ -28,7 +28,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Readyz */
+        /**
+         * Readyz
+         * @description Readiness. 503 only when the database is unreachable.
+         *
+         *     Redis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a
+         *     live ping: the API holds no persistent Redis connection, so a ping would
+         *     add a fresh TCP connect — new latency and a new crash surface — to every
+         *     load-balancer probe. And a missing queue is an ACCEPTED degraded state this
+         *     cycle (infrastructure/aws/README.md): it must be visible here without
+         *     failing readiness, so a reachability result could never change the status
+         *     code anyway.
+         */
         get: operations["readyz_readyz_get"];
         put?: never;
         post?: never;
@@ -424,7 +435,24 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Cancel Job */
+        /**
+         * Cancel Job
+         * @description Mark a QUEUED or RUNNING job cancelled. Record-level only — no abort.
+         *
+         *     Precise semantics (SOLUSDEV-152 audit item 4):
+         *     - Sets ``status=cancelled`` + ``finished_at`` on the Job row and emits the
+         *       activity/data events; the response is the updated record.
+         *     - Does NOT abort the underlying work: no task-handle registry exists, so an
+         *       ARQ task the worker already picked up (or an in-process fallback task)
+         *       runs to completion, and its completion path (``connectors.runtime
+         *       ._mark_job``) then overwrites this status with succeeded/failed.
+         *     - A QUEUED job's task is not dequeued either; the worker does not consult
+         *       job status before starting, so a race with pickup ends the same way.
+         *
+         *     Treat cancellation as advisory intent: truthful at response time, not
+         *     guaranteed to stick for jobs whose task is (or gets) in flight. Real
+         *     abort/dequeue needs worker-side cooperation and is out of scope this cycle.
+         */
         post: operations["cancel_job_api_v1_jobs__job_id__cancel_post"];
         delete?: never;
         options?: never;
@@ -501,6 +529,23 @@ export interface paths {
          *     server-side. The state must belong to the requesting user.
          */
         post: operations["oauth_exchange_api_v1_integrations__provider__oauth_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/stripe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stripe Webhook */
+        post: operations["stripe_webhook_api_v1_webhooks_stripe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -684,15 +729,197 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/sol/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tools
+         * @description The tool set SOL may invoke for this project — the W0-04 descriptors the model
+         *     reads. The set is fixed by Solus code, identical for every caller in the project.
+         */
+        get: operations["list_tools_api_v1_projects__project_id__sol_tools_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sol/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Conversations */
+        get: operations["list_conversations_api_v1_projects__project_id__sol_conversations_get"];
+        put?: never;
+        /** Create Conversation */
+        post: operations["create_conversation_api_v1_projects__project_id__sol_conversations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sol/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Conversation */
+        get: operations["get_conversation_api_v1_projects__project_id__sol_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Conversation */
+        delete: operations["delete_conversation_api_v1_projects__project_id__sol_conversations__conversation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Turns */
+        get: operations["list_turns_api_v1_projects__project_id__sol_conversations__conversation_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Message
+         * @description Append the user's message and stream SOL's reply as Server-Sent Events. The user
+         *     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
+         *     turns are persisted as the stream completes.
+         */
+        post: operations["post_message_api_v1_projects__project_id__sol_conversations__conversation_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bridge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bridge Status
+         * @description The requesting user's bridge state for this project (BRG-03). PER-USER
+         *     semantics: the registry is keyed (user, team, project) — you see YOUR
+         *     companion, not a teammate's. No DB writes; liveness is ephemeral.
+         */
+        get: operations["bridge_status_api_v1_projects__project_id__bridge_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orchestration/classify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Classify */
+        post: operations["classify_api_v1_orchestration_classify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AttachmentIn
+         * @description A measurable attachment fact for classify/completion requests (MO-04):
+         *     what kind of artifact and how many tokens it contributes.
+         */
+        AttachmentIn: {
+            /** Kind */
+            kind: string;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
+        };
+        /**
+         * ClassifyRequest
+         * @description MO-04 pre-flight preview input. `complexity`/`type` let the override UI
+         *     preview a user's pick; extra fields (e.g. a raw model name) are rejected.
+         */
+        ClassifyRequest: {
+            /** Query */
+            query: string;
+            context?: components["schemas"]["InteractionContext"] | null;
+            complexity?: components["schemas"]["Complexity"] | null;
+            type?: components["schemas"]["RouteType"] | null;
+            /** Attachments */
+            attachments?: components["schemas"]["AttachmentIn"][];
+        };
+        /**
+         * Complexity
+         * @description Routing tier, derived automatically by the Step-1 gateway — never supplied
+         *     by the end user (see `router.derive_complexity`).
+         * @enum {string}
+         */
+        Complexity: "trivial" | "standard" | "hard";
+        /** ConversationCreate */
+        ConversationCreate: {
+            /** Title */
+            title?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * InteractionContext
+         * @description What kind of interaction the caller is in. The gateway maps this →
+         *     `Complexity` with no model call. Extend as new callers appear.
+         * @enum {string}
+         */
+        InteractionContext: "code_autocomplete" | "telemetry_summary" | "sol_open_question" | "compatibility_research";
         /** InviteCreate */
         InviteCreate: {
             /**
@@ -724,6 +951,11 @@ export interface components {
              * @enum {string}
              */
             role: "owner" | "admin" | "member" | "viewer";
+        };
+        /** MessageCreate */
+        MessageCreate: {
+            /** Content */
+            content: string;
         };
         /**
          * OAuthExchange
@@ -766,6 +998,16 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /**
+         * RouteType
+         * @description Query kind, routed to the frontier model whose strength matches it. A REAL
+         *     v1 input (not a no-op): e.g. Gemini-class models are strong for VISUAL_LOG /
+         *     LONG_CONTEXT, Claude-class for CODE. `GENERAL` is the fallback when `type` is
+         *     None. Truly-specialist future models (e.g. spatial reasoning) get new members
+         *     here without touching routing code.
+         * @enum {string}
+         */
+        RouteType: "code" | "visual_log" | "long_context" | "general";
         /** SettingsUpdate */
         SettingsUpdate: {
             /** Sol Mode */
@@ -785,7 +1027,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "github" | "gitlab" | "kicad" | "onshape" | "ros";
+            type: "github" | "gitlab" | "kicad" | "onshape" | "ros" | "altium";
             /** Name */
             name: string;
             /** Config */
@@ -1463,7 +1705,10 @@ export interface operations {
     };
     list_invites_api_v1_teams__team_id__invites_get: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
             header?: never;
             path: {
                 team_id: string;
@@ -1637,6 +1882,8 @@ export interface operations {
         parameters: {
             query?: {
                 include_archived?: boolean;
+                cursor?: string | null;
+                limit?: number;
             };
             header?: never;
             path: {
@@ -2107,6 +2354,28 @@ export interface operations {
             };
         };
     };
+    stripe_webhook_api_v1_webhooks_stripe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_sources_api_v1_projects__project_id__sources_get: {
         parameters: {
             query?: {
@@ -2555,6 +2824,317 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tools_api_v1_projects__project_id__sol_tools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_api_v1_projects__project_id__sol_conversations_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_conversation_api_v1_projects__project_id__sol_conversations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_conversation_api_v1_projects__project_id__sol_conversations__conversation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_conversation_api_v1_projects__project_id__sol_conversations__conversation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_turns_api_v1_projects__project_id__sol_conversations__conversation_id__turns_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                conversation_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_message_api_v1_projects__project_id__sol_conversations__conversation_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bridge_status_api_v1_projects__project_id__bridge_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    classify_api_v1_orchestration_classify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClassifyRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

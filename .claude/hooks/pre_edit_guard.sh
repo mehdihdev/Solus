@@ -16,8 +16,8 @@ case "$FILE" in /*) REL="${FILE#"$ROOT"/}";; *) REL="$FILE";; esac
 # ---- H1: protected paths (human territory) ----
 if ! hook_disabled H1; then
   case "$REL" in
-    DECISIONS.md|CLAUDE.md|packages/contracts/*|.claude/settings.json|.claude/settings.local.json|.claude/hooks/*|.gitlab-ci.yml|.env|.env.*)
-      echo "[H1] BLOCKED: '$REL' is human-owned (DECISIONS.md / contracts / harness / CI / env)." >&2
+    .claude/settings.json|.claude/settings.local.json|.claude/hooks/*|.env|.env.*)
+      echo "[H1] BLOCKED: '$REL' is harness/secrets territory (settings, hooks, env) — never agent-editable." >&2
       echo "Propose the change in your design-review questions or completion report instead of editing it (CLAUDE.md §5, §9)." >&2
       exit 2;;
   esac

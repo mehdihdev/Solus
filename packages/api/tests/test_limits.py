@@ -37,7 +37,12 @@ async def test_signup_auto_provisions_basic_trial(
     sub = await _subscription(db, alice["id"])
     assert sub.plan is PlanType.BASIC
     assert sub.status is SubscriptionStatus.TRIALING
-    assert sub.limits == {"max_integrations": 4, "max_projects": 3, "max_teams": 2}
+    assert sub.limits == {
+        "max_integrations": 4,
+        "max_projects": 3,
+        "max_teams": 2,
+        "byo_paid_tools": 0,  # MCP-05: BYO-license tools blocked on BASIC
+    }
     assert sub.expires_at is not None  # ~ now + 14 days
 
 
@@ -184,5 +189,10 @@ async def test_patch_subscription_changes_plan_and_limits(
     data = resp.json()["data"]
     assert data["plan"] == "pro"
     assert data["status"] == "trialing"
-    assert data["limits"] == {"max_integrations": None, "max_projects": None, "max_teams": None}
+    assert data["limits"] == {
+        "max_integrations": None,
+        "max_projects": None,
+        "max_teams": None,
+        "byo_paid_tools": None,  # MCP-05: explicit null = unlimited on PRO
+    }
     assert data["expires_at"] is not None

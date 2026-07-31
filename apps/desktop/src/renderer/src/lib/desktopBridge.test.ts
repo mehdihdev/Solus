@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { getDesktopOAuthBridge } from './desktopBridge'
+import { getDesktopOAuthBridge, getDesktopCompanionBridge } from './desktopBridge'
 
 interface SolusWindow {
   solus?: unknown
@@ -18,5 +18,17 @@ describe('getDesktopOAuthBridge', () => {
     const oauth = { getRedirectUrl: async () => 'x', awaitGithub: async () => ({}) }
     ;(window as unknown as SolusWindow).solus = { oauth }
     expect(getDesktopOAuthBridge()).toBe(oauth)
+  })
+})
+
+describe('getDesktopCompanionBridge', () => {
+  it('returns null when not running under Electron', () => {
+    expect(getDesktopCompanionBridge()).toBeNull()
+  })
+
+  it('returns the companion bridge when present', () => {
+    const bridge = { setToken: async () => undefined }
+    ;(window as unknown as SolusWindow).solus = { bridge }
+    expect(getDesktopCompanionBridge()).toBe(bridge)
   })
 })

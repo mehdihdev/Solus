@@ -229,11 +229,13 @@ def test_plan_default_limits() -> None:
         "max_integrations": 4,
         "max_projects": 3,
         "max_teams": 2,
+        "byo_paid_tools": 0,  # MCP-05: BYO-license tools blocked on BASIC
     }
     assert default_limits(PlanType.PRO) == {
         "max_integrations": None,
         "max_projects": None,
         "max_teams": None,
+        "byo_paid_tools": None,  # MCP-05: explicit null = unlimited on PRO
     }
     assert default_limits(PlanType.ENTERPRISE) == {}
     # Returned dict is a copy: mutating it must not corrupt the shared defaults.

@@ -98,11 +98,11 @@ interface: the MODEL reads them to decide when and how to call the tool.
 
 **`ToolError`** — a structured failure, never a traceback.
 
-| field       | meaning                                                                               |
-| ----------- | ------------------------------------------------------------------------------------- |
-| `code`      | `ToolErrorCode`: `INVALID_ARGS \| NOT_FOUND \| TOOL_ERROR \| TIMEOUT \| UNAUTHORIZED` |
-| `message`   | human/model-readable                                                                  |
-| `retryable` | can SOL sensibly retry (transient) or not (permanent)?                                |
+| field       | meaning                                                                                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code`      | `ToolErrorCode`: `INVALID_ARGS \| NOT_FOUND \| TOOL_ERROR \| TIMEOUT \| UNAUTHORIZED \| UNAVAILABLE` — `UNAVAILABLE` ("the tool's backing channel has no live session", e.g. bridge offline) added by SOLUSDEV-154 per bridge-protocol §3; ratified 2026-07-30 with ADR-032 |
+| `message`   | human/model-readable                                                                                                                                                                                                                                                        |
+| `retryable` | can SOL sensibly retry (transient) or not (permanent)?                                                                                                                                                                                                                      |
 
 **Invariant (validated):** a `ToolResult` with `ok=true` MUST carry a `value` and no `error`; with
 `ok=false` it MUST carry an `error` and no `value`. Enforced by a model validator so a malformed

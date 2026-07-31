@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""ADR-031 launch entrypoint for the vendored mock MCP server fixture."""
+
+import os
+import sys
+from pathlib import Path
+
+SERVER = Path(__file__).resolve().parent.parent / "solus" / "server.py"
+
+os.execv(sys.executable, [sys.executable, str(SERVER)])

@@ -58,6 +58,9 @@ export function WorkspaceShell(): React.JSX.Element {
     setRoute({ name: screen })
     setNotifOpen(false)
   }
+  // Reactive: the bridge pill re-scopes when the topbar switcher changes the
+  // project (merge fix — SOLUSDEV-164 moved the current project into the store).
+  const project = useWorkspaceStore((s) => s.project)
   const openProject = (p: { id: string; name: string }): void => {
     useWorkspaceStore.getState().setProject(p)
     // Opening a project from Home/Team lands on the project hub (SOLUSDEV-164)
@@ -108,6 +111,7 @@ export function WorkspaceShell(): React.JSX.Element {
           onHome={() => go('home')}
           screenTitle={SCREEN_TITLES[name] ?? ''}
           openCount={online ? notifs.unreadCount : 0}
+          projectId={project?.id ?? null}
           onBell={() => setNotifOpen((o) => !o)}
           onSignOut={() => void onSignOut()}
         />

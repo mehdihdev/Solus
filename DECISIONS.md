@@ -171,7 +171,7 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 **Decision:** Three subscription plans:
 
 - **BASIC** — $25/month or $200/year. **Full feature access**, including the advanced models for the SOL agent. Limits: up to **4** connected integrated services, create/join up to **3** projects, create/join up to **2** COLLABORATIVE teams (the auto-created personal team, ADR-025, does **not** count).
-- **PRO** — no limits: unlimited integrations, projects, and teams. For $30/month or $300/year 
+- **PRO** — no limits: unlimited integrations, projects, and teams. For $30/month or $300/year
 - **ENTERPRISE** — variable per-seat pricing. The org fills out an application form (what they do, seats needed); we send a per-seat offer by email; they accept/decline; on accept, enterprise is set up (automatically or via manual back-and-forth). Fields: `seat_count`, custom `price_per_seat`.
 
 **Cross-plan invite enforcement:** when a user is invited to (or tries to join) a project/team, the limit check is against the **invitee's own** plan limits — e.g. a BASIC user already at their project limit cannot be invited/join. This is a **HARD BLOCK** with a clear message, never an overflow-and-warn.
@@ -243,39 +243,39 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 - **`graph_entity` carries `canonical_part_id`** (self-reference) — the multimodal fingerprint (ADR-012) collapses cross-domain observations of one physical part to a single canonical entity.
 - **`graph_edge` carries** `(src, dst, relation_type, domain_pair, confidence)`.
 - The Week-0 tree carried two parallel graph schemas: `graph_entity`/`graph_edge` (this ADR's
- shape, read by the SOL `get_entity` tool and mirrored by the fingerprint `SourceRef`) and a
- second `entities`/`relations` pair (added by the connector-runtime work, the only tables any
- connector actually wrote). Readers and writers never met, so `get_entity` on a synced project
- always returned `not_found`. This amendment collapses them into ONE pair on the canonical
- `graph_entity`/`graph_edge` names, absorbing the operationally-proven connector columns.
+  shape, read by the SOL `get_entity` tool and mirrored by the fingerprint `SourceRef`) and a
+  second `entities`/`relations` pair (added by the connector-runtime work, the only tables any
+  connector actually wrote). Readers and writers never met, so `get_entity` on a synced project
+  always returned `not_found`. This amendment collapses them into ONE pair on the canonical
+  `graph_entity`/`graph_edge` names, absorbing the operationally-proven connector columns.
 - **`entities`/`relations` are removed.** They were never sanctioned by an ADR. Their columns
-   move onto `graph_entity`/`graph_edge`; the connector runtime now writes the canonical tables.
+  move onto `graph_entity`/`graph_edge`; the connector runtime now writes the canonical tables.
 - **`graph_entity` gains** `source_id` (FK → `sources`, nullable — manual/fingerprint rows have
-   none), `origin` (`connector` | `manual`, default `connector`), and `version` (int, optimistic
-   concurrency per API.md §2.4). It keeps `source_connector`/`external_ref` (the fingerprint-facing
-   provenance mirror). A partial-unique index `(source_id, external_ref) WHERE deleted_at IS NULL`
-   gives idempotent re-sync.
+  none), `origin` (`connector` | `manual`, default `connector`), and `version` (int, optimistic
+  concurrency per API.md §2.4). It keeps `source_connector`/`external_ref` (the fingerprint-facing
+  provenance mirror). A partial-unique index `(source_id, external_ref) WHERE deleted_at IS NULL`
+  gives idempotent re-sync.
 - **`external_ref` is the identity linchpin**, made explicit: `graph_entity.external_ref` ==
-   the connector's `EntityOut.source_key` == the fingerprint's `SourceRef.external_ref`. One value,
-   three names; the write seam maps `source_key → external_ref`. (The fingerprint contract W0-06 is
-   unchanged — it already keys on `external_ref`.)
+  the connector's `EntityOut.source_key` == the fingerprint's `SourceRef.external_ref`. One value,
+  three names; the write seam maps `source_key → external_ref`. (The fingerprint contract W0-06 is
+  unchanged — it already keys on `external_ref`.)
 - **`graph_edge` gains** `source_id` (FK → `sources`, nullable) and `origin`, with a partial-unique
-   `(source_id, src_id, dst_id, relation_type) WHERE deleted_at IS NULL`. `domain_pair` is derived
-   from the two endpoints' domains at write time; connector edges default `confidence = 1.0`.
+  `(source_id, src_id, dst_id, relation_type) WHERE deleted_at IS NULL`. `domain_pair` is derived
+  from the two endpoints' domains at write time; connector edges default `confidence = 1.0`.
 - **`kind` and `relation_type` become free strings, not enums.** Connectors legitimately emit kinds
-   (`code_repo`, `code_module`, `design_export`, and future `ros_node`, `cad_assembly`, …) and
-   relations (`contains`, `part_of`, `mates_with`, `connected_to`) that no closed enum can hold.
-   This resolves the `RelationType`-is-too-small gap already flagged in metadata-extraction.md §7a.
-   The former `EntityKind` and `RelationType` enums are removed. `domain` stays enum-constrained.
+  (`code_repo`, `code_module`, `design_export`, and future `ros_node`, `cad_assembly`, …) and
+  relations (`contains`, `part_of`, `mates_with`, `connected_to`) that no closed enum can hold.
+  This resolves the `RelationType`-is-too-small gap already flagged in metadata-extraction.md §7a.
+  The former `EntityKind` and `RelationType` enums are removed. `domain` stays enum-constrained.
 - **`Domain` vocabulary reconciled to one canonical set:** `code`, `electrical`, `mechanical`,
-   `simulation`, `runtime`. The connector layer previously used a rival enum (`software`,
-   `electrical`, `mechanical`, `runtime`); `software` is reconciled to `code` (same world), and
-   `runtime` is added. `runtime`/`simulation` are kept distinct (telemetry ≠ sim) and neither is
-   emitted by a connector yet. `error_solution.domain` shares this enum; its DB CHECK is updated.
+  `simulation`, `runtime`. The connector layer previously used a rival enum (`software`,
+  `electrical`, `mechanical`, `runtime`); `software` is reconciled to `code` (same world), and
+  `runtime` is added. `runtime`/`simulation` are kept distinct (telemetry ≠ sim) and neither is
+  emitted by a connector yet. `error_solution.domain` shares this enum; its DB CHECK is updated.
 - **Soft-delete now covers connector-written graph rows.** The old `entities`/`relations` runtime
-   HARD-deleted stale rows on re-sync — directly against this ADR's "graph-as-living-documentation"
-   rejection of hard deletes. The unified runtime sets `deleted_at` instead. (Project/team/source
-   _teardown_ still hard-deletes, since the parent row is physically removed.)
+  HARD-deleted stale rows on re-sync — directly against this ADR's "graph-as-living-documentation"
+  rejection of hard deletes. The unified runtime sets `deleted_at` instead. (Project/team/source
+  _teardown_ still hard-deletes, since the parent row is physically removed.)
 
 **Amended — 2026-07-12, SOLUSDEV-59 Decision C (origin vocabulary):**
 
@@ -301,7 +301,6 @@ observations of one physical part — not rows synced from any external source. 
   bases `MPU-6050`→`MPU6050`, `AMS1117-3.3`→`AMS11173.3`) changes the affected uuid5
   canonical ids and `canonical_key` values; orphaned old-base rows are accepted for
   dev-only data. Post-launch, such a policy change requires a keyed data migration.
-
 
 **Rejected:** Auto-increment integer PKs (leak counts, poor for distributed/merge); hard deletes as default (loses history/undo, breaks the graph-as-living-documentation value); a dedicated graph DB now (premature; Postgres handles current scale — mirrors ADR-003).
 **Revisit when:** A measured deep-traversal bottleneck justifies a graph engine behind the graph-access seam.
@@ -367,6 +366,91 @@ or a target tool has no usable committed export format — then a live-plugin or
 evaluated behind the same `Connector` interface (the interface does not change; only the extraction
 mechanism does).
 
+## ADR-031: MCP hosting model — forked, Solus-owned servers on the customer machine
+
+**Status:** Accepted (2026-07-30 — ratified by Pratham in-session alongside the bridge-protocol
+contract and the `ToolErrorCode.UNAVAILABLE` extension; Mehdi review at the SOLUSDEV-154 MR)
+**Context:** SOLUSDEV-153 (MCP foundation), SOLUSDEV-157 (MCP-03), SOLUSDEV-161 (BRG-02),
+SOLUSDEV-154 (local bridge)
+
+**Decision.** Solus integrates desktop/EDA/CAD tooling through the Model Context Protocol under a
+**fork–harden–own** hosting model:
+
+1. **Pattern 1 — tools.** MCP servers that act on a user's local tools are **forked into
+   `integrations/mcp/<tool>/`, hardened, and owned by Solus** — never run from upstream
+   registries at launch time (no `npx`/`uvx`/pip-at-launch). They execute on the **customer's
+   machine**, launched and supervised by the bridge companion, and are exposed to SOL exclusively
+   as the W0-04 `MCPTool` kind behind the untouched `ToolRegistry` (ADR-010: the agent
+   orchestrates validated tools; the registry's never-raises invariant holds across the wire).
+   The cloud treats the companion and everything it advertises or returns as **untrusted input**
+   (CLAUDE.md §7); the tool namespace available to any SOL invocation is fixed cloud-side against
+   the Solus-owned allowlist, never by what a machine advertises.
+2. **Pattern 2 — telemetry.** Live sensor/runtime data **never rides an MCP tool interface**. It
+   flows through the isolated `LiveConnection` seam (`docs/contracts/live-connection.md`,
+   ADR-005/029/030), enforced mechanically by that contract's conformance suite.
+3. **Enforcement of ownership.** Every fork carries: a provenance/license record
+   (`PROVENANCE.template.md` — upstream SHA, vendored-tree hash, modification log), a **MIT or
+   Apache-2.0 only** license boundary (stricter than `metadata-extraction.md` §6.6 — customer-
+   machine code admits no copyleft/EULA ambiguity; Apache NOTICE preserved), a curated
+   `allowlist.yaml` (single source of truth for exposed tools and per-tool
+   `requires_confirmation`; server-side destructive hints are untrusted and ignored), a pinned
+   Solus-authored `bin/launch` entrypoint (CLAUDE.md §7 pinned binaries; zero network at launch;
+   deps from a hash-pinned lockfile at companion install time), and a **passed, evidence-based
+   security review signed by both devs** (`SECURITY_REVIEW.template.md`), mechanically voided by
+   any change to the vendored tree hash.
+
+**Rationale.** Local tools (Onshape desktop, Altium, DelphiScript-scriptable EDA, flashing
+toolchains) cannot be reached from the cloud; MCP is the interoperable protocol the ecosystem is
+converging on, and W0-04 anticipated exactly this kind (`RemoteTool/MCPTool`). Running unaudited
+third-party servers on customer machines is an unacceptable supply-chain and secret-leakage
+surface — forking with a review gate converts "someone's GitHub repo" into Solus-owned, pinned,
+reviewed code with a paper trail. One hosting model also resolves the bridge contract's open
+holes (advertised-descriptor allowlisting; tool→server mapping) with one file per fork.
+
+**Consequences.** Solus owns fork maintenance: a named CVE-intake mechanism per fork, a 14-day
+re-vendor clock for CVEs on shipped paths, quarterly upstream diff reviews, and scoped re-reviews
+on rebase. Review cost gates how fast new tool servers ship (deliberate). The license boundary
+excludes some upstream servers; the answer is a clean-room or alternative upstream, not a policy
+exception.
+
+**Revisit when:** the companion gains OS-level sandboxing (posture declarations in the checklist
+tighten into mechanism requirements); an MCP-server SDK of our own makes forks thin shims; or the
+fork count makes per-fork review economics untenable (then invest in shared hardening layers, not
+weaker review).
+
+---
+
+## ADR-032: Agent-editable governance docs (two-tier)
+
+**Status:** Accepted (2026-07-30 — ratified by Pratham in-session; Mehdi review at the
+SOLUSDEV-154 MR)
+**Context:** SOLUSDEV-154 retrospective. The temp-file paste convention (agents write `temp-*.md`,
+humans copy into DECISIONS.md / docs/contracts / docs/api / CI) made every governance change a
+manual human copy step and broke agentic flow.
+
+**Decision.** Governance files split into two agent-editable tiers plus a hard floor:
+
+1. **Tier 1 — direct agent edits, no per-change approval** (the MR's 2-approval review is the
+   gate): `docs/api/`, `docs/architecture/`, `docs/wireflows/`, `docs/schemas/`, `docs/qa/`,
+   `.gitlab-ci.yml`, and `docs/contracts/` when landing content already approved in-session.
+   Amendments are called out in the completion report.
+2. **Tier 2 — in-chat approval BEFORE editing**: `DECISIONS.md` (new/changed ADRs),
+   `packages/contracts/*`, and any `CLAUDE.md`. The agent presents the concrete change
+   (AskUserQuestion or equivalent), the recorded human answer is the approval, the edit lands in a
+   dedicated commit. Tier-2 edits are the orchestrator's alone — never delegated to subagents.
+3. **Never agent-editable** (H1 hard-blocks): `.claude/hooks/*`, `.claude/settings*.json`,
+   `.env*`. Harness and secrets integrity are not subject to this ADR.
+
+**Rationale.** The durable human controls are the in-chat approval (recorded in the conversation
+and the completion report) and the MR 2-approval merge gate — not the copy-paste act itself.
+This supersedes the paste MECHANICS of the ADR-028-era convention; human ownership of decisions
+is unchanged, only who types them. H1 was narrowed accordingly (hook change applied by a human,
+as hook changes must be).
+
+**Consequences.** Loop prompts no longer carry a "temp-\* for human paste" rule; contract docs
+land directly with their features; ADR ratification happens in-chat with the sponsoring human
+and is double-checked by the second founder at the MR. Agents editing this file follow rule 2
+below with "in-chat approval" standing in for "only humans edit".
 
 ---
 
@@ -374,4 +458,4 @@ mechanism does).
 
 1. New decision: append an entry with the next ADR number, date it, set Status: Accepted.
 2. Changing a decision: set the old entry's Status to **Superseded by ADR-XXX**, add the new entry referencing what it replaces and why. Never delete history.
-3. Only humans edit this file. An agent that believes a decision needs revisiting flags it in its design-review critique or completion report.
+3. Humans own decisions; agents may edit this file only under ADR-032 tier-2 (concrete change approved in-chat first, dedicated commit). An agent that believes a decision needs revisiting raises it in its design-review critique or completion report.

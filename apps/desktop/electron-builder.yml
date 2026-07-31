@@ -11,6 +11,16 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+# Local-bridge companion (SOLUSDEV-154 / BRG-04): PyInstaller binary + vendored
+# MCP servers, built per-platform by scripts/build-companion.sh into repo-root
+# dist/companion/. Ships at <resources>/companion/solus-companion(.exe).
+extraResources:
+  - from: ../../dist/companion
+    to: companion
+# Code signing is the final, swappable step (external blocker: certs — see
+# SOLUSDEV-148/149). At build time: Windows signs via CSC_LINK/CSC_KEY_PASSWORD
+# env; macOS via a Developer ID identity + notarize: true below. Linux ARM dev
+# builds stay unsigned this cycle.
 win:
   executableName: Solus
 nsis:
@@ -31,6 +41,8 @@ mac:
 dmg:
   artifactName: solus-${version}.${ext}
 linux:
+  # The package name (@solus/desktop) is not a valid executable name.
+  executableName: solus
   target:
     - AppImage
     - snap

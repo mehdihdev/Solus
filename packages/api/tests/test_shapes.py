@@ -108,11 +108,16 @@ def test_artifactref_references_bytes_it_never_inlines() -> None:
     assert minimal.size_bytes is None and minimal.summary is None
 
 
-def test_toolerrorcode_has_the_five_codes() -> None:
+def test_toolerrorcode_has_the_six_codes() -> None:
+    # UNAVAILABLE added by SOLUSDEV-154 (BRG-03) — a pre-sanctioned, wire-
+    # compatible extension per the bridge contract §3; flagged for ratification
+    # in docs/contracts/agent-tool.md (ratified 2026-07-30, ADR-032 landing)
+    # paste. This test remains the enum's lock: changing it is a contract event.
     assert {c.value for c in ToolErrorCode} == {
         "invalid_args",
         "not_found",
         "tool_error",
         "timeout",
         "unauthorized",
+        "unavailable",
     }

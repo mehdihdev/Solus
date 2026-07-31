@@ -122,6 +122,41 @@ async def check_can_create_project(session: AsyncSession, user: User) -> None:
         )
 
 
+async def check_can_use_byo_tool(session: AsyncSession, user: User, server_name: str) -> None:
+    """MCP-05: may this user invoke a bring-your-own-license (byo_paid) tool?
+
+    Boolean-shaped count: there is nothing to count — a cap of 0 means blocked,
+    any positive cap or null/absent means entitled. Read as DATA like every
+    other limit (never a plan-name branch); the no-subscription path stays the
+    existing 402."""
+    cap = _limit(await _locked_limits(session, user.id), "byo_paid_tools")
+    if cap is not None and cap <= 0:
+        raise _limit_error(
+            "byo_paid_tools",
+            0,
+            0,
+            f"Bring-your-own-license tools require a Pro plan. Upgrade to connect {server_name}.",
+        )
+
+
+async def user_has_byo_entitlement(session: AsyncSession, user_id: uuid.UUID) -> bool:
+    """MCP-05 NON-LOCKING read of the `byo_paid_tools` entitlement, for read
+    surfaces (the `GET /bridge` license_state poll) and the bridge
+    credential-submit gate — paths with no plan-limited INSERT to serialize,
+    where `_locked_limits`'s FOR UPDATE would pin the subscription row across
+    external secret-store I/O (Phase-4 review finding). Same data semantics as
+    `check_can_use_byo_tool`; no subscription → not entitled (fail closed)."""
+    sub = await session.scalar(
+        select(Subscription).where(
+            Subscription.user_id == user_id, Subscription.deleted_at.is_(None)
+        )
+    )
+    if sub is None:
+        return False
+    cap = _limit(sub.limits, "byo_paid_tools")
+    return cap is None or cap > 0
+
+
 async def check_can_add_integration(session: AsyncSession, user: User) -> None:
     cap = _limit(await _locked_limits(session, user.id), "max_integrations")
     if cap is None:

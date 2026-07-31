@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { useAuthStore, toAuthUser } from './authStore'
+import { getDesktopCompanionBridge } from '../lib/desktopBridge'
+
+// The companion token relay (SOLUSDEV-154 / BRG-04) is mocked so we can assert
+// setSession fires it; everywhere else it resolves to no bridge (non-Electron).
+vi.mock('../lib/desktopBridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/desktopBridge')>()
+  return { ...actual, getDesktopCompanionBridge: vi.fn(() => null) }
+})
 
 // With no Supabase env in the test environment, the store runs its dev-bypass
 // path — exactly what keeps the prototype demoable offline.
@@ -156,6 +164,48 @@ describe('authStore (production build gate, SOLUSDEV-152)', () => {
     expect(s.status).toBe('unauthenticated')
     expect(s.user).toBeNull()
     expect(s.accessToken).toBeNull()
+  })
+})
+
+// SOLUSDEV-154 / BRG-04: setSession is the single choke point for token
+// changes (sign-in, TOKEN_REFRESHED, sign-out) — every call relays the token
+// to the local companion, fire-and-forget.
+describe('authStore companion token relay', () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      status: 'loading',
+      user: null,
+      accessToken: null,
+      onboarded: false
+    })
+    vi.mocked(getDesktopCompanionBridge).mockReset()
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue(null)
+  })
+
+  it('relays the access token to the companion on setSession', () => {
+    const setToken = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken })
+    useAuthStore.getState().setSession({ email: 'maya@strider.dev' }, 'sb-token')
+    expect(setToken).toHaveBeenCalledWith('sb-token')
+  })
+
+  it('relays null (signout) when the session is cleared', () => {
+    const setToken = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken })
+    useAuthStore.getState().setSession(null, null)
+    expect(setToken).toHaveBeenCalledWith(null)
+  })
+
+  it('is a no-op outside Electron and never blocks the session update', () => {
+    useAuthStore.getState().setSession({ email: 'maya@strider.dev' }, 'sb-token')
+    expect(useAuthStore.getState().status).toBe('authenticated')
+  })
+
+  it('swallows relay failures without touching session state', () => {
+    const setToken = vi.fn().mockRejectedValue(new Error('ipc down'))
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken })
+    useAuthStore.getState().setSession({ email: 'maya@strider.dev' }, 'sb-token')
+    expect(useAuthStore.getState().accessToken).toBe('sb-token')
   })
 })
 

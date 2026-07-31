@@ -15,6 +15,11 @@ is human-owned and mirrored to `packages/contracts/python/` (CLAUDE.md §9, ADR-
 module re-exports it so every implementation imports the one canonical shape.
 """
 
+# The LiveConnection sibling (MCP-02) is deliberately NOT re-exported here: `live.py`
+# imports the W0-07 shapes from `solus_api.agent.interfaces`, whose own import chain
+# reaches this package — an eager re-export closes that cycle and breaks a bare
+# `import solus_api.agent.runtime`. Import `solus_api.connectors.live` /
+# `solus_api.connectors.live_conformance` directly (same pattern as agent.tools.mcp_tool).
 from solus_api.connectors.conformance import assert_connector_contract
 from solus_api.connectors.contracts import (
     AccountInfo,

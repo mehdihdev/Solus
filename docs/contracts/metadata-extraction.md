@@ -4,7 +4,11 @@
 PARSES and EMITS — plus researched parser candidates (all **verify-before-pinning**) and per-format
 file→`EntityOut`/`RelationOut` field mappings. **No parsers, connectors, or the shared CAD parser are
 built here** — those are downstream connector tickets that reference the ROWS below.
-**Authority:** ADR-030 (parse committed Git exports v1, not live tool plugins — `DECISIONS.md`),
+**Authority:** ADR-030 (parse committed Git exports v1, not live tool plugins — `DECISIONS.md`), as
+extended by ADR-031 (MCP hosting model: fork–harden–own; forked Solus-owned MCP servers on the
+customer machine via the bridge; Accepted 2026-07-30) — ADR-030's own revisit clause ("a live-plugin
+or API-pull path is evaluated behind the same `Connector` interface (the interface does not change;
+only the extraction mechanism does).") is exactly the clause this amendment exercises,
 W0-05 connector interface (`EntityOut`/`RelationOut`; intra-source only; `source_id ==`
 `graph_entity.external_ref`), W0-06 fingerprint (`modality_hints` feed the matcher), ADR-001
 (graph-centric), ADR-027 + `packages/api/src/solus_api/models.py` (the `EntityKind`/`RelationType`/
@@ -30,6 +34,10 @@ those are versioned, diffable, and available without a running desktop tool. Thi
 roster tractable and defines the payloads connectors emit. The connector reads the committed export (or,
 for code hosts, the live repo API), parses it, and emits normalized `EntityOut`/`RelationOut`
 (W0-05). Change detection is the W0-05 re-parse-and-diff path fired by the repo's commit events (ADR-030).
+Where a team runs the bridge companion with a vendored MCP server for their desktop tool
+(`integrations/mcp/<tool>/`, MCP-03), the SAME export file may instead be acquired by a **live MCP
+export call** (§2.1) — a third acquisition mechanism. Parsing is untouched either way: the export
+lands in the same parser regardless of how it was obtained.
 
 - **v1-real (actually parsed in v1):** electrical netlists (KiCad XML primary + SPICE deck + Altium
   export), mechanical CAD (**STEP + STL** → geometry + assembly structure + inter-part connections,
@@ -69,11 +77,63 @@ does not.
   integration; the API is just a means to get the file and know it changed. **Fallback:** if a needed
   format isn't API-exportable from Onshape, fall back to pulling structural data from the API for that
   piece.
+- **Live MCP export call (bridge-connected teams — the MCP-04 refinement):** for any committed-export
+  row whose desktop tool has a **vendored MCP server** (`integrations/mcp/<tool>/`, MCP-03), the
+  connector may obtain the SAME export file by dispatching that server's export tool through the
+  W0-04 registry and the bridge (`MCPTool`, MCP-01) instead of reading the committed copy. This is
+  **Onshape-thin-API-shaped**: the MCP call is a means to get the file and know it changed —
+  authenticate/launch, drive the local tool to emit STEP/STL/netlist/deck, return the bytes — NEVER
+  a deep live integration. Mechanism details and invariants: §2.1. **The committed-export path is
+  retained as the fallback and remains the default** whenever no companion is connected.
+
+**Table note (MCP-04):** every "**Committed export**" acquisition cell above reads as "Committed
+export — or a live MCP export call (§2.1) when the team's bridge companion is connected and a
+vendored server exists for the tool." The format parsed and the parser column are unchanged; only
+how the file arrives differs.
 
 > **Roster note.** The repo names "~9 design-artifact connectors" (GitHub, GitLab; Onshape + proprietary
 > STEP/DWG CAD; KiCad, LTspice, NgSpice, Altium). **Fusion 360 / SolidWorks / AutoCAD are instances of the
 > generic "proprietary STEP/DWG" mechanical-CAD bucket**, not separately scaffolded. **ROS is runtime**
 > (Live Bench telemetry, ADR-014/029) — NOT a design-artifact parse connector, so it is out of scope here.
+
+### 2.1 Live MCP acquisition — the bridge path (MCP-04)
+
+**Flow.** Change detection or a sync triggers the connector → the cloud dispatches the vendored
+server's export tool as a normal W0-04 `ToolCall` through the untouched `ToolRegistry` and the
+bridge channel → the forked server (running on the customer machine, `integrations/mcp/<tool>/`)
+drives the local desktop tool to produce the export (STEP/STL, netlist, SPICE deck) → the export
+returns as the tool result — **bulk bytes ride an `ArtifactRef`** (`ArtifactStorage.CLIENT`, per
+the bridge contract's size caps), never inlined — → the runtime materializes the bytes to a
+temporary working file → **the SAME parser the committed-file path uses** (§3) parses it → the
+SAME `EntityOut`/`RelationOut` emission (§5 rows, unchanged).
+
+**Invariants (each load-bearing):**
+
+1. **Mapping preservation.** The parser and the §5 field mappings cannot tell acquisition paths
+   apart — they receive a file, full stop. No parser, mapping, or `modality_hints` change is
+   permitted under this mechanism; a divergence is a defect.
+2. **Identity is content-derived, never transport-derived.** `source_key` (≡
+   `graph_entity.external_ref` ≡ fingerprint `SourceRef.external_ref`, Edit 3) derives from the
+   design content exactly as §5 defines it (refdes, part/instance id, repo-relative path) —
+   **NEVER** from temp-file paths, `ArtifactRef` ids, call ids, or anything else the transport
+   invents. A byte-identical export acquired via either path yields identical
+   `EntityOut`/`RelationOut` — and therefore **the fingerprint (W0-06) receives identical
+   canonical-part inputs regardless of source**.
+3. **Fallback retention (ADR-030 baseline).** The committed-file path is not removed, not
+   deprecated, and needs no companion: bridge absent, offline, tool closed, or the MCP call
+   failing (`ToolResult(ok=false)` — the never-raises envelope) → the connector falls back to
+   the committed export for that sync, logging the degradation. When both are available, the
+   live export is preferred as the fresher working copy; the committed file remains the
+   versioned historical record.
+4. **Untrusted either way.** An export produced by a local tool via MCP is EXACTLY as untrusted
+   as a committed file (CLAUDE.md §7): same defensive parsing, same size bounds, same
+   zip/traversal guards. Arriving over the bridge grants no trust — the channel's ingress caps
+   and the fork's security review (MCP-03) bound the transport, and the parser assumes hostility
+   regardless.
+5. **Export tools are non-destructive reads** and are allowlisted per fork
+   (`integrations/mcp/<tool>/allowlist.yaml`); an export tool needs no confirmation gate. Any
+   vendored tool that MUTATES the design is outside this mechanism and carries
+   `requires_confirmation: true` per MCP-03.
 
 ---
 
@@ -81,7 +141,8 @@ does not.
 
 **Every CAD connector = {a way to obtain the export file} + {the SHARED geometry/assembly parser}.** The
 "way to obtain" differs — Onshape fetches STEP/STL via its API and change-detects; Fusion/SolidWorks/
-AutoCAD read committed exports from Git — but once you have the STEP/STL (and, later, DWG), it **ALL flows through ONE
+AutoCAD read committed exports from Git; bridge-connected teams may obtain the same file by a live
+MCP export call (§2.1) — but once you have the STEP/STL (and, later, DWG), it **ALL flows through ONE
 shared CAD parser**. The hard work — parsing geometry + assembly structure + inter-part relationships — is
 done **ONCE**, not per-tool. This is why the CAD family mirrors: the connectors converge on one parser and
 differ only in file acquisition. (Formats differ in what they can yield — STEP carries the assembly tree,
@@ -134,7 +195,7 @@ domain_pair="code<->code")`, `src`/`dst` = the two file paths.
 > ticket's "JSON netlist (primary)" is realized here as **the structured netlist export (KiCad XML
 > primary; JSON where a tool emits it)**.
 
-- **Obtain:** committed KiCad XML netlist (or `.net`).
+- **Obtain:** committed KiCad XML netlist (or `.net`) — or acquired via a live MCP export call (§2.1); parsing and field mapping identical.
 - **Entities:** each component → `EntityOut(kind="component", source_id=<ref designator, e.g. "U1">,
 attrs={value, footprint, datasheet, libsource, ...})`.
 - **modality_hints (→ fingerprint, W0-06):** `{part_number (from MPN custom field), schematic_symbol_name
@@ -152,7 +213,7 @@ pinfunction, pintype)`.
 ### 5.3 SPICE deck (electrical) — committed export
 
 - **Obtain:** committed SPICE deck (`.cir`/`.net`; LTspice: prefer the exported `.net` over the `.asc`
-  schematic).
+  schematic) — or acquired via a live MCP export call (§2.1); parsing and field mapping identical.
 - **Entities:** circuit elements → `EntityOut(kind="component", source_id=<SPICE element name, e.g. "R1">,
 attrs={element_type, value, model, model_params, ...})`.
 - **Relations:** circuit topology (element→node connectivity) → intra-source `RelationOut`,
@@ -167,7 +228,7 @@ attrs={element_type, value, model, model_params, ...})`.
 
 ### 5.4 Altium export (electrical) — committed export
 
-- **Obtain:** committed **Protel netlist** (recommended — native, simplest; or SPICE, or `orcadpcb2`).
+- **Obtain:** committed **Protel netlist** (recommended — native, simplest; or SPICE, or `orcadpcb2`) — or acquired via a live MCP export call (§2.1); parsing and field mapping identical.
 - **Maps to the SAME component + connectivity model as KiCad:** component blocks `[ ... ]` (designator,
   footprint/pattern, comment/value) → `EntityOut(kind="component", source_id=<designator>)`; net blocks
   `( ... )` (net name, `Designator-Pin` nodes) → intra-source connectivity relations,
@@ -179,7 +240,7 @@ attrs={element_type, value, model, model_params, ...})`.
 
 ### 5.5 STEP (mechanical, shared parser) — the assembly source
 
-- **Obtain:** committed STEP (Fusion/SolidWorks) or Onshape API fetch.
+- **Obtain:** committed STEP (Fusion/SolidWorks) or Onshape API fetch — or acquired via a live MCP export call (§2.1); parsing and field mapping identical.
 - **Entities:** parts/bodies in the assembly → `EntityOut(kind="part" | "cad_body", source_id=<the
 part/instance id in the assembly>, attrs={name, geometry summary, dimensions/bbox, material if present,
 absolute placement})`.
@@ -195,7 +256,7 @@ absolute placement})`.
 
 ### 5.6 STL (mechanical, shared parser) — geometry only
 
-- **Obtain:** committed STL or Onshape API fetch.
+- **Obtain:** committed STL or Onshape API fetch — or acquired via a live MCP export call (§2.1); parsing and field mapping identical.
 - **KEY LIMITATION (confirmed):** STL is a **flat triangle mesh — NO assembly structure, NO part identity,
   NO relationships** (binary STL has no naming at all; ASCII solid-names are unreliable and often unparsed).
   **Assembly structure MUST come from STEP, not STL.**
@@ -407,6 +468,10 @@ preserves the legacy wire keys via serializers (`type←kind`, `source_key←ext
   lack part names. Validate on real robotics exports.
 - **Netlist ≠ JSON** — KiCad's parseable target is XML (or S-expr `.net`), not a JSON netlist; pin the
   concrete producer before writing any JSON-netlist schema.
+- **Live MCP acquisition (§2.1) degrades, never blocks** — companion offline / tool closed /
+  call failed → committed-export fallback with a logged degradation. Export determinism is NOT
+  assumed: the same design may not export byte-identical files across tool versions, so identity
+  rests on content-derived `source_key`s (§2.1 invariant 2), never on file hashes.
 - **netlist ↔ SPICE reconciliation** — netlist primary for identity/footprint; SPICE adds sim params +
   corroborates topology; join on refdes; **emit a mismatch on disagreement** rather than silently merging.
 - **Licensing (§6.6)** and the **`RelationType` enum gap (§7)** both need human decisions before the
@@ -420,4 +485,7 @@ preserves the legacy wire keys via serializers (`type←kind`, `source_key←ext
 (`docs/contracts/fingerprint-output.md` — `modality_hints` feed the matcher), ADR-027 + `models.py`
 (`EntityKind`/`RelationType`/`Domain`, `domain_pair`). Downstream: each design-artifact connector ticket
 implements a ROW above and the ONE shared CAD parser (§3). Sibling contracts: `connector-interface.md`,
-`fingerprint-output.md`, `agent-tool.md`, `sol-interface.md`, `model-orchestration.md`.
+`fingerprint-output.md`, `agent-tool.md`, `sol-interface.md`, `model-orchestration.md`. MCP-04
+additions: ADR-031 (fork–harden–own hosting model) + `integrations/mcp/` (MCP-03 vendor layout,
+allowlist, security gate); W0-04 `MCPTool` (`agent/tools/mcp_tool.py`, MCP-01); bridge channel
+contract (`docs/contracts/bridge-protocol.md`).

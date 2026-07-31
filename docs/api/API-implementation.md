@@ -807,3 +807,28 @@ the plumbing end to end — lists tools, invokes the reference `get_entity` tool
 per-request registry, pulls W0-07 graph context, and honors a bounded tool-call loop guard.
 Model routing / credit metering (W0-03 `route()`/`track_cost`) remain MO-01 stubs, so no live
 model call is made yet; per-team model-budget enforcement lands with MO-01.
+
+### Bridge (SOLUSDEV-154 / SOLUS-BRG-02)
+
+**`WS /api/v1/projects/{project_id}/bridge`** — the companion's dial-out channel. Project-scoped
+per CLAUDE.md §7 ("WebSocket connections authenticate at connect time and are scoped to a team's
+project"); one socket = one project scope.
+
+- **Auth:** `Authorization: Bearer <Supabase access JWT>` on the upgrade request, verified by
+  `decode_token`; scope derived server-side from DB memberships. Query-string tokens are never
+  read. The bridge never provisions accounts. Non-member/unknown project → close `4404` (no
+  existence leak — the same 404 posture as every project route).
+- **Frames:** `{type, data}` JSON text messages per `docs/contracts/bridge-protocol.md`
+  (`hello`/`hello_ack`/`tool_call`/`tool_result`/`status`/`ping`/`pong`/`error`).
+- **Close codes:** `4400` protocol/version · `4401` auth/expiry · `4403` revoked mid-session ·
+  `4404` non-member · `4409` superseded · `4413` oversize · `4429` rate/caps.
+- **Config (`SOLUS_BRIDGE_*`):** `ALLOWLIST_ROOT` (default `integrations/mcp`) ·
+  `CONTROL_FRAME_MAX_BYTES` 16384 · `TOOL_CALL_MAX_BYTES` 262144 · `TOOL_RESULT_MAX_BYTES`
+  1048576 · `MSG_RATE_PER_SECOND` 20 · `MSG_BURST` 100 · `CONNECT_RATE_PER_MINUTE` 30 ·
+  `MAX_INFLIGHT` 8 · `MAX_TEAM_SESSIONS` 10 · `IDLE_TIMEOUT_SECONDS` 60 ·
+  `HELLO_TIMEOUT_SECONDS` 10 · `REVOCATION_POLL_SECONDS` 15.
+- **Effect on SOL:** while a companion session is live, `GET /sol/tools` additionally lists the
+  session's allowlist-validated `{server}.{tool}` descriptors; the SOL turn registry registers a
+  `BridgeTool` per entry (scope fixed by Solus code at turn start).
+- Implementation: `routers/bridge.py` + `solus_api/bridge/`; tests `tests/test_bridge.py` (WS
+  protocol + red-team), `tests/test_bridge_e2e.py` (real companion round-trip).

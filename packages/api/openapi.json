@@ -28,6 +28,7 @@
     "/readyz": {
       "get": {
         "summary": "Readyz",
+        "description": "Readiness. 503 only when the database is unreachable.\n\nRedis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a\nlive ping: the API holds no persistent Redis connection, so a ping would\nadd a fresh TCP connect \u2014 new latency and a new crash surface \u2014 to every\nload-balancer probe. And a missing queue is an ACCEPTED degraded state this\ncycle (infrastructure/aws/README.md): it must be visible here without\nfailing readiness, so a reachability result could never change the status\ncode anyway.",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
@@ -812,6 +813,34 @@
               "format": "uuid",
               "title": "Team Id"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
           }
         ],
         "responses": {
@@ -1141,6 +1170,34 @@
               "type": "boolean",
               "default": false,
               "title": "Include Archived"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
             }
           }
         ],
@@ -1625,6 +1682,7 @@
     "/api/v1/jobs/{job_id}/cancel": {
       "post": {
         "summary": "Cancel Job",
+        "description": "Mark a QUEUED or RUNNING job cancelled. Record-level only \u2014 no abort.\n\nPrecise semantics (SOLUSDEV-152 audit item 4):\n- Sets ``status=cancelled`` + ``finished_at`` on the Job row and emits the\n  activity/data events; the response is the updated record.\n- Does NOT abort the underlying work: no task-handle registry exists, so an\n  ARQ task the worker already picked up (or an in-process fallback task)\n  runs to completion, and its completion path (``connectors.runtime\n  ._mark_job``) then overwrites this status with succeeded/failed.\n- A QUEUED job's task is not dequeued either; the worker does not consult\n  job status before starting, so a race with pickup ends the same way.\n\nTreat cancellation as advisory intent: truthful at response time, not\nguaranteed to stick for jobs whose task is (or gets) in flight. Real\nabort/dequeue needs worker-side cooperation and is out of scope this cycle.",
         "operationId": "cancel_job_api_v1_jobs__job_id__cancel_post",
         "security": [
           {
@@ -1886,6 +1944,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/stripe": {
+      "post": {
+        "summary": "Stripe Webhook",
+        "operationId": "stripe_webhook_api_v1_webhooks_stripe_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Stripe Webhook Api V1 Webhooks Stripe Post"
                 }
               }
             }
@@ -2880,10 +2958,640 @@
           }
         }
       }
+    },
+    "/api/v1/projects/{project_id}/sol/tools": {
+      "get": {
+        "summary": "List Tools",
+        "description": "The tool set SOL may invoke for this project \u2014 the W0-04 descriptors the model\nreads. The set is fixed by Solus code, identical for every caller in the project.",
+        "operationId": "list_tools_api_v1_projects__project_id__sol_tools_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Tools Api V1 Projects  Project Id  Sol Tools Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sol/conversations": {
+      "post": {
+        "summary": "Create Conversation",
+        "operationId": "create_conversation_api_v1_projects__project_id__sol_conversations_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Conversation Api V1 Projects  Project Id  Sol Conversations Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Conversations",
+        "operationId": "list_conversations_api_v1_projects__project_id__sol_conversations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Conversations Api V1 Projects  Project Id  Sol Conversations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sol/conversations/{conversation_id}": {
+      "get": {
+        "summary": "Get Conversation",
+        "operationId": "get_conversation_api_v1_projects__project_id__sol_conversations__conversation_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Conversation Api V1 Projects  Project Id  Sol Conversations  Conversation Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Conversation",
+        "operationId": "delete_conversation_api_v1_projects__project_id__sol_conversations__conversation_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/turns": {
+      "get": {
+        "summary": "List Turns",
+        "operationId": "list_turns_api_v1_projects__project_id__sol_conversations__conversation_id__turns_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Turns Api V1 Projects  Project Id  Sol Conversations  Conversation Id  Turns Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages": {
+      "post": {
+        "summary": "Post Message",
+        "description": "Append the user's message and stream SOL's reply as Server-Sent Events. The user\nturn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool\nturns are persisted as the stream completes.",
+        "operationId": "post_message_api_v1_projects__project_id__sol_conversations__conversation_id__messages_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bridge": {
+      "get": {
+        "summary": "Bridge Status",
+        "description": "The requesting user's bridge state for this project (BRG-03). PER-USER\nsemantics: the registry is keyed (user, team, project) \u2014 you see YOUR\ncompanion, not a teammate's. No DB writes; liveness is ephemeral.",
+        "operationId": "bridge_status_api_v1_projects__project_id__bridge_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Bridge Status Api V1 Projects  Project Id  Bridge Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orchestration/classify": {
+      "post": {
+        "summary": "Classify",
+        "operationId": "classify_api_v1_orchestration_classify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Classify Api V1 Orchestration Classify Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AttachmentIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Kind"
+          },
+          "tokens": {
+            "type": "integer",
+            "maximum": 10000000.0,
+            "minimum": 0.0,
+            "title": "Tokens",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "AttachmentIn",
+        "description": "A measurable attachment fact for classify/completion requests (MO-04):\nwhat kind of artifact and how many tokens it contributes."
+      },
+      "ClassifyRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 1000000,
+            "title": "Query"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InteractionContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "complexity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Complexity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentIn"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Attachments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "ClassifyRequest",
+        "description": "MO-04 pre-flight preview input. `complexity`/`type` let the override UI\npreview a user's pick; extra fields (e.g. a raw model name) are rejected."
+      },
+      "Complexity": {
+        "type": "string",
+        "enum": [
+          "trivial",
+          "standard",
+          "hard"
+        ],
+        "title": "Complexity",
+        "description": "Routing tier, derived automatically by the Step-1 gateway \u2014 never supplied\nby the end user (see `router.derive_complexity`)."
+      },
+      "ConversationCreate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConversationCreate"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2896,6 +3604,17 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InteractionContext": {
+        "type": "string",
+        "enum": [
+          "code_autocomplete",
+          "telemetry_summary",
+          "sol_open_question",
+          "compatibility_research"
+        ],
+        "title": "InteractionContext",
+        "description": "What kind of interaction the caller is in. The gateway maps this \u2192\n`Complexity` with no model call. Extend as new callers appear."
       },
       "InviteCreate": {
         "properties": {
@@ -2963,6 +3682,22 @@
           "role"
         ],
         "title": "MemberRoleUpdate"
+      },
+      "MessageCreate": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "MessageCreate"
       },
       "OAuthExchange": {
         "properties": {
@@ -3108,6 +3843,17 @@
         "type": "object",
         "title": "ProjectUpdate"
       },
+      "RouteType": {
+        "type": "string",
+        "enum": [
+          "code",
+          "visual_log",
+          "long_context",
+          "general"
+        ],
+        "title": "RouteType",
+        "description": "Query kind, routed to the frontier model whose strength matches it. A REAL\nv1 input (not a no-op): e.g. Gemini-class models are strong for VISUAL_LOG /\nLONG_CONTEXT, Claude-class for CODE. `GENERAL` is the fallback when `type` is\nNone. Truly-specialist future models (e.g. spatial reasoning) get new members\nhere without touching routing code."
+      },
       "SettingsUpdate": {
         "properties": {
           "sol_mode": {
@@ -3167,7 +3913,8 @@
               "gitlab",
               "kicad",
               "onshape",
-              "ros"
+              "ros",
+              "altium"
             ],
             "title": "Type"
           },

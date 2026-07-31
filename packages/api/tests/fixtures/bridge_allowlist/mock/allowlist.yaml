@@ -1,0 +1,12 @@
+server: mock
+tools:
+  - name: echo
+  - name: add
+  - name: boom
+  - name: sleepy
+  - name: plain
+  - name: pic
+  - name: badschema
+  - name: flash_firmware
+    requires_confirmation: true
+    reason: writes firmware to a connected device

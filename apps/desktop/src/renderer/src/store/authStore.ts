@@ -10,7 +10,7 @@ import { create, type StateCreator } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured, devBypassActive } from '../lib/supabase'
-import { getDesktopOAuthBridge } from '../lib/desktopBridge'
+import { getDesktopCompanionBridge, getDesktopOAuthBridge } from '../lib/desktopBridge'
 import { runGithubOAuth } from '../features/auth/githubOAuth'
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated'
@@ -105,8 +105,15 @@ function sessionActions(
   get: AuthGet
 ): Pick<AuthState, 'setSession' | 'bootstrap' | 'teardown' | 'signOut' | 'completeOnboarding'> {
   return {
-    setSession: (user, accessToken) =>
-      set({ user, accessToken, status: user ? 'authenticated' : 'unauthenticated' }),
+    setSession: (user, accessToken) => {
+      set({ user, accessToken, status: user ? 'authenticated' : 'unauthenticated' })
+      // Single choke point for token changes (sign-in, TOKEN_REFRESHED,
+      // sign-out): relay to the local companion (SOLUSDEV-154 / BRG-04).
+      // Fire-and-forget; the token is never stored or logged anywhere new.
+      void getDesktopCompanionBridge()
+        ?.setToken(accessToken)
+        .catch(() => undefined)
+    },
 
     bootstrap: async () => {
       if (!supabase) {

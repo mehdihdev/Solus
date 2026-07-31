@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { awaitGithubCallback, getRedirectUrl } from './oauthLoopback'
+import { startCompanion, stopCompanion, sendAccessToken } from './companion'
 import { cloneRepo, cloneDeps, type CloneInput } from './projectFolder'
 import { isAllowedBillingUrl } from './billingUrl'
 
@@ -46,52 +47,87 @@ function createWindow(): void {
   }
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
-
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+// Single instance (SOLUSDEV-154 / BRG-04): the companion supervisor assumes
+// exactly one owner per user (pidfile takeover). A second launch hands off to
+// the first and quits.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    }
   })
 
-  // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
-  // Supabase authorize URL, then hands it back for the system-browser round-trip.
-  ipcMain.handle('oauth:github:redirect-url', () => getRedirectUrl())
-  ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
-    awaitGithubCallback(authorizeUrl)
-  )
+  // This method will be called when Electron has finished
+  // initialization and is ready to create browser windows.
+  // Some APIs can only be used after this event occurs.
+  app.whenReady().then(() => {
+    // Set app user model id for windows
+    electronApp.setAppUserModelId('com.electron')
 
-  // Local project folder (SOLUSDEV-164): pick an existing directory, clone a
-  // repo into a chosen parent, or reveal a linked folder in the OS file manager.
-  // The clone input is untrusted renderer data — cloneRepo validates it.
-  ipcMain.handle('folder:pick', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+    // Default open or close DevTools by F12 in development
+    // and ignore CommandOrControl + R in production.
+    // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+    })
+
+    // Local project folder (SOLUSDEV-164): pick an existing directory, clone a
+    // repo into a chosen parent, or reveal a linked folder in the OS file manager.
+    // The clone input is untrusted renderer data — cloneRepo validates it.
+    ipcMain.handle('folder:pick', async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory']
+      })
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+    })
+    ipcMain.handle('folder:reveal', async (_event, path: string) => {
+      const error = await shell.openPath(path)
+      return { ok: error === '' }
+    })
+    ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
+
+    // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
+    // portal URL (returned by our API) in the system browser.
+    ipcMain.handle('billing:open-external', (_event, url: string) => openBillingUrl(url))
+
+    // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
+    // Supabase authorize URL, then hands it back for the system-browser round-trip.
+    ipcMain.handle('oauth:github:redirect-url', () => getRedirectUrl())
+    ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
+      awaitGithubCallback(authorizeUrl)
+    )
+
+    // Local bridge companion (BRG-04): spawn/supervise, and relay the renderer's
+    // Supabase access token over stdin. Renderer input is untrusted — accept
+    // only a string token or null (signout); never log it.
+    ipcMain.handle('bridge:token', (_event, token: unknown) => {
+      if (typeof token === 'string' || token === null) sendAccessToken(token)
+    })
+    startCompanion()
+
+    createWindow()
+
+    app.on('activate', function () {
+      // On macOS it's common to re-create a window in the app when the
+      // dock icon is clicked and there are no other windows open.
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
   })
-  ipcMain.handle('folder:reveal', async (_event, path: string) => {
-    const error = await shell.openPath(path)
-    return { ok: error === '' }
+
+  // Tear the companion's process tree down before quitting: hold the quit once,
+  // stop (SIGTERM → 3 s grace → SIGKILL), then resume it.
+  let companionStopped = false
+  app.on('before-quit', (event) => {
+    if (companionStopped) return
+    companionStopped = true
+    event.preventDefault()
+    void stopCompanion().finally(() => app.quit())
   })
-  ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
-
-  // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
-  // portal URL (returned by our API) in the system browser.
-  ipcMain.handle('billing:open-external', (_event, url: string) => openBillingUrl(url))
-
-  createWindow()
-
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
-})
+}
 
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits

@@ -618,6 +618,32 @@ export function markAllNotificationsRead(client: ApiClient = api): Promise<{ upd
   return client.request<{ updated: number }>('/users/me/notifications/read-all', { method: 'POST' })
 }
 
+// --- Local bridge status (SOLUSDEV-154 / BRG-03) ------------------------------
+
+export type BridgeServerState = 'not_launched' | 'launching' | 'ready' | 'busy' | 'error'
+
+/** One vendored MCP server as last reported by the local companion. */
+export interface BridgeServer {
+  name: string
+  state: BridgeServerState
+  detail: string | null
+  updated_at: string
+}
+
+/** The requesting user's local-bridge state for a project. Offline shape is
+ *  `{connected: false, companion_version: null, servers: []}`. */
+export interface BridgeStatus {
+  connected: boolean
+  companion_version: string | null
+  connected_at?: string
+  status_updated_at?: string | null
+  servers: BridgeServer[]
+}
+
+export function getBridgeStatus(projectId: string, client: ApiClient = api): Promise<BridgeStatus> {
+  return client.request<BridgeStatus>(`/projects/${projectId}/bridge`)
+}
+
 // --- MO-04: pre-flight classification preview --------------------------------
 
 export type CostTier = 'low' | 'standard' | 'premium'

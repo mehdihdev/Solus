@@ -67,7 +67,16 @@ class ToolRegistry:
         if registration is None:
             return _failure(call, ToolErrorCode.NOT_FOUND, f"No tool named {call.tool!r}")
 
-        schema_errors = sorted(registration.validator.iter_errors(call.args), key=str)
+        try:
+            schema_errors = sorted(registration.validator.iter_errors(call.args), key=str)
+        except Exception:
+            # A schema can pass `check_schema` at register time yet explode during
+            # validation (e.g. an unresolvable $ref) — that is the TOOL's defect,
+            # not the caller's args, and it must not break the never-raises seam.
+            logger.exception(
+                "tool %s (call %s) schema failed during validation", call.tool, call.call_id
+            )
+            return _failure(call, ToolErrorCode.TOOL_ERROR, "The tool's schema is invalid.")
         if schema_errors:
             return _failure(call, ToolErrorCode.INVALID_ARGS, schema_errors[0].message)
 

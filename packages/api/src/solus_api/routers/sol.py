@@ -37,9 +37,12 @@ from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     AgentRunnerDep,
+    BridgeSessionsDep,
     ProjectCtx,
+    SecretStoreDep,
     SessionDep,
     SessionMakerDep,
+    SettingsDep,
     SolSystemsDep,
     require_role,
 )
@@ -79,10 +82,24 @@ def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
 
 
 @router.get("/tools")
-async def list_tools(ctx: ProjectCtx, sessionmaker: SessionMakerDep) -> dict[str, Any]:
+async def list_tools(
+    ctx: ProjectCtx,
+    sessionmaker: SessionMakerDep,
+    bridge_sessions: BridgeSessionsDep,
+    settings: SettingsDep,
+    secret_store: SecretStoreDep,
+) -> dict[str, Any]:
     """The tool set SOL may invoke for this project — the W0-04 descriptors the model
     reads. The set is fixed by Solus code, identical for every caller in the project."""
-    registry = build_sol_registry(sessionmaker, ctx.project.id)
+    registry = build_sol_registry(
+        sessionmaker,
+        ctx.project.id,
+        bridge=bridge_sessions,
+        user_id=ctx.user.id,
+        team_id=ctx.team.id,
+        bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
+        secret_store=secret_store,
+    )
     return envelope(_tool_descriptors(registry))
 
 
@@ -306,6 +323,9 @@ async def post_message(
     sessionmaker: SessionMakerDep,
     systems: SolSystemsDep,
     runner: AgentRunnerDep,
+    bridge_sessions: BridgeSessionsDep,
+    settings: SettingsDep,
+    secret_store: SecretStoreDep,
 ) -> StreamingResponse:
     """Append the user's message and stream SOL's reply as Server-Sent Events. The user
     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
@@ -345,7 +365,15 @@ async def post_message(
     await session.commit()
 
     # Scope is bound HERE, by Solus code, before the runner sees any user content (§7).
-    registry = build_sol_registry(sessionmaker, ctx.project.id)
+    registry = build_sol_registry(
+        sessionmaker,
+        ctx.project.id,
+        bridge=bridge_sessions,
+        user_id=ctx.user.id,
+        team_id=ctx.team.id,
+        bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
+        secret_store=secret_store,
+    )
     run_ctx = AgentRunContext(
         prompt=content,
         registry=registry,

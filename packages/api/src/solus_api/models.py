@@ -501,8 +501,20 @@ class PendingCreditDebit(UuidPkMixin, TimestampMixin, Base):
 
 
 PLAN_LIMITS: dict[PlanType, dict[str, int | None]] = {
-    PlanType.BASIC: {"max_integrations": 4, "max_projects": 3, "max_teams": 2},
-    PlanType.PRO: {"max_integrations": None, "max_projects": None, "max_teams": None},
+    # `byo_paid_tools` (MCP-05): bring-your-own-license MCP tools — 0 = blocked,
+    # null = unlimited. Boolean-shaped; enforcement reads it as data like every limit.
+    PlanType.BASIC: {
+        "max_integrations": 4,
+        "max_projects": 3,
+        "max_teams": 2,
+        "byo_paid_tools": 0,
+    },
+    PlanType.PRO: {
+        "max_integrations": None,
+        "max_projects": None,
+        "max_teams": None,
+        "byo_paid_tools": None,
+    },
     PlanType.ENTERPRISE: {},  # custom per deal; set explicitly at creation.
 }
 

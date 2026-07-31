@@ -48,7 +48,7 @@ lint:node:
 typecheck:python:
   extends: .python-base
   stage: typecheck
-  script: uv run mypy packages/api/src
+  script: uv run mypy packages/api/src packages/companion/src
 
 typecheck:node:
   extends: .node-base

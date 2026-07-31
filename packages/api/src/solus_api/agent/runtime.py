@@ -18,6 +18,11 @@ This is the wiring the reasoning loop runs on, NOT the reasoning itself. It ship
 """
 
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from solus_api.bridge.registry import BridgeSessionRegistry
+    from solus_api.connectors.secrets import SecretStore
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -26,7 +31,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.interfaces import GraphScope, SolSystems
 from solus_api.agent.stream import AgentEvent
-from solus_api.agent.tools import ToolCall, ToolRegistry, ToolResult, build_get_entity_tool
+from solus_api.agent.tools import (
+    ToolCall,
+    ToolError,
+    ToolErrorCode,
+    ToolRegistry,
+    ToolResult,
+    build_get_entity_tool,
+)
 from solus_api.models import SolMode
 from solus_api.orchestration.enums import InteractionContext
 from solus_api.orchestration.router import derive_complexity
@@ -44,13 +56,62 @@ _UUID_RE = re.compile(
 
 
 def build_sol_registry(
-    session_factory: async_sessionmaker[AsyncSession], project_id: uuid.UUID
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None" = None,
+    user_id: uuid.UUID | None = None,
+    team_id: uuid.UUID | None = None,
+    bridge_call_cap_bytes: int = 262_144,
+    secret_store: "SecretStore | None" = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
-    tools are registered here, never proposed by a model."""
+    tools are registered here, never proposed by a model.
+
+    When a bridge session registry + full scope are supplied (SOLUSDEV-154), one
+    BridgeTool per entry of the LIVE session's cloud-validated inventory is added —
+    the turn's tool set reflects the requesting user's connected companion at turn
+    start, fixed here before any model or ingested content is seen. The bridge
+    package relays JSON only, so the reasoning import graph stays MCP-free."""
     registry = ToolRegistry()
     registry.register(build_get_entity_tool(session_factory, project_id))
+    if bridge is not None and user_id is not None and team_id is not None:
+        # Function-local like BridgeTool: the reasoning import graph stays
+        # MCP-ignorant; the catalog is consulted only when a bridge is wired.
+        from solus_api.agent.tools.mcp_servers import (
+            MCP_SERVER_CATALOG,
+            build_license_preflight,
+        )
+        from solus_api.agent.tools.mcp_tool import LicenseTier
+        from solus_api.bridge.tool import BridgeTool
+
+        session = bridge.get(user_id, team_id, project_id)
+        if session is not None:
+            for spec in session.inventory:
+                # MCP-05: byo_paid servers get the invoke-time license gate;
+                # free-tier and uncataloged servers get zero new checks.
+                catalog_spec = MCP_SERVER_CATALOG.get(spec.server)
+                preflight = None
+                if catalog_spec is not None and catalog_spec.license_tier is LicenseTier.BYO_PAID:
+                    preflight = build_license_preflight(
+                        catalog_spec,
+                        session_factory=session_factory,
+                        user_id=user_id,
+                        team_id=team_id,
+                        secret_store=secret_store,
+                    )
+                registry.register(
+                    BridgeTool(
+                        descriptor=spec.descriptor,
+                        sessions=bridge,
+                        user_id=user_id,
+                        team_id=team_id,
+                        project_id=project_id,
+                        call_cap_bytes=bridge_call_cap_bytes,
+                        preflight=preflight,
+                    )
+                )
     return registry
 
 
@@ -98,6 +159,31 @@ class AgentRunContext:
     interaction_context: InteractionContext = InteractionContext.SOL_OPEN_QUESTION
 
 
+def confirmation_refusal(registry: ToolRegistry, call: ToolCall) -> ToolResult | None:
+    """The CENTRAL destructive-action gate (CLAUDE.md §7, SEC-H1). A tool whose
+    descriptor carries `requires_confirmation` may NOT be dispatched without the
+    user explicitly approving the concrete action — and that confirmation flow
+    does not exist yet, so the gate refuses outright: destructive tools are
+    structurally un-dispatchable until it lands. Every runner MUST consult this
+    before `registry.invoke` (the registry itself stays a pure dispatcher per
+    the W0-04 contract); a runner that skips it is a §7 violation and a
+    merge-blocker for SOL-01/02."""
+    descriptor = next((d for d in registry.list() if d.name == call.tool), None)
+    if descriptor is not None and descriptor.requires_confirmation:
+        return ToolResult.failure(
+            call.call_id,
+            ToolError(
+                code=ToolErrorCode.UNAUTHORIZED,
+                message=(
+                    f"{call.tool} is a destructive action requiring explicit user "
+                    "confirmation; the confirmation flow is not yet available"
+                ),
+                retryable=False,
+            ),
+        )
+    return None
+
+
 class AgentRunner:
     """The seam SOL-01/02 implements. Structural: any object with a matching `run`
     satisfies it (see `ScaffoldRunner`). `run` returns an async stream of events."""
@@ -127,7 +213,8 @@ class ScaffoldRunner:
         results: list[ToolResult] = []
         for call in plan_tool_calls(ctx.prompt)[:MAX_TOOL_CALLS]:
             yield AgentEvent.tool_call(call)
-            result = await ctx.registry.invoke(call)  # registry validates + scopes + never raises
+            refusal = confirmation_refusal(ctx.registry, call)  # §7 destructive gate
+            result = refusal if refusal is not None else await ctx.registry.invoke(call)
             results.append(result)
             yield AgentEvent.tool_result(result)
 

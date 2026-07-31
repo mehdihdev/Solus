@@ -13,13 +13,19 @@ interface CloneResult {
 
 // Custom APIs for renderer. `solus.oauth` drives the loopback GitHub flow:
 // the renderer gets the redirect URL, builds the authorize URL, then asks the
-// main process to open the browser and capture the callback. `solus.folder`
-// links a project to a local directory (pick / clone / reveal) — SOLUSDEV-164.
+// main process to open the browser and capture the callback. `solus.bridge`
+// relays the Supabase access token to the local companion (SOLUSDEV-154 /
+// BRG-04); null means signout. The token is never stored or logged here.
+// `solus.folder` links a project to a local directory (pick / clone / reveal)
+// — SOLUSDEV-164.
 const api = {
   oauth: {
     getRedirectUrl: (): Promise<string> => ipcRenderer.invoke('oauth:github:redirect-url'),
     awaitGithub: (authorizeUrl: string): Promise<OAuthCallbackResult> =>
       ipcRenderer.invoke('oauth:github:await', authorizeUrl)
+  },
+  bridge: {
+    setToken: (token: string | null): Promise<void> => ipcRenderer.invoke('bridge:token', token)
   },
   folder: {
     pick: (): Promise<string | null> => ipcRenderer.invoke('folder:pick'),

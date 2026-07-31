@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from solus_api.agent.fake_systems import FakeSolSystems
 from solus_api.agent.runtime import ScaffoldRunner
+from solus_api.bridge.allowlist import load_allowlist
+from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
+from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.connectors.registry import build_registry
 from solus_api.connectors.secrets import build_secret_store
 from solus_api.core.config import Settings
@@ -21,6 +25,7 @@ from solus_api.models import Base
 from solus_api.routers import (
     activity,
     billing,
+    bridge,
     entities,
     integrations,
     invites,
@@ -85,6 +90,17 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # with a one-line change here and no endpoint edit.
     app.state.sol_systems = FakeSolSystems()
     app.state.agent_runner = ScaffoldRunner()
+    # Local bridge (SOLUSDEV-154): session registry + allowlist + connect limiter.
+    # Allowlist root is loaded ONCE at assembly; tests point it at a fixture dir.
+    app.state.bridge_sessions = InMemoryBridgeSessionRegistry()
+    app.state.bridge_allowlist = load_allowlist(Path(resolved_settings.bridge_allowlist_root))
+    app.state.bridge_connect_limiter = ConnectRateLimiter(
+        resolved_settings.bridge_connect_rate_per_minute
+    )
+    # SEC-M1: separate PRE-AUTH per-IP throttle (the per-user one runs post-auth).
+    app.state.bridge_ip_connect_limiter = ConnectRateLimiter(
+        resolved_settings.bridge_connect_rate_per_minute
+    )
 
     register_error_handlers(app)
     # CORS for the Electron renderer / browser dev server (must precede the
@@ -123,5 +139,6 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(sources.router)
     app.include_router(entities.router)
     app.include_router(sol.router)
+    app.include_router(bridge.router)
     app.include_router(orchestration.router)
     return app
