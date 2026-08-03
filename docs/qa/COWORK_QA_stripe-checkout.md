@@ -19,14 +19,24 @@ to be run against a running Solus app with this file and nothing else.
 1. **Postgres + API + desktop running** (`pnpm dev:all`), signed in as a real
    Supabase user (so a subscription is auto-provisioned; trial credits granted).
 2. **Stripe test-mode configured** (this is the operator step that makes it
-   transact live). In the SecretStore, set `stripe_api_key` to a Stripe **test**
-   secret key (`sk_test_...`). In `.env.mega` (then `pnpm env:sync`):
+   transact live). Use the operator CLI from `packages/api`:
+
+   - `uv run stripe-setup put-key` — stores a Stripe **test** secret key
+     (`sk_test_...`) in the SecretStore (interactive prompt).
+   - `uv run stripe-setup bootstrap` — creates the ADR-023/024 plan/pack Prices
+     in Stripe (idempotent) and prints the two `SOLUS_STRIPE_*` lines to paste.
+   - `uv run stripe-setup check` — verifies the key and every configured price
+     id; must print `check: PASS` before running the flows below.
+
+   In `.env.mega` (then `pnpm env:sync`):
+
    - `SOLUS_STRIPE_WEBHOOK_SECRET` = the signing secret from `stripe listen` (or the
      dashboard test webhook).
    - `SOLUS_STRIPE_PLAN_PRICES` = JSON mapping `basic:month`/`basic:year`/`pro:month`/
      `pro:year` to test Price ids created in Stripe.
    - `SOLUS_STRIPE_PACK_CREDITS` = JSON mapping each pack's test Price id → credits.
    - `SOLUS_STRIPE_TRIAL_DAYS` (default 14) as desired.
+
 3. **Forward webhooks** to the API: `stripe listen --forward-to
 http://127.0.0.1:8000/api/v1/webhooks/stripe`.
 4. Stripe test card for checkout: `4242 4242 4242 4242`, any future expiry/CVC/zip.

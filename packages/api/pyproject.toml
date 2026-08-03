@@ -29,6 +29,9 @@ dependencies = [
     "mcp>=1.28.1,<2.0",
 ]
 
+[project.scripts]
+stripe-setup = "solus_api.ops.stripe_setup:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",

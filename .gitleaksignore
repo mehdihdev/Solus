@@ -5,3 +5,9 @@
 # docstring (after the word "keys,"). Not a credential. The docstring is also
 # reworded to avoid the heuristic going forward; this pins the historical hit.
 3e9fdba5050b906850a880c33c6150e64d98caf0:packages/api/tests/test_eda.py:generic-api-key:5
+
+# SOLUSDEV-83: stripe-access-token matched the made-up fixture "sk_live_oldkey…"
+# in the put-key overwrite test. Not a credential — the value never existed at
+# Stripe. The fixture is also shortened below the rule's 10-char suffix
+# threshold going forward; this pins the already-pushed historical hit.
+8c6978d6e28ba3414814cae69b596f9ee419712e:packages/api/tests/test_stripe_setup.py:stripe-access-token:398

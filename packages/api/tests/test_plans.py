@@ -13,7 +13,11 @@ from solus_api.models import PlanType
 
 
 def _settings(prices: dict[str, str]) -> Settings:
+    # _env_file=None keeps this hermetic: pydantic-settings MERGES dict fields
+    # (like stripe_plan_prices) across sources, so a developer's real .env would
+    # otherwise leak extra plan→price entries into these tests (see conftest).
     return Settings(
+        _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
         supabase_jwt_secret=TEST_JWT_SECRET,
         supabase_jwt_audience=TEST_AUDIENCE,
         stripe_plan_prices=prices,
