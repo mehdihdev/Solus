@@ -92,6 +92,12 @@ def test_build_treats_blank_backend_as_unset(engine: AsyncEngine) -> None:
 
 def test_build_falls_back_to_inmemory_in_dev(engine: AsyncEngine) -> None:
     maker = async_sessionmaker(engine, expire_on_commit=False)
+    # "No backend configured" must really mean none: a developer's `.env` may
+    # legitimately set SOLUS_SECRETS_KEY, which would flip build_secret_store to
+    # the local encrypted backend and make this assertion pass for the wrong
+    # reason. HermeticSettings reads no `.env` at all, so the backend fields are
+    # genuinely unset. (Both branches fixed this leak; main's subclass is the
+    # idiom the rest of this module now uses, so it wins here.)
     settings = HermeticSettings(supabase_jwt_secret=SECRET, database_url="sqlite+aiosqlite://")
     store = build_secret_store(settings, maker)
     assert isinstance(store, InMemorySecretStore)
@@ -103,6 +109,9 @@ def test_build_hard_fails_in_prod_without_backend(engine: AsyncEngine) -> None:
         supabase_jwt_secret=SECRET,
         database_url="sqlite+aiosqlite://",
         app_env="production",
+        secrets_key=None,
+        secrets_backend=None,
+        aws_region=None,
     )
     with pytest.raises(RuntimeError):
         build_secret_store(settings, maker)
