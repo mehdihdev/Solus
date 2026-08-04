@@ -135,6 +135,27 @@ SAME `EntityOut`/`RelationOut` emission (§5 rows, unchanged).
    vendored tool that MUTATES the design is outside this mechanism and carries
    `requires_confirmation: true` per MCP-03.
 
+> **§2.1 addendum — ratified export transport (2026-08-03, SOLUSDEV-100; F1 decision,
+> human-approved in-session; tier-1 amendment per ADR-032).** The Flow paragraph above
+> predates the built transport; this paragraph supersedes its "bulk bytes ride an
+> `ArtifactRef` (`ArtifactStorage.CLIENT`…), never inlined" clause. As ratified and built:
+> a live export **≤ 512 KiB** (`artifact_inline_max_bytes`, `docs/api/artifacts.md` §4.4)
+> rides **inline** in the tool result (`content`); a larger export is written by the fork to
+> a **workspace-confined file** and returned as a workspace-relative `artifact_path`, which
+> the **COMPANION** — never the fork, never the cloud — uploads via
+> `POST /api/v1/projects/{project_id}/artifacts` (`docs/api/artifacts.md` §2) and rewrites
+> in the `tool_result` into the returned W0-04 `ArtifactRef` before the frame crosses the
+> bridge (`storage` reports the backend actually holding the bytes: `s3` prod / `local`
+> dev). Cloud-side consumption is **one-shot**: the sync acquirer fetches the bytes exactly
+> once, and only after the full **six-condition anti-forgery match** against the originating
+> tool call (`docs/api/artifacts.md` §4.3 — project scope, team scope, creator = the
+> dispatched acting user, `source_tool`, `tool_call_id`, and liveness/first-consumer-wins);
+> any mismatch or failure anywhere in the chain declines the live path and **invariant 3's
+> committed-file fallback proceeds unchanged**. The five invariants above are NOT modified
+> by this addendum; invariant 5 in particular is untouched — the fork's one mutating tool
+> (`set_symbol_property`) is allowlisted `requires_confirmation: true` and sits entirely
+> outside this export mechanism.
+
 ---
 
 ## 3. THE UNIFYING PRINCIPLE — one shared CAD parser

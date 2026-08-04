@@ -207,11 +207,20 @@ async def run_sync(
     secret_store: SecretStore,
     trigger: SyncTrigger = SyncTrigger.MANUAL,
     job_id: uuid.UUID | None = None,
+    acting_user_id: uuid.UUID | None = None,
 ) -> uuid.UUID | None:
     """Run one sync end-to-end. Records a Sync row and returns its id; failures
     are recorded on the Sync/Source/Job (never raised) so the caller's 202 stands
     and the error is answerable from the records (CLAUDE.md §6). Returns None only
-    if the source vanished before the run could start (logged, nothing to record)."""
+    if the source vanished before the run could start (logged, nothing to record).
+
+    `acting_user_id` (SOLUSDEV-100 T4b, F3) is the resolved user whose bridge
+    session (if any) an EDA connector's live acquirer may use — resolution
+    happens in `worker.execute_source_sync`; this is logged here purely for
+    observability ("why did this sync not use live acquisition?" — CLAUDE.md
+    §6), since `connector` is already fully constructed by the time it
+    reaches `run_sync`.
+    """
     try:
         sync_id, config, cursor, secret_ref = await _begin_sync(
             sessionmaker, source_id, trigger, job_id
@@ -219,6 +228,12 @@ async def run_sync(
     except Exception:
         logger.exception("sync setup failed for source=%s (deleted before start?)", source_id)
         return None
+    logger.info(
+        "sync acting_user=%s source=%s sync=%s",
+        acting_user_id,
+        source_id,
+        sync_id,
+    )
 
     try:
         if connector.auth_kind is AuthKind.NONE:

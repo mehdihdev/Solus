@@ -27,7 +27,8 @@ PROVENANCE modification log).
 
 ```
 integrations/mcp/<tool>/
-├── PROVENANCE.md            # from PROVENANCE.template.md — provenance, license, sign-offs, tree hash
+├── PROVENANCE.md            # from PROVENANCE.template.md — provenance, license, sign-offs, tree hash;
+│                            #   ONE file per fork, with a SECTION per vendored tree (see two-tree note)
 ├── SECURITY_REVIEW.md       # dated, filled copies of SECURITY_REVIEW.template.md — APPEND per review,
 │                            #   never overwrite (the history of what was reviewed is the point)
 ├── allowlist.yaml           # curated Solus-owned tool allowlist — single source of truth (below)
@@ -35,11 +36,37 @@ integrations/mcp/<tool>/
 │   └── launch               # Solus-AUTHORED pinned entrypoint — the ONLY thing spec.command may name
 ├── solus/                   # all Solus-authored code: env allowlist, disabled-tool shims,
 │                            #   added lockfile if upstream lacks one, wrapper modules
-└── upstream/                # verbatim upstream tree at the pinned SHA
-    ├── LICENSE              # retained as-is (MIT or Apache-2.0 only — no other license ships)
-    ├── NOTICE               # if Apache-2.0: preserved verbatim, ships with every distribution
-    └── ...                  # upstream source + upstream's own lockfile
+├── upstream/                # verbatim upstream tree at the pinned SHA
+│   ├── LICENSE              # retained as-is (MIT or Apache-2.0 only — no other license ships)
+│   ├── NOTICE               # if Apache-2.0: preserved verbatim, ships with every distribution
+│   └── ...                  # upstream source + upstream's own lockfile
+└── vendor/                  # OPTIONAL second vendored tree (two-tree shape, below): a third-party
+    ├── LICENSE              #   support LIBRARY the solus/ overlay builds on, verbatim at its own
+    └── <lib_package>/       #   pinned SHA — e.g. kicad/vendor/kicad_sch_api/
 ```
+
+### Two-tree shape (ratified SOLUSDEV-100, F6/F7)
+
+A fork that builds its overlay on a third-party support **library** (not a second server)
+vendors that library in a `vendor/` tree **beside** `upstream/`, under the same fork-model
+rules — verbatim single import commit at a pinned SHA, F6 exclusion pattern re-evaluated per
+tree, every post-import deviation logged. The load-bearing mechanics:
+
+- **One `PROVENANCE.md` per fork, one section per tree.** The vendor tree gets its own
+  "Vendored library tree" section carrying its repository, pinned SHA, license verification,
+  exclusion/strip rows, and dependency truth — never merged into the upstream rows.
+- **Each tree carries its OWN hash**, recomputed independently
+  (`git rev-parse HEAD:integrations/mcp/<tool>/upstream` and `…/vendor`). A change to either
+  tree voids the fork's shared sign-offs; the sign-off lines pin BOTH hashes.
+- The license boundary applies per tree (MIT/Apache-2.0 only). A permissive non-copyleft
+  dependency exception (e.g. `sexpdata`, BSD-2-Clause, in the kicad fork) is a human-approved
+  row in the vendor section, never a silent import.
+- `vendor/` is consumed by `solus/` via `sys.path`, never pip-installed; its pins ride the
+  fork's single `requirements.lock.txt`. Nothing under `vendor/` may register MCP tools —
+  a fork never gains a second server (`bin/launch` execs the `solus/` entry only).
+
+Reference implementation: `integrations/mcp/kicad/` (upstream `lamaalrajih/kicad-mcp` +
+`vendor/` = `circuit-synth/kicad-sch-api`).
 
 ## Naming rule
 
@@ -73,7 +100,9 @@ allowlisting** and the **tool → local-server mapping** (spec.name ↔ this dir
 
 ```yaml
 server: delphiscript # == spec.name == this directory's name
-upstream_tool_count: 290 # stated so the exposed/total ratio is reviewable
+# NOTE: no extra fields — `ServerAllowlist` (packages/api/src/solus_api/bridge/
+# allowlist.py) is extra="forbid". The exposed/total tool ratio is recorded in
+# PROVENANCE.md ("Exposed tools"), NOT here (T1b finding, SOLUSDEV-100).
 tools:
   - name: run_script # must pass _SAFE_REMOTE_NAME
     requires_confirmation: true # per-tool, Solus-authored; server destructiveHint is UNTRUSTED

@@ -7,10 +7,12 @@ It parses into the shared electrical graph shape via the EDA family
 custom field, `schematic_symbol_name`, `datasheet_ref`) on `modality_hints`.
 
 This connector is therefore tiny by design — it is {a format parser} + {the
-shared EDA family base}. The only deferred piece is LIVE export ACQUISITION
-(pulling the committed file from the linked repo at a ref), which the family
-base stubs behind `config['export']` with a clear v1 marker
-(`EdaExportConnector._read_export`).
+shared EDA family base}. Live export ACQUISITION (an injected `ExportAcquirer`
+— e.g. a bridge/MCP export call, SOLUSDEV-100 T4a) is tried first when
+configured; the family base falls back to inline `config['export']` on
+decline/failure either way (`EdaExportConnector._read_export`). Wiring a
+concrete acquirer into this connector at construction is a later ticket
+(this base stays zero-arg constructible by default).
 
 v1 limitations (flagged): XML netlist only (design review Q2) — the S-expr
 `.net` is rejected with re-export guidance rather than half-parsed.

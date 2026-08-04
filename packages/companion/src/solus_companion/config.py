@@ -5,6 +5,17 @@ An integrations root holds one directory per vendored MCP server:
 deliberately paranoid — the launch command must resolve INSIDE the root
 (no `..`/symlink escapes), exist, and be executable, or the server is
 skipped with a hard log line. The companion never trusts the tree.
+
+`SOLUS_COMPANION_WORKSPACE` (optional): the project working directory this
+companion serves. When set, `CompanionConfig.workspace` carries it and
+callers pass it to `discover_servers(root, workspace=config.workspace)` so
+every vendored server's declared env carries `SOLUS_MCP_WORKSPACE` — the
+knob a fork's own confinement trusts (e.g. the kicad fork's
+`solus/workspace.py::workspace_root()`, H3). When unset, no server receives
+that variable, and a fork built to fail closed on an absent workspace
+refuses its confined operations rather than falling back to an arbitrary
+cwd — this is deliberate, not a gap: a companion instance with no configured
+workspace should not silently let a fork guess one.
 """
 
 import asyncio
@@ -34,6 +45,11 @@ DEFAULT_INSTANCE_FILE = "~/.solus/companion_id"
 # setting SOLUS_COMPANION_ALLOWED_HOSTS is the explicit user/app consent.
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
 _LOCAL_HOSTS = frozenset(DEFAULT_ALLOWED_HOSTS)
+
+# The bridge WS path (bridge-protocol.md §8); the artifact upload origin and
+# project id are derived from it so the HTTPS API host is always the SAME
+# allowlisted host the socket dials (SEC-M2 — one consent covers both).
+_BRIDGE_PATH_RE = re.compile(r"^/api/v1/projects/([^/]+)/bridge/?$")
 
 
 @dataclass(frozen=True)
@@ -108,6 +124,37 @@ class CompanionConfig:
     servers: tuple[ServerLaunch, ...] = ()
     ping_interval: float = 20.0
     companion_version: str = __version__
+    # SEC-M2: the one allowlist gating every host the bearer token rides to —
+    # the WS dial (checked at config time) AND artifact uploads (artifacts.py).
+    allowed_hosts: frozenset[str] = frozenset(DEFAULT_ALLOWED_HOSTS)
+    # H3 (companion half): the project working directory this companion
+    # serves, from `SOLUS_COMPANION_WORKSPACE` — optional. When set, callers
+    # pass it to `discover_servers(..., workspace=config.workspace)` so every
+    # vendored server's declared env carries `SOLUS_MCP_WORKSPACE`; when
+    # unset, no server gets that variable and each fork's own
+    # `workspace_root()` fails closed rather than confining to an arbitrary
+    # cwd (docs/architecture — kicad fork `solus/workspace.py`).
+    workspace: str | None = None
+
+
+@dataclass(frozen=True)
+class ApiEndpoint:
+    """The HTTPS API origin + project id derived from the bridge WS URL."""
+
+    origin: str
+    project_id: str
+
+
+def api_endpoint_from_ws_url(url: str) -> ApiEndpoint | None:
+    """`wss://host/api/v1/projects/{id}/bridge` → (`https://host`, id).
+    `ws://` maps to `http://` (localhost dev only, mirroring the URL guard).
+    Any other shape → None: artifact uploads stay disabled."""
+    parsed = urlparse(url)
+    match = _BRIDGE_PATH_RE.match(parsed.path)
+    if match is None or parsed.scheme not in ("ws", "wss"):
+        return None
+    scheme = "https" if parsed.scheme == "wss" else "http"
+    return ApiEndpoint(origin=f"{scheme}://{parsed.netloc}", project_id=match.group(1))
 
 
 def _read_server_name(allowlist: Path) -> str | None:
@@ -145,9 +192,17 @@ def _launch_command(root_resolved: Path, server_dir: Path, name: str) -> Path | 
     return resolved
 
 
-def discover_servers(root: Path) -> tuple[ServerLaunch, ...]:
-    """Scan `<root>/*/allowlist.yaml` for vendored servers (ADR-031)."""
+def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[ServerLaunch, ...]:
+    """Scan `<root>/*/allowlist.yaml` for vendored servers (ADR-031).
+
+    H3 (companion half): when *workspace* is given (non-empty), every
+    discovered server's declared env carries `SOLUS_MCP_WORKSPACE=workspace`
+    — the one knob a fork's own confinement (e.g. the kicad fork's
+    `solus/workspace.py::workspace_root()`) trusts. Omitted or empty means no
+    server gets that variable, and each fork fails closed rather than
+    confining to an arbitrary cwd."""
     root_resolved = root.resolve()
+    declared_env = {"SOLUS_MCP_WORKSPACE": workspace} if workspace else {}
     servers: list[ServerLaunch] = []
     for allowlist in sorted(root.glob("*/allowlist.yaml")):
         server_dir = allowlist.parent
@@ -163,7 +218,7 @@ def discover_servers(root: Path) -> tuple[ServerLaunch, ...]:
         command = _launch_command(root_resolved, server_dir, name)
         if command is None:
             continue
-        servers.append(ServerLaunch(name=name, command=command))
+        servers.append(ServerLaunch(name=name, command=command, env=declared_env))
     return tuple(servers)
 
 
@@ -220,10 +275,17 @@ def config_from_env(env: Mapping[str, str] | None = None) -> CompanionConfig:
     instance_file = Path(
         source.get("SOLUS_COMPANION_INSTANCE_FILE", DEFAULT_INSTANCE_FILE)
     ).expanduser()
+    # H3 (companion half): the project directory this companion serves —
+    # optional. `None` (never an empty string) means "not configured", so
+    # `discover_servers(..., workspace=config.workspace)` omits the env var
+    # for every server rather than passing an empty one.
+    workspace = source.get("SOLUS_COMPANION_WORKSPACE") or None
     return CompanionConfig(
         url=url,
         # The env token pre-seeds the box; stdin token lines refresh it later.
         token_source=TokenBox(token) if token is not None else TokenBox(),
         integrations_root=integrations_root,
         instance_id=load_instance_id(instance_file),
+        allowed_hosts=allowed,
+        workspace=workspace,
     )

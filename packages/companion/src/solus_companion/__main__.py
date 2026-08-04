@@ -74,7 +74,7 @@ async def _amain(config: CompanionConfig) -> int:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     config = config_from_env()
-    servers = discover_servers(config.integrations_root)
+    servers = discover_servers(config.integrations_root, workspace=config.workspace)
     logger.info("discovered %d server(s) under %s", len(servers), config.integrations_root)
     return asyncio.run(_amain(dataclasses.replace(config, servers=servers)))
 

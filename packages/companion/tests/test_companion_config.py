@@ -42,6 +42,36 @@ def test_discover_servers_finds_mock_fixture() -> None:
     assert servers[0].args == ()
 
 
+# --- H3 (companion half): SOLUS_MCP_WORKSPACE propagation ------------------------
+
+
+def test_discover_servers_omits_the_workspace_env_when_not_configured() -> None:
+    """No `workspace=` given at all — every child's declared env stays
+    empty, exactly as before this fix (fail closed: the fork's own
+    `workspace_root()` then refuses rather than defaulting to its cwd)."""
+    servers = discover_servers(FIXTURE_ROOT)
+    assert servers[0].env == {}
+
+
+def test_discover_servers_omits_the_workspace_env_when_explicitly_none() -> None:
+    servers = discover_servers(FIXTURE_ROOT, workspace=None)
+    assert servers[0].env == {}
+
+
+def test_discover_servers_omits_the_workspace_env_when_empty_string() -> None:
+    """An empty string is "not configured", not a workspace of the empty
+    path — the same optionality `SOLUS_COMPANION_WORKSPACE` documents."""
+    servers = discover_servers(FIXTURE_ROOT, workspace="")
+    assert servers[0].env == {}
+
+
+def test_discover_servers_sets_solus_mcp_workspace_on_every_server_when_configured() -> None:
+    servers = discover_servers(FIXTURE_ROOT, workspace="/projects/robot")
+    assert servers
+    for server in servers:
+        assert server.env == {"SOLUS_MCP_WORKSPACE": "/projects/robot"}
+
+
 def test_symlink_escaping_root_is_refused(tmp_path: Path) -> None:
     outside = tmp_path / "outside.sh"
     outside.write_text("#!/bin/sh\nexit 0\n")
@@ -130,6 +160,21 @@ def test_config_from_env_allows_ws_for_localhost(tmp_path: Path) -> None:
     assert config.instance_id == load_instance_id(tmp_path / "companion_id")
     assert config.servers == ()
     assert config.ping_interval == 20.0
+
+
+def test_config_from_env_workspace_defaults_to_none(tmp_path: Path) -> None:
+    """H3 (companion half): `SOLUS_COMPANION_WORKSPACE` is optional — absent
+    means the companion serves no fixed project directory, and every server's
+    declared env stays empty (the fork then fails closed, per H3's fork half)."""
+    config = config_from_env(_env(tmp_path, "ws://localhost:8000/bridge"))
+    assert config.workspace is None
+
+
+def test_config_from_env_reads_the_workspace_when_set(tmp_path: Path) -> None:
+    env = _env(tmp_path, "ws://localhost:8000/bridge")
+    env["SOLUS_COMPANION_WORKSPACE"] = "/projects/robot"
+    config = config_from_env(env)
+    assert config.workspace == "/projects/robot"
 
 
 def test_config_from_env_accepts_wss_when_allowlisted(tmp_path: Path) -> None:

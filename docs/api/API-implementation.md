@@ -832,3 +832,27 @@ project"); one socket = one project scope.
   `BridgeTool` per entry (scope fixed by Solus code at turn start).
 - Implementation: `routers/bridge.py` + `solus_api/bridge/`; tests `tests/test_bridge.py` (WS
   protocol + red-team), `tests/test_bridge_e2e.py` (real companion round-trip).
+
+---
+
+## 12. Project artifacts (SOLUSDEV-100) — PLANNED, route plan in [artifacts.md](artifacts.md)
+
+Tier-1 route-plan amendment (ADR-032; F1 decision, in-session human approval 2026-08-03) closing
+the `docs/contracts/bridge-protocol.md` §10 "ArtifactRef upload path" hole: the HTTP surface a
+companion uses to upload bulk MCP tool output (KiCad/EDA exports > the 1 MiB `tool_result` frame
+cap) and the scope-enforced fetch routes for the W0-04 `artifacts` table. Documented before
+implementation per the authority hierarchy (#3); the implementing task is T4c on the same ticket.
+
+All routes resolve through `ProjectCtx` (non-member → `404`, no existence leak); upload requires
+the `member` role.
+
+| Method | Path                                                            | Purpose                                         | Success |
+| ------ | --------------------------------------------------------------- | ----------------------------------------------- | ------- |
+| POST   | `/api/v1/projects/{project_id}/artifacts`                       | Multipart upload; returns a W0-04 `ArtifactRef` | `201`   |
+| GET    | `/api/v1/projects/{project_id}/artifacts/{artifact_id}`         | Artifact metadata (registry row)                | `200`   |
+| GET    | `/api/v1/projects/{project_id}/artifacts/{artifact_id}/content` | The raw bytes                                   | `200`   |
+
+Full plan — request/response shapes, `scope=PROJECT` default, TTL + one-shot consumption,
+anti-forgery consumption rules, size caps (8 MiB), rate budgets, and the `ArtifactStore`
+S3/local backends (presigned-S3 as the documented revisit path) — lives in
+[artifacts.md](artifacts.md).

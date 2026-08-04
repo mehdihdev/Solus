@@ -45,10 +45,14 @@ dev = [
     "boto3-stubs[secretsmanager]>=1.35",
     # The uvicorn E2E drives a real companion against a real socket (BRG-01/02).
     "solus-companion",
+    # Parity tests pin the human-owned contracts package to the in-tree draft
+    # (tests/test_contracts_package.py, SOLUSDEV-100).
+    "solus-contracts",
 ]
 
 [tool.uv.sources]
 solus-companion = { workspace = true }
+solus-contracts = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

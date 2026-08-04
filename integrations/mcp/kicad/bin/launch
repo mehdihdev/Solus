@@ -1,0 +1,49 @@
+#!/bin/sh
+# integrations/mcp/kicad/bin/launch — Solus-authored ADR-031 entrypoint for the
+# vendored lamaalrajih/kicad-mcp fork. This is the ONLY way the companion may
+# start this server (integrations/mcp/README.md; MCPServerSpec.command).
+#
+# Guarantees (locked by ../tests/test_launch_entrypoint.py):
+#   * fixed argv — no caller-argument passthrough;
+#   * scrubbed child environment — env -i plus the declared allowlist below;
+#   * zero network I/O and zero installs at launch (ADR-031). Dependencies are
+#     materialized at companion install/update time from requirements.lock.txt
+#     (hash-verified) into the fork-private virtualenv referenced below — the
+#     BRG install-time follow-up creates it. Nothing here resolves from PATH.
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+
+# Fixed private interpreter (install-time materialization creates it; see the
+# header comment and PROVENANCE.md "Local modifications" notes).
+PYTHON="$FORK_DIR/.venv/bin/python3"
+
+# The companion passes the project workspace via SOLUS_MCP_WORKSPACE — the one
+# documented cwd knob. cwd falls back to the fork dir for stable relative I/O,
+# but the child variable is passed through EMPTY when the companion did not
+# provide it: solus/workspace.py fails closed on empty (Phase 4 H3), so every
+# path-confined tool refuses instead of silently anchoring to the install dir.
+WORKSPACE="${SOLUS_MCP_WORKSPACE:-$FORK_DIR}"
+cd -- "$WORKSPACE"
+
+# Declared child-environment allowlist — everything else is dropped by env -i.
+# The written declaration lives in ../solus/env_allowlist.py (T1b); this block
+# must match it exactly (pinned by ../tests/test_overlay_env_allowlist.py and
+# test_launch_entrypoint.py). The KICAD_* knobs are upstream's documented
+# configuration; PATH is a fixed constant (never inherited) so the kicad-cli
+# lookup stays off user-controlled search paths. Changing this set is a
+# PROVENANCE re-review trigger.
+exec /usr/bin/env -i \
+  HOME="${HOME:-}" \
+  USER="${USER:-}" \
+  LANG="${LANG:-}" \
+  LC_ALL="${LC_ALL:-}" \
+  TMPDIR="${TMPDIR:-}" \
+  PATH="/usr/bin:/bin" \
+  KICAD_SEARCH_PATHS="${KICAD_SEARCH_PATHS:-}" \
+  KICAD_USER_DIR="${KICAD_USER_DIR:-}" \
+  KICAD_APP_PATH="${KICAD_APP_PATH:-}" \
+  KICAD_CLI_PATH="${KICAD_CLI_PATH:-}" \
+  SOLUS_MCP_WORKSPACE="${SOLUS_MCP_WORKSPACE:-}" \
+  "$PYTHON" "$FORK_DIR/solus/server.py"

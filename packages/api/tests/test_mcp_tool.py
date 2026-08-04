@@ -36,7 +36,7 @@ from solus_api.agent.tools import (
     ToolException,
     ToolRegistry,
 )
-from solus_api.agent.tools.mcp_servers import ONSHAPE, WEB_SEARCH
+from solus_api.agent.tools.mcp_servers import FUSION, KICAD, ONSHAPE, WEB_SEARCH
 from solus_api.agent.tools.mcp_tool import MCPServerSpec, MCPTool, discover_mcp_tools
 from solus_api.connectors.secrets import InMemorySecretStore
 
@@ -460,7 +460,10 @@ async def test_binary_content_is_never_inlined() -> None:
 
 async def test_requires_confirmation_propagates_from_spec() -> None:
     """The confirmation gate is Solus-authored per server spec — never taken from
-    the server's own (untrusted) annotations."""
+    the server's own (untrusted) annotations. This spec has NO allowlist.yaml
+    on disk (no `integrations/mcp/confirm/` fork dir exists), so the blanket
+    spec-level flag is the fallback (Phase 4 H4: gating is conditional on an
+    allowlist actually being found for the server)."""
     spec = MCPServerSpec(
         name="confirm",
         command=sys.executable,
@@ -470,3 +473,101 @@ async def test_requires_confirmation_propagates_from_spec() -> None:
     tools = await discover_mcp_tools(spec, InMemorySecretStore())
     assert tools
     assert all(t.descriptor.requires_confirmation for t in tools)
+
+
+# --------------------------- Phase 4 H4: allowlist-gated stdio discovery -------
+
+
+def _write_allowlist(root: Path, server: str, body: str) -> None:
+    fork = root / server
+    fork.mkdir(parents=True)
+    (fork / "allowlist.yaml").write_text(body)
+
+
+async def test_non_allowlisted_upstream_tool_names_are_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stdio spec whose fork dir HAS an allowlist.yaml gates discovery: any
+    upstream tool name not listed there is skipped, exactly like the bridge's
+    own `validate_inventory` gate (ADR-031) — the allowlist, not the server's
+    own advertisement, decides what SOL can ever call."""
+    _write_allowlist(
+        tmp_path,
+        "gated",
+        "server: gated\ntools:\n  - name: list_projects\n    requires_confirmation: false\n",
+    )
+    listing = ListToolsResult(tools=[_remote("list_projects"), _remote("not_allowlisted_tool")])
+
+    @asynccontextmanager
+    async def _fake_session(_spec: MCPServerSpec) -> AsyncIterator[Any]:
+        class _Session:
+            async def list_tools(self) -> ListToolsResult:
+                return listing
+
+        yield _Session()
+
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    monkeypatch.setattr(mcp_tool_module, "_open_session", _fake_session)
+    spec = MCPServerSpec(name="gated", command=sys.executable, args=(str(MOCK_SERVER),))
+    tools = await discover_mcp_tools(spec, InMemorySecretStore(), allowlist_root=tmp_path)
+    names = {t.descriptor.name for t in tools}
+    assert names == {"gated.list_projects"}
+
+
+async def test_set_symbol_property_can_never_be_confirmation_false_through_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`requires_confirmation` comes ONLY from the allowlist entry once one
+    exists for the server — never from the spec's own blanket flag (which a
+    caller could construct with `requires_confirmation=False`) and never from
+    the server's own (untrusted) advertisement."""
+    _write_allowlist(
+        tmp_path,
+        "kicad",
+        "server: kicad\ntools:\n"
+        "  - name: list_projects\n"
+        "    requires_confirmation: false\n"
+        "  - name: set_symbol_property\n"
+        "    requires_confirmation: true\n"
+        "    reason: mutates a design file on the customer machine\n",
+    )
+    listing = ListToolsResult(tools=[_remote("list_projects"), _remote("set_symbol_property")])
+
+    @asynccontextmanager
+    async def _fake_session(_spec: MCPServerSpec) -> AsyncIterator[Any]:
+        class _Session:
+            async def list_tools(self) -> ListToolsResult:
+                return listing
+
+        yield _Session()
+
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    monkeypatch.setattr(mcp_tool_module, "_open_session", _fake_session)
+    # requires_confirmation=False at the SPEC level must not matter once an
+    # allowlist entry exists — it is entirely overridden per-tool below.
+    spec = MCPServerSpec(
+        name="kicad", command=sys.executable, args=(str(MOCK_SERVER),), requires_confirmation=False
+    )
+    tools = await discover_mcp_tools(spec, InMemorySecretStore(), allowlist_root=tmp_path)
+    by_name = {t.descriptor.name: t.descriptor for t in tools}
+    assert by_name["kicad.set_symbol_property"].requires_confirmation is True
+    assert by_name["kicad.list_projects"].requires_confirmation is False
+
+
+# ------------------------------- Phase 4 H4: absolute-resolving fork commands --
+
+
+@pytest.mark.parametrize("spec", [KICAD, FUSION], ids=lambda s: s.name)
+def test_fork_launcher_commands_are_pinned_absolute_paths(spec: MCPServerSpec) -> None:
+    """The KICAD/FUSION catalog commands must never be PATH/CWD-resolved
+    (CLAUDE.md §7: subprocess binaries pinned to expected paths) — a relative
+    command string spawned via a different process CWD than the repo root
+    could silently resolve to an attacker-controlled binary on PATH. Whether
+    the launcher has actually been vendored yet (KICAD's has; FUSION's has
+    not) is orthogonal to this property — either way, the path is absolute
+    and anchored at the repo root, never PATH-resolved."""
+    assert spec.command is not None
+    assert Path(spec.command).is_absolute()
+    assert spec.command.endswith(f"integrations/mcp/{spec.name}/bin/launch")

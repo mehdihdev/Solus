@@ -4,13 +4,23 @@ version = "0.0.0"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["packages/api", "packages/companion"]
+members = ["packages/api", "packages/companion", "packages/contracts/python"]
 # Add as they are created: "integrations/*", "reasoning", "livebench"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = [".venv", "node_modules"]
+# The quality hooks (H8/H10) pass changed files EXPLICITLY; force-exclude makes
+# the excludes below apply even then (plain exclude only governs discovery).
+force-exclude = true
+# Vendored MCP-server fork trees (integrations/mcp/README.md) are reviewed
+# third-party code, not Solus style-clean code — outside the lint law.
+extend-exclude = [
+    ".venv",
+    "node_modules",
+    "integrations/mcp/*/upstream",
+    "integrations/mcp/*/vendor",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C901", "N", "S"]
@@ -24,16 +34,53 @@ max-complexity = 10
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+# Vendored MCP-server fork trees are third-party code; Solus-authored areas
+# (integrations/mcp/tests/, <fork>/solus/, <fork>/tests/) stay in scope.
+exclude = [
+    'integrations/mcp/[^/]+/upstream/',
+    'integrations/mcp/[^/]+/vendor/',
+]
 
 # These packages ship no py.typed marker; treat their imports as untyped rather than error.
 [[tool.mypy.overrides]]
 module = ["pgvector.*", "asyncpg"]
 ignore_missing_imports = true
 
+# Vendored MCP fork modules (kicad fork, SOLUSDEV-100): untyped third-party
+# code imported by Solus-authored solus/ wrappers. Module-scoped on purpose —
+# never a blanket override.
+[[tool.mypy.overrides]]
+module = ["kicad_mcp.*", "kicad_sch_api.*", "sexpdata"]
+ignore_missing_imports = true
+
+# mypy's `exclude` does not apply to explicitly-passed files (the H8/H10 hooks
+# pass changed files by path), so vendored-tree modules are additionally
+# silenced per-module. "main"/"run_tests"/"tests.*" are the vendored fork's
+# top-level and tests-package modules; no Solus tests dir ships __init__.py,
+# so nothing Solus-authored resolves into the "tests.*" namespace.
+[[tool.mypy.overrides]]
+module = ["kicad_mcp.*", "kicad_sch_api.*", "main", "run_tests", "tests", "tests.*"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages", "integrations", "reasoning", "livebench"]
 addopts = "-p no:launch_testing -p no:launch_pytest"
+# Setting norecursedirs REPLACES pytest's defaults, so the defaults we rely on
+# are restated alongside the vendored MCP fork trees (upstream/, vendor/).
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    ".venv",
+    "upstream",
+    "vendor",
+]
 markers = [
     "live: real provider-API smoke tests; needs API keys, never run in CI (run with -m live)",
 ]

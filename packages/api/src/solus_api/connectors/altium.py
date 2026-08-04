@@ -8,10 +8,13 @@ a **committed Altium export** (the Protel netlist — native and simplest, W0-08
 
 This connector is therefore tiny by design — it is {a format parser} + {the
 shared EDA family base}. Everything real (parse, map, the full W0-05 interface,
-conformance) lives here and is tested; the only deferred piece is LIVE export
-ACQUISITION (pulling the committed file from the linked repo at a ref, or any
-direct Altium tool integration), which the family base stubs behind
-`config['export']` with a clear v1 marker (`EdaExportConnector._read_export`).
+conformance) lives here and is tested. Live export ACQUISITION (an injected
+`ExportAcquirer` — e.g. a bridge/MCP export call, or a future direct Altium
+tool integration, SOLUSDEV-100 T4a) is tried first when configured; the
+family base falls back to inline `config['export']` on decline/failure either
+way (`EdaExportConnector._read_export`). Wiring a concrete acquirer into this
+connector at construction is a later ticket (this base stays zero-arg
+constructible by default).
 
 v1 limitations (flagged): only the Protel netlist format (SPICE/orcadpcb2 exports
 are a later extension), and stock Protel has no native MPN field (W0-08 §5.4), so

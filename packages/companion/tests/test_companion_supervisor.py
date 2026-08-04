@@ -15,12 +15,35 @@ from solus_companion.supervisor import (
     ServerState,
     Supervisor,
     UnknownToolError,
+    _child_env,
 )
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mcp_root"
 LAUNCH = FIXTURE_ROOT / "mock" / "bin" / "launch"
 
 EXPECTED_TOOLS = {"echo", "add", "boom", "sleepy", "plain", "pic", "badschema"}
+
+
+# --- H3 (companion half): _child_env passes SOLUS_MCP_WORKSPACE through ---------
+
+
+def test_child_env_passes_solus_mcp_workspace_through_when_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/home/solus")
+    env = _child_env({"SOLUS_MCP_WORKSPACE": "/projects/robot"})
+    assert env["SOLUS_MCP_WORKSPACE"] == "/projects/robot"
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == "/home/solus"
+
+
+def test_child_env_omits_solus_mcp_workspace_when_not_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    env = _child_env({})
+    assert "SOLUS_MCP_WORKSPACE" not in env
 
 
 def _make_supervisor(pid_file: Path | None = None) -> Supervisor:

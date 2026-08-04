@@ -13,6 +13,7 @@ resolution-markers = [
 members = [
     "solus-api",
     "solus-companion",
+    "solus-contracts",
     "solus-workspace",
 ]
 
@@ -1684,6 +1685,7 @@ dev = [
     { name = "respx" },
     { name = "ruff" },
     { name = "solus-companion" },
+    { name = "solus-contracts" },
     { name = "types-jsonschema" },
     { name = "types-pyyaml" },
 ]
@@ -1725,6 +1727,7 @@ dev = [
     { name = "respx", specifier = ">=0.21" },
     { name = "ruff", specifier = ">=0.8" },
     { name = "solus-companion", editable = "packages/companion" },
+    { name = "solus-contracts", editable = "packages/contracts/python" },
     { name = "types-jsonschema", specifier = ">=4.20" },
     { name = "types-pyyaml", specifier = ">=6.0" },
 ]
@@ -1757,6 +1760,17 @@ dev = [
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
 ]
+
+[[package]]
+name = "solus-contracts"
+version = "0.1.0"
+source = { editable = "packages/contracts/python" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2" }]
 
 [[package]]
 name = "solus-workspace"

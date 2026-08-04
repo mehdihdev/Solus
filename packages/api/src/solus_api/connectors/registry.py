@@ -7,15 +7,35 @@ registration. The catalog feeds `GET /api/v1/integrations` (API.md §2.5).
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from solus_api.connectors.acquisition import ExportAcquirer
 from solus_api.connectors.contracts import Connector
 
 if TYPE_CHECKING:
     from solus_api.core.config import Settings
 
 ConnectorFactory = Callable[[], Connector]
+
+
+@dataclass(frozen=True)
+class ConnectorContext:
+    """Per-sync-run scoping for a SCOPED factory (SOLUSDEV-100 T4b): the
+    (project, team, acting-user) triple a live-acquisition-capable connector
+    (the EDA family's bridge export acquirer) needs. `acting_user_id` is the
+    F3-resolved acting user for THIS run — `None` when neither the manual
+    requester nor `source.created_by` resolved to one, in which case live
+    acquisition is skipped (the acquirer itself declines cleanly)."""
+
+    project_id: uuid.UUID
+    team_id: uuid.UUID
+    acting_user_id: uuid.UUID | None = None
+
+
+ScopedConnectorFactory = Callable[[ConnectorContext], Connector]
 
 
 class UnknownConnectorError(KeyError):
@@ -25,9 +45,20 @@ class UnknownConnectorError(KeyError):
 class ConnectorRegistry:
     def __init__(self) -> None:
         self._factories: dict[str, ConnectorFactory] = {}
+        # Additive: a provider MAY also carry a scoped factory (T4b, EDA live
+        # acquisition). `create`/`catalog`/`providers` are entirely unchanged
+        # for providers that only ever register a plain factory.
+        self._scoped_factories: dict[str, ScopedConnectorFactory] = {}
 
     def register(self, provider: str, factory: ConnectorFactory) -> None:
         self._factories[provider] = factory
+
+    def register_scoped(self, provider: str, factory: ScopedConnectorFactory) -> None:
+        """Register a factory that additionally needs `ConnectorContext`
+        scope. A provider may carry BOTH a plain and a scoped factory —
+        `create_scoped` prefers the scoped one; `create` always uses the
+        plain one, unaffected by this registration."""
+        self._scoped_factories[provider] = factory
 
     def create(self, provider: str) -> Connector:
         try:
@@ -35,6 +66,17 @@ class ConnectorRegistry:
         except KeyError as exc:
             raise UnknownConnectorError(provider) from exc
         return factory()
+
+    def create_scoped(self, provider: str, ctx: ConnectorContext) -> Connector:
+        """Like `create`, but gives a scoped factory (if one is registered
+        for this provider) the (project, team, acting-user) triple it needs.
+        Providers without a scoped factory fall back to `create` unchanged —
+        this is what makes the ARQ worker process (no bridge registry, so it
+        never registers scoped factories) degrade to plain construction."""
+        scoped = self._scoped_factories.get(provider)
+        if scoped is not None:
+            return scoped(ctx)
+        return self.create(provider)
 
     def providers(self) -> list[str]:
         return sorted(self._factories)
@@ -55,7 +97,20 @@ class ConnectorRegistry:
         return items
 
 
-def build_registry(settings: Settings) -> ConnectorRegistry:
+#: Builds a `BridgeExportAcquirer` (or equivalent) for one EDA provider's
+#: allowlisted export tool, given the run's scope. `None` (the ARQ worker
+#: process, which has no bridge session registry) means the EDA family's
+#: scoped factories are never registered here — every `create_scoped` call
+#: for "kicad"/"altium" then falls back to the plain, acquirer-less factory
+#: (T4b F2 wiring).
+AcquirerFactory = Callable[[ConnectorContext, str], ExportAcquirer]
+
+
+def build_registry(
+    settings: Settings,
+    *,
+    acquirer_factory: AcquirerFactory | None = None,
+) -> ConnectorRegistry:
     """The default registry. Code hosts shipped (SOLUSDEV-103/104); the rest of
     the roster (KiCad, Onshape, ROS) registers here as each connector lands."""
     from solus_api.connectors.altium import AltiumConnector
@@ -83,4 +138,16 @@ def build_registry(settings: Settings) -> ConnectorRegistry:
     registry.register("altium", AltiumConnector)
     # KiCad (SOLUSDEV-100) — committed-export EDA connector, XML netlist parse.
     registry.register("kicad", KicadConnector)
+    if acquirer_factory is not None:
+        # T4b (MCP-04): the EDA family's live bridge acquisition. Only
+        # registered when the caller (the API process, via main.py) actually
+        # has a bridge session registry to acquire through.
+        registry.register_scoped(
+            "kicad",
+            lambda ctx: KicadConnector(acquirer=acquirer_factory(ctx, "kicad.export_netlist")),
+        )
+        registry.register_scoped(
+            "altium",
+            lambda ctx: AltiumConnector(acquirer=acquirer_factory(ctx, "altium.export_netlist")),
+        )
     return registry

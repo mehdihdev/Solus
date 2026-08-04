@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from solus_api.core.config import Settings
 from solus_api.models import (
     Activity,
+    Artifact,
     ArtifactScope,
     ArtifactStorage,
     CreditTxnType,
@@ -379,6 +380,37 @@ def serialize_notification(notification: Notification) -> dict[str, Any]:
     }
 
 
+def serialize_artifact_ref(artifact: Artifact) -> dict[str, Any]:
+    """The W0-04 `ArtifactRef` shape, verbatim (docs/contracts/agent-tool.md §4)."""
+    return {
+        "artifact_id": artifact.id,
+        "uri": artifact.uri,
+        "media_type": artifact.media_type,
+        "storage": artifact.storage_location.value,
+        "size_bytes": artifact.size_bytes,
+        "summary": None,
+    }
+
+
+def serialize_artifact(artifact: Artifact) -> dict[str, Any]:
+    """The registry-row view (docs/api/artifacts.md §3)."""
+    return {
+        "id": artifact.id,
+        "project_id": artifact.project_id,
+        "scope": artifact.scope.value,
+        "uri": artifact.uri,
+        "media_type": artifact.media_type,
+        "size_bytes": artifact.size_bytes,
+        "storage_location": artifact.storage_location.value,
+        "created_by": artifact.created_by,
+        "source_tool": artifact.source_tool,
+        "tool_call_id": artifact.tool_call_id,
+        "created_at": artifact.created_at,
+        "updated_at": artifact.updated_at,
+        "deleted_at": artifact.deleted_at,
+    }
+
+
 def serialize_activity(activity: Activity) -> dict[str, Any]:
     return {
         "id": activity.id,
@@ -570,6 +602,7 @@ class ArtifactRead(_SoftDeletable):
     storage_location: ArtifactStorage
     created_by: UUID | None
     source_tool: str | None
+    tool_call_id: str | None
 
 
 class JobRead(_Timestamped):

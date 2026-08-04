@@ -1,5 +1,14 @@
 # COWORK_QA — KiCad Connector (SOLUSDEV-100, SOLUS-EDA-01)
 
+> **Phase 2 (MCP) — tested separately.** SOLUSDEV-100 phase 2 added the vendored KiCad
+> MCP server fork (`integrations/mcp/kicad/`), live netlist-export acquisition over the
+> bridge companion (committed export remains the fallback), the project artifact
+> upload/fetch surface, and the confirmation-gated schematic write tool. Those flows —
+> plus their isolation and security spot-checks — live in
+> [`COWORK_QA_kicad-mcp.md`](COWORK_QA_kicad-mcp.md). Run THIS file first (the committed
+> path is phase 2's fallback and must pass on its own), then the MCP plan. The flows
+> below are unchanged by phase 2.
+
 End-to-end test plan for the KiCad connector — the electrical PRIMARY (W0-08
 §5.2). v1 **parses a committed KiCad XML netlist** (`kicad-cli sch export
 netlist --format kicadxml`) into the shared electrical graph shape — components

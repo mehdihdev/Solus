@@ -11,3 +11,9 @@
 # Stripe. The fixture is also shortened below the rule's 10-char suffix
 # threshold going forward; this pins the already-pushed historical hit.
 8c6978d6e28ba3414814cae69b596f9ee419712e:packages/api/tests/test_stripe_setup.py:stripe-access-token:398
+
+# SOLUSDEV-100: the artifact-store storage-key UUID hit is suppressed by VALUE in
+# .gitleaks.toml, not by fingerprint. CI's shallow fetch (depth 20) re-attributes
+# the same literal to whichever commit is on the graft boundary, and that boundary
+# moves with every push — so a fingerprint here passes one pipeline and fails the
+# next. See the `regexes` block in .gitleaks.toml.

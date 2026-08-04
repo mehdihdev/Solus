@@ -17,6 +17,8 @@ on the in-house QA path.
 
 import uuid
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,6 +29,26 @@ from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.core.errors import APIError
 from solus_api.models import User
 from solus_api.services.limits import check_can_use_byo_tool
+
+# Phase 4 H4 fix: the repo root, anchored from THIS FILE's fixed location —
+# never the process's ambient CWD/PATH. `Settings.bridge_allowlist_root`
+# resolves its own repo-relative path against the process CWD (trusted to be
+# the repo root only at app-boot time, in main.py); a subprocess SPAWN
+# happens much later, per tool invocation, so it must not depend on which
+# directory happened to launch the API/worker process (CLAUDE.md §7: pinned
+# binaries, never PATH/CWD-resolved).
+_REPO_ROOT: Final = Path(__file__).resolve().parents[6]
+
+
+def _fork_launcher(relative_path: str) -> str:
+    """Resolve a vendored MCP fork's launcher script to an ABSOLUTE path
+    anchored at `_REPO_ROOT`. Existence is intentionally NOT checked here:
+    a fork may or may not be vendored yet (KICAD's `bin/launch` has landed;
+    FUSION's has not, per MCP-03) — either way, spawning an absolute path
+    fails closed on a missing file, and never silently falls back to
+    resolving a same-named binary from PATH."""
+    return str(_REPO_ROOT / relative_path)
+
 
 ONSHAPE = MCPServerSpec(
     name="onshape",
@@ -44,12 +66,13 @@ WEB_SEARCH = MCPServerSpec(
     required_secrets=("brave_api_key",),
 )
 
-# MCP-05 free tier — usable on any plan, no customer license. Provisional stdio
-# specs per the MCP-03 rule (no vendor dirs exist yet); the launcher paths do
-# not exist, so nothing can spawn.
-KICAD = MCPServerSpec(name="kicad", command="integrations/mcp/kicad/bin/launch")
+# MCP-05 free tier — usable on any plan, no customer license. Phase 4 H4:
+# pinned to an ABSOLUTE path (`_fork_launcher`) rather than a bare
+# repo-relative string, so a spawn can never depend on the process's ambient
+# working directory.
+KICAD = MCPServerSpec(name="kicad", command=_fork_launcher("integrations/mcp/kicad/bin/launch"))
 FUSION = MCPServerSpec(  # Fusion personal/free license
-    name="fusion", command="integrations/mcp/fusion/bin/launch"
+    name="fusion", command=_fork_launcher("integrations/mcp/fusion/bin/launch")
 )
 
 # MCP-05 BYO-paid tier — the customer brings their own vendor license.
@@ -57,19 +80,19 @@ FUSION = MCPServerSpec(  # Fusion personal/free license
 # the SecretStore); validated customer-side, never on the in-house QA path.
 ALTIUM = MCPServerSpec(
     name="altium",
-    command="integrations/mcp/altium/bin/launch",
+    command=_fork_launcher("integrations/mcp/altium/bin/launch"),
     license_tier=LicenseTier.BYO_PAID,
     license_secrets=("altium_license",),
 )
 SOLIDWORKS = MCPServerSpec(
     name="solidworks",
-    command="integrations/mcp/solidworks/bin/launch",
+    command=_fork_launcher("integrations/mcp/solidworks/bin/launch"),
     license_tier=LicenseTier.BYO_PAID,
     license_secrets=("solidworks_serial",),
 )
 AUTOCAD = MCPServerSpec(
     name="autocad",
-    command="integrations/mcp/autocad/bin/launch",
+    command=_fork_launcher("integrations/mcp/autocad/bin/launch"),
     license_tier=LicenseTier.BYO_PAID,
     license_secrets=("autocad_license",),
 )

@@ -1,13 +1,15 @@
 """Integration tests for §2.5 Sources — connect/sync/disconnect, the repo
 picker, sync history, secret non-leakage, and cross-tenant isolation."""
 
+import uuid
 from typing import Any
 
 import pytest
 from conftest import create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
-from solus_api.connectors.registry import ConnectorRegistry
+from solus_api.connectors.contracts import Connector
+from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -263,3 +265,51 @@ async def test_cross_tenant_isolation(
     assert (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=bob_headers)
     ).status_code == 404
+
+
+# --- SOLUSDEV-100 T4b: F3 acting-user threading on the manual trigger ---
+
+
+class _SpyRegistry:
+    """Wraps a real `ConnectorRegistry`, recording every `create_scoped` call
+    so a test can assert WHO the manual `/sync` trigger resolved as the
+    acting user, without needing a live bridge companion."""
+
+    def __init__(self, inner: ConnectorRegistry) -> None:
+        self._inner = inner
+        self.scoped_calls: list[tuple[str, ConnectorContext]] = []
+
+    def create(self, provider: str) -> Connector:
+        return self._inner.create(provider)
+
+    def create_scoped(self, provider: str, ctx: ConnectorContext) -> Connector:
+        self.scoped_calls.append((provider, ctx))
+        return self._inner.create_scoped(provider, ctx)
+
+    def providers(self) -> list[str]:
+        return self._inner.providers()
+
+    def catalog(self) -> list[dict[str, Any]]:
+        return self._inner.catalog()
+
+
+async def test_manual_trigger_passes_the_requesting_user_as_acting_user(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    spy = _SpyRegistry(app.state.connector_registry)
+    app.state.connector_registry = spy
+
+    user = await me(client, alice_headers)
+    project_id = await _project(client, alice_headers)
+    source = await _connect(client, alice_headers, project_id)
+
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/sources/{source['id']}/sync", headers=alice_headers
+    )
+    assert resp.status_code == 202, resp.text
+
+    assert spy.scoped_calls, "trigger_sync must resolve the connector via create_scoped"
+    provider, ctx = spy.scoped_calls[-1]
+    assert provider == "github"
+    assert ctx.project_id == uuid.UUID(project_id)
+    assert ctx.acting_user_id == uuid.UUID(user["id"])

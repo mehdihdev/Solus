@@ -296,7 +296,9 @@ async def trigger_sync(
     )
     await session.commit()
 
-    await _dispatch_sync(request.app, settings, background_tasks, source.id, job_id)
+    await _dispatch_sync(
+        request.app, settings, background_tasks, source.id, job_id, acting_user_id=ctx.user.id
+    )
     response.headers["Location"] = f"/api/v1/jobs/{job_id}"
     return envelope({"job_id": job_id, "status": JobStatus.QUEUED.value})
 
@@ -367,24 +369,32 @@ async def _dispatch_sync(
     background_tasks: BackgroundTasks,
     source_id: uuid.UUID,
     job_id: uuid.UUID,
+    *,
+    acting_user_id: uuid.UUID,
 ) -> None:
+    # F3 (SOLUSDEV-100 T4b): the manual trigger's requesting user threads
+    # through to `execute_source_sync` — the ONE call-site edit the EDA
+    # family's live-bridge acquirer needs to resolve its scope.
     if settings.sync_inline:
-        await _run_inline(app, source_id, job_id)
+        await _run_inline(app, source_id, job_id, acting_user_id=acting_user_id)
         return
     if settings.redis_url:
         pool = await _arq_pool(app)
-        await pool.enqueue_job("sync_source", str(source_id), str(job_id))
+        await pool.enqueue_job("sync_source", str(source_id), str(job_id), str(acting_user_id))
         return
-    background_tasks.add_task(_run_inline, app, source_id, job_id)
+    background_tasks.add_task(_run_inline, app, source_id, job_id, acting_user_id=acting_user_id)
 
 
-async def _run_inline(app: FastAPI, source_id: uuid.UUID, job_id: uuid.UUID) -> None:
+async def _run_inline(
+    app: FastAPI, source_id: uuid.UUID, job_id: uuid.UUID, *, acting_user_id: uuid.UUID
+) -> None:
     await execute_source_sync(
         sessionmaker=app.state.sessionmaker,
         registry=app.state.connector_registry,
         secret_store=app.state.secret_store,
         source_id=source_id,
         job_id=job_id,
+        acting_user_id=acting_user_id,
     )
 
 

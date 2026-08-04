@@ -1,0 +1,190 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kicad-sch-api"
+version = "0.5.6"
+description = "Professional KiCAD schematic manipulation library with exact format preservation"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "Circuit-Synth", email = "shane@circuit-synth.com"}
+]
+maintainers = [
+    {name = "Circuit-Synth", email = "shane@circuit-synth.com"}
+]
+keywords = [
+    "kicad", "schematic", "eda", "electronics", "circuit-design", 
+    "ai", "automation", "pcb"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "sexpdata>=0.0.3",
+    "typing-extensions>=4.0.0; python_version<'3.11'",
+    "pydantic>=2.0.0",
+    "mcp>=1.10.0",
+    "fastmcp>=0.2.0",
+    "jinja2>=3.0.0",
+]
+
+[project.scripts]
+kicad-sch-api = "kicad_sch_api.cli:main"
+kicad-sch-mcp = "mcp_server.server:main"
+ksa-kicad-to-python = "kicad_sch_api.cli.kicad_to_python:entry_point"
+ksa-claude-setup = "kicad_sch_api.cli.setup_claude:entry_point"
+ksa-demo = "kicad_sch_api.cli.demo:entry_point"
+ksa-find-libraries = "kicad_sch_api.cli.find_libraries:entry_point"
+ksa-bom = "kicad_sch_api.cli.bom_manage:entry_point"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=22.0.0",
+    "isort>=5.0.0",
+    "flake8>=4.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+docs = [
+    "sphinx>=5.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "myst-parser>=0.18.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/circuit-synth/kicad-sch-api"
+Documentation = "https://kicad-sch-api.readthedocs.io/"
+Repository = "https://github.com/circuit-synth/kicad-sch-api.git"
+"Bug Reports" = "https://github.com/circuit-synth/kicad-sch-api/issues"
+Changelog = "https://github.com/circuit-synth/kicad-sch-api/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["kicad_sch_api*", "mcp_server*"]
+exclude = ["tests*", "submodules*"]
+
+[tool.setuptools.package-data]
+kicad_sch_api = ["py.typed", "exporters/templates/*.jinja2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--tb=short", 
+    "--strict-markers",
+    "--cov=kicad_sch_api",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=70",
+]
+markers = [
+    "unit: Unit tests for individual components",
+    "integration: Integration tests with file I/O", 
+    "performance: Performance and benchmarking tests",
+    "format: Format preservation tests",
+    "validation: Validation and error handling tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+  | submodules
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+src_paths = ["kicad_sch_api", "tests"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "sexpdata.*",
+    "uuid.*",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["kicad_sch_api"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/submodules/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError", 
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "build>=1.3.0",
+    "pytest-cov>=6.2.1",
+]

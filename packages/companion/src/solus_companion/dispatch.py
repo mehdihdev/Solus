@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from mcp.types import CallToolResult, TextContent
 
+from solus_companion.artifacts import REASON_UPLOAD_UNAVAILABLE, ArtifactUploadError
 from solus_companion.frames import ToolCallIn, tool_result_error, tool_result_ok
 from solus_companion.supervisor import UnknownToolError
 
@@ -27,6 +28,14 @@ class ToolCaller(Protocol):
     """What dispatch needs from the supervisor (tests use fakes)."""
 
     async def call_tool(self, server: str, tool: str, args: dict[str, Any]) -> CallToolResult: ...
+
+
+class ArtifactUpload(Protocol):
+    """What dispatch needs from the artifact uploader (tests use fakes)."""
+
+    async def upload(
+        self, *, server: str, artifact_path: str, source_tool: str, call_id: str
+    ) -> dict[str, Any]: ...
 
 
 def map_result(call_id: str, result: CallToolResult) -> str:
@@ -51,9 +60,12 @@ def map_result(call_id: str, result: CallToolResult) -> str:
 class Dispatcher:
     """Tracks in-flight calls for one connection and sends their results."""
 
-    def __init__(self, supervisor: ToolCaller, send: SendFn) -> None:
+    def __init__(
+        self, supervisor: ToolCaller, send: SendFn, *, uploader: ArtifactUpload | None = None
+    ) -> None:
         self._supervisor = supervisor
         self._send = send
+        self._uploader = uploader
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
@@ -88,7 +100,39 @@ class Dispatcher:
             return tool_result_error(
                 call.call_id, "tool_error", str(exc) or type(exc).__name__, retryable=True
             )
+        value = result.structuredContent
+        if (
+            not result.isError
+            and isinstance(value, dict)
+            and value.get("artifact_path") is not None
+        ):
+            return await self._artifact_result(call, server, value)
         return map_result(call.call_id, result)
+
+    async def _artifact_result(self, call: ToolCallIn, server: str, value: dict[str, Any]) -> str:
+        """`artifact_path` → upload → REWRITE (strip the local path, insert the
+        ArtifactRef). ANY failure → one retryable error with a stable reason;
+        the workspace-relative path itself never rides the wire (§6)."""
+        if self._uploader is None:
+            logger.warning(
+                "call %.64s produced artifact_path but no uploader is wired", call.call_id
+            )
+            return tool_result_error(
+                call.call_id, "tool_error", REASON_UPLOAD_UNAVAILABLE, retryable=True
+            )
+        try:
+            ref = await self._uploader.upload(
+                server=server,
+                artifact_path=str(value["artifact_path"]),
+                source_tool=call.tool,
+                call_id=call.call_id,
+            )
+        except ArtifactUploadError as exc:
+            logger.warning("call %.64s artifact upload failed: %s", call.call_id, exc.reason)
+            return tool_result_error(call.call_id, "tool_error", exc.reason, retryable=True)
+        rewritten = {key: item for key, item in value.items() if key != "artifact_path"}
+        rewritten["artifact_ref"] = ref
+        return tool_result_ok(call.call_id, rewritten)
 
     async def _run(self, call: ToolCallIn) -> None:
         payload = await self._execute(call)

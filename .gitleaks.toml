@@ -18,8 +18,19 @@ paths = [
 
 # Belt-and-suspenders: exempt the specific known-fake values by regex,
 # so even if they appear elsewhere they won't trip the scanner.
+#
+# Prefer THIS over a `.gitleaksignore` fingerprint for a literal that lives in
+# committed history. CI fetches shallow (`git depth 20`), so boundary commits
+# have no parent and their whole tree reads as newly added — the finding gets
+# attributed to whichever commit sits on the graft boundary, and that boundary
+# MOVES with every push. A fingerprint pinned to one SHA therefore passes once
+# and fails on the next pipeline; a value-based rule holds forever.
 regexes = [
   '''sk_live_abc123''',
+  # SOLUSDEV-100: the opaque storage-key UUID in the artifact-store tests — an
+  # artifact id, never a credential (the constant is named STORAGE_REF now, but
+  # the literal remains in history and re-surfaces on every graft boundary).
+  '''0d7a5e2a-1c1a-4a6d-9d0e-2b6a5f9c1a10''',
 ]
 
 # You can also pin the exact findings by fingerprint (most surgical):

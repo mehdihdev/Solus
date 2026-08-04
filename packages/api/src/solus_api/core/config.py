@@ -149,6 +149,31 @@ class Settings(BaseSettings):
     # ≤30 s revocation bound by polling; a Redis push seam replaces it when the
     # API goes multi-instance.
     bridge_revocation_poll_seconds: float = 15.0
+    # Phase 4 C1 (SOLUSDEV-100 security fix): `bridge.service.dispatch()` awaits
+    # the wire directly, bypassing `ToolRegistry.invoke`'s own timeout bound —
+    # this is the acquirer's OWN bound around that dispatch, so a stalled
+    # companion session can never hang a sync indefinitely. Matches
+    # `agent.tools.registry.DEFAULT_TIMEOUT_SECONDS`'s default by convention
+    # (not imported, to keep config.py dependency-free of the tools package).
+    bridge_tool_timeout_seconds: float = 30.0
+
+    # --- Artifacts (SOLUSDEV-100 T4c / docs/api/artifacts.md) ---
+    # Hard upload cap (§4.4) — over → 413, enforced against Content-Length
+    # before reading and again while streaming.
+    artifact_max_bytes: int = 8_388_608
+    # Advisory threshold below which a tool result SHOULD inline instead of
+    # minting an artifact — read by callers (bridge/tool code), not this surface.
+    artifact_inline_max_bytes: int = 524_288
+    # Local filesystem backend root (dev). S3 wins when both are set.
+    artifact_local_root: str | None = None
+    artifact_s3_bucket: str | None = None
+    # Bridge-upload artifacts are a hand-off buffer, not a document store (§4.2):
+    # the ARQ sweep soft-deletes rows past this TTL and deletes their bytes.
+    artifact_ttl_seconds: int = 3600
+    # §4.5 upload-route budgets. PROVISIONAL pending the F13 security pass —
+    # the setting NAMES are the contract, not these values.
+    artifact_uploads_per_minute_per_user: int = 30
+    artifact_upload_bytes_per_hour_per_team: int = 67_108_864
 
     @property
     def cors_origin_list(self) -> list[str]:

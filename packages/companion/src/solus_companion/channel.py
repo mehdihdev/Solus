@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
+from solus_companion.artifacts import ArtifactUploader
 from solus_companion.config import CompanionConfig, TokenBox
 from solus_companion.dispatch import Dispatcher, ToolCaller
 from solus_companion.frames import (
@@ -153,9 +154,10 @@ async def _serve(
     state: ChannelState,
     ping_interval: float,
     status_coalesce: float,
+    uploader: ArtifactUploader | None = None,
 ) -> None:
     state.connected = True
-    dispatcher = Dispatcher(supervisor, ws.send)
+    dispatcher = Dispatcher(supervisor, ws.send, uploader=uploader)
     liveness = _Liveness()
     pinger = asyncio.create_task(_ping_loop(ws, liveness, ping_interval))
     status_task = asyncio.create_task(_status_loop(ws, supervisor, status_coalesce))
@@ -194,7 +196,16 @@ async def _connect_once(
             if not await _await_ack(ws, hello_timeout):
                 return None, False
             reached_ack = True
-            await _serve(ws, supervisor, state, config.ping_interval, status_coalesce)
+            await _serve(
+                ws,
+                supervisor,
+                state,
+                config.ping_interval,
+                status_coalesce,
+                # Artifact uploads ride the same allowlist as the WS dial; absent
+                # config (non-bridge URL) the dispatcher fails closed (T4d).
+                uploader=ArtifactUploader.from_config(config),
+            )
     except ConnectionClosed as exc:
         code = exc.rcvd.code if exc.rcvd is not None else None
         if code == CLOSE_REAUTH:

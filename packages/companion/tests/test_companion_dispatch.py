@@ -5,6 +5,11 @@ import json
 from typing import Any
 
 from mcp.types import CallToolResult, ImageContent, TextContent
+from solus_companion.artifacts import (
+    REASON_PATH_ESCAPES,
+    REASON_UPLOAD_UNAVAILABLE,
+    ArtifactUploadError,
+)
 from solus_companion.dispatch import NON_TEXT_NOTE, Dispatcher
 from solus_companion.frames import ToolCallIn
 from solus_companion.supervisor import UnknownToolError
@@ -154,6 +159,163 @@ async def test_duplicate_live_call_id_is_dropped() -> None:
     await dispatcher.wait_idle()
     assert len(sink.sent) == 1
     assert len(fake.calls) == 1
+
+
+class FakeUploader:
+    """Programmable stand-in for artifacts.ArtifactUploader (structural)."""
+
+    def __init__(
+        self,
+        ref: dict[str, Any] | None = None,
+        exc: ArtifactUploadError | None = None,
+        gate: asyncio.Event | None = None,
+    ) -> None:
+        self.ref = (
+            ref if ref is not None else {"artifact_id": "a1", "uri": "/u", "storage": "local"}
+        )
+        self.exc = exc
+        self.gate = gate
+        self.calls: list[dict[str, str]] = []
+
+    async def upload(
+        self, *, server: str, artifact_path: str, source_tool: str, call_id: str
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "server": server,
+                "artifact_path": artifact_path,
+                "source_tool": source_tool,
+                "call_id": call_id,
+            }
+        )
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.exc is not None:
+            raise self.exc
+        return self.ref
+
+
+def _export_value(**overrides: Any) -> dict[str, Any]:
+    """The locked kicad export_netlist shape (exactly one of content/artifact_path)."""
+    value: dict[str, Any] = {
+        "format": "kicadxml",
+        "filename": "netlist.kicadxml",
+        "bytes": 2_000_000,
+        "content": None,
+        "artifact_path": "out/netlist.kicadxml",
+        "degraded": False,
+        "reason": None,
+    }
+    value.update(overrides)
+    return value
+
+
+async def test_artifact_path_is_rewritten_to_artifact_ref() -> None:
+    fake = FakeSupervisor(
+        result=CallToolResult(content=[], structuredContent=_export_value(), isError=False)
+    )
+    uploader = FakeUploader()
+    sink = Sink()
+    dispatcher = Dispatcher(fake, sink, uploader=uploader)
+    dispatcher.handle_tool_call(_call(call_id="c-art", tool="kicad.export_netlist"))
+    await dispatcher.wait_idle()
+    [frame] = sink.sent
+    assert frame["data"]["ok"] is True
+    value = frame["data"]["value"]
+    assert "artifact_path" not in value  # stripped
+    assert value["artifact_ref"] == uploader.ref  # inserted
+    # the rest of the locked shape is preserved verbatim
+    assert value["format"] == "kicadxml"
+    assert value["filename"] == "netlist.kicadxml"
+    assert value["bytes"] == 2_000_000
+    assert value["content"] is None
+    assert value["degraded"] is False
+    # the uploader received the dispatched identifiers, not client-asserted ones
+    assert uploader.calls == [
+        {
+            "server": "kicad",
+            "artifact_path": "out/netlist.kicadxml",
+            "source_tool": "kicad.export_netlist",
+            "call_id": "c-art",
+        }
+    ]
+
+
+async def test_upload_failure_is_retryable_error_with_stable_reason() -> None:
+    fake = FakeSupervisor(
+        result=CallToolResult(content=[], structuredContent=_export_value(), isError=False)
+    )
+    uploader = FakeUploader(exc=ArtifactUploadError(REASON_PATH_ESCAPES))
+    sink = Sink()
+    dispatcher = Dispatcher(fake, sink, uploader=uploader)
+    dispatcher.handle_tool_call(_call(tool="kicad.export_netlist"))
+    await dispatcher.wait_idle()
+    [frame] = sink.sent
+    assert frame["data"]["ok"] is False
+    assert "value" not in frame["data"]  # no partial fields
+    error = frame["data"]["error"]
+    assert error["code"] == "tool_error"
+    assert error["message"] == REASON_PATH_ESCAPES
+    assert error["retryable"] is True
+
+
+async def test_artifact_path_without_uploader_fails_closed() -> None:
+    fake = FakeSupervisor(
+        result=CallToolResult(content=[], structuredContent=_export_value(), isError=False)
+    )
+    sink = Sink()
+    dispatcher = Dispatcher(fake, sink)  # no uploader wired
+    dispatcher.handle_tool_call(_call(tool="kicad.export_netlist"))
+    await dispatcher.wait_idle()
+    [frame] = sink.sent
+    error = frame["data"]["error"]
+    assert error["message"] == REASON_UPLOAD_UNAVAILABLE
+    assert error["retryable"] is True
+    # the local path is NEVER forwarded upstream
+    assert "out/netlist.kicadxml" not in json.dumps(sink.sent)
+
+
+async def test_content_branch_passes_through_untouched() -> None:
+    value = _export_value(content="<netlist/>", artifact_path=None, bytes=10)
+    fake = FakeSupervisor(result=CallToolResult(content=[], structuredContent=value, isError=False))
+    uploader = FakeUploader()
+    sink = Sink()
+    dispatcher = Dispatcher(fake, sink, uploader=uploader)
+    dispatcher.handle_tool_call(_call(tool="kicad.export_netlist"))
+    await dispatcher.wait_idle()
+    assert sink.sent[0]["data"]["value"] == value  # verbatim, null artifact_path kept
+    assert uploader.calls == []
+
+
+async def test_degraded_result_passes_through_untouched() -> None:
+    value = _export_value(content=None, artifact_path=None, degraded=True, reason="no kicad-cli")
+    fake = FakeSupervisor(result=CallToolResult(content=[], structuredContent=value, isError=False))
+    uploader = FakeUploader()
+    sink = Sink()
+    dispatcher = Dispatcher(fake, sink, uploader=uploader)
+    dispatcher.handle_tool_call(_call(tool="kicad.export_netlist"))
+    await dispatcher.wait_idle()
+    assert sink.sent[0]["data"]["value"] == value
+    assert uploader.calls == []
+
+
+async def test_artifact_upload_in_flight_never_sends_after_disconnect() -> None:
+    """Contract §5: a reconnect is a new session — nothing is buffered across it."""
+    gate = asyncio.Event()  # never set before cancel: the upload hangs
+    fake = FakeSupervisor(
+        result=CallToolResult(content=[], structuredContent=_export_value(), isError=False)
+    )
+    uploader = FakeUploader(gate=gate)
+    sink = Sink()
+    dispatcher = Dispatcher(fake, sink, uploader=uploader)
+    dispatcher.handle_tool_call(_call(call_id="c-up", tool="kicad.export_netlist"))
+    await asyncio.sleep(0.01)
+    assert len(uploader.calls) == 1  # upload started
+    dispatcher.cancel_all()
+    gate.set()  # upload "completes" only after the disconnect
+    await dispatcher.wait_idle()
+    await asyncio.sleep(0.01)
+    assert sink.sent == []
 
 
 async def test_cancel_all_sends_nothing_afterward() -> None:

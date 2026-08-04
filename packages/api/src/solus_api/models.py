@@ -656,6 +656,10 @@ class Artifact(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
     )
     source_tool: Mapped[str | None] = mapped_column(String(64), default=None)  # producing tool
+    # Which W0-04 ToolCall this upload fulfils — the anti-forgery anchor of the
+    # bridge acquirer's §4.3 consumption check (SOLUSDEV-100 T4c). Nullable:
+    # pre-existing/non-tool-fulfilling artifacts have none.
+    tool_call_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
 
 
 def artifact_is_accessible(

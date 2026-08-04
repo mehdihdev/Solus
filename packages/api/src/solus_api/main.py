@@ -14,7 +14,8 @@ from solus_api.agent.runtime import ScaffoldRunner
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
-from solus_api.connectors.registry import build_registry
+from solus_api.connectors.mcp_acquire import BridgeExportAcquirer
+from solus_api.connectors.registry import AcquirerFactory, ConnectorContext, build_registry
 from solus_api.connectors.secrets import build_secret_store
 from solus_api.core.config import Settings
 from solus_api.core.db import build_engine, build_sessionmaker
@@ -24,6 +25,7 @@ from solus_api.core.security import build_jwks_client
 from solus_api.models import Base
 from solus_api.routers import (
     activity,
+    artifacts,
     billing,
     bridge,
     entities,
@@ -40,7 +42,9 @@ from solus_api.routers import (
     teams,
     users,
 )
+from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.supabase_admin import build_supabase_admin
+from solus_api.storage import build_artifact_store
 
 
 async def create_all_tables(engine: AsyncEngine) -> None:
@@ -51,6 +55,31 @@ async def create_all_tables(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+
+
+def _build_bridge_acquirer_factory(app: FastAPI, settings: Settings) -> AcquirerFactory:
+    """Closes over `app` (not its `.state` attributes) so this may be built
+    and handed to `build_registry` at ANY point during app assembly — the
+    factory only reads `app.state.bridge_sessions`/`sessionmaker`/
+    `artifact_store` lazily, the first time a sync actually dispatches a live
+    export (well after `create_app` returns and every attribute is set)."""
+
+    def _factory(ctx: ConnectorContext, tool_name: str) -> BridgeExportAcquirer:
+        return BridgeExportAcquirer(
+            sessions=app.state.bridge_sessions,
+            sessionmaker=app.state.sessionmaker,
+            store=app.state.artifact_store,
+            project_id=ctx.project_id,
+            team_id=ctx.team_id,
+            acting_user_id=ctx.acting_user_id,
+            tool_name=tool_name,
+            call_cap_bytes=settings.bridge_tool_call_max_bytes,
+            artifact_ttl_seconds=settings.artifact_ttl_seconds,
+            inline_max_bytes=settings.artifact_inline_max_bytes,
+            dispatch_timeout_seconds=settings.bridge_tool_timeout_seconds,
+        )
+
+    return _factory
 
 
 def create_app(settings: Settings | None = None, engine: AsyncEngine | None = None) -> FastAPI:
@@ -76,7 +105,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.engine = resolved_engine
     app.state.sessionmaker = build_sessionmaker(resolved_engine)
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
-    app.state.connector_registry = build_registry(resolved_settings)
+    # T4b (MCP-04): the EDA family also gets a bridge export acquirer factory
+    # here (the API process HAS a bridge session registry, unlike the ARQ
+    # worker — connectors/worker.py's `build_registry` call passes none).
+    app.state.connector_registry = build_registry(
+        resolved_settings,
+        acquirer_factory=_build_bridge_acquirer_factory(app, resolved_settings),
+    )
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
     # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
     app.state.supabase_admin = build_supabase_admin(resolved_settings)
@@ -101,6 +136,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.bridge_ip_connect_limiter = ConnectRateLimiter(
         resolved_settings.bridge_connect_rate_per_minute
     )
+    # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
+    # + the §4.5 upload-route budgets (separate from the global rate limiter).
+    app.state.artifact_store = build_artifact_store(resolved_settings)
+    app.state.artifact_upload_request_limiter = FixedWindowLimiter(window_seconds=60)
+    app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
 
     register_error_handlers(app)
     # CORS for the Electron renderer / browser dev server (must precede the
@@ -137,6 +177,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(billing.router)
     app.include_router(billing.actions_router)
     app.include_router(sources.router)
+    app.include_router(artifacts.router)
     app.include_router(entities.router)
     app.include_router(sol.router)
     app.include_router(bridge.router)

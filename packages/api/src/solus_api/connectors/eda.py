@@ -14,10 +14,11 @@ Three layers:
   * `EdaExportConnector` — the Connector scaffold: it validates a synthetic
     identity (a committed export needs no tool credential of its own),
     reads the export CONTENT, parses it via the subclass's `parse`, and builds
-    the graph. **v1 SCAFFOLD:** the export content is supplied on
-    `SyncContext.config["export"]`; the live path (pull the committed file from
-    the linked repo at a ref, or a proprietary tool integration) is stubbed for
-    post-launch — see `_read_export`.
+    the graph. The export content comes either from an injected
+    `ExportAcquirer` (a live acquisition mechanism — SOLUSDEV-100 T4a;
+    docs/contracts/metadata-extraction.md §2.1) or, when no acquirer is
+    configured or it declines/fails, inline on `SyncContext.config["export"]`
+    — see `_read_export`.
 
 Everything mapping-side is pure (netlist in → entities out) per the analyzer
 rule. Ingested netlist text is untrusted DATA, never instructions, and is parsed
@@ -28,11 +29,13 @@ from __future__ import annotations
 
 import abc
 import hashlib
+import logging
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final
 
 from pydantic import ValidationError
 
+from solus_api.connectors.acquisition import ExportAcquirer
 from solus_api.connectors.contracts import (
     AccountInfo,
     AuthKind,
@@ -46,6 +49,14 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+
+#: Structured-logging channel for acquisition degradation (§2.1 invariant 3):
+#: "why did this user's sync degrade?" must be answerable from here.
+_LOGGER: Final = logging.getLogger("solus.connectors.eda")
+
+#: The `SyncContext.config` key an inline committed export arrives on, and the
+#: key named in a degradation log line's `config_key=`.
+EXPORT_CONFIG_KEY: Final = "export"
 
 #: A committed export larger than this is refused rather than parsed (§7 — bound
 #: message sizes; never let a malformed/huge artifact exhaust the worker).
@@ -279,8 +290,17 @@ class EdaExportConnector(Connector):
     auth_kind: ClassVar[AuthKind] = AuthKind.NONE
     supports_token_connect: ClassVar[bool] = False
     #: v1 scaffold: the committed export CONTENT is handed in on this config key.
-    #: When live acquisition lands this becomes the repo path/ref (see _read_export).
+    #: A live `ExportAcquirer` (below) is tried first when one is injected.
     config_fields: ClassVar[tuple[str, ...]] = ("export",)
+
+    def __init__(self, *, acquirer: ExportAcquirer | None = None) -> None:
+        """`acquirer` is the optional live-acquisition seam (docs/contracts/
+        metadata-extraction.md §2.1). `None` (the default) keeps every subclass
+        zero-arg constructible and preserves the v1 inline-export-only
+        behavior; registry factories inject a concrete acquirer per source once
+        one exists (a later ticket) — this base never constructs one itself.
+        """
+        self._acquirer = acquirer
 
     @abc.abstractmethod
     def parse(self, text: str) -> Netlist:
@@ -296,7 +316,7 @@ class EdaExportConnector(Connector):
         )
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
-        text = self._read_export(ctx)
+        text = await self._read_export(ctx)
         netlist = self.parse(text)
         entities, relations, errors = build_graph(netlist)
         return SyncResult(
@@ -310,32 +330,35 @@ class EdaExportConnector(Connector):
         # Re-parse-and-diff (W0-05 §7): the export's content hash vs the cursor.
         # On any acquisition failure, be safe and let a full sync decide.
         try:
-            text = self._read_export(ctx)
+            text = await self._read_export(ctx)
         except ConnectorError:
             return True
         return _content_sha(text) != ctx.cursor.get("content_sha")
 
-    def _read_export(self, ctx: SyncContext) -> str:
+    async def _read_export(self, ctx: SyncContext) -> str:
         """Obtain the committed export content.
 
-        **v1 SCAFFOLD (post-launch completion):** the content is supplied inline
-        on `ctx.config["export"]`. The LIVE path — resolving the configured repo
-        path/ref and fetching the committed file's bytes (or a proprietary
-        Altium tool integration) — is intentionally NOT built here; it depends on
-        the shared file-acquisition seam (a later ticket). Until then, a config
-        without inline `export` raises a clear, stable error.
+        Acquisition chain (docs/contracts/metadata-extraction.md §2.1): try the
+        injected `ExportAcquirer` first — success wins outright; decline
+        (`None`) or any raised exception logs a degradation and falls through
+        to the inline `ctx.config['export']` path, exactly as if no acquirer
+        were configured. Only when BOTH are exhausted (no acquirer/decline,
+        AND no inline export) does this raise `ConnectorError('export_unavailable')`.
 
-        When the live path lands, it MUST raise `ConnectorError` (not raw
-        network/IO exceptions) on failure, so `detect_changes`'s narrow catch
-        keeps its fail-safe behavior.
+        The size bound applies to whichever text was ultimately selected —
+        acquired or inline — identically (§2.1 invariant 4: untrusted either
+        way). Only `ConnectorError` ever escapes this method, so
+        `detect_changes`'s narrow catch keeps its fail-safe behavior.
         """
-        export = ctx.config.get("export")
+        export = await self._acquire_export(ctx)
+        if export is None:
+            export = ctx.config.get(EXPORT_CONFIG_KEY)
         if export is None:
             raise ConnectorError(
                 "export_unavailable",
                 (
-                    f"{self.provider}: v1 parses a committed export supplied via "
-                    "config['export']; live repo/tool acquisition is not yet implemented."
+                    f"{self.provider}: no export available — the live acquirer (if any) "
+                    f"declined/failed and config['{EXPORT_CONFIG_KEY}'] was not supplied."
                 ),
             )
         if not isinstance(export, str):
@@ -343,6 +366,33 @@ class EdaExportConnector(Connector):
         if _byte_len(export) > MAX_EXPORT_BYTES:
             raise ConnectorError("export_too_large", "export exceeds the size limit")
         return export
+
+    async def _acquire_export(self, ctx: SyncContext) -> str | None:
+        """Try the injected `ExportAcquirer`, if any. Returns `None` for "fall
+        through to inline" — whether because there is no acquirer, it declined,
+        or it raised; all three are indistinguishable to the caller and, except
+        for "no acquirer", are logged as a degradation (§2.1 invariant 3).
+        """
+        if self._acquirer is None:
+            return None
+        try:
+            text = await self._acquirer.acquire(ctx)
+        except Exception as exc:
+            self._log_degradation(f"acquirer raised {type(exc).__name__}: {exc}")
+            return None
+        if text is None:
+            self._log_degradation("acquirer returned None (declined/unavailable)")
+            return None
+        return text
+
+    def _log_degradation(self, reason: str) -> None:
+        _LOGGER.warning(
+            "eda export acquisition degraded; falling back to inline export "
+            "provider=%s config_key=%s reason=%s",
+            self.provider,
+            EXPORT_CONFIG_KEY,
+            reason,
+        )
 
 
 def _byte_len(text: str) -> int:

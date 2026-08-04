@@ -50,3 +50,4 @@ dmypy.json
 .pytest_cache/
 .ruff_cache/
 .eslintcache
+*.tsbuildinfo

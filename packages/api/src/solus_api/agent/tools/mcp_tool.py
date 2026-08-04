@@ -26,7 +26,8 @@ import enum
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from typing import Any, Self
+from pathlib import Path
+from typing import Any, Final, Self
 
 from mcp import ClientSession, McpError, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -49,6 +50,7 @@ from solus_api.agent.tools.untrusted import (
 from solus_api.agent.tools.untrusted import (
     unsafe_schema_reason as _unsafe_schema_reason,
 )
+from solus_api.bridge.allowlist import AllowedTool, load_allowlist
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 
 logger = logging.getLogger("solus.tools.mcp")
@@ -56,6 +58,9 @@ logger = logging.getLogger("solus.tools.mcp")
 _FALLBACK_RETURNS: dict[str, Any] = {"type": "object"}
 # Discovery runs OUTSIDE the registry (wiring time), so it carries its own bound.
 DISCOVERY_TIMEOUT_SECONDS = 30.0
+# Phase 4 H4: the SAME repo-relative convention `Settings.bridge_allowlist_root`
+# uses (one `allowlist.yaml` per vendored fork under `integrations/mcp/<server>/`).
+DEFAULT_ALLOWLIST_ROOT: Final = "integrations/mcp"
 
 
 class LicenseTier(enum.StrEnum):
@@ -257,11 +262,34 @@ def _descriptor_safe(spec: MCPServerSpec, remote: RemoteTool) -> bool:
     return True
 
 
+def _stdio_server_allowlist(
+    spec: MCPServerSpec, allowlist_root: str | Path
+) -> dict[str, AllowedTool] | None:
+    """Phase 4 H4: the per-tool allowlist gate for a STDIO spec, or `None` if
+    no `allowlist.yaml` exists for this server (no fork dir vendored/ratified
+    yet) — in which case discovery falls back to the spec's own blanket
+    `requires_confirmation` flag, unchanged. Only `command`-transport specs
+    are gated this way; a `url` (streamable-http) spec (e.g. Onshape) has no
+    vendored fork and is out of scope for this allowlist mechanism.
+
+    Reuses the SAME loader the bridge path uses (`bridge/allowlist.py`,
+    ADR-031) so the two enforcement points — this direct-connect discovery
+    path and the bridge's `validate_inventory` — can never drift on what
+    "allowlisted" means."""
+    if spec.command is None:
+        return None
+    root = Path(allowlist_root)
+    if not (root / spec.name / "allowlist.yaml").is_file():
+        return None
+    return load_allowlist(root).servers.get(spec.name)
+
+
 async def discover_mcp_tools(
     spec: MCPServerSpec,
     secret_store: SecretStore,
     *,
     timeout_seconds: float = DISCOVERY_TIMEOUT_SECONDS,
+    allowlist_root: str | Path = DEFAULT_ALLOWLIST_ROOT,
 ) -> list[MCPTool]:
     """Connect once, `list_tools()`, and build one `MCPTool` per remote tool.
 
@@ -272,6 +300,14 @@ async def discover_mcp_tools(
     params are the remote inputSchema verbatim — gated by `_descriptor_safe`, and
     a tool failing any guard is SKIPPED (warning) so one bad remote tool can
     never break discovery or a later `ToolRegistry.register`.
+
+    Phase 4 H4: a STDIO spec whose fork dir HAS an `allowlist.yaml`
+    (`_stdio_server_allowlist`) is gated per-tool exactly like the bridge path
+    (ADR-031) — a remote tool not listed there is skipped, and
+    `requires_confirmation` comes ONLY from the allowlist entry, never the
+    spec's own blanket flag. Without an allowlist.yaml for the server (no
+    fork vendored yet, or a `url`-transport spec), the spec's blanket flag is
+    the fallback, unchanged from before this fix.
     """
     missing = await _missing_secrets(spec, secret_store)
     if missing:  # fail fast — no connection without credentials
@@ -300,17 +336,26 @@ async def discover_mcp_tools(
             code=ToolErrorCode.TOOL_ERROR,
             retryable=True,
         ) from exc
+    server_allowlist = _stdio_server_allowlist(spec, allowlist_root)
     tools: list[MCPTool] = []
     for remote in listing.tools:
         if not _descriptor_safe(spec, remote):
             continue
+        if server_allowlist is not None:
+            allowed = server_allowlist.get(remote.name)
+            if allowed is None:
+                _skip(spec, remote.name, "is not allowlisted")
+                continue
+            requires_confirmation = allowed.requires_confirmation
+        else:
+            requires_confirmation = spec.requires_confirmation
         descriptor = ToolDescriptor(
             name=f"{spec.name}.{remote.name}",
             description=(remote.description or "")[:_UNTRUSTED_TEXT_CAP],
             params=remote.inputSchema,
             returns=remote.outputSchema if remote.outputSchema is not None else _FALLBACK_RETURNS,
             timeout_seconds=None,  # the registry default owns the bound
-            requires_confirmation=spec.requires_confirmation,
+            requires_confirmation=requires_confirmation,
         )
         tools.append(
             MCPTool(
