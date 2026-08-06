@@ -435,9 +435,18 @@ manual human copy step and broke agentic flow.
    `.gitlab-ci.yml`, and `docs/contracts/` when landing content already approved in-session.
    Amendments are called out in the completion report.
 2. **Tier 2 — in-chat approval BEFORE editing**: `DECISIONS.md` (new/changed ADRs),
-   `packages/contracts/*`, and any `CLAUDE.md`. The agent presents the concrete change
-   (AskUserQuestion or equivalent), the recorded human answer is the approval, the edit lands in a
-   dedicated commit. Tier-2 edits are the orchestrator's alone — never delegated to subagents.
+   `packages/contracts/*`, `packages/shared-types/*`, and any `CLAUDE.md`. The agent presents the
+   concrete change (AskUserQuestion or equivalent), the recorded human answer is the approval, the
+   edit lands in a dedicated commit. Tier-2 edits are the orchestrator's alone — never delegated
+   to subagents.
+
+   **`packages/shared-types/*` added 2026-08-05 (Pratham, in-session, at the SOLUSDEV-216 MR
+   prep).** ADR-028 already declared "the TypeScript types" human-owned, but this list named only
+   `packages/contracts/*`, so the two documents disagreed about a directory six lanes now import.
+   Tier 2 resolves it in favour of ADR-028. The LANE 0 contracts landed on
+   `SOLUSDEV-216-CTR` before this line existed and **stand as approved** — the design questions
+   behind them were put in-chat and answered, which is the control this tier encodes.
+
 3. **Never agent-editable** (H1 hard-blocks): `.claude/hooks/*`, `.claude/settings*.json`,
    `.env*`. Harness and secrets integrity are not subject to this ADR.
 

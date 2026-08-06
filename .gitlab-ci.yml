@@ -13,7 +13,7 @@ default:
 variables:
   PNPM_STORE: "$CI_PROJECT_DIR/.pnpm-store"
   UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
-  IMAGE_TAG: "arm-latest"   # the tag your ECS task definition references
+  IMAGE_TAG: "arm-latest" # the tag your ECS task definition references
 
 .node-base:
   image: node:22
@@ -45,6 +45,22 @@ lint:node:
   stage: lint
   script: pnpm lint
 
+# SOLUSDEV-222 (CTR-07) — a lane branch may only change paths its lane owns in
+# CODEOWNERS. Branches with no `-lane-<slug>` suffix are skipped, so this never
+# blocks LANE 0 or an ordinary ticket branch. Protocol: docs/WORKTREES.md.
+# No .node-base: this needs node and git, not a pnpm install.
+lint:lane-ownership:
+  image: node:22
+  tags: [aws-arm]
+  stage: lint
+  variables:
+    GIT_DEPTH: 0 # merge-base against the target branch needs real history
+  script:
+    - git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - node scripts/check-lane-ownership.mjs
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
 typecheck:python:
   extends: .python-base
   stage: typecheck
@@ -59,8 +75,8 @@ test:python:
   extends: .python-base
   stage: test
   services:
-   - name: pgvector/pgvector:pg16
-     alias: postgres
+    - name: pgvector/pgvector:pg16
+      alias: postgres
   variables:
     FF_NETWORK_PER_BUILD: "true"
     POSTGRES_USER: solus
@@ -104,7 +120,6 @@ deploy:staging:
   script:
     - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment --region "$AWS_REGION"
     - echo "Staging deploy triggered — image $CI_COMMIT_SHORT_SHA."
-
 # deploy:production (enable when prod ECS service exists):
 # deploy:production:
 #   stage: deploy

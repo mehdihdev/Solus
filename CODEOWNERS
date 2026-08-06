@@ -1,0 +1,208 @@
+# CODEOWNERS — one lane owns each path (SOLUSDEV-222 / CTR-07)
+#
+# WHY THIS FILE EXISTS
+#   Worktrees isolate the filesystem; they do not stop two lanes editing the same
+#   file and colliding at merge. Directory ownership, written down, is what does.
+#   See docs/WORKTREES.md for the protocol and the lane -> branch mapping.
+#
+# HOW IT IS ENFORCED
+#   GitLab CODEOWNERS is a PREMIUM feature. On Free this file is inert — it does
+#   not gate approvals. The real enforcement is the `lint:lane-ownership` CI job
+#   (scripts/check-lane-ownership.mjs), which PARSES THIS FILE as its single
+#   source of truth. Keep the two in sync by only ever editing this file.
+#
+# HOW TO READ IT
+#   Later rules win (GitLab/GitHub semantics). The `*` default assigns every
+#   otherwise-unclaimed path to @shared, so there is no unowned path by
+#   construction; a lane line below then claims its subtree. Where a single file
+#   inside one lane's directory belongs to another lane, it appears as a
+#   more-specific line AFTER that lane's directory line — the two `@lane-systems`
+#   entries under `agent/` are the only such cases, and they are called out.
+#
+# @shared PATHS ARE NOT A FREE-FOR-ALL
+#   A lane MR touching an @shared path FAILS the CI check. That is the point:
+#   the cross-lane need becomes a LANE 0 contract ticket, not a direct edit
+#   (docs/WORKTREES.md "Changing a contract after lanes start"). A human can set
+#   the CI variable LANE_OWNERSHIP_OVERRIDE=1 for a one-off; agents never do.
+#
+# THE LANE HANDLES ARE NOT GITLAB USERS. They are lane identifiers, matched to
+# branch names: @lane-<slug> <-> branch SOLUSDEV-<epic#>-lane-<slug>. If GitLab
+# Premium is enabled later, create groups with these names.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Default: everything not claimed by a lane below.
+# ─────────────────────────────────────────────────────────────────────────────
+*                                                       @shared
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE 0 — Platform Contracts & Shared Foundations (SOLUSDEV-36)
+# branch: SOLUSDEV-36-lane-contracts
+# Listed explicitly rather than left to the `*` default: these are the paths
+# LANE 0 writes, and naming them keeps "who owns the contracts" answerable.
+# ─────────────────────────────────────────────────────────────────────────────
+/CODEOWNERS                                             @shared
+/packages/shared-types/                                 @shared
+/packages/api/src/solus_api/contracts/                  @shared
+/docs/contracts/                                        @shared
+/docs/WORKTREES.md                                      @shared
+/scripts/                                               @shared
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE A — Graph, Linking & Impact (SOLUSDEV-63) · branch SOLUSDEV-63-lane-graph
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/graph/                      @lane-graph
+/packages/api/src/solus_api/linking/                    @lane-graph
+/packages/api/src/solus_api/impact/                     @lane-graph
+/packages/api/src/solus_api/routers/entities.py         @lane-graph
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE B — Workspace Shell & Widgets (SOLUSDEV-214) · SOLUSDEV-214-lane-workspace
+# The widgets/ ROOT stays @shared (the framework + discovery loader are LANE 0);
+# each widget SUBDIRECTORY is owned by the lane that ships it. That is what makes
+# "adding a widget never edits another lane's file" true.
+# ─────────────────────────────────────────────────────────────────────────────
+/apps/desktop/src/renderer/src/features/workspace/      @lane-workspace
+/apps/desktop/src/renderer/src/widgets/parts/           @lane-workspace
+/apps/desktop/src/renderer/src/widgets/tool-viewport/   @lane-workspace
+/apps/desktop/src/renderer/src/widgets/impact/          @lane-workspace
+/apps/desktop/src/renderer/src/widgets/map/             @lane-workspace
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE C — SOL Reasoning, Chat & Orb (SOLUSDEV-68) · SOLUSDEV-68-lane-sol
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/agent/                      @lane-sol
+/packages/api/src/solus_api/routers/sol.py              @lane-sol
+/apps/desktop/src/renderer/src/features/sol/            @lane-sol
+/apps/desktop/src/renderer/src/components/ui/SolOrb.tsx @lane-sol
+/apps/desktop/src/main/sol-window/                      @lane-sol
+/apps/desktop/src/main/companion/                       @lane-sol
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE E — SOL Systems (SOLUSDEV-69) · branch SOLUSDEV-69-lane-systems
+# The two entries under agent/ are DERIVED, not literal: LANE E's charter claims
+# "the tool-call execution/hardening layer" and "agent/perf.py", both of which sit
+# inside LANE C's agent/ directory. They are placed after LANE C's line so the
+# more-specific rule wins. Confirm with the epic owners if this split is wrong.
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/systems/                    @lane-systems
+/packages/api/src/solus_api/orchestration/              @lane-systems
+/packages/api/src/solus_api/routers/orchestration.py    @lane-systems
+/packages/api/src/solus_api/agent/tools/                @lane-systems
+/packages/api/src/solus_api/agent/perf.py               @lane-systems
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE D — Tool Understanding & Guide Overlay (SOLUSDEV-215) · …-lane-tool-understanding
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/toolkb/                     @lane-toolkb
+/apps/desktop/src/main/overlay/                         @lane-toolkb
+/apps/desktop/src/renderer/src/features/guide/          @lane-toolkb
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE F — Mechanical CAD MCP Connectors (SOLUSDEV-60) · SOLUSDEV-60-lane-cad
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/connectors/cad/             @lane-cad
+/integrations/onshape/                                  @lane-cad
+/integrations/mcp/onshape/                              @lane-cad
+/integrations/mcp/fusion/                               @lane-cad
+/integrations/mcp/solidworks/                           @lane-cad
+/integrations/mcp/autocad/                              @lane-cad
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE G — Electrical / EDA MCP Connectors (SOLUSDEV-61) · SOLUSDEV-61-lane-eda
+# The five flat files are the pre-existing EDA connectors; connectors/ has no
+# cad//eda/ split yet. Both lanes should move their files into those subpackages
+# — until they do, LANE F and LANE G share one directory (see docs/WORKTREES.md).
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/connectors/eda/             @lane-eda
+/packages/api/src/solus_api/connectors/eda.py           @lane-eda
+/packages/api/src/solus_api/connectors/kicad.py         @lane-eda
+/packages/api/src/solus_api/connectors/kicad_netlist.py @lane-eda
+/packages/api/src/solus_api/connectors/altium.py        @lane-eda
+/packages/api/src/solus_api/connectors/protel_netlist.py @lane-eda
+/integrations/kicad/                                    @lane-eda
+/integrations/mcp/kicad/                                @lane-eda
+/integrations/mcp/spice/                                @lane-eda
+/integrations/mcp/altium/                               @lane-eda
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE H — Streaming Telemetry & Live Bench (SOLUSDEV-66) · SOLUSDEV-66-lane-telemetry
+# LANE N (SOLUSDEV-62, Foxglove/MCAP ingest) shares these paths BY DESIGN — its
+# charter says to run it inside the LANE H worktree, not as its own terminal.
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/livebench/                  @lane-telemetry
+/livebench/                                             @lane-telemetry
+/apps/desktop/src/renderer/src/features/bench/          @lane-telemetry
+/apps/desktop/src/renderer/src/widgets/livebench/       @lane-telemetry
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE I — Error Logging, RAG & Error UI (SOLUSDEV-67) · SOLUSDEV-67-lane-errors
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/errors/                     @lane-errors
+/packages/api/src/solus_api/rag/                        @lane-errors
+/apps/desktop/src/renderer/src/widgets/errors/          @lane-errors
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE J — Part Compatibility Checkers (SOLUSDEV-64) · SOLUSDEV-64-lane-checkers
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/checkers/                   @lane-checkers
+# CHK-01's Checker/Warning/Severity interface is a SHIPPED contract other lanes
+# import — the impact contract reuses Severity rather than re-declaring it.
+# The rules are LANE J's; the shape they implement is not.
+/packages/api/src/solus_api/checkers/interface.py       @shared
+/reasoning/checkers/                                    @lane-checkers
+/apps/desktop/src/renderer/src/widgets/checkers/        @lane-checkers
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE K — System Probing (SOLUSDEV-65) · branch SOLUSDEV-65-lane-probing
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/probing/                    @lane-probing
+/apps/desktop/src/main/probing/                         @lane-probing
+/apps/desktop/src/renderer/src/widgets/environment/     @lane-probing
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE L — Search/Retrieval MCP Tools (SOLUSDEV-70) · SOLUSDEV-70-lane-research
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/research/                   @lane-research
+/integrations/mcp/search/                               @lane-research
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE M — Teams / Projects / Settings / Onboarding / Billing (SOLUSDEV-57)
+# branch: SOLUSDEV-57-lane-foundations
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/billing/                    @lane-foundations
+/packages/api/src/solus_api/teams/                      @lane-foundations
+/packages/api/src/solus_api/routers/billing.py          @lane-foundations
+/packages/api/src/solus_api/routers/teams.py            @lane-foundations
+/packages/api/src/solus_api/routers/members.py          @lane-foundations
+/packages/api/src/solus_api/routers/invites.py          @lane-foundations
+/packages/api/src/solus_api/routers/projects.py         @lane-foundations
+/apps/desktop/src/renderer/src/features/settings/       @lane-foundations
+/apps/desktop/src/renderer/src/features/onboarding/     @lane-foundations
+/apps/desktop/src/renderer/src/features/team/           @lane-foundations
+/apps/desktop/src/renderer/src/features/billing/        @lane-foundations
+/apps/desktop/src/renderer/src/features/project/        @lane-foundations
+/apps/desktop/src/renderer/src/features/auth/           @lane-foundations
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE N — Code-Host Connectors (SOLUSDEV-62) · runs inside the LANE H worktree
+# GitHub/GitLab connectors are Done; these paths are listed so they are owned,
+# not because active work is planned.
+# ─────────────────────────────────────────────────────────────────────────────
+/packages/api/src/solus_api/connectors/code_host.py     @lane-telemetry
+/packages/api/src/solus_api/connectors/github.py        @lane-telemetry
+/packages/api/src/solus_api/connectors/gitlab.py        @lane-telemetry
+/integrations/github/                                   @lane-telemetry
+/integrations/gitlab/                                   @lane-telemetry
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANE Z — Production & Launch (SOLUSDEV-71) · SOLUSDEV-71-lane-production
+# .gitlab-ci.yml is LANE Z's. LANE 0 amends it exactly once, in CTR-07, to add
+# the lane-ownership job — an ADR-032 tier-1 edit called out in the completion
+# report. Every later CI change is LANE Z's.
+# ─────────────────────────────────────────────────────────────────────────────
+/infrastructure/                                        @lane-production
+/.gitlab-ci.yml                                         @lane-production
+/apps/desktop/electron-builder.yml                      @lane-production
+/apps/web/                                              @lane-production
+/tests/                                                 @lane-production
+/docker-compose.dev.yml                                 @lane-production

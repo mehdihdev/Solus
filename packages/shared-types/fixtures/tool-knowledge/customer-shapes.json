@@ -1,0 +1,49 @@
+{
+  "$comment": "SOLUSDEV-220 (CTR-05) \u2014 the ONE definition of 'this text is about a design, not about a tool'. Loaded by packages/shared-types/src/tool-knowledge.ts AND packages/api/src/solus_api/contracts/tool_knowledge.py. Two hand-maintained copies of a security filter drifted within one ticket (the TS list was missing AWG); this file is why that cannot happen again. Patterns are restricted to the syntax JS and Python regex engines share. Text is NFKC-normalised before matching, so homoglyphs do not evade these. Every pattern here matches a MECHANICAL shape (path, id, file, URL, dimensioned value, reference designator). Prose naming a customer's part \u2014 'Hero Arm Bracket Rev C' \u2014 is NOT and cannot be caught here; two patterns that tried were removed because they rejected KiCad's own 'Net Label' menu item and 'Revision History'. THIS LIST IS A BACKSTOP, NOT A FILTER \u2014 see docs/contracts/tool-knowledge.md 'What this contract does not do'.",
+  "patterns": [
+    {
+      "re": "^[~/]|^[A-Za-z]:[\\\\/]|\\\\\\\\",
+      "why": "looks like a filesystem path"
+    },
+    {
+      "re": "(?:^|\\s)(?:[A-Za-z]:)?[\\w.-]+(?:[\\\\/][\\w.-]+){2,}",
+      "why": "looks like a path or an assembly hierarchy"
+    },
+    {
+      "re": "\\.(?:f3d|f3z|sldprt|sldasm|step|stp|iges|igs|stl|dxf|dwg|kicad_pcb|kicad_sch|sch|brd|3mf|obj|prt|asm|catpart|ipt|iam)\\b",
+      "why": "names a design file"
+    },
+    {
+      "re": "\\bhttps?://",
+      "why": "contains a URL"
+    },
+    {
+      "re": "\\b[wdev]/[0-9a-f]{6,}",
+      "why": "looks like an Onshape document, workspace or element id"
+    },
+    {
+      "re": "\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b",
+      "why": "contains a UUID"
+    },
+    {
+      "re": "\\b[0-9a-f]{24,}\\b",
+      "why": "contains a long opaque hex id"
+    },
+    {
+      "re": "\\b[A-Za-z0-9+/]{40,}={0,2}\\b",
+      "why": "contains a base64-looking blob"
+    },
+    {
+      "re": "\\b[\\w.+-]+@[\\w-]+\\.[\\w.]+\\b",
+      "why": "contains an email address"
+    },
+    {
+      "re": "\\d+(?:\\.\\d+)?\\s?(?:mm|cm|m|km|um|nm|in|ft|mil|thou|deg|\u00b0|rad|V|mV|kV|A|mA|uA|Ah|mAh|W|mW|kW|Wh|kWh|Hz|kHz|MHz|GHz|RPM|Nm|kg|g|mg|lb|oz|psi|bar|Pa|kPa|N|kN|F|uF|nF|pF|H|mH|uH|ohm|\u03a9|AWG|C|K)\\b",
+      "why": "contains a dimensioned value"
+    },
+    {
+      "re": "\\b[URCLDQJXY]\\d+\\b",
+      "why": "looks like a schematic reference designator"
+    }
+  ]
+}

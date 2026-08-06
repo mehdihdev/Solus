@@ -1,0 +1,12 @@
+{
+  "data": {
+    "call_id": "b0d9c73e5a1f42bd8e64a2c091f37d55",
+    "ok": false,
+    "value": null,
+    "error": {
+      "code": "unauthorized",
+      "message": "What this action would do has changed since it was shown to you. Nothing was applied — ask again to see the current change.",
+      "retryable": false
+    }
+  }
+}

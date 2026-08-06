@@ -1,0 +1,12 @@
+{
+  "data": {
+    "call_id": "3fe8b1a56c2d40799e14ba82d6f0c371",
+    "ok": false,
+    "value": null,
+    "error": {
+      "code": "not_found",
+      "message": "onshape.set_dimension is no longer available in this project.",
+      "retryable": false
+    }
+  }
+}

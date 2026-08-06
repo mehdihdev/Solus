@@ -1,0 +1,8 @@
+{
+  "data": {
+    "call_id": "4a2f6b18c9d047e3a1b5c7d9e0f21234",
+    "ok": true,
+    "value": { "applied": true, "feature_id": "FsD:motor_mount_width", "value_mm": 62.0 },
+    "error": null
+  }
+}

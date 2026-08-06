@@ -1,0 +1,14 @@
+{
+  "confirmation_id": "6f1c9a20-0d3e-4b1a-9f0e-2b7c5d8a4e11",
+  "tool": "onshape.set_dimension",
+  "args": {
+    "document_id": "d/9a1c2e",
+    "feature_id": "FsD:motor_mount_width",
+    "value_mm": 62.0
+  },
+  "summary": "Change a sketch dimension in Onshape (onshape.set_dimension) with document_id='d/9a1c2e', feature_id='FsD:motor_mount_width', value_mm=62.0",
+  "preview": [
+    { "label": "motor_mount_width", "before": "58.0 mm", "after": "62.0 mm" },
+    { "label": "mount_hole_spacing", "before": "44.0 mm", "after": "48.0 mm" }
+  ]
+}

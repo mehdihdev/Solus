@@ -1,0 +1,8 @@
+{
+  "data": {
+    "call_id": "c94d2e70b5a8416fa07b3c81d5e2f6aa",
+    "ok": false,
+    "value": null,
+    "error": { "code": "not_found", "message": "No such pending action.", "retryable": false }
+  }
+}

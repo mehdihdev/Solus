@@ -1,0 +1,51 @@
+{
+  "Consequence": [
+    "action",
+    "evidence",
+    "headline",
+    "id",
+    "rationale",
+    "severity"
+  ],
+  "ConsequenceEvidence": [
+    "detail",
+    "label",
+    "locator"
+  ],
+  "ImpactEntity": [
+    "entity_id",
+    "project_id"
+  ],
+  "ImpactFocus": [
+    "domain",
+    "entity",
+    "label"
+  ],
+  "ImpactNode": [
+    "consequences",
+    "distance",
+    "domain",
+    "entity",
+    "label",
+    "path",
+    "severity"
+  ],
+  "ImpactPathStep": [
+    "domain",
+    "entity",
+    "label",
+    "relation"
+  ],
+  "ImpactResult": [
+    "change",
+    "computed_at",
+    "focus",
+    "nodes",
+    "truncated"
+  ],
+  "SolAction": [
+    "args",
+    "label",
+    "tool"
+  ]
+}

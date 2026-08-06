@@ -1,0 +1,24 @@
+{
+  "Invocation": [
+    "menu_path",
+    "shortcut"
+  ],
+  "ScreenLocator": [
+    "h",
+    "w",
+    "x",
+    "y"
+  ],
+  "ToolKnowledge": [
+    "control_id",
+    "description",
+    "effect",
+    "invocation",
+    "label",
+    "locator",
+    "provenance",
+    "surface",
+    "tool",
+    "version_range"
+  ]
+}

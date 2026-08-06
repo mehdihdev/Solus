@@ -1,0 +1,8 @@
+{
+  "data": {
+    "call_id": "77af1c4b8e2d49a0b3f5c6d81e09a2b4",
+    "ok": false,
+    "value": null,
+    "error": { "code": "unauthorized", "message": "This action was already approved.", "retryable": false }
+  }
+}

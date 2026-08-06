@@ -1,0 +1,12 @@
+{
+  "data": {
+    "call_id": "e5b7a2c1d90f43a8bc26f4e18d07b3aa",
+    "ok": false,
+    "value": null,
+    "error": {
+      "code": "unauthorized",
+      "message": "This action expired before it was approved; ask again.",
+      "retryable": false
+    }
+  }
+}

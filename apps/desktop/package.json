@@ -28,6 +28,7 @@
     "@electron-toolkit/utils": "4.0.0",
     "@fontsource/ibm-plex-mono": "5.2.7",
     "@fontsource/ibm-plex-sans": "5.2.8",
+    "@solus/shared-types": "workspace:*",
     "@supabase/supabase-js": "2.108.2",
     "electron-updater": "6.3.9",
     "react-router-dom": "7.18.0",

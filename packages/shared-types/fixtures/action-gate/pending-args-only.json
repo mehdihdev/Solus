@@ -1,0 +1,15 @@
+{
+  "confirmation_id": "1b8e4d55-7c02-42a9-bd31-90f6a1c3e007",
+  "tool": "arduino.flash_firmware",
+  "args": {
+    "board": "arduino:avr:nano",
+    "port": "/dev/ttyUSB0",
+    "sketch": "firmware/motor_ctl/motor_ctl.ino"
+  },
+  "summary": "Writes firmware to a connected device (arduino.flash_firmware) with board='arduino:avr:nano', port='/dev/ttyUSB0', sketch='firmware/motor_ctl/motor_ctl.ino'",
+  "preview": [
+    { "label": "board", "before": null, "after": "arduino:avr:nano" },
+    { "label": "port", "before": null, "after": "/dev/ttyUSB0" },
+    { "label": "sketch", "before": null, "after": "firmware/motor_ctl/motor_ctl.ino" }
+  ]
+}

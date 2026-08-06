@@ -53,6 +53,9 @@ importers:
       '@fontsource/ibm-plex-sans':
         specifier: 5.2.8
         version: 5.2.8
+      '@solus/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       '@supabase/supabase-js':
         specifier: 2.108.2
         version: 2.108.2
@@ -175,7 +178,11 @@ importers:
         specifier: 16.0.1
         version: 16.0.1
 
-  packages/shared-types: {}
+  packages/shared-types:
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.7
+        version: 19.2.7
 
 packages:
 

@@ -1,0 +1,14 @@
+{
+  "DiffRow": [
+    "after",
+    "before",
+    "label"
+  ],
+  "ToolConfirmationEvent": [
+    "args",
+    "confirmation_id",
+    "preview",
+    "summary",
+    "tool"
+  ]
+}

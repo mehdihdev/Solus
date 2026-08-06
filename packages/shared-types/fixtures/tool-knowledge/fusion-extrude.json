@@ -1,0 +1,12 @@
+{
+  "tool": "fusion",
+  "version_range": ">=2.0 <3.0",
+  "surface": "toolbar",
+  "control_id": "fusion.solid.extrude",
+  "label": "Extrude",
+  "effect": "create_feature",
+  "description": "Adds depth to a closed sketch profile, producing a solid or surface body.",
+  "invocation": { "menu_path": ["Create", "Extrude"], "shortcut": "E" },
+  "locator": { "x": 0.31, "y": 0.06, "w": 0.04, "h": 0.05 },
+  "provenance": "vendor_docs"
+}

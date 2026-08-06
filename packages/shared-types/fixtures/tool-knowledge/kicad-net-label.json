@@ -1,0 +1,12 @@
+{
+  "tool": "kicad",
+  "version_range": ">=8.0 <9.0",
+  "surface": "menu",
+  "control_id": "kicad.eeschema.place_net_label",
+  "label": "Add Net Label",
+  "effect": "create_feature",
+  "description": "Places a named net label on the current wire so nets can be joined without drawing a connection.",
+  "invocation": { "menu_path": ["Place", "Net Label"], "shortcut": "L" },
+  "locator": null,
+  "provenance": "vendor_docs"
+}

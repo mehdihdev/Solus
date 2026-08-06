@@ -1,0 +1,8 @@
+{
+  "data": {
+    "call_id": "8c31d0f4a72b4e59b6d8130e5f4a9c02",
+    "ok": false,
+    "value": null,
+    "error": { "code": "unauthorized", "message": "You rejected this action.", "retryable": false }
+  }
+}
