@@ -39,6 +39,7 @@ from solus_api.agent.tools import (
     ToolResult,
     build_get_entity_tool,
 )
+from solus_api.agent.tools.exec import run_tool
 from solus_api.models import SolMode
 from solus_api.orchestration.enums import InteractionContext
 from solus_api.orchestration.router import derive_complexity
@@ -213,8 +214,9 @@ class ScaffoldRunner:
         results: list[ToolResult] = []
         for call in plan_tool_calls(ctx.prompt)[:MAX_TOOL_CALLS]:
             yield AgentEvent.tool_call(call)
-            refusal = confirmation_refusal(ctx.registry, call)  # §7 destructive gate
-            result = refusal if refusal is not None else await ctx.registry.invoke(call)
+            # SYS-02: single dispatch path — run_tool consults the §7 gate then
+            # registry.invoke, and adds the observability layer.
+            result = await run_tool(ctx.registry, call)
             results.append(result)
             yield AgentEvent.tool_result(result)
 

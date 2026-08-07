@@ -5,7 +5,9 @@ Pydantic models, this document, and `mock_canonical_parts.json`. The matcher tha
 this shape (FP-01/02) and the linking that consumes it (LNK-01) are separate tickets.
 **Authority:** ADR-012 (fingerprint = weighted heuristics + human confirmation), ADR-001
 (graph-centric), ADR-027 (`canonical_part_id` self-reference + `SAME_AS` edge), ADR-028
-(Week-0 human-owned contract). Code: `packages/api/src/solus_api/fingerprint/`.
+(Week-0 human-owned contract; the CTR-08 enum edit was human-approved in-chat per ADR-032
+tier-2 handling). Code: `packages/api/src/solus_api/fingerprint/`.
+Amended 2026-08-07 (CTR-08 — hardware-recognition modalities, §6 addendum + §6a).
 
 Consumers — **the mock-and-swap seam.** Cross-domain linking (LNK-01, Mehdi) consumes this
 output to connect cross-domain observations of one physical part (the op-amp in the
@@ -138,6 +140,67 @@ bounded 0..1 (validated).
 matcher does NOT populate it (visual/silkscreen matching is a later stretch). It is present so
 the contract is stable when visual matching arrives — the mock includes a `photo` example to
 prove the shape carries it, with an evidence note that v1 won't produce it.
+
+> **§6 addendum — hardware-recognition modalities (2026-08-07, SOLUSDEV-136/CTR-08; enum
+> edit human-approved in-chat; tier-1 amendment per ADR-032).** `Modality` gains three
+> ADDITIVE members so robot-runtime hardware recognition carries evidence through THIS
+> contract instead of a second identity mechanism: `bus_enumeration`, `firmware_symbol`,
+> `telemetry_channel`. All three are **declared-but-unscored** in v1 — the same status
+> `photo`/`cad_model` established: the shape carries them, and the v1 matcher routes any
+> unscored modality to `unmatched` (`_V1_SCORED` fall-through in `matcher.py` — visible,
+> never silently dropped). Evidence semantics + honest confidence bands (normative for the
+> future runtime scorer; **doc-level for now — no `matching.yaml` weights exist because no
+> scorer exists**; the scorer ticket MUST add the load-validated ceilings below, mirroring
+> the existing `weights.photo < thresholds.matched` idiom):
+>
+> | modality            | band       | normative confidence | ceiling the scorer MUST load-validate                                                                                                                                                                                                                    |
+> | ------------------- | ---------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `bus_enumeration`   | **high**   | ~0.92                | ≤ `weights.exact_mpn`, < 1.0 — the device asserts its OWN identity (Dynamixel model register, CAN model ID); residual risk is a misflashed/spoofed ID. **May exceed `thresholds.matched`** — unlike photo, this is not inference.                        |
+> | `firmware_symbol`   | **medium** | ~0.55                | < `thresholds.matched` — code intent can never assert physical identity; the firmware may be stale or wrong relative to the physical build (mirrors the datasheet ceiling).                                                                              |
+> | `telemetry_channel` | **low**    | ~0.30                | < `thresholds.low_confidence` — a channel's shape (rate, range, units) constrains what a part _could_ be; it rarely identifies one. Telemetry corroborates, never attaches; alone it always lands `unmatched` or `ambiguous` (mirrors `generic_symbol`). |
+>
+> Propose-never-assert holds unchanged: even a MATCHED `bus_enumeration` identifies the
+> PART, not which joint it drives — a wrong motor→joint link is the same catastrophe class
+> as a false fingerprint merge, so linking still goes through LNK-01 MATCHED-only FK
+> stamping and ADR-012 human confirmation. **The invariants of this contract are NOT
+> modified by this addendum:** the `SourceRef` resolvability invariant (§3), the 0..1
+> confidence bounds and two-level confidence (§5), the four explicit dispositions and
+> UNMATCHED-not-a-`MatchState` (§4), the five original modality members and their semantics
+> (§6), and `mock_canonical_parts.json` byte-identical. The hardware evidence fixture lives
+> at `packages/api/tests/fixtures/hardware_modalities.json` (a bus-enumerated servo
+> MATCHED, a firmware-inferred servo LOW_CONFIDENCE, and an ambiguous telemetry channel
+> that provably links nothing — ambiguity stays visible).
+>
+> This contract is versioned by **dated amendments like this one**, not a schema-version
+> field: none exists in the doc or on `FingerprintOutput`, and adding one would change the
+> serialized shape for zero consumers.
+
+---
+
+## 6a. Canonical names — the one identity, its three names, and the names that do not exist
+
+_(Added by the CTR-08 amendment above.)_ Hardware recognition (and every other consumer)
+resolves observations through ONE identity value that deliberately carries three names —
+ADR-027: "one value, three names":
+
+| where          | name                        | role                                    |
+| -------------- | --------------------------- | --------------------------------------- |
+| connector emit | `EntityOut.source_key`      | what a connector calls the observation  |
+| graph column   | `graph_entity.external_ref` | where the write seam stores it          |
+| this contract  | `SourceRef.external_ref`    | how a match resolves back to the entity |
+
+The write seam maps `source_key → external_ref`; a consumer holds `SourceRef.external_ref`,
+the (`source_connector`, `external_ref`) pair, or `graph_entity_id` — nothing else.
+
+**Names that do NOT exist — do not invent, alias, or shim them:**
+
+- **`EntityOut.source_id`** — not a field. `graph_entity.source_id` exists but is the ORM
+  FK to `sources` (connector-runtime provenance/idempotency plumbing), NOT identity.
+  Reaching for "source_id" as an identity handle is the trap that produces a shim — and the
+  shim is the second identity mechanism this contract exists to prevent.
+- **A string-typed `source_ref`** — `ModalityMatch.source_ref` is an OBJECT of type
+  `SourceRef` (`graph_entity_id` / `source_connector` / `external_ref`), never a bare
+  string.
 
 ---
 

@@ -37,10 +37,11 @@ from uuid6 import uuid7
 # NOTE: pgvector returns embeddings as numpy.ndarray on read, not list — call
 # .tolist() before any list-only or truthiness operation on a loaded embedding.
 EMBEDDING_DIM = 1536
-# ivfflat centroid-list count. Placeholder: retune toward ~sqrt(rows) once corpus
-# size is known, and REINDEX after the first large load (ivfflat clusters existing
-# rows, so an index built on an empty table has no useful centroids yet).
-IVFFLAT_LISTS = 100
+# HNSW graph parameters (pgvector defaults; ADR-027 as amended 2026-08-07). HNSW has
+# no training step, so the index is correct when built empty and needs no REINDEX or
+# parameter retune as the corpus grows through ~10^6 vectors.
+HNSW_M = 16
+HNSW_EF_CONSTRUCTION = 64
 
 
 def utcnow() -> datetime:
@@ -250,13 +251,14 @@ def _partial_unique(name: str, *columns: str) -> Index:
     return Index(name, *columns, unique=True, postgresql_where=text("deleted_at IS NULL"))
 
 
-def _ivfflat(name: str, column: str) -> Index:
-    """Approximate-nearest-neighbour index for a pgvector column (cosine)."""
+def _hnsw(name: str, column: str) -> Index:
+    """Approximate-nearest-neighbour index for a pgvector column (cosine). HNSW: correct
+    when built empty, no REINDEX ceremony as the corpus grows (ADR-027 amendment)."""
     return Index(
         name,
         column,
-        postgresql_using="ivfflat",
-        postgresql_with={"lists": IVFFLAT_LISTS},
+        postgresql_using="hnsw",
+        postgresql_with={"m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION},
         postgresql_ops={column: "vector_cosine_ops"},
     )
 
@@ -535,7 +537,7 @@ class GraphEntity(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     __tablename__ = "graph_entity"
     __table_args__ = (
-        _ivfflat("ix_graph_entity_embedding", "embedding"),
+        _hnsw("ix_graph_entity_embedding", "embedding"),
         # Idempotent re-sync: one live row per (source, external id).
         _partial_unique("uq_graph_entity_source_ref", "source_id", "external_ref"),
         Index("ix_graph_entity_project_kind", "project_id", "kind"),
@@ -622,7 +624,7 @@ class ErrorSolution(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     """RAG source for SOL: an error seen in a project and (optionally) its fix."""
 
     __tablename__ = "error_solution"
-    __table_args__ = (_ivfflat("ix_error_solution_embedding", "embedding"),)
+    __table_args__ = (_hnsw("ix_error_solution_embedding", "embedding"),)
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True

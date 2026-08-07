@@ -66,7 +66,15 @@ def test_conflict_refs_are_grouped_refs() -> None:
 
 def test_every_v1_modality_is_exercised() -> None:
     seen = {obs.modality for case in ALL_CASES for obs in case.observations}
-    assert seen >= (set(Modality) - {Modality.PHOTO})
+    # The CTR-08 hardware modalities (bus_enumeration/firmware_symbol/telemetry_channel)
+    # are declared-but-UNSCORED — the matcher routes them to `unmatched` (covered by
+    # test_matcher's fall-through test), so the scoring-accuracy corpus doesn't carry them.
+    assert seen >= {
+        Modality.PART_NUMBER,
+        Modality.DATASHEET,
+        Modality.SCHEMATIC_SYMBOL,
+        Modality.CAD_MODEL,
+    }
 
 
 def test_injection_red_team_case_present() -> None:

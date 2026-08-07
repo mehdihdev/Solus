@@ -64,6 +64,21 @@ class ModelCatalogEntry(BaseModel):
         return self
 
 
+class EmbeddingConfig(BaseModel):
+    """The single embedding model (SYS-02, `embeddings:` in models.yaml). Embeddings
+    bill input tokens only, so there is no `price_out`. `dimensions` must match the
+    pgvector column width (`models.EMBEDDING_DIM`) — validated at call time by
+    `embeddings.embed`, not here, so the config contract stays free of a models.py
+    import."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    name: str
+    dimensions: int = Field(gt=0)
+    price_in: float = Field(ge=0)  # USD per 1M input tokens
+
+
 class CostConfig(BaseModel):
     """Token→credit conversion knobs (ADR-024), all CALIBRATABLE post-pilot.
 
@@ -243,6 +258,7 @@ class OrchestrationConfig(BaseModel):
     estimator: EstimatorConfig = Field(default_factory=EstimatorConfig)
     type_estimator: TypeEstimatorConfig = Field(default_factory=TypeEstimatorConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    embeddings: EmbeddingConfig | None = None  # SYS-02: absent → embed() unavailable
 
     _role_index: dict[str, ModelCatalogEntry] = PrivateAttr(default_factory=dict)
 

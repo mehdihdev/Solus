@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://localhost:5432/solus"
     redis_url: str | None = None
 
+    # Sentry error capture (SYS-02). Absent → sentry_sdk.init never runs and every
+    # capture_* call is a documented SDK no-op — keyless environments stay silent.
+    sentry_dsn: str | None = None
+
     # Comma-separated origins allowed to call the API from a browser/renderer.
     # The Electron renderer dev server (electron-vite) defaults to :5173.
     cors_origins: str = "http://localhost:5173,http://localhost:4173"

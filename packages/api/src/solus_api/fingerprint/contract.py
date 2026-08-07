@@ -29,6 +29,11 @@ class Modality(enum.StrEnum):
     SCHEMATIC_SYMBOL = "schematic_symbol"
     CAD_MODEL = "cad_model"
     PHOTO = "photo"
+    # CTR-08 hardware-recognition modalities — declared-but-unscored (v1 matcher
+    # routes them to `unmatched`; see fingerprint-output.md §6 addendum, 2026-08-07).
+    BUS_ENUMERATION = "bus_enumeration"
+    FIRMWARE_SYMBOL = "firmware_symbol"
+    TELEMETRY_CHANNEL = "telemetry_channel"
 
 
 class MatchState(enum.StrEnum):

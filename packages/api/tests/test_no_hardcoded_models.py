@@ -22,7 +22,12 @@ _PROVIDER_SDK_IMPORT = re.compile(
     r"^\s*(?:import|from)\s+(anthropic|openai|google)\b", re.MULTILINE
 )
 
-_ADAPTER_MODULE = SRC_ROOT / "orchestration" / "providers.py"
+# The sanctioned SDK surfaces: the streaming adapters and the SYS-02 embedding
+# adapter (docs/api/gateway-embeddings.md — a sibling registry, same key seam).
+_ADAPTER_MODULES = {
+    SRC_ROOT / "orchestration" / "providers.py",
+    SRC_ROOT / "orchestration" / "embeddings.py",
+}
 
 
 def _src_files() -> list[Path]:
@@ -46,7 +51,7 @@ def test_no_hardcoded_model_names_outside_config() -> None:
 def test_provider_sdks_imported_only_by_adapter_module() -> None:
     offenders: list[str] = []
     for path in _src_files():
-        if path == _ADAPTER_MODULE:
+        if path in _ADAPTER_MODULES:
             continue
         match = _PROVIDER_SDK_IMPORT.search(path.read_text())
         if match:

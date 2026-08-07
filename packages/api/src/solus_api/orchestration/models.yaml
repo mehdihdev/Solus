@@ -110,6 +110,16 @@ catalog:
     price_out_long: 9.0
     roles: [openai_cheap]
 
+# --- Embeddings (SYS-02, human-approved model choice 2026-08-07) --------------
+# The single embedding model behind orchestration.embeddings.embed() — feeds the
+# FP-02 EmbedFn seam and RAG retrieval. `dimensions` must match the pgvector
+# column width (EMBEDDING_DIM = 1536). Embeddings bill input tokens only.
+embeddings:
+  provider: openai
+  name: text-embedding-3-small
+  dimensions: 1536
+  price_in: 0.02 # USD per 1M tokens — VERIFIED 2026-08-07 (developers.openai.com pricing)
+
 # --- (complexity × type) → role matrix ---------------------------------------
 # May be partial; a missing cell falls back to `default_role`.
 matrix:

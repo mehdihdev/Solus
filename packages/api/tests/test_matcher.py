@@ -687,3 +687,21 @@ def test_photo_weight_must_stay_below_matched_threshold() -> None:
     data["weights"]["photo"] = 0.9  # type: ignore[index]
     with pytest.raises(ValidationError, match="photo"):
         FingerprintConfig.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "modality",
+    [
+        Modality.CAD_MODEL,
+        Modality.BUS_ENUMERATION,
+        Modality.FIRMWARE_SYMBOL,
+        Modality.TELEMETRY_CHANNEL,
+    ],
+)
+def test_unscored_modalities_land_in_unmatched_never_dropped(modality: Modality) -> None:
+    """CTR-08: any v1-unscored modality stays VISIBLE in `unmatched` — a modality
+    the pipeline cannot score must never silently vanish from the output."""
+    observation = obs("dev:1", modality, "XM430-W350", connector="runtime")
+    output = match([observation], config=_CFG)
+    assert not output.canonical_parts and not output.ambiguous
+    assert output.unmatched == [observation.source_ref]  # visible, not dropped

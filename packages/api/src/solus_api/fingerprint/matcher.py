@@ -56,6 +56,13 @@ _HINT_KEYS: dict[str, Modality] = {
     "cad_model": Modality.CAD_MODEL,  # v1-unscored → lands in unmatched, never dropped
 }
 
+# Modalities the v1 pipeline scores. Anything else — CAD_MODEL and the CTR-08
+# hardware modalities today, any future member tomorrow — falls through to
+# `unmatched`, never silently dropped (fingerprint-output.md §6 addendum).
+_V1_SCORED = frozenset(
+    {Modality.PART_NUMBER, Modality.SCHEMATIC_SYMBOL, Modality.DATASHEET, Modality.PHOTO}
+)
+
 
 class Observation(BaseModel):
     """One modality hint with its provenance — the matcher's input unit.
@@ -395,8 +402,8 @@ def match(
     datasheets = [o for o in observations if o.modality is Modality.DATASHEET]
     photos = [o for o in observations if o.modality is Modality.PHOTO]
     for observation in observations:
-        if observation.modality is Modality.CAD_MODEL:
-            buckets.unmatched.append(observation)  # CAD stays v1-unscored
+        if observation.modality not in _V1_SCORED:
+            buckets.unmatched.append(observation)  # v1-unscored stays visible, never dropped
 
     _score_part_numbers(part_numbers, buckets, cfg, proposals)
     member_bases = set(buckets.members)

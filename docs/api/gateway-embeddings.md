@@ -1,9 +1,11 @@
 # MO-01 gateway embedding extension (feeds FP-02's EmbedFn seam)
 
 > **REFERENCE MATERIAL for MO-01** (model-orchestration gateway + embeddings).
-> **Status:** proposal accepted-in-principle; implementation deferred to
-> MO-01 (SOLUSDEV-58/SOLUSDEV-136). Formerly a root-level temp proposal
-> file (FP-02), folded here in SOLUSDEV-152.
+> **Status: IMPLEMENTED — SOLUSDEV-136/SYS-02 (2026-08-07).** `embed()` +
+> `build_embed_fn` live in `solus_api/orchestration/embeddings.py`; the model
+> is the `embeddings:` entry in `models.yaml` (openai `text-embedding-3-small`,
+> 1536-d). Formerly a root-level temp proposal file (FP-02), folded here in
+> SOLUSDEV-152; the design below is as-built.
 
 FP-02 shipped the consumer seam only — `solus_api.fingerprint.ingest.EmbedFn`, an
 injectable `async (text) -> list[float] | None` — with `graph_entity.embedding`

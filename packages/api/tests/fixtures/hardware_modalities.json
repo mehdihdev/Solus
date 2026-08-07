@@ -1,0 +1,63 @@
+{
+  "canonical_parts": [
+    {
+      "canonical_id": "33333333-3333-3333-3333-333333330101",
+      "part_number": "XM430-W350",
+      "manufacturer": "ROBOTIS",
+      "modalities": [
+        {
+          "modality": "bus_enumeration",
+          "source_ref": {
+            "graph_entity_id": "44444444-4444-4444-4444-444444440201",
+            "source_connector": "dynamixel",
+            "external_ref": "ttyUSB0/id:3"
+          },
+          "confidence": 0.92,
+          "state": "matched",
+          "evidence": {
+            "matched_on": "model_register",
+            "value": "1020",
+            "note": "Dynamixel model-number register 1020 = XM430-W350; the device asserts its own identity. Not 1.0: a misflashed or spoofed ID is the residual risk. This identifies the PART, not which joint it drives - the motor-to-joint link still goes through LNK-01 MATCHED-only stamping + ADR-012 human confirmation."
+          }
+        }
+      ],
+      "confidence": 0.92
+    },
+    {
+      "canonical_id": "33333333-3333-3333-3333-333333330102",
+      "part_number": "XL330-M288",
+      "manufacturer": "ROBOTIS",
+      "modalities": [
+        {
+          "modality": "firmware_symbol",
+          "source_ref": {
+            "source_connector": "github",
+            "external_ref": "firmware/src/servo_driver.h"
+          },
+          "confidence": 0.55,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "firmware_symbol",
+            "value": "XL330_M288_PROFILE",
+            "note": "driver profile constant in committed firmware; code intent only - the firmware may be stale or wrong relative to the physical build"
+          }
+        }
+      ],
+      "confidence": 0.55
+    }
+  ],
+  "unmatched": [],
+  "ambiguous": [
+    {
+      "source_ref": {
+        "source_connector": "ros2",
+        "external_ref": "/joint_states/wrist_pitch"
+      },
+      "candidate_canonical_ids": [
+        "33333333-3333-3333-3333-333333330101",
+        "33333333-3333-3333-3333-333333330102"
+      ],
+      "note": "telemetry_channel: 12-bit position channel at 50 Hz is consistent with BOTH enumerated servo models; channel shape constrains, it does not identify - stays unlinked pending human confirmation"
+    }
+  ]
+}

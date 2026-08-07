@@ -1,8 +1,10 @@
 """App factory. Run with: uvicorn --factory solus_api.main:create_app"""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,11 +84,42 @@ def _build_bridge_acquirer_factory(app: FastAPI, settings: Settings) -> Acquirer
     return _factory
 
 
+def _scrub_sentry_event(event: Any, _hint: Any) -> Any:
+    """§7 (sec review C1): the ASGI integration attaches request data the default
+    scrubber misses — `query_string` carries OAuth authorization codes on the
+    integration callback routes. Strip the query surface entirely."""
+    request = event.get("request") if isinstance(event, dict) else None
+    if isinstance(request, dict):
+        request.pop("query_string", None)
+        url = request.get("url")
+        if isinstance(url, str):
+            request["url"] = url.split("?", 1)[0]
+    return event
+
+
 def create_app(settings: Settings | None = None, engine: AsyncEngine | None = None) -> FastAPI:
     # Settings' required fields (the JWT secret) come from the environment at
     # runtime; mypy can't see env-driven init, hence the targeted ignore.
     resolved_settings = settings if settings is not None else Settings()  # type: ignore[call-arg]
     resolved_engine = engine if engine is not None else build_engine(resolved_settings.database_url)
+
+    if resolved_settings.sentry_dsn:
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        # §7: PII, stack-frame locals, request bodies, and query strings stay OUT
+        # of Sentry — an OAuth callback's ?code=… must never ride an error event
+        # (sec review C1), and ERROR logs must not auto-become events carrying raw
+        # exception strings from tools/providers (sec review M1): only deliberate
+        # Solus capture_* calls create events; log breadcrumbs remain.
+        sentry_sdk.init(
+            dsn=resolved_settings.sentry_dsn,
+            send_default_pii=False,
+            include_local_variables=False,
+            max_request_body_size="never",
+            before_send=_scrub_sentry_event,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=None)],
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

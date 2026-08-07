@@ -27,6 +27,7 @@ dependencies = [
     "google-genai>=2.11.0",
     "stripe>=11.0",
     "mcp>=1.28.1,<2.0",
+    "sentry-sdk>=2.0",
 ]
 
 [project.scripts]

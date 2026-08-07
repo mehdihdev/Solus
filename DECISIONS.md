@@ -302,6 +302,22 @@ observations of one physical part — not rows synced from any external source. 
   canonical ids and `canonical_key` values; orphaned old-base rows are accepted for
   dev-only data. Post-launch, such a policy change requires a keyed data migration.
 
+**Amended — 2026-08-07, SOLUSDEV-136 (SYS-02, human-approved in-chat per ADR-032):**
+
+Embedding indexes move from ivfflat (lists=100) to **HNSW** (m=16, ef_construction=64,
+cosine) on both `graph_entity.embedding` and `error_solution.embedding`. Rationale:
+ivfflat trains k-means centroids at CREATE INDEX time — ours were built on empty tables,
+so recall is degenerate until a manual REINDEX after the first large load, and `lists`
+needs retuning (~√rows) plus a REINDEX at each corpus order of magnitude. HNSW builds
+incrementally with no training step, is correct when created empty, and holds
+recall/latency through ~10⁶ vectors (10× the medium-term estimate) with no parameter
+changes; costs are higher memory (~hundreds of MB of graph overhead at 10⁶ × 1536-d) and
+slower builds — irrelevant at the current corpus (≈0 rows), which is precisely why the
+switch happens now, within the entrypoint migration budget. pgvector ≥0.8 (deployed
+0.8.2) additionally offers iterative index scans (`hnsw.iterative_scan`) that repair
+filtered-ANN recall for project-scoped queries if the planner ever prefers the vector
+index over per-project exact KNN. Everything else in this ADR stands.
+
 **Rejected:** Auto-increment integer PKs (leak counts, poor for distributed/merge); hard deletes as default (loses history/undo, breaks the graph-as-living-documentation value); a dedicated graph DB now (premature; Postgres handles current scale — mirrors ADR-003).
 **Revisit when:** A measured deep-traversal bottleneck justifies a graph engine behind the graph-access seam.
 
