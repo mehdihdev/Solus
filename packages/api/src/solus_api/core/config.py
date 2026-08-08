@@ -63,10 +63,19 @@ class Settings(BaseSettings):
     # models.yaml default of 100 credits/$ and margin 2.0, 1000 credits ≈ $5 of
     # real model spend. Calibrate from pilot data before production.
     trial_credit_grant: int = 1000
+    # One-time starting credits granted when a paid plan first becomes live for
+    # a user (ADR-023/024, amended 2026-08-08). Keyed by PlanType value; missing
+    # key = no grant (enterprise is custom per deal). PROVISIONAL like the trial
+    # grant: BASIC 2,500 (≈ the $25 pack), PRO 10,000 (4×). Calibrate post-pilot.
+    plan_credit_grants: dict[str, int] = {"basic": 2500, "pro": 10000}
     # Stripe price-id → credits granted, for credit-pack purchases
     # (checkout.session.completed). Provisional; empty until real Stripe prices
     # exist. Parsed from a JSON env var, e.g. SOLUS_STRIPE_PACK_CREDITS='{"price_x":1000}'.
     stripe_pack_credits: dict[str, int] = {}
+    # Stripe price-id → whole-dollar display price for the same packs, so the
+    # UI can show "$10" beside "1,000 credits". Display-only — the charged
+    # amount is always the Stripe Price itself; unmapped packs show creditless.
+    stripe_pack_usd: dict[str, int] = {}
     # Max Stripe webhook body we will parse, bytes — bound untrusted input.
     stripe_webhook_max_bytes: int = 262144
 

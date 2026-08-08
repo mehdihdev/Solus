@@ -4,161 +4,102 @@ import SiteFooter from "../components/site-footer";
 import SiteHeader from "../components/site-header";
 import WaitlistTrigger from "../components/waitlist-trigger";
 
-const whyItems = [
-  {
-    number: "01",
-    title: "Unified context",
-    description:
-      "Manage BOMs, control systems, simulations, and code from one shared workspace so the entire robot pipeline stays aligned.",
-  },
-  {
-    number: "02",
-    title: "Portable environments",
-    description:
-      "Carry project state, dependencies, and simulation setup across machines, teams, and deployment targets without fragile scripts.",
-  },
-  {
-    number: "03",
-    title: "Domain-aware pipelines",
-    description:
-      "Link mechanical design changes to electrical validation and software simulation in a single workflow that updates automatically.",
-  },
-  {
-    number: "04",
-    title: "Ship faster",
-    description:
-      "Remove environment setup chaos so engineers spend less time bootstrapping and more time shipping robust robotic systems.",
-  },
-];
-
-const stats = [
-  { value: "4×", label: "faster onboarding" },
-  { value: "1 unified", label: "workspace" },
-  { value: "100%", label: "context retained" },
-  { value: "4", label: "domains, one tool" },
-];
-
-const features = [
-  {
-    number: "01",
-    title: "Context portability",
-    description:
-      "Carry project state, dependencies, and simulation setup across machines, teams, and deployment targets without fragile scripts.",
-  },
-  {
-    number: "02",
-    title: "Domain-aware pipelines",
-    description:
-      "Link mechanical design changes to electrical validation and software simulation in a single workflow that updates automatically.",
-  },
-  {
-    number: "03",
-    title: "Real-world validation",
-    description:
-      "Run realistic simulation scenarios directly from Forge, then push validated configurations into production-ready build assets.",
-  },
-  {
-    number: "04",
-    title: "Faster team delivery",
-    description:
-      "Remove environment setup chaos so engineers spend less time bootstrapping and more time shipping robust robotic systems.",
-  },
-];
-
-const workflowBullets = [
-  "Shared engineering projects that include CAD, circuits, code, and virtual tests",
-  "Portable environments that preserve configuration, dependencies, and simulation data",
-  "Automated workspaces that update as the robot design evolves",
-];
-
-const workflowSteps = [
-  {
-    number: "01",
-    title: "Define the robot project",
-    description:
-      "Import BOMs, mechanical assemblies, firmware, and test cases into one consistent workspace.",
-  },
-  {
-    number: "02",
-    title: "Sync domain data",
-    description:
-      "Keep electrical, mechanical, and simulation context aligned as the design changes.",
-  },
-  {
-    number: "03",
-    title: "Validate and ship",
-    description:
-      "Validate systems in simulation, share portable artifacts, and ship robotic systems faster.",
-  },
-];
-
 const sidebarProjects = ["bipedal-v3.2", "arm-assembly", "sensor-stack"];
 
 const sidebarDomains = [
-  { name: "Mechanical", color: "green" },
-  { name: "Electrical", color: "cyan" },
-  { name: "Software", color: "blue" },
-  { name: "Simulation", color: "purple" },
+  { id: "sw", name: "Software" },
+  { id: "ee", name: "Electrical" },
+  { id: "me", name: "Mechanical" },
+  { id: "rt", name: "Runtime" },
 ];
 
 const domainPanels = [
   {
-    name: "Mechanical",
-    status: "Active",
-    color: "green",
+    id: "sw",
+    name: "Software",
+    status: "Synced",
     files: [
-      "BOM_rev4.xml",
-      "chassis_assembly.step",
-      "joint_constraints.json",
+      "motion_controller.py",
+      "camera_node  (ROS 2)",
+      "main.rs @ a3f9c2d",
+      "ros2_config.yaml",
+    ],
+    meta: "GitHub · main · 3 contributors",
+  },
+  {
+    id: "ee",
+    name: "Electrical",
+    status: "Rev D",
+    files: [
+      "pdb_rev4.kicad_sch",
+      "OV9281_IC  (camera)",
+      "imu_breakout.kicad_pcb",
+      "power_rails.net",
+    ],
+    meta: "KiCad · 8 boards",
+  },
+  {
+    id: "me",
+    name: "Mechanical",
+    status: "Current",
+    files: [
+      "chassis_v3.step",
+      "CAM_v2  (mount)",
+      "mast_assembly",
       "tolerance_spec.pdf",
     ],
-    meta: "Rev D · 14 components",
+    meta: "Onshape · 14 parts",
   },
   {
-    name: "Electrical",
-    status: "Synced",
-    color: "cyan",
-    files: [
-      "schematic_rev4.kicad",
-      "power_rails.json",
-      "sensor_map.yaml",
-      "pcb_layout.kicad_pcb",
-    ],
-    meta: "Rev D · 8 boards",
-  },
-  {
-    name: "Software",
+    id: "rt",
+    name: "Runtime",
     status: "Live",
-    color: "blue",
     files: [
-      "main.rs @ a3f9c2d",
-      "ros2_config.toml",
-      "motion_controller.py",
-      "test_suite.yaml",
+      "/imu/data · 200 Hz",
+      "/camera/image_raw · 30 fps",
+      "battery_bus · 11.9 V",
+      "/joint_states",
     ],
-    meta: "main · 3 contributors",
-  },
-  {
-    name: "Simulation",
-    status: "Ready",
-    color: "purple",
-    files: [
-      "world_v3.urdf",
-      "physics_params.cfg",
-      "gait_scenarios.yaml",
-      "collision_mesh.obj",
-    ],
-    meta: "ROS 2 Humble · 6 tests",
+    meta: "Live Bench · streaming",
   },
 ];
 
-const terminalLines = [
-  { content: "forge sync --all", prompt: true },
-  { content: "Mechanical context loaded (rev4)", tone: "ok" },
-  { content: "Electrical schematics synced", tone: "ok" },
-  { content: "Software pinned to a3f9c2d", tone: "ok" },
-  { content: "Simulation environment ready", tone: "ok" },
-  { content: "Context is portable. Ready to build.", tone: "dim" },
+const solLines = [
+  {
+    tone: "warn",
+    content:
+      "I2C address conflict: IMU (0x68) and ToF sensor (0x68) share bus 1 — caught in schematic rev D, before flash.",
+  },
+  {
+    tone: "ok",
+    content:
+      "camera_node ↔ OV9281_IC ↔ CAM_v2 linked across ROS, KiCad, and Onshape (fingerprint confidence 0.94).",
+  },
+  {
+    tone: "dim",
+    content: "31 checks passed · 1 warning · graph updated 2 m ago",
+  },
+];
+
+const howSteps = [
+  {
+    number: "01",
+    title: "Connect your tools",
+    description:
+      "Link GitHub, KiCad, Onshape, and ROS. Connectors translate each tool into shared entities and relations — no changes to how your team already works.",
+  },
+  {
+    number: "02",
+    title: "One living graph",
+    description:
+      "Every code module, IC, CAD part, and telemetry signal becomes a node in one graph of your robot. It stays current as the design changes, in every domain.",
+  },
+  {
+    number: "03",
+    title: "Catch breaks early",
+    description:
+      "Checkers and the SOL agent reason across domains — pin conflicts, power budgets, mismatched interfaces — and flag problems before they break hardware.",
+  },
 ];
 
 function RevealLines({ lines }) {
@@ -178,31 +119,29 @@ export default function HomePage() {
       <main>
         <section className="hero">
           <div className="container">
-            <p className="hero-label">Forge RDE — Robotics Development Environment</p>
+            <p className="hero-label">Solus — the robotics context layer</p>
             <h1>
               <RevealLines
                 lines={[
-                  "The robotics",
-                  "development",
-                  "environment",
-                  "built for real-world",
-                  "complexity.",
+                  "Your robot lives",
+                  "in four worlds.",
+                  "Solus makes them one.",
                 ]}
               />
             </h1>
             <div className="hero-sub-row">
               <p className="hero-desc">
-                Forge is our RDE: a unified workspace for mechanical,
-                electrical, software, and simulation context. We remove
-                environment setup chaos, make context portable, and help
-                robotics teams ship faster.
+                Code, electronics, CAD, and the running robot drift apart until
+                something fails. Solus connects GitHub, KiCad, Onshape, and ROS
+                into one living graph — and catches cross-domain problems before
+                they break hardware.
               </p>
               <HeroActions />
             </div>
           </div>
 
-          <div className="forge-mockup-wrap" id="demo">
-            <div className="forge-mockup">
+          <div className="product-mockup-wrap" id="demo">
+            <div className="product-mockup">
               <div className="mockup-bar">
                 <div className="mockup-dots" aria-hidden="true">
                   <span />
@@ -210,14 +149,14 @@ export default function HomePage() {
                   <span />
                 </div>
                 <span className="mockup-title">
-                  forge — bipedal-v3.2 — all domains synced
+                  solus — bipedal-v3.2 — 4 domains · 1 graph
                 </span>
-                <span className="mockup-badge">● live</span>
+                <span className="mockup-badge">● synced</span>
               </div>
               <div className="mockup-body">
                 <div className="mockup-sidebar">
                   <div className="sb-section">
-                    <div className="sb-label">Project</div>
+                    <div className="sb-label">Projects</div>
                     {sidebarProjects.map((project, index) => (
                       <div
                         className={`sb-item${index === 0 ? " active" : ""}`}
@@ -230,8 +169,8 @@ export default function HomePage() {
                   <div className="sb-section">
                     <div className="sb-label">Domains</div>
                     {sidebarDomains.map((domain) => (
-                      <div className="sb-item active" key={domain.name}>
-                        <span className={`dot ${domain.color}`} />
+                      <div className="sb-item active" key={domain.id}>
+                        <span className={`dot ${domain.id}`} />
                         {domain.name}
                       </div>
                     ))}
@@ -241,10 +180,10 @@ export default function HomePage() {
                 <div className="mockup-main">
                   <div className="domain-grid">
                     {domainPanels.map((panel) => (
-                      <div className="domain-panel" key={panel.name}>
+                      <div className="domain-panel" key={panel.id}>
                         <div className="domain-head">
                           <span className="domain-name">{panel.name}</span>
-                          <span className={`domain-tag ${panel.color}`}>
+                          <span className={`domain-tag ${panel.id}`}>
                             {panel.status}
                           </span>
                         </div>
@@ -264,28 +203,19 @@ export default function HomePage() {
                     ))}
                   </div>
 
-                  <div className="mockup-terminal">
-                    {terminalLines.map((line) => (
+                  <div className="sol-strip">
+                    <div className="sol-strip-head">
+                      <span className="sol-orb pulse" aria-hidden="true" />
+                      <span className="sol-strip-title">SOL · diagnosis</span>
+                    </div>
+                    {solLines.map((line) => (
                       <div
-                        className={`term-line${line.tone ? ` ${line.tone}` : ""}`}
+                        className={`sol-line ${line.tone}`}
                         key={line.content}
                       >
-                        {line.prompt ? (
-                          <>
-                            <span className="term-prompt">$</span>
-                            {line.content}
-                          </>
-                        ) : (
-                          <>
-                            {line.tone === "ok" ? "✓ " : "→ "}
-                            {line.content}
-                          </>
-                        )}
+                        {line.content}
                       </div>
                     ))}
-                    <div className="term-cursor" aria-hidden="true">
-                      █
-                    </div>
                   </div>
                 </div>
               </div>
@@ -297,75 +227,25 @@ export default function HomePage() {
           <div className="line-glow" />
         </div>
 
-        <section id="why" className="section-why">
+        <section id="how" className="section-how">
           <div className="container">
-            <div className="why-header">
-              <p className="section-label" data-fade-up>
-                Built for robotics teams
-              </p>
-              <h2 data-reveal-lines>
-                <RevealLines
-                  lines={[
-                    "Stop fighting environments.",
-                    "Start building robots.",
-                  ]}
-                />
-              </h2>
-            </div>
-            <div className="why-grid" data-stagger>
-              {whyItems.map((item) => (
-                <div className="why-item" key={item.number}>
-                  <span className="why-num">{item.number}</span>
-                  <h3>{item.title}</h3>
-                  <p>{item.description}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <div className="line-sep">
-          <div className="line-glow pink" />
-        </div>
-
-        <section className="section-stats">
-          <div className="container">
-            <div className="stats-row" data-stagger>
-              {stats.map((stat) => (
-                <div className="stat-item" key={stat.label}>
-                  <strong>{stat.value}</strong>
-                  <span>{stat.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <div className="line-sep">
-          <div className="line-glow" />
-        </div>
-
-        <section id="features" className="section-features">
-          <div className="container">
-            <div className="features-header">
-              <p className="section-label" data-fade-up>
-                Features
-              </p>
-              <h2 data-reveal-lines>
-                <RevealLines
-                  lines={[
-                    "Everything your robotics",
-                    "team needs, connected.",
-                  ]}
-                />
-              </h2>
-            </div>
-            <div className="features-grid" data-stagger>
-              {features.map((feature) => (
-                <article className="feature-item" key={feature.number}>
-                  <div className="feature-num">{feature.number}</div>
-                  <h3>{feature.title}</h3>
-                  <p>{feature.description}</p>
+            <p className="section-label" data-fade-up>
+              How Solus works
+            </p>
+            <h2 data-reveal-lines>
+              <RevealLines
+                lines={[
+                  "From four disconnected tools",
+                  "to one system you can reason about.",
+                ]}
+              />
+            </h2>
+            <div className="how-grid" data-stagger>
+              {howSteps.map((step) => (
+                <article className="how-step" key={step.number}>
+                  <div className="how-num">{step.number}</div>
+                  <h3>{step.title}</h3>
+                  <p>{step.description}</p>
                 </article>
               ))}
             </div>
@@ -373,68 +253,16 @@ export default function HomePage() {
         </section>
 
         <div className="line-sep">
-          <div className="line-glow pink" />
-        </div>
-
-        <section id="workflows" className="section-workflows">
-          <div className="container">
-            <div className="workflows-top">
-              <div className="workflows-copy">
-                <p className="section-label" data-fade-up>
-                  How Forge works
-                </p>
-                <h2 data-reveal-lines>
-                  <RevealLines
-                    lines={[
-                      "From prototype to production,",
-                      "every context travels",
-                      "with the robot.",
-                    ]}
-                  />
-                </h2>
-                <p data-fade-up>
-                  Forge stitches together engineering domains and simulation
-                  feedback into a single source of truth. Prototype faster,
-                  validate earlier, deploy with confidence.
-                </p>
-              </div>
-              <ul className="workflows-list" data-stagger>
-                {workflowBullets.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="workflows-steps" data-stagger>
-              {workflowSteps.map((step) => (
-                <div className="step" key={step.number}>
-                  <div className="step-num">{step.number}</div>
-                  <div className="step-body">
-                    <h4>{step.title}</h4>
-                    <p>{step.description}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <div className="line-sep">
-          <div className="line-glow" />
+          <div className="line-glow me" />
         </div>
 
         <section id="start" className="section-cta">
           <div className="container">
             <h2 data-reveal-lines>
-              <RevealLines
-                lines={[
-                  "Ready to forge your",
-                  "robotics workflow?",
-                ]}
-              />
+              <RevealLines lines={["See your robot", "as one system."]} />
             </h2>
             <div data-fade-up>
-              <WaitlistTrigger label="Join the Waitlist →" variant="cta" />
+              <WaitlistTrigger label="Join the waitlist →" variant="cta" />
             </div>
           </div>
         </section>

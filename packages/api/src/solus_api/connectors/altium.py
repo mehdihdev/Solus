@@ -35,9 +35,12 @@ class AltiumConnector(EdaExportConnector):
     proprietary path is a scaffolded post-launch stub (see module docstring)."""
 
     provider: ClassVar[str] = "altium"
-    #: v1 scaffold: the committed Protel netlist CONTENT (live repo/tool
-    #: acquisition is stubbed in the family base for post-launch — SOLUSDEV-102).
-    config_fields: ClassVar[tuple[str, ...]] = ("export",)
+    #: `export` — the committed Protel netlist CONTENT, sufficient on its own
+    #: (§2.1 invariant 3). `project_path` — additive, read by the injected
+    #: `BridgeExportAcquirer` (mcp_acquire.py) to locate the project on the
+    #: companion machine for live acquisition; absent, the live path declines
+    #: cleanly and the inline export proceeds unchanged (SOLUSDEV-102 ALT-8).
+    config_fields: ClassVar[tuple[str, ...]] = ("export", "project_path")
 
     def parse(self, text: str) -> Netlist:
         return parse_protel_netlist(text)

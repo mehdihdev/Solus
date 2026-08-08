@@ -25,11 +25,21 @@ const api = {
       ipcRenderer.invoke('oauth:github:await', authorizeUrl)
   },
   bridge: {
-    setToken: (token: string | null): Promise<void> => ipcRenderer.invoke('bridge:token', token)
+    setToken: (token: string | null): Promise<void> => ipcRenderer.invoke('bridge:token', token),
+    // BYO-license capture (SOLUSDEV-102 / MCP-05): one flat key→value secrets
+    // object per server, relayed to the companion's stdin. Never stored or
+    // logged anywhere along the way.
+    submitLicense: (
+      server: string,
+      secrets: Record<string, string>
+    ): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('bridge:license', server, secrets)
   },
   folder: {
     pick: (): Promise<string | null> => ipcRenderer.invoke('folder:pick'),
     reveal: (path: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('folder:reveal', path),
+    openInVscode: (path: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('folder:open-vscode', path),
     clone: (input: { repoUrl: string; parentDir: string }): Promise<CloneResult> =>
       ipcRenderer.invoke('git:clone', input)
   },

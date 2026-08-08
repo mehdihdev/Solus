@@ -1,9 +1,8 @@
 import Link from "next/link";
 
 const footerLinks = [
-  { href: "#why", label: "Why Forge" },
-  { href: "#features", label: "Features" },
-  { href: "#workflows", label: "Workflows" },
+  { href: "#demo", label: "Product" },
+  { href: "#how", label: "How it works" },
   { href: "/blog", label: "Blog", isRoute: true },
   { href: "#", label: "Privacy" },
   { href: "#", label: "Terms" },
@@ -18,9 +17,9 @@ export default function SiteFooter({ isHome = false }) {
       <div className="footer-inner">
         <div className="footer-top">
           <p className="footer-tagline">
-            The robotics development environment
+            One graph across code, electronics,
             <br />
-            built for real-world complexity.
+            CAD, and the running robot.
           </p>
           <div className="footer-links">
             {footerLinks.map((link) =>

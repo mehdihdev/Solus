@@ -503,6 +503,8 @@ class SubscriptionRead(_SoftDeletable):
     status: SubscriptionStatus
     limits: dict[str, Any]
     expires_at: datetime | None
+    # Pending cancel-at-period-end date; the client shows "your plan ends on X".
+    cancel_at: datetime | None
     stripe_customer_id: str | None
     stripe_subscription_id: str | None
     seat_count: int | None

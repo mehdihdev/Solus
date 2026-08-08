@@ -79,3 +79,38 @@ describe('BridgePill', () => {
     expect(screen.getByText(/companion isn't connected/i)).toBeInTheDocument()
   })
 })
+
+// MCP-05 BYO-license surface (SOLUSDEV-102): the popover row per license_state.
+describe('BridgePill license capture', () => {
+  const altium = (license_state: BridgeStatus['servers'][number]['license_state']): BridgeStatus =>
+    ({
+      ...READY,
+      servers: [{ name: 'altium', state: 'ready', detail: null, updated_at: '', license_state }]
+    }) as BridgeStatus
+
+  it('shows an Add license affordance for bring_your_license and opens the modal', async () => {
+    vi.mocked(useBridgeStatus).mockReturnValue(altium('bring_your_license'))
+    render(<BridgePill projectId="p1" />)
+    await userEvent.click(screen.getByTestId('bridge-pill'))
+    await userEvent.click(screen.getByRole('button', { name: /add license/i }))
+    // The capture modal is open: one masked input per key name.
+    expect(screen.getByLabelText('altium_license')).toBeInTheDocument()
+  })
+
+  it('shows a non-interactive upgrade note for upgrade_required', async () => {
+    vi.mocked(useBridgeStatus).mockReturnValue(altium('upgrade_required'))
+    render(<BridgePill projectId="p1" />)
+    await userEvent.click(screen.getByTestId('bridge-pill'))
+    expect(screen.getByText(/upgrade/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add license/i })).not.toBeInTheDocument()
+  })
+
+  it('shows neither for a ready license_state', async () => {
+    vi.mocked(useBridgeStatus).mockReturnValue(altium('ready'))
+    render(<BridgePill projectId="p1" />)
+    await userEvent.click(screen.getByTestId('bridge-pill'))
+    expect(screen.getByText('altium')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add license/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/upgrade/i)).not.toBeInTheDocument()
+  })
+})

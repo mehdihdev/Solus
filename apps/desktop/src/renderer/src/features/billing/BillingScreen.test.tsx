@@ -122,4 +122,79 @@ describe('BillingScreen', () => {
     // Only the Pro card offers Subscribe; Basic (current) shows CURRENT PLAN.
     expect(screen.getAllByRole('button', { name: /Subscribe/i })).toHaveLength(1)
   })
+
+  it('shows monthly prices on the plan cards (ADR-023)', async () => {
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Basic')).toBeInTheDocument())
+    expect(screen.getByText('$25')).toBeInTheDocument()
+    expect(screen.getByText('$35')).toBeInTheDocument()
+    expect(screen.getAllByText('/month')).toHaveLength(2)
+  })
+
+  it('switches to yearly prices with the interval toggle', async () => {
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Basic')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: 'Yearly' }))
+    expect(screen.getByText('$200')).toBeInTheDocument()
+    expect(screen.getByText('$300')).toBeInTheDocument()
+    expect(screen.queryByText('$25')).not.toBeInTheDocument()
+  })
+
+  it('lists the plan features including starting credits (ADR-024)', async () => {
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Basic')).toBeInTheDocument())
+    expect(screen.getAllByText('All capabilities')).toHaveLength(2)
+    expect(screen.getByText(/Starts with 2,500 credits/)).toBeInTheDocument()
+    expect(screen.getByText(/Starts with 10,000 credits/)).toBeInTheDocument()
+  })
+
+  it('presents Enterprise as per-seat, org-paid, contact sales', async () => {
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Basic')).toBeInTheDocument())
+    expect(screen.getByText(/Per-seat pricing/)).toBeInTheDocument()
+    expect(screen.getByText(/organization('|’)s wallet/i)).toBeInTheDocument()
+    expect(screen.getByText('CONTACT SALES')).toBeInTheDocument()
+  })
+
+  it('shows a persistent end-date bar while a cancellation is pending', async () => {
+    vi.mocked(resources.getSubscription).mockResolvedValue({
+      ...SUB,
+      plan: 'pro',
+      status: 'active',
+      stripe_subscription_id: 'sub_live',
+      cancel_at: '2026-09-15T00:00:00Z'
+    })
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Billing')).toBeInTheDocument())
+    const bar = screen.getByRole('status')
+    expect(bar.textContent).toMatch(/Pro plan ends on/i)
+    expect(bar.textContent).toMatch(/September 15, 2026/)
+    expect(bar.textContent).toMatch(/keep full access until then/i)
+  })
+
+  it('shows no end-date bar without a pending cancellation or once canceled', async () => {
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Billing')).toBeInTheDocument())
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    vi.mocked(resources.getSubscription).mockResolvedValue({
+      ...SUB,
+      status: 'canceled',
+      cancel_at: null
+    })
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getAllByText('Billing').length).toBeGreaterThan(0))
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('shows the dollar price on credit packs when the server provides it', async () => {
+    vi.mocked(resources.getCreditPacks).mockResolvedValue([
+      { price_id: 'price_p10', credits: 1000, usd: 10 },
+      { price_id: 'price_p50', credits: 5000, usd: 50 }
+    ])
+    render(<BillingScreen />)
+    await waitFor(() => expect(screen.getByText('Buy credits')).toBeInTheDocument())
+    expect(screen.getByText('$10')).toBeInTheDocument()
+    expect(screen.getByText('$50')).toBeInTheDocument()
+  })
 })

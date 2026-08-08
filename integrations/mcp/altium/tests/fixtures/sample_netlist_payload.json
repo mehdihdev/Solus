@@ -1,0 +1,38 @@
+{
+  "comment": "Benign Altium bridge payloads for export_netlist round-trip tests (SOLUSDEV-102 ALT-6). Shapes mirror upstream project.get_nets / project.get_bom responses (see upstream/tests/altium_simulator.py).",
+  "get_nets": {
+    "pins": [
+      { "component": "U1", "pin": "8", "pin_name": "V+", "net": "VCC" },
+      { "component": "R1", "pin": "1", "pin_name": "1", "net": "VCC" },
+      { "component": "U1", "pin": "4", "pin_name": "V-", "net": "GND" },
+      { "component": "C5", "pin": "2", "pin_name": "2", "net": "GND" },
+      { "component": "U1", "pin": "1", "pin_name": "OUT", "net": "NET_OUT" },
+      { "component": "R1", "pin": "2", "pin_name": "2", "net": "NET_OUT" },
+      { "component": "C5", "pin": "1", "pin_name": "1", "net": "NET_OUT" }
+    ],
+    "count": 7
+  },
+  "get_bom": {
+    "components": [
+      {
+        "designator": "U1",
+        "comment": "LM358",
+        "footprint": "SOIC-8",
+        "lib_ref": "LM358"
+      },
+      {
+        "designator": "R1",
+        "comment": "10k",
+        "footprint": "RES0603",
+        "lib_ref": "RES"
+      },
+      {
+        "designator": "C5",
+        "comment": "100nF",
+        "footprint": "CAP0402",
+        "lib_ref": "CAP"
+      }
+    ],
+    "count": 3
+  }
+}

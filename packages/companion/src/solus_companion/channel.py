@@ -21,6 +21,7 @@ from websockets.exceptions import ConnectionClosed
 
 from solus_companion.artifacts import ArtifactUploader
 from solus_companion.config import CompanionConfig, TokenBox
+from solus_companion.credentials import CredentialRelay, parse_credential_ack, surface_ack
 from solus_companion.dispatch import Dispatcher, ToolCaller
 from solus_companion.frames import (
     PROTOCOL_VERSION,
@@ -117,7 +118,12 @@ async def _ping_loop(ws: ClientConnection, liveness: _Liveness, interval: float)
         return
 
 
-async def _recv_loop(ws: ClientConnection, dispatcher: Dispatcher, liveness: _Liveness) -> None:
+async def _recv_loop(
+    ws: ClientConnection,
+    dispatcher: Dispatcher,
+    liveness: _Liveness,
+    supervisor: BridgeSupervisor,
+) -> None:
     while True:
         raw = await ws.recv()  # raises ConnectionClosed when the socket dies
         frame = parse_inbound(raw)
@@ -130,7 +136,28 @@ async def _recv_loop(ws: ClientConnection, dispatcher: Dispatcher, liveness: _Li
         elif isinstance(frame, Invalid):
             logger.warning("invalid frame dropped: %s", frame.reason)
         elif isinstance(frame, Unknown):
-            logger.info("ignored unknown frame type %.64r", frame.type)
+            # MCP-05: credential_ack rides the §4 extension rule (an unknown
+            # type to frames.py); it carries key NAMES only, never values.
+            if frame.type == "credential_ack":
+                ack = parse_credential_ack(raw)
+                if ack is None:
+                    logger.warning("invalid credential_ack frame dropped")
+                else:
+                    surface_ack(ack, supervisor)
+            else:
+                logger.info("ignored unknown frame type %.64r", frame.type)
+
+
+async def _credential_loop(ws: ClientConnection, relay: CredentialRelay) -> None:
+    """Addendum C: send queued credential_submit frames — exactly one frame
+    per accepted stdin line, at-most-once (a frame lost to a dying socket is
+    not re-queued; the user re-submits and the license_state surface still
+    reads bring_your_license)."""
+    try:
+        while True:
+            await ws.send(await relay.next_frame())
+    except ConnectionClosed:
+        return
 
 
 async def _status_loop(ws: ClientConnection, supervisor: BridgeSupervisor, coalesce: float) -> None:
@@ -155,17 +182,21 @@ async def _serve(
     ping_interval: float,
     status_coalesce: float,
     uploader: ArtifactUploader | None = None,
+    relay: CredentialRelay | None = None,
 ) -> None:
     state.connected = True
     dispatcher = Dispatcher(supervisor, ws.send, uploader=uploader)
     liveness = _Liveness()
     pinger = asyncio.create_task(_ping_loop(ws, liveness, ping_interval))
     status_task = asyncio.create_task(_status_loop(ws, supervisor, status_coalesce))
+    side_tasks = [pinger, status_task]
+    if relay is not None:
+        side_tasks.append(asyncio.create_task(_credential_loop(ws, relay)))
     try:
-        await _recv_loop(ws, dispatcher, liveness)
+        await _recv_loop(ws, dispatcher, liveness, supervisor)
     finally:
         state.connected = False
-        for task in (pinger, status_task):
+        for task in side_tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
                 await task
@@ -179,6 +210,7 @@ async def _connect_once(
     state: ChannelState,
     hello_timeout: float,
     status_coalesce: float,
+    relay: CredentialRelay | None = None,
 ) -> tuple[str | None, bool]:
     """One dial. Returns (stop_reason | None, reached_hello_ack)."""
     reached_ack = False
@@ -205,6 +237,7 @@ async def _connect_once(
                 # Artifact uploads ride the same allowlist as the WS dial; absent
                 # config (non-bridge URL) the dispatcher fails closed (T4d).
                 uploader=ArtifactUploader.from_config(config),
+                relay=relay,
             )
     except ConnectionClosed as exc:
         code = exc.rcvd.code if exc.rcvd is not None else None
@@ -237,6 +270,16 @@ async def run_channel(
     """Dial, serve, redial until a STOP close code (or max_attempts, tests)."""
     channel_state = state if state is not None else ChannelState()
     consecutive_failures = 0
+    # MCP-05: attach the credential relay to the token box (the stdin control
+    # channel) keyed to the DISCOVERED server set — a credential line for a
+    # server this companion does not supervise is dropped at the stdin edge.
+    relay: CredentialRelay | None = None
+    if isinstance(config.token_source, TokenBox):
+        if config.token_source.credentials is None:
+            config.token_source.credentials = CredentialRelay(
+                known_servers=frozenset(server.name for server in config.servers)
+            )
+        relay = config.token_source.credentials
     while True:
         if max_attempts is not None and channel_state.attempts >= max_attempts:
             channel_state.stop_reason = STOP_MAX_ATTEMPTS
@@ -248,7 +291,7 @@ async def run_channel(
         channel_state.attempts += 1
         token = source()
         stop_reason, reached_ack = await _connect_once(
-            config, supervisor, token, channel_state, hello_timeout, status_coalesce
+            config, supervisor, token, channel_state, hello_timeout, status_coalesce, relay=relay
         )
         if stop_reason is not None:
             channel_state.stop_reason = stop_reason

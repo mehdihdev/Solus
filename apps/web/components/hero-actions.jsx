@@ -8,7 +8,7 @@ export default function HeroActions() {
         href="https://youtu.be/qszQ76kajuM"
         target="_blank"
         rel="noreferrer"
-        className="link-plain waitlist-trigger"
+        className="link-plain"
       >
         Watch the walkthrough
       </a>

@@ -15,11 +15,12 @@ vi.mock('../../lib/desktopBridge', async (importOriginal) => {
 const pick = vi.fn()
 const reveal = vi.fn()
 const clone = vi.fn()
+const openInVscode = vi.fn()
 
 beforeEach(() => {
   vi.clearAllMocks()
   useProjectFolderStore.setState({ folders: {} })
-  vi.mocked(bridge.getDesktopFolderBridge).mockReturnValue({ pick, reveal, clone })
+  vi.mocked(bridge.getDesktopFolderBridge).mockReturnValue({ pick, reveal, clone, openInVscode })
 })
 
 describe('ProjectFolderCard', () => {
@@ -54,12 +55,22 @@ describe('ProjectFolderCard', () => {
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
   })
 
-  it('opens and unlinks a linked folder', async () => {
+  it('opens a linked folder in VSCode', async () => {
+    useProjectFolderStore.setState({ folders: { p1: { path: '/home/u/arm' } } })
+    openInVscode.mockResolvedValue({ ok: true })
+    render(<ProjectFolderCard projectId="p1" />)
+    await userEvent.click(screen.getByRole('button', { name: /open with vscode/i }))
+    expect(openInVscode).toHaveBeenCalledWith('/home/u/arm')
+    expect(reveal).not.toHaveBeenCalled()
+  })
+
+  it('opens a linked folder in the file manager and unlinks', async () => {
     useProjectFolderStore.setState({ folders: { p1: { path: '/home/u/arm' } } })
     reveal.mockResolvedValue({ ok: true })
     render(<ProjectFolderCard projectId="p1" />)
-    await userEvent.click(screen.getByRole('button', { name: /open/i }))
+    await userEvent.click(screen.getByRole('button', { name: /open folder/i }))
     expect(reveal).toHaveBeenCalledWith('/home/u/arm')
+    expect(openInVscode).not.toHaveBeenCalled()
     await userEvent.click(screen.getByRole('button', { name: /unlink/i }))
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
   })

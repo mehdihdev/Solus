@@ -9,17 +9,14 @@ export default function SiteHeader({ isHome = false }) {
     <header className="site-header">
       <div className="header-inner">
         <Link href="/" className="wordmark">
-          Solus
+          <span className="sol-orb" aria-hidden="true" />
+          SOLUS
         </Link>
         <nav className="site-nav" aria-label="Primary navigation">
-          <a href={`${sectionPrefix}#why`}>Why Forge</a>
-          <a href={`${sectionPrefix}#features`}>Features</a>
-          <a href={`${sectionPrefix}#workflows`}>Workflows</a>
+          <a href={`${sectionPrefix}#demo`}>Product</a>
+          <a href={`${sectionPrefix}#how`}>How it works</a>
           <Link href="/blog">Blog</Link>
-          <WaitlistTrigger
-            className="nav-cta nav-cta-button"
-            label="Join Waitlist"
-          />
+          <WaitlistTrigger className="nav-cta-button" label="Join Waitlist" />
           <ThemeToggle />
         </nav>
       </div>

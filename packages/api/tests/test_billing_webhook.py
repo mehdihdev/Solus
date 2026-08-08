@@ -413,6 +413,298 @@ async def test_subscription_event_with_unknown_price_leaves_plan(
     assert sub.plan.value == original_plan  # unchanged when the price isn't ours
 
 
+# --- plan starting-credit grants (ADR-023/024, amended 2026-08-08) ---------
+
+
+def _plan_event(
+    event_id: str, *, customer: str, status: str, price_id: str, created: int
+) -> dict[str, Any]:
+    return {
+        "id": event_id,
+        "type": "customer.subscription.updated",
+        "created": created,
+        "data": {
+            "object": {
+                "id": "sub_grant",
+                "customer": customer,
+                "status": status,
+                "items": {"data": [{"price": {"id": price_id}}]},
+            }
+        },
+    }
+
+
+_GRANT_PLAN_PRICES = {"basic:month": "price_basic_m", "pro:month": "price_pro_m"}
+_GRANTS = {"basic": 2500, "pro": 10000}
+
+
+async def _balance(db: AsyncSession, user_id: uuid.UUID) -> int:
+    bal = await db.scalar(select(CreditBalance.balance).where(CreditBalance.user_id == user_id))
+    return int(bal or 0)
+
+
+async def test_plan_activation_grants_starting_credits(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """First activation of a paid plan applies its one-time starting grant
+    (BASIC 2,500) on top of the trial grant."""
+    user_id = await _provision(client, "grant-basic@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_grant_b"
+    await db.commit()
+
+    await process_event(
+        db,
+        _plan_event(
+            "evt_g1", customer="cus_grant_b", status="active", price_id="price_basic_m", created=100
+        ),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+        plan_credit_grants=_GRANTS,
+    )
+    assert await _balance(db, user_id) == 1000 + 2500  # trial + basic grant
+
+
+async def test_plan_renewal_does_not_regrant(client: AsyncClient, db: AsyncSession) -> None:
+    user_id = await _provision(client, "grant-renew@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_grant_r"
+    await db.commit()
+
+    for event_id, created in (("evt_r1", 100), ("evt_r2", 200)):
+        await process_event(
+            db,
+            _plan_event(
+                event_id,
+                customer="cus_grant_r",
+                status="active",
+                price_id="price_basic_m",
+                created=created,
+            ),
+            pack_credits={},
+            plan_prices=_GRANT_PLAN_PRICES,
+            plan_credit_grants=_GRANTS,
+        )
+    assert await _balance(db, user_id) == 1000 + 2500  # granted exactly once
+
+
+async def test_upgrade_grants_new_plan_amount_once(client: AsyncClient, db: AsyncSession) -> None:
+    """BASIC→PRO grants PRO's starting credits once; further PRO events don't."""
+    user_id = await _provision(client, "grant-upgrade@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_grant_u"
+    await db.commit()
+
+    for event_id, price, created in (
+        ("evt_u1", "price_basic_m", 100),
+        ("evt_u2", "price_pro_m", 200),
+        ("evt_u3", "price_pro_m", 300),
+    ):
+        await process_event(
+            db,
+            _plan_event(
+                event_id, customer="cus_grant_u", status="active", price_id=price, created=created
+            ),
+            pack_credits={},
+            plan_prices=_GRANT_PLAN_PRICES,
+            plan_credit_grants=_GRANTS,
+        )
+    assert await _balance(db, user_id) == 1000 + 2500 + 10000
+
+
+async def test_non_live_status_does_not_grant(client: AsyncClient, db: AsyncSession) -> None:
+    """A subscription that lands past_due/canceled never triggers the grant."""
+    user_id = await _provision(client, "grant-dead@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_grant_d"
+    await db.commit()
+
+    await process_event(
+        db,
+        _plan_event(
+            "evt_d1",
+            customer="cus_grant_d",
+            status="past_due",
+            price_id="price_basic_m",
+            created=100,
+        ),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+        plan_credit_grants=_GRANTS,
+    )
+    assert await _balance(db, user_id) == 1000  # trial only
+
+
+# --- cancellation lifecycle: cancel_at bar, resume, end-of-term downgrade ---
+
+
+async def _notes_of(
+    db: AsyncSession, user_id: uuid.UUID, ntype: NotificationType
+) -> list[Notification]:
+    rows = await db.scalars(
+        select(Notification).where(Notification.user_id == user_id, Notification.type == ntype)
+    )
+    return list(rows)
+
+
+def _cancel_event(
+    event_id: str,
+    *,
+    customer: str,
+    created: int,
+    cancel_at: int | None,
+    status: str = "active",
+    etype: str = "customer.subscription.updated",
+) -> dict[str, Any]:
+    return {
+        "id": event_id,
+        "type": etype,
+        "created": created,
+        "data": {
+            "object": {
+                "id": "sub_cxl",
+                "customer": customer,
+                "status": status,
+                "cancel_at": cancel_at,
+                "items": {"data": [{"price": {"id": "price_pro_m"}}]},
+            }
+        },
+    }
+
+
+_CANCEL_AT = 1_790_000_000  # arbitrary future epoch
+
+
+async def test_scheduled_cancel_records_cancel_at_and_notifies(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Cancel-at-period-end shows up locally (drives the billing-page bar) and
+    notifies with the end date. Access continues until then."""
+    user_id = await _provision(client, "cxl-sched@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_cxl_s"
+    await db.commit()
+
+    await process_event(
+        db,
+        _cancel_event("evt_c1", customer="cus_cxl_s", created=100, cancel_at=_CANCEL_AT),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    db.expunge_all()
+    sub = await _subscription(db, user_id)
+    assert sub.cancel_at is not None
+    assert int(sub.cancel_at.timestamp()) == _CANCEL_AT
+    assert sub.status is SubscriptionStatus.ACTIVE  # access continues
+    notes = await _notes_of(db, user_id, NotificationType.SUBSCRIPTION_CANCELED)
+    assert len(notes) == 1
+    assert notes[0].body is not None and "Pro" in notes[0].body
+
+    # A replayed/renewal event with the same cancel_at does not re-notify.
+    await process_event(
+        db,
+        _cancel_event("evt_c2", customer="cus_cxl_s", created=200, cancel_at=_CANCEL_AT),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    assert len(await _notes_of(db, user_id, NotificationType.SUBSCRIPTION_CANCELED)) == 1
+
+
+async def test_resume_clears_cancel_at_and_notifies(client: AsyncClient, db: AsyncSession) -> None:
+    user_id = await _provision(client, "cxl-resume@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_cxl_r"
+    await db.commit()
+
+    await process_event(
+        db,
+        _cancel_event("evt_r1", customer="cus_cxl_r", created=100, cancel_at=_CANCEL_AT),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    await process_event(
+        db,
+        _cancel_event("evt_r2", customer="cus_cxl_r", created=200, cancel_at=None),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    db.expunge_all()
+    sub = await _subscription(db, user_id)
+    assert sub.cancel_at is None
+    assert len(await _notes_of(db, user_id, NotificationType.SUBSCRIPTION_RESUMED)) == 1
+
+
+async def test_subscription_end_downgrades_limits_and_notifies(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """When the term actually ends (subscription.deleted), the account stops
+    being unlimited: limits clamp to the BASIC tier and the user is told."""
+    user_id = await _provision(client, "cxl-end@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_cxl_e"
+    await db.commit()
+
+    # Live PRO first (unlimited limits), then the end-of-term deletion.
+    await process_event(
+        db,
+        _cancel_event("evt_e1", customer="cus_cxl_e", created=100, cancel_at=_CANCEL_AT),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    await process_event(
+        db,
+        _cancel_event(
+            "evt_e2",
+            customer="cus_cxl_e",
+            created=200,
+            cancel_at=None,
+            status="canceled",
+            etype="customer.subscription.deleted",
+        ),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    db.expunge_all()
+    sub = await _subscription(db, user_id)
+    assert sub.status is SubscriptionStatus.CANCELED
+    assert sub.cancel_at is None  # the bar goes away
+    assert sub.limits.get("max_projects") == 3  # BASIC-tier clamp (ADR-023)
+    assert sub.limits.get("max_integrations") == 4
+    notes = await _notes_of(db, user_id, NotificationType.SUBSCRIPTION_ENDED)
+    assert len(notes) == 1
+
+
+async def test_immediate_cancel_via_updated_event_also_downgrades(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """An updated event that lands status=canceled (immediate cancellation)
+    clamps limits and notifies exactly like a deletion."""
+    user_id = await _provision(client, "cxl-now@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_cxl_n"
+    await db.commit()
+
+    await process_event(
+        db,
+        _cancel_event("evt_n1", customer="cus_cxl_n", created=100, cancel_at=None),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    await process_event(
+        db,
+        _cancel_event(
+            "evt_n2", customer="cus_cxl_n", created=200, cancel_at=None, status="canceled"
+        ),
+        pack_credits={},
+        plan_prices=_GRANT_PLAN_PRICES,
+    )
+    db.expunge_all()
+    sub = await _subscription(db, user_id)
+    assert sub.status is SubscriptionStatus.CANCELED
+    assert sub.limits.get("max_projects") == 3
+    assert len(await _notes_of(db, user_id, NotificationType.SUBSCRIPTION_ENDED)) == 1
+
+
 # --- success notifications (in-app confirmation via the existing notif system) ----
 
 

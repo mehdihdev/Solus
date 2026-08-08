@@ -98,7 +98,7 @@ export default function WaitlistTrigger({
       setEmail("");
       closeModal();
       setToastMessage(
-        payload?.message || "Thanks for joining the Solus Forge waitlist.",
+        payload?.message || "Thanks for joining the Solus waitlist.",
       );
     } catch (error) {
       setErrorMessage(
@@ -113,10 +113,12 @@ export default function WaitlistTrigger({
 
   const trigger =
     variant === "cta" ? (
-      <button type="button" className={`cta cta-button ${className}`.trim()} onClick={openModal}>
-        <div className="cta-gradient-bg" />
-        <div className="cta-gradient-overlay" />
-        <span className="cta-text">{label}</span>
+      <button
+        type="button"
+        className={`cta ${className}`.trim()}
+        onClick={openModal}
+      >
+        {label}
       </button>
     ) : (
       <button type="button" className={className} onClick={openModal}>
@@ -146,11 +148,11 @@ export default function WaitlistTrigger({
                 >
                   ×
                 </button>
-                <p className="modal-eyebrow">Solus Forge</p>
+                <p className="modal-eyebrow">Solus</p>
                 <h2 id="waitlist-title">Join the waitlist</h2>
                 <p className="modal-copy">
-                  Enter your email and we&apos;ll reach out when Forge is ready for early
-                  access.
+                  Enter your email and we&apos;ll reach out when Solus is ready
+                  for early access.
                 </p>
                 <form className="waitlist-form" onSubmit={handleSubmit}>
                   <label className="sr-only" htmlFor="waitlist-email">
@@ -170,19 +172,17 @@ export default function WaitlistTrigger({
                   />
                   <button
                     type="submit"
-                    className="cta cta-button modal-submit"
+                    className="cta modal-submit"
                     disabled={isSubmitting}
                   >
-                    <div className="cta-gradient-bg" />
-                    <div className="cta-gradient-overlay" />
-                    <span className="cta-text">
-                      {isSubmitting
-                        ? "Joining waitlist..."
-                        : "Join early access waitlist"}
-                    </span>
+                    {isSubmitting
+                      ? "Joining waitlist..."
+                      : "Join early access waitlist"}
                   </button>
                 </form>
-                {errorMessage ? <p className="modal-error">{errorMessage}</p> : null}
+                {errorMessage ? (
+                  <p className="modal-error">{errorMessage}</p>
+                ) : null}
               </div>
             </div>,
             document.body,

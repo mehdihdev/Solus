@@ -15,11 +15,17 @@ import type { CheckoutInterval, CreditPack, PlanType, Subscription } from '../..
 import { useOfflineReason } from '../workspace/workspaceOnline'
 import { useBillingData, type BillingData } from './useBillingData'
 
-/** Self-serve plans and their limits (mirrors models.PLAN_LIMITS). Enterprise is
- *  inbound-only this cycle, so it carries no self-serve checkout. */
+/** Self-serve plans: prices, features, and limits (mirrors ADR-023/024 and the
+ *  server's models.PLAN_LIMITS / plan_credit_grants config — keep in step when
+ *  those change). Enterprise is inbound-only this cycle: per-seat pricing on the
+ *  organization's wallet, no self-serve checkout. */
 interface PlanCardDef {
   plan: PlanType
   tagline: string
+  /** Whole-dollar price per interval; absent ⇒ custom (contact sales). */
+  price?: { month: number; year: number }
+  /** Headline capabilities shown above the limit rows. */
+  features: readonly string[]
   /** Ordered [label, limit] pairs; null limit ⇒ Unlimited. `undefined` ⇒ Custom. */
   limits: readonly (readonly [string, number | null | undefined])[]
   contactSales?: boolean
@@ -29,6 +35,8 @@ const PLAN_CARDS: readonly PlanCardDef[] = [
   {
     plan: 'basic',
     tagline: 'For getting started',
+    price: { month: 25, year: 200 },
+    features: ['All capabilities', 'Starts with 2,500 credits'],
     limits: [
       ['Projects', 3],
       ['Teams', 2],
@@ -38,6 +46,8 @@ const PLAN_CARDS: readonly PlanCardDef[] = [
   {
     plan: 'pro',
     tagline: 'For full-stack teams',
+    price: { month: 35, year: 300 },
+    features: ['All capabilities', 'Starts with 10,000 credits'],
     limits: [
       ['Projects', null],
       ['Teams', null],
@@ -47,6 +57,10 @@ const PLAN_CARDS: readonly PlanCardDef[] = [
   {
     plan: 'enterprise',
     tagline: 'Custom limits, SSO, and support',
+    features: [
+      'Per-seat pricing, set per agreement',
+      "Billed to your organization's wallet — one subscription covers every seat"
+    ],
     limits: [
       ['Projects', undefined],
       ['Teams', undefined],
@@ -112,6 +126,7 @@ function BillingLive({ data }: { data: BillingData }): React.JSX.Element {
           </div>
         </Card>
       )}
+      <CancellationBar sub={subscription} />
       <CurrentPlanCard sub={subscription} credits={credits} busy={busy} onManage={openPortal} />
 
       <div
@@ -175,6 +190,31 @@ function IntervalToggle({
         </button>
       ))}
     </div>
+  )
+}
+
+/** Persistent while a cancellation is pending: the plan stays live until
+ *  `cancel_at`, so say exactly when it ends. The webhook clears `cancel_at`
+ *  on resume or once the term ends, which removes the bar. */
+function CancellationBar({ sub }: { sub: Subscription | null }): React.JSX.Element | null {
+  if (!sub?.cancel_at || sub.status === 'canceled') return null
+  const ends = new Date(sub.cancel_at).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC'
+  })
+  return (
+    <Card pad={14} style={{ marginTop: 16, borderColor: 'var(--warn, var(--bd))' }}>
+      <div style={{ fontSize: 12.5, lineHeight: 1.5 }} role="status">
+        Your{' '}
+        <strong>
+          {planLabel(sub.plan)} plan ends on {ends}
+        </strong>{' '}
+        — you keep full access until then. Changed your mind? Resume it in{' '}
+        <span style={{ whiteSpace: 'nowrap' }}>Manage billing</span>.
+      </div>
+    </Card>
   )
 }
 
@@ -268,7 +308,31 @@ function PlanCard({
       <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2, lineHeight: 1.4 }}>
         {def.tagline}
       </div>
-      <div style={{ marginTop: 10, flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 10 }}>
+        {def.price ? (
+          <>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600 }}>
+              ${interval === 'year' ? def.price.year : def.price.month}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--mut)' }}>
+              {interval === 'year' ? '/year' : '/month'}
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--mut)' }}>Custom pricing</span>
+        )}
+      </div>
+      <div style={{ marginTop: 8 }}>
+        {def.features.map((feature) => (
+          <div
+            key={feature}
+            style={{ fontSize: 11.5, lineHeight: 1.5, padding: '2px 0', color: 'var(--fg)' }}
+          >
+            {feature}
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 8, flex: 1 }}>
         {def.limits.map(([label, value]) => (
           <div
             key={label}
@@ -375,10 +439,22 @@ function CreditPacks({
               {pack.credits.toLocaleString()}
             </div>
             <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2, flex: 1 }}>credits</div>
-            <div style={{ marginTop: 10 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginTop: 10
+              }}
+            >
               <Button kind="soft" size="sm" disabled={busy} onClick={() => onBuy(pack.price_id)}>
                 Buy
               </Button>
+              {pack.usd != null && (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600 }}>
+                  ${pack.usd}
+                </span>
+              )}
             </div>
           </Card>
         ))}

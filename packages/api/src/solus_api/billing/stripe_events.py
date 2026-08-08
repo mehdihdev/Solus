@@ -27,6 +27,7 @@ from solus_api.billing.plans import plan_for_price_id
 from solus_api.models import (
     CreditTxnType,
     NotificationType,
+    PlanType,
     ProcessedStripeEvent,
     Subscription,
     SubscriptionStatus,
@@ -100,6 +101,7 @@ async def _apply_subscription(
     etype: str,
     created: datetime,
     plan_prices: dict[str, str],
+    plan_credit_grants: dict[str, int],
 ) -> None:
     sub_id = obj.get("id")
     customer = obj.get("customer")
@@ -117,6 +119,7 @@ async def _apply_subscription(
         local.stripe_subscription_id = sub_id
     if customer:
         local.stripe_customer_id = customer
+    old_cancel_at = local.cancel_at
     if etype == "customer.subscription.deleted":
         local.status = SubscriptionStatus.CANCELED
     else:
@@ -129,8 +132,116 @@ async def _apply_subscription(
             if plan is not None:
                 local.plan = plan
                 local.limits = default_limits(plan)
+        local.cancel_at = _cancel_at_dt(obj)
     local.stripe_event_at = created
+    if local.status is SubscriptionStatus.CANCELED and old_status in _LIVE_STATUSES:
+        _apply_term_end(session, local)
+    else:
+        _notify_cancel_transition(session, local, old_cancel_at)
     _notify_if_entitlement_changed(session, local, old_plan=old_plan, old_status=old_status)
+    await _grant_plan_credits(session, local, plan_credit_grants)
+
+
+def _cancel_at_dt(obj: dict[str, Any]) -> datetime | None:
+    """The subscription's scheduled cancellation time, parsed defensively."""
+    raw = obj.get("cancel_at")
+    if not raw:
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw), tz=UTC)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _apply_term_end(session: AsyncSession, local: Subscription) -> None:
+    """A live subscription actually ended (deletion at term end, or an updated
+    event landing `canceled`): the account stops being entitled — limits clamp
+    to the BASIC tier (the smallest paid plan's caps, ADR-023), the pending
+    cancel marker clears (the billing-page bar goes away), and the user is told.
+    The out-of-order guard upstream makes this fire once per real transition."""
+    local.cancel_at = None
+    local.limits = default_limits(PlanType.BASIC)
+    plan_label = local.plan.value.capitalize()
+    notify_user(
+        session,
+        user_id=local.user_id,
+        notification_type=NotificationType.SUBSCRIPTION_ENDED,
+        title="Subscription ended",
+        body=(
+            f"Your {plan_label} plan has ended — limits now match the Basic tier. "
+            "You can resubscribe anytime from Billing."
+        ),
+        attrs={"plan": local.plan.value},
+    )
+
+
+def _notify_cancel_transition(
+    session: AsyncSession, local: Subscription, old_cancel_at: datetime | None
+) -> None:
+    """Notify when a LIVE subscription's scheduled cancellation appears or is
+    undone. Same-state replays/renewals stay silent."""
+    if local.status not in _LIVE_STATUSES:
+        return
+    plan_label = local.plan.value.capitalize()
+    if local.cancel_at is not None and old_cancel_at is None:
+        notify_user(
+            session,
+            user_id=local.user_id,
+            notification_type=NotificationType.SUBSCRIPTION_CANCELED,
+            title="Subscription canceled",
+            body=(
+                f"Your {plan_label} plan ends on {local.cancel_at:%B %d, %Y} — "
+                "you keep full access until then."
+            ),
+            attrs={"plan": local.plan.value, "cancel_at": local.cancel_at.isoformat()},
+        )
+    elif local.cancel_at is None and old_cancel_at is not None:
+        notify_user(
+            session,
+            user_id=local.user_id,
+            notification_type=NotificationType.SUBSCRIPTION_RESUMED,
+            title="Subscription resumed",
+            body=f"The scheduled cancellation was undone — your {plan_label} plan continues.",
+            attrs={"plan": local.plan.value},
+        )
+
+
+async def _grant_plan_credits(
+    session: AsyncSession, local: Subscription, grants: dict[str, int]
+) -> None:
+    """One-time starting credits when a paid plan is live (ADR-023/024, amended
+    2026-08-08). Idempotent per (user, plan): renewals/replays never re-grant;
+    an upgrade grants the new plan's amount exactly once.
+
+    The credit primitive owns its transaction and ROLLS BACK on a duplicate key
+    (every renewal after the first), which would discard this event's pending
+    subscription updates — so those are committed first, and `local` is not
+    touched afterward (the instance expires on commit)."""
+    if local.status not in _LIVE_STATUSES:
+        return
+    plan_value = local.plan.value
+    amount = grants.get(plan_value)
+    if not amount:
+        return
+    user_id = local.user_id
+    await session.commit()
+    result = await credits.add_credits(
+        session,
+        user_id,
+        amount,
+        CreditTxnType.PLAN_GRANT,
+        idempotency_key=credits.plan_grant_key(user_id, plan_value),
+        attrs={"reason": "plan_grant", "plan": plan_value},
+    )
+    if result.applied:
+        notify_user(
+            session,
+            user_id=user_id,
+            notification_type=NotificationType.PAYMENT_SUCCEEDED,
+            title="Credits added",
+            body=f"{amount:,} credits are included with your {plan_value.capitalize()} plan.",
+            attrs={"credits": amount, "plan": plan_value},
+        )
 
 
 _LIVE_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
@@ -277,10 +388,13 @@ class _EventMeta:
     created: datetime
     pack_credits: dict[str, int]
     plan_prices: dict[str, str]
+    plan_credit_grants: dict[str, int]
 
 
 async def _on_subscription(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
-    await _apply_subscription(session, obj, meta.etype, meta.created, meta.plan_prices)
+    await _apply_subscription(
+        session, obj, meta.etype, meta.created, meta.plan_prices, meta.plan_credit_grants
+    )
 
 
 async def _on_checkout(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
@@ -313,11 +427,14 @@ async def process_event(
     *,
     pack_credits: dict[str, int],
     plan_prices: dict[str, str] | None = None,
+    plan_credit_grants: dict[str, int] | None = None,
 ) -> bool:
     """Dispatch one Stripe event. Returns True if newly processed, False if it was
     a duplicate (already recorded). Idempotent and out-of-order safe. `plan_prices`
-    maps Stripe Price ids → plan (for deriving entitlement from a subscription)."""
+    maps Stripe Price ids → plan (for deriving entitlement from a subscription);
+    `plan_credit_grants` maps plan value → its one-time starting credits."""
     plan_prices = plan_prices or {}
+    plan_credit_grants = plan_credit_grants or {}
     event_id = str(event["id"])
     etype = str(event["type"])
 
@@ -338,6 +455,7 @@ async def process_event(
             created=created,
             pack_credits=pack_credits,
             plan_prices=plan_prices,
+            plan_credit_grants=plan_credit_grants,
         )
         await handler(session, obj, meta)
     else:

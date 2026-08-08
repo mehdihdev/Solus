@@ -265,6 +265,28 @@ async def test_sync_fails_without_credentials(
         assert sync.status == JobStatus.FAILED
 
 
+async def test_sync_with_vanished_secret_reports_actionable_error(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A source whose secret_ref points at a missing secret (e.g. stored in the
+    in-memory dev store before a restart) must surface an actionable
+    missing-credentials error, not the generic internal-sync-error message."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+    await store.delete(source.secret_ref or "")
+    connector = ScriptedConnector([SyncResult()])
+
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+
+    async with maker() as db:
+        source_row = await db.get(Source, source.id)
+        assert source_row is not None and source_row.last_error is not None
+        assert source_row.last_error["code"] == "missing_credentials"
+        assert "reconnect" in source_row.last_error["message"].lower()
+        # The opaque ref must not leak into the client-visible message.
+        assert (source.secret_ref or "") not in source_row.last_error["message"]
+
+
 async def test_auth_none_connector_syncs_without_stored_credentials(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:

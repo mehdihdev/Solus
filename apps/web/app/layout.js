@@ -4,12 +4,9 @@ const themeInitScript = `
 (() => {
   const storageKey = "solus-theme";
   const storedTheme = window.localStorage.getItem(storageKey);
-  const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
   const theme = storedTheme === "light" || storedTheme === "dark"
     ? storedTheme
-    : preferredTheme;
+    : "dark";
 
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
@@ -17,9 +14,9 @@ const themeInitScript = `
 `;
 
 export const metadata = {
-  title: "Solus Forge | Robotics Development Environment",
+  title: "Solus | The Robotics Context Layer",
   description:
-    "The robotics development environment built for real-world complexity. Forge unifies mechanical, electrical, software, and simulation context so your team ships faster.",
+    "Solus connects GitHub, KiCad, Onshape, and ROS into one living graph of your robot — and catches cross-domain problems before they break hardware.",
 };
 
 export default function RootLayout({ children }) {
@@ -28,9 +25,13 @@ export default function RootLayout({ children }) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap"
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
           rel="stylesheet"
         />
       </head>

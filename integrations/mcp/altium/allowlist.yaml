@@ -1,0 +1,63 @@
+# integrations/mcp/altium/allowlist.yaml — the Solus-owned tool allowlist for
+# the vendored salitronic/eda-agent fork (SOLUSDEV-102 ALT-4 draft; the WHOLE
+# file is human-ratified at the MR — integrations/mcp/CLAUDE.md rule 2).
+#
+# Single source of truth (README): the discovery filter, the cloud bridge
+# ingress gate (validate_inventory), and the fork-side trimming shim
+# (solus/registration.py) all derive from THIS list. Validates against
+# packages/api/src/solus_api/bridge/allowlist.py::ServerAllowlist — that model
+# forbids extra fields, so the exposed/total ratio lives in PROVENANCE.md
+# ("Exposed tools": 8 of ~396 upstream tools exposed + 1 Solus-authored +
+# 2 confirmation-gated writes = 11 total).
+#
+# Composed-name bound: every `altium.{name}` here is <= 128 chars.
+#
+# HARD EXCLUSIONS (recorded here so no later MR "rediscovers" them; full
+# rationale in SECURITY_REVIEW.md): `tool_catalog`/`tool_invoke` — upstream's
+# meta-dispatch pair can invoke ANY of the ~396 registered tools by name,
+# making any allowlist decorative; the trimming shim additionally makes them
+# dead in-process. `obj_run_process` and the tools/generic.py object mutators —
+# arbitrary process/DelphiScript execution. The design-agent executor, all
+# part-sourcing/network providers (Digi-Key/Mouser/Nexar/EasyEDA), the KiCad
+# backend (our own fork owns KiCad), ECO/output-job runners, checkpoint/
+# restore, and every export renderer.
+#
+# NOTE: `export_netlist` (Solus-authored) and the two write tools are drafted
+# NOW so nothing ever widens this allowlist later; their implementations land
+# in ALT-6/ALT-7 — the overlay does not register a tool before its
+# implementation exists (tests/test_overlay_tool_trimming.py pins that).
+server: altium
+tools:
+  - name: app_get_status
+    requires_confirmation: false
+    reason: read-only Altium reachability, version, and active-document status
+  - name: proj_get_path
+    requires_confirmation: false
+    reason: read-only path of the focused project
+  - name: proj_list_documents
+    requires_confirmation: false
+    reason: read-only listing of the project's member documents
+  - name: proj_get_stats
+    requires_confirmation: false
+    reason: read-only sheet/component/pin/net counts
+  - name: proj_get_bom
+    requires_confirmation: false
+    reason: read-only BOM read (designator/comment/footprint/lib_ref + pin-nets) — the primary graph feed
+  - name: proj_get_nets
+    requires_confirmation: false
+    reason: read-only pin-net table; the overlay wrapper pins force_recompile=False (upstream True saves all dirty documents — a disk write behind a read)
+  - name: proj_get_component_info
+    requires_confirmation: false
+    reason: read-only single-component detail
+  - name: list_nets
+    requires_confirmation: false
+    reason: read-only backend-agnostic net summary
+  - name: export_netlist
+    requires_confirmation: false
+    reason: Solus-authored non-destructive Protel netlist synthesis from proj_get_nets/proj_get_bom reads, confined to the workspace (metadata-extraction.md section 2.1; ALT-6)
+  - name: proj_set_parameter
+    requires_confirmation: true
+    reason: mutates a project parameter on the customer machine (ALT-7 write tool; workspace-confined, size-bounded)
+  - name: sch_set_components_parameters
+    requires_confirmation: true
+    reason: bulk schematic component-parameter write — higher blast radius than proj_set_parameter; drafted for explicit human ratification, cut it here if one write tool suffices (ALT-7)

@@ -41,6 +41,13 @@ def trial_grant_key(user_id: uuid.UUID) -> str:
     return f"trial-grant:{user_id}"
 
 
+def plan_grant_key(user_id: uuid.UUID, plan: str) -> str:
+    """Idempotency key for a plan's one-time starting-credit grant (ADR-023/024).
+    Keyed per (user, plan): renewals never re-grant; an upgrade grants the new
+    plan's amount exactly once."""
+    return f"plan-grant:{user_id}:{plan}"
+
+
 async def get_balance(session: AsyncSession, user_id: uuid.UUID) -> int:
     """Cached balance for a user; 0 when no row exists yet."""
     bal = await session.scalar(

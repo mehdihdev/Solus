@@ -84,4 +84,8 @@ def test_build_registry_ships_the_roster() -> None:
     # no tool credential, configured with the export content in v1.
     for eda_provider in ("altium", "kicad"):
         assert catalog[eda_provider]["auth_kind"] == "none"
-        assert catalog[eda_provider]["config_fields"] == ["export"]
+    # Altium additionally advertises the live-acquisition project_path key
+    # (SOLUSDEV-102 ALT-8; mcp_acquire.py's config-key decision). KiCad's
+    # matching update belongs to whoever owns connectors/kicad.py.
+    assert catalog["altium"]["config_fields"] == ["export", "project_path"]
+    assert catalog["kicad"]["config_fields"] == ["export"]

@@ -34,6 +34,9 @@ max-complexity = 10
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+# Shared fork-test helpers (integrations/mcp/tests/_lib) are imported by bare
+# module name from each fork's tests/ (sys.path via per-fork conftest.py).
+mypy_path = ["integrations/mcp/tests/_lib"]
 # Vendored MCP-server fork trees are third-party code; Solus-authored areas
 # (integrations/mcp/tests/, <fork>/solus/, <fork>/tests/) stay in scope.
 exclude = [
@@ -46,11 +49,11 @@ exclude = [
 module = ["pgvector.*", "asyncpg"]
 ignore_missing_imports = true
 
-# Vendored MCP fork modules (kicad fork, SOLUSDEV-100): untyped third-party
-# code imported by Solus-authored solus/ wrappers. Module-scoped on purpose —
-# never a blanket override.
+# Vendored MCP fork modules (kicad fork SOLUSDEV-100, altium fork
+# SOLUSDEV-102): untyped third-party code imported by Solus-authored solus/
+# wrappers. Module-scoped on purpose — never a blanket override.
 [[tool.mypy.overrides]]
-module = ["kicad_mcp.*", "kicad_sch_api.*", "sexpdata"]
+module = ["kicad_mcp.*", "kicad_sch_api.*", "sexpdata", "eda_agent.*"]
 ignore_missing_imports = true
 
 # mypy's `exclude` does not apply to explicitly-passed files (the H8/H10 hooks
@@ -59,7 +62,26 @@ ignore_missing_imports = true
 # top-level and tests-package modules; no Solus tests dir ships __init__.py,
 # so nothing Solus-authored resolves into the "tests.*" namespace.
 [[tool.mypy.overrides]]
-module = ["kicad_mcp.*", "kicad_sch_api.*", "main", "run_tests", "tests", "tests.*"]
+module = [
+    "kicad_mcp.*",
+    "kicad_sch_api.*",
+    "main",
+    "run_tests",
+    "tests",
+    "tests.*",
+    # altium fork (SOLUSDEV-102): src package + upstream/scripts/*.py top-level
+    # modules (the H8/H10 hooks pass changed files by path, bypassing exclude).
+    "eda_agent.*",
+    # Since altium/__init__.py namespaced the fork, explicitly-passed upstream
+    # files resolve as altium.upstream.* — Solus-authored altium.solus/tests
+    # namespaces stay in scope.
+    "altium.upstream.*",
+    "gen_tool_reference",
+    "build",
+    "build_placement_priors",
+    "lint",
+    "train_quality_model",
+]
 ignore_errors = true
 
 [tool.pytest.ini_options]

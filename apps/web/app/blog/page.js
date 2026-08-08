@@ -9,9 +9,9 @@ import {
 } from "../../lib/posts";
 
 export const metadata = {
-  title: "Blog | Solus Forge",
+  title: "Blog | Solus",
   description:
-    "Updates, product notes, and engineering writing from the Solus Forge team.",
+    "Updates, product notes, and engineering writing from the Solus team.",
 };
 
 export default async function BlogPage({ searchParams }) {
@@ -35,7 +35,7 @@ export default async function BlogPage({ searchParams }) {
               <h1>Perspectives on the future of robotics</h1>
               <p>
                 Product notes, engineering ideas, and operating lessons from the team
-                building Solus Forge.
+                building Solus.
               </p>
             </div>
           </div>

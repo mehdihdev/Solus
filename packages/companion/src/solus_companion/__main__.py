@@ -14,6 +14,7 @@ import sys
 
 from solus_companion.channel import run_channel
 from solus_companion.config import (
+    _MAX_STDIN_LINE_BYTES,
     CompanionConfig,
     TokenBox,
     apply_token_line,
@@ -26,6 +27,13 @@ logger = logging.getLogger("solus.companion")
 
 HEALTH_INTERVAL_SECONDS = 30.0
 
+# MCP-05 / M4: cap the stdin StreamReader at twice the control-line bound so a
+# well-formed control line always fits (apply_token_line still rejects any
+# line over _MAX_STDIN_LINE_BYTES before parsing). A line longer than THIS
+# makes asyncio's readline raise ValueError instead of returning; the consume
+# loop drops it and resyncs rather than letting the whole control channel die.
+STDIN_READER_LIMIT = _MAX_STDIN_LINE_BYTES * 2
+
 
 async def _health_loop(supervisor: Supervisor) -> None:
     while True:
@@ -33,17 +41,35 @@ async def _health_loop(supervisor: Supervisor) -> None:
         await supervisor.ensure_healthy()
 
 
-async def _stdin_token_loop(box: TokenBox) -> None:
-    """BRG-04 prep: newline-delimited JSON token lines from the desktop app."""
-    loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+async def _consume_token_lines(reader: asyncio.StreamReader, box: TokenBox) -> None:
+    """Read newline-delimited control lines until EOF, applying each. An
+    oversize line (longer than the reader limit) makes `readline` raise
+    ValueError — asyncio clears the offending bytes from the buffer, so we
+    count the drop and resync on the next newline rather than dying (M4)."""
+    dropped = 0
     while True:
-        line = await reader.readline()
+        try:
+            line = await reader.readline()
+        except ValueError:
+            dropped += 1
+            logger.warning(
+                "dropped oversize stdin line (over %d bytes); %d dropped so far",
+                STDIN_READER_LIMIT,
+                dropped,
+            )
+            continue
         if not line:  # EOF: the app hung up; keep running on the current token
             return
         apply_token_line(box, line)
+
+
+async def _stdin_token_loop(box: TokenBox) -> None:
+    """BRG-04 prep: newline-delimited JSON token lines from the desktop app."""
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader(limit=STDIN_READER_LIMIT)
+    protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    await _consume_token_lines(reader, box)
 
 
 async def _amain(config: CompanionConfig) -> int:

@@ -166,12 +166,12 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 
 ## ADR-023: Pricing — three plans (BASIC / PRO / ENTERPRISE), limits stored as data
 
-**Status:** Accepted — 2026-07-04, SOLUSDEV-72. Supersedes the pricing structure in ADR-017.
+**Status:** Accepted — 2026-07-04, SOLUSDEV-72. Supersedes the pricing structure in ADR-017. **Amended 2026-08-08 (SOLUSDEV-102, founder-approved in-chat):** PRO price set to $35/month (was $30); plan starting-credit grants added (amounts and mechanics in ADR-024).
 **Context:** The Individual/Team-seat structure (ADR-017) conflated "who the customer is" with "what they pay for," and hardcoded plan assumptions leak into enforcement. We want three clear plans and limit-enforcement that reads data, not plan names.
 **Decision:** Three subscription plans:
 
-- **BASIC** — $25/month or $200/year. **Full feature access**, including the advanced models for the SOL agent. Limits: up to **4** connected integrated services, create/join up to **3** projects, create/join up to **2** COLLABORATIVE teams (the auto-created personal team, ADR-025, does **not** count).
-- **PRO** — no limits: unlimited integrations, projects, and teams. For $30/month or $300/year
+- **BASIC** — $25/month or $200/year. **Full feature access**, including the advanced models for the SOL agent. Starts with a one-time **2,500-credit** grant (ADR-024). Limits: up to **4** connected integrated services, create/join up to **3** projects, create/join up to **2** COLLABORATIVE teams (the auto-created personal team, ADR-025, does **not** count).
+- **PRO** — no limits: unlimited integrations, projects, and teams. Starts with a one-time **10,000-credit** grant (4× BASIC, ADR-024). For $35/month or $300/year _(amended 2026-08-08 — was $30/month)_.
 - **ENTERPRISE** — variable per-seat pricing. The org fills out an application form (what they do, seats needed); we send a per-seat offer by email; they accept/decline; on accept, enterprise is set up (automatically or via manual back-and-forth). Fields: `seat_count`, custom `price_per_seat`.
 
 **Cross-plan invite enforcement:** when a user is invited to (or tries to join) a project/team, the limit check is against the **invitee's own** plan limits — e.g. a BASIC user already at their project limit cannot be invited/join. This is a **HARD BLOCK** with a clear message, never an overflow-and-warn.
@@ -182,13 +182,14 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 
 ## ADR-024: Credits — per-user, packs, ledger + cached balance, cost-capped trial
 
-**Status:** Accepted — 2026-07-04, SOLUSDEV-72; **amended 2026-07-04 (W0-03)** — margin default + debit-failure policy locked. Refines ADR-018; carries forward the per-user credit model from ADR-017's 2026-07-03 amendment.
+**Status:** Accepted — 2026-07-04, SOLUSDEV-72; **amended 2026-07-04 (W0-03)** — margin default + debit-failure policy locked; **amended 2026-08-08 (SOLUSDEV-102, founder-approved in-chat)** — plan starting-credit grants added (see Decision). Refines ADR-018; carries forward the per-user credit model from ADR-017's 2026-07-03 amendment.
 **Context:** Credits meter model-backed usage (ADR-018). We need per-user attribution, a purchasable top-up path, an auditable balance, and a trial that cannot run up an unbounded bill — all before we have real cost-per-operation data.
 **Decision:**
 
 - Credits are **per-user, with NO pooling** — regardless of whether the user is solo or in a team.
 - **Purchase packs:** $10 / $25 / $50 / $100, each displayed with an **estimated** query count. Estimates are **provisional** (no real cost-per-operation data yet): ship conservative, calibrate post-pilot.
 - **One-month free trial**, which must be **cost-capped** — a bounded credit grant, never unlimited.
+- **Plan starting credits (2026-08-08):** each paid plan carries a **one-time** credit grant applied when the plan first becomes live for a user — **BASIC 2,500**, **PRO 10,000** (4×) — sized so BASIC comfortably covers two projects of normal SOL usage. Idempotent per (user, plan): renewals never re-grant; upgrading BASIC→PRO grants PRO's amount once. Amounts are **CONFIG** (calibratable like the trial grant), never hardcoded in enforcement. Ongoing top-ups are the purchase packs — buying credits never requires a plan upgrade.
 - **Accounting:** an immutable, append-only **`credit_ledger`** is the source of truth, plus a cached per-user **`credit_balance`**. The **token→credit conversion rate embeds the margin and is CONFIG** (calibratable), never hardcoded. Per-call debits are written by the post-call cost hook (ADR-026).
 - **Conversion + margin (W0-03):** `credits = ceil(dollars × margin_multiplier × credits_per_dollar)`, prices in USD per 1M tokens, `ceil` so a real call never bills 0. **`margin_multiplier` defaults to 2.0** — it covers infra + failed/retried calls + trial grants + profit (NOT pure profit, which is why 2.0, not ~1.25). Both `margin_multiplier` and `credits_per_dollar` live in config (`models.yaml`), provisional until pilot calibration.
 - **Debit-failure policy (W0-03):** the model call already ran and was paid for — **never fail the user's request on the accounting write**. On debit failure (DB down, race), serve the result and enqueue the debit to a reconciliation / dead-letter path (ARQ + Redis); reconcile later.

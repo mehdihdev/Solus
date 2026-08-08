@@ -90,7 +90,7 @@ export async function POST(request) {
     });
 
     return Response.json({
-      message: "Thanks for joining the Solus Forge waitlist.",
+      message: "Thanks for joining the Solus waitlist.",
     });
   } catch (error) {
     console.error("Failed to append waitlist signup", error);

@@ -98,9 +98,14 @@ def _resolve_checkout_target(
 async def list_credit_packs(user: CurrentUser, settings: SettingsDep) -> dict[str, object]:
     """The credit packs available for purchase (ADR-024), from server config so the
     UI never hard-codes environment-specific Stripe Price ids. Price ids are not
-    secrets. Sorted by credit amount ascending."""
+    secrets. Sorted by credit amount ascending. `usd` is the display price (whole
+    dollars) when configured; the charged amount is always the Stripe Price."""
     packs = [
-        {"price_id": price_id, "credits": amount}
+        {
+            "price_id": price_id,
+            "credits": amount,
+            "usd": settings.stripe_pack_usd.get(price_id),
+        }
         for price_id, amount in sorted(settings.stripe_pack_credits.items(), key=lambda kv: kv[1])
     ]
     return envelope({"packs": packs})
@@ -214,5 +219,6 @@ async def stripe_webhook(
         event,
         pack_credits=settings.stripe_pack_credits,
         plan_prices=settings.stripe_plan_prices,
+        plan_credit_grants=settings.plan_credit_grants,
     )
     return envelope({"processed": processed})

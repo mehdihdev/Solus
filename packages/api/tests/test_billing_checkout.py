@@ -64,7 +64,8 @@ def _settings() -> Settings:
         rate_limit_per_minute=100_000,
         sync_inline=True,
         stripe_plan_prices={"basic:month": "price_bm", "pro:year": "price_py"},
-        stripe_pack_credits={"price_pack10": 1000},
+        stripe_pack_credits={"price_pack10": 1000, "price_pack25": 2500},
+        stripe_pack_usd={"price_pack10": 10},  # pack25 deliberately unmapped
         stripe_trial_days=14,
     )
 
@@ -229,7 +230,11 @@ async def test_list_credit_packs_returns_configured_packs(bclient: AsyncClient) 
     resp = await bclient.get("/api/v1/billing/packs", headers=headers)
     assert resp.status_code == 200, resp.text
     packs = resp.json()["data"]["packs"]
-    assert packs == [{"price_id": "price_pack10", "credits": 1000}]
+    # `usd` is the display price when mapped (SOLUS_STRIPE_PACK_USD), null when not.
+    assert packs == [
+        {"price_id": "price_pack10", "credits": 1000, "usd": 10},
+        {"price_id": "price_pack25", "credits": 2500, "usd": None},
+    ]
 
 
 async def test_credits_endpoint_reports_balance(client: AsyncClient) -> None:

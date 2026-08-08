@@ -19,12 +19,12 @@ export async function generateMetadata({ params }) {
 
   if (!post) {
     return {
-      title: "Post Not Found | Solus Forge",
+      title: "Post Not Found | Solus",
     };
   }
 
   return {
-    title: `${post.title} | Solus Forge`,
+    title: `${post.title} | Solus`,
     description: post.excerpt,
   };
 }

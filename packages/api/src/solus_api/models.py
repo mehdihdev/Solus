@@ -111,6 +111,9 @@ class CreditTxnType(enum.StrEnum):
     PURCHASE = "purchase"
     USAGE = "usage"
     TRIAL_GRANT = "trial_grant"
+    # One-time starting credits when a paid plan first activates (ADR-023/024,
+    # amended 2026-08-08). Distinct from PURCHASE for ledger auditability.
+    PLAN_GRANT = "plan_grant"
     REFUND = "refund"
     ADJUSTMENT = "adjustment"
 
@@ -124,6 +127,11 @@ class NotificationType(enum.StrEnum):
     PROJECT_CREATED = "project.created"
     PAYMENT_FAILED = "payment.failed"
     PAYMENT_SUCCEEDED = "payment.succeeded"
+    # Cancellation lifecycle (SOLUSDEV-102 follow-up): scheduled cancel (access
+    # until term end), the cancel being undone, and the term actually ending.
+    SUBSCRIPTION_CANCELED = "subscription.canceled"
+    SUBSCRIPTION_RESUMED = "subscription.resumed"
+    SUBSCRIPTION_ENDED = "subscription.ended"
     PROJECT_SHARED = "project.shared"
     CREDIT_LOW = "credit.low"
     MEMBER_LEFT = "member.left"
@@ -389,6 +397,10 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     limits: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     # Trial/period end — stored only; charge/downgrade-at-expiry is the future Stripe work.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # When a scheduled cancellation takes effect (Stripe subscription.cancel_at).
+    # Set while cancel-at-period-end is pending (drives the billing-page bar),
+    # cleared on resume or once the term actually ends (SOLUSDEV-102 follow-up).
+    cancel_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Stripe wiring is deferred; a trial has no customer yet (nullable).
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), default=None)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), default=None)

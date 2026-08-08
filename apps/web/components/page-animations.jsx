@@ -34,7 +34,7 @@ export default function PageAnimations() {
           "[data-fade-up]",
           "[data-stagger] > *",
           ".line-sep",
-          ".forge-mockup",
+          ".product-mockup",
         ],
         { clearProps: "all" },
       );
@@ -135,9 +135,9 @@ export default function PageAnimations() {
         );
       });
 
-      gsap.to(".forge-mockup", {
+      gsap.to(".product-mockup", {
         scrollTrigger: {
-          trigger: ".forge-mockup-wrap",
+          trigger: ".product-mockup-wrap",
           start: "top bottom",
           end: "bottom top",
           scrub: 1.2,

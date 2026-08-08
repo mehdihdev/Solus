@@ -10,10 +10,12 @@ export interface CompanionBridge {
 }
 
 /** Machine-local folder bridge (SOLUSDEV-164): pick a directory, clone a repo,
- *  or reveal a linked folder. Only present under the Electron desktop app. */
+ *  reveal a linked folder, or open it in VSCode. Only present under the
+ *  Electron desktop app. */
 export interface FolderBridge {
   pick: () => Promise<string | null>
   reveal: (path: string) => Promise<{ ok: boolean }>
+  openInVscode: (path: string) => Promise<{ ok: boolean }>
   clone: (input: {
     repoUrl: string
     parentDir: string

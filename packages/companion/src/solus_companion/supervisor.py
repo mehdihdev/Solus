@@ -97,6 +97,12 @@ class ServerHandle:
         self.changed_at = datetime.now(UTC)
         self._notify()
 
+    def note_detail(self, detail: str | None) -> None:
+        """Update the surfaced status detail WITHOUT a state transition —
+        MCP-05 license acks ride the existing status frames this way. The
+        §6 detail cap in `_set_state` applies."""
+        self._set_state(self.state, detail)
+
     def begin_call(self) -> None:
         self.active_calls += 1
         if self.active_calls == 1 and self.state is ServerState.READY:
@@ -328,6 +334,23 @@ class Supervisor:
                 continue
             logger.warning("server %r unhealthy; restarting", handle.launch.name)
             await handle.ensure_session(dead=session)  # reuses a concurrent revive
+
+    def note_license_ack(
+        self, server: str, ok: bool, stored: Sequence[str], error: str | None
+    ) -> None:
+        """MCP-05: surface a cloud `credential_ack` on the server's status
+        entry (key NAMES only — no secret value ever reaches this function).
+        The next status frame carries it to the cloud's read surface."""
+        handle = self._handles.get(server)
+        if handle is None:
+            logger.info("license ack for unsupervised server %r ignored", server)
+            return
+        if ok:
+            names = ", ".join(stored)
+            detail = f"license stored ({names})" if names else "license stored"
+        else:
+            detail = f"license not stored: {error or 'unknown error'}"
+        handle.note_detail(detail)
 
     async def stop_all(self) -> None:
         """Unwind every session; the SDK SIGTERMs the children on exit."""

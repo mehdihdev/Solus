@@ -4,7 +4,7 @@
 // §7 subprocess rules). The spawn itself is injected so we assert the exact
 // argument vector and result mapping without touching the real git binary.
 import { describe, it, expect, vi } from 'vitest'
-import { isValidRepoUrl, cloneTargetName, cloneRepo } from './projectFolder'
+import { isValidRepoUrl, cloneTargetName, cloneRepo, vscodeFolderUrl } from './projectFolder'
 
 describe('isValidRepoUrl', () => {
   it('accepts https, ssh, and scp-style git URLs', () => {
@@ -32,6 +32,26 @@ describe('cloneTargetName', () => {
 
   it('falls back to a default name when the segment sanitizes to nothing', () => {
     expect(cloneTargetName('https://github.com/octo/@@@')).toBe('repo')
+  })
+})
+
+describe('vscodeFolderUrl', () => {
+  it('builds a vscode://file URL from an absolute path', () => {
+    expect(vscodeFolderUrl('/home/u/arm')).toBe('vscode://file/home/u/arm')
+  })
+
+  it('percent-encodes path segments', () => {
+    expect(vscodeFolderUrl('/home/u/my robot #2')).toBe('vscode://file/home/u/my%20robot%20%232')
+  })
+
+  it('handles Windows-style paths', () => {
+    expect(vscodeFolderUrl('C:\\Users\\u\\arm')).toBe('vscode://file/C%3A/Users/u/arm')
+  })
+
+  it('rejects empty and relative paths', () => {
+    expect(vscodeFolderUrl('')).toBeNull()
+    expect(vscodeFolderUrl('   ')).toBeNull()
+    expect(vscodeFolderUrl('relative/path')).toBeNull()
   })
 })
 

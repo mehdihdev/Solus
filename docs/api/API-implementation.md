@@ -707,6 +707,19 @@ the raw body is size-bounded, then `stripe.Webhook.construct_event` verifies the
   subscription mode; grant a configured credit pack in payment mode — pack →
   credits map from `SOLUS_STRIPE_PACK_CREDITS`), `invoice.payment_failed`
   (mark `past_due` + `payment.failed` notification). Other types are ignored.
+- Plan starting credits (ADR-023/024, amended 2026-08-08): when a subscription
+  event leaves a plan live (active/trialing), its one-time starting grant
+  (`SOLUS_PLAN_CREDIT_GRANTS`, default basic 2,500 / pro 10,000) is applied as a
+  `plan_grant` ledger entry, idempotent per (user, plan) — renewals/replays never
+  re-grant; an upgrade grants the new plan's amount once.
+- Cancellation lifecycle (SOLUSDEV-102 follow-up): subscription events carry
+  Stripe's `cancel_at` — stored on `subscriptions.cancel_at` (exposed via
+  `GET /users/me/subscription`; drives the client's "your plan ends on X" bar)
+  and cleared on resume. When a live subscription actually ends (deletion at
+  term end, or an updated event landing `canceled`), limits clamp to the BASIC
+  tier and `cancel_at` clears. Notifications: `subscription.canceled` (with the
+  end date), `subscription.resumed`, `subscription.ended` — same-state
+  replays/renewals stay silent.
 
 ### POST /api/v1/billing/checkout-session — start Stripe Checkout (authenticated)
 
@@ -735,9 +748,11 @@ billing_unconfigured`; Stripe API error → `502 billing_provider_error`.
 
 ### GET /api/v1/billing/packs — purchasable credit packs (authenticated)
 
-- `200 {"data": {"packs": [{"price_id": "...", "credits": 1000}, ...]}}` from
-  `SOLUS_STRIPE_PACK_CREDITS`, sorted by credits. Price ids are not secrets; this
-  keeps the UI from hard-coding environment-specific Stripe ids.
+- `200 {"data": {"packs": [{"price_id": "...", "credits": 1000, "usd": 10}, ...]}}`
+  from `SOLUS_STRIPE_PACK_CREDITS`, sorted by credits. `usd` is the whole-dollar
+  display price from `SOLUS_STRIPE_PACK_USD` (`null` when unmapped) — display
+  only; the charged amount is always the Stripe Price. Price ids are not secrets;
+  this keeps the UI from hard-coding environment-specific Stripe ids.
 
 ### GET /api/v1/users/me/credits — credit balance (authenticated)
 

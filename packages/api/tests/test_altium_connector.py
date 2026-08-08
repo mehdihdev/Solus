@@ -68,6 +68,15 @@ def test_provider_metadata() -> None:
     assert "export" in connector.config_fields
 
 
+def test_config_fields_declare_live_acquisition_project_path() -> None:
+    # SOLUSDEV-102 ALT-8: `BridgeExportAcquirer` reads the additive
+    # `project_path` config key (mcp_acquire.py's documented config-key
+    # decision) — the connector's declared config shape must advertise it.
+    # The committed export stays first: it remains sufficient on its own
+    # (ADR-030 / §2.1 invariant 3).
+    assert AltiumConnector.config_fields == ("export", "project_path")
+
+
 async def test_sync_maps_components_nets_and_connectivity() -> None:
     result = await AltiumConnector().sync(_ctx())
     by_type: dict[str, set[str]] = {}
@@ -113,6 +122,73 @@ async def test_live_acquisition_is_a_marked_scaffold() -> None:
     with pytest.raises(ConnectorError) as excinfo:
         await AltiumConnector().sync(SyncContext(credentials=Credentials(token="x"), config={}))
     assert excinfo.value.code == "export_unavailable"
+
+
+# A minimal, distinct acquired export (one part, one net) so the acquirer-wins
+# test can tell the two sources apart by the graph they produce.
+ACQUIRED_EXPORT = """[
+D1
+SOD-123
+1N4148
+]
+(
+NETA
+D1-1
+)
+"""
+
+
+class _RecordingAcquirer:
+    """Fake `ExportAcquirer`: records every `SyncContext` it is handed and
+    returns a canned answer (text, or `None` to decline)."""
+
+    def __init__(self, result: str | None) -> None:
+        self._result = result
+        self.contexts: list[SyncContext] = []
+
+    async def acquire(self, ctx: SyncContext) -> str | None:
+        self.contexts.append(ctx)
+        return self._result
+
+
+async def test_inline_export_fallback_without_project_path() -> None:
+    # §2.1 invariant 3 (ADR-030): a source configured with ONLY the committed
+    # export — no project_path, no acquirer — syncs exactly as today.
+    result = await AltiumConnector().sync(
+        SyncContext(credentials=Credentials(token="x"), config={"export": PROTEL_EXPORT})
+    )
+    by_type: dict[str, set[str]] = {}
+    for entity in result.entities:
+        by_type.setdefault(entity.type, set()).add(entity.source_key)
+    assert by_type["component"] == {"U1", "R1", "C1"}
+    assert by_type["net"] == {"net:VCC", "net:GND", "net:SIGNAL"}
+    assert result.errors == []
+
+
+async def test_declining_acquirer_falls_back_to_inline_export() -> None:
+    # A configured acquirer returning None degrades to config["export"]
+    # (§2.1 invariant 3) — identical result to the acquirer-less path.
+    acquirer = _RecordingAcquirer(result=None)
+    result = await AltiumConnector(acquirer=acquirer).sync(_ctx())
+    components = {e.source_key for e in result.entities if e.type == "component"}
+    assert components == {"U1", "R1", "C1"}
+    assert len(acquirer.contexts) == 1  # the acquirer WAS consulted first
+
+
+async def test_acquired_export_wins_and_project_path_reaches_the_acquirer() -> None:
+    # An acquirer that returns text wins outright over the inline export, and
+    # the connector hands the acquirer its SyncContext with the config —
+    # including project_path — untouched.
+    acquirer = _RecordingAcquirer(result=ACQUIRED_EXPORT)
+    config = {"export": PROTEL_EXPORT, "project_path": "/work/board"}
+    ctx = SyncContext(credentials=Credentials(token="x"), config=config)
+    result = await AltiumConnector(acquirer=acquirer).sync(ctx)
+    components = {e.source_key for e in result.entities if e.type == "component"}
+    assert components == {"D1"}  # the acquired text, not the inline export
+    assert len(acquirer.contexts) == 1
+    seen = acquirer.contexts[0]
+    assert seen is ctx
+    assert seen.config == {"export": PROTEL_EXPORT, "project_path": "/work/board"}
 
 
 async def test_validate_credentials_reports_synthetic_identity() -> None:

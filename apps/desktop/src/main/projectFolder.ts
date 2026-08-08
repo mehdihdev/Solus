@@ -34,6 +34,18 @@ export function cloneTargetName(url: string): string {
   return safe || 'repo'
 }
 
+/** Build a `vscode://file/...` URL for an absolute folder path. Pure; returns
+ *  null for anything non-absolute — only a path we can vouch for is safe to
+ *  hand to the OS URL handler. Segments are percent-encoded so spaces/#/? in
+ *  folder names cannot break or extend the URL. */
+export function vscodeFolderUrl(path: string): string | null {
+  const p = path.trim()
+  const isAbsolute = p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p)
+  if (!p || !isAbsolute) return null
+  const encoded = p.split(/[\\/]/).filter(Boolean).map(encodeURIComponent).join('/')
+  return `vscode://file/${encoded}`
+}
+
 export interface CloneInput {
   repoUrl: string
   parentDir: string

@@ -53,13 +53,16 @@ VENDORED_RUFF_GLOBS = ("integrations/mcp/*/upstream", "integrations/mcp/*/vendor
 VENDORED_SAMPLE_PATHS = (
     "integrations/mcp/kicad/upstream/kicad_mcp/server.py",
     "integrations/mcp/kicad/vendor/kicad_sch_api/core.py",
+    "integrations/mcp/altium/upstream/src/eda_agent/server.py",
 )
 SOLUS_SAMPLE_PATHS = (
     "integrations/mcp/tests/test_vendor_hygiene.py",
     "integrations/mcp/kicad/solus/env_allowlist.py",
     "integrations/mcp/kicad/tests/test_launch.py",
+    "integrations/mcp/altium/solus/env_allowlist.py",
+    "integrations/mcp/altium/tests/test_launch_entrypoint.py",
 )
-VENDORED_MYPY_MODULES = frozenset({"kicad_mcp.*", "kicad_sch_api.*", "sexpdata"})
+VENDORED_MYPY_MODULES = frozenset({"kicad_mcp.*", "kicad_sch_api.*", "sexpdata", "eda_agent.*"})
 
 # Real fork directories: one dir per fork, marked by its allowlist.yaml
 # (templates, README, and this tests/ dir have none).

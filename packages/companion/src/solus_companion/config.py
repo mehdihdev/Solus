@@ -31,8 +31,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from solus_companion import __version__
+from solus_companion.credentials import CredentialRelay
 
 logger = logging.getLogger("solus.companion.config")
+
+# MCP-05 pre-parse guard: no stdin control line is ever parsed past this bound
+# (tokens and credential frames are all far smaller — Addendum C caps control
+# frames at 16 KiB; the slack covers JSON envelope overhead).
+_MAX_STDIN_LINE_BYTES = 32 * 1024
 
 SERVER_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 # ponytail: minimal `server:` field extraction — the only YAML field discovery
@@ -70,6 +76,10 @@ class TokenBox:
     def __init__(self, token: str | None = None) -> None:
         self._token = token
         self.available = asyncio.Event()
+        # MCP-05: the credential relay rides the same stdin control channel as
+        # tokens. Attached by the channel once the discovered-server set is
+        # known; None until then (credential lines are dropped with a log).
+        self.credentials: CredentialRelay | None = None
         if token:
             self.available.set()
 
@@ -90,8 +100,15 @@ class TokenBox:
 
 def apply_token_line(box: TokenBox, line: str | bytes) -> None:
     """One stdin line from the desktop app: `{"type":"token","access_token":..}`
-    updates the box, `{"type":"signout"}` clears it, garbage is logged and
-    ignored. Never raises; never logs token material (§7)."""
+    updates the box, `{"type":"signout"}` clears it, `{"type":"credential",..}`
+    routes to the attached MCP-05 credential relay, garbage is logged and
+    ignored. Never raises; never logs token or credential material (§7 —
+    only key NAMES may appear in logs, never values)."""
+    if len(line) > _MAX_STDIN_LINE_BYTES:
+        # Oversize is refused BEFORE parsing: nothing this channel carries is
+        # legitimately this large (Addendum C 16 KiB control cap).
+        logger.warning("ignored oversize stdin line (%d bytes)", len(line))
+        return
     try:
         message = json.loads(line)
     except (ValueError, UnicodeDecodeError):
@@ -111,6 +128,11 @@ def apply_token_line(box: TokenBox, line: str | bytes) -> None:
     elif kind == "signout":
         box.clear()
         logger.info("signed out via stdin; channel idles until a new token arrives")
+    elif kind == "credential":
+        if box.credentials is None:
+            logger.warning("ignored credential line: no relay attached yet")
+        else:
+            box.credentials.offer(message)  # validates, queues, never raises
     else:
         logger.warning("ignored unknown stdin line type %.32r", kind)
 
@@ -169,10 +191,44 @@ def _read_server_name(allowlist: Path) -> str | None:
     return None
 
 
+_WINDOWS_LAUNCHER_NAME = "launch.cmd"
+_WINDOWS_EXECUTABLE_SUFFIXES = frozenset({".bat", ".cmd", ".com", ".exe"})
+
+
+def _is_windows() -> bool:
+    """Read at call time so tests can monkeypatch `sys.platform`. Routed
+    through a plain str so mypy (strict, warn_unreachable) does not mark the
+    win32 branch unreachable on the checking platform."""
+    platform: str = sys.platform
+    return platform == "win32"
+
+
+def _is_executable(path: Path) -> bool:
+    """Per-platform executability guard: on Windows `os.access(..., X_OK)` is
+    True for ANY existing file, so the meaningful check there is the resolved
+    launcher's extension; on POSIX it is the execute bit."""
+    if _is_windows():
+        return path.suffix.lower() in _WINDOWS_EXECUTABLE_SUFFIXES
+    return os.access(path, os.X_OK)
+
+
 def _launch_command(root_resolved: Path, server_dir: Path, name: str) -> Path | None:
-    """The ADR-031 launch guard: `bin/launch` must RESOLVE inside the root,
-    exist, and be executable — anything else is refused with a hard log."""
+    """The ADR-031 launch guard: the launcher must RESOLVE inside the root,
+    exist, and be executable — anything else is refused with a hard log.
+    Specs keep pointing at `bin/launch`; on Windows the sibling
+    `bin/launch.cmd` is the real launcher (the altium fork ships both), and
+    its absence fails closed — a POSIX shell script is never spawned there."""
     command = server_dir / "bin" / "launch"
+    if _is_windows():
+        windows_command = command.with_name(_WINDOWS_LAUNCHER_NAME)
+        if not windows_command.is_file():
+            logger.error(
+                "REFUSED server %r: no Windows launcher %s next to the POSIX launch script",
+                name,
+                windows_command,
+            )
+            return None
+        command = windows_command
     resolved = command.resolve()
     if not resolved.is_relative_to(root_resolved):
         logger.error(
@@ -184,7 +240,7 @@ def _launch_command(root_resolved: Path, server_dir: Path, name: str) -> Path | 
     if not resolved.is_file():
         logger.error("REFUSED server %r: launch command %s does not exist", name, command)
         return None
-    if not os.access(resolved, os.X_OK):
+    if not _is_executable(resolved):
         logger.error("REFUSED server %r: launch command %s is not executable", name, command)
         return None
     # SEC-L2: return the RESOLVED path so the validated target is what gets

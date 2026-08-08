@@ -1,0 +1,66 @@
+#!/bin/sh
+# integrations/mcp/altium/bin/launch — Solus-authored ADR-031 entrypoint for
+# the vendored salitronic/eda-agent fork. This is the ONLY way the companion
+# may start this server (integrations/mcp/README.md; MCPServerSpec.command).
+# bin/launch.cmd is the human-approved Windows twin (Altium runs only on
+# Windows); this POSIX script is the posture reference both are tested
+# against (../tests/test_launch_entrypoint.py).
+#
+# Guarantees (locked by ../tests/test_launch_entrypoint.py):
+#   * fixed argv — no caller-argument passthrough;
+#   * scrubbed child environment — env -i plus the declared allowlist below;
+#   * zero network I/O and zero package installation at launch (ADR-031).
+#     Dependencies are materialized at companion install/update time from
+#     requirements.lock.txt (hash-verified) into the fork-private virtualenv
+#     referenced below. Nothing here resolves from PATH.
+#   * confined file-drop IPC — upstream signals its DelphiScript bridge
+#     through an IPC workspace directory plus a MACHINE-GLOBAL pointer file
+#     (C:\ProgramData\eda-agent\workspace-path.txt) unless
+#     EDA_AGENT_POINTER_FILE redirects it (upstream/src/eda_agent/config.py).
+#     Both are SET below — derived from SOLUS_MCP_WORKSPACE, never inherited —
+#     so the child can never read a caller-supplied pointer path and a test
+#     run or second checkout can never repoint a live bridge.
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+
+# Fixed private interpreter (install-time materialization creates it; see the
+# header comment and PROVENANCE.md "Local modifications" notes). The exec'd
+# solus/server.py is ALT-5's deliverable — referencing it before it lands
+# mirrors how the kicad launcher preceded its server.
+PYTHON="$FORK_DIR/.venv/bin/python3"
+
+# The companion passes the project workspace via SOLUS_MCP_WORKSPACE — the one
+# documented cwd knob. cwd falls back to the fork dir for stable relative I/O,
+# but the child variable is passed through EMPTY when the companion did not
+# provide it: solus/workspace.py fails closed on empty, so the server refuses
+# instead of silently anchoring the IPC drop box to the install dir.
+WORKSPACE="${SOLUS_MCP_WORKSPACE:-$FORK_DIR}"
+cd -- "$WORKSPACE"
+
+# The confined file-drop IPC workspace: always a subdirectory of the Solus
+# workspace (solus/pointer.py is the Python-side computation ALT-5's server
+# bootstrap validates against).
+IPC_DIR="$WORKSPACE/.eda-agent-ipc"
+
+# Declared child-environment allowlist — everything else is dropped by env -i.
+# The written declaration lives in ../solus/env_allowlist.py; this block must
+# match it exactly (pinned by ../tests/test_overlay_env_allowlist.py and
+# test_launch_entrypoint.py). PATH is a fixed constant, never inherited. The
+# three EDA_AGENT_* names are launcher-SET pins derived from the workspace
+# above — NEVER inherited — and every other EDA_AGENT_* / part-sourcing knob
+# upstream reads is deliberately scrubbed (UPSTREAM_ENV_NEVER_FORWARDED in
+# the same declaration). Changing this set is a PROVENANCE re-review trigger.
+exec /usr/bin/env -i \
+  HOME="${HOME:-}" \
+  USER="${USER:-}" \
+  LANG="${LANG:-}" \
+  LC_ALL="${LC_ALL:-}" \
+  TMPDIR="${TMPDIR:-}" \
+  PATH="/usr/bin:/bin" \
+  SOLUS_MCP_WORKSPACE="${SOLUS_MCP_WORKSPACE:-}" \
+  EDA_AGENT_BACKEND="altium" \
+  EDA_AGENT_WORKSPACE="$IPC_DIR" \
+  EDA_AGENT_POINTER_FILE="$IPC_DIR/workspace-path.txt" \
+  "$PYTHON" "$FORK_DIR/solus/server.py"

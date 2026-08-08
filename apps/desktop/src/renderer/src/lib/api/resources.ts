@@ -172,6 +172,9 @@ export interface Subscription {
   status: SubscriptionStatus
   limits: Record<string, number | null>
   expires_at: string | null
+  /** Pending cancel-at-period-end moment — the plan stays live until then and
+   *  the billing page shows a persistent "ends on <date>" bar. */
+  cancel_at?: string | null
   seat_count: number | null
   /** Set once the user has a live Stripe subscription — plan changes then go
    *  through the billing portal, not a new Checkout (avoids double-billing). */
@@ -205,10 +208,13 @@ export interface CreditBalance {
   balance: number
 }
 
-/** A purchasable credit pack (GET /billing/packs) — price id + credits granted. */
+/** A purchasable credit pack (GET /billing/packs) — price id + credits granted.
+ *  `usd` is the display price in whole dollars when the server has it mapped;
+ *  the charged amount is always the Stripe Price itself. */
 export interface CreditPack {
   price_id: string
   credits: number
+  usd?: number | null
 }
 
 /** Start a Stripe Checkout for a subscription plan → hosted redirect URL
@@ -628,12 +634,20 @@ export function markAllNotificationsRead(client: ApiClient = api): Promise<{ upd
 
 export type BridgeServerState = 'not_launched' | 'launching' | 'ready' | 'busy' | 'error'
 
+/** MCP-05 BYO-license surface (bridge.py `_license_states`): `ready` (free
+ *  tier, uncataloged, or fully licensed) · `bring_your_license` (byo_paid,
+ *  entitled, keys missing) · `upgrade_required` (byo_paid, not entitled). */
+export type BridgeLicenseState = 'ready' | 'bring_your_license' | 'upgrade_required'
+
 /** One vendored MCP server as last reported by the local companion. */
 export interface BridgeServer {
   name: string
   state: BridgeServerState
   detail: string | null
   updated_at: string
+  /** Sent for every server on the connected bridge-status surface
+   *  (SOLUSDEV-102 / MCP-05); optional for pre-MCP-05 fixtures. */
+  license_state?: BridgeLicenseState
 }
 
 /** The requesting user's local-bridge state for a project. Offline shape is

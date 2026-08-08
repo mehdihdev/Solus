@@ -56,7 +56,8 @@ export function ProjectFolderCard({
       ) : link ? (
         <LinkedFolder
           link={link}
-          onOpen={() => void bridge.reveal(link.path)}
+          onOpenVscode={() => void bridge.openInVscode(link.path)}
+          onOpenFolder={() => void bridge.reveal(link.path)}
           onUnlink={() => clearFolder(projectId)}
         />
       ) : (
@@ -87,11 +88,13 @@ export function ProjectFolderCard({
 
 function LinkedFolder({
   link,
-  onOpen,
+  onOpenVscode,
+  onOpenFolder,
   onUnlink
 }: {
   link: { path: string; repoUrl?: string }
-  onOpen: () => void
+  onOpenVscode: () => void
+  onOpenFolder: () => void
   onUnlink: () => void
 }): React.JSX.Element {
   return (
@@ -109,8 +112,11 @@ function LinkedFolder({
           </div>
         )}
       </div>
-      <Button kind="ghost" size="sm" onClick={onOpen}>
-        Open
+      <Button kind="ghost" size="sm" onClick={onOpenVscode}>
+        Open with VSCode
+      </Button>
+      <Button kind="ghost" size="sm" onClick={onOpenFolder}>
+        Open Folder
       </Button>
       <Button kind="ghost" size="sm" onClick={onUnlink}>
         Unlink

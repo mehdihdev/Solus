@@ -27,7 +27,7 @@ from solus_api.connectors.contracts import (
     SyncContext,
     SyncResult,
 )
-from solus_api.connectors.secrets import SecretStore
+from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.models import (
     GraphEdge,
     GraphEntity,
@@ -53,15 +53,26 @@ ERROR_MESSAGE_MAX = 1024
 #: UI (SOLUSDEV-114 security review). The full detail stays in server logs.
 INTERNAL_SYNC_ERROR_MESSAGE = "Internal sync error — details are in the server logs."
 
+#: A source whose secret_ref points at nothing (e.g. the token lived in the
+#: in-memory dev store and evaporated on restart). Actionable, and it must not
+#: echo the opaque ref itself — that's what SecretNotFoundError carries.
+MISSING_CREDENTIALS_MESSAGE = (
+    "The stored credentials for this source could not be found — "
+    "disconnect and reconnect it to store a new token."
+)
+
 
 def connector_error_payload(exc: Exception) -> dict[str, str]:
     """API-safe ``{code, message}`` for a sync/connect failure.
 
-    Connector-authored errors pass through bounded; anything else degrades to
-    a generic message so internal exception text never reaches a client.
+    Connector-authored errors pass through bounded; a vanished stored secret
+    gets an actionable message; anything else degrades to a generic message so
+    internal exception text never reaches a client.
     """
     if isinstance(exc, ConnectorError):
         return {"code": exc.code[:ERROR_CODE_MAX], "message": exc.message[:ERROR_MESSAGE_MAX]}
+    if isinstance(exc, SecretNotFoundError):
+        return {"code": "missing_credentials", "message": MISSING_CREDENTIALS_MESSAGE}
     return {"code": "sync_error", "message": INTERNAL_SYNC_ERROR_MESSAGE}
 
 

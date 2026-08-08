@@ -81,6 +81,45 @@ export function tokenLine(token: string | null): string {
     : `${JSON.stringify({ type: 'token', access_token: token })}\n`
 }
 
+/** One newline-delimited JSON stdin frame carrying BYO-license credentials
+ *  (SOLUSDEV-102 / MCP-05). Values are never logged and never touch disk. */
+export function credentialLine(server: string, secrets: Record<string, string>): string {
+  return `${JSON.stringify({ type: 'credential', server, secrets })}\n`
+}
+
+/** Upper bound on one credential relay line before framing (M4). The
+ *  companion drops any stdin control line over its 16 KiB cap; rejecting an
+ *  oversize payload here keeps it off stdin entirely. Sized to the same
+ *  16 KiB budget the companion's MAX_CONTROL_FRAME_BYTES enforces. */
+export const MAX_CREDENTIAL_SECRETS_BYTES = 16 * 1024
+
+/** True when *secrets* is a flat, non-empty object of non-empty string keys
+ *  to string values. Narrows to a record for the caller. */
+function isFlatStringRecord(secrets: unknown): secrets is Record<string, string> {
+  if (typeof secrets !== 'object' || secrets === null || Array.isArray(secrets)) return false
+  const entries = Object.entries(secrets)
+  if (entries.length === 0) return false
+  return entries.every(([key, value]) => key.length > 0 && typeof value === 'string')
+}
+
+/** Validate untrusted renderer input for the license relay: a non-empty
+ *  string server plus a flat, non-empty object of non-empty string keys to
+ *  string values, whose framed size stays under the control-line cap.
+ *  Returns a STATIC error (never echoing any value) or null. */
+export function credentialInputError(server: unknown, secrets: unknown): string | null {
+  if (typeof server !== 'string' || server.length === 0) return 'invalid server name'
+  if (!isFlatStringRecord(secrets)) return 'invalid secrets'
+  if (Buffer.byteLength(JSON.stringify(secrets), 'utf8') > MAX_CREDENTIAL_SECRETS_BYTES) {
+    return 'secrets too large'
+  }
+  return null
+}
+
+export interface CredentialWriteResult {
+  ok: boolean
+  error?: string
+}
+
 // --- supervision state (module-singleton: one companion per app) -------------
 
 let child: ChildProcess | null = null
@@ -228,6 +267,23 @@ export function startCompanion(): void {
 export function sendAccessToken(token: string | null): void {
   latestToken = token
   if (child) writeStdin(child, tokenLine(token))
+}
+
+/** Relay one BYO-license capture (SOLUSDEV-102 / MCP-05) to the companion's
+ *  stdin as exactly one newline-terminated JSON line. Unlike tokens, the
+ *  secrets are NEVER remembered or replayed — they exist only in this call's
+ *  write. Values are never logged; errors are static strings. */
+export function writeCredential(server: unknown, secrets: unknown): CredentialWriteResult {
+  const invalid = credentialInputError(server, secrets)
+  if (invalid !== null) return { ok: false, error: invalid }
+  if (!child || !child.stdin?.writable) return { ok: false, error: 'companion not running' }
+  try {
+    child.stdin.write(credentialLine(server as string, secrets as Record<string, string>))
+  } catch {
+    // The companion died mid-write; the user re-submits once it restarts.
+    return { ok: false, error: 'companion write failed' }
+  }
+  return { ok: true }
 }
 
 /** Stop the companion for good: SIGTERM the tree, give it 3 s, then SIGKILL.

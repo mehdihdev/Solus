@@ -3,8 +3,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { awaitGithubCallback, getRedirectUrl } from './oauthLoopback'
-import { startCompanion, stopCompanion, sendAccessToken } from './companion'
-import { cloneRepo, cloneDeps, type CloneInput } from './projectFolder'
+import { startCompanion, stopCompanion, sendAccessToken, writeCredential } from './companion'
+import { cloneRepo, cloneDeps, vscodeFolderUrl, type CloneInput } from './projectFolder'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 
@@ -106,6 +106,19 @@ if (!app.requestSingleInstanceLock()) {
       const error = await shell.openPath(path)
       return { ok: error === '' }
     })
+    // Open the linked folder in VSCode via its vscode://file URL scheme. The
+    // path is untrusted renderer data — vscodeFolderUrl validates and encodes
+    // it; openExternal rejects when no vscode:// handler is installed.
+    ipcMain.handle('folder:open-vscode', async (_event, path: unknown) => {
+      const url = typeof path === 'string' ? vscodeFolderUrl(path) : null
+      if (!url) return { ok: false }
+      try {
+        await shell.openExternal(url)
+        return { ok: true }
+      } catch {
+        return { ok: false }
+      }
+    })
     ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
 
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
@@ -131,10 +144,23 @@ if (!app.requestSingleInstanceLock()) {
 
     // Local bridge companion (BRG-04): spawn/supervise, and relay the renderer's
     // Supabase access token over stdin. Renderer input is untrusted — accept
-    // only a string token or null (signout); never log it.
-    ipcMain.handle('bridge:token', (_event, token: unknown) => {
-      if (typeof token === 'string' || token === null) sendAccessToken(token)
+    // only a string token or null (signout); never log it. Only the app's own
+    // renderer may relay a token (credential-bearing, like bridge:license — L2).
+    ipcMain.handle('bridge:token', (event, token: unknown) => {
+      if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
+        sendAccessToken(token)
+      }
     })
+    // BYO-license capture (SOLUSDEV-102 / MCP-05): relay license credentials
+    // to the companion's stdin. Renderer input is untrusted — writeCredential
+    // validates shape; values are never logged, never persisted, and flow
+    // renderer → preload → main → child stdin only. Only the app's own
+    // renderer may invoke this channel (credential-bearing, like billing).
+    ipcMain.handle('bridge:license', (event, server: unknown, secrets: unknown) =>
+      isMainRendererSender(event)
+        ? writeCredential(server, secrets)
+        : { ok: false, error: 'unauthorized sender' }
+    )
     startCompanion()
 
     createWindow()
