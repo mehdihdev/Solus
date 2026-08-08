@@ -204,6 +204,50 @@ async def test_sync_records_connector_failure(
         assert source_row.last_error["code"] == "repo_not_found"
 
 
+async def test_sync_failure_never_echoes_internal_exception_text(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Non-ConnectorError failures store a generic message — raw exception text
+    can carry SQL, bound params, or ingested content (SOLUSDEV-114 security
+    review MEDIUM-1); the detail belongs in server logs only."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+    internal = "INSERT INTO graph_entity VALUES ('secret-ingested-content')"
+    connector = ScriptedConnector([RuntimeError(internal)])
+
+    sync_id = await run_sync(
+        source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store
+    )
+
+    async with maker() as db:
+        source_row = await db.get(Source, source.id)
+        sync = await db.get(Sync, sync_id)
+        assert source_row is not None and source_row.last_error is not None
+        assert sync is not None
+        assert source_row.last_error["code"] == "sync_error"
+        assert internal not in source_row.last_error["message"]
+        assert source_row.last_error["message"]  # still human-readable, not empty
+        assert all(internal not in e["message"] for e in sync.errors)
+
+
+async def test_sync_failure_bounds_connector_error_size(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Connector-authored errors pass through but bounded (§7 — bound message
+    sizes; SOLUSDEV-114 security review MEDIUM-2)."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+    connector = ScriptedConnector([ConnectorError("x" * 1_000, "m" * 100_000)])
+
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+
+    async with maker() as db:
+        source_row = await db.get(Source, source.id)
+        assert source_row is not None and source_row.last_error is not None
+        assert len(source_row.last_error["code"]) <= 128
+        assert len(source_row.last_error["message"]) <= 1024
+
+
 async def test_sync_fails_without_credentials(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:

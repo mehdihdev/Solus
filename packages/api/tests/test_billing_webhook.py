@@ -1,27 +1,44 @@
 """Stripe webhook: signature, dedupe, reconciliation of out-of-order events,
 credit-pack grant, payment-failed (SOLUSDEV-83 / SOLUS-FND-03)."""
 
+import asyncio
 import hashlib
 import hmac
 import json
+import os
 import time
 import uuid
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import asyncpg
+import pytest
+from alembic import command
+from alembic.config import Config
 from conftest import bearer
 from httpx import AsyncClient
+from solus_api.billing import stripe_events
 from solus_api.billing.stripe_events import process_event
 from solus_api.models import (
     CreditBalance,
     Notification,
     NotificationType,
+    ProcessedStripeEvent,
     Subscription,
     SubscriptionStatus,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 WEBHOOK_SECRET = "whsec_test"  # noqa: S105 - test-only
+
+API_DIR = Path(__file__).resolve().parent.parent
+
+
+def _test_db_url() -> str:
+    return str(os.environ["SOLUS_DATABASE_URL"])
 
 
 async def _provision(client: AsyncClient, email: str = "billing@example.com") -> uuid.UUID:
@@ -396,6 +413,132 @@ async def test_subscription_event_with_unknown_price_leaves_plan(
     assert sub.plan.value == original_plan  # unchanged when the price isn't ours
 
 
+# --- success notifications (in-app confirmation via the existing notif system) ----
+
+
+async def _payment_succeeded_notes(db: AsyncSession, user_id: uuid.UUID) -> list[Notification]:
+    rows = await db.scalars(
+        select(Notification).where(
+            Notification.user_id == user_id,
+            Notification.type == NotificationType.PAYMENT_SUCCEEDED,
+        )
+    )
+    return list(rows)
+
+
+def _pro_sub_event(
+    event_id: str, *, customer: str, created: int, status: str = "active"
+) -> dict[str, Any]:
+    return {
+        "id": event_id,
+        "type": "customer.subscription.updated",
+        "created": created,
+        "data": {
+            "object": {
+                "id": "sub_notify",
+                "customer": customer,
+                "status": status,
+                "items": {"data": [{"price": {"id": "price_pro_month"}}]},
+            }
+        },
+    }
+
+
+PRO_PRICES = {"pro:month": "price_pro_month"}
+
+
+async def test_subscription_activation_notifies_payment_succeeded(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    user_id = await _provision(client, "notify-activate@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_notify"
+    await db.commit()
+
+    await process_event(
+        db,
+        _pro_sub_event("evt_n1", customer="cus_notify", created=100),
+        pack_credits={},
+        plan_prices=PRO_PRICES,
+    )
+    notes = await _payment_succeeded_notes(db, user_id)
+    assert len(notes) == 1
+    assert "Pro" in (notes[0].body or "")
+    assert notes[0].attrs.get("plan") == "pro"
+
+
+async def test_renewal_without_change_does_not_notify_again(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    user_id = await _provision(client, "notify-renewal@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_renewal"
+    await db.commit()
+
+    await process_event(
+        db,
+        _pro_sub_event("evt_r1", customer="cus_renewal", created=100),
+        pack_credits={},
+        plan_prices=PRO_PRICES,
+    )
+    # Same plan, same status, later event — a routine renewal must stay silent.
+    await process_event(
+        db,
+        _pro_sub_event("evt_r2", customer="cus_renewal", created=200),
+        pack_credits={},
+        plan_prices=PRO_PRICES,
+    )
+    notes = await _payment_succeeded_notes(db, user_id)
+    assert len(notes) == 1  # only the original activation
+
+
+async def test_credit_pack_grant_notifies_with_amount(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    user_id = await _provision(client, "notify-pack@example.com")
+    await process_event(
+        db,
+        _pack_checkout("evt_n_pack", user_id, payment_status="paid"),
+        pack_credits={"price_small": 500},
+    )
+    notes = await _payment_succeeded_notes(db, user_id)
+    assert len(notes) == 1
+    assert notes[0].attrs.get("credits") == 500
+    assert "500" in (notes[0].body or "")
+
+
+async def test_unpaid_checkout_does_not_notify(client: AsyncClient, db: AsyncSession) -> None:
+    user_id = await _provision(client, "notify-unpaid@example.com")
+    await process_event(
+        db,
+        _pack_checkout("evt_n_unpaid", user_id, payment_status="unpaid"),
+        pack_credits={"price_small": 500},
+    )
+    assert await _payment_succeeded_notes(db, user_id) == []
+
+
+async def test_cancellation_does_not_notify_payment_succeeded(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    user_id = await _provision(client, "notify-cancel@example.com")
+    sub = await _subscription(db, user_id)
+    sub.stripe_customer_id = "cus_cancel_n"
+    await db.commit()
+    await process_event(
+        db,
+        _sub_event(
+            "evt_n_del",
+            "customer.subscription.deleted",
+            sub_id="sub_cn",
+            customer="cus_cancel_n",
+            status="canceled",
+            created=300,
+        ),
+        pack_credits={},
+    )
+    assert await _payment_succeeded_notes(db, user_id) == []
+
+
 async def test_oversized_body_rejected(client: AsyncClient) -> None:
     # 300 KB exceeds the default 256 KB cap; rejected before signature checks.
     resp = await client.post(
@@ -404,3 +547,116 @@ async def test_oversized_body_rejected(client: AsyncClient) -> None:
         headers={"stripe-signature": "t=1,v1=x", "content-type": "application/json"},
     )
     assert resp.status_code == 413
+
+
+# --- IntegrityError handling: only the dedupe race is swallowed (sec review H1) ----
+
+
+def _integrity_error(
+    *, sqlstate: str | None, constraint: str | None, message: str = "boom"
+) -> IntegrityError:
+    orig = SimpleNamespace(sqlstate=sqlstate, constraint_name=constraint)
+    return IntegrityError(message, params=None, orig=orig)  # type: ignore[arg-type]
+
+
+def test_duplicate_race_detector_accepts_only_the_event_id_unique_violation() -> None:
+    race = _integrity_error(
+        sqlstate="23505", constraint="ix_processed_stripe_events_stripe_event_id"
+    )
+    assert stripe_events._is_duplicate_event_race(race)
+    check_violation = _integrity_error(sqlstate="23514", constraint="notificationtype")
+    assert not stripe_events._is_duplicate_event_race(check_violation)
+    other_unique = _integrity_error(sqlstate="23505", constraint="uq_something_else")
+    assert not stripe_events._is_duplicate_event_race(other_unique)
+    # Fallback when the driver exposes no fields: match on the rendered message.
+    by_message = _integrity_error(
+        sqlstate=None,
+        constraint=None,
+        message="duplicate key value violates unique constraint "
+        '"ix_processed_stripe_events_stripe_event_id"',
+    )
+    assert stripe_events._is_duplicate_event_race(by_message)
+
+
+def _no_match_sub_event(event_id: str) -> dict[str, Any]:
+    """A subscription event with no local match: the handler is a no-op, so the
+    only commit is process_event's final one — the exact seam under test."""
+    return _sub_event(
+        event_id,
+        "customer.subscription.updated",
+        sub_id="sub_ghost",
+        customer="cus_ghost",
+        status="active",
+        created=100,
+    )
+
+
+async def test_unexpected_integrity_error_at_commit_propagates_so_stripe_retries(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema running behind the code (e.g. an unapplied CHECK migration) must
+    surface as an error — never be reported as a duplicate delivery — so the
+    webhook 5xxs and Stripe redelivers the event."""
+
+    async def check_violation_commit() -> None:
+        raise _integrity_error(sqlstate="23514", constraint="notificationtype")
+
+    monkeypatch.setattr(db, "commit", check_violation_commit)
+    with pytest.raises(IntegrityError):
+        await process_event(db, _no_match_sub_event("evt_check_violation"), pack_credits={})
+    monkeypatch.undo()
+    await db.rollback()
+    # Not recorded as processed — a redelivery will be attempted, not deduped.
+    seen = await db.scalar(
+        select(ProcessedStripeEvent.id).where(
+            ProcessedStripeEvent.stripe_event_id == "evt_check_violation"
+        )
+    )
+    assert seen is None
+
+
+async def test_duplicate_event_race_at_commit_still_reports_duplicate(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def racing_commit() -> None:
+        raise _integrity_error(
+            sqlstate="23505", constraint="ix_processed_stripe_events_stripe_event_id"
+        )
+
+    monkeypatch.setattr(db, "commit", racing_commit)
+    processed = await process_event(db, _no_match_sub_event("evt_commit_race"), pack_credits={})
+    assert processed is False  # benign concurrent delivery, no raise
+
+
+# --- migration 1827bb0b37b6 reverses and reapplies cleanly --------------------------
+
+
+def _notification_check_values() -> str:
+    async def check() -> str:
+        conn = await asyncpg.connect(_test_db_url().replace("+asyncpg", ""))
+        try:
+            return str(
+                await conn.fetchval(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'notificationtype'"
+                )
+            )
+        finally:
+            await conn.close()
+
+    return asyncio.run(check())
+
+
+def test_payment_succeeded_migration_downgrade_and_reupgrade() -> None:
+    """1827bb0b37b6 reverses cleanly (removing payment.succeeded rows + narrowing
+    the CHECK) and reapplies. Restores head in finally so a mid-test failure
+    cannot poison the rest of the session."""
+    cfg = Config(str(API_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(API_DIR / "migrations"))
+    try:
+        # Direct parent (SOLUSDEV-136's HNSW migration) — reverses only ours.
+        command.downgrade(cfg, "e3a1c8f27b54")
+        assert "payment.succeeded" not in _notification_check_values()
+    finally:
+        command.upgrade(cfg, "head")
+    assert "payment.succeeded" in _notification_check_values()

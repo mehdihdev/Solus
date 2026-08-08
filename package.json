@@ -8,6 +8,7 @@
   "scripts": {
     "dev:all": "bash scripts/dev-all.sh",
     "dev:api": "cd packages/api && uv run uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port 8000 --reload",
+    "dev:stripe": "stripe listen --forward-to http://127.0.0.1:8000/api/v1/webhooks/stripe",
     "db:up": "docker compose -f docker-compose.dev.yml up -d db",
     "db:down": "docker compose -f docker-compose.dev.yml down",
     "dev:desktop": "pnpm --filter @solus/desktop dev",

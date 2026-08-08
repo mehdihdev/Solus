@@ -5,7 +5,7 @@
 // fallback). On return from that browser tab the window `focus` event refetches
 // so the new plan/credits appear. Degrades to `offline` when the workspace can't
 // reach the API. (SOLUSDEV-83 follow-up — replaces the trial-only PATCH flow.)
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api/envelope.types'
 import {
   createBillingPortal,
@@ -43,14 +43,33 @@ export interface BillingData {
   refresh: () => Promise<void>
 }
 
+/** How the in-app checkout window ended (preload bridge, SOLUSDEV-114). */
+type CheckoutStatus = 'success' | 'cancel' | 'return' | 'closed' | 'blocked' | 'busy'
+
+interface BillingBridge {
+  openExternal?: (u: string) => Promise<{ ok: boolean }>
+  openCheckout?: (u: string) => Promise<{ status: CheckoutStatus }>
+}
+
+function billingBridge(): BillingBridge | undefined {
+  return (window as unknown as { solus?: { billing?: BillingBridge } }).solus?.billing
+}
+
+/** Dispatched after a checkout completes so the shell bell refetches and shows
+ *  the webhook's payment notification without waiting for a remount. */
+export const NOTIFICATIONS_REFRESH_EVENT = 'solus:notifications-refresh'
+
+/** The webhook applies the entitlement moments after Stripe confirms payment —
+ *  refetch a few times after the checkout window closes to absorb that lag. */
+const POST_CHECKOUT_REFRESH_DELAYS_MS = [1500, 4000, 10000] as const
+
+const SUCCESS_NOTICE = 'Payment received — your plan and credits are updating now.'
+const CANCELED_NOTICE = 'Checkout canceled — you haven’t been charged.'
+
 /** Open a Stripe URL in the system browser: the preload bridge if present
  *  (Electron), else window.open (which the main process also routes external). */
 async function openExternal(url: string): Promise<void> {
-  const opener = (
-    window as unknown as {
-      solus?: { billing?: { openExternal?: (u: string) => Promise<{ ok: boolean }> } }
-    }
-  ).solus?.billing?.openExternal
+  const opener = billingBridge()?.openExternal
   if (opener) {
     await opener(url)
     return
@@ -139,17 +158,70 @@ export function useBillingData(): BillingData {
     return () => window.removeEventListener('focus', onFocus)
   }, [load])
 
-  const runAction = useCallback(async (getUrl: () => Promise<string>): Promise<void> => {
-    setBusy(true)
-    setNotice(null)
-    try {
-      await openExternal(await getUrl())
-    } catch (error) {
-      setNotice(messageFor(error))
-    } finally {
-      setBusy(false)
-    }
+  // Follow-up refetch timers (post-checkout webhook lag); cleared on unmount.
+  const refreshTimersRef = useRef<number[]>([])
+  useEffect(() => {
+    const timers = refreshTimersRef.current
+    return () => timers.forEach((id) => window.clearTimeout(id))
   }, [])
+
+  const refetchEverything = useCallback((): void => {
+    void load()
+    // Nudge the shell bell so the webhook's payment notification shows up
+    // without a remount.
+    window.dispatchEvent(new Event(NOTIFICATIONS_REFRESH_EVENT))
+  }, [load])
+
+  /** Apply the outcome of the in-app checkout window (SOLUSDEV-114). */
+  const finishCheckout = useCallback(
+    (status: CheckoutStatus): void => {
+      if (status === 'cancel' || status === 'closed') {
+        setNotice(CANCELED_NOTICE)
+        return
+      }
+      if (status === 'busy') {
+        setNotice('A checkout window is already open — finish or close it first.')
+        return
+      }
+      if (status === 'blocked') {
+        setNotice(messageFor(null))
+        return
+      }
+      if (status === 'success') setNotice(SUCCESS_NOTICE)
+      refetchEverything()
+      for (const delay of POST_CHECKOUT_REFRESH_DELAYS_MS) {
+        const id = window.setTimeout(() => {
+          // Prune fired timers so the list doesn't grow for the app's lifetime.
+          refreshTimersRef.current = refreshTimersRef.current.filter((t) => t !== id)
+          refetchEverything()
+        }, delay)
+        refreshTimersRef.current.push(id)
+      }
+    },
+    [refetchEverything]
+  )
+
+  const runAction = useCallback(
+    async (getUrl: () => Promise<string>): Promise<void> => {
+      setBusy(true)
+      setNotice(null)
+      try {
+        const url = await getUrl()
+        const openCheckout = billingBridge()?.openCheckout
+        if (openCheckout) {
+          // Self-contained: a sandboxed in-app window; busy until it closes.
+          finishCheckout((await openCheckout(url)).status)
+        } else {
+          await openExternal(url)
+        }
+      } catch (error) {
+        setNotice(messageFor(error))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [finishCheckout]
+  )
 
   const startCheckout = useCallback(
     (plan: PlanType, interval: CheckoutInterval): Promise<void> =>

@@ -36,7 +36,13 @@ const api = {
   billing: {
     // Open a Stripe Checkout / billing-portal URL (from our API) in the browser.
     openExternal: (url: string): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('billing:open-external', url)
+      ipcRenderer.invoke('billing:open-external', url),
+    // Self-contained checkout (SOLUSDEV-114): sandboxed in-app window that
+    // closes itself on Stripe's return redirect and reports how it ended.
+    openCheckout: (
+      url: string
+    ): Promise<{ status: 'success' | 'cancel' | 'return' | 'closed' | 'blocked' | 'busy' }> =>
+      ipcRenderer.invoke('billing:open-checkout', url)
   }
 }
 

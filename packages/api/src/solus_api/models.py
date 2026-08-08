@@ -123,6 +123,7 @@ class NotificationType(enum.StrEnum):
     INVITE_ACCEPTED = "invite.accepted"
     PROJECT_CREATED = "project.created"
     PAYMENT_FAILED = "payment.failed"
+    PAYMENT_SUCCEEDED = "payment.succeeded"
     PROJECT_SHARED = "project.shared"
     CREDIT_LOW = "credit.low"
     MEMBER_LEFT = "member.left"

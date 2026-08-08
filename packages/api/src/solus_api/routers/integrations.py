@@ -24,6 +24,7 @@ from fastapi.responses import RedirectResponse
 
 from solus_api.connectors.contracts import ConnectorError, OAuthConnector
 from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
+from solus_api.connectors.runtime import connector_error_payload
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
@@ -224,7 +225,8 @@ async def _complete_oauth(
         account = await connector.validate_credentials(creds)
     except ConnectorError as exc:
         source.status = SourceStatus.ERROR
-        source.last_error = {"code": exc.code, "message": exc.message}
+        # Bounded provider-supplied text (§7 — bound message sizes, SOLUSDEV-114).
+        source.last_error = connector_error_payload(exc)
         await session.delete(record)
         await session.commit()
         return source, "oauth_failed"

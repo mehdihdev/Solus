@@ -42,6 +42,28 @@ from solus_api.models import (
 
 logger = logging.getLogger("solus.connectors.runtime")
 
+#: Bounds for the persisted, API-visible `last_error` payload (§7 — bound
+#: message sizes; a connector/provider error must not round-trip unbounded
+#: text into every source list).
+ERROR_CODE_MAX = 128
+ERROR_MESSAGE_MAX = 1024
+
+#: Shown for non-ConnectorError failures instead of raw exception text, which
+#: can echo SQL statements, bound parameters, or ingested content back to the
+#: UI (SOLUSDEV-114 security review). The full detail stays in server logs.
+INTERNAL_SYNC_ERROR_MESSAGE = "Internal sync error — details are in the server logs."
+
+
+def connector_error_payload(exc: Exception) -> dict[str, str]:
+    """API-safe ``{code, message}`` for a sync/connect failure.
+
+    Connector-authored errors pass through bounded; anything else degrades to
+    a generic message so internal exception text never reaches a client.
+    """
+    if isinstance(exc, ConnectorError):
+        return {"code": exc.code[:ERROR_CODE_MAX], "message": exc.message[:ERROR_MESSAGE_MAX]}
+    return {"code": "sync_error", "message": INTERNAL_SYNC_ERROR_MESSAGE}
+
 
 class _Counts:
     __slots__ = ("entities_created", "entities_updated", "relations_created", "relations_deleted")
@@ -330,9 +352,11 @@ async def _record_failure(
     job_id: uuid.UUID | None,
     exc: Exception,
 ) -> None:
-    code = exc.code if isinstance(exc, ConnectorError) else "sync_error"
-    message = exc.message if isinstance(exc, ConnectorError) else str(exc)
-    logger.warning("sync failed source=%s sync=%s code=%s: %s", source_id, sync_id, code, message)
+    payload = connector_error_payload(exc)
+    # Log the FULL exception text — only the sanitized payload is persisted.
+    logger.warning(
+        "sync failed source=%s sync=%s code=%s: %s", source_id, sync_id, payload["code"], exc
+    )
     async with sessionmaker() as session:
         source = await session.get(Source, source_id)
         sync = await session.get(Sync, sync_id)
@@ -344,12 +368,12 @@ async def _record_failure(
             )
         if source is not None:
             source.status = SourceStatus.ERROR
-            source.last_error = {"code": code, "message": message}
+            source.last_error = dict(payload)
         if sync is not None:
             sync.status = JobStatus.FAILED
-            sync.errors = [*sync.errors, {"item": "sync", "message": message}]
+            sync.errors = [*sync.errors, {"item": "sync", "message": payload["message"]}]
             sync.finished_at = utcnow()
-        await _mark_job(session, job_id, JobStatus.FAILED, error={"code": code, "message": message})
+        await _mark_job(session, job_id, JobStatus.FAILED, error=dict(payload))
         await session.commit()
 
 

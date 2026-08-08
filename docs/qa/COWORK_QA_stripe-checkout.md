@@ -30,15 +30,18 @@ to be run against a running Solus app with this file and nothing else.
 
    In `.env.mega` (then `pnpm env:sync`):
 
-   - `SOLUS_STRIPE_WEBHOOK_SECRET` = the signing secret from `stripe listen` (or the
-     dashboard test webhook).
+   - `SOLUS_STRIPE_WEBHOOK_SECRET` — optional in dev: `pnpm dev:all` derives it from
+     the Stripe CLI automatically. In production it is the endpoint secret printed
+     by `uv run stripe-setup webhook --url https://<api-host>` (or the dashboard).
    - `SOLUS_STRIPE_PLAN_PRICES` = JSON mapping `basic:month`/`basic:year`/`pro:month`/
      `pro:year` to test Price ids created in Stripe.
    - `SOLUS_STRIPE_PACK_CREDITS` = JSON mapping each pack's test Price id → credits.
    - `SOLUS_STRIPE_TRIAL_DAYS` (default 14) as desired.
 
-3. **Forward webhooks** to the API: `stripe listen --forward-to
-http://127.0.0.1:8000/api/v1/webhooks/stripe`.
+3. **Forward webhooks** to the API: `pnpm dev:all` does this automatically when the
+   Stripe CLI is installed and logged in (it derives the signing secret from the CLI
+   and starts `stripe listen`); standalone: `pnpm dev:stripe`. **Without this
+   forwarder a completed checkout never updates the local plan/credits.**
 4. Stripe test card for checkout: `4242 4242 4242 4242`, any future expiry/CVC/zip.
 
 > If Stripe is NOT configured yet, the feature must **degrade gracefully** (see the
@@ -51,11 +54,17 @@ http://127.0.0.1:8000/api/v1/webhooks/stripe`.
    row with a Monthly/Yearly toggle and BASIC/PRO/Enterprise cards; credit balance
    shows on the current-plan card.
 2. Ensure the toggle reads **Monthly**. Click **Subscribe · Monthly** on the PRO card.
-   → The system browser opens Stripe Checkout for the PRO monthly price.
-3. Pay with the test card and complete checkout. Return to the app.
-4. **Expected:** within a moment (the app refetches on focus; the webhook applies
-   the change), the current plan shows **Pro**, status **Active** (or Trialing if a
-   trial applies), and PRO limits (unlimited). ✅ / ❌
+   → A **"Secure checkout — Stripe" window opens inside the app** (SOLUSDEV-114) —
+   no browser tab. The Billing buttons stay disabled while it is open.
+3. Pay with the test card and complete checkout.
+4. **Expected:** the checkout window **closes itself**; a notice appears
+   ("Payment received — your plan and credits are updating now."); within a few
+   seconds the current plan shows **Pro**, status **Active** (or Trialing), PRO
+   limits (unlimited), and the **shell bell shows a "Payment successful /
+   You're on the Pro plan" notification** without reloading. ✅ / ❌
+5. **Cancel path:** start another checkout and close the window (or click Stripe's
+   back/cancel link). → Notice "Checkout canceled — you haven't been charged.";
+   plan unchanged; **no** payment notification in the bell. ✅ / ❌
 
 ## Flow 2 — Subscribe (yearly interval)
 
@@ -68,10 +77,12 @@ http://127.0.0.1:8000/api/v1/webhooks/stripe`.
 
 1. On Billing, find the **Buy credits** section (shown when packs are configured).
    Each card shows a credit amount + **Buy**.
-2. Click **Buy** on a pack. → Stripe Checkout opens for a one-time payment. Pay with
-   the test card.
-3. Return to the app. **Expected:** the credit balance on the current-plan card
-   increases by the pack's credits (after the webhook processes the paid session). ✅ / ❌
+2. Click **Buy** on a pack. → The in-app checkout window opens for a one-time
+   payment. Pay with the test card.
+3. **Expected:** the window closes itself; the credit balance on the current-plan
+   card increases by the pack's credits (after the webhook processes the paid
+   session), and the bell shows a **"Credits added — N credits were added to your
+   balance"** notification. ✅ / ❌
 
 ## Flow 4 — Manage billing (portal)
 

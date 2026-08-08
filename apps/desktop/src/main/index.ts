@@ -5,19 +5,31 @@ import icon from '../../resources/icon.png?asset'
 import { awaitGithubCallback, getRedirectUrl } from './oauthLoopback'
 import { startCompanion, stopCompanion, sendAccessToken } from './companion'
 import { cloneRepo, cloneDeps, type CloneInput } from './projectFolder'
-import { isAllowedBillingUrl } from './billingUrl'
+import { isAllowedCheckoutEntryUrl } from './billingUrl'
+import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 
 /** Open a Stripe Checkout / billing-portal URL in the system browser, refusing
- *  anything that isn't an https Stripe URL (see billingUrl.ts). */
+ *  anything that isn't one of the Stripe-hosted surfaces our API returns
+ *  (see billingUrl.ts — buy.stripe.com Payment Links are attacker-creatable). */
 async function openBillingUrl(url: string): Promise<{ ok: boolean }> {
-  if (!isAllowedBillingUrl(url)) return { ok: false }
+  if (!isAllowedCheckoutEntryUrl(url)) return { ok: false }
   await shell.openExternal(url)
   return { ok: true }
 }
 
+// The app's own renderer window — the only legitimate sender for privileged
+// IPC (billing), and the parent for the checkout window.
+let mainWindow: BrowserWindow | null = null
+
+/** True when the invoke came from the app's own renderer, not some other
+ *  webContents that gained IPC reach. */
+function isMainRendererSender(event: Electron.IpcMainInvokeEvent): boolean {
+  return mainWindow !== null && event.sender === mainWindow.webContents
+}
+
 function createWindow(): void {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
@@ -28,12 +40,16 @@ function createWindow(): void {
       sandbox: false
     }
   })
+  const win = mainWindow
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+  win.on('ready-to-show', () => {
+    win.show()
+  })
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
@@ -41,9 +57,9 @@ function createWindow(): void {
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
@@ -72,7 +88,9 @@ if (!app.requestSingleInstanceLock()) {
     // and ignore CommandOrControl + R in production.
     // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
     app.on('browser-window-created', (_, window) => {
-      optimizer.watchWindowShortcuts(window)
+      // Never wire dev shortcuts (F12 devtools) onto windows showing remote
+      // content (the Stripe checkout window) — app windows only.
+      if (!isCheckoutWindow(window)) optimizer.watchWindowShortcuts(window)
     })
 
     // Local project folder (SOLUSDEV-164): pick an existing directory, clone a
@@ -91,8 +109,18 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
 
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
-    // portal URL (returned by our API) in the system browser.
-    ipcMain.handle('billing:open-external', (_event, url: string) => openBillingUrl(url))
+    // portal URL (returned by our API) in the system browser. Only the app's
+    // own renderer may invoke either billing channel.
+    ipcMain.handle('billing:open-external', (event, url: string) =>
+      isMainRendererSender(event) ? openBillingUrl(url) : { ok: false }
+    )
+    // Billing (SOLUSDEV-114): self-contained checkout — same Stripe URL, but in
+    // a sandboxed in-app window that closes itself on the return redirect.
+    ipcMain.handle('billing:open-checkout', (event, url: string) =>
+      isMainRendererSender(event)
+        ? openCheckoutWindow(url, mainWindow ?? undefined)
+        : { status: 'blocked' }
+    )
 
     // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
     // Supabase authorize URL, then hands it back for the system-browser round-trip.

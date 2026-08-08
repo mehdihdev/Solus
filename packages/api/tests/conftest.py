@@ -93,14 +93,28 @@ async def _ensure_test_database() -> None:
         await conn.close()
 
 
+async def _truncate_all_tables() -> None:
+    """Wipe every mapped table. Used at session start and per-test teardown."""
+    eng = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with eng.begin() as conn:
+            await conn.execute(text(f"TRUNCATE {_ALL_TABLES} RESTART IDENTITY CASCADE"))
+    finally:
+        await eng.dispose()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _schema() -> None:
-    """Build the schema once per session by running the migration to head."""
+    """Build the schema once per session by running the migration to head, then
+    start from a clean slate: per-test isolation truncates in TEARDOWN, so a
+    killed/interrupted previous run can leave rows behind (e.g. a deleted-account
+    tombstone) that would poison the first test of the next run."""
     asyncio.run(_ensure_test_database())
     os.environ["SOLUS_DATABASE_URL"] = TEST_DATABASE_URL
     cfg = Config(str(API_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(API_DIR / "migrations"))
     command.upgrade(cfg, "head")
+    asyncio.run(_truncate_all_tables())
 
 
 def make_token(
@@ -353,15 +367,7 @@ def make_app() -> Iterator[Callable[..., FastAPI]]:
 
     yield _make
 
-    async def _truncate() -> None:
-        engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(text(f"TRUNCATE {_ALL_TABLES} RESTART IDENTITY CASCADE"))
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_truncate())
+    asyncio.run(_truncate_all_tables())
 
 
 @pytest.fixture

@@ -13,6 +13,8 @@ or out-of-order delivery converges to the correct final state:
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -110,6 +112,7 @@ async def _apply_subscription(
     # Out-of-order guard: ignore an event older than the last one applied.
     if local.stripe_event_at is not None and created < local.stripe_event_at:
         return
+    old_plan, old_status = local.plan, local.status
     if sub_id:
         local.stripe_subscription_id = sub_id
     if customer:
@@ -127,6 +130,38 @@ async def _apply_subscription(
                 local.plan = plan
                 local.limits = default_limits(plan)
     local.stripe_event_at = created
+    _notify_if_entitlement_changed(session, local, old_plan=old_plan, old_status=old_status)
+
+
+_LIVE_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
+
+
+def _notify_if_entitlement_changed(
+    session: AsyncSession,
+    local: Subscription,
+    *,
+    old_plan: object,
+    old_status: SubscriptionStatus,
+) -> None:
+    """One in-app notification when a payment takes effect: entering a live
+    (active/trialing) status, or switching plans while live. Routine renewals
+    (same plan, still live) stay silent; the event-id dedupe and out-of-order
+    guards upstream make this at-most-once per Stripe event."""
+    if local.status not in _LIVE_STATUSES:
+        return
+    became_live = old_status not in _LIVE_STATUSES
+    plan_changed = local.plan != old_plan
+    if not (became_live or plan_changed):
+        return
+    plan_label = local.plan.value.capitalize()
+    notify_user(
+        session,
+        user_id=local.user_id,
+        notification_type=NotificationType.PAYMENT_SUCCEEDED,
+        title="Payment successful" if became_live else "Plan updated",
+        body=f"You're on the {plan_label} plan.",
+        attrs={"plan": local.plan.value, "subscription": local.stripe_subscription_id},
+    )
 
 
 async def _apply_checkout(
@@ -191,7 +226,7 @@ async def _grant_credit_pack(
         logger.warning("checkout payment with unknown credit pack price=%r", price_id)
         return
     # Idempotent by event id — a replayed purchase never double-grants.
-    await credits.add_credits(
+    result = await credits.add_credits(
         session,
         user_id,
         amount,
@@ -199,6 +234,16 @@ async def _grant_credit_pack(
         idempotency_key=f"stripe:{event_id}",
         attrs={"price_id": price_id, "checkout": obj.get("id")},
     )
+    # Notify only when the grant actually applied (never on a deduped replay).
+    if result.applied:
+        notify_user(
+            session,
+            user_id=user_id,
+            notification_type=NotificationType.PAYMENT_SUCCEEDED,
+            title="Credits added",
+            body=f"{amount:,} credits were added to your balance.",
+            attrs={"credits": amount, "price_id": price_id},
+        )
 
 
 async def _apply_invoice_failed(session: AsyncSession, obj: dict[str, Any]) -> None:
@@ -221,6 +266,45 @@ async def _apply_invoice_failed(session: AsyncSession, obj: dict[str, Any]) -> N
         body="We couldn't process your latest payment. Update your billing to avoid interruption.",
         attrs={"invoice": obj.get("id")},
     )
+
+
+@dataclass(frozen=True)
+class _EventMeta:
+    """Everything a handler may need beyond the event object itself."""
+
+    event_id: str
+    etype: str
+    created: datetime
+    pack_credits: dict[str, int]
+    plan_prices: dict[str, str]
+
+
+async def _on_subscription(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
+    await _apply_subscription(session, obj, meta.etype, meta.created, meta.plan_prices)
+
+
+async def _on_checkout(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
+    await _apply_checkout(session, obj, meta.event_id, meta.pack_credits)
+
+
+async def _on_invoice_failed(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
+    await _apply_invoice_failed(session, obj)
+
+
+type _Handler = Callable[[AsyncSession, dict[str, Any], _EventMeta], Awaitable[None]]
+
+# The dispatch table is the single source of truth for what we handle.
+_HANDLERS: dict[str, _Handler] = {
+    **dict.fromkeys(_SUBSCRIPTION_EVENTS, _on_subscription),
+    "checkout.session.completed": _on_checkout,
+    "invoice.payment_failed": _on_invoice_failed,
+}
+
+# Every event type process_event() handles — derived from the dispatch table so
+# the two can never drift. `stripe-setup webhook` registers exactly this list on
+# the production endpoint: an event handled here but not subscribed there would
+# silently break billing.
+WEBHOOK_EVENT_TYPES: frozenset[str] = frozenset(_HANDLERS)
 
 
 async def process_event(
@@ -246,20 +330,49 @@ async def process_event(
     obj = event.get("data", {}).get("object", {})
     created = _event_dt(int(event.get("created") or 0))
 
-    if etype in _SUBSCRIPTION_EVENTS:
-        await _apply_subscription(session, obj, etype, created, plan_prices)
-    elif etype == "checkout.session.completed":
-        await _apply_checkout(session, obj, event_id, pack_credits)
-    elif etype == "invoice.payment_failed":
-        await _apply_invoice_failed(session, obj)
+    handler = _HANDLERS.get(etype)
+    if handler is not None:
+        meta = _EventMeta(
+            event_id=event_id,
+            etype=etype,
+            created=created,
+            pack_credits=pack_credits,
+            plan_prices=plan_prices,
+        )
+        await handler(session, obj, meta)
     else:
         logger.info("stripe event ignored type=%s", etype)
 
     session.add(ProcessedStripeEvent(stripe_event_id=event_id, event_type=etype))
     try:
         await session.commit()
-    except IntegrityError:
-        # A concurrent delivery recorded the same event id first — treat as dup.
+    except IntegrityError as exc:
         await session.rollback()
+        if not _is_duplicate_event_race(exc):
+            # Any OTHER integrity failure (e.g. a CHECK violation because the
+            # schema is behind the code) must propagate: a swallowed error here
+            # returns 200 to Stripe, which never retries — the customer would be
+            # charged with the entitlement silently lost (sec review H1).
+            raise
+        # A concurrent delivery recorded the same event id first — treat as dup.
         return False
     return True
+
+
+# The unique index on processed_stripe_events.stripe_event_id — the ONLY
+# constraint whose violation is the benign concurrent-delivery race.
+_EVENT_ID_CONSTRAINT = "ix_processed_stripe_events_stripe_event_id"
+_UNIQUE_VIOLATION_SQLSTATE = "23505"
+
+
+def _is_duplicate_event_race(exc: IntegrityError) -> bool:
+    """True only for a unique violation on the processed-events event id."""
+    # The asyncpg driver wraps the real error; walk to it for its fields.
+    cause = getattr(exc.orig, "__cause__", None) or exc.orig
+    sqlstate = getattr(cause, "sqlstate", None)
+    if sqlstate is not None and sqlstate != _UNIQUE_VIOLATION_SQLSTATE:
+        return False
+    constraint = getattr(cause, "constraint_name", None)
+    if constraint is not None:
+        return bool(constraint == _EVENT_ID_CONSTRAINT)
+    return _EVENT_ID_CONSTRAINT in str(exc)

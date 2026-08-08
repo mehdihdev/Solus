@@ -14,6 +14,7 @@ import logging
 import pytest
 import stripe
 from solus_api.billing.plans import VALID_INTERVALS
+from solus_api.billing.stripe_events import WEBHOOK_EVENT_TYPES
 from solus_api.billing.stripe_gateway import STRIPE_API_KEY_NAME
 from solus_api.connectors.secrets import InMemorySecretStore, SecretNotFoundError, SecretStore
 from solus_api.core.config import Settings
@@ -21,7 +22,10 @@ from solus_api.models import PlanType
 from solus_api.ops.stripe_setup import (
     PACK_DOLLARS,
     PLAN_SPECS,
+    WEBHOOK_ROUTE_PATH,
     PriceInfo,
+    WebhookEndpointInfo,
+    _resolve_confirm,
     format_env_lines,
     pack_credits,
     read_key_interactive,
@@ -29,6 +33,7 @@ from solus_api.ops.stripe_setup import (
     run_check,
     run_command,
     run_put_key,
+    run_webhook,
 )
 
 TEST_KEY = "sk_test_abc123"
@@ -498,3 +503,406 @@ async def test_run_command_put_key_never_touches_stripe() -> None:
 def test_no_global_stripe_key_mutation() -> None:
     # Every command above ran against the module; the SDK global must stay unset.
     assert stripe.api_key is None
+
+
+# --- webhook (production endpoint registration) ------------------------------------
+
+WEBHOOK_SECRET_FIXTURE = "whsec_fake_test_fixture"
+PROD_BASE = "https://api.solus.example"
+PROD_URL = f"{PROD_BASE}{WEBHOOK_ROUTE_PATH}"
+
+
+def _endpoint(
+    url: str = PROD_URL,
+    *,
+    endpoint_id: str = "we_existing",
+    status: str = "enabled",
+    events: tuple[str, ...] | None = None,
+) -> WebhookEndpointInfo:
+    return WebhookEndpointInfo(
+        id=endpoint_id,
+        url=url,
+        status=status,
+        enabled_events=tuple(sorted(WEBHOOK_EVENT_TYPES)) if events is None else events,
+    )
+
+
+class _FakeWebhooks:
+    """In-memory stand-in for the Stripe webhook-endpoint seam."""
+
+    def __init__(self, existing: tuple[WebhookEndpointInfo, ...] = ()) -> None:
+        self.endpoints: list[WebhookEndpointInfo] = list(existing)
+        self.created: list[WebhookEndpointInfo] = []
+        self.updated: list[tuple[str, tuple[str, ...]]] = []
+
+    async def account_id(self) -> str:
+        return "acct_test"
+
+    async def list_webhook_endpoints(self) -> list[WebhookEndpointInfo]:
+        return list(self.endpoints)
+
+    async def create_webhook_endpoint(
+        self, *, url: str, events: tuple[str, ...]
+    ) -> tuple[WebhookEndpointInfo, str]:
+        info = WebhookEndpointInfo(
+            id=f"we_new_{len(self.created) + 1}", url=url, status="enabled", enabled_events=events
+        )
+        self.endpoints.append(info)
+        self.created.append(info)
+        return info, WEBHOOK_SECRET_FIXTURE
+
+    async def update_webhook_endpoint(self, endpoint_id: str, *, events: tuple[str, ...]) -> None:
+        self.updated.append((endpoint_id, events))
+
+
+def test_webhook_event_types_cover_exactly_what_the_dispatcher_handles() -> None:
+    # The registration list and the dispatcher must never drift: an event the
+    # dispatcher handles but the endpoint doesn't subscribe to silently breaks
+    # billing in production.
+    assert WEBHOOK_EVENT_TYPES == frozenset(
+        {
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+            "checkout.session.completed",
+            "invoice.payment_failed",
+        }
+    )
+
+
+def _tty() -> bool:
+    return True
+
+
+async def test_webhook_creates_endpoint_when_none_exists() -> None:
+    client = _FakeWebhooks()
+    lines: list[str] = []
+    await run_webhook(
+        client,
+        base_url=PROD_BASE,
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lines.append,
+        isatty=_tty,
+    )
+    assert len(client.created) == 1
+    created = client.created[0]
+    assert created.url == PROD_URL
+    assert set(created.enabled_events) == set(WEBHOOK_EVENT_TYPES)
+    # The signing secret is printed exactly once, as a pasteable env line, with
+    # a handling warning — and nowhere else.
+    secret_lines = [line for line in lines if WEBHOOK_SECRET_FIXTURE in line]
+    assert secret_lines == [f"SOLUS_STRIPE_WEBHOOK_SECRET={WEBHOOK_SECRET_FIXTURE}"]
+    assert any("shown once" in line.lower() or "secrets manager" in line.lower() for line in lines)
+
+
+async def test_webhook_refuses_to_create_when_stdout_is_not_a_tty() -> None:
+    # Creating prints the one-time signing secret; a redirected/piped/CI stdout
+    # would persist it (same threat model as read_key_interactive, H1).
+    client = _FakeWebhooks()
+    lines: list[str] = []
+    with pytest.raises(SystemExit, match="TTY"):
+        await run_webhook(
+            client,
+            base_url=PROD_BASE,
+            mode="LIVE",
+            confirm=lambda _: True,
+            out=lines.append,
+            isatty=lambda: False,
+        )
+    assert client.created == []  # refused BEFORE creating — the secret is never burned
+    assert all(WEBHOOK_SECRET_FIXTURE not in line for line in lines)
+
+
+async def test_webhook_update_path_allows_non_tty() -> None:
+    # Updating prints no secret, so it stays automatable.
+    client = _FakeWebhooks(existing=(_endpoint(events=("checkout.session.completed",)),))
+    await run_webhook(
+        client,
+        base_url=PROD_BASE,
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lambda _: None,
+        isatty=lambda: False,
+    )
+    assert client.updated
+
+
+async def test_webhook_normalizes_trailing_slash_on_base_url() -> None:
+    client = _FakeWebhooks()
+    await run_webhook(
+        client,
+        base_url=f"{PROD_BASE}/",
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lambda _: None,
+        isatty=_tty,
+    )
+    assert client.created[0].url == PROD_URL
+
+
+async def test_webhook_existing_matching_endpoint_is_left_alone() -> None:
+    client = _FakeWebhooks(existing=(_endpoint(),))
+    lines: list[str] = []
+    await run_webhook(
+        client,
+        base_url=PROD_BASE,
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lines.append,
+        isatty=_tty,
+    )
+    assert client.created == []
+    assert client.updated == []
+    # No secret can be re-fetched for an existing endpoint; say so instead.
+    assert all(WEBHOOK_SECRET_FIXTURE not in line for line in lines)
+    assert any("OK" in line for line in lines)
+
+
+async def test_webhook_existing_with_drifted_events_is_updated() -> None:
+    stale = _endpoint(events=("checkout.session.completed",))
+    client = _FakeWebhooks(existing=(stale,))
+    await run_webhook(
+        client,
+        base_url=PROD_BASE,
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lambda _: None,
+        isatty=_tty,
+    )
+    assert client.created == []
+    assert client.updated == [("we_existing", tuple(sorted(WEBHOOK_EVENT_TYPES)))]
+
+
+async def test_webhook_disabled_endpoint_is_updated() -> None:
+    client = _FakeWebhooks(existing=(_endpoint(status="disabled"),))
+    await run_webhook(
+        client,
+        base_url=PROD_BASE,
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lambda _: None,
+        isatty=_tty,
+    )
+    assert client.updated  # re-enabled via update
+    assert client.created == []
+
+
+async def test_webhook_wildcard_endpoint_is_treated_as_covering() -> None:
+    # A "*" endpoint receives every event; shrinking it to our list could break
+    # another consumer sharing the endpoint — leave it alone.
+    client = _FakeWebhooks(existing=(_endpoint(events=("*",)),))
+    await run_webhook(
+        client,
+        base_url=PROD_BASE,
+        mode="LIVE",
+        confirm=lambda _: True,
+        out=lambda _: None,
+        isatty=_tty,
+    )
+    assert client.created == []
+    assert client.updated == []
+
+
+async def test_webhook_disabled_wildcard_endpoint_is_not_reported_ok() -> None:
+    # A disabled wildcard endpoint means billing is silently dead — the tool
+    # must fail loudly, never print "OK".
+    client = _FakeWebhooks(existing=(_endpoint(status="disabled", events=("*",)),))
+    with pytest.raises(SystemExit, match="(?i)disabled"):
+        await run_webhook(
+            client,
+            base_url=PROD_BASE,
+            mode="LIVE",
+            confirm=lambda _: True,
+            out=lambda _: None,
+            isatty=_tty,
+        )
+    assert client.created == []
+    assert client.updated == []
+
+
+async def test_webhook_declined_confirmation_changes_nothing() -> None:
+    client = _FakeWebhooks()
+    with pytest.raises(SystemExit, match="[Aa]borted"):
+        await run_webhook(
+            client,
+            base_url=PROD_BASE,
+            mode="LIVE",
+            confirm=lambda _: False,
+            out=lambda _: None,
+            isatty=_tty,
+        )
+    assert client.created == []
+    assert client.updated == []
+
+
+async def test_webhook_preview_shows_url_events_and_mode_before_confirm() -> None:
+    client = _FakeWebhooks()
+    lines: list[str] = []
+    prompts: list[str] = []
+
+    def confirm(prompt: str) -> bool:
+        prompts.append(prompt)
+        return True
+
+    await run_webhook(
+        client, base_url=PROD_BASE, mode="LIVE", confirm=confirm, out=lines.append, isatty=_tty
+    )
+    preview = "\n".join(lines)
+    assert PROD_URL in preview
+    assert "checkout.session.completed" in preview
+    assert prompts and "LIVE" in prompts[0]
+
+
+async def test_webhook_create_and_update_emit_audit_log_without_secret(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="solus.ops.stripe_setup"):
+        fresh = _FakeWebhooks()
+        await run_webhook(
+            fresh,
+            base_url=PROD_BASE,
+            mode="LIVE",
+            confirm=lambda _: True,
+            out=lambda _: None,
+            isatty=_tty,
+        )
+        stale = _FakeWebhooks(existing=(_endpoint(events=("checkout.session.completed",)),))
+        await run_webhook(
+            stale,
+            base_url=PROD_BASE,
+            mode="LIVE",
+            confirm=lambda _: True,
+            out=lambda _: None,
+            isatty=_tty,
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("created" in m and fresh.created[0].id in m for m in messages)
+    assert any("updated" in m and "we_existing" in m for m in messages)
+    assert all("whsec_" not in m for m in messages)  # never any secret material
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://api.solus.example",  # not https
+        "https://localhost:8000",  # local dev — that's what `pnpm dev:stripe` is for
+        "https://127.0.0.1:8000",
+        "not-a-url",
+        "",
+        "https://user:pw@api.solus.example",  # userinfo would ship credentials to Stripe
+        "https://api.solus.example?x=1",  # query corrupts the registered URL
+        "https://api.solus.example#frag",
+        f"https://api.solus.example{WEBHOOK_ROUTE_PATH}",  # full webhook URL, not the base
+    ],
+)
+async def test_webhook_refuses_malformed_or_local_urls(bad_url: str) -> None:
+    client = _FakeWebhooks()
+    with pytest.raises(SystemExit):
+        await run_webhook(
+            client,
+            base_url=bad_url,
+            mode="LIVE",
+            confirm=lambda _: True,
+            out=lambda _: None,
+            isatty=_tty,
+        )
+    assert client.created == []
+
+
+async def test_webhook_refuses_ambiguous_duplicate_endpoints() -> None:
+    client = _FakeWebhooks(existing=(_endpoint(endpoint_id="we_1"), _endpoint(endpoint_id="we_2")))
+    with pytest.raises(SystemExit, match="[Mm]ultiple"):
+        await run_webhook(
+            client,
+            base_url=PROD_BASE,
+            mode="LIVE",
+            confirm=lambda _: True,
+            out=lambda _: None,
+            isatty=_tty,
+        )
+    assert client.updated == []
+
+
+def test_assume_yes_never_applies_to_webhook() -> None:
+    # §7: registering/updating a live webhook endpoint is an external mutation
+    # that must show the concrete action — `--yes` must not bypass it.
+    assert _resolve_confirm("bootstrap", assume_yes=True)("anything?") is True
+    assert _resolve_confirm("webhook", assume_yes=True) is _resolve_confirm(
+        "webhook", assume_yes=False
+    )
+
+
+async def test_run_command_webhook_requires_stored_key() -> None:
+    lines: list[str] = []
+    code = await run_command(
+        "webhook",
+        settings=_settings(),
+        store=_FakeStore(),
+        make_client=lambda _key: _FakeWebhooks(),  # type: ignore[arg-type,return-value]
+        key_reader=lambda: TEST_KEY,
+        confirm=lambda _: True,
+        out=lines.append,
+        url=PROD_BASE,
+    )
+    assert code == 1
+    assert any("put-key" in line for line in lines)
+
+
+async def test_run_command_webhook_registers_endpoint() -> None:
+    client = _FakeWebhooks()
+    code = await run_command(
+        "webhook",
+        settings=_settings(),
+        store=_FakeStore({STRIPE_API_KEY_NAME: TEST_KEY}),
+        make_client=lambda _key: client,  # type: ignore[arg-type,return-value]
+        key_reader=lambda: TEST_KEY,
+        confirm=lambda _: True,
+        out=lambda _: None,
+        url=PROD_BASE,
+        stdout_isatty=_tty,
+    )
+    assert code == 0
+    assert len(client.created) == 1
+
+
+@pytest.mark.parametrize(
+    ("key", "app_env"),
+    [
+        (TEST_KEY, "production"),  # test key must never register a production endpoint
+        ("sk_live_x9", "dev"),  # live key must never register a dev endpoint
+    ],
+)
+async def test_run_command_webhook_refuses_key_mode_env_mismatch(key: str, app_env: str) -> None:
+    # A TEST-mode endpoint registered for production signs with a test secret,
+    # so every real payment event is silently rejected (security review M3).
+    client = _FakeWebhooks()
+    lines: list[str] = []
+    code = await run_command(
+        "webhook",
+        settings=_settings(app_env=app_env),
+        store=_FakeStore({STRIPE_API_KEY_NAME: key}),
+        make_client=lambda _key: client,  # type: ignore[arg-type,return-value]
+        key_reader=lambda: key,
+        confirm=lambda _: True,
+        out=lines.append,
+        url=PROD_BASE,
+        stdout_isatty=_tty,
+    )
+    assert code == 1
+    assert client.created == []
+    assert any("FAIL" in line and "mode" in line for line in lines)
+
+
+async def test_run_command_webhook_without_url_fails_cleanly() -> None:
+    code = await run_command(
+        "webhook",
+        settings=_settings(),
+        store=_FakeStore({STRIPE_API_KEY_NAME: TEST_KEY}),
+        make_client=lambda _key: _FakeWebhooks(),  # type: ignore[arg-type,return-value]
+        key_reader=lambda: TEST_KEY,
+        confirm=lambda _: True,
+        out=lambda _: None,
+        url=None,
+    )
+    assert code == 1

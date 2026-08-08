@@ -81,11 +81,14 @@ class Settings(BaseSettings):
     # Config, not hardcoded — this is the single place that resolves the ADR-024
     # "one month" vs the 14-day code/API drift; calibrate here. 0 disables it.
     stripe_trial_days: int = 14
-    # Where Stripe returns the user after Checkout / the billing portal. Points at
-    # the desktop renderer route; the app refetches subscription+credits on return.
+    # Where Stripe returns the user after Checkout / the billing portal. The
+    # `checkout=`/`portal=` markers are load-bearing (SOLUSDEV-114): the desktop
+    # opens Stripe in an in-app window and closes it when the top frame navigates
+    # to a marker URL (main/checkoutReturn.ts) — the URL itself never loads, so
+    # it doesn't need to resolve. Keep the markers on any environment override.
     stripe_checkout_success_url: str = "http://localhost:5173/#/billing?checkout=success"
     stripe_checkout_cancel_url: str = "http://localhost:5173/#/billing?checkout=cancel"
-    stripe_billing_portal_return_url: str = "http://localhost:5173/#/billing"
+    stripe_billing_portal_return_url: str = "http://localhost:5173/#/billing?portal=return"
 
     # --- Connector framework (SOLUSDEV-103) ---
     # Secret store selection. Prod/staging with aws_region set → AWS Secrets

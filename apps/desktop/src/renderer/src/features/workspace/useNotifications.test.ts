@@ -120,3 +120,29 @@ describe('useNotifications', () => {
     expect(vi.mocked(resources.listNotificationsPage)).toHaveBeenLastCalledWith('c2')
   })
 })
+
+describe('useNotifications refresh event (SOLUSDEV-114)', () => {
+  it('refetches when the billing flow dispatches solus:notifications-refresh', async () => {
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const callsBefore = vi.mocked(resources.listNotificationsPage).mock.calls.length
+    await act(async () => {
+      window.dispatchEvent(new Event('solus:notifications-refresh'))
+    })
+    await waitFor(() =>
+      expect(vi.mocked(resources.listNotificationsPage).mock.calls.length).toBeGreaterThan(
+        callsBefore
+      )
+    )
+  })
+
+  it('stops listening after unmount', async () => {
+    const { result, unmount } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    unmount()
+    const callsBefore = vi.mocked(resources.listNotificationsPage).mock.calls.length
+    window.dispatchEvent(new Event('solus:notifications-refresh'))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(vi.mocked(resources.listNotificationsPage).mock.calls.length).toBe(callsBefore)
+  })
+})

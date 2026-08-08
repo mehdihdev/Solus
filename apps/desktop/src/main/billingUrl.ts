@@ -13,3 +13,24 @@ export function isAllowedBillingUrl(url: string): boolean {
     return false
   }
 }
+
+/** The Stripe-hosted surfaces our API actually returns URLs for. */
+const CHECKOUT_ENTRY_HOSTS = new Set([
+  'checkout.stripe.com',
+  'billing.stripe.com',
+  'pay.stripe.com'
+])
+
+/** True only for an https URL on a checkout/portal host. Deliberately narrower
+ *  than isAllowedBillingUrl for ENTRY points (the in-app checkout window and
+ *  system-browser opens): anyone can mint a buy.stripe.com Payment Link with an
+ *  arbitrary post-payment redirect, so `*.stripe.com` is not trustworthy as a
+ *  place to send the user to pay (SOLUSDEV-114 sec review M3). */
+export function isAllowedCheckoutEntryUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && CHECKOUT_ENTRY_HOSTS.has(parsed.hostname)
+  } catch {
+    return false
+  }
+}

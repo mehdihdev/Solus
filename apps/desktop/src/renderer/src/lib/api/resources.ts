@@ -41,6 +41,12 @@ export interface ProjectDetail extends Project {
 
 export type SourceStatus = 'pending' | 'connected' | 'syncing' | 'error' | 'disconnected'
 
+/** Structured sync/connect failure as the API serializes it (models.Source.last_error). */
+export interface SourceError {
+  code: string
+  message: string
+}
+
 /** A connected external tool feeding the graph. Secrets are NEVER present. */
 export interface Source {
   id: string
@@ -51,7 +57,7 @@ export interface Source {
   config: Record<string, unknown>
   account_login: string | null
   last_synced_at: string | null
-  last_error: string | null
+  last_error: SourceError | null
   entity_count?: number
   created_at: string
   updated_at: string

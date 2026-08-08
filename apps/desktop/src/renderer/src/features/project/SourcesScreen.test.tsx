@@ -79,6 +79,24 @@ describe('SourcesScreen', () => {
     expect(screen.getByText('CONNECTED')).toBeInTheDocument()
   })
 
+  it('renders the message of a structured sync error without crashing (SOLUSDEV-114)', () => {
+    // The real API serializes last_error as {code, message} (models.Source.last_error
+    // is a JSON column) — rendering the raw object crashed the whole app.
+    mockSources([
+      SOURCE({
+        status: 'error',
+        // No cast: last_error is typed as the structured object, so reverting
+        // the SOLUSDEV-114 type fix breaks this test at compile time too.
+        last_error: {
+          code: 'export_format_unsupported',
+          message: 'kicad: the S-expression netlist is not supported in v1; re-export as XML.'
+        }
+      })
+    ])
+    render(<SourcesScreen />)
+    expect(screen.getByText(/re-export as XML/i)).toBeInTheDocument()
+  })
+
   it('syncs a source on demand', async () => {
     mockSources([SOURCE()])
     render(<SourcesScreen />)

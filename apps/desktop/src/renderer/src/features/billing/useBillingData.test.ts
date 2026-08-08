@@ -114,3 +114,119 @@ describe('useBillingData', () => {
     expect(result.current.notice).toMatch(/configured/i)
   })
 })
+
+// --- in-app checkout window (SOLUSDEV-114) -----------------------------------
+
+const openCheckout = vi.fn()
+
+function installCheckoutBridge(): void {
+  ;(window as unknown as { solus?: unknown }).solus = {
+    billing: { openExternal, openCheckout }
+  }
+}
+
+describe('useBillingData with the in-app checkout bridge', () => {
+  beforeEach(() => {
+    openCheckout.mockReset()
+    installCheckoutBridge()
+    vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
+    vi.mocked(resources.createBillingPortal).mockResolvedValue({ url: 'https://portal/x' })
+  })
+
+  it('prefers the in-app window over the system browser', async () => {
+    openCheckout.mockResolvedValue({ status: 'success' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.startCheckout('pro', 'month')
+    })
+    expect(openCheckout).toHaveBeenCalledWith('https://checkout/x')
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('on success: refetches, shows a confirmation, and pings the notifications bell', async () => {
+    openCheckout.mockResolvedValue({ status: 'success' })
+    const bellRefresh = vi.fn()
+    window.addEventListener('solus:notifications-refresh', bellRefresh)
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const callsBefore = vi.mocked(resources.getSubscription).mock.calls.length
+    await act(async () => {
+      await result.current.startCheckout('pro', 'month')
+    })
+    await waitFor(() =>
+      expect(vi.mocked(resources.getSubscription).mock.calls.length).toBeGreaterThan(callsBefore)
+    )
+    expect(result.current.notice).toMatch(/payment received/i)
+    expect(bellRefresh).toHaveBeenCalled()
+    window.removeEventListener('solus:notifications-refresh', bellRefresh)
+  })
+
+  it('schedules follow-up refetches to absorb webhook lag', async () => {
+    openCheckout.mockResolvedValue({ status: 'success' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        await result.current.startCheckout('pro', 'month')
+      })
+      const callsAfterImmediate = vi.mocked(resources.getSubscription).mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000)
+      })
+      expect(vi.mocked(resources.getSubscription).mock.calls.length).toBeGreaterThan(
+        callsAfterImmediate
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('on cancel or a dismissed window: canceled notice, nothing charged-looking', async () => {
+    for (const status of ['cancel', 'closed'] as const) {
+      openCheckout.mockResolvedValue({ status })
+      const { result } = renderHook(() => useBillingData())
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      await act(async () => {
+        await result.current.startCheckout('pro', 'month')
+      })
+      expect(result.current.notice).toMatch(/canceled/i)
+      expect(result.current.notice).toMatch(/charged/i)
+    }
+  })
+
+  it('portal return refetches without a notice', async () => {
+    openCheckout.mockResolvedValue({ status: 'return' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const callsBefore = vi.mocked(resources.getSubscription).mock.calls.length
+    await act(async () => {
+      await result.current.openPortal()
+    })
+    await waitFor(() =>
+      expect(vi.mocked(resources.getSubscription).mock.calls.length).toBeGreaterThan(callsBefore)
+    )
+    expect(result.current.notice).toBeNull()
+  })
+
+  it('busy (a checkout window is already open) surfaces a clear notice', async () => {
+    openCheckout.mockResolvedValue({ status: 'busy' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.startCheckout('pro', 'month')
+    })
+    expect(result.current.notice).toMatch(/already open/i)
+  })
+
+  it('a blocked URL surfaces the generic error notice', async () => {
+    openCheckout.mockResolvedValue({ status: 'blocked' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.startCheckout('pro', 'month')
+    })
+    expect(result.current.notice).toMatch(/went wrong/i)
+  })
+})

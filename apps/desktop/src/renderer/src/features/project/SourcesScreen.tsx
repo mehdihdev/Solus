@@ -24,7 +24,7 @@ import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { useGithubConnect } from '../onboarding/useGithubConnect'
 import { useEdaConnect } from '../onboarding/useEdaConnect'
-import { sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
+import { sourceErrorText, sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectSources } from './useProjectSources'
 
 const EXPORT_FILE_ACCEPT = '.xml,.net'
@@ -127,6 +127,7 @@ function SourceRow({
     : 'Never synced'
   const entities =
     typeof source.entity_count === 'number' ? ` · ${source.entity_count} entities` : ''
+  const errorText = sourceErrorText(source.last_error)
 
   return (
     <div
@@ -154,10 +155,8 @@ function SourceRow({
           {sourceTypeLabel(source.type)} · {synced}
           {entities}
         </div>
-        {source.last_error && (
-          <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>
-            {source.last_error}
-          </div>
+        {errorText && (
+          <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>{errorText}</div>
         )}
       </div>
       <Mono size={8.5} color="var(--mut)">
