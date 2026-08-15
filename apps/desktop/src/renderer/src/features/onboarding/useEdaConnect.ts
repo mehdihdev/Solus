@@ -1,6 +1,6 @@
 // Component-side glue for the real committed-export EDA connect (SOLUSDEV-100):
 // binds the typed API singleton + onboarding store to the pure orchestration in
-// edaConnect.ts, mirroring useGithubConnect.
+// edaConnect.ts, mirroring useOAuthConnect.
 import { createSource, getSource, getSyncs, triggerSync } from '../../lib/api/resources'
 import { runEdaConnect, type EdaConnectApi, type EdaExportFile } from './edaConnect'
 import { useOnboardingStore } from './onboardingStore'

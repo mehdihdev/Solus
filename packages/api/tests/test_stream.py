@@ -44,7 +44,9 @@ def test_tool_result_failure_carries_structured_error_not_a_traceback() -> None:
 
 def test_message_and_error_events() -> None:
     msg = AgentEvent.message("done reasoning")
-    assert msg.data == {"role": "assistant", "content": "done reasoning"}
+    assert msg.data == {"role": "assistant", "content": "done reasoning", "citations": []}
+    cited = AgentEvent.message("grounded", citations=("[datasheet:x.pdf]",))
+    assert cited.data["citations"] == ["[datasheet:x.pdf]"]
     err = AgentEvent.error("internal", "the turn failed")
     assert err.type is AgentEventType.ERROR
     assert err.data == {"code": "internal", "message": "the turn failed"}

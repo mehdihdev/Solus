@@ -4,11 +4,14 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits
+from solus_api.bridge.service import ConnectRateLimiter
+from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
@@ -35,6 +38,8 @@ from solus_api.models import (
     Notification,
     NotificationType,
     OAuthState,
+    PanelBinding,
+    PanelPairing,
     Project,
     Role,
     SolMode,
@@ -45,6 +50,7 @@ from solus_api.models import (
     Team,
     User,
     default_limits,
+    ensure_utc,
     utcnow,
 )
 from solus_api.schemas import (
@@ -140,6 +146,10 @@ async def delete_projects_cascade(
         for _sid, ref in sources:
             if ref:
                 await secret_store.delete(ref)
+                # The OAuth refresh token has its own ref (SOLUS-CAD-01); without
+                # this, deleting an account would leave a live grant against the
+                # user's GitLab/Onshape data. `delete` no-ops when absent.
+                await secret_store.delete(refresh_secret_ref(ref))
     source_ids = [sid for sid, _ref in sources]
     if source_ids:
         await session.execute(delete(OAuthState).where(OAuthState.source_id.in_(source_ids)))
@@ -312,3 +322,102 @@ async def get_credits(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
     exists. The desktop Billing screen reads this to reflect credit-pack purchases."""
     balance = await credits.get_balance(session, user.id)
     return envelope(CreditBalanceView(user_id=user.id, balance=balance).model_dump(mode="json"))
+
+
+# ------------------------------------------------------------ panel links
+#
+# The approve / list / revoke half of the Onshape panel pairing (SOLUS-A7-01).
+#
+# Deliberately HERE rather than in `routers/panel.py`: these are the only three
+# operations in the flow that need a real Solus session, and keeping them out of
+# that module is what makes "no route under /api/v1/panel can reach
+# provisioning" a statement `test_panel.py` checks mechanically rather than a
+# convention someone has to remember.
+#
+# Holding a live, verified Solus session IS the proof of who is approving. The
+# `user_code` proves only that the person typing it is looking at the panel.
+
+#: Codes are 8 chars from a 31-symbol alphabet (~40 bits) and live 10 minutes,
+#: so guessing is already hopeless; this bounds the noise a compromised account
+#: could make and keys on the authenticated user, unlike the IP-blind global
+#: limiter (`core/ratelimit.py` cannot see past the ALB).
+PANEL_APPROVALS_PER_MINUTE = 10
+
+
+class PanelLinkApprove(BaseModel):
+    """Reject unknown fields: this endpoint hands out a 90-day credential."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_code: str = Field(min_length=1, max_length=32)
+
+
+@router.post("/panel-links")
+async def approve_panel_link(
+    body: PanelLinkApprove,
+    user: CurrentUser,
+    _verified: RequireVerified,
+    session: SessionDep,
+    request: Request,
+) -> dict[str, Any]:
+    """Approve a pairing by its user code. Mints nothing.
+
+    The token is minted at redemption inside `panel/pair/poll`, so the plaintext
+    never exists on this side and cannot be logged with the request body.
+    """
+    limiter: ConnectRateLimiter | None = getattr(request.app.state, "panel_approve_limiter", None)
+    if limiter is not None and not limiter.allow(str(user.id)):
+        raise APIError(429, "rate_limited", "Too many pairing attempts. Wait a minute.")
+
+    code = body.user_code.strip().upper()
+    pairing = await session.scalar(select(PanelPairing).where(PanelPairing.user_code == code))
+    if pairing is None or ensure_utc(pairing.expires_at) <= utcnow():
+        raise APIError(
+            404, "invalid_pairing", "That code is not valid. Ask the panel for a new one."
+        )
+    if pairing.approved_user_id is not None:
+        raise APIError(409, "already_approved", "That code was already approved.")
+
+    pairing.approved_user_id = user.id
+    emit_event(session, user=user, event_type="panel.link.approved", payload={})
+    await session.commit()
+    return envelope({"status": "approved"})
+
+
+@router.get("/panel-links")
+async def list_panel_links(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    """Live panel links, so revoking one is possible without guessing its id."""
+    bindings = await session.scalars(
+        select(PanelBinding)
+        .where(PanelBinding.user_id == user.id, PanelBinding.revoked_at.is_(None))
+        .order_by(PanelBinding.created_at.desc())
+    )
+    return envelope(
+        [
+            {
+                "id": str(binding.id),
+                # Untrusted label from Onshape, charset-validated at pair/start.
+                # Shown so a user can tell two links apart; never a lookup key.
+                "onshape_user_id": binding.onshape_user_id,
+                "created_at": binding.created_at.isoformat(),
+                "last_used_at": binding.last_used_at.isoformat() if binding.last_used_at else None,
+                "expires_at": binding.expires_at.isoformat(),
+            }
+            for binding in bindings.all()
+        ]
+    )
+
+
+@router.delete("/panel-links/{binding_id}", status_code=204)
+async def revoke_panel_link(
+    binding_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> Response:
+    """Revoke immediately — `get_panel_binding` re-reads the row per request, so
+    there is no cache for a revocation to lag behind."""
+    binding = await session.get(PanelBinding, binding_id)
+    if binding is None or binding.user_id != user.id or binding.revoked_at is not None:
+        raise APIError(404, "not_found", "No such panel link")
+    binding.revoked_at = utcnow()
+    emit_event(session, user=user, event_type="panel.link.revoked", payload={})
+    await session.commit()
+    return Response(status_code=204)

@@ -8,8 +8,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface OAuthBridge {
+  /** Sign-in flow: a per-flow redirect URL carrying our own CSRF nonce. */
   getRedirectUrl: () => Promise<string>
   awaitGithub: (authorizeUrl: string) => Promise<{ code?: string; error?: string }>
+  /** Connector flow: a CONSTANT redirect URL (strict providers such as Onshape
+   *  match the registered URI exactly), with the backend's OAuth state as the
+   *  nonce the provider echoes back. */
+  getConnectorRedirectUrl: () => Promise<string>
+  awaitOAuth: (
+    authorizeUrl: string,
+    expectedState: string
+  ) => Promise<{ code?: string; error?: string }>
 }
 
 export interface GithubOAuthResult {

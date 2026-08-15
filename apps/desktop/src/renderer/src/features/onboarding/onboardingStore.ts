@@ -2,20 +2,32 @@
 // driven by REAL flows only (SOLUSDEV-152 de-simulation): connections carry the
 // live connector progress, and the build log mirrors actual source syncs.
 import { create } from 'zustand'
-import type { GithubRepo } from '../../lib/api/resources'
+import type { IntegrationAccessModes, SelectableItem } from '../../lib/api/resources'
 import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 
 export type OnboardingStep = 0 | 1 | 2
 
 /**
- * Per-source connection state, fed by the real connectors (GitHub OAuth,
+ * Per-source connection state, fed by the real connectors (OAuth,
  * committed-export EDA): a live `label` for progress copy, the `sourceId` once
- * one exists, discovered `repos` when a picker is needed, and a real `result`
- * string on completion. `error` is reachable via OAuth cancel, sync failure,
- * missing Electron bridge, or an unlinked workspace.
+ * one exists, the discovered `selectable` items when a picker is needed, the
+ * connector's `configFields` when the generic details form is needed instead,
+ * and a real `result` string on completion. `error` is reachable via OAuth cancel, sync
+ * failure, missing Electron bridge, or an unlinked workspace.
  */
 export type ConnectionState =
-  | { phase: 'busy'; label?: string; sourceId?: string; repos?: GithubRepo[] }
+  | {
+      phase: 'busy'
+      label?: string
+      sourceId?: string
+      /** What this source can be pointed at, when a picker is open. */
+      selectable?: readonly SelectableItem[]
+      /** Whether that picker takes one item or many. */
+      selectionMode?: 'single' | 'multi'
+      configFields?: readonly string[]
+      /** The grants offered, when the connect-time access choice is open. */
+      accessModes?: IntegrationAccessModes
+    }
   | { phase: 'done'; sourceId?: string; result?: string }
   | { phase: 'error'; error: string; sourceId?: string }
 

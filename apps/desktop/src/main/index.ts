@@ -2,11 +2,24 @@ import { app, shell, dialog, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { awaitGithubCallback, getRedirectUrl } from './oauthLoopback'
-import { startCompanion, stopCompanion, sendAccessToken, writeCredential } from './companion'
+import {
+  awaitGithubCallback,
+  awaitOAuthCallback,
+  getConnectorRedirectUrl,
+  getRedirectUrl
+} from './oauthLoopback'
+import {
+  startCompanion,
+  stopCompanion,
+  sendAccessToken,
+  setCompanionProject,
+  writeCredential
+} from './companion'
 import { cloneRepo, cloneDeps, vscodeFolderUrl, type CloneInput } from './projectFolder'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
+import { isFromWindow } from './senderGate'
+import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
 
 /** Open a Stripe Checkout / billing-portal URL in the system browser, refusing
  *  anything that isn't one of the Stripe-hosted surfaces our API returns
@@ -22,9 +35,10 @@ async function openBillingUrl(url: string): Promise<{ ok: boolean }> {
 let mainWindow: BrowserWindow | null = null
 
 /** True when the invoke came from the app's own renderer, not some other
- *  webContents that gained IPC reach. */
+ *  webContents that gained IPC reach. The decision itself lives in
+ *  `senderGate.ts`, where it can be tested. */
 function isMainRendererSender(event: Electron.IpcMainInvokeEvent): boolean {
-  return mainWindow !== null && event.sender === mainWindow.webContents
+  return isFromWindow(event.sender, mainWindow)
 }
 
 function createWindow(): void {
@@ -135,11 +149,30 @@ if (!app.requestSingleInstanceLock()) {
         : { status: 'blocked' }
     )
 
+    // Detached SOL orb (SOLX-02): the always-on-top second window at #/orb.
+    // The renderer initiates both directions over these invokes; the CTR-06
+    // orb↔overlay wire is attached to the window at creation.
+    registerSolWindowHandlers(ipcMain, () => createSolBrowserWindow(ipcMain), isMainRendererSender)
+
     // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
     // Supabase authorize URL, then hands it back for the system-browser round-trip.
     ipcMain.handle('oauth:github:redirect-url', () => getRedirectUrl())
     ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
       awaitGithubCallback(authorizeUrl)
+    )
+
+    // Connector OAuth (GitHub/GitLab/Onshape/…): a CONSTANT redirect URL, since
+    // strict providers match the registered URI exactly. The nonce is the
+    // backend's own OAuth state, echoed back by the provider.
+    ipcMain.handle('oauth:connector:redirect-url', () => getConnectorRedirectUrl())
+    // Sender-gated like the other credential-bearing channels: this one RESOLVES
+    // WITH THE AUTHORIZATION CODE, so any other webContents that gained IPC reach
+    // could open a provider consent screen and read the code out of the result.
+    // The state check inside is a CSRF defence, not a caller check.
+    ipcMain.handle('oauth:connector:await', (event, authorizeUrl: string, expectedState: string) =>
+      isMainRendererSender(event)
+        ? awaitOAuthCallback(authorizeUrl, expectedState)
+        : Promise.reject(new Error('unauthorized sender'))
     )
 
     // Local bridge companion (BRG-04): spawn/supervise, and relay the renderer's
@@ -149,6 +182,15 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('bridge:token', (event, token: unknown) => {
       if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
         sendAccessToken(token)
+      }
+    })
+    // The project the companion serves. The bridge route is project-scoped, so
+    // without this the companion has no URL to dial and stays idle. Renderer
+    // input is untrusted: a string or null only, and companionWsUrl refuses any
+    // id that is not a single safe path segment.
+    ipcMain.handle('bridge:project', (event, projectId: unknown) => {
+      if (isMainRendererSender(event) && (typeof projectId === 'string' || projectId === null)) {
+        setCompanionProject(projectId)
       }
     })
     // BYO-license capture (SOLUSDEV-102 / MCP-05): relay license credentials

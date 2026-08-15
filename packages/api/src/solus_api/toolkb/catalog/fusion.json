@@ -1,0 +1,9 @@
+{
+  "$comment": "SOLUS-TU-06 seed catalog — control ids named by Autodesk's own documentation (help.autodesk.com). Grown by TU-01/TU-02; curation is human-signed-off (Phase 0 §7.5).",
+  "tool": "fusion",
+  "controls": [
+    "fusion.solid.extrude",
+    "fusion.solid.revolve",
+    "fusion.sketch.create_sketch"
+  ]
+}

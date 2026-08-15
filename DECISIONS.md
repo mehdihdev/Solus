@@ -480,6 +480,49 @@ below with "in-chat approval" standing in for "only humans edit".
 
 ---
 
+## ADR-033: Tool knowledge lives in a global, tenant-free table
+
+**Status:** Accepted (2026-08-03 — approved in-session by Pratham against the concrete text below;
+Mehdi review at the SOLUSDEV-96 MR)
+**Context:** SOLUSDEV-96 (Onshape MCP server, A6)
+
+**Context.** SOL needs vendor API knowledge to construct valid tool calls — "what parameters does
+`extrude` take?", "what is a valid `endBound`?". That knowledge is Solus-authored or vendor-derived,
+identical for every customer, and must never mix with customer data. Today there is nowhere to put
+it: every table that stores text is project-scoped by `ForeignKey("projects.id",
+ondelete="CASCADE")`, and the four non-tenant-scoped tables (`processed_stripe_events`,
+`deleted_accounts`, `connector_secrets`, `oauth_states`) hold opaque ids, ciphertext, or tombstones
+— never prose. The nearest global *knowledge* precedent is `integrations/mcp/*/allowlist.yaml`:
+Solus-authored, loaded at startup, with no runtime write path.
+
+**Decision.** A `tool_doc` table with **no tenant scoping**, contained by four rules:
+
+1. **No `project_id`/`team_id`/`user_id` column and no FK to those tables.** Absence of the column
+   *is* the enforcement — there is nowhere to put a tenant reference, so none can be added by
+   accident.
+2. **Typed columns only** (`tool`, `version`, `symbol`, `summary`, `parameters`, `source_url`,
+   `confidence`, `acquisition_method`, `fetched_at`). No free-text JSONB a request handler could
+   fill.
+3. **No runtime write path.** Populated by an admin/ingestion job over **vendor documentation
+   only** — never by a sync, a tool call, or anything holding a `SyncContext` or a `GraphEntity`.
+4. **Retrieval is lexical-first** (`tool` + `version` + `symbol` exact, then full-text): "what does
+   extrude take?" is a lookup, not a semantic search. A nullable `embedding` column is added and
+   left **unpopulated** until `embed()` exists (`docs/api/gateway-embeddings.md` is a deferred
+   MO-01 proposal and `graph_entity.embedding` is still NULL).
+
+**Counter-example to stay unlike.** `DataEvent` has no FKs but is very much tenant-attributed and
+content-bearing. "No FK" alone is not containment; rules 2 and 3 are what make this table
+structurally incapable of holding customer data.
+
+**Consequences.** This is the first global content-bearing table in the schema, and the precedent it
+sets is narrow by design: a table qualifies only if it satisfies all four rules. Ingestion sources
+are machine-readable — Onshape's public OpenAPI spec and its per-document `featurespecs` (which
+includes custom features a customer imported, so those are read live and never stored) — so entries
+are versioned and attributable rather than scraped prose. A hand-maintained schema table would rot;
+this one is regenerable from its sources.
+
+---
+
 ## How to add or change a decision
 
 1. New decision: append an entry with the next ADR number, date it, set Status: Accepted.

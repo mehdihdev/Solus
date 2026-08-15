@@ -36,7 +36,7 @@ export function formatMissingSupabaseEnvError(missing: readonly string[], mode: 
     `[solus-prod-auth-guard] Refusing to build in "${mode}" mode: missing Supabase auth env — ${missing.join(', ')}.`,
     'A production build without these would ship the dev fake-login bypass (CLAUDE.md §7):',
     'the UI would appear authenticated while every API call fails with 401.',
-    'Fix: populate .env.mega at the repo root and run `pnpm env:sync` (SOLUSDEV-147),',
+    'Fix: set them in the .env at the repo root (the one env file — see env.example),',
     'or export the variables in the build environment.',
     'For local no-auth work use the dev server (`pnpm dev`); an explicit',
     '`electron-vite build --mode development` also skips this check (built bundles',

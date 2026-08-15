@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import signal
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from solus_companion.supervisor import (
     ServerState,
     Supervisor,
     UnknownToolError,
-    _child_env,
+    child_env,
 )
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mcp_root"
@@ -23,8 +24,13 @@ LAUNCH = FIXTURE_ROOT / "mock" / "bin" / "launch"
 
 EXPECTED_TOOLS = {"echo", "add", "boom", "sleepy", "plain", "pic", "badschema"}
 
+#: CAD-00b: `bin/launch` resolves NO interpreter off PATH, so the companion has
+#: to hand it one. In a shipped build this is the fork's private-env python; in
+#: tests the running interpreter stands in for it.
+INTERPRETER = {"SOLUS_MCP_PYTHON": sys.executable}
 
-# --- H3 (companion half): _child_env passes SOLUS_MCP_WORKSPACE through ---------
+
+# --- H3 (companion half): child_env passes SOLUS_MCP_WORKSPACE through ---------
 
 
 def test_child_env_passes_solus_mcp_workspace_through_when_declared(
@@ -32,7 +38,7 @@ def test_child_env_passes_solus_mcp_workspace_through_when_declared(
 ) -> None:
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/solus")
-    env = _child_env({"SOLUS_MCP_WORKSPACE": "/projects/robot"})
+    env = child_env({"SOLUS_MCP_WORKSPACE": "/projects/robot"})
     assert env["SOLUS_MCP_WORKSPACE"] == "/projects/robot"
     assert env["PATH"] == "/usr/bin:/bin"
     assert env["HOME"] == "/home/solus"
@@ -42,12 +48,14 @@ def test_child_env_omits_solus_mcp_workspace_when_not_declared(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    env = _child_env({})
+    env = child_env({})
     assert "SOLUS_MCP_WORKSPACE" not in env
 
 
 def _make_supervisor(pid_file: Path | None = None) -> Supervisor:
-    env = {"MCP_MOCK_PID_FILE": str(pid_file)} if pid_file is not None else {}
+    env = dict(INTERPRETER)
+    if pid_file is not None:
+        env["MCP_MOCK_PID_FILE"] = str(pid_file)
     launch = ServerLaunch(name="mock", command=LAUNCH, env=env)
     return Supervisor((launch,), ping_timeout=2.0)
 
@@ -126,7 +134,9 @@ async def test_concurrent_calls_after_crash_cause_exactly_one_restart(tmp_path: 
     wrapper = tmp_path / "launch"
     wrapper.write_text(f'#!/bin/sh\necho x >> "{starts_file}"\nexec "{LAUNCH}"\n')
     wrapper.chmod(0o755)
-    launch = ServerLaunch(name="mock", command=wrapper, env={"MCP_MOCK_PID_FILE": str(pid_file)})
+    launch = ServerLaunch(
+        name="mock", command=wrapper, env={**INTERPRETER, "MCP_MOCK_PID_FILE": str(pid_file)}
+    )
     sup = Supervisor((launch,), ping_timeout=2.0)
     await sup.start_all()
     try:

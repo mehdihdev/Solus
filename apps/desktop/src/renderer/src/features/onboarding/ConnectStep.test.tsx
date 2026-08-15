@@ -6,21 +6,21 @@ import { useOnboardingStore } from './onboardingStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import * as provisioning from './provisioning'
-import * as githubConnect from './githubConnect'
+import * as oauthConnect from './oauthConnect'
 import * as edaConnect from './edaConnect'
 import * as catalogModule from './integrationCatalog'
 import { FALLBACK_CATALOG } from './integrationCatalog'
 import * as bridgeModule from '../../lib/desktopBridge'
-import type { GithubRepo } from '../../lib/api/resources'
+import type { SelectableItem } from '../../lib/api/resources'
 
 vi.mock('./provisioning', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./provisioning')>()
   return { ...actual, ensureWorkspace: vi.fn() }
 })
 
-vi.mock('./githubConnect', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./githubConnect')>()
-  return { ...actual, runGithubConnect: vi.fn() }
+vi.mock('./oauthConnect', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./oauthConnect')>()
+  return { ...actual, runOAuthConnect: vi.fn() }
 })
 
 vi.mock('./edaConnect', async (importOriginal) => {
@@ -34,7 +34,7 @@ vi.mock('./integrationCatalog', async (importOriginal) => {
 })
 
 const mockedEnsure = vi.mocked(provisioning.ensureWorkspace)
-const mockedRun = vi.mocked(githubConnect.runGithubConnect)
+const mockedRun = vi.mocked(oauthConnect.runOAuthConnect)
 const mockedEda = vi.mocked(edaConnect.runEdaConnect)
 const mockedCatalog = vi.mocked(catalogModule.loadIntegrationCatalog)
 
@@ -69,13 +69,15 @@ describe('ConnectStep — workspace bootstrap', () => {
   })
 })
 
-describe('ConnectStep — GitHub routing', () => {
+describe('ConnectStep — OAuth routing', () => {
   beforeEach(reset)
 
   it('drives the REAL connector when linked + bridge present', async () => {
     const bridge = {
-      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
-      awaitGithub: vi.fn(async () => ({ code: 'cd' }))
+      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
+      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
+      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
+      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
     }
     vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(bridge)
     mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
@@ -89,9 +91,10 @@ describe('ConnectStep — GitHub routing', () => {
     await userEvent.click(screen.getByText('GitHub'))
 
     await vi.waitFor(() => expect(mockedRun).toHaveBeenCalledTimes(1))
-    const [, projectId, options] = mockedRun.mock.calls[0]
+    const [, projectId, provider, options] = mockedRun.mock.calls[0]
     expect(projectId).toBe('p1')
-    expect(options).toEqual({ redirectUri: 'http://127.0.0.1:9/cb' })
+    expect(provider).toBe('github')
+    expect(options).toEqual({ redirectUri: 'http://127.0.0.1:9/cb', displayName: 'GitHub' })
   })
 
   it('reports an honest error when there is no bridge (dev/web) — never a fake connect', async () => {
@@ -112,8 +115,10 @@ describe('ConnectStep — GitHub routing', () => {
 
   it('reports an honest error when the workspace never linked', async () => {
     const bridge = {
-      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
-      awaitGithub: vi.fn(async () => ({ code: 'cd' }))
+      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
+      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
+      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
+      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
     }
     vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(bridge)
     mockedEnsure.mockResolvedValue({ linked: false })
@@ -129,21 +134,22 @@ describe('ConnectStep — GitHub routing', () => {
     expect(github).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
   })
 
-  it('renders a repo picker when a busy github state carries repos', async () => {
-    const repos: GithubRepo[] = [
-      { full_name: 'a/one', default_branch: 'main', private: false },
-      { full_name: 'a/two', default_branch: 'main', private: false }
+  it('renders a picker when a busy state carries selectable items', async () => {
+    const selectable: SelectableItem[] = [
+      { id: 'a/one', name: 'a/one' },
+      { id: 'a/two', name: 'a/two' }
     ]
     useOnboardingStore.getState().setConnection('github', {
       phase: 'busy',
-      label: 'Choose a repository to index…',
+      label: 'Choose repositorys to track…',
       sourceId: 's1',
-      repos
+      selectable,
+      selectionMode: 'single'
     })
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
-    const picker = await screen.findByLabelText('Choose a repository')
+    const picker = await screen.findByLabelText('Choose an item to track')
     expect(picker).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
   })

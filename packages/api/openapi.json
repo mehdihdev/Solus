@@ -281,6 +281,141 @@
         ]
       }
     },
+    "/api/v1/users/me/credits": {
+      "get": {
+        "summary": "Get Credits",
+        "description": "Current credit balance (ADR-024). Always answerable \u2014 0 before any ledger row\nexists. The desktop Billing screen reads this to reflect credit-pack purchases.",
+        "operationId": "get_credits_api_v1_users_me_credits_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Credits Api V1 Users Me Credits Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/panel-links": {
+      "get": {
+        "summary": "List Panel Links",
+        "description": "Live panel links, so revoking one is possible without guessing its id.",
+        "operationId": "list_panel_links_api_v1_users_me_panel_links_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Panel Links Api V1 Users Me Panel Links Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Approve Panel Link",
+        "description": "Approve a pairing by its user code. Mints nothing.\n\nThe token is minted at redemption inside `panel/pair/poll`, so the plaintext\nnever exists on this side and cannot be logged with the request body.",
+        "operationId": "approve_panel_link_api_v1_users_me_panel_links_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PanelLinkApprove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Approve Panel Link Api V1 Users Me Panel Links Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/panel-links/{binding_id}": {
+      "delete": {
+        "summary": "Revoke Panel Link",
+        "description": "Revoke immediately \u2014 `get_panel_binding` re-reads the row per request, so\nthere is no cache for a revocation to lag behind.",
+        "operationId": "revoke_panel_link_api_v1_users_me_panel_links__binding_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me/notifications": {
       "get": {
         "summary": "List Notifications",
@@ -1971,6 +2106,113 @@
         }
       }
     },
+    "/api/v1/billing/packs": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "List Credit Packs",
+        "description": "The credit packs available for purchase (ADR-024), from server config so the\nUI never hard-codes environment-specific Stripe Price ids. Price ids are not\nsecrets. Sorted by credit amount ascending. `usd` is the display price (whole\ndollars) when configured; the charged amount is always the Stripe Price.",
+        "operationId": "list_credit_packs_api_v1_billing_packs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Credit Packs Api V1 Billing Packs Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/checkout-session": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Create Checkout Session",
+        "description": "Start a Stripe Checkout for a subscription plan or a credit pack, returning\nthe hosted redirect URL. The entitlement is applied by the webhook once Stripe\nconfirms payment \u2014 never from this request (SOLUSDEV-83 / ADR-024).",
+        "operationId": "create_checkout_session_api_v1_billing_checkout_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutSessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Checkout Session Api V1 Billing Checkout Session Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/portal-session": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Create Portal Session",
+        "description": "Open the Stripe-hosted billing portal (manage payment method, cancel,\nswitch plan). Requires an existing Stripe customer (i.e. a prior checkout).",
+        "operationId": "create_portal_session_api_v1_billing_portal_session_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Portal Session Api V1 Billing Portal Session Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/sources": {
       "get": {
         "summary": "List Sources",
@@ -2497,11 +2739,11 @@
         }
       }
     },
-    "/api/v1/projects/{project_id}/sources/{source_id}/repos": {
+    "/api/v1/projects/{project_id}/sources/{source_id}/selectable": {
       "get": {
-        "summary": "List Repos",
-        "description": "Repo picker for the connect flow (GitHub). Lists repositories the\nconnected account can access.",
-        "operationId": "list_repos_api_v1_projects__project_id__sources__source_id__repos_get",
+        "summary": "List Selectable",
+        "description": "What this connected source can be pointed at: repositories, CAD documents,\n\u2026. One generic picker route, so a new connector becomes pickable by\nimplementing `list_selectable` \u2014 no route and no frontend change.\n\nCredentials go through the refresh path: an Onshape access token lives 60\nminutes, so editing a selection an hour after connecting must refresh rather\nthan 502.",
+        "operationId": "list_selectable_api_v1_projects__project_id__sources__source_id__selectable_get",
         "security": [
           {
             "HTTPBearer": []
@@ -2537,8 +2779,161 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response List Repos Api V1 Projects  Project Id  Sources  Source Id  Repos Get"
+                  "title": "Response List Selectable Api V1 Projects  Project Id  Sources  Source Id  Selectable Get"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/artifacts": {
+      "post": {
+        "summary": "Upload Artifact",
+        "operationId": "upload_artifact_api_v1_projects__project_id__artifacts_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/artifacts/{artifact_id}": {
+      "get": {
+        "summary": "Get Artifact",
+        "operationId": "get_artifact_api_v1_projects__project_id__artifacts__artifact_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Artifact Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Artifact Api V1 Projects  Project Id  Artifacts  Artifact Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/artifacts/{artifact_id}/content": {
+      "get": {
+        "summary": "Get Artifact Content",
+        "operationId": "get_artifact_content_api_v1_projects__project_id__artifacts__artifact_id__content_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Artifact Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -2640,6 +3035,23 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "name": "external_ref_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "External Ref Prefix"
             }
           },
           {
@@ -2850,6 +3262,122 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Entity Relations Api V1 Projects  Project Id  Entities  Entity Id  Relations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/graph": {
+      "get": {
+        "summary": "Get Subgraph",
+        "description": "Subgraph extraction around a focused entity \u2014 the read WS-01's shared-focus engine uses to\nre-scope every mounted widget in one call, and the same traversal SOL reasons over.\n\nBounded by construction: `depth` is capped at `MAX_DEPTH` and `limit` at `MAX_LIMIT`, and\n`truncated` says so when the cap bit \u2014 a silently capped subgraph reads as the whole picture.",
+        "operationId": "get_subgraph_api_v1_projects__project_id__graph_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "root",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Root"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2,
+              "minimum": 0,
+              "default": 1,
+              "title": "Depth"
+            }
+          },
+          {
+            "name": "entity_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Types"
+            }
+          },
+          {
+            "name": "relation_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Relation Types"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Subgraph Api V1 Projects  Project Id  Graph Get"
                 }
               }
             }
@@ -3389,10 +3917,367 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}": {
+      "post": {
+        "summary": "Decide Tool Confirmation",
+        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).\n\nThe turn that proposed it has long since ended \u2014 a one-shot SSE stream cannot\nblock for a click \u2014 so the tool runs HERE, with the registry rebuilt under\nthe deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.\nThe request body carries a decision and nothing else, so what the user\napproved is what executes (CLAUDE.md \u00a77).",
+        "operationId": "decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "confirmation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Confirmation Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmationDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Decide Tool Confirmation Api V1 Projects  Project Id  Sol Confirmations  Confirmation Id  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/telemetry": {
+      "post": {
+        "summary": "Ingest Telemetry",
+        "operationId": "ingest_telemetry_api_v1_projects__project_id__bench_telemetry_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetryBatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Ingest Telemetry Api V1 Projects  Project Id  Bench Telemetry Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/recent/{entity_id}": {
+      "get": {
+        "summary": "Recent Values",
+        "operationId": "recent_values_api_v1_projects__project_id__bench_recent__entity_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "signals",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signals"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 512,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Recent Values Api V1 Projects  Project Id  Bench Recent  Entity Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/summary": {
+      "get": {
+        "summary": "Telemetry Summary",
+        "operationId": "telemetry_summary_api_v1_projects__project_id__bench_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "duration_seconds",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "maximum": 3600.0,
+              "exclusiveMinimum": 0,
+              "title": "Duration Seconds"
+            }
+          },
+          {
+            "name": "signals",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signals"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Telemetry Summary Api V1 Projects  Project Id  Bench Summary Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/events": {
+      "get": {
+        "summary": "Recent Events",
+        "operationId": "recent_events_api_v1_projects__project_id__bench_events_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 512,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Recent Events Api V1 Projects  Project Id  Bench Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/bridge": {
       "get": {
         "summary": "Bridge Status",
-        "description": "The requesting user's bridge state for this project (BRG-03). PER-USER\nsemantics: the registry is keyed (user, team, project) \u2014 you see YOUR\ncompanion, not a teammate's. No DB writes; liveness is ephemeral.",
+        "description": "The requesting user's bridge state for this project (BRG-03 + MCP-05\nlicense_state). PER-USER semantics: the registry is keyed (user, team,\nproject) \u2014 you see YOUR companion, not a teammate's. Read-only: no DB\nwrites beyond the entitlement read; liveness is ephemeral.",
         "operationId": "bridge_status_api_v1_projects__project_id__bridge_get",
         "security": [
           {
@@ -3481,10 +4366,243 @@
           }
         ]
       }
+    },
+    "/api/v1/panel/pair/start": {
+      "post": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Pair Start",
+        "description": "Begin a pairing. Grants nothing \u2014 it only mints a code to be approved.",
+        "operationId": "pair_start_api_v1_panel_pair_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Pair Start Api V1 Panel Pair Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/panel/pair/poll": {
+      "post": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Pair Poll",
+        "description": "Exchange an approved device code for a panel token, exactly once.\n\nThe device code travels as a Bearer so this loop lands in a per-credential\nrate-limit bucket rather than the shared unauthenticated one.",
+        "operationId": "pair_poll_api_v1_panel_pair_poll_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Pair Poll Api V1 Panel Pair Poll Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/panel/context": {
+      "get": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Panel Context",
+        "description": "Which Solus projects this user can see that track this Onshape document.\n\nResolved at REQUEST time from live membership rather than stored on the\nbinding: a document can appear in several projects, one Onshape account maps\nto many projects, and a stored answer would go stale the moment someone\nedits a source's document selection.\n\nZero matches is an empty list, never a 403 \u2014 a panel must not become an\nexistence oracle for other tenants' documents.",
+        "operationId": "panel_context_api_v1_panel_context_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "element_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Element Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Panel Context Api V1 Panel Context Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/panel/projects/{project_id}/parts": {
+      "get": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Panel Parts",
+        "description": "Parts Solus knows for this document/element, in this project.\n\nThe project the panel names carries NO authority: `get_project_context` is\ncalled directly with the user resolved from the binding, so a project the\nbinding cannot see 404s exactly as it would for any other caller. Calling it\nas a plain function (the `routers/bridge.py` precedent) means it never\ntouches the provisioning dependency.",
+        "operationId": "panel_parts_api_v1_panel_projects__project_id__parts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "element_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Element Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Panel Parts Api V1 Panel Projects  Project Id  Parts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "ActionMode": {
+        "type": "string",
+        "enum": [
+          "guide",
+          "do"
+        ],
+        "title": "ActionMode",
+        "description": "How SOL is allowed to act on this request: explain, or operate."
+      },
       "AttachmentIn": {
         "properties": {
           "kind": {
@@ -3508,6 +4626,61 @@
         ],
         "title": "AttachmentIn",
         "description": "A measurable attachment fact for classify/completion requests (MO-04):\nwhat kind of artifact and how many tokens it contributes."
+      },
+      "CheckoutSessionCreate": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "pack"
+            ],
+            "title": "Kind"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interval": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "month",
+                  "year"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval"
+          },
+          "price_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "CheckoutSessionCreate",
+        "description": "Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,\nmonth/year); `pack` needs a price_id that maps to a configured credit pack."
       },
       "ClassifyRequest": {
         "properties": {
@@ -3572,6 +4745,25 @@
         ],
         "title": "Complexity",
         "description": "Routing tier, derived automatically by the Step-1 gateway \u2014 never supplied\nby the end user (see `router.derive_complexity`)."
+      },
+      "ConfirmationDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "title": "Decision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "ConfirmationDecision",
+        "description": "Approve or reject one parked destructive action (SOLUS-ONS-A5).\n\nA decision and NOTHING ELSE. `StrictModel` forbids extra fields, so a body\ncarrying its own `args` is a 422 rather than a merge \u2014 the arguments that\nexecute are the stored ones the user was shown. That is the whole security\nproperty of the round-trip."
       },
       "ConversationCreate": {
         "properties": {
@@ -3690,6 +4882,10 @@
             "maxLength": 8000,
             "minLength": 1,
             "title": "Content"
+          },
+          "action_mode": {
+            "$ref": "#/components/schemas/ActionMode",
+            "default": "guide"
           }
         },
         "additionalProperties": false,
@@ -3765,6 +4961,18 @@
               }
             ],
             "title": "Redirect Uri"
+          },
+          "access": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access"
           }
         },
         "additionalProperties": false,
@@ -3773,6 +4981,79 @@
           "project_id"
         ],
         "title": "OAuthStart"
+      },
+      "ObserverEventIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "threshold_breach",
+              "change_point",
+              "stream_gap"
+            ],
+            "title": "Kind"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Device Id"
+          },
+          "signal": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Signal"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "device_id",
+          "signal",
+          "at"
+        ],
+        "title": "ObserverEventIn",
+        "description": "Wire shape of an edge-observer event (mirrors livebench's ObserverEvent)."
+      },
+      "PanelLinkApprove": {
+        "properties": {
+          "user_code": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "User Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_code"
+        ],
+        "title": "PanelLinkApprove",
+        "description": "Reject unknown fields: this endpoint hands out a 90-day credential."
       },
       "PlanType": {
         "type": "string",
@@ -4054,6 +5335,34 @@
         "additionalProperties": false,
         "type": "object",
         "title": "TeamUpdate"
+      },
+      "TelemetryBatchIn": {
+        "properties": {
+          "packets": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Packets"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ObserverEventIn"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "packets"
+        ],
+        "title": "TelemetryBatchIn"
       },
       "UserUpdate": {
         "properties": {

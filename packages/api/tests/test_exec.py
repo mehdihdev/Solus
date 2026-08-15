@@ -1,9 +1,10 @@
 """SYS-02 tool-call execution layer (`agent/tools/exec.py`).
 
 The executor composes the existing safety sequence — it must not weaken it:
-the §7 destructive gate is consulted BEFORE dispatch, the registry keeps the
-only per-call clock, every failure is `ToolResult(ok=False)` (never a raise),
-and observability logs identifiers/counts only — never tool args or values.
+the §7 destructive gate lives inside the dispatch closure (`build_dispatch`)
+and is consulted BEFORE any invoke, the registry keeps the only per-call clock,
+every failure is `ToolResult(ok=False)` (never a raise), and observability logs
+identifiers/counts only — never tool args or values.
 """
 
 import asyncio
@@ -14,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from solus_api.agent.runtime import build_dispatch
 from solus_api.agent.tools import (
     InProcessTool,
     ToolCall,
@@ -21,7 +23,7 @@ from solus_api.agent.tools import (
     ToolErrorCode,
     ToolRegistry,
 )
-from solus_api.agent.tools.exec import DEFAULT_MAX_CONCURRENCY, run_tool, run_tool_calls
+from solus_api.agent.tools.exec import DEFAULT_MAX_CONCURRENCY, run_tool_calls
 
 _ARGS_SENTINEL = "DO-NOT-LOG-args-sentinel-abc"
 _VALUE_SENTINEL = "DO-NOT-LOG-value-sentinel-xyz"
@@ -65,7 +67,7 @@ async def test_gated_tool_is_refused_and_never_dispatched() -> None:
         invoke = AsyncMock()
 
     registry.register(_Flagged())
-    result = await run_tool(registry, ToolCall(tool="flash", args={}))
+    result = await build_dispatch(registry, None)(ToolCall(tool="flash", args={}))
     assert result.ok is False and result.error is not None
     assert result.error.code is ToolErrorCode.UNAUTHORIZED
     _Flagged.invoke.assert_not_awaited()  # dispatch never happened
@@ -75,7 +77,7 @@ async def test_successful_call_passes_through_registry_result() -> None:
     registry = ToolRegistry()
     registry.register(_tool("echo", _ok))
     call = ToolCall(tool="echo", args={"x": "1"})
-    result = await run_tool(registry, call)
+    result = await build_dispatch(registry, None)(call)
     assert result.ok is True
     assert result.call_id == call.call_id
     assert result.value == {"echoed": {"x": "1"}, "secret": _VALUE_SENTINEL}
@@ -88,7 +90,7 @@ async def test_timeout_returns_failed_result_without_raising() -> None:
 
     registry = ToolRegistry()
     registry.register(_tool("slow", hang, timeout=0.02))
-    result = await run_tool(registry, ToolCall(tool="slow", args={}))
+    result = await build_dispatch(registry, None)(ToolCall(tool="slow", args={}))
     assert result.ok is False and result.error is not None
     assert result.error.code is ToolErrorCode.TIMEOUT
     assert result.error.retryable is True
@@ -100,7 +102,7 @@ async def test_crashing_tool_returns_failed_result_without_raising() -> None:
 
     registry = ToolRegistry()
     registry.register(_tool("boom", boom))
-    result = await run_tool(registry, ToolCall(tool="boom", args={}))
+    result = await build_dispatch(registry, None)(ToolCall(tool="boom", args={}))
     assert result.ok is False and result.error is not None
     assert result.error.code is ToolErrorCode.TOOL_ERROR
     assert "internal-detail" not in result.error.message
@@ -117,7 +119,7 @@ async def test_run_tool_calls_preserves_call_order_under_concurrency() -> None:
         ToolCall(tool="slow", args={"name": "first", "delay": "0.05"}),
         ToolCall(tool="slow", args={"name": "second", "delay": "0.0"}),
     ]
-    results = await run_tool_calls(registry, calls)
+    results = await run_tool_calls(build_dispatch(registry, None), calls)
     assert [r.call_id for r in results] == [c.call_id for c in calls]
     assert results[0].value == {"name": "first"}  # order by input, not completion
 
@@ -137,7 +139,7 @@ async def test_run_tool_calls_bounds_concurrency() -> None:
     registry = ToolRegistry()
     registry.register(_tool("tracked", tracked))
     calls = [ToolCall(tool="tracked", args={}) for _ in range(6)]
-    results = await run_tool_calls(registry, calls, max_concurrency=2)
+    results = await run_tool_calls(build_dispatch(registry, None), calls, max_concurrency=2)
     assert all(r.ok for r in results)
     assert peak <= 2
     assert DEFAULT_MAX_CONCURRENCY == 4  # the documented MCP-subprocess fan-out cap
@@ -155,7 +157,7 @@ async def test_batch_budget_expiry_yields_timeout_results_not_exception() -> Non
     registry.register(_tool("fast", fast))
     registry.register(_tool("hang", hang))
     calls = [ToolCall(tool="fast", args={}), ToolCall(tool="hang", args={})]
-    results = await run_tool_calls(registry, calls, budget_seconds=0.1)
+    results = await run_tool_calls(build_dispatch(registry, None), calls, budget_seconds=0.1)
     assert results[0].ok is True and results[0].value == {"done": "yes"}
     assert results[1].ok is False and results[1].error is not None
     assert results[1].error.code is ToolErrorCode.TIMEOUT
@@ -166,7 +168,7 @@ async def test_log_lines_never_contain_args_or_values(caplog: pytest.LogCaptureF
     registry = ToolRegistry()
     registry.register(_tool("echo", _ok))
     with caplog.at_level(logging.INFO, logger="solus.tools.exec"):
-        await run_tool(registry, ToolCall(tool="echo", args={"x": _ARGS_SENTINEL}))
+        await build_dispatch(registry, None)(ToolCall(tool="echo", args={"x": _ARGS_SENTINEL}))
     joined = " ".join(record.getMessage() for record in caplog.records)
     assert _ARGS_SENTINEL not in joined
     assert _VALUE_SENTINEL not in joined
@@ -181,7 +183,9 @@ async def test_crafted_tool_name_cannot_forge_log_lines(
     ESCAPED in the log record, never as a second forged line (sec review L1)."""
     registry = ToolRegistry()
     with caplog.at_level(logging.INFO, logger="solus.tools.exec"):
-        result = await run_tool(registry, ToolCall(tool="evil\ninjected log line", args={}))
+        result = await build_dispatch(registry, None)(
+            ToolCall(tool="evil\ninjected log line", args={})
+        )
     assert result.ok is False  # NOT_FOUND — but observed either way
     (message,) = [r.getMessage() for r in caplog.records]
     assert "\n" not in message  # no forged second line
@@ -216,7 +220,9 @@ async def test_sentry_capture_is_tags_only_and_never_error_message(
         )
     )
     # INVALID_ARGS whose jsonschema message echoes the offending value.
-    result = await run_tool(registry, ToolCall(tool="strict", args={"x": 42, "extra": "no"}))
+    result = await build_dispatch(registry, None)(
+        ToolCall(tool="strict", args={"x": 42, "extra": "no"})
+    )
     assert result.ok is False
 
     assert len(captured) == 1

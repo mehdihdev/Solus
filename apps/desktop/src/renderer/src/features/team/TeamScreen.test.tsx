@@ -6,7 +6,9 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TeamScreen } from './TeamScreen'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useAuthStore } from '../../store/authStore'
 import * as resources from '../../lib/api/resources'
+import { ApiError } from '../../lib/api/envelope.types'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -239,5 +241,37 @@ describe('TeamScreen — live (API-backed)', () => {
     await waitFor(() => expect(screen.getByText('Rover Nav')).toBeInTheDocument())
     await userEvent.click(screen.getByText('Rover Nav'))
     expect(onOpen).toHaveBeenCalledWith({ id: 'p1', name: 'Rover Nav' })
+  })
+})
+
+describe('TeamScreen — a team that is gone is not an outage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Signed in: `useOfflineReason` only reports `api_unreachable` for an
+    // authenticated user — signed out, every failure is "sign in" instead.
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'maya@example.dev' } })
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getMe).mockResolvedValue(meWithTeams([SOLO_TEAM]))
+    vi.mocked(resources.listProjects).mockResolvedValue([])
+  })
+
+  it('does not tell the user to go restart a backend that is answering', async () => {
+    vi.mocked(resources.getTeamDetail).mockRejectedValue(
+      new ApiError(404, 'not_found', 'No such team')
+    )
+    render(<TeamScreen />)
+    // The exact sentence that sent a real user chasing a healthy API.
+    await waitFor(() =>
+      expect(screen.queryByText(/Make sure the backend is running/)).not.toBeInTheDocument()
+    )
+    expect(screen.getByText(/no longer exists|no longer have access/i)).toBeInTheDocument()
+  })
+
+  it('still says the API is unreachable when it genuinely is', async () => {
+    vi.mocked(resources.getTeamDetail).mockRejectedValue(new TypeError('Failed to fetch'))
+    render(<TeamScreen />)
+    await waitFor(() =>
+      expect(screen.getByText(/Make sure the backend is running/)).toBeInTheDocument()
+    )
   })
 })

@@ -4,6 +4,7 @@ import { renderHook, waitFor, act } from '@testing-library/react'
 import { useTeamData } from './useTeamData'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
+import { ApiError } from '../../lib/api/envelope.types'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -311,5 +312,78 @@ describe('useTeamData', () => {
     expect(result.current.activity.map((a) => a.id)).toEqual(['act1', 'act2'])
     expect(result.current.activityHasMore).toBe(false)
     expect(vi.mocked(resources.listActivityPage)).toHaveBeenLastCalledWith('t1', 'c2')
+  })
+})
+
+// The persisted team id is a memory of a SERVER row, exactly like the project id
+// that useValidateProject already guards. When it goes stale — the database is
+// reset, the user is removed from the team, a dev points at a different stack —
+// every team-scoped call 404s forever, and the screen used to blame the backend.
+describe('useTeamData — a stale persisted team id', () => {
+  const ME_WITH_PERSONAL = {
+    id: 'u1',
+    email: 'maya@strider.dev',
+    name: null,
+    avatar_url: null,
+    created_at: '',
+    teams: [
+      {
+        team_id: 't-real',
+        name: 'Personal',
+        role: 'owner',
+        is_personal: true,
+        plan_status: 'trial',
+        trial_ends_at: ''
+      }
+    ]
+  }
+
+  it('ignores a stored id that is not one of my teams and uses the personal team', async () => {
+    // The live failure: 't-ghost' came from a different database.
+    useWorkspaceStore.setState({ linked: true, teamId: 't-ghost' })
+    vi.mocked(resources.getMe).mockResolvedValue(ME_WITH_PERSONAL)
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(vi.mocked(resources.getTeamDetail)).toHaveBeenCalledWith('t-real')
+    expect(vi.mocked(resources.getTeamDetail)).not.toHaveBeenCalledWith('t-ghost')
+  })
+
+  it('keeps a stored id that IS still one of my teams', async () => {
+    // Self-healing must not become gratuitous switching: a user who picked a
+    // non-personal team stays on it across reloads.
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(vi.mocked(resources.getTeamDetail)).toHaveBeenCalledWith('t1')
+  })
+})
+
+describe('useTeamData — 404 is not "the backend is down"', () => {
+  it('reports a deleted team as gone, not offline', async () => {
+    // Race: the team existed in getMe and was removed before we fetched it.
+    vi.mocked(resources.getTeamDetail).mockRejectedValue(
+      new ApiError(404, 'not_found', 'No such team')
+    )
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('gone'))
+  })
+
+  it('still reports a 5xx as offline', async () => {
+    vi.mocked(resources.getTeamDetail).mockRejectedValue(new ApiError(500, 'boom', 'boom'))
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('offline'))
+  })
+
+  it('still reports a network failure as offline', async () => {
+    vi.mocked(resources.getTeamDetail).mockRejectedValue(new TypeError('Failed to fetch'))
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('offline'))
+  })
+
+  it('reports offline when getMe itself fails — we could not even ask', async () => {
+    vi.mocked(resources.getMe).mockRejectedValue(new TypeError('Failed to fetch'))
+    useWorkspaceStore.setState({ linked: true, teamId: null })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('offline'))
   })
 })

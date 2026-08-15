@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import { createOrbOverlayBridge } from './orbOverlayBridge'
+import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
 
 interface OAuthCallbackResult {
   code?: string
@@ -17,15 +19,26 @@ interface CloneResult {
 // relays the Supabase access token to the local companion (SOLUSDEV-154 /
 // BRG-04); null means signout. The token is never stored or logged here.
 // `solus.folder` links a project to a local directory (pick / clone / reveal)
-// — SOLUSDEV-164.
+// — SOLUSDEV-164. `solus.orbOverlay` is the renderer end of the CTR-06
+// orb↔overlay push wire (SOLUSDEV-223): validated publish/subscribe over the
+// shared channel constants.
 const api = {
   oauth: {
     getRedirectUrl: (): Promise<string> => ipcRenderer.invoke('oauth:github:redirect-url'),
     awaitGithub: (authorizeUrl: string): Promise<OAuthCallbackResult> =>
-      ipcRenderer.invoke('oauth:github:await', authorizeUrl)
+      ipcRenderer.invoke('oauth:github:await', authorizeUrl),
+    getConnectorRedirectUrl: (): Promise<string> =>
+      ipcRenderer.invoke('oauth:connector:redirect-url'),
+    awaitOAuth: (authorizeUrl: string, expectedState: string): Promise<OAuthCallbackResult> =>
+      ipcRenderer.invoke('oauth:connector:await', authorizeUrl, expectedState)
   },
   bridge: {
     setToken: (token: string | null): Promise<void> => ipcRenderer.invoke('bridge:token', token),
+    // The project the companion serves. The bridge WS route is project-scoped,
+    // so the companion cannot dial anything until this is set, and it respawns
+    // when it changes (the project is fixed in its environment at spawn).
+    setProject: (projectId: string | null): Promise<void> =>
+      ipcRenderer.invoke('bridge:project', projectId),
     // BYO-license capture (SOLUSDEV-102 / MCP-05): one flat key→value secrets
     // object per server, relayed to the companion's stdin. Never stored or
     // logged anywhere along the way.
@@ -56,7 +69,21 @@ const api = {
   }
 }
 
-export type SolusBridge = typeof api
+// window.api is vestigial (typed `unknown`, still zero renderer consumers) —
+// everything the renderer actually calls comes through window.solus, which is
+// `api` plus the surfaces below.
+// `solus.solWindow` detaches the orb to the always-on-top window / re-attaches
+// it (SOLX-02); channel names come from the shared constants module only.
+const solus = {
+  ...api,
+  orbOverlay: createOrbOverlayBridge(ipcRenderer),
+  solWindow: {
+    detach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.detach),
+    attach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.attach)
+  }
+}
+
+export type SolusBridge = typeof solus
 
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
@@ -65,7 +92,7 @@ if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
-    contextBridge.exposeInMainWorld('solus', api)
+    contextBridge.exposeInMainWorld('solus', solus)
   } catch (error) {
     console.error(error)
   }
@@ -75,5 +102,5 @@ if (process.contextIsolated) {
   const w = window as unknown as { electron: unknown; api: unknown; solus: unknown }
   w.electron = electronAPI
   w.api = api
-  w.solus = api
+  w.solus = solus
 }

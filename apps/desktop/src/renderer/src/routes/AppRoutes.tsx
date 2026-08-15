@@ -6,6 +6,8 @@ import { LoginPage } from '../features/auth/LoginPage'
 import { SignupPage } from '../features/auth/SignupPage'
 import { ResetPasswordPage } from '../features/auth/ResetPasswordPage'
 import { Onboarding } from '../features/onboarding/Onboarding'
+import { OverlayWindow } from '../features/overlay/OverlayWindow'
+import { OrbWindow } from '../features/sol/OrbWindow'
 import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
 import { Spinner } from '../components/ui/Spinner'
 import { useAuthStore } from '../store/authStore'
@@ -89,6 +91,11 @@ export function AppRoutes(): React.JSX.Element {
           </RequireOnboarding>
         }
       />
+      {/* SOLX-02: the detached always-on-top orb window (guards its own auth). */}
+      <Route path="/orb" element={<OrbWindow />} />
+      {/* SOLX-03/TU-10: the click-through guide overlay window. No auth guard —
+          it renders only what the orb hands it over CTR-06, never fetched data. */}
+      <Route path="/overlay" element={<OverlayWindow />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

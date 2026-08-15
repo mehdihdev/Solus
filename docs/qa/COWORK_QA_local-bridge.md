@@ -8,8 +8,10 @@ hosts local MCP tool servers and connects them to the cloud so SOL can call loca
 - Postgres running (`make db-up`), API running:
   `cd packages/api && uv run uvicorn --factory solus_api.main:create_app --port 8000`
   with `SOLUS_SUPABASE_JWT_SECRET` set (any value; mint matching HS256 tokens below) and
-  `SOLUS_BRIDGE_ALLOWLIST_ROOT=packages/companion/tests/fixtures/mcp_root` (exposes the mock
-  server — no CAD tool needed).
+  `SOLUS_BRIDGE_ALLOWLIST_ROOT=../companion/tests/fixtures/mcp_root` (exposes the mock
+  server — no CAD tool needed). The path is relative to the `cd packages/api` above; an
+  absolute path is safer. Unset, the default is now the repo's own
+  `integrations/mcp`, anchored on the package rather than the cwd.
 - A user with a team + project (sign up / use the desktop app once), and a valid access token
   for them (real Supabase token, or HS256-signed with the same secret: claims `sub`, `email`,
   `aud=authenticated`, `exp`).

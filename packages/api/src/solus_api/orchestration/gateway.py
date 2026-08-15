@@ -59,6 +59,8 @@ from solus_api.orchestration.providers import (
     ProviderCredentialsMissingError,
     ProviderError,
     ProviderTransientError,
+    ToolConversation,
+    ToolUse,
     UnknownProviderError,
     Usage,
     build_adapter_registry,
@@ -126,6 +128,10 @@ class Completion(BaseModel):
     tokens_out: int
     model: ModelChoice
     call_id: str
+    #: Tool calls the model PROPOSED this round. Empty on every text-only call,
+    #: so existing callers are unaffected. Proposals only — Solus code decides
+    #: whether any of them runs.
+    tool_calls: tuple[ToolUse, ...] = ()
 
 
 def _select_adapter(provider: str, adapters: Mapping[str, ProviderAdapter]) -> ProviderAdapter:
@@ -187,7 +193,7 @@ class CompletionStream:
 
     def __init__(
         self,
-        inner_factory: Callable[[], AsyncIterator[str | Usage]],
+        inner_factory: Callable[[], AsyncIterator[str | ToolUse | Usage]],
         *,
         call_id: str,
         model: ModelChoice,
@@ -198,7 +204,7 @@ class CompletionStream:
         enqueue: EnqueueFn | None,
     ) -> None:
         self._inner_factory = inner_factory
-        self._inner: AsyncIterator[str | Usage] | None = None
+        self._inner: AsyncIterator[str | ToolUse | Usage] | None = None
         self._call_id = call_id
         self._model = model
         self._config = config
@@ -207,6 +213,7 @@ class CompletionStream:
         self._redis = redis
         self._enqueue = enqueue
         self._parts: list[str] = []
+        self._tool_uses: list[ToolUse] = []
         self._started = time.monotonic()
         self._closed = False
         self.completion: Completion | None = None
@@ -215,6 +222,22 @@ class CompletionStream:
         return self
 
     async def __anext__(self) -> str:
+        # Loops so a ToolUse event is absorbed rather than returned: this
+        # iterator is typed `AsyncIterator[str]` and every existing consumer
+        # treats what it yields as text. A tool call must never leak out as a
+        # text chunk.
+        while True:
+            event = await self._next_inner()
+            if isinstance(event, Usage):
+                await self._finalize(event)
+                raise StopAsyncIteration
+            if isinstance(event, ToolUse):
+                self._tool_uses.append(event)
+                continue
+            self._parts.append(event)
+            return event
+
+    async def _next_inner(self) -> str | ToolUse | Usage:
         if self._closed:
             raise StopAsyncIteration
         try:
@@ -238,13 +261,9 @@ class CompletionStream:
             raise ProviderError(
                 f"{self._model.provider}/{self._model.model_name} call failed"
             ) from exc
-        if isinstance(event, Usage):
-            await self._finalize(event)
-            raise StopAsyncIteration
-        self._parts.append(event)
         return event
 
-    async def _start(self) -> str | Usage:
+    async def _start(self) -> str | ToolUse | Usage:
         """Pre-flight gates, then start the provider stream with transient
         retry; returns the first inner event. MO-03 order: frequency cap →
         spend/trial gate → (retry-wrapped) provider call."""
@@ -312,6 +331,7 @@ class CompletionStream:
             tokens_out=usage.tokens_out,
             model=self._model,
             call_id=self._call_id,
+            tool_calls=tuple(self._tool_uses),
         )
         logger.info(
             "model call done call_id=%s provider=%s model=%s role=%s "
@@ -335,7 +355,7 @@ class CompletionStream:
         )
 
 
-async def _close_generator(inner: AsyncIterator[str | Usage]) -> None:
+async def _close_generator(inner: AsyncIterator[str | ToolUse | Usage]) -> None:
     if isinstance(inner, AsyncGenerator):
         await inner.aclose()
 
@@ -349,6 +369,7 @@ def stream(
     type: RouteType | None = None,
     attachments: Sequence[AttachmentHint] | None = None,
     images: Sequence[ImageBlock] | None = None,
+    conversation: ToolConversation | None = None,
     config: OrchestrationConfig | None = None,
     adapters: Mapping[str, ProviderAdapter] | None = None,
     user_id: uuid.UUID | None = None,
@@ -369,6 +390,14 @@ def stream(
     reason, never a silent escalation); a SYSTEM-routed miss escalates within
     the role family (logged) or raises `ContextWindowExceededError` when
     nothing fits. Never silent truncation.
+
+    `conversation` (SOLUS-RUN-01) carries a system prompt, multi-turn messages
+    and tool definitions. When it is None the call is byte-identical to the
+    text-only path every existing caller uses. When supplied, `query` is used
+    ONLY for routing and token estimation — the conversation is the request —
+    and any tool calls the model proposes land on `Completion.tool_calls`.
+    Not every provider implements it: an adapter that cannot raises
+    `ToolCallingUnsupportedError` rather than silently dropping the tools.
 
     MO-03: `redis` powers the per-user frequency cap (None -> fail-open with a
     warning, confirmed policy); `enqueue` is the ARQ seam for debit
@@ -413,7 +442,13 @@ def stream(
         choice.route_type,
     )
     return CompletionStream(
-        lambda: adapter.stream(choice.model_name, query, max_tokens=max_tokens, images=images),
+        lambda: adapter.stream(
+            choice.model_name,
+            query,
+            max_tokens=max_tokens,
+            images=images,
+            conversation=conversation,
+        ),
         call_id=call_id,
         model=choice,
         config=resolved_config,
@@ -433,6 +468,7 @@ async def complete(
     type: RouteType | None = None,
     attachments: Sequence[AttachmentHint] | None = None,
     images: Sequence[ImageBlock] | None = None,
+    conversation: ToolConversation | None = None,
     config: OrchestrationConfig | None = None,
     adapters: Mapping[str, ProviderAdapter] | None = None,
     user_id: uuid.UUID | None = None,
@@ -452,6 +488,7 @@ async def complete(
         type=type,
         attachments=attachments,
         images=images,
+        conversation=conversation,
         config=config,
         adapters=adapters,
         user_id=user_id,

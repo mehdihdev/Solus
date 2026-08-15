@@ -8,9 +8,10 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 from solus_companion.artifacts import (
     REASON_PATH_ESCAPES,
     REASON_UPLOAD_UNAVAILABLE,
+    ArtifactStore,
     ArtifactUploadError,
 )
-from solus_companion.dispatch import NON_TEXT_NOTE, Dispatcher
+from solus_companion.dispatch import NON_TEXT_NOTE, Dispatcher, map_result
 from solus_companion.frames import ToolCallIn
 from solus_companion.supervisor import UnknownToolError
 
@@ -141,8 +142,16 @@ async def test_non_text_content_is_never_inlined() -> None:
     await dispatcher.wait_idle()
     value = sink.sent[0]["data"]["value"]
     assert value["content"][0]["text"] == "caption"
-    assert value["content"][1] == {"type": "image", "inlined": False, "note": NON_TEXT_NOTE}
+    # SOLUS-CAD-00c: the block now carries a HANDLE instead of a dropped note —
+    # but the bytes themselves still never ride the frame.
+    block = value["content"][1]
+    assert block["type"] == "image"
+    assert block["inlined"] is False
+    assert block["artifact_id"]
+    assert block["media_type"] == "image/png"
+    assert block["size_bytes"] == len(b"BINARYSENTINEL")
     assert "QklOQVJZU0VOVElORUw=" not in json.dumps(sink.sent)
+    assert "BINARYSENTINEL" not in json.dumps(sink.sent)
 
 
 async def test_duplicate_live_call_id_is_dropped() -> None:
@@ -335,3 +344,55 @@ async def test_cancel_all_sends_nothing_afterward() -> None:
     dispatcher.handle_tool_call(_call(call_id="c-late"))
     await dispatcher.wait_idle()
     assert sink.sent == []
+
+
+async def test_a_block_too_large_to_stage_degrades_to_a_note_not_a_failure() -> None:
+    """The fallback CAD-00c left behind: staging has a per-artifact budget, and a
+    block over it must not fail the tool call — the caller still gets its text
+    content plus a note saying the bytes were omitted.
+
+    Uncovered until the SOLUSDEV-100 merge, which is when it was noticed: the
+    only reference to `NON_TEXT_NOTE` in the suite was an import.
+    """
+    fake = FakeSupervisor(
+        CallToolResult(
+            content=[
+                TextContent(type="text", text="caption"),
+                ImageContent(type="image", data="QklOQVJZU0VOVElORUw=", mimeType="image/png"),
+            ]
+        )
+    )
+    sink = Sink()
+    # One byte of headroom short of the payload, so staging refuses it.
+    dispatcher = Dispatcher(fake, sink, ArtifactStore(max_artifact_bytes=1))
+
+    dispatcher.handle_tool_call(_call(tool="mock.pic"))
+    await dispatcher.wait_idle()
+
+    value = sink.sent[0]["data"]["value"]
+    assert sink.sent[0]["type"] == "tool_result"
+    assert value["content"][0]["text"] == "caption"
+    block = value["content"][1]
+    assert block["type"] == "image"
+    assert block["inlined"] is False
+    assert "artifact_id" not in block  # nothing was staged
+    assert "exceeds" in block["note"]  # says WHY, rather than a generic omission
+    # The bytes still never ride the frame, degraded or not.
+    assert "BINARYSENTINEL" not in json.dumps(sink.sent)
+
+
+async def test_without_a_store_a_non_text_block_degrades_to_the_generic_note() -> None:
+    """`map_result`'s pre-CAD-00c behaviour, still reachable: callers that stage
+    nothing get a note instead of a handle, and never the bytes."""
+    result = CallToolResult(
+        content=[ImageContent(type="image", data="QklOQVJZU0VOVElORUw=", mimeType="image/png")]
+    )
+
+    frame = json.loads(map_result("call-1", result))
+
+    assert frame["data"]["value"]["content"][0] == {
+        "type": "image",
+        "inlined": False,
+        "note": NON_TEXT_NOTE,
+    }
+    assert "BINARYSENTINEL" not in json.dumps(frame)

@@ -1,8 +1,20 @@
-"""Artifact upload: path paranoia, allowlist gate, status mapping, ArtifactRef.
+"""Companion artifact transfer — BOTH transports (see artifacts.py).
 
-Hermetic — HTTP rides an injected fake `post`; no network, no real API. Token
-values follow the suite convention ("tok-1"), placeholders only.
+Two independently-written suites, kept together because they cover two
+different ways bulk bytes leave the machine and neither subsumes the other:
+
+* staging + pull (SOLUS-CAD-00c) — inline content blocks held in memory and
+  fetched over the channel; before it, `map_result` silently DROPPED every
+  non-text block, so a STEP export from a vendored CAD server could never reach
+  the cloud at all;
+* upload + push (SOLUSDEV-100) — path paranoia, the allowlist gate, status
+  mapping and `ArtifactRef` for a file the fork wrote to disk.
+
+Both are hermetic: no network, no real API. HTTP rides an injected fake `post`,
+and token values follow the suite convention ("tok-1"), placeholders only.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -24,6 +36,7 @@ from solus_companion.artifacts import (
     REASON_TIMEOUT,
     REASON_UNAUTHORIZED,
     REASON_WORKSPACE_UNKNOWN,
+    ArtifactStore,
     ArtifactUploader,
     ArtifactUploadError,
     server_workspace,
@@ -34,6 +47,104 @@ from solus_companion.config import (
     TokenBox,
     api_endpoint_from_ws_url,
 )
+
+# --- staged / PULL (SOLUS-CAD-00c) ---
+
+
+def test_stage_returns_a_handle_and_get_round_trips() -> None:
+    store = ArtifactStore()
+
+    ref = store.stage(b"STEP-BYTES", media_type="application/step")
+
+    assert ref.size_bytes == len(b"STEP-BYTES")
+    assert ref.media_type == "application/step"
+    assert store.get(ref.artifact_id) == b"STEP-BYTES"
+
+
+def test_handles_are_unique_per_artifact() -> None:
+    store = ArtifactStore()
+
+    first = store.stage(b"a", media_type="text/plain")
+    second = store.stage(b"a", media_type="text/plain")
+
+    assert first.artifact_id != second.artifact_id
+
+
+def test_unknown_handle_is_none_not_an_error() -> None:
+    assert ArtifactStore().get("nope") is None
+
+
+def test_oversized_artifact_is_refused_rather_than_staged() -> None:
+    store = ArtifactStore(max_artifact_bytes=8)
+
+    with pytest.raises(ValueError):
+        store.stage(b"x" * 9, media_type="application/octet-stream")
+
+
+def test_total_budget_evicts_oldest_first() -> None:
+    """A tool that emits artifacts in a loop must not grow the companion's
+    memory without bound; the newest artifact is the one a fetch will want."""
+    store = ArtifactStore(max_total_bytes=10)
+
+    first = store.stage(b"12345", media_type="application/octet-stream")
+    second = store.stage(b"67890", media_type="application/octet-stream")
+    third = store.stage(b"abcde", media_type="application/octet-stream")
+
+    assert store.get(first.artifact_id) is None
+    assert store.get(second.artifact_id) == b"67890"
+    assert store.get(third.artifact_id) == b"abcde"
+
+
+def test_count_budget_evicts_oldest_first() -> None:
+    store = ArtifactStore(max_artifacts=2)
+
+    first = store.stage(b"a", media_type="text/plain")
+    store.stage(b"b", media_type="text/plain")
+    store.stage(b"c", media_type="text/plain")
+
+    assert store.get(first.artifact_id) is None
+    assert len(store) == 2
+
+
+def test_clear_forgets_everything_for_a_new_session() -> None:
+    store = ArtifactStore()
+    ref = store.stage(b"a", media_type="text/plain")
+
+    store.clear()
+
+    assert store.get(ref.artifact_id) is None
+    assert len(store) == 0
+
+
+def test_chunks_split_at_the_configured_size_and_cover_the_bytes() -> None:
+    store = ArtifactStore()
+    ref = store.stage(b"abcdefg", media_type="text/plain")
+
+    chunks = list(store.chunks(ref.artifact_id, chunk_bytes=3))
+
+    assert chunks == [(b"abc", False), (b"def", False), (b"g", True)]
+
+
+def test_a_single_chunk_artifact_is_marked_final() -> None:
+    store = ArtifactStore()
+    ref = store.stage(b"ab", media_type="text/plain")
+
+    assert list(store.chunks(ref.artifact_id, chunk_bytes=64)) == [(b"ab", True)]
+
+
+def test_an_empty_artifact_still_yields_one_final_chunk() -> None:
+    """Otherwise the cloud would wait for a `final` frame that never arrives."""
+    store = ArtifactStore()
+    ref = store.stage(b"", media_type="text/plain")
+
+    assert list(store.chunks(ref.artifact_id, chunk_bytes=64)) == [(b"", True)]
+
+
+def test_chunking_an_unknown_handle_yields_nothing() -> None:
+    assert list(ArtifactStore().chunks("nope", chunk_bytes=8)) == []
+
+
+# --- uploaded / PUSH (SOLUSDEV-100) ---
 
 ARTIFACT_ID = "019f9a01-2c44-7d1e-9b0a-3f52c1e0aa10"
 

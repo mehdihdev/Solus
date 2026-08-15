@@ -231,3 +231,60 @@ sibling `models.yaml`).
 **Cross-references:** ADR-026 (routing), ADR-024 (credits: `credit_ledger` + `credit_balance`),
 ADR-018 (metering classes), ADR-010 (orchestrator). Credit tables: `CreditLedger` / `CreditBalance`
 / `CreditTxnType.USAGE` in `packages/api/src/solus_api/models.py`.
+
+---
+
+## Tool calling (SOLUS-RUN-01)
+
+The gateway carried text only: one string in, text out. SOL's tool registry was therefore
+unreachable — a model could be asked about a robot but could not look anything up. This section
+covers the addition. **Routing, complexity, window policy and cost mechanics above are unchanged.**
+
+### The shape
+
+`stream()` and `complete()` take one optional `conversation: ToolConversation`:
+
+| field | meaning |
+| --- | --- |
+| `system` | Solus-authored instruction text. The ONLY instruction position. |
+| `messages` | `tuple[Turn, ...]` — multi-turn. A `Turn` carries `text`, `tool_uses` (assistant) or `tool_results` (user). |
+| `tools` | `tuple[ToolSpec, ...]` — `name`, `description`, `input_schema`. |
+
+`ToolSpec.input_schema` is a `ToolDescriptor.params` **verbatim** (it is already JSON Schema), so a
+tool's `params` and `description` are now literally model-facing wire content — see
+`docs/contracts/agent-tool.md` §5.
+
+Calls the model proposes come back on `Completion.tool_calls: tuple[ToolUse, ...]`. They are
+PROPOSALS: the shape carries no way to execute itself, and Solus code decides.
+
+### Invariants
+
+- **`conversation=None` is byte-identical to the text-only path.** One user message, no system
+  prompt, no tools key. `fingerprint/escalation.py` and `visual.py` use that path and are untouched.
+  Asserted directly on the wire request in `test_providers.py`.
+- **The adapter yield contract extends** from `str* → Usage` to `str* → ToolUse* → Usage`. The
+  `Usage` sentinel still terminates. `CompletionStream` absorbs `ToolUse` events rather than
+  yielding them, because it is typed `AsyncIterator[str]` and every existing consumer treats what
+  it yields as text.
+- **A multi-round loop bills PER ROUND.** Each round is one gateway call: one frequency-cap check,
+  one spend gate, one debit. §6 above describes a single call; a SOL turn is up to
+  `MAX_MODEL_ROUNDS` of them.
+- **Identity is required in practice.** `complete()` still defaults `user_id`/`session` to `None`
+  and silently skips gates and debits when absent (unchanged, ADR-018). A tool loop must never
+  inherit that: `LlmRunner` refuses to run without them.
+
+### Provider support is a real constraint on the matrix
+
+| provider | tool calling |
+| --- | --- |
+| anthropic | implemented |
+| openai | raises `ToolCallingUnsupportedError` |
+| google (gemini) | raises `ToolCallingUnsupportedError` |
+
+`ToolCallingUnsupportedError` is a `ProviderError` but deliberately **not** a
+`ProviderTransientError` — MO-03 backoff must not retry a structural gap.
+
+This makes `models.yaml` load-bearing in a new way: a matrix cell that SOL routes to must name a
+tool-capable provider. Today `SOL_OPEN_QUESTION → HARD → general_hard → claude-opus-4-8`. Repointing
+that cell at a Gemini role fails **loudly** on the next SOL turn rather than silently dropping the
+tools array and returning prose — which would look like the model simply choosing not to act.

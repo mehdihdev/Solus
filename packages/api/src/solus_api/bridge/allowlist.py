@@ -54,6 +54,13 @@ class ServerAllowlist(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     server: str
+    #: A VENDOR-RUN MCP server on the customer's machine (CAD-02: Autodesk's
+    #: Fusion server at 127.0.0.1:27182), rather than a vendored fork the
+    #: companion launches. The cloud never dials it — the companion does — but
+    #: the field must exist here: this model is `extra="forbid"`, so an
+    #: allowlist carrying `url:` without it would fail validation and the whole
+    #: server would register with ZERO tools, silently.
+    url: str | None = None
     tools: tuple[AllowedTool, ...] = ()
 
 
@@ -109,6 +116,10 @@ def load_allowlist(root: Path) -> BridgeAllowlist:
                 continue
             entries[tool.name] = tool
         servers[parsed.server] = entries
+    if not servers:
+        # A wrong root and a correct-but-empty one used to look identical: every
+        # bridge tool would then be rejected as un-allowlisted, with no clue why.
+        logger.warning("no bridge allowlists found under %s — is the root correct?", root)
     return BridgeAllowlist(servers=servers)
 
 
@@ -164,6 +175,14 @@ def validate_inventory(hello: HelloData, allowlist: BridgeAllowlist) -> tuple[Br
             descriptor = ToolDescriptor(
                 name=f"{advertised.server}.{tool.name}",
                 description=tool.description[:UNTRUSTED_TEXT_CAP],
+                # SOLX-01 SEC-C1/H1: the advertised `description` above is
+                # UNTRUSTED fork text — fenced in prompts, refused on consent
+                # cards. For the consent card we use OUR words: the Solus-written
+                # allowlist `reason` is mandatory on every destructive entry and
+                # is reviewed with the fork, so it is what a human reads when
+                # approving.
+                description_trusted=False,
+                consent_summary=allowed.reason,
                 params=tool.input_schema,
                 returns=(
                     tool.output_schema if tool.output_schema is not None else _ANY_OBJECT_RETURNS

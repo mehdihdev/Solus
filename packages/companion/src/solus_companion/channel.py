@@ -26,6 +26,7 @@ from solus_companion.dispatch import Dispatcher, ToolCaller
 from solus_companion.frames import (
     PROTOCOL_VERSION,
     Ack,
+    ArtifactFetchIn,
     ErrorIn,
     Invalid,
     Pong,
@@ -129,6 +130,8 @@ async def _recv_loop(
         frame = parse_inbound(raw)
         if isinstance(frame, ToolCallIn):
             dispatcher.handle_tool_call(frame)
+        elif isinstance(frame, ArtifactFetchIn):
+            dispatcher.handle_artifact_fetch(frame)
         elif isinstance(frame, Pong):
             liveness.last_pong = time.monotonic()
         elif isinstance(frame, ErrorIn):

@@ -1,7 +1,9 @@
 {
   "family": "solus-api",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "256",
   "memory": "512",
   "runtimePlatform": {
@@ -14,7 +16,12 @@
       "name": "solus-api",
       "image": "344838028176.dkr.ecr.us-east-1.amazonaws.com/solus/backend:arm-latest",
       "essential": true,
-      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
       "secrets": [
         {
           "name": "SOLUS_DATABASE_URL",
@@ -22,17 +29,34 @@
         },
         {
           "name": "SOLUS_SUPABASE_JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:344838028176:secret:solus/staging/supabase-XXXXXX:jwt_secret::"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:344838028176:secret:solus/staging/supabase-n3yCLv:jwt_secret::"
         }
       ],
       "environment": [
-        { "name": "SOLUS_APP_ENV", "value": "staging" },
-        { "name": "SOLUS_AWS_REGION", "value": "us-east-1" },
+        {
+          "name": "SOLUS_APP_ENV",
+          "value": "staging"
+        },
+        {
+          "name": "SOLUS_AWS_REGION",
+          "value": "us-east-1"
+        },
         {
           "name": "SOLUS_CORS_ORIGINS",
-          "value": "http://localhost:5173,http://localhost:3000"
+          "value": "https://panel.solusforge.com,http://localhost:5173,http://localhost:3000,http://localhost:4173"
         },
-        { "name": "SOLUS_REDIS_URL", "value": "" }
+        {
+          "name": "SOLUS_REDIS_URL",
+          "value": ""
+        },
+        {
+          "name": "SOLUS_PUBLIC_API_BASE_URL",
+          "value": "https://api.solusforge.com"
+        },
+        {
+          "name": "SOLUS_ARTIFACT_S3_BUCKET",
+          "value": "solus-staging-artifacts"
+        }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
@@ -43,5 +67,6 @@
         }
       }
     }
-  ]
+  ],
+  "taskRoleArn": "arn:aws:iam::344838028176:role/solus-staging-task-role"
 }

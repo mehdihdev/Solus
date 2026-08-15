@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,6 +26,7 @@ from solus_api.connectors.contracts import (
     Connector,
     ConnectorError,
     Credentials,
+    OAuthConnector,
     SyncContext,
     SyncResult,
 )
@@ -232,6 +235,103 @@ async def _reconcile_relations(
     await session.flush()
 
 
+def refresh_secret_ref(secret_ref: str) -> str:
+    """The SecretStore ref holding a source's OAuth REFRESH token (SOLUS-CAD-01).
+
+    Derived from the access-token ref so the write (`_complete_oauth`) and the
+    reads (here, and the post-refresh re-persist) can never drift — the same
+    one-definition rule MCP-05's `license_secret_ref` follows. Sources connected
+    before this ticket simply have no such secret; that is not an error.
+    """
+    return f"{secret_ref}/refresh"
+
+
+async def resolve_credentials(secret_store: SecretStore, secret_ref: str) -> Credentials:
+    """Access token plus, when one was stored, the refresh token."""
+    token = await secret_store.get(secret_ref)
+    try:
+        refresh_token: str | None = await secret_store.get(refresh_secret_ref(secret_ref))
+    except SecretNotFoundError:
+        refresh_token = None
+    return Credentials(token=token, refresh_token=refresh_token)
+
+
+#: Back-compat alias for the private name this used to carry.
+_resolve_credentials = resolve_credentials
+
+
+async def call_with_refresh[T](
+    *,
+    connector: Connector,
+    credentials: Credentials,
+    secret_store: SecretStore,
+    secret_ref: str | None,
+    run: Callable[[Credentials], Awaitable[T]],
+) -> T:
+    """Run `run`, refreshing an expired OAuth token at most ONCE and retrying.
+
+    Onshape access tokens live 60 minutes (SOLUS-CAD-01), so `invalid_credentials`
+    is an ordinary, expected outcome rather than a user error — for a sync AND
+    for any other authenticated connector call (the document/repo picker is the
+    other one; a user editing their selection an hour after connecting would
+    otherwise just get a 502). The runtime owns persistence because it holds the
+    SecretStore; the connector owns the provider-specific refresh call. Bounded
+    to a single attempt so a permanently-broken credential can never spin against
+    the token endpoint.
+    """
+    try:
+        return await run(credentials)
+    except ConnectorError as exc:
+        if (
+            exc.code != "invalid_credentials"
+            or not isinstance(connector, OAuthConnector)
+            # The base `refresh_credentials` REFUSES, so calling it would replace
+            # the caller's real `invalid_credentials` with a misleading
+            # `oauth_refresh_failed`. GitLab already stores a refresh token
+            # without having opted in — gate on the override, not the token.
+            or type(connector).refresh_credentials is OAuthConnector.refresh_credentials
+            or not credentials.refresh_token
+            or not secret_ref
+        ):
+            raise
+        logger.info("refreshing expired %s credentials", connector.provider)
+        refreshed = await connector.refresh_credentials(credentials)
+        # Persist BOTH, REFRESH TOKEN FIRST: providers that rotate the refresh
+        # token (Onshape does, on every use) have already invalidated the old
+        # one by now. If the second write fails, this ordering leaves a stale
+        # access token beside a VALID refresh token — which the next call
+        # self-heals. The reverse ordering would strand the source permanently.
+        if refreshed.refresh_token:
+            await secret_store.put(refresh_secret_ref(secret_ref), refreshed.refresh_token)
+        await secret_store.put(secret_ref, refreshed.token)
+        return await run(refreshed)
+
+
+async def _sync_with_refresh(
+    *,
+    connector: Connector,
+    credentials: Credentials,
+    config: dict[str, Any],
+    cursor: dict[str, Any],
+    secret_store: SecretStore,
+    secret_ref: str | None,
+) -> SyncResult:
+    """Run one sync, refreshing an expired OAuth token at most ONCE.
+
+    The refresh-and-retry mechanics are shared with every other authenticated
+    connector call (see `call_with_refresh`); this only supplies the sync.
+    """
+    return await call_with_refresh(
+        connector=connector,
+        credentials=credentials,
+        secret_store=secret_store,
+        secret_ref=secret_ref,
+        run=lambda creds: connector.sync(
+            SyncContext(credentials=creds, config=config, cursor=cursor)
+        ),
+    )
+
+
 async def run_sync(
     *,
     source_id: uuid.UUID,
@@ -276,9 +376,15 @@ async def run_sync(
         elif not secret_ref:
             raise ConnectorError("no_credentials", "Source has no stored credentials")
         else:
-            credentials = Credentials(token=await secret_store.get(secret_ref))
-        ctx = SyncContext(credentials=credentials, config=config, cursor=cursor)
-        result = await connector.sync(ctx)
+            credentials = await _resolve_credentials(secret_store, secret_ref)
+        result = await _sync_with_refresh(
+            connector=connector,
+            credentials=credentials,
+            config=config,
+            cursor=cursor,
+            secret_store=secret_store,
+            secret_ref=secret_ref,
+        )
     except Exception as exc:
         await _record_failure(sessionmaker, source_id, sync_id, job_id, exc)
         return sync_id

@@ -19,8 +19,6 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "env:sync": "node scripts/env-sync.mjs sync",
-    "env:gather": "node scripts/env-sync.mjs gather",
     "test:env": "node --test scripts/lib/*.test.mjs scripts/*.test.mjs",
     "test": "pnpm -r --if-present test && pnpm test:env"
   },

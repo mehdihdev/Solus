@@ -1,0 +1,11 @@
+# Fabricated-data audit — <clone of U-C4N/Autocad-MCP @ abc2a82>
+# 154 MCP tools examined
+
+delegating wrappers (judged by their target): 0
+text generators (emit source, claim nothing): 0
+TOOLS THAT CAN REPORT SUCCESS FOR WORK THAT NEVER HAPPENED: 0
+
+
+## never-touches-cad (0)
+
+## probe-fallback (0)

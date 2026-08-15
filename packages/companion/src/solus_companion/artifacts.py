@@ -1,16 +1,27 @@
-"""Companion-side ArtifactRef path: bulk tool output → HTTPS upload → reference.
+"""Bulk tool output leaving the customer machine — BOTH transports.
 
-When a fork tool result carries a non-null `artifact_path` (workspace-relative,
-the kicad export shape), the dispatcher hands it here. The file is resolved
-with the same paranoia as `config._launch_command` — symlinks resolved FIRST,
-then `is_relative_to` the workspace the companion passed to that server — and
-size-capped by stat WITHOUT reading. Upload goes to
-`POST {origin}/api/v1/projects/{project_id}/artifacts` (docs/api/artifacts.md),
-but ONLY when the API host passes the same allowed-hosts allowlist guarding the
-WS URL: the bearer token never rides to a non-allowlisted host, and is never
-logged. A 201 yields the W0-04 `ArtifactRef` that replaces `artifact_path` in
-the tool result; every failure is one stable reason string (retryable frames).
+Two paths land here because tools produce bulk bytes two different ways, and
+neither subsumes the other:
+
+* **PULL / staged (SOLUS-CAD-00c)** — a tool returns non-text content blocks
+  INLINE. `ArtifactStore` holds the bytes in memory, the result carries a handle,
+  and the cloud fetches them over the channel (`artifact_fetch` →
+  `artifact_chunk`) only when a connector actually needs them.
+* **PUSH / uploaded (SOLUSDEV-100)** — a tool writes a FILE to disk and returns
+  `structuredContent.artifact_path`. `ArtifactUploader` POSTs it to the API and
+  the result is rewritten with an `artifact_ref`.
+
+They were written independently on two branches and merged here deliberately
+rather than one replacing the other: a fork that streams inline bytes has no
+file to upload, and a fork that writes a 200 MB STEP file to disk should not
+have it staged in companion memory. `Dispatcher` accepts both seams and uses
+whichever the result shape calls for.
+
+Nothing in the staged path touches the filesystem: those bytes live in memory
+only, so a crash leaves nothing behind on a customer's machine.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -19,9 +30,11 @@ import mimetypes
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable, Mapping
+from collections import OrderedDict
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -31,6 +44,99 @@ from solus_companion.config import (
     ServerLaunch,
     api_endpoint_from_ws_url,
 )
+
+# --- PULL: inline content blocks staged for the cloud to fetch (CAD-00c) ---
+
+#: One artifact larger than this is refused outright. Matches the cloud's CAD
+#: export bound so the two ends agree on what is transferable.
+MAX_ARTIFACT_BYTES: Final = 64 * 1024 * 1024
+
+#: Total staged bytes across all artifacts.
+MAX_TOTAL_BYTES: Final = 128 * 1024 * 1024
+
+#: Most artifacts held at once, regardless of size.
+MAX_ARTIFACTS: Final = 16
+
+
+@dataclass(frozen=True)
+class StagedArtifact:
+    """The handle that travels in a tool result; the bytes stay behind."""
+
+    artifact_id: str
+    media_type: str
+    size_bytes: int
+
+
+class ArtifactStore:
+    def __init__(
+        self,
+        *,
+        max_artifact_bytes: int = MAX_ARTIFACT_BYTES,
+        max_total_bytes: int = MAX_TOTAL_BYTES,
+        max_artifacts: int = MAX_ARTIFACTS,
+    ) -> None:
+        self._max_artifact_bytes = max_artifact_bytes
+        self._max_total_bytes = max_total_bytes
+        self._max_artifacts = max_artifacts
+        self._items: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+        self._total = 0
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def stage(self, payload: bytes, *, media_type: str) -> StagedArtifact:
+        """Hold `payload` and return the handle to advertise to the cloud.
+
+        Raises `ValueError` when the artifact alone exceeds the per-artifact
+        budget — the caller turns that into a note on the tool result rather
+        than a failed call.
+        """
+        if len(payload) > self._max_artifact_bytes:
+            raise ValueError(
+                f"artifact of {len(payload)} bytes exceeds the "
+                f"{self._max_artifact_bytes} byte staging limit"
+            )
+        artifact_id = uuid.uuid4().hex
+        self._items[artifact_id] = (payload, media_type)
+        self._total += len(payload)
+        self._evict()
+        return StagedArtifact(
+            artifact_id=artifact_id, media_type=media_type, size_bytes=len(payload)
+        )
+
+    def _evict(self) -> None:
+        while self._items and (
+            self._total > self._max_total_bytes or len(self._items) > self._max_artifacts
+        ):
+            _oldest, (payload, _media) = self._items.popitem(last=False)
+            self._total -= len(payload)
+
+    def get(self, artifact_id: str) -> bytes | None:
+        item = self._items.get(artifact_id)
+        return None if item is None else item[0]
+
+    def chunks(self, artifact_id: str, *, chunk_bytes: int) -> Iterator[tuple[bytes, bool]]:
+        """Yield `(chunk, is_final)` for one artifact; nothing for an unknown id.
+
+        An EMPTY artifact still yields exactly one final chunk — otherwise the
+        cloud would wait for a `final` frame that never arrives.
+        """
+        payload = self.get(artifact_id)
+        if payload is None:
+            return
+        if not payload:
+            yield b"", True
+            return
+        for offset in range(0, len(payload), chunk_bytes):
+            chunk = payload[offset : offset + chunk_bytes]
+            yield chunk, offset + chunk_bytes >= len(payload)
+
+    def clear(self) -> None:
+        self._items.clear()
+        self._total = 0
+
+
+# --- PUSH: a file the fork wrote to disk, uploaded to the API (SOLUSDEV-100) ---
 
 logger = logging.getLogger("solus.companion.artifacts")
 
@@ -85,12 +191,21 @@ class ArtifactRef(BaseModel):
     summary: str | None = None
 
 
-def server_workspace(launch: ServerLaunch) -> Path:
+def server_workspace(launch: ServerLaunch) -> Path | None:
     """The workspace the companion passed to that server: its declared
-    `SOLUS_MCP_WORKSPACE`, else the fork dir (`bin/launch`'s own fallback)."""
+    `SOLUS_MCP_WORKSPACE`, else the fork dir (`bin/launch`'s own fallback).
+
+    `None` for a VENDOR-RUN server (CAD-02): it has a `url:` and no launcher, so
+    there is no fork directory to fall back to and Solus never chose its
+    workspace. Callers must treat that as "cannot resolve a path here" — a
+    vendor-run server's `artifact_path` cannot be confined and is refused
+    (`REASON_WORKSPACE_UNKNOWN`), rather than being resolved against a guess.
+    """
     raw = launch.env.get("SOLUS_MCP_WORKSPACE", "")
     if raw:
         return Path(raw)
+    if launch.command is None:
+        return None
     return launch.command.parent.parent  # <fork>/bin/launch → <fork>
 
 
@@ -174,14 +289,21 @@ class ArtifactUploader:
         self._timeout = timeout
 
     @classmethod
-    def from_config(cls, config: CompanionConfig) -> "ArtifactUploader | None":
+    def from_config(cls, config: CompanionConfig) -> ArtifactUploader | None:
         """Build from the companion config; None when the WS URL is not a
         project bridge URL (uploads stay disabled, dispatch fails closed)."""
         endpoint = api_endpoint_from_ws_url(config.url)
         if endpoint is None:
             logger.warning("companion URL is not a project bridge URL; artifact uploads disabled")
             return None
-        workspaces = {launch.name: server_workspace(launch) for launch in config.servers}
+        # A vendor-run (`url:`) server has no resolvable workspace, so it gets no
+        # entry — `_resolve_file` then refuses it with REASON_WORKSPACE_UNKNOWN,
+        # which is the behaviour we want and already have.
+        workspaces = {
+            launch.name: workspace
+            for launch in config.servers
+            if (workspace := server_workspace(launch)) is not None
+        }
         return cls(
             origin=endpoint.origin,
             project_id=endpoint.project_id,

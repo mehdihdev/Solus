@@ -23,7 +23,9 @@ Security (CLAUDE.md §7):
   MUST include a cross-tenant isolation case (write under team A, read under team B returns none of
   A's data). `project_id` is derived from the authenticated request, NEVER from ingested content.
 - UNTRUSTED DATA: string fields that carry ingested or model-generated content — `EntityRead.name`/
-  `attrs`, `TelemetryWindowSummary.summary`/`anomalies`, `RagHit.chunk`, `ErrorHit.solution_text` —
+  `attrs`, `TelemetryWindowSummary.summary`/`anomalies`, the `TelemetryWindowSummary.signals` KEYS
+  (device-authored signal names, verbatim off the LB-06 wire: up to 256 per packet at 128 chars
+  each), `RagHit.chunk`, `ErrorHit.solution_text` —
   are attacker-influenceable ("ignore previous instructions…" in a CAD part name or a recorded fix).
   The reasoning layer MUST wrap them as delimited DATA in prompt assembly, never emit them as
   instructions. The flywheel does not launder trust: a model-generated `solution_text` recorded via

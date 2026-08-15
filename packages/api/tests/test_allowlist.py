@@ -3,12 +3,14 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
 from solus_api.bridge.allowlist import (
     BridgeAllowlist,
     load_allowlist,
     validate_inventory,
 )
 from solus_api.bridge.frames import HelloData
+from solus_api.core.config import Settings
 
 GOOD_YAML = """
 server: mock
@@ -41,6 +43,21 @@ def _tool(name: str, **overrides: Any) -> dict[str, Any]:
     tool: dict[str, Any] = {"name": name, "description": "d", "input_schema": {"type": "object"}}
     tool.update(overrides)
     return tool
+
+
+def test_descriptors_carry_solus_consent_text_not_fork_text(tmp_path: Path) -> None:
+    """SOLX-01 SEC-C1/H1: every bridge descriptor's description is
+    fork-advertised text — never trusted — and a destructive entry's consent
+    sentence is the Solus-authored allowlist `reason`, asserted over the
+    PRODUCTION builder rather than a hand-built descriptor."""
+    _write_allowlist(tmp_path, "mock", GOOD_YAML)
+    hello = _hello([{"server": "mock", "tools": [_tool("echo"), _tool("flash_firmware")]}])
+    specs = validate_inventory(hello, load_allowlist(tmp_path))
+    by_name = {spec.descriptor.name: spec.descriptor for spec in specs}
+    assert set(by_name) == {"mock.echo", "mock.flash_firmware"}
+    assert all(d.description_trusted is False for d in by_name.values())
+    assert by_name["mock.flash_firmware"].consent_summary == "writes to the device"
+    assert by_name["mock.flash_firmware"].requires_confirmation is True
 
 
 def test_load_allowlist_good_file(tmp_path: Path) -> None:
@@ -129,3 +146,26 @@ def test_duplicate_advertisement_is_dropped_not_fatal(tmp_path: Path) -> None:
     )
     specs = validate_inventory(hello, allowlist)
     assert [spec.descriptor.name for spec in specs] == ["mock.echo"]
+
+
+def test_the_default_allowlist_root_is_anchored_not_cwd_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default used to be the bare relative `integrations/mcp`, so it only
+    resolved when the process happened to start at the repo root — which the
+    repo's own `make dev-api` (cd packages/api) does not do, and which the
+    container does not do either. It failed silently: an empty allowlist drops
+    every advertised tool as "not allowlisted" rather than raising.
+
+    Hermetic: no `.env`, no ambient override, and run from somewhere else
+    entirely, since cwd-independence is the whole property.
+    """
+    monkeypatch.delenv("SOLUS_BRIDGE_ALLOWLIST_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings(_env_file=None, supabase_jwt_secret="x")  # type: ignore[call-arg]
+    root = Path(settings.bridge_allowlist_root)
+
+    assert root.is_absolute()
+    # The repo's real forks — proves the anchor points somewhere that exists.
+    assert load_allowlist(root).servers

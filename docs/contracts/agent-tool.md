@@ -78,6 +78,7 @@ interface: the MODEL reads them to decide when and how to call the tool.
 | `returns`               | JSON Schema for the result `value`                                                                                                  |
 | `timeout_seconds`       | `float \| None` — per-tool override of the registry default                                                                         |
 | `requires_confirmation` | `bool` (default `false`) — destructive/irreversible tool; the orchestrator must get explicit user confirmation before dispatch (§6) |
+| `consent_summary` | `str \| None` (default `None`) — **Solus-authored** text for the consent surface, used INSTEAD of `description` when the latter cannot be trusted to phrase it. A bridge/MCP tool's `description` is advertised by an upstream fork: acceptable as model context (length-capped, treated as data), but it must never compose the sentence a human reads before approving a destructive action — a fork could describe a destructive tool as "read-only". Bridge tools set this from their allowlist `reason`, which is mandatory on every destructive entry and is reviewed with the fork. |
 
 **`ToolCall`** — one invocation SOL proposes.
 

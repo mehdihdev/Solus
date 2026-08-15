@@ -17,6 +17,7 @@ import { MiniOrb } from '../sol/MiniOrb'
 import { TeamScreen } from '../team/TeamScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
+import { useValidateProject } from './useValidateProject'
 import { ProjectOverview } from '../project/ProjectOverview'
 import { SourcesScreen } from '../project/SourcesScreen'
 import { HomeScreen } from './HomeScreen'
@@ -25,6 +26,7 @@ import { useMe, displayName } from './useMe'
 import { useNotifications } from './useNotifications'
 import { TopBar, OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { useShellStore, type MainScreen } from './shellStore'
+import { useFocusStore } from './focusStore'
 
 type Route = { name: MainScreen } | { name: 'alert'; alertId: string }
 
@@ -61,8 +63,14 @@ export function WorkspaceShell(): React.JSX.Element {
   // Reactive: the bridge pill re-scopes when the topbar switcher changes the
   // project (merge fix — SOLUSDEV-164 moved the current project into the store).
   const project = useWorkspaceStore((s) => s.project)
+  // The persisted project id names a server row that can disappear under us.
+  // Confirm it once, so a dead id drops us to Home instead of 404ing every
+  // project-scoped screen with no way back.
+  useValidateProject()
   const openProject = (p: { id: string; name: string }): void => {
     useWorkspaceStore.getState().setProject(p)
+    // Entity ids are project-scoped, so the focus cache must not survive the switch (WS-01).
+    useFocusStore.getState().clearProject()
     // Opening a project from Home/Team lands on the project hub (SOLUSDEV-164)
     // — an orienting overview — rather than the Context Model canvas.
     go('overview')
@@ -71,6 +79,7 @@ export function WorkspaceShell(): React.JSX.Element {
     // Switching from the topbar only re-scopes the CURRENT screen to the new
     // project — it must not navigate away and interrupt the user's flow.
     useWorkspaceStore.getState().setProject(p)
+    useFocusStore.getState().clearProject()
     setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {
@@ -81,6 +90,10 @@ export function WorkspaceShell(): React.JSX.Element {
     await signOut()
     useWorkspaceStore.getState().reset()
     useShellStore.getState().reset()
+    // The focus cache holds another user's entity names and properties in renderer memory. On a
+    // shared workstation, leaving it would let the NEXT user read them with no request and no
+    // authorization check (WS-01).
+    useFocusStore.getState().reset()
     navigate('/')
   }
 

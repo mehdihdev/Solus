@@ -795,24 +795,33 @@ All routes are under `/api/v1/projects/{project_id}/sol` and resolve through `Pr
 reaches it, so another tenant OR another teammate in the same project gets `404`. Writes
 require the `member` role; reads need only a resolvable project.
 
-| Method | Path                               | Purpose                                                        | Success |
-| ------ | ---------------------------------- | -------------------------------------------------------------- | ------- |
-| GET    | `/sol/tools`                       | List the W0-04 tool descriptors SOL may invoke (fixed by code) | `200`   |
-| POST   | `/sol/conversations`               | Create a conversation (`{title?}`)                             | `201`   |
-| GET    | `/sol/conversations`               | List the caller's conversations (cursor-paginated)             | `200`   |
-| GET    | `/sol/conversations/{id}`          | Get one owned conversation                                     | `200`   |
-| DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                              | `204`   |
-| GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                 | `200`   |
-| POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)         | `200`   |
+| Method | Path                               | Purpose                                                                                 | Success |
+| ------ | ---------------------------------- | --------------------------------------------------------------------------------------- | ------- |
+| GET    | `/sol/tools`                       | List the W0-04 tool descriptors SOL may invoke (fixed by code)                          | `200`   |
+| POST   | `/sol/conversations`               | Create a conversation (`{title?}`)                                                      | `201`   |
+| GET    | `/sol/conversations`               | List the caller's conversations (cursor-paginated)                                      | `200`   |
+| GET    | `/sol/conversations/{id}`          | Get one owned conversation                                                              | `200`   |
+| DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                                                       | `204`   |
+| GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                                          | `200`   |
+| POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
+| POST   | `/sol/confirmations/{id}`          | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
 
-**Streaming turn (`POST …/messages`).** Returns `text/event-stream`. The user turn is persisted
+SOLX-04: `GET /sol/tools` additionally lists `solus.list_integrations`, `solus.connect_integration` (destructive — parks through the CTR-03 gate), and `solus.verify_integration` when the connector registry is wired. Connecting from chat is discovery → confirm → verify; OAuth providers are pointed at the in-app flow (credentials never pass through tool arguments).
+
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?}` where `action_mode` is
+`"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
+destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
+logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
+Returns `text/event-stream`. The user turn is persisted
 (and `sol.message` logged) before streaming; assistant/tool turns are persisted as the stream
 completes. SSE `event:` names and their `data` payloads:
 
 - `token` — `{"text": "…"}` incremental reply delta
 - `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
 - `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
-- `message` — `{"role":"assistant","content":"…"}` the finished reply
+- `message` — `{"role":"assistant","content":"…","citations":["…"]}` the finished reply;
+  `citations` is the SOL-02 structured provenance surface (verified by Solus code — renderers
+  show it in a dedicated region, never linkified, display-capped, never parsed from prose)
 - `error` — `{"code","message"}` a generic, author-safe failure (never a traceback, §7)
 - `done` — `{"conversation_id","turn_id"}` terminal marker
 
@@ -871,3 +880,94 @@ Full plan — request/response shapes, `scope=PROJECT` default, TTL + one-shot c
 anti-forgery consumption rules, size caps (8 MiB), rate budgets, and the `ArtifactStore`
 S3/local backends (presigned-S3 as the documented revisit path) — lives in
 [artifacts.md](artifacts.md).
+
+---
+
+## 13. Graph subgraph extraction (SOLUSDEV-191 / SOLUS-WS-01) — LIVE
+
+**`GET /api/v1/projects/{project_id}/graph`** — the focus-scope read. Planned in `API.md` §2.4
+since SOLUSDEV-2; implemented here. One call returns everything a widget needs to re-scope when
+the user selects an entity, so a focus change is a single bounded request rather than a reload.
+
+| Param            | Type            | Default      | Notes                                                                                |
+| ---------------- | --------------- | ------------ | ------------------------------------------------------------------------------------ |
+| `root`           | UUID            | **required** | The focused entity. 404 if unknown or in another project.                            |
+| `depth`          | int 0–2         | 1            | Hops to traverse. `422` beyond 2 (ADR-027 defers deep traversal).                    |
+| `entity_types`   | csv, ≤32 values | all          | Filters which entities are reached _and_ traversed through. The root is always kept. |
+| `relation_types` | csv, ≤32 values | all          | Filters which edges are followed and returned.                                       |
+| `limit`          | int 1–500       | 200          | Max entities. When it bites, `truncated` is `true`.                                  |
+
+**Response** — `{"data": {"entities": [...], "edges": [...], "truncated": false}}`. Entities and
+edges use the same public keys as `/entities` and `/relations` (`type`, `source_key`,
+`properties`, `from_entity_id`, `to_entity_id`), so the frontend has one entity type, not two.
+
+- **Induced subgraph:** every returned edge has BOTH endpoints in `entities` — no dangling
+  references, and edges _between_ neighbours are included (two parts wired to each other must not
+  render as unrelated).
+- **Undirected traversal:** focus asks what an entity relates to, not which way an edge points.
+- **Bounded and honest:** `depth` and `limit` are capped by the route; `truncated` reports when a
+  cap bit, because a silently capped subgraph reads as the whole picture.
+- **Scoping:** `ProjectCtx` as every project route; non-member → 404, never 403 (no existence
+  oracle). A malformed edge pointing at another project's entity resolves to nothing.
+- Implementation: `routers/entities.py::get_subgraph` over `solus_api/graph/neighborhood.py`
+  (`load_neighborhood`) — the SAME traversal a real `SolSystems.get_graph_context` adapts via
+  `to_graph_context`, so the agent and the focused view can never disagree about the graph.
+  Tests: `tests/test_neighborhood.py` (traversal), `tests/test_entities.py` (route + isolation).
+
+---
+
+## 14. Impact analysis (SOLUSDEV-197 / SOLUS-IMP-01) — PLANNED, engine LIVE
+
+Tier-1 route-plan amendment (ADR-032) written with the IMP-01 engine, called out in its
+completion report. The engine (`solus_api/impact/engine.py::compute_impact`) is implemented and
+tested; the HTTP surface below is the plan the Impact widget's backend wiring implements when
+LANE B mounts the widget against live data (it renders CTR-04 fixtures until then).
+
+**`POST /api/v1/projects/{project_id}/impact`** — compute the impact of a proposed change.
+
+Request body: `{"focus_id": "<entity uuid>", "change": [DiffRow, …], "depth": 0–2 (default 2)}`.
+`change` reuses the action-gate `DiffRow` shape (CTR-03), exactly as `ImpactResult.change`
+carries it.
+
+Response — `{"data": ImpactResult}` per the CTR-04 contract (`docs/contracts/impact.md`):
+`focus`, `change`, `computed_at`, `truncated`, `nodes[]` (each with `distance == len(path)`,
+severity = worst consequence, path starting at the focus).
+
+- **POST, not GET**: the request carries a change payload; the analysis is a computation over
+  it, not an addressable resource. Nothing is persisted (v1).
+- **Scoping:** `ProjectCtx` as every project route; non-member → 404, never 403. Unknown or
+  cross-project `focus_id` → 404 (the engine refuses to resolve foreign entities).
+- **Bounded:** depth capped at the traversal's `MAX_DEPTH` (2); `truncated` reported honestly.
+  Consequence computation runs the checker adapter; when narration (IMP-02) calls the model
+  gateway it is budget-metered per §7 — over-budget degrades to template rationale, never a 500.
+- Rate limiting: expensive-endpoint class (per-user and per-team), same tier as agent routes.
+
+---
+
+## 15. Live Bench telemetry (SOLUSDEV-66 / SOLUS-LB-05) — LIVE
+
+Tier-1 route-plan amendment (ADR-032), documented alongside implementation and called out in the
+LANE H completion report. This is the first production wiring of the LNK-06 telemetry plumbing
+(`TelemetryPlumbing`) and closes the "no bench route exists" gap flagged in Phase 0. Local bench
+runners (sim connectors, serial/WS robot links — `livebench/`) PUSH LB-06 packet batches; the
+Live Bench widget POLLS recent values, W0-07 summaries, and edge-observer events.
+
+All routes resolve through `ProjectCtx` (non-member → `404`, no existence leak); ingest requires
+the `member` role. Each packet decodes through the ratified LB-06 `from_wire` (§7 trust
+boundary): hostile packets count as `rejected` and drop themselves, unresolved devices count as
+`unresolved` — a batch never 500s on content. Buffer and event state are keyed by project id;
+cross-tenant isolation is covered by `test_bench_router.py`.
+
+| Method | Path                                                     | Purpose                                                      | Success |
+| ------ | -------------------------------------------------------- | ------------------------------------------------------------ | ------- |
+| POST   | `/api/v1/projects/{project_id}/bench/telemetry`          | Ingest ≤500 LB-06 wire packets + ≤100 observer events        | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/recent/{entity_id}` | Recent values for one entity (`RecentValuesView`)            | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/summary`            | W0-07 `TelemetrySummaryView` over a bounded window (≤3600s)  | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/events`             | Recent observer events (bounded per-project ring, ephemeral) | `200`   |
+
+Deliberately poll/push REST for this cycle: the WS/SSE streaming upgrade stays on the §2.15
+later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the windowed shapes carry
+to continuous delivery without a contract change. Durable telemetry history stays out of scope
+(LNK-06 decision: live ephemeral values only).
+
+> > > > > > > SOLUSDEV-66-lane-telemetry

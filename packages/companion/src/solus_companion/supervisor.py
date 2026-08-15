@@ -25,7 +25,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult, Tool
 
-from solus_companion.config import ServerLaunch
+from solus_companion.config import ServerLaunch, is_loopback_url
 
 logger = logging.getLogger("solus.companion.supervisor")
 
@@ -52,11 +52,35 @@ class ServerUnavailableError(Exception):
     """The server is down and a restart attempt did not bring it back."""
 
 
-def _child_env(declared: Mapping[str, str]) -> dict[str, str]:
-    """ONLY PATH/HOME plus the launch spec's declared env — secret hygiene."""
-    env = {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
+def child_env(
+    declared: Mapping[str, str],
+    passthrough: Sequence[str] = (),
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """PATH/HOME, the names the fork DECLARED it may inherit, then the values
+    Solus SETS — in that order, so a hostile ambient value cannot redirect a
+    fork's interpreter. Everything else in the companion's environment stays
+    out (secret hygiene)."""
+    ambient = os.environ if source is None else source
+    env = {key: ambient[key] for key in ("PATH", "HOME") if key in ambient}
+    env.update({key: ambient[key] for key in passthrough if key in ambient})
     env.update(declared)
     return env
+
+
+def _loopback_transport(url: str) -> Any:
+    """Streamable-HTTP to a VENDOR-RUN server on this machine (CAD-02).
+
+    Autodesk prohibits hosting or multiplexing a licensed Fusion seat, so Solus
+    connects to the customer's own local instance as a local client. The URL was
+    already pinned to loopback at discovery (`config.is_loopback_url`); it is
+    re-checked here because this is the line that actually opens a socket.
+    """
+    from mcp.client.streamable_http import streamablehttp_client
+
+    if not is_loopback_url(url):  # pragma: no cover - discovery refuses first
+        raise ValueError(f"refusing a non-loopback MCP url: {url}")
+    return streamablehttp_client(url)
 
 
 def _tool_payload(tool: Tool) -> dict[str, Any]:
@@ -133,14 +157,9 @@ class ServerHandle:
 
     async def _own(self, started: asyncio.Event, stop: asyncio.Event) -> None:
         """Owner task: enter transport+session, park, unwind — all one task."""
-        params = StdioServerParameters(
-            command=str(self.launch.command),
-            args=list(self.launch.args),
-            env=_child_env(dict(self.launch.env)),
-        )
         try:
             async with AsyncExitStack() as stack:
-                read, write = await stack.enter_async_context(stdio_client(params))
+                read, write = await stack.enter_async_context(self._transport())
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
                 listing = await session.list_tools()
@@ -159,6 +178,20 @@ class ServerHandle:
             if self.state is ServerState.READY:
                 self._set_state(ServerState.NOT_LAUNCHED)
             started.set()
+
+    def _transport(self) -> Any:
+        """stdio for a vendored fork, streamable-http for a vendor-run server.
+        Exactly one is configured; discovery guarantees it."""
+        if self.launch.url is not None:
+            return _loopback_transport(self.launch.url)
+        return stdio_client(
+            StdioServerParameters(
+                command=str(self.launch.command),
+                args=list(self.launch.args),
+                env=child_env(dict(self.launch.env), self.launch.env_passthrough),
+                cwd=str(self.launch.cwd) if self.launch.cwd else None,
+            )
+        )
 
     async def start(self) -> bool:
         async with self._lifecycle:

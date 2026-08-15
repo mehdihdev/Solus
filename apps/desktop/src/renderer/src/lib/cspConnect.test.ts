@@ -1,5 +1,40 @@
 import { describe, expect, test } from 'vitest'
-import { DEFAULT_API_BASE_URL, apiOriginForCsp, widenConnectSrc } from './cspConnect'
+import {
+  DEFAULT_API_BASE_URL,
+  apiOriginForCsp,
+  resolveApiBaseUrl,
+  widenConnectSrc
+} from './cspConnect'
+
+// Regression: `apps/desktop/.env` ships `VITE_API_BASE_URL=` — present but
+// BLANK. api/client.ts used `??`, which only falls back on null/undefined, so
+// the base became '' and every request went out relative to the renderer's own
+// origin: the app showed "Solus can't reach its API" and the integration
+// catalog silently degraded to its offline fallback, dropping the Onshape,
+// Altium and GitLab tiles. Both callers now share this one resolver.
+describe('resolveApiBaseUrl', () => {
+  test('treats a present-but-blank value as unset', () => {
+    expect(resolveApiBaseUrl('')).toBe(DEFAULT_API_BASE_URL)
+    expect(resolveApiBaseUrl('   ')).toBe(DEFAULT_API_BASE_URL)
+  })
+
+  test('treats a missing value as unset', () => {
+    expect(resolveApiBaseUrl(undefined)).toBe(DEFAULT_API_BASE_URL)
+  })
+
+  test('keeps a configured value, trimmed', () => {
+    expect(resolveApiBaseUrl('http://127.0.0.1:8000/api/v1')).toBe('http://127.0.0.1:8000/api/v1')
+    expect(resolveApiBaseUrl('  https://api.solus.dev/api/v1  ')).toBe(
+      'https://api.solus.dev/api/v1'
+    )
+  })
+
+  test('never yields an empty base — a relative URL would miss the API entirely', () => {
+    for (const value of ['', '   ', undefined]) {
+      expect(resolveApiBaseUrl(value).length).toBeGreaterThan(0)
+    }
+  })
+})
 
 describe('apiOriginForCsp', () => {
   test('returns the origin of a configured API base URL', () => {

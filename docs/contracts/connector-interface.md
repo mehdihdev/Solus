@@ -282,12 +282,119 @@ the real connectors (each must pass the conformance suite), fingerprint (W0-06 �
 `SourceRef`), linking (LNK-01 — cross-connector links). Sibling contracts: `fingerprint-output.md`,
 `agent-tool.md`, `model-orchestration.md`. **Pending:** ADR-030 (git-exports-v1 metadata strategy).
 
+---
 
+## Edit 6 — OAuth token refresh (SOLUSDEV-96 / CAD-01)
 
+The shipped OAuth path stored only the ACCESS token: `_complete_oauth` persisted `creds.token` and
+`run_sync` rebuilt `Credentials(token=...)`, dropping `refresh_token`. GitHub and GitLab tokens are
+long-lived so nothing surfaced the gap — but **Onshape access tokens expire after 60 minutes**, so
+an Onshape source would have stopped syncing within the hour. This edit adds the refresh seam.
 
+**`OAuthConnector.refresh_credentials(creds) -> Credentials`** — non-abstract, default REFUSES with
+`ConnectorError('oauth_refresh_failed', ...)`. A provider that has not opted in can therefore never
+appear to refresh silently. Providers with expiring tokens MUST override it.
 
+**Division of responsibility.** The RUNTIME owns persistence (it holds the `SecretStore`); the
+CONNECTOR owns the provider-specific refresh call. `runtime._sync_with_refresh` runs one sync and,
+**only** when it fails with `invalid_credentials` **and** the connector is an `OAuthConnector`
+**and** a refresh token is stored, calls `refresh_credentials` **at most once**, persists the
+result, and retries the sync **once**. A permanently-broken credential can never spin against a
+provider's token endpoint.
 
+**Rotation is mandatory to honour.** Onshape issues a NEW refresh token on every refresh and
+invalidates the old one, so an implementation MUST return the rotated `refresh_token` and the
+runtime MUST persist it — dropping it breaks the chain at the _next_ refresh, not this one.
 
+**Storage.** `runtime.refresh_secret_ref(secret_ref) -> f"{secret_ref}/refresh"` is the ONE
+definition, shared by the OAuth-completion write and both reads, so the refs cannot drift (the same
+rule MCP-05's `license_secret_ref` follows). Sources connected before this edit simply have no such
+secret; its absence is not an error and the access-token read path is unchanged.
 
+**Error codes.** `invalid_credentials` is the code a connector raises for an expired or rejected
+token — it is the trigger the runtime keys off, so a connector that reports expiry any other way
+will not be refreshed. `oauth_refresh_failed` means the refresh token itself was rejected; the
+runtime then leaves the stored credentials untouched and records the sync failure.
 
+## Edit 7 — the selection capability (SOLUSDEV-96 follow-up)
 
+A connector may let a user choose **what** it tracks after connecting: a repository for a code
+host, CAD documents for an account-level tool. That is one optional capability, not a per-provider
+route or a per-provider UI.
+
+**`Connector.selection: ClassVar[dict] | None`** — declared metadata, surfaced verbatim by
+`GET /api/v1/integrations`:
+
+```python
+selection = {"mode": "single" | "multi", "config_key": "repo", "label": "repository"}
+```
+
+`mode` decides whether the picker takes one item or many, `config_key` names the source-config key
+the choice writes, and `label` is the noun shown to the user. Absent (`None`) means there is
+nothing to pick — the app then falls back to a generated form over `config_fields`.
+
+**`async list_selectable(self, creds: Credentials) -> list[dict]`** — duck-typed, resolved with
+`getattr` by `GET /api/v1/projects/{p}/sources/{s}/selectable`, exactly as `list_repositories` was.
+It is deliberately NOT on the `Connector` ABC: not every connector has anything to list, and the
+route already treats its absence as `400 unsupported`. Item shape:
+
+```json
+{ "id": "...", "name": "...", "subtitle": "...", "config": { "...": "..." } }
+```
+
+`config` is optional and is the exact source config choosing that item writes — it exists so a
+single-select connector can contribute more than an id (GitHub needs `repo` AND `branch`) without
+the caller knowing what the item means. Multi-select ignores it and writes
+`{config_key: [id, …]}`.
+
+**Credentials go through the refresh path.** The route resolves credentials with
+`runtime.resolve_credentials` and calls the lister through `runtime.call_with_refresh` — the same
+refresh-once-and-retry machinery `_sync_with_refresh` uses. Without it, a 60-minute Onshape token
+would make "edit my selection" fail an hour after connecting.
+
+**Why this shape.** Nothing in the frontend may branch on a provider id: the next CAD connector
+(Fusion, SolidWorks, AutoCAD) becomes fully pickable by declaring `selection` and implementing
+`list_selectable`, with no route, no picker, and no catalog change.
+
+---
+
+## Edit 8 — the access-mode capability (SOLUS-ONS-A2)
+
+A connector may let a user choose **how much power** it grants at connect time, the same way
+`selection` lets them choose **what** it tracks. One optional capability, not a per-provider route
+and not a per-provider UI.
+
+**`OAuthConnector.access_modes: ClassVar[dict] | None`** — declared metadata, surfaced verbatim by
+`GET /api/v1/integrations` beside `selection`:
+
+```python
+access_modes = {
+    "default": "read",
+    "modes": [
+        {"id": "read",  "label": "Read only",     "description": "...", "scopes": ["OAuth2Read"]},
+        {"id": "write", "label": "Read and edit", "description": "...", "scopes": ["OAuth2Read", "OAuth2Write"]},
+    ],
+}
+```
+
+`None` (the default) means there is no choice — `scopes` is the whole story, which is the case for
+GitHub and GitLab.
+
+**`scopes_for(access: str | None) -> tuple[str, ...]`** resolves a mode to its scopes. `None` means
+the declared **default**, never the widest option, so an omitted choice can only ever under-grant.
+An **unknown mode raises** rather than falling back: silently downgrading a typo would connect a
+source with powers the user did not choose, in either direction. The route maps that to
+`400 invalid_access_mode`.
+
+**`authorize_url(*, state, redirect_uri, access=None)`** — the ABC gained `access`; connectors
+without modes ignore it.
+
+**Why this exists.** An OAuth grant is account-wide on the providers that matter here — Onshape has
+no per-document or per-project scope — so "may Solus edit my CAD?" is a real decision that belongs
+to the customer, not a default we pick. `POST /{provider}/oauth/start` takes an optional `access`,
+and the granted mode is recorded on `Source.config["access"]` so "can Solus edit this?" is
+answerable without re-deriving it from the token.
+
+**Why this shape.** Identical reasoning to Edit 7: the next CAD connector (Fusion, SolidWorks,
+AutoCAD) becomes choosable by declaring `access_modes`, with no route change, no picker change and
+no catalog change — and nothing in the frontend may branch on a provider id.

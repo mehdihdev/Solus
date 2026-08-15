@@ -52,7 +52,16 @@ def test_catalog_exposes_auth_and_config() -> None:
     registry.register("fake", _Fake)
     catalog = registry.catalog()
     assert catalog == [
-        {"type": "fake", "auth_kind": "pat", "config_fields": ["repo"], "scopes": []}
+        {
+            "type": "fake",
+            "auth_kind": "pat",
+            "config_fields": ["repo"],
+            "scopes": [],
+            # None: a connector that declares no selection has nothing to pick.
+            "selection": None,
+            # None: and no access choice to make either (SOLUS-ONS-A2).
+            "access_modes": None,
+        }
     ]
 
 
@@ -61,6 +70,7 @@ def test_build_registry_ships_the_roster() -> None:
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
     from solus_api.connectors.kicad import KicadConnector
+    from solus_api.connectors.onshape import OnshapeConnector
     from solus_api.core.config import Settings
 
     settings = Settings(
@@ -71,7 +81,7 @@ def test_build_registry_ships_the_roster() -> None:
     from solus_api.connectors.registry import build_registry
 
     registry = build_registry(settings)
-    assert registry.providers() == ["altium", "github", "gitlab", "kicad"]
+    assert registry.providers() == ["altium", "github", "gitlab", "kicad", "onshape"]
     assert isinstance(registry.create("github"), GitHubConnector)
     gitlab = registry.create("gitlab")
     assert isinstance(gitlab, GitLabConnector)
@@ -89,3 +99,16 @@ def test_build_registry_ships_the_roster() -> None:
     # matching update belongs to whoever owns connectors/kicad.py.
     assert catalog["altium"]["config_fields"] == ["export", "project_path"]
     assert catalog["kicad"]["config_fields"] == ["export"]
+    # Onshape (SOLUSDEV-96 / CAD-01) is the thin-API mechanical CAD connector:
+    # OAuth ONLY — an API key pair would reach only the DEVELOPER's documents.
+    assert isinstance(registry.create("onshape"), OnshapeConnector)
+    assert catalog["onshape"]["auth_kind"] == "oauth"
+    assert catalog["onshape"]["scopes"] == ["OAuth2Read"]
+    # EMPTY: the OAuth grant is account-level, so connecting takes no typed
+    # config. What to track is a post-connect SELECTION of documents.
+    assert catalog["onshape"]["config_fields"] == []
+    assert catalog["onshape"]["selection"] == {
+        "mode": "multi",
+        "config_key": "documents",
+        "label": "document",
+    }

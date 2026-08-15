@@ -1,5 +1,5 @@
 import { resolve } from 'path'
-import { defineConfig } from 'electron-vite'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import type { PluginOption } from 'vite'
@@ -56,10 +56,31 @@ function apiCsp(): PluginOption {
   }
 }
 
+// SOLUSDEV-68 live verification: main and preload import `@solus/shared-types`
+// (the CTR-06 orb↔overlay contract, since SOL-IPC-01). electron-vite externalizes
+// `dependencies` by default, so the built bundles emitted
+// `require("@solus/shared-types")` — but that package ships RAW TypeScript
+// (`main: "src/index.ts"`), which Node cannot execute: the app died on launch
+// with ERR_MODULE_NOT_FOUND. vitest and tsc both transpile TS, so every test and
+// the typecheck passed while the app could not start. Bundle it instead.
+const bundleWorkspaceContracts = externalizeDepsPlugin({ exclude: ['@solus/shared-types'] })
+
+// The repo root holds the ONE `.env` (see packages/api/.../config.py). electron-vite
+// defaults envDir to each build's root — `apps/desktop` — so the renderer read a second,
+// hand-maintained env file that could (and did) shadow the real one with a blank
+// `VITE_API_BASE_URL`. Pointing every build at the root removes the shadow entirely.
+//
+// Safe with a root file full of secrets: Vite only inlines vars matching envPrefix, which
+// stays at its default (`VITE_`/`RENDERER_VITE_` for the renderer, `MAIN_VITE_` for main).
+// The ~70 unprefixed keys — Stripe, AWS, OAuth secrets — are read and discarded, never
+// reaching a bundle. Do NOT widen envPrefix to '' here; that would ship them to the client.
+const ENV_DIR = resolve(__dirname, '../..')
+
 export default defineConfig({
-  main: {},
-  preload: {},
+  main: { envDir: ENV_DIR, plugins: [bundleWorkspaceContracts] },
+  preload: { envDir: ENV_DIR, plugins: [bundleWorkspaceContracts] },
   renderer: {
+    envDir: ENV_DIR,
     resolve: {
       // The monorepo has more than one react/react-dom copy (root node_modules vs this
       // app's). Force a single instance, else zustand binds a different React than react-dom

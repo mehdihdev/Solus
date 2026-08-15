@@ -6,13 +6,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import redis.asyncio as redis_asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from solus_api.agent.fake_systems import FakeSolSystems
-from solus_api.agent.runtime import ScaffoldRunner
+from solus_api.agent.runtime import LlmRunner
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
@@ -24,6 +25,11 @@ from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.core.errors import register_error_handlers
 from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
+from solus_api.graph.buffer import InMemoryTelemetryBuffer
+from solus_api.graph.resolver import DbEntityResolver
+from solus_api.graph.telemetry import TelemetryPlumbing
+from solus_api.livebench.bench_router import BenchEventRing
+from solus_api.livebench.bench_router import router as bench_router
 from solus_api.models import Base
 from solus_api.routers import (
     activity,
@@ -38,15 +44,18 @@ from solus_api.routers import (
     meta,
     notifications,
     orchestration,
+    panel,
     projects,
     sol,
     sources,
     teams,
     users,
 )
+from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.supabase_admin import build_supabase_admin
 from solus_api.storage import build_artifact_store
+from solus_api.toolkb import router as toolkb
 
 
 async def create_all_tables(engine: AsyncEngine) -> None:
@@ -136,6 +145,20 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     )
     app.state.settings = resolved_settings
     app.state.engine = resolved_engine
+    # SOLUSDEV-68 live verification: `/readyz` reported `redis: configured`
+    # while nothing ever assigned this, so `check_frequency_cap` always took its
+    # `redis is None` fail-open branch — turn-admission rate limiting (§7) was
+    # off everywhere and the 429 path was dead code. `from_url` is lazy (no
+    # connect at startup) and `redis.asyncio` satisfies the gate's `RedisLike`
+    # protocol; a Redis outage still degrades to the gate's existing uniform
+    # fail-open, so this adds enforcement without adding a failure mode.
+    app.state.redis = (
+        # redis.asyncio ships no stubs for from_url; the gate only needs the
+        # five sorted-set commands its RedisLike protocol declares.
+        redis_asyncio.from_url(resolved_settings.redis_url)  # type: ignore[no-untyped-call]
+        if resolved_settings.redis_url
+        else None
+    )
     app.state.sessionmaker = build_sessionmaker(resolved_engine)
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     # T4b (MCP-04): the EDA family also gets a bridge export acquirer factory
@@ -157,7 +180,10 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # reasoning-loop runner. Swap these for the real systems impl / SOL-01/02 reasoning
     # with a one-line change here and no endpoint edit.
     app.state.sol_systems = FakeSolSystems()
-    app.state.agent_runner = ScaffoldRunner()
+    # SOLUS-RUN-01: the real model-driven runner. `ScaffoldRunner` stays in
+    # runtime.py as the model-free double the transport tests pin (conftest), so
+    # the loop guard / timeout / error-masking suites still run with no API key.
+    app.state.agent_runner = LlmRunner()
     # Local bridge (SOLUSDEV-154): session registry + allowlist + connect limiter.
     # Allowlist root is loaded ONCE at assembly; tests point it at a fixture dir.
     app.state.bridge_sessions = InMemoryBridgeSessionRegistry()
@@ -165,10 +191,20 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.bridge_connect_limiter = ConnectRateLimiter(
         resolved_settings.bridge_connect_rate_per_minute
     )
+    # A7-01: panel pairing approvals, keyed on the authenticated user. Its own
+    # bucket so a burst of bridge connects cannot block someone linking a panel.
+    app.state.panel_approve_limiter = ConnectRateLimiter(PANEL_APPROVALS_PER_MINUTE)
     # SEC-M1: separate PRE-AUTH per-IP throttle (the per-user one runs post-auth).
     app.state.bridge_ip_connect_limiter = ConnectRateLimiter(
         resolved_settings.bridge_connect_rate_per_minute
     )
+    # Live Bench (SOLUSDEV-66 LB-05): the LNK-06 plumbing goes live — bounded
+    # in-memory buffer + DB entity resolver + per-project observer-event ring.
+    # Redis buffer backend is a one-line swap here when multi-process serving needs it.
+    app.state.telemetry_plumbing = TelemetryPlumbing(
+        InMemoryTelemetryBuffer(), DbEntityResolver(app.state.sessionmaker)
+    )
+    app.state.bench_events = BenchEventRing()
     # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
     # + the §4.5 upload-route budgets (separate from the global rate limiter).
     app.state.artifact_store = build_artifact_store(resolved_settings)
@@ -191,7 +227,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         # MO-04: the classify preview fires on typing pauses — its own generous
         # bucket, never counted against the shared budget.
         path_limits={
-            "/api/v1/orchestration/classify": resolved_settings.classify_rate_limit_per_minute
+            "/api/v1/orchestration/classify": resolved_settings.classify_rate_limit_per_minute,
+            # A7-01: unauthenticated, and behind the ALB every caller shares one
+            # bucket (core/ratelimit sees the LB's IP), so it gets its own rather
+            # than eating the shared budget every panel load.
+            "/api/v1/panel/pair/start": resolved_settings.rate_limit_per_minute,
         },
     )
 
@@ -213,6 +253,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(artifacts.router)
     app.include_router(entities.router)
     app.include_router(sol.router)
+    app.include_router(bench_router)
     app.include_router(bridge.router)
     app.include_router(orchestration.router)
+    app.include_router(panel.router)
+    app.include_router(toolkb.router)
     return app

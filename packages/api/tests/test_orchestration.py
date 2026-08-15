@@ -15,7 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 class MockAdapter:
     async def stream(
-        self, model_name: str, query: str, *, max_tokens: int, images: object = None
+        self,
+        model_name: str,
+        query: str,
+        *,
+        max_tokens: int,
+        images: object = None,
+        conversation: object = None,
     ) -> Any:
         yield "ok"
         from solus_api.orchestration.providers import Usage

@@ -9,6 +9,9 @@ import os
 
 from alembic import context
 from solus_api.models import Base
+from solus_api.toolkb import (
+    schema as _toolkb_schema,  # noqa: F401  (registers tool_knowledge on Base.metadata)
+)
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 

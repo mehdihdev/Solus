@@ -19,6 +19,7 @@ dependencies = [
     "pgvector>=0.4.2",
     "pyyaml>=6.0",
     "jsonschema>=4.20",
+    "msgpack>=1.1",
     "httpx>=0.28",
     "cryptography>=43.0",
     "boto3>=1.35",
@@ -33,6 +34,16 @@ dependencies = [
 [project.scripts]
 stripe-setup = "solus_api.ops.stripe_setup:main"
 
+[project.optional-dependencies]
+# SOLUS-CAD-00 mechanical CAD ingestion. Deliberately OPTIONAL, not a runtime
+# dependency: the wheel is ~60 MB and bundles an OCCT kernel that is
+# LGPL-2.1-with-exception (the binding is Apache-2.0) — a licensing call
+# `docs/contracts/metadata-extraction.md` §6.6 reserves to a human, unsigned as
+# of this ticket. `step_parser` imports it lazily and degrades to a clear
+# ConnectorError, so the API runs without it. Promote to `dependencies` once the
+# licence review passes.
+cad = ["cadquery-ocp-novtk>=7.9,<8"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",
@@ -44,6 +55,10 @@ dev = [
     "types-jsonschema>=4.20",
     "respx>=0.21",
     "boto3-stubs[secretsmanager]>=1.35",
+    # The STEP-reader suite (SOLUS-CAD-00) needs the optional `cad` extra; it is
+    # in dev so CI exercises the real OCCT path. `test_step_parser.py` skips
+    # cleanly wherever the wheel is unavailable.
+    "cadquery-ocp-novtk>=7.9,<8",
     # The uvicorn E2E drives a real companion against a real socket (BRG-01/02).
     "solus-companion",
     # Parity tests pin the human-owned contracts package to the in-tree draft

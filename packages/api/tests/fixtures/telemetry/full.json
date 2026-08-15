@@ -1,0 +1,1 @@
+{"device_id":"/robot/imu0","schema_version":1,"seq":42,"ts_us":1783252800123456,"units":{"accel_x":"m/s^2","rpm":"rev/min","temp_c":"degC"},"values":{"accel_x":0.125,"rpm":1200.0,"temp_c":31.5}}

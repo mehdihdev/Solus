@@ -81,6 +81,13 @@ class GitLabConnector(OAuthConnector):
     provider: ClassVar[str] = "gitlab"
     scopes: ClassVar[tuple[str, ...]] = ("read_api", "read_user")
     config_fields: ClassVar[tuple[str, ...]] = ("repo", "branch")
+    #: How the app lets a user choose what to track: exactly one repository.
+    #: Read generically by the catalog — no provider id appears in the frontend.
+    selection: ClassVar[dict[str, str]] = {
+        "mode": "single",
+        "config_key": "repo",
+        "label": "repository",
+    }
     # A GitLab PAT works against the same REST API (same Bearer header), so a
     # directly-supplied token is accepted (gated in connect_source).
     supports_token_connect: ClassVar[bool] = True
@@ -98,7 +105,7 @@ class GitLabConnector(OAuthConnector):
 
     # ----------------------------------------------------------------- OAuth
 
-    def authorize_url(self, *, state: str, redirect_uri: str) -> str:
+    def authorize_url(self, *, state: str, redirect_uri: str, access: str | None = None) -> str:
         if self._client_id is None:
             raise ConnectorError(
                 "oauth_not_configured", "GitLab OAuth client_id is not configured."
@@ -179,6 +186,21 @@ class GitLabConnector(OAuthConnector):
             }
             for project in body
             if isinstance(project, dict)
+        ]
+
+    async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
+        """The generic picker capability: repositories, in the shape every
+        connector's selectable items use. `config` is the exact source config
+        this choice writes, so the caller never has to know what a repo means."""
+        return [
+            {
+                "id": repo["full_name"],
+                "name": repo["full_name"],
+                "subtitle": "private" if repo.get("private") else "public",
+                "config": {"repo": repo["full_name"], "branch": repo.get("default_branch")},
+            }
+            for repo in await self.list_repositories(creds)
+            if repo.get("full_name")
         ]
 
     # --------------------------------------------------------------- syncing

@@ -7,6 +7,9 @@ import type { OAuthBridge } from '../features/auth/githubOAuth'
  *  local companion (SOLUSDEV-154 / BRG-04). Null token means signout. */
 export interface CompanionBridge {
   setToken: (token: string | null) => Promise<void>
+  /** The project the companion serves. Its bridge URL is project-scoped, so it
+   *  stays idle until this is set and respawns when it changes. */
+  setProject: (projectId: string | null) => Promise<void>
 }
 
 /** Machine-local folder bridge (SOLUSDEV-164): pick a directory, clone a repo,

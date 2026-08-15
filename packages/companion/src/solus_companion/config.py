@@ -19,6 +19,7 @@ workspace should not silently let a fork guess one.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -46,6 +47,38 @@ SERVER_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SERVER_LINE_RE = re.compile(r"^server:\s*[\"']?([A-Za-z0-9_-]+)[\"']?\s*$")
 
 DEFAULT_INSTANCE_FILE = "~/.solus/companion_id"
+
+#: Where a vendored fork's private dependency environment lives, relative to the
+#: server directory (CAD-00b). Materialized at install time from the fork's
+#: committed lockfile — never at launch, and `bin/launch` does no network I/O.
+PRIVATE_ENV_INTERPRETER = Path(".venv") / "bin" / "python"
+
+#: The variable a fork's `bin/launch` reads to find that interpreter. It is an
+#: ABSOLUTE path because the README forbids PATH resolution, and because a
+#: PyInstaller-frozen companion's `sys.executable` is the companion itself — so
+#: a launcher that re-execs `sys.executable` would re-exec the companion.
+INTERPRETER_ENV = "SOLUS_MCP_PYTHON"
+
+#: One variable NAME per line; `#` comments and blanks ignored. Solus-authored,
+#: reviewed with the fork — this is the "env allowlist declared in solus/" the
+#: MCP-03 launcher contract promises, made mechanical.
+ENV_ALLOW_FILE = Path("solus") / "env.allow"
+
+#: A POSIX environment variable name. Anything else in env.allow is a defect in
+#: OUR file, so it is dropped loudly rather than passed through.
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+#: Where a packaged build puts the vendored tree, relative to the binary.
+_PACKAGED_TREE = "mcp"
+
+#: `url: <...>` in an allowlist — a VENDOR-RUN server on this machine (CAD-02:
+#: Autodesk's Fusion MCP at 127.0.0.1:27182). Read with the same line-regex as
+#: `server:` so the companion keeps its no-YAML-dependency posture.
+_URL_LINE_RE = re.compile(r"^url:\s*[\"\']?(\S+?)[\"\']?\s*$")
+
+#: Hostnames that mean "this machine". Compared exactly — a name that merely
+#: STARTS with one (`127.0.0.1.evil.com`) is a different host.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 # SEC-M2: the bearer token only ever rides to an allowlisted host. Packaged
 # builds bake the real backend origin at build time (SOLUSDEV-148/149);
 # setting SOLUS_COMPANION_ALLOWED_HOSTS is the explicit user/app consent.
@@ -63,9 +96,22 @@ class ServerLaunch:
     """One vendored MCP server: how to launch it and its declared child env."""
 
     name: str
-    command: Path
+    #: stdio: the vendored fork's launcher. None for a vendor-run URL server.
+    command: Path | None = None
+    #: streamable-http: a VENDOR-RUN server on this machine (CAD-02). Mutually
+    #: exclusive with `command`; always loopback.
+    url: str | None = None
     args: tuple[str, ...] = ()
+    #: Values Solus SETS for the child (the private interpreter, and — once the
+    #: bridge carries them — delivered license credentials). These win over the
+    #: ambient environment: a hostile value must not be able to redirect a fork.
     env: Mapping[str, str] = field(default_factory=dict)
+    #: Variable NAMES the fork declared it may inherit from the host. Values are
+    #: read at spawn time, so a license variable set after install still works.
+    env_passthrough: tuple[str, ...] = ()
+    #: The fork runs in its own directory. Without this it inherits the
+    #: companion's, which the launch contract forbids.
+    cwd: Path | None = None
 
 
 class TokenBox:
@@ -248,6 +294,98 @@ def _launch_command(root_resolved: Path, server_dir: Path, name: str) -> Path | 
     return resolved
 
 
+def is_loopback_url(url: str) -> bool:
+    """Whether `url` names an MCP server on THIS machine.
+
+    THE security boundary for vendor-run servers. The companion runs inside the
+    customer's network, so a companion that will dial an arbitrary URL is an
+    SSRF primitive reachable through whatever can influence an allowlist file —
+    cloud metadata at 169.254.169.254 being the classic target.
+
+    Scheme is restricted to http/https and the host is matched EXACTLY against
+    the loopback names, plus the whole 127.0.0.0/8 block. A hostname that merely
+    starts with "127.0.0.1" is a different host and is refused.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _server_url(allowlist: Path, name: str) -> str | None:
+    """The declared vendor-run endpoint, or None for a vendored stdio fork."""
+    try:
+        text = allowlist.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        match = _URL_LINE_RE.match(line)
+        if match is None:
+            continue
+        url = match.group(1)
+        if not is_loopback_url(url):
+            logger.error(
+                "REFUSED server %r: url %r is not loopback; the companion only "
+                "connects to MCP servers on this machine",
+                name,
+                url,
+            )
+            return ""
+        return url
+    return None
+
+
+def _private_interpreter(root_resolved: Path, server_dir: Path, name: str) -> Path | None:
+    """The fork's own interpreter, or None when it has no private env.
+
+    A fork with no dependencies needs none, so absence is not an error. A
+    present-but-escaping one IS: the same symlink-swap guard the launch command
+    gets, because this path is executed.
+    """
+    interpreter = server_dir / PRIVATE_ENV_INTERPRETER
+    if not interpreter.exists():
+        return None
+    resolved = interpreter.resolve()
+    if not resolved.is_relative_to(root_resolved):
+        logger.error(
+            "REFUSED private interpreter for %r: resolves outside %s", name, root_resolved
+        )
+        return None
+    if not os.access(resolved, os.X_OK):
+        logger.error("REFUSED private interpreter for %r: %s is not executable", name, interpreter)
+        return None
+    return resolved
+
+
+def _env_passthrough(server_dir: Path, name: str) -> tuple[str, ...]:
+    """Variable names the fork declared, from its Solus-authored env.allow."""
+    try:
+        text = (server_dir / ENV_ALLOW_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    names: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if _ENV_NAME_RE.fullmatch(line) is None:
+            logger.error(
+                "ignoring %r in %s env.allow: not an environment variable name", line, name
+            )
+            continue
+        names.append(line)
+    return tuple(names)
+
+
 def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[ServerLaunch, ...]:
     """Scan `<root>/*/allowlist.yaml` for vendored servers (ADR-031).
 
@@ -271,11 +409,50 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
                 server_dir.name,
             )
             continue
-        command = _launch_command(root_resolved, server_dir, name)
-        if command is None:
+        url = _server_url(allowlist, name)
+        if url == "":  # declared, but refused as non-loopback
             continue
-        servers.append(ServerLaunch(name=name, command=command, env=declared_env))
+        command = None
+        if url is None:
+            # No url ⇒ a vendored fork, which must have a launcher.
+            command = _launch_command(root_resolved, server_dir, name)
+            if command is None:
+                continue
+        # Start from main's H3 workspace knob, then add ours — one dict, so
+        # neither variable is lost.
+        env: dict[str, str] = dict(declared_env)
+        interpreter = _private_interpreter(root_resolved, server_dir, name)
+        if interpreter is not None:
+            env[INTERPRETER_ENV] = str(interpreter)
+        servers.append(
+            ServerLaunch(
+                name=name,
+                command=command,
+                url=url,
+                env=env,
+                env_passthrough=_env_passthrough(server_dir, name),
+                cwd=server_dir.resolve(),
+            )
+        )
+    if not servers:
+        # A wrong root and a correct-but-empty one used to be indistinguishable:
+        # the glob simply yielded nothing and the companion ran with no tools.
+        logger.warning("no MCP servers found under %s — is the integrations root correct?", root)
     return tuple(servers)
+
+
+def default_integrations_root(executable: str | None = None) -> Path | None:
+    """The vendored tree next to a packaged companion binary, if it is there.
+
+    `SOLUS_COMPANION_INTEGRATIONS_ROOT` was required with no default and the
+    desktop app never set it, so a packaged companion died at config validation
+    while shipping the tree right beside itself. No default is invented when the
+    tree is absent — that would turn a packaging mistake into a silent
+    zero-server run.
+    """
+    binary = Path(executable or sys.executable)
+    candidate = binary.parent / _PACKAGED_TREE
+    return candidate if candidate.is_dir() else None
 
 
 def load_instance_id(path: Path) -> str:
@@ -327,7 +504,14 @@ def config_from_env(env: Mapping[str, str] | None = None) -> CompanionConfig:
     token = source.get("SOLUS_COMPANION_TOKEN")
     if token is None and sys.stdin.isatty():
         raise ValueError("SOLUS_COMPANION_TOKEN is required when no stdin token relay is attached")
-    integrations_root = Path(_require(source, "SOLUS_COMPANION_INTEGRATIONS_ROOT"))
+    configured = source.get("SOLUS_COMPANION_INTEGRATIONS_ROOT", "")
+    if configured:
+        integrations_root = Path(configured)
+    else:
+        fallback = default_integrations_root()
+        if fallback is None:
+            raise ValueError("SOLUS_COMPANION_INTEGRATIONS_ROOT is required")
+        integrations_root = fallback
     instance_file = Path(
         source.get("SOLUS_COMPANION_INSTANCE_FILE", DEFAULT_INSTANCE_FILE)
     ).expanduser()

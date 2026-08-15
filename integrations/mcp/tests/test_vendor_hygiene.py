@@ -97,12 +97,25 @@ def _mypy_excluded(exclude_regexes: list[str], rel_path: str) -> bool:
 # --- README rule: stdio specs launch only via vendored `bin/launch` ----------
 
 
-@pytest.mark.parametrize("server", ["kicad", "fusion"])
+@pytest.mark.parametrize("server", ["kicad"])
 def test_free_tier_stdio_spec_points_at_its_vendored_launcher(server: str) -> None:
     # Phase 4 H4: commands are pinned ABSOLUTE (anchored at the repo root by
     # mcp_servers._fork_launcher) so a spawn never depends on process cwd.
     spec = MCP_SERVER_CATALOG[server]
     assert spec.command == str(REPO_ROOT / f"integrations/mcp/{server}/bin/launch")
+
+
+def test_fusion_declares_a_loopback_url_and_no_launcher() -> None:
+    """Fusion was in the parametrize above until CAD-02 established it is not a
+    fork at all: Autodesk ships the server, it runs on the customer's machine,
+    and hosting or multiplexing that licensed seat would breach the EULA. It has
+    no bin/launch to pin — so the property to hold is the opposite one."""
+    spec = MCP_SERVER_CATALOG["fusion"]
+    assert spec.command is None, "a command would re-assert the fork model CAD-02 rejected"
+    assert spec.url == "http://127.0.0.1:27182/mcp"
+    fork_dir = MCP_ROOT / "fusion"
+    assert (fork_dir / "allowlist.yaml").is_file()  # still allowlist-gated
+    assert not (fork_dir / "upstream").exists(), "nothing is vendored for a vendor-run server"
 
 
 def test_catalog_stdio_commands_are_vendored_launchers() -> None:

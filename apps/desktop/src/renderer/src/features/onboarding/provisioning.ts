@@ -3,7 +3,14 @@
 // persist their SOL mode. Best-effort — if the API is unreachable or auth isn't
 // configured (dev bypass), it degrades to the simulated flow and the UI carries
 // on. Connect/build of the actual graph remain simulated (no backend yet).
-import { getMe, createProject, updateSolMode, personalTeam } from '../../lib/api/resources'
+import {
+  getMe,
+  getProject,
+  createProject,
+  updateSolMode,
+  personalTeam
+} from '../../lib/api/resources'
+import { classifyFetchError } from '../../lib/api/errors'
 import type { SolMode } from '../../store/settingsStore'
 
 const DEFAULT_PROJECT_NAME = 'My first robot'
@@ -17,6 +24,27 @@ export function deriveProjectName(description: string): string {
   return sentence.length > MAX_NAME_LENGTH
     ? `${sentence.slice(0, MAX_NAME_LENGTH).trim()}…`
     : sentence
+}
+
+/**
+ * Whether a remembered project id still names a real project.
+ *
+ * The id is persisted client-side but describes a SERVER row, and that row can
+ * disappear under the app — a teammate deletes the project, the user leaves the
+ * team, the database is restored. Reusing a dead id leaves every project-scoped
+ * screen 404ing with no way back.
+ *
+ * ONLY a 404 answers "gone". A 401, a 5xx or an unreachable API means we could
+ * not ask, and throwing away a good project over a blip would be the same
+ * mistake as reporting a rejected token as "backend offline" — so those keep it.
+ */
+async function stillExists(projectId: string): Promise<boolean> {
+  try {
+    await getProject(projectId)
+    return true
+  } catch (error) {
+    return classifyFetchError(error) !== 'gone'
+  }
 }
 
 export interface ProvisionResult {
@@ -53,7 +81,7 @@ export async function ensureWorkspace({
   solMode,
   existing
 }: ProvisionInput): Promise<ProvisionResult> {
-  if (existing?.project) {
+  if (existing?.project && (await stillExists(existing.project.id))) {
     return { linked: true, teamId: existing.teamId ?? undefined, project: existing.project }
   }
   try {

@@ -51,3 +51,10 @@ dmypy.json
 .ruff_cache/
 .eslintcache
 *.tsbuildinfo
+
+# Vendored MCP forks' private interpreters, materialized by `make mcp-forks`
+# from each fork's hash-pinned requirements.lock.txt. Derived, machine-specific
+# (the interpreter is a real copy, not a symlink — the companion refuses one
+# that resolves outside the tree), and thousands of files. The lockfile is the
+# committed artifact; the venv never is.
+integrations/mcp/*/.venv/

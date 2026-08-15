@@ -103,7 +103,11 @@ def test_reconcile_job_is_registered_on_the_worker() -> None:
     # build_worker_settings returns a bare `type` (the class is built lazily);
     # Any-typed access mirrors how ARQ itself consumes it.
     worker_settings: Any = build_worker_settings(
-        Settings(supabase_jwt_secret="test-only", redis_url="redis://localhost:6379")
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
+            supabase_jwt_secret="test-only",
+            redis_url="redis://localhost:6379",
+        )
     )
     names = {fn.__name__ for fn in worker_settings.functions}
     assert "reconcile_credit_debits" in names

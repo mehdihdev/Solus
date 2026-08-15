@@ -37,7 +37,10 @@ from solus_api.services.limits import check_can_use_byo_tool
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-FREE_SERVERS = {"onshape", "web_search", "kicad", "fusion"}
+#: SOLUS-ONS-A1 removed `onshape`: it was an API-KEY-PAIR spec, a credential
+#: that authenticates the developer rather than the customer. Onshape is now
+#: reached through the customer OAuth grant as in-process tools, not MCP.
+FREE_SERVERS = {"web_search", "kicad", "fusion"}
 BYO_SERVERS = {"altium", "solidworks", "autocad"}
 
 
@@ -62,8 +65,26 @@ def test_new_stdio_specs_are_pinned_paths_not_package_runners() -> None:
     # reach a network — the paths do not exist yet.
     for name in (FREE_SERVERS | BYO_SERVERS) - {"onshape", "web_search"}:
         spec = MCP_SERVER_CATALOG[name]
+        if spec.url is not None:
+            continue  # vendor-run, not a fork we launch — see below
         assert spec.command is not None and "/" in spec.command
         assert spec.command.split("/")[0] not in {"npx", "uvx"}
+
+
+def test_vendor_run_specs_are_loopback_only() -> None:
+    """CAD-02. A url spec names a server on the CUSTOMER's machine, which is a
+    licensing requirement (Autodesk prohibits hosting or multiplexing a licensed
+    seat) as well as the only place a local CAD app exists.
+
+    A non-loopback url here would point the companion at an arbitrary host —
+    an SSRF primitive inside the customer's network."""
+    from solus_companion.config import is_loopback_url
+
+    for name in FREE_SERVERS | BYO_SERVERS:
+        spec = MCP_SERVER_CATALOG[name]
+        if spec.url is None:
+            continue
+        assert is_loopback_url(spec.url), f"{name} url is not loopback: {spec.url}"
 
 
 def test_license_secret_ref_is_tenant_scoped() -> None:
@@ -400,3 +421,24 @@ def test_catalog_specs_serialize_without_leaking_anything() -> None:
     for spec in MCP_SERVER_CATALOG.values():
         dumped = json.dumps(spec.model_dump(mode="json"))
         assert "fake-lic" not in dumped  # trivially true; guards accidental value fields
+
+
+def test_fusion_carries_a_personal_tier_notice() -> None:
+    """CAD-02. Fusion Personal forbids commercial use and >$1,000/year of
+    output, and Autodesk asks integrations to warn about it. A paying Solus
+    customer driving a free-tier Fusion for business work breaches their terms.
+
+    The notice INFORMS and does not block: the licence is the customer's to
+    hold, and refusing to connect would neither enforce it nor help them."""
+    notice = MCP_SERVER_CATALOG["fusion"].connect_notice
+
+    assert notice is not None
+    assert "non-commercial" in notice.lower()
+
+
+def test_the_notice_is_generic_catalog_data_not_a_fusion_branch() -> None:
+    """Any surface offering a tool can render this without knowing which tool it
+    is — the treatment `access_modes` and `selection` already get on connectors.
+    Tools with nothing to say simply carry None."""
+    assert MCP_SERVER_CATALOG["kicad"].connect_notice is None
+    assert "connect_notice" in type(MCP_SERVER_CATALOG["fusion"]).model_fields

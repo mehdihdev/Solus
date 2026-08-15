@@ -35,6 +35,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from solus_api.agent.runtime import ScaffoldRunner
 from solus_api.connectors.contracts import (
     AccountInfo,
     ConnectorError,
@@ -60,6 +61,37 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 API_DIR = Path(__file__).resolve().parent.parent
+
+#: Ambient `SOLUS_*` this suite must NOT strip.
+#: - `SOLUS_TEST_DATABASE_URL` names the database to test against (CI sets it).
+#: - `SOLUS_LIVE_*` are opt-in gates for the live-provider smoke tests; removing
+#:   them would silently skip the very tests a developer exported them to run.
+_KEEP_AMBIENT_ENV = ("SOLUS_TEST_DATABASE_URL",)
+_KEEP_AMBIENT_PREFIXES = ("SOLUS_LIVE_",)
+
+
+def _strip_ambient_solus_env() -> None:
+    """Make the suite immune to the developer's shell.
+
+    `Settings(_env_file=None, ...)` only disables the .env FILE — pydantic still
+    reads `os.environ`, and real environment variables outrank both. So a shell
+    that has sourced the root `.env` (which is exactly what running the API asks
+    you to do) leaks all ~80 keys into every test: `test_config` then sees a real
+    `stripe_webhook_secret` where it asserts None, and `test_secrets` gets the
+    encrypted store where it asserts the in-memory fallback.
+
+    CI never hits this — there is no `.env` in a clean checkout — so the suite
+    passes there and fails on the machine of whoever just ran the app. Strip the
+    ambient values here, once, before anything reads them; the tests that want a
+    value set it explicitly.
+    """
+    for name in [k for k in os.environ if k.startswith("SOLUS_")]:
+        if name in _KEEP_AMBIENT_ENV or name.startswith(_KEEP_AMBIENT_PREFIXES):
+            continue
+        del os.environ[name]
+
+
+_strip_ambient_solus_env()
 
 
 def _default_test_db_url() -> str:
@@ -170,7 +202,7 @@ class FakeGitHub(OAuthConnector):
     config_fields = ("repo", "branch")
     supports_token_connect = True
 
-    def authorize_url(self, *, state: str, redirect_uri: str) -> str:
+    def authorize_url(self, *, state: str, redirect_uri: str, access: str | None = None) -> str:
         return f"https://gh.test/login/oauth/authorize?state={state}&redirect_uri={redirect_uri}&scope=repo"
 
     async def exchange_code(self, *, code: str, redirect_uri: str) -> Credentials:
@@ -218,6 +250,16 @@ class FakeGitHub(OAuthConnector):
             {"full_name": "octocat/strider-tools", "default_branch": "main", "private": True},
         ]
 
+    async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": repo["full_name"],
+                "name": repo["full_name"],
+                "config": {"repo": repo["full_name"], "branch": repo["default_branch"]},
+            }
+            for repo in await self.list_repositories(creds)
+        ]
+
 
 @pytest.fixture
 def fake_registry() -> ConnectorRegistry:
@@ -251,7 +293,14 @@ async def engine(_schema: None) -> AsyncIterator[AsyncEngine]:
 
 @pytest.fixture
 def app(settings: Settings, engine: AsyncEngine) -> FastAPI:
-    return create_app(settings=settings, engine=engine)
+    application = create_app(settings=settings, engine=engine)
+    # The shipped runner is `LlmRunner`, which makes a real provider call. The
+    # transport suites (loop guard, timeout, error masking, pagination) are about
+    # the plumbing around a runner, not about the model, so they run against the
+    # model-free scaffold. Tests that DO exercise the model swap in their own
+    # scripted adapter (see test_sol_red_team.py).
+    application.state.agent_runner = ScaffoldRunner()
+    return application
 
 
 @pytest.fixture
@@ -276,6 +325,50 @@ def alice_headers() -> dict[str, str]:
 @pytest.fixture
 def bob_headers() -> dict[str, str]:
     return bearer(BOB["sub"], BOB["email"])
+
+
+@pytest.fixture
+def unverified_headers() -> dict[str, str]:
+    # A token whose email is NOT verified — for RequireVerified gate tests.
+    # A fixture (not an import) so subdirectory suites can use it despite the
+    # conftest module-name shadowing that breaks `from conftest import ...` there.
+    return bearer("unverified-sub", "unverified@example.com", email_verified=False)
+
+
+@pytest.fixture
+def make_entry() -> "Callable[..., Any]":
+    """Factory for a valid published tool_knowledge row (LANE D toolkb suite).
+
+    Lives HERE, not in a tests/toolkb/conftest.py — a second module named
+    `conftest` shadows this one and breaks every root-level `from conftest
+    import ...` when the full suite runs. Direct row construction is allowed in
+    tests only; production code goes through toolkb.guard (tripwire-tested).
+    """
+    from solus_api.contracts import tool_knowledge as ctr
+    from solus_api.toolkb.schema import AcquisitionMethod, KnowledgeStatus, ToolKnowledgeEntry
+
+    def _entry(**overrides: object) -> ToolKnowledgeEntry:
+        fields: dict[str, object] = {
+            "tool": ctr.ToolFamily.KICAD,
+            "version_range": ">=8.0 <9.0",
+            "surface": ctr.UiSurface.MENU,
+            "control_id": "kicad.eeschema.place_net_label",
+            "label": "Add Net Label",
+            "effect": ctr.ControlEffect.CREATE_FEATURE,
+            "description": "Places a named net label on the current wire.",
+            "menu_path": ["Place", "Net Label"],
+            "shortcut": "L",
+            "provenance": ctr.Provenance.VENDOR_DOCS,
+            "status": KnowledgeStatus.PUBLISHED,
+            "acquired_via": AcquisitionMethod.DOCS,
+            "confidence": 0.8,
+            "version_min_key": "0008.0000.0000",
+            "version_max_key": "0009.0000.0000",
+        }
+        fields.update(overrides)
+        return ToolKnowledgeEntry(**fields)
+
+    return _entry
 
 
 # The reusable conformance suite now ships in the package
@@ -343,6 +436,11 @@ BRIDGE_ALLOWLIST_ROOT = str(Path(__file__).parent / "fixtures" / "bridge_allowli
 
 def bridge_settings(**overrides: Any) -> Settings:
     fields: dict[str, Any] = {
+        # Hermetic, like `settings()` above: `Settings.env_file` is anchored to the
+        # repo root, so without this every UNSPECIFIED field below would come from
+        # the developer's real `.env` — green here, different in CI, and live
+        # secrets pulled into a test process.
+        "_env_file": None,
         "supabase_jwt_secret": TEST_JWT_SECRET,
         "supabase_jwt_audience": TEST_AUDIENCE,
         "database_url": TEST_DATABASE_URL,

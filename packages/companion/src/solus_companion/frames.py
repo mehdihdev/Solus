@@ -9,6 +9,7 @@ hello tools carry exactly {name, description, input_schema, output_schema}
 (never `requires_confirmation` — the cloud rejects that hello).
 """
 
+import base64
 import json
 import logging
 from collections.abc import Sequence
@@ -62,7 +63,17 @@ class Invalid:
     reason: str
 
 
-Inbound = ToolCallIn | Ack | Pong | ErrorIn | Unknown | Invalid
+class ArtifactFetchIn(BaseModel):
+    """An inbound `artifact_fetch` frame (SOLUS-CAD-00c): the cloud asking for
+    the bytes behind a handle a previous tool result advertised."""
+
+    model_config = ConfigDict(frozen=True)
+
+    artifact_id: str
+    fetch_id: str
+
+
+Inbound = ToolCallIn | ArtifactFetchIn | Ack | Pong | ErrorIn | Unknown | Invalid
 
 
 def _parse_data(raw: str | bytes) -> tuple[str, dict[str, Any]] | Invalid:
@@ -92,6 +103,11 @@ def parse_inbound(raw: str | bytes) -> Inbound:
             return ToolCallIn.model_validate(data)
         except ValidationError:
             return Invalid(reason="tool_call failed validation")
+    if frame_type == "artifact_fetch":
+        try:
+            return ArtifactFetchIn.model_validate(data)
+        except ValidationError:
+            return Invalid(reason="artifact_fetch failed validation")
     if frame_type == "hello_ack":
         version = data.get("protocol_version")
         if isinstance(version, int):
@@ -154,5 +170,25 @@ def tool_result_error(call_id: str, code: ErrorCode, message: str, *, retryable:
                 "message": message[:ERROR_MESSAGE_CAP],
                 "retryable": retryable,
             },
+        },
+    )
+
+
+def artifact_chunk_frame(
+    *, fetch_id: str, data: bytes, final: bool, error: str | None = None
+) -> str:
+    """One slice of a staged artifact (SOLUS-CAD-00c).
+
+    `data` is base64 so the bytes survive a JSON text frame. `error` set means
+    the fetch cannot be served (unknown/evicted handle) — the cloud fails that
+    one fetch and the socket survives.
+    """
+    return _encode(
+        "artifact_chunk",
+        {
+            "fetch_id": fetch_id,
+            "data": base64.b64encode(data).decode("ascii"),
+            "final": final,
+            "error": error,
         },
     )

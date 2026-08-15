@@ -5,6 +5,7 @@
 // In this onboarding slice the flows are simulated (no live source/graph calls),
 // but the client is the single seam every future feature talks through.
 import { ApiError, type ApiMeta, type ApiSuccess } from './envelope.types'
+import { resolveApiBaseUrl } from '../cspConnect'
 
 export interface ApiClientOptions {
   baseUrl: string
@@ -110,7 +111,26 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   }
 }
 
-const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
+// `??` only falls back on null/undefined, so a PRESENT-BUT-BLANK
+// `VITE_API_BASE_URL=` (which is what apps/desktop/.env ships) yielded `''` —
+// and `joinUrl('', '/projects/x')` is `/projects/x`, a relative URL resolved
+// against the renderer's own origin. Every call then missed the API entirely
+// and surfaced as "Solus can't reach its API", with the integration catalog
+// silently degrading to its offline fallback (so Onshape/Altium/GitLab tiles
+// vanished). `cspConnect` already treated blank as absent — that asymmetry WAS
+// the bug — so take the constant from there rather than restating it, which is
+// what its "kept in lockstep" note asks for.
+const DEFAULT_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+
+/** The app client's base URL and token source, exposed so the SSE stream
+ *  (which cannot go through `request`, being a streaming body) reuses ONE
+ *  configuration instead of re-deriving it. */
+export const apiBaseUrl = DEFAULT_BASE_URL
+
+export async function apiToken(): Promise<string | null> {
+  const { useAuthStore } = await import('../../store/authStore')
+  return useAuthStore.getState().accessToken
+}
 
 /**
  * App-wide client. The bearer token is the current Supabase access token held

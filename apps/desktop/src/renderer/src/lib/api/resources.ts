@@ -83,11 +83,86 @@ export interface Entity {
   source_key: string
 }
 
+/** A graph edge between two entities. Public keys mirror `serialize_relation` (API.md §2.4). */
+export interface Relation {
+  id: string
+  type: string
+  from_entity_id: string
+  to_entity_id: string
+}
+
+/**
+ * The induced subgraph around a focused entity (API.md §2.4 `GET /projects/{id}/graph`).
+ *
+ * Every edge has BOTH endpoints in `entities`, so a widget can render it without guarding against
+ * dangling references. `truncated` is `true` when the server's entity cap bit — surface it, since
+ * a silently capped neighbourhood reads as the whole picture.
+ */
+export interface Neighborhood {
+  entities: Entity[]
+  edges: Relation[]
+  truncated: boolean
+}
+
+/** Options for a neighbourhood read. `depth` is capped at 2 server-side. */
+export interface NeighborhoodOptions {
+  depth?: number
+  entity_types?: string[]
+  relation_types?: string[]
+  limit?: number
+}
+
+/** The focus-scope read: one bounded call re-scopes every mounted widget (WS-01). */
+export function getGraphNeighborhood(
+  projectId: string,
+  root: string,
+  options: NeighborhoodOptions = {},
+  client: ApiClient = api
+): Promise<Neighborhood> {
+  const params = new URLSearchParams({ root, depth: String(options.depth ?? 1) })
+  if (options.entity_types?.length) params.set('entity_types', options.entity_types.join(','))
+  if (options.relation_types?.length) params.set('relation_types', options.relation_types.join(','))
+  if (options.limit) params.set('limit', String(options.limit))
+  return client.request<Neighborhood>(`/projects/${projectId}/graph?${params.toString()}`)
+}
+
 /** A repository discoverable through a connected GitHub source. */
 export interface GithubRepo {
   full_name: string
   default_branch: string
   private: boolean
+}
+
+/** One thing a connected source can be pointed at: a repository, a CAD
+ *  document, … . `config` (when present) is the exact source config choosing
+ *  this item writes, so the app never has to know what the item means. */
+export interface SelectableItem {
+  id: string
+  name: string
+  subtitle?: string
+  config?: Record<string, unknown>
+}
+
+/** How a connector lets a user choose what to track, from the live registry. */
+export interface IntegrationSelection {
+  mode: 'single' | 'multi'
+  config_key: string
+  label: string
+}
+
+/** One grant a connector offers at connect time. */
+export interface IntegrationAccessMode {
+  id: string
+  label: string
+  description: string
+  scopes: readonly string[]
+}
+
+/** How much power the user grants while connecting, from the live registry.
+ *  Null when the provider offers no choice. */
+export interface IntegrationAccessModes {
+  default: string
+  modes: readonly IntegrationAccessMode[]
 }
 
 /** The integration catalog entry (auth + config requirements). */
@@ -96,6 +171,9 @@ export interface Integration {
   auth_kind: string
   config_fields: string[]
   scopes: string[]
+  /** Null when the connector has nothing to pick after connecting. */
+  selection?: IntegrationSelection | null
+  access_modes?: IntegrationAccessModes | null
 }
 
 /** Response from kicking off the GitHub loopback OAuth flow. */
@@ -340,33 +418,41 @@ export function getSource(
   return client.request<Source>(`/projects/${projectId}/sources/${sourceId}`)
 }
 
-/** Repositories reachable through a connected GitHub source. */
-export function listRepos(
+/** What a connected source can be pointed at (repositories, CAD documents, …).
+ *  One generic route for every connector. */
+export function listSelectable(
   projectId: string,
   sourceId: string,
   client: ApiClient = api
-): Promise<GithubRepo[]> {
-  return client.request<GithubRepo[]>(`/projects/${projectId}/sources/${sourceId}/repos`)
+): Promise<SelectableItem[]> {
+  return client.request<SelectableItem[]>(`/projects/${projectId}/sources/${sourceId}/selectable`)
 }
 
-/** Begin the GitHub loopback OAuth flow; returns the authorize URL + state. */
-export function startGithubOAuth(
+/**
+ * Begin a loopback OAuth flow for `provider`; returns the authorize URL + state.
+ * The provider is an argument, never baked into the path — the backend routes
+ * are `/{provider}/oauth/*`, so every OAuth connector the registry grows is
+ * reachable without a change here.
+ */
+export function startOAuth(
   projectId: string,
-  input: { redirect_uri?: string; repo?: string; name?: string } = {},
+  provider: string,
+  input: { redirect_uri?: string; name?: string; access?: string } = {},
   client: ApiClient = api
 ): Promise<OAuthStartResponse> {
-  return client.request<OAuthStartResponse>('/integrations/github/oauth/start', {
+  return client.request<OAuthStartResponse>(`/integrations/${provider}/oauth/start`, {
     method: 'POST',
     body: { project_id: projectId, ...input }
   })
 }
 
 /** Exchange the OAuth state + code for a connected source. */
-export function exchangeGithubOAuth(
+export function exchangeOAuth(
+  provider: string,
   input: { state: string; code: string },
   client: ApiClient = api
 ): Promise<Source> {
-  return client.request<Source>('/integrations/github/oauth/exchange', {
+  return client.request<Source>(`/integrations/${provider}/oauth/exchange`, {
     method: 'POST',
     body: input
   })
@@ -645,8 +731,12 @@ export interface BridgeServer {
   state: BridgeServerState
   detail: string | null
   updated_at: string
-  /** Sent for every server on the connected bridge-status surface
-   *  (SOLUSDEV-102 / MCP-05); optional for pre-MCP-05 fixtures. */
+  /** MCP-05 BYO-licence readiness, computed server-side and previously
+   *  discarded by this client. A tool can be CONNECTED but not usable — a
+   *  paid-tier server with no customer licence reports its state here, and
+   *  showing "connected" alone would misrepresent that. Optional because a
+   *  free-tier server (Fusion) simply reports "ready", and for pre-MCP-05
+   *  fixtures. */
   license_state?: BridgeLicenseState
 }
 
@@ -710,4 +800,76 @@ export function classifyQuery(
   client: ApiClient = api
 ): Promise<ClassifyPreview> {
   return client.request<ClassifyPreview>('/orchestration/classify', { method: 'POST', body })
+}
+
+// --- SOL (SOLUSDEV-96 / ONS-UI-01) ---------------------------------------
+// `createSolConversation` used to live here too. The SOLUSDEV-68 merge brought
+// LANE C's `features/sol/solApi.ts`, which defines the same POST against the
+// same endpoint, and that is the copy every production caller now uses — so the
+// one here was dead. Removed rather than left as a second definition nobody
+// could tell apart. The remaining SOL calls below still live here because
+// nothing in features/sol owns them yet; consolidating the two layers is a
+// separate call.
+
+/**
+ * Approve or reject a destructive action SOL parked.
+ *
+ * A decision and NOTHING ELSE — the arguments that execute are the ones the
+ * server stored and showed the user. Sending args here would defeat the point,
+ * and the API rejects a body that carries them.
+ */
+export interface ConfirmationOutcome {
+  /** False when nothing ran: expired, already decided, the tool is gone, the
+   *  described effect changed, or the tool itself failed. A REJECTION is also
+   *  ok:false — refusing to run is its success — so callers must branch on the
+   *  decision, not on this flag alone. */
+  readonly ok?: boolean
+  readonly error?: { readonly code?: string; readonly message?: string }
+}
+
+export function decideSolConfirmation(
+  projectId: string,
+  confirmationId: string,
+  decision: 'approve' | 'reject',
+  client: ApiClient = api
+): Promise<ConfirmationOutcome> {
+  return client.request<ConfirmationOutcome>(
+    `/projects/${projectId}/sol/confirmations/${confirmationId}`,
+    { method: 'POST', body: { decision } }
+  )
+}
+
+// --- Onshape panel links (SOLUS-A7-01) ------------------------------------
+// A panel link is a SECOND credential class: a long-lived token the Onshape
+// in-app panel holds, minted only after the signed-in user approves the code
+// the panel is showing. The desktop app never sees that token — it only
+// approves the pairing and can revoke it afterwards.
+
+export interface PanelLink {
+  id: string
+  /** Untrusted label from Onshape, shown only so two links are tellable apart. */
+  onshape_user_id: string | null
+  created_at: string
+  last_used_at: string | null
+  expires_at: string
+}
+
+export function listPanelLinks(client: ApiClient = api): Promise<PanelLink[]> {
+  return client.request<PanelLink[]>('/users/me/panel-links')
+}
+
+/** Approve the code the panel is displaying. Rejects 404 `invalid_pairing`
+ * (wrong or expired) and 409 `already_approved`. */
+export function approvePanelLink(
+  userCode: string,
+  client: ApiClient = api
+): Promise<{ status: string }> {
+  return client.request<{ status: string }>('/users/me/panel-links', {
+    method: 'POST',
+    body: { user_code: userCode }
+  })
+}
+
+export function revokePanelLink(linkId: string, client: ApiClient = api): Promise<void> {
+  return client.request<void>(`/users/me/panel-links/${linkId}`, { method: 'DELETE' })
 }

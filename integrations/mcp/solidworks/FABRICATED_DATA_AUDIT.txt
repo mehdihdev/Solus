@@ -1,0 +1,161 @@
+# Fabricated-data audit — <clone of andrewbartels1/SolidworksMCP-python @ 34a21fe>
+# 112 MCP tools examined
+
+delegating wrappers (judged by their target): 1
+text generators (emit source, claim nothing): 12
+TOOLS THAT CAN REPORT SUCCESS FOR WORK THAT NEVER HAPPENED: 48
+
+
+## never-touches-cad (13)
+
+  analyze_geometry  (src/solidworks_mcp/tools/analysis.py:331)
+    {'status': 'success', 'message': f'Geometry analysis ({input_data.analysis_type}) completed', 'analysis_type': input_data.analysis_type, 'results': {'summary': f'Analysis of type {input_data.analysis_type} completed', 'parameters': input_data.parameters, 'findings': ['No issues found']}}
+
+  get_material_properties  (src/solidworks_mcp/tools/analysis.py:360)
+    {'status': 'success', 'material': {'name': 'Steel, Plain Carbon', 'density': {'value': 7850, 'units': 'kg/m³'}, 'elastic_modulus': {'value': 200000, 'units': 'MPa'}, 'yield_strength': {'value': 250, 'units': 'MPa'}, 'ultimate_tensile_strength': {'value': 400, 'units': 'MPa'}, 'poissons_ratio': 0.29,
+
+  stop_macro_recording  (src/solidworks_mcp/tools/automation.py:438)
+    {'status': 'success', 'message': 'Stopped macro recording', 'macro_recording': {'status': 'stopped', 'end_time': '2024-01-01T10:05:00Z', 'duration': '5 minutes', 'actions_recorded': 15, 'file_location': 'C:\\Users\\User\\AppData\\Local\\SolidWorks\\Macros\\recorded_macro.swp'}}
+
+  search_solidworks_api_help  (src/solidworks_mcp/tools/docs_discovery.py:1136)
+    {'status': 'success', 'message': 'SolidWorks API help search completed', 'query': normalized.query, 'year': year, 'source_index_file': str(index_file) if index_file else None, 'matches': matches, 'fallback_help': fallback, 'guidance': ' '.join(guidance_lines), 'execution_time': time.time() - start_t
+
+  create_drawing_view  (src/solidworks_mcp/tools/drawing.py:400)
+    {'status': 'success', 'message': f'Created {input_data.view_type} view of {input_data.model_path}', 'drawing_view': {'model_path': input_data.model_path, 'view_type': input_data.view_type, 'position': {'x': input_data.position_x, 'y': input_data.position_y}, 'scale': input_data.scale, 'orientation':
+
+  add_note  (src/solidworks_mcp/tools/drawing.py:563)
+    {'status': 'success', 'message': f'Added note: {input_data.text[:30]}...', 'note': {'text': input_data.text, 'position': {'x': input_data.position_x, 'y': input_data.position_y}, 'font_size': input_data.font_size, 'leader_attachment': input_data.leader_attachment}}
+
+  create_section_view  (src/solidworks_mcp/tools/drawing.py:623)
+    {'status': 'success', 'message': f'Created section view {input_data.label}', 'section_view': {'section_line': {'start': input_data.section_line_start, 'end': input_data.section_line_end}, 'view_position': {'x': input_data.view_position_x, 'y': input_data.view_position_y}, 'scale': input_data.scale, 
+
+  create_detail_view  (src/solidworks_mcp/tools/drawing.py:686)
+    {'status': 'success', 'message': f'Created detail view {input_data.label}', 'detail_view': {'detail_circle': {'center': {'x': input_data.center_x, 'y': input_data.center_y}, 'radius': input_data.radius}, 'view_position': {'x': input_data.view_position_x, 'y': input_data.view_position_y}, 'scale': in
+
+  update_sheet_format  (src/solidworks_mcp/tools/drawing.py:751)
+    {'status': 'success', 'message': f'Updated sheet format to {input_data.sheet_size}', 'sheet_format': {'format_file': input_data.format_file, 'sheet_size': input_data.sheet_size, 'title_block': {'title': input_data.title, 'drawn_by': getattr(input_data, 'drawn_by', ''), 'checked_by': getattr(input_da
+
+  auto_dimension_view  (src/solidworks_mcp/tools/drawing.py:813)
+    {'status': 'success', 'message': 'Auto-dimensioned drawing view', 'auto_dimensions': {'dimensions_added': 12, 'dimension_types': ['linear', 'radial', 'diameter'], 'coverage': '85%'}}
+
+  check_drawing_standards  (src/solidworks_mcp/tools/drawing.py:869)
+    {'status': 'success', 'message': 'Drawing standards check completed', 'standards_check': {'standard': 'ANSI Y14.5', 'compliance_score': 92, 'warnings': ['Missing general tolerance note', 'Some dimensions lack required precision'], 'errors': [], 'recommendations': ['Add material specification', 'Incl
+
+  compare_drawing_versions  (src/solidworks_mcp/tools/drawing_analysis.py:1157)
+    {'status': 'success', 'message': 'Drawing version comparison completed', 'comparison_results': comparison_results, 'change_summary': {'total_changes': 8, 'geometric_changes': 2, 'dimensional_changes': 3, 'annotation_changes': 2, 'administrative_changes': 1}, 'change_significance': {'level': 'Medium'
+
+  validate_drawing_completeness  (src/solidworks_mcp/tools/drawing_analysis.py:1290)
+    {'status': 'success', 'message': 'Drawing completeness validation completed', 'completeness_check': completeness_check, 'validation_results': {'completeness_score': completeness_score, 'manufacturing_ready': completeness_score >= 90, 'blocking_issues': len(blocking_issues), 'recommendations': len(re
+
+## probe-fallback (37)
+
+  check_interference  (src/solidworks_mcp/tools/analysis.py:300)
+    {'status': 'success', 'message': 'Interference check completed', 'interference_found': False, 'components_checked': input_data.components, 'tolerance': input_data.tolerance, 'interferences': []}
+
+  start_macro_recording  (src/solidworks_mcp/tools/automation.py:406)
+    {'status': 'success', 'message': f'Started recording macro: {input_data.macro_name}', 'macro_recording': {'macro_name': input_data.macro_name, 'description': input_data.description, 'status': 'recording', 'start_time': '2024-01-01T10:00:00Z'}}
+
+  batch_process_files  (src/solidworks_mcp/tools/automation.py:479)
+    {'status': 'success', 'message': f'Batch {input_data.operation_type} completed', 'batch_process': {'source_directory': input_data.source_directory, 'operation': input_data.operation_type, 'target_format': input_data.target_format, 'files_found': 25, 'files_processed': 23, 'files_successful': 21, 'fi
+
+  manage_design_table  (src/solidworks_mcp/tools/automation.py:534)
+    {'status': 'success', 'message': f'Design table {input_data.table_type} completed', 'design_table': {'operation': input_data.table_type, 'excel_file': input_data.excel_file, 'parameters': input_data.parameters, 'configurations': input_data.configurations, 'total_configurations': len(input_data.confi
+
+  execute_workflow  (src/solidworks_mcp/tools/automation.py:583)
+    {'status': 'success', 'message': f"Workflow '{input_data.workflow_name}' completed", 'workflow': {'name': input_data.workflow_name, 'total_steps': len(input_data.steps), 'completed_steps': len(input_data.steps) - 1, 'failed_steps': 1, 'parallel_execution': input_data.parallel_execution, 'execution_t
+
+  create_template  (src/solidworks_mcp/tools/automation.py:637)
+    {'status': 'success', 'message': f'Created {input_data.template_type} template: {input_data.template_name}', 'template': {'type': input_data.template_type, 'name': input_data.template_name, 'base_file': input_data.base_file, 'metadata': input_data.metadata, 'file_location': f'C:\\ProgramData\\SolidW
+
+  optimize_performance  (src/solidworks_mcp/tools/automation.py:685)
+    {'status': 'success', 'message': 'Performance optimization completed', 'optimization': {'settings_analyzed': 45, 'settings_optimized': 12, 'estimated_performance_gain': '25%', 'optimizations': ['Disabled real-time visualization for large assemblies', 'Increased graphics cache size', 'Optimized rebui
+
+  add_dimension  (src/solidworks_mcp/tools/drawing.py:502)
+    {'status': 'success', 'message': f'Added {dimension_type} dimension', 'dimension': {'type': dimension_type, 'entity1': entity1, 'entity2': entity2, 'position': {'x': position_x, 'y': position_y}, 'precision': precision}}
+
+  create_technical_drawing  (src/solidworks_mcp/tools/drawing.py:924)
+    {'status': 'success', 'message': 'Technical drawing created successfully', 'data': {'drawing_path': input_data.output_path, 'template_used': input_data.template, 'views_created': ['Front', 'Right', 'Top'] if input_data.auto_populate_views else [], 'sheet_format': input_data.sheet_format, 'scale': in
+
+  add_drawing_view  (src/solidworks_mcp/tools/drawing.py:969)
+    {'status': 'success', 'message': 'Drawing view added successfully', 'data': {'view_name': input_data.view_name, 'view_type': input_data.view_type, 'position': input_data.position, 'scale': input_data.scale}}
+
+  add_annotation  (src/solidworks_mcp/tools/drawing.py:1011)
+    {'status': 'success', 'message': 'Annotation added successfully', 'data': {'annotation_text': input_data.text, 'annotation_type': input_data.annotation_type, 'position': [input_data.position_x, input_data.position_y], 'font_size': input_data.font_size}}
+
+  update_title_block  (src/solidworks_mcp/tools/drawing.py:1053)
+    {'status': 'success', 'message': 'Title block updated successfully', 'data': input_data}
+
+  analyze_drawing_comprehensive  (src/solidworks_mcp/tools/drawing_analysis.py:270)
+    {'status': 'success', 'message': 'Comprehensive drawing analysis completed', 'analysis_results': analysis_results, 'overall_quality_score': 87, 'recommendations': recommendations, 'compliance_summary': {'standard': 'ISO 128', 'compliance_level': 'High', 'critical_issues': 0, 'warnings': 3, 'suggesti
+
+  analyze_drawing_dimensions  (src/solidworks_mcp/tools/drawing_analysis.py:387)
+    {'status': 'success', 'message': 'Dimension analysis completed', 'dimension_analysis': dimension_analysis, 'quality_metrics': {'precision_consistency': 'Needs Improvement', 'tolerance_coverage': 'Adequate', 'completeness': 'Good', 'overall_score': 78}, 'action_items': ['Add tolerance to slot width d
+
+  analyze_drawing_annotations  (src/solidworks_mcp/tools/drawing_analysis.py:524)
+    {'status': 'success', 'message': 'Annotation analysis completed', 'annotation_analysis': annotation_analysis, 'quality_scores': {'notes_quality': 85, 'symbol_compliance': 95, 'text_consistency': 78, 'overall_score': 86}, 'improvement_areas': ['Standardize note text height to 2.5mm', 'Use consistent 
+
+  check_drawing_compliance  (src/solidworks_mcp/tools/drawing_analysis.py:705)
+    {'status': 'success', 'message': f'Standards compliance check completed for {input_data.standard}', 'compliance_check': compliance_check, 'overall_compliance': {'score': overall_score, 'level': 'Good' if overall_score >= 80 else 'Needs Improvement', 'critical_issues': len(critical_issues), 'warnings
+
+  analyze_drawing_views  (src/solidworks_mcp/tools/drawing_analysis.py:878)
+    {'status': 'success', 'message': 'Drawing view analysis completed', 'view_analysis': view_analysis, 'quality_metrics': {'view_selection': 'Excellent', 'view_placement': 'Good', 'clarity': 'Good', 'completeness': 'Excellent', 'overall_score': 88}, 'recommendations': ['Consider adding isometric view f
+
+  export_image  (src/solidworks_mcp/tools/export.py:857)
+    {'status': 'success', 'message': f'Exported image: {input_data.file_path}', 'export': {'file_path': input_data.file_path, 'format': input_data.format_type.upper(), 'dimensions': f'{input_data.width}x{input_data.height}', 'view': input_data.view_orientation, 'use_case': 'Documentation and presentatio
+
+  batch_export  (src/solidworks_mcp/tools/export.py:929)
+    {'status': 'success', 'message': f'Batch export completed to {input_data.format_type} format', 'batch_export': {'source_directory': input_data.source_directory, 'output_directory': input_data.output_directory, 'format': (input_data.format_type or '').upper(), 'files_processed': 0, 'files_successful'
+
+  save_file  (src/solidworks_mcp/tools/file_management.py:683)
+    {'status': 'success', 'message': 'File saved successfully', 'timestamp': '2024-03-14T00:00:00Z'}
+
+  save_as  (src/solidworks_mcp/tools/file_management.py:774)
+    {'status': 'success', 'message': f'File saved as: {input_data.file_path}', 'file_path': input_data.file_path, 'format': input_data.format_type}
+
+  manage_file_properties  (src/solidworks_mcp/tools/file_management.py:1092)
+    {'status': 'success', 'message': 'File properties managed successfully', 'data': {'file_path': input_data.file_path, 'operation': input_data.operation}}
+
+  convert_file_format  (src/solidworks_mcp/tools/file_management.py:1132)
+    {'status': 'success', 'message': 'File converted successfully', 'data': {'source_file': input_data.source_file, 'target_file': input_data.target_file or input_data.output_path, 'format_to': input_data.target_format}}
+
+  batch_file_operations  (src/solidworks_mcp/tools/file_management.py:1173)
+    {'status': 'success', 'message': 'Batch file operations completed successfully', 'data': {'file_path': input_data.file_path, 'operation': input_data.operation}}
+
+  start_macro_recording  (src/solidworks_mcp/tools/macro_recording.py:233)
+    {'status': 'success', 'message': f'Macro recording started: {input_data.macro_name}', 'recording_session': recording_session, 'instructions': recording_instructions, 'best_practices': ['Work slowly and deliberately for better recording', 'Use keyboard shortcuts when possible', 'Avoid redundant actio
+
+  stop_macro_recording  (src/solidworks_mcp/tools/macro_recording.py:323)
+    {'status': 'success', 'message': 'Macro recording completed and saved', 'recorded_macro': recorded_macro, 'macro_preview': macro_preview, 'optimization_suggestions': ['Consider parameterizing hardcoded values', 'Add error handling for robustness', 'Group similar operations for efficiency', 'Add user
+
+  execute_macro  (src/solidworks_mcp/tools/macro_recording.py:407)
+    {'status': 'success', 'message': f'Macro executed {input_data.repeat_count} times successfully', 'data': {'macro_path': input_data.macro_path, 'parameters_used': input_data.parameters, 'repeat_count': input_data.repeat_count, 'pause_between_runs': input_data.pause_between_runs, 'total_execution_time
+
+  analyze_macro  (src/solidworks_mcp/tools/macro_recording.py:532)
+    {'status': 'success', 'message': f'Macro analysis completed for {input_data.macro_path}', 'analysis': analysis_results, 'summary': {'overall_quality': 'Good', 'maintainability': 'Medium', 'reusability': 'Medium', 'performance': 'Good'}, 'recommendations': {'immediate': 'Add error handling', 'short_t
+
+  batch_execute_macros  (src/solidworks_mcp/tools/macro_recording.py:615)
+    {'status': 'success' if len(failed_runs) == 0 else 'partial_success', 'message': f'Batch execution completed: {len(successful_runs)} success, {len(failed_runs)} failed', 'data': {'execution_order': execution_order, 'stop_on_error': stop_on_error, 'total_macros': len(macro_list), 'successful_macros':
+
+  optimize_macro  (src/solidworks_mcp/tools/macro_recording.py:780)
+    {'status': 'success', 'message': f'Macro optimization analysis completed for {optimization_level} level', 'optimization_report': {'original_macro': macro_path, 'optimization_level': optimization_level, 'potential_improvements': optimizations, 'estimated_performance_gain': '50% faster execution', 'es
+
+  create_macro_library  (src/solidworks_mcp/tools/macro_recording.py:923)
+    {'status': 'success', 'message': f'Macro library created successfully at {library_path}', 'data': {'library_name': library_name, 'library_path': library_path, 'categories_created': categories, 'documentation_generated': True, 'library_structure': library_structure, 'library_index': library_index}, '
+
+  extract_template  (src/solidworks_mcp/tools/template_management.py:179)
+    {'status': 'success', 'message': f"Template '{input_data.template_name}' extracted from {input_data.source_model}", 'template': {'name': input_data.template_name, 'type': input_data.template_type, 'save_path': input_data.save_path, 'extracted_properties': extracted_properties, 'property_count': len(
+
+  apply_template  (src/solidworks_mcp/tools/template_management.py:255)
+    {'status': 'success', 'message': f'Template applied to {input_data.target_model}', 'template_application': {'template_path': input_data.template_path, 'target_model': input_data.target_model, 'changes_applied': applied_changes, 'overwrite_mode': input_data.overwrite_existing, 'material_applied': inp
+
+  batch_apply_template  (src/solidworks_mcp/tools/template_management.py:333)
+    {'status': 'success', 'message': f'Batch template application completed on {summary['total_processed']} files', 'batch_operation': {'template_path': input_data.template_path, 'source_folder': input_data.source_folder, 'file_pattern': input_data.file_pattern, 'recursive': input_data.recursive, 'summa
+
+  compare_templates  (src/solidworks_mcp/tools/template_management.py:445)
+    {'status': 'success', 'message': f'Template comparison completed - {similarity_score}% similar', 'comparison': comparison_report, 'analysis': {'major_differences': 3, 'minor_differences': 2, 'compatibility': 'High' if similarity_score > 80 else 'Medium'}}
+
+  save_to_template_library  (src/solidworks_mcp/tools/template_management.py:521)
+    {'status': 'success', 'message': f'Template saved to library as {library_entry['template_id']}', 'library_entry': library_entry, 'library_stats': {'total_templates': 47, 'category_count': {'parts': 15, 'assemblies': 12, 'drawings': 8, 'custom': 12}, 'most_popular': 'STD-PART-001', 'latest_addition':
+
+  list_template_library  (src/solidworks_mcp/tools/template_management.py:646)
+    {'status': 'success', 'message': f'Found {len(filtered_templates)} templates matching criteria', 'library_search': {'category_filter': category_filter, 'search_term': search_term, 'sort_by': sort_by, 'total_results': len(filtered_templates)}, 'templates': filtered_templates, 'categories_available': 

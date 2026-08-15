@@ -4,8 +4,8 @@ version = "0.0.0"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["packages/api", "packages/companion", "packages/contracts/python"]
-# Add as they are created: "integrations/*", "reasoning", "livebench"
+members = ["packages/api", "packages/companion", "packages/contracts/python", "livebench"]
+# Add as they are created: "integrations/*", "reasoning"
 
 [tool.ruff]
 line-length = 100
@@ -46,7 +46,18 @@ exclude = [
 
 # These packages ship no py.typed marker; treat their imports as untyped rather than error.
 [[tool.mypy.overrides]]
-module = ["pgvector.*", "asyncpg"]
+# `OCP.*` is the CAD kernel (SOLUSDEV-60 lane), `msgpack` the LB-06 telemetry
+# codec (LANE A), `mujoco` the simulator (LANE H) — unrelated additions to the
+# same list, so all three are kept.
+module = ["pgvector.*", "asyncpg", "OCP.*", "msgpack", "mujoco"]
+ignore_missing_imports = true
+
+# mcap ships a layout mypy maps to two module names ("mcap" and "mcap.__init__"),
+# aborting the whole run. Skip following into it; its surface is typed at our
+# call sites (livebench/telemetry/mcap_*.py).
+[[tool.mypy.overrides]]
+module = ["mcap.*"]
+follow_imports = "skip"
 ignore_missing_imports = true
 
 # Vendored MCP fork modules (kicad fork SOLUSDEV-100, altium fork
@@ -76,6 +87,17 @@ module = [
     # files resolve as altium.upstream.* — Solus-authored altium.solus/tests
     # namespaces stay in scope.
     "altium.upstream.*",
+    # altium's solus/ overlay imports dual-mode: relative in package mode,
+    # absolute `solus.*` under bin/launch. That absolute name is FORK-LOCAL —
+    # each fork puts its own solus/ on sys.path, and kicad's overlay uses the
+    # bare `solus.*` form with no fallback — so the two forks define the same
+    # top-level package with different contents and CANNOT be resolved in one
+    # mypy run. CI never tries (`mypy packages/api/src packages/companion/src`,
+    # .gitlab-ci.yml); only the by-path hooks above reach both at once, where
+    # `solus.*` binds to whichever fork was seen first and the other's fallback
+    # reads as a conflicting redefinition. Scoped to the one module with the
+    # dual-mode block, not the overlay package.
+    "altium.solus.server",
     "gen_tool_reference",
     "build",
     "build_placement_priors",
@@ -84,10 +106,27 @@ module = [
 ]
 ignore_errors = true
 
+# Two test dirs each ship a `conftest.py`; with no __init__.py they both resolve to
+# the bare module name `conftest`, so a mypy run spanning both (the H10 changed-file
+# gate) collides on which one exports which helper. Don't follow into it — a test's
+# `from conftest import ...` yields Any, which is correct for pytest fixtures/helpers.
+[[tool.mypy.overrides]]
+module = ["conftest"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+# `from conftest import <helper>` needs a `type: ignore[attr-defined]` when the H10
+# gate's mypy run spans BOTH test dirs (the two same-named conftest modules collide
+# and the wrong one resolves); the SAME line is clean when the run sees only the api
+# tests. Don't warn on the now-unused ignore in that second case.
+[[tool.mypy.overrides]]
+module = ["test_bench_router"]
+warn_unused_ignores = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages", "integrations", "reasoning", "livebench"]
-addopts = "-p no:launch_testing -p no:launch_pytest"
+addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros"
 # Setting norecursedirs REPLACES pytest's defaults, so the defaults we rely on
 # are restated alongside the vendored MCP fork trees (upstream/, vendor/).
 norecursedirs = [

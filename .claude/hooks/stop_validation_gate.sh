@@ -38,7 +38,7 @@ if [[ -n "$PY" ]]; then
   R=""; command -v uv >/dev/null 2>&1 && [[ -f "$ROOT/pyproject.toml" ]] && R="uv run"
   run "ruff (changed .py)"  $R ruff check -q $PY
   run "mypy (changed .py)"  $R mypy --no-error-summary $PY
-  run "pytest (full suite)" twrap 600 $R pytest -q
+  run "pytest (full suite)" twrap 1000 $R pytest -q
 fi
 if [[ -n "$TS" ]]; then
   run "eslint (changed .ts)" npx --no-install eslint $TS

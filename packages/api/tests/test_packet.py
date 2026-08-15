@@ -14,6 +14,8 @@ from pydantic import ValidationError
 from solus_api.graph.packet import (
     MAX_SIGNAL_NAME_LEN,
     MAX_SIGNALS_PER_PACKET,
+    MAX_UNIT_LEN,
+    SCHEMA_VERSION,
     RecentSample,
     RecentValuesView,
     SignalSeries,
@@ -72,6 +74,56 @@ def test_packet_rejects_unknown_fields() -> None:
         TelemetryPacket.model_validate(
             {"device_id": "imu0", "timestamp": _T0, "values": {"x": 1.0}, "evil": "1"}
         )
+
+
+def test_packet_defaults_schema_version_and_omits_seq() -> None:
+    """LB-06: existing producers keep working — `schema_version` defaults and `seq` is optional
+    (not every source sequences its stream; None means 'unsequenced', never a fake 0)."""
+    pkt = TelemetryPacket(device_id="imu0", timestamp=_T0, values={"x": 1.0})
+    assert pkt.schema_version == SCHEMA_VERSION
+    assert pkt.seq is None
+    assert pkt.units == {}
+
+
+def test_packet_carries_seq_and_units() -> None:
+    pkt = TelemetryPacket(
+        device_id="imu0",
+        timestamp=_T0,
+        seq=42,
+        values={"rpm": 1200.0, "temp_c": 31.5},
+        units={"rpm": "rev/min", "temp_c": "degC"},
+    )
+    assert pkt.seq == 42
+    assert pkt.units["rpm"] == "rev/min"
+
+
+def test_packet_rejects_negative_seq() -> None:
+    with pytest.raises(ValidationError):
+        TelemetryPacket(device_id="imu0", timestamp=_T0, seq=-1, values={"x": 1.0})
+
+
+def test_packet_rejects_units_for_unknown_signal() -> None:
+    """A unit for a signal the packet doesn't carry is a producer bug — catch it at the
+    boundary rather than silently storing metadata that describes nothing."""
+    with pytest.raises(ValidationError):
+        TelemetryPacket(
+            device_id="imu0", timestamp=_T0, values={"x": 1.0}, units={"nonexistent": "m/s"}
+        )
+
+
+def test_packet_rejects_overlong_unit() -> None:
+    with pytest.raises(ValidationError):
+        TelemetryPacket(
+            device_id="imu0",
+            timestamp=_T0,
+            values={"x": 1.0},
+            units={"x": "u" * (MAX_UNIT_LEN + 1)},
+        )
+
+
+def test_packet_rejects_schema_version_below_one() -> None:
+    with pytest.raises(ValidationError):
+        TelemetryPacket(device_id="imu0", timestamp=_T0, schema_version=0, values={"x": 1.0})
 
 
 def test_recent_values_view_is_foxglove_serializable() -> None:

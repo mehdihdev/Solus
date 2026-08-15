@@ -163,13 +163,68 @@ class OAuthConnector(Connector):
     auth_kind: ClassVar[AuthKind] = AuthKind.OAUTH
     #: OAuth scopes Solus requests. Fixed in code (CLAUDE.md §7).
     scopes: ClassVar[tuple[str, ...]] = ()
+    #: The connect-time access choice, when the provider has one (SOLUS-ONS-A2).
+    #: Declared metadata, surfaced verbatim by `GET /api/v1/integrations` exactly
+    #: like `selection`, so a new CAD connector becomes choosable without a route
+    #: or a frontend change — and nothing may branch on a provider id.
+    #:
+    #:     {"default": "read",
+    #:      "modes": [{"id": "read", "label": ..., "description": ...,
+    #:                 "scopes": ["OAuth2Read"]}, ...]}
+    #:
+    #: `None` (the default) means there is no choice: `scopes` is the whole story.
+    #: The choice exists because an OAuth grant is account-wide — Onshape has no
+    #: per-document or per-project scope — so how much power Solus holds over a
+    #: customer's CAD is theirs to decide, not ours to assume.
+    access_modes: ClassVar[dict[str, Any] | None] = None
+
+    def scopes_for(self, access: str | None) -> tuple[str, ...]:
+        """The scopes to request for a chosen access mode.
+
+        `None` means the connector's declared default — never the widest option,
+        so an omitted choice can only ever under-grant. An unknown mode raises
+        rather than falling back: silently downgrading a typo would connect a
+        source with powers the user did not choose, in either direction.
+        """
+        modes = self.access_modes
+        if not modes:
+            return self.scopes
+        wanted = access or modes.get("default")
+        for mode in modes.get("modes", ()):
+            if mode.get("id") == wanted:
+                return tuple(mode.get("scopes", ()))
+        raise ValueError(f"{self.provider} has no access mode {access!r}")
 
     @abc.abstractmethod
-    def authorize_url(self, *, state: str, redirect_uri: str) -> str:
-        """Build the provider authorize URL the user's browser is sent to."""
+    def authorize_url(self, *, state: str, redirect_uri: str, access: str | None = None) -> str:
+        """Build the provider authorize URL the user's browser is sent to.
+
+        `access` names one of `access_modes`; connectors without a choice ignore
+        it (SOLUS-ONS-A2)."""
 
     @abc.abstractmethod
     async def exchange_code(self, *, code: str, redirect_uri: str) -> Credentials:
         """Exchange an OAuth `code` for access credentials.
 
         Raises ConnectorError('oauth_exchange_failed', ...) on failure."""
+
+    async def refresh_credentials(self, creds: Credentials) -> Credentials:
+        """Exchange `creds.refresh_token` for a fresh access token (SOLUS-CAD-01).
+
+        Providers whose access tokens expire (Onshape: 60 minutes) MUST override
+        this. The default refuses, so a provider that has not opted in can never
+        silently appear to refresh.
+
+        The runtime calls this at most once per sync, when a sync fails with
+        `invalid_credentials`, then persists BOTH returned tokens and retries —
+        so an implementation MUST return the rotated `refresh_token` when the
+        provider issues one (Onshape rotates on every use; dropping it breaks
+        the chain at the next refresh).
+
+        Raises ConnectorError('oauth_refresh_failed', ...) when the refresh
+        token is rejected — the caller leaves the stored credentials untouched.
+        """
+        raise ConnectorError(
+            "oauth_refresh_failed",
+            f"{self.provider} does not support token refresh",
+        )

@@ -1,0 +1,40 @@
+# Autodesk Fusion — CAD-02.
+#
+# NOT A FORK. Autodesk ships this MCP server and it runs on the CUSTOMER's
+# machine: Preferences → General → API → "Fusion MCP Server (Runs locally on
+# this device)", default port 27182, available on the free Personal tier. There
+# is nothing to vendor here — no `upstream/`, no `bin/launch`, no private env,
+# no PROVENANCE.md, no fork security review, because no upstream code is taken.
+#
+# `url:` instead of a launcher is what tells the companion this is vendor-run.
+# It is pinned to loopback and re-checked at connect: a companion that dials an
+# arbitrary URL is an SSRF primitive inside the customer's network.
+#
+# Reaching it through the companion is a LICENSING requirement, not a
+# networking detail — Autodesk prohibits hosting or multiplexing a licensed
+# seat, so Solus drives the customer's own instance as a local client. See
+# ../README.md.
+
+server: fusion
+url: http://127.0.0.1:27182/mcp
+
+# DELIBERATELY EMPTY — this is not an oversight, and it must not be filled in
+# from documentation.
+#
+# The Fusion server is closed source and its tooling is DYNAMIC, so the only
+# honest source for tool names and schemas is a live `tools/list` against a
+# running Fusion. Names invented from docs or from memory would be exactly the
+# fabricated-fixture failure the vendoring rules exist to prevent — and here
+# they would be worse than a missing tool, because the allowlist is the security
+# gate: a wrong name silently exposes nothing while looking configured.
+#
+# To populate: run Fusion with the MCP server enabled, then
+#     python3 scripts/capture-fusion-tools.py
+# and paste its output here. Every entry with `requires_confirmation: true` MUST
+# carry a Solus-authored `reason` (allowlist.py rejects it otherwise) — the
+# server's own destructiveHint is untrusted and deliberately ignored.
+#
+# Until then the companion connects, the bridge reports `fusion`, and zero tools
+# are exposed. Connected is not the same as callable, and the UI should not
+# imply otherwise.
+tools: []

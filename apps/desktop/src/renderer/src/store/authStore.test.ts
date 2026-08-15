@@ -184,14 +184,14 @@ describe('authStore companion token relay', () => {
 
   it('relays the access token to the companion on setSession', () => {
     const setToken = vi.fn().mockResolvedValue(undefined)
-    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken })
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken, setProject: vi.fn().mockResolvedValue(undefined) })
     useAuthStore.getState().setSession({ email: 'maya@strider.dev' }, 'sb-token')
     expect(setToken).toHaveBeenCalledWith('sb-token')
   })
 
   it('relays null (signout) when the session is cleared', () => {
     const setToken = vi.fn().mockResolvedValue(undefined)
-    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken })
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken, setProject: vi.fn().mockResolvedValue(undefined) })
     useAuthStore.getState().setSession(null, null)
     expect(setToken).toHaveBeenCalledWith(null)
   })
@@ -203,7 +203,7 @@ describe('authStore companion token relay', () => {
 
   it('swallows relay failures without touching session state', () => {
     const setToken = vi.fn().mockRejectedValue(new Error('ipc down'))
-    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken })
+    vi.mocked(getDesktopCompanionBridge).mockReturnValue({ setToken, setProject: vi.fn().mockResolvedValue(undefined) })
     useAuthStore.getState().setSession({ email: 'maya@strider.dev' }, 'sb-token')
     expect(useAuthStore.getState().accessToken).toBe('sb-token')
   })

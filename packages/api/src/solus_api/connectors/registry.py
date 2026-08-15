@@ -92,6 +92,15 @@ class ConnectorRegistry:
                     "auth_kind": connector.auth_kind.value,
                     "config_fields": list(connector.config_fields),
                     "scopes": list(getattr(connector, "scopes", ())),
+                    # How the app lets a user choose WHAT to track after
+                    # connecting (repos, documents, …), or None when there is
+                    # nothing to choose. Read generically by the frontend, so a
+                    # new connector needs no frontend change to become pickable.
+                    "selection": getattr(connector, "selection", None),
+                    # How much power the user grants at CONNECT time (read vs
+                    # read+write), or None when the provider offers no choice.
+                    # Same generic treatment as `selection` (SOLUS-ONS-A2).
+                    "access_modes": getattr(connector, "access_modes", None),
                 }
             )
         return items
@@ -117,6 +126,7 @@ def build_registry(
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
     from solus_api.connectors.kicad import KicadConnector
+    from solus_api.connectors.onshape import OnshapeConnector
 
     registry = ConnectorRegistry()
     registry.register(
@@ -138,6 +148,15 @@ def build_registry(
     registry.register("altium", AltiumConnector)
     # KiCad (SOLUSDEV-100) — committed-export EDA connector, XML netlist parse.
     registry.register("kicad", KicadConnector)
+    # Onshape (SOLUSDEV-96 / CAD-01) — thin-API mechanical CAD: OAuth, detect
+    # change on the microversion, fetch a STEP export, then the SHARED parser.
+    registry.register(
+        "onshape",
+        lambda: OnshapeConnector(
+            client_id=settings.onshape_client_id or "",
+            client_secret=settings.onshape_client_secret or "",
+        ),
+    )
     if acquirer_factory is not None:
         # T4b (MCP-04): the EDA family's live bridge acquisition. Only
         # registered when the caller (the API process, via main.py) actually

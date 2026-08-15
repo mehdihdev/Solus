@@ -60,7 +60,7 @@ SOLUS_SECRETS_KEY=paste-the-generated-fernet-key
 
 # Where the *web* OAuth callback redirects back to, and the API's own public
 # base (used to build the web callback URL). Safe defaults for local dev:
-SOLUS_GITHUB_OAUTH_REDIRECT_APP=http://localhost:5173/#/onboarding
+SOLUS_OAUTH_REDIRECT_APP=http://localhost:5173/#/onboarding
 SOLUS_PUBLIC_API_BASE_URL=http://localhost:8000
 
 # Optional: run syncs through the ARQ worker instead of an in-process

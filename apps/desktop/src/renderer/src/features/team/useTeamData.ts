@@ -24,6 +24,7 @@ import {
   type AcceptInviteResult,
   type ActivityApi,
   type InviteApi,
+  type Me,
   type Project,
   type TeamDetail,
   type TeamMemberApi,
@@ -31,10 +32,14 @@ import {
   type TeamSummary
 } from '../../lib/api/resources'
 import type { ApiMeta } from '../../lib/api/envelope.types'
+import { classifyFetchError } from '../../lib/api/errors'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
-export type TeamDataStatus = 'loading' | 'ready' | 'offline'
+/** `gone` is distinct from `offline` on purpose: the server ANSWERED, and said
+ *  this team no longer exists. Rendering that as "can't reach the API" sends the
+ *  user to restart a backend that is working perfectly. */
+export type TeamDataStatus = 'loading' | 'ready' | 'offline' | 'gone'
 
 export interface TeamSettingsInput {
   name?: string
@@ -169,6 +174,26 @@ function createTeamActions(
   }
 }
 
+/**
+ * Which team this screen should show.
+ *
+ * The persisted id is a memory of a SERVER row, so it is trusted only while it
+ * is still one of my teams. It used to win outright (`storedTeamId ?? …`, the
+ * fallback firing only when nothing was stored), so an id left over from another
+ * database — or a team I had been removed from — was requested forever, 404ing
+ * every call while the screen blamed the backend. `useHomeData` and
+ * `useProjectSwitcher` never had this bug: they always derive from `me.teams`.
+ *
+ * Pure and separate from the hook so the rule is readable on its own.
+ */
+function resolveTeamId(me: Me | null, storedTeamId: string | null): string | null {
+  if (!me) return null
+  const stillMine = me.teams.some((t) => t.team_id === storedTeamId)
+  // Still mine ⇒ keep it. Self-healing must not become gratuitous switching:
+  // someone who chose a non-personal team stays on it across reloads.
+  return stillMine ? storedTeamId : (personalTeam(me)?.team_id ?? null)
+}
+
 export function useTeamData(): TeamData {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const storedTeamId = useWorkspaceStore((s) => s.teamId)
@@ -194,7 +219,7 @@ export function useTeamData(): TeamData {
       // and resolve the active team from the stored id or the personal team.
       const me = await getMe().catch(() => null)
       setTeams(me?.teams ?? [])
-      const id = storedTeamId ?? (me ? (personalTeam(me)?.team_id ?? null) : null)
+      const id = resolveTeamId(me, storedTeamId)
       if (!id) {
         setStatus('offline')
         return
@@ -215,8 +240,12 @@ export function useTeamData(): TeamData {
       setActivityMeta(feed.meta)
       setProjects(teamProjects)
       setStatus('ready')
-    } catch {
-      setStatus('offline')
+    } catch (error: unknown) {
+      // A 404 here means the team really is gone (a race: it existed in `getMe`
+      // and was deleted, or I was removed, before we fetched it). That is not
+      // "the backend is down", and telling the user to go restart a healthy
+      // server is the failure this whole classification exists to prevent.
+      setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
     }
   }, [fetchEnabled, storedTeamId])
 

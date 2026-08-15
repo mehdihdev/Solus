@@ -1,15 +1,14 @@
-"""SYS-02 tool-call execution layer — gate → dispatch → observe.
+"""SYS-02 tool-call execution layer — observe the gated dispatch.
 
 Composes the existing safety sequence instead of wrapping a parallel one:
 
-- The §7 destructive gate (`runtime.confirmation_refusal`) is consulted BEFORE
-  every dispatch; a `requires_confirmation` tool gets the refusal `ToolResult`
-  back and its `invoke` is never awaited. The import is FUNCTION-LOCAL (house
-  precedent: runtime.py's MCP imports): `runtime` imports this package's
-  `__init__`, so a module-level import here would arm an import cycle the day
-  `exec` is ever re-exported — and the call-time lookup means the SOLUSDEV-60
-  confirmation surface replaces the gate's behavior without touching this file.
-  For the same reason this module is deliberately NOT in `tools/__init__.__all__`.
+- The §7 destructive gate lives INSIDE the `dispatch` callable this module is
+  handed (`runtime.build_dispatch` fuses gate-then-invoke into one closure), so
+  there is no registry and no gate here — `run_tool` cannot skip a gate it
+  never held. This module is the observability wrapper `build_dispatch` routes
+  every dispatch through: one observable path for every runner (SYS-02), and
+  the only production holders of `registry.invoke` stay `runtime.py` and
+  `confirmations.py` (ratchet-tested).
 - Per-call safety (timeout, arg validation, exception trapping) belongs to
   `ToolRegistry.invoke` — the registry owns the ONLY per-call clock
   (registry.py's `asyncio.wait_for`); nothing here re-times a call. The layer
@@ -36,11 +35,15 @@ from typing import TYPE_CHECKING, Any
 
 import sentry_sdk
 
-from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
+
+    #: Structural twin of `runtime.DispatchFn` — typed locally so this module
+    #: never imports runtime (runtime imports this one; the old function-local
+    #: import cycle is gone).
+    DispatchFn = Callable[[ToolCall], Awaitable[ToolResult]]
 
 logger = logging.getLogger("solus.tools.exec")
 
@@ -77,26 +80,22 @@ def _capture_failure(call: ToolCall, error: ToolError, duration_ms: int) -> None
         logger.warning("sentry capture failed for tool %s", call.tool, exc_info=True)
 
 
-async def run_tool(registry: ToolRegistry, call: ToolCall) -> ToolResult:
-    """Gate → `registry.invoke` → observe. NEVER raises (see module docstring)."""
-    from solus_api.agent.runtime import confirmation_refusal  # function-local: cycle-proof
-
+async def run_tool(dispatch: DispatchFn, call: ToolCall) -> ToolResult:
+    """Observe one gated dispatch. NEVER raises (see module docstring)."""
     started = time.monotonic()
-    refusal = confirmation_refusal(registry, call)  # §7 destructive gate, before dispatch
-    result = refusal if refusal is not None else await registry.invoke(call)
+    result = await dispatch(call)
     duration_ms = int((time.monotonic() - started) * 1000)
     outcome = "ok" if result.ok else (result.error.code.value if result.error else "unknown")
     # §7 logging: identifiers, counts, and sizes only — never args or values.
     # %.128r bounds and escapes the remote-/caller-influenced identifiers so a
     # crafted name cannot forge log lines (house idiom: mcp_tool._skip).
     logger.info(
-        "tool call done tool=%.128r call_id=%.128r duration_ms=%d outcome=%s gated=%d "
+        "tool call done tool=%.128r call_id=%.128r duration_ms=%d outcome=%s "
         "args_bytes=%d value_bytes=%d",
         call.tool,
         call.call_id,
         duration_ms,
         outcome,
-        int(refusal is not None),
         _json_size(call.args),
         _json_size(result.value),
     )
@@ -106,7 +105,7 @@ async def run_tool(registry: ToolRegistry, call: ToolCall) -> ToolResult:
 
 
 async def run_tool_calls(
-    registry: ToolRegistry,
+    dispatch: DispatchFn,
     calls: Sequence[ToolCall],
     *,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
@@ -121,7 +120,9 @@ async def run_tool_calls(
 
     async def _one(index: int, call: ToolCall) -> None:
         async with semaphore:
-            results[index] = await run_tool(registry, call)
+            # `dispatch` (from `build_dispatch`) is already the observed gated
+            # path — wrapping it in `run_tool` again would double-log every call.
+            results[index] = await dispatch(call)
 
     try:
         # asyncio.timeout(None) never expires — one code path for both cases.

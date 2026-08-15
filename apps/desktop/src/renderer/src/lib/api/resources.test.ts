@@ -10,14 +10,15 @@ import {
   listIntegrations,
   listSources,
   getSource,
-  listRepos,
-  startGithubOAuth,
-  exchangeGithubOAuth,
+  listSelectable,
+  startOAuth,
+  exchangeOAuth,
   updateSource,
   disconnectSource,
   triggerSync,
   getSyncs,
   listEntities,
+  getGraphNeighborhood,
   type Me
 } from './resources'
 import type { ApiClient } from './client'
@@ -112,27 +113,10 @@ describe('integration + source calls', () => {
     expect(calls[0].path).toBe('/projects/p1/sources/s1')
   })
 
-  it('listRepos hits the repos route under the source', async () => {
+  it('listSelectable hits the generic picker route under the source', async () => {
     const { client, calls } = stubClient([])
-    await listRepos('p1', 's1', client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1/repos')
-  })
-
-  it('startGithubOAuth POSTs project_id plus the redirect uri', async () => {
-    const { client, calls } = stubClient({ authorize_url: 'u', state: 'st', source_id: 's1' })
-    await startGithubOAuth('p1', { redirect_uri: 'http://127.0.0.1:9/cb' }, client)
-    expect(calls[0].path).toBe('/integrations/github/oauth/start')
-    expect(calls[0].options).toMatchObject({
-      method: 'POST',
-      body: { project_id: 'p1', redirect_uri: 'http://127.0.0.1:9/cb' }
-    })
-  })
-
-  it('exchangeGithubOAuth POSTs the state + code', async () => {
-    const { client, calls } = stubClient({ id: 's1', status: 'connected' })
-    await exchangeGithubOAuth({ state: 'st', code: 'cd' }, client)
-    expect(calls[0].path).toBe('/integrations/github/oauth/exchange')
-    expect(calls[0].options).toMatchObject({ method: 'POST', body: { state: 'st', code: 'cd' } })
+    await listSelectable('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/selectable')
   })
 
   it('updateSource PATCHes the source config', async () => {
@@ -171,6 +155,25 @@ describe('integration + source calls', () => {
     expect(calls[0].path).toBe('/projects/p1/sources/s1/syncs')
   })
 
+  it('getGraphNeighborhood requests the focused entity with a bounded depth', async () => {
+    const { client, calls } = stubClient({ entities: [], edges: [], truncated: false })
+    await getGraphNeighborhood('p1', 'e1', {}, client)
+    expect(calls[0].path).toBe('/projects/p1/graph?root=e1&depth=1')
+  })
+
+  it('getGraphNeighborhood passes filters and limit through', async () => {
+    const { client, calls } = stubClient({ entities: [], edges: [], truncated: false })
+    await getGraphNeighborhood(
+      'p1',
+      'e1',
+      { depth: 2, entity_types: ['ic', 'motor'], relation_types: ['drives'], limit: 50 },
+      client
+    )
+    expect(calls[0].path).toBe(
+      '/projects/p1/graph?root=e1&depth=2&entity_types=ic%2Cmotor&relation_types=drives&limit=50'
+    )
+  })
+
   it('listEntities builds a filtered query string', async () => {
     const { client, calls } = stubClient([])
     await listEntities('p1', { type: 'code_module', source_id: 's1' }, client)
@@ -182,6 +185,41 @@ describe('integration + source calls', () => {
     await listEntities('p1', {}, client)
     expect(calls[0].path).toBe('/projects/p1/entities')
   })
+})
+
+// The bug this generalisation exists to prevent: the provider must reach the
+// request path, not be baked in. A provider the app has never heard of must
+// route to its own OAuth endpoints with no code change here.
+describe('OAuth routes are provider-driven', () => {
+  it('startOAuth POSTs project_id plus the redirect uri', async () => {
+    const { client, calls } = stubClient({ authorize_url: 'u', state: 'st', source_id: 's1' })
+    await startOAuth('p1', 'github', { redirect_uri: 'http://127.0.0.1:9/cb' }, client)
+    expect(calls[0].path).toBe('/integrations/github/oauth/start')
+    expect(calls[0].options).toMatchObject({
+      method: 'POST',
+      body: { project_id: 'p1', redirect_uri: 'http://127.0.0.1:9/cb' }
+    })
+  })
+
+  it('exchangeOAuth POSTs the state + code', async () => {
+    const { client, calls } = stubClient({ id: 's1', status: 'connected' })
+    await exchangeOAuth('github', { state: 'st', code: 'cd' }, client)
+    expect(calls[0].path).toBe('/integrations/github/oauth/exchange')
+    expect(calls[0].options).toMatchObject({ method: 'POST', body: { state: 'st', code: 'cd' } })
+  })
+
+  it.each(['github', 'gitlab', 'onshape', 'someFutureCad'])(
+    'routes %s to its own start/exchange endpoints',
+    async (provider) => {
+      const start = stubClient({ authorize_url: 'u', state: 'st', source_id: 's1' })
+      await startOAuth('p1', provider, {}, start.client)
+      expect(start.calls[0].path).toBe(`/integrations/${provider}/oauth/start`)
+
+      const exchange = stubClient({ id: 's1', status: 'connected' })
+      await exchangeOAuth(provider, { state: 'st', code: 'cd' }, exchange.client)
+      expect(exchange.calls[0].path).toBe(`/integrations/${provider}/oauth/exchange`)
+    }
+  )
 })
 
 describe('personalTeam', () => {

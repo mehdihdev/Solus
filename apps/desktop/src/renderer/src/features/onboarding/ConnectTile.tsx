@@ -1,11 +1,17 @@
 // Connect tile for the real connectors (SOLUSDEV-103/-100, de-simulated in
-// SOLUSDEV-152): a busy state carries the live `label` from the flow, a repo
-// picker (`repos`), or an `error` phase; the done state shows the real
-// `result` string. No copy here is ever fabricated.
+// SOLUSDEV-152): a busy state carries the live `label` from the flow, a picker
+// over whatever the source can track (`selectable`, one or many per the
+// connector's own `selectionMode`), the connector's `configFields` when it is
+// configured by plain values instead, or an `error` phase; the done state shows
+// the real `result` string. No copy here is ever fabricated, and nothing here
+// knows what a selectable item IS — so a new connector needs no change.
+import { useState } from 'react'
+import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import type { GithubRepo } from '../../lib/api/resources'
+import type { IntegrationAccessModes, SelectableItem } from '../../lib/api/resources'
+import { SelectionPicker, PICKER_FIELD_STYLE } from './SelectionPicker'
 import type { Integration } from './integrations.constants'
 import type { ConnectionState } from './onboardingStore'
 
@@ -13,9 +19,13 @@ interface ConnectTileProps {
   integration: Integration
   state?: ConnectionState
   onConnect: () => void
-  /** Resolve the repo picker (GitHub real flow). */
-  onChooseRepo?: (repo: GithubRepo) => void
-  /** Retry after an error (GitHub real flow). */
+  /** Resolve the picker (null cancels). */
+  onSelect?: (items: SelectableItem[] | null) => void
+  /** Resolve the connector-details form (every other OAuth provider). */
+  onSubmitConfig?: (values: Record<string, string>) => void
+  /** Resolve the connect-time grant choice (null cancels). */
+  onChooseAccess?: (mode: string | null) => void
+  /** Retry after an error. */
   onRetry?: () => void
 }
 
@@ -45,44 +55,94 @@ function TileFooter({ state }: { state?: ConnectionState }): React.JSX.Element {
   return <span style={{ ...MONO, color: 'var(--ok)' }}>{state.result ?? 'Connected'}</span>
 }
 
-function RepoPicker({
-  repos,
-  onChooseRepo
+/** `document_id` → `Document id`. The registry names the fields; we only make
+ * them readable, so a connector we have never seen still gets sane labels. */
+function fieldLabel(field: string): string {
+  const words = field.replace(/[_-]+/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/**
+ * The generic connector-details form: one input per live `config_field`. Used by
+ * every OAuth provider that has nothing to pick.
+ */
+function ConfigForm({
+  fields,
+  onSubmitConfig
 }: {
-  repos: GithubRepo[]
-  onChooseRepo?: (repo: GithubRepo) => void
+  fields: readonly string[]
+  onSubmitConfig?: (values: Record<string, string>) => void
 }): React.JSX.Element {
+  const [values, setValues] = useState<Record<string, string>>({})
+  const complete = fields.every((field) => values[field]?.trim())
+
   return (
-    <select
-      aria-label="Choose a repository"
-      defaultValue=""
-      onChange={(e) => {
-        const repo = repos.find((r) => r.full_name === e.target.value)
-        if (repo) onChooseRepo?.(repo)
-      }}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        marginTop: 8,
-        width: '100%',
-        background: 'var(--sur)',
-        color: 'var(--tx)',
-        border: '1px solid var(--bd)',
-        borderRadius: 3,
-        padding: '7px 9px',
-        fontSize: 11.5,
-        fontFamily: 'var(--font-mono)',
-        outline: 'none'
-      }}
-    >
-      <option value="" disabled>
-        Select a repository…
-      </option>
-      {repos.map((r) => (
-        <option key={r.full_name} value={r.full_name}>
-          {r.full_name}
-        </option>
+    <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+      {fields.map((field) => (
+        <input
+          key={field}
+          aria-label={fieldLabel(field)}
+          placeholder={fieldLabel(field)}
+          value={values[field] ?? ''}
+          onChange={(e) => setValues((prev) => ({ ...prev, [field]: e.target.value }))}
+          style={PICKER_FIELD_STYLE}
+        />
       ))}
-    </select>
+      <Button
+        kind="primary"
+        size="sm"
+        disabled={!complete}
+        onClick={() => onSubmitConfig?.(values)}
+      >
+        Connect
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * The connect-time grant choice. Generic over whatever the connector declares:
+ * it renders labels and descriptions from the registry and knows nothing about
+ * Onshape or scopes. The DESCRIPTION is shown, not just the label — "Read and
+ * edit" alone does not tell a user their models can be changed.
+ */
+function AccessPicker({
+  accessModes,
+  onChooseAccess
+}: {
+  accessModes: IntegrationAccessModes
+  onChooseAccess?: (mode: string | null) => void
+}): React.JSX.Element {
+  // Default to the connector's own default, never to the widest grant.
+  const [chosen, setChosen] = useState(accessModes.default)
+
+  return (
+    <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+      {accessModes.modes.map((mode) => (
+        <label
+          key={mode.id}
+          style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}
+        >
+          <input
+            type="radio"
+            name="solus-access-mode"
+            aria-label={mode.label}
+            checked={chosen === mode.id}
+            onChange={() => setChosen(mode.id)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{mode.label}</span>
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--mut)' }}>
+              {mode.description}
+            </span>
+          </span>
+        </label>
+      ))}
+      <Button kind="primary" size="sm" onClick={() => onChooseAccess?.(chosen)}>
+        Continue
+      </Button>
+    </div>
   )
 }
 
@@ -93,16 +153,43 @@ function borderFor(state?: ConnectionState): string {
   return 'var(--bd)'
 }
 
+/** Whatever input the live flow is waiting on: a repo picker, the generic
+ * connector-details form, or nothing. */
+function TileInput({
+  state,
+  onSelect,
+  onSubmitConfig,
+  onChooseAccess
+}: Pick<
+  ConnectTileProps,
+  'state' | 'onSelect' | 'onSubmitConfig' | 'onChooseAccess'
+>): React.JSX.Element | null {
+  if (state?.phase !== 'busy') return null
+  if (state.accessModes) {
+    return <AccessPicker accessModes={state.accessModes} onChooseAccess={onChooseAccess} />
+  }
+  if (state.selectable && state.selectable.length > 0) {
+    return (
+      <SelectionPicker items={state.selectable} mode={state.selectionMode} onSelect={onSelect} />
+    )
+  }
+  if (state.configFields && state.configFields.length > 0) {
+    return <ConfigForm fields={state.configFields} onSubmitConfig={onSubmitConfig} />
+  }
+  return null
+}
+
 export function ConnectTile({
   integration,
   state,
   onConnect,
-  onChooseRepo,
+  onSelect,
+  onSubmitConfig,
+  onChooseAccess,
   onRetry
 }: ConnectTileProps): React.JSX.Element {
   const clickable = !state || state.phase === 'error'
   const handleClick = !state ? onConnect : state.phase === 'error' ? onRetry : undefined
-  const repos = state?.phase === 'busy' ? state.repos : undefined
   return (
     <Card
       pad={0}
@@ -149,7 +236,12 @@ export function ConnectTile({
         }}
       >
         <TileFooter state={state} />
-        {repos && repos.length > 0 && <RepoPicker repos={repos} onChooseRepo={onChooseRepo} />}
+        <TileInput
+          state={state}
+          onSelect={onSelect}
+          onSubmitConfig={onSubmitConfig}
+          onChooseAccess={onChooseAccess}
+        />
       </div>
     </Card>
   )

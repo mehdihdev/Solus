@@ -7,6 +7,14 @@ so nothing here can spawn or reach a network in tests. Credential DELIVERY
 (secret → server) is deliberately unbuilt: presence is checked, values never
 leave the store.
 
+ONSHAPE IS DELIBERATELY ABSENT (SOLUS-ONS-A1). It used to sit here as a
+streamable-http spec against `mcp.onshape.com` with an API KEY PAIR
+(`onshape_access_key`/`onshape_secret_key`) — a credential that authenticates the
+DEVELOPER, not the customer, and so can only ever reach our own documents. Onshape
+is reached through the customer's OAuth grant instead: `connectors/onshape_ops.py`
++ `agent/tools/onshape_tools.py`, registered as in-process tools. If Onshape's
+announced hosted server ever ships, it slots in behind those same operations.
+
 MCP-05 adds the license tier as catalog DATA: free-tier tools (KiCad, Onshape,
 Fusion personal, web search) need no customer license; byo_paid tools (Altium,
 SolidWorks, AutoCAD) require the CUSTOMER's own vendor license, captured in the
@@ -50,12 +58,6 @@ def _fork_launcher(relative_path: str) -> str:
     return str(_REPO_ROOT / relative_path)
 
 
-ONSHAPE = MCPServerSpec(
-    name="onshape",
-    url="https://mcp.onshape.com/mcp",  # provisional — MCP-03 pins the real endpoint
-    required_secrets=("onshape_access_key", "onshape_secret_key"),
-)
-
 WEB_SEARCH = MCPServerSpec(
     name="web_search",
     # TODO(MCP-03): pin to a vendored launcher path — `npx` is PATH-resolved and
@@ -67,12 +69,37 @@ WEB_SEARCH = MCPServerSpec(
 )
 
 # MCP-05 free tier — usable on any plan, no customer license. Phase 4 H4:
-# pinned to an ABSOLUTE path (`_fork_launcher`) rather than a bare
-# repo-relative string, so a spawn can never depend on the process's ambient
-# working directory.
+# pinned to an ABSOLUTE path (`_fork_launcher`) rather than a bare repo-relative
+# string, so a spawn can never depend on the process's ambient working directory.
 KICAD = MCPServerSpec(name="kicad", command=_fork_launcher("integrations/mcp/kicad/bin/launch"))
-FUSION = MCPServerSpec(  # Fusion personal/free license
-    name="fusion", command=_fork_launcher("integrations/mcp/fusion/bin/launch")
+
+# FUSION IS NOT A FORK (CAD-02). Autodesk ships its own MCP server, and it runs
+# on the CUSTOMER's machine — Preferences → General → API → "Fusion MCP Server
+# (Runs locally on this device)", default port 27182, available on the free
+# Personal tier. There is nothing to vendor: no bin/launch, no private env, no
+# PROVENANCE, no fork security review.
+#
+# It is reached through the COMPANION, never from the cloud, and that is a
+# LICENSING REQUIREMENT rather than a networking detail: Autodesk prohibits
+# hosting or multiplexing a licensed seat, so running Fusion server-side and
+# exposing it to several users through Solus would breach the EULA. Solus acts
+# as a local client of the individual user's own authorized seat. (The legal
+# route for any future cloud-side automation is the Fusion Automation API via
+# APS, pay-per-use — not this server.)
+#
+# This spec therefore documents the endpoint for the catalog; the companion owns
+# the connection and pins it to loopback. Tool names come from `tools/list` at
+# connect and are never hardcoded — the server is closed source and its tooling
+# is dynamic.
+FUSION_LOOPBACK_URL = "http://127.0.0.1:27182/mcp"
+FUSION = MCPServerSpec(
+    name="fusion",
+    url=FUSION_LOOPBACK_URL,
+    connect_notice=(
+        "Fusion Personal is licensed for non-commercial use only, and for generating "
+        "under $1,000 per year. Commercial work needs a paid Fusion subscription. "
+        "Solus drives the Fusion running on this machine under your own licence."
+    ),
 )
 
 # MCP-05 BYO-paid tier — the customer brings their own vendor license.
@@ -98,7 +125,7 @@ AUTOCAD = MCPServerSpec(
 )
 
 MCP_SERVER_CATALOG: dict[str, MCPServerSpec] = {
-    spec.name: spec for spec in (ONSHAPE, WEB_SEARCH, KICAD, FUSION, ALTIUM, SOLIDWORKS, AUTOCAD)
+    spec.name: spec for spec in (WEB_SEARCH, KICAD, FUSION, ALTIUM, SOLIDWORKS, AUTOCAD)
 }
 
 

@@ -1,0 +1,40 @@
+{
+  "$comment": "SOLUS-TU-09 seed guide. TOOL knowledge only — a KiCad task procedure referencing vendor control_ids ingested by TU-02; no customer content. control_ids must match the TU-02 KiCad ingestion output.",
+  "id": "kicad.eeschema.first_schematic",
+  "tool": "kicad",
+  "version_range": ">=9.0 <10.0",
+  "title": "Wire up your first schematic",
+  "summary": "Place a couple of symbols, connect them with a wire, name the net, and run the electrical rules checker — the core loop of drawing a schematic in KiCad's Schematic Editor.",
+  "steps": [
+    {
+      "control_id": "kicad.eeschema.interactive_drawing.place_symbol",
+      "note_guide": "Start by placing a component. This opens the symbol chooser — pick a part (say a resistor) and click to drop it on the sheet. A symbol is the schematic representation of a real part.",
+      "note_expert": "Place a symbol from the library chooser."
+    },
+    {
+      "control_id": "kicad.eeschema.interactive_drawing.place_power_symbol",
+      "note_guide": "Add a power symbol (like GND or +5V). Power symbols tell KiCad which nets are power rails, and nets with the same power symbol are automatically joined.",
+      "note_expert": "Place a power port for your rails."
+    },
+    {
+      "control_id": "kicad.eeschema.interactive_drawing_line_wire_bus.draw_wires",
+      "note_guide": "Draw a wire between two pins to connect them. Click the first pin, then the second. Wires are the electrical connections of the schematic.",
+      "note_expert": "Draw wires pin-to-pin."
+    },
+    {
+      "control_id": "kicad.eeschema.interactive_drawing.place_label",
+      "note_guide": "Give the net a name with a net label. Two wires with the same label are the same net even without a drawn connection — handy for keeping the sheet tidy.",
+      "note_expert": "Label the net; same label = same net."
+    },
+    {
+      "control_id": "kicad.eeschema.interactive_drawing.place_junction",
+      "note_guide": "Where two wires cross and should connect, drop a junction. Without it, crossing wires are NOT connected — a classic source of silent schematic bugs.",
+      "note_expert": "Junction at intentional 4-way crossings."
+    },
+    {
+      "control_id": "kicad.eeschema.inspection_tool.run_erc",
+      "note_guide": "Finally, run the Electrical Rules Checker. It flags unconnected pins, conflicting outputs, and missing power — catch these now, before they reach the PCB.",
+      "note_expert": "Run ERC; resolve violations before layout."
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { PreferencesSection } from './sections/PreferencesSection'
 import { PrivacySection } from './sections/PrivacySection'
 import { BillingSection } from './sections/BillingSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
+import { PanelLinksSection } from './sections/PanelLinksSection'
 import { MembersSection } from './sections/MembersSection'
 import { TeamSection } from './sections/TeamSection'
 import { AccountSection } from './sections/AccountSection'
@@ -61,6 +62,7 @@ export function SettingsScreen(): React.JSX.Element {
         {online && <PrivacySection data={settings} />}
         {online && <BillingSection data={settings} />}
         <IntegrationsSection />
+        {online && <PanelLinksSection />}
         {team.status === 'ready' && (
           <>
             <MembersSection team={team} />

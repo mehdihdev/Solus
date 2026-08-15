@@ -97,20 +97,25 @@ async def test_sync_rejected_when_not_connected(
     assert resp.json()["error"]["code"] == "not_connected"
 
 
-async def test_repos_picker_lists_repositories(
+async def test_selectable_picker_lists_what_the_source_can_track(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
+    """One generic picker route for every connector — repos here, CAD documents
+    for Onshape — so a new connector needs no new route."""
     project_id = await _project(client, alice_headers)
     source = await _connect(client, alice_headers, project_id)
     resp = await client.get(
-        f"/api/v1/projects/{project_id}/sources/{source['id']}/repos", headers=alice_headers
+        f"/api/v1/projects/{project_id}/sources/{source['id']}/selectable", headers=alice_headers
     )
     assert resp.status_code == 200
-    repos = resp.json()["data"]
-    assert {r["full_name"] for r in repos} == {
+    items = resp.json()["data"]
+    assert {i["id"] for i in items} == {
         "octocat/strider-fw",
         "octocat/strider-tools",
     }
+    # Each item carries the exact config choosing it writes, so the caller never
+    # has to know what a "repo" means.
+    assert items[0]["config"] == {"repo": "octocat/strider-fw", "branch": "main"}
 
 
 async def test_disconnect_cascades_entities_by_default(
@@ -265,6 +270,35 @@ async def test_cross_tenant_isolation(
     assert (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=bob_headers)
     ).status_code == 404
+
+
+async def test_disconnect_deletes_the_oauth_refresh_secret_too(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    """Security review HIGH-2: the refresh token lives under its own ref and
+    outlives the access token unless disconnect removes it. Leaving it lets
+    Solus keep minting access tokens against the user's documents after the
+    user believes they revoked us."""
+    from solus_api.connectors.runtime import refresh_secret_ref
+    from solus_api.connectors.secrets import SecretNotFoundError
+
+    store = app.state.secret_store
+    project_id = await _project(client, alice_headers)
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        headers=alice_headers,
+        json={"type": "github", "name": "octo/r", "token": "tok", "config": {}},
+    )
+    source_id = created.json()["data"]["id"]
+    ref = f"source/{source_id}/github"
+    await store.put(refresh_secret_ref(ref), "a-refresh-token")
+
+    await client.delete(f"/api/v1/projects/{project_id}/sources/{source_id}", headers=alice_headers)
+
+    with pytest.raises(SecretNotFoundError):
+        await store.get(ref)
+    with pytest.raises(SecretNotFoundError):
+        await store.get(refresh_secret_ref(ref))
 
 
 # --- SOLUSDEV-100 T4b: F3 acting-user threading on the manual trigger ---

@@ -23,8 +23,8 @@ ADR-024 credit packs ($10/$25/$50/$100) idempotently — each Price carries a
 `lookup_key`, so re-runs reuse what exists; an existing price that does not
 match the catalog aborts loudly rather than being adopted. It previews the
 exact catalog and key mode and requires confirmation (`--yes` for automation)
-before touching the Stripe account, then prints the `.env.mega` lines to
-paste. Amounts are PROVISIONAL until pilot calibration (ADR-023/024).
+before touching the Stripe account, then prints the `.env` lines to paste.
+Amounts are PROVISIONAL until pilot calibration (ADR-023/024).
 
 All Stripe calls pass `api_key` per call (no global `stripe.api_key` mutation),
 matching the gateway's convention.
@@ -111,8 +111,8 @@ def pack_lookup_key(dollars: int) -> str:
 
 
 def format_env_lines(plan_map: dict[str, str], pack_map: dict[str, int]) -> str:
-    """The exact `.env.mega` lines an operator pastes (single-quoted JSON, the
-    format env-sync and pydantic-settings both accept)."""
+    """The exact root `.env` lines an operator pastes (single-quoted JSON, the
+    format pydantic-settings accepts)."""
     plans = json.dumps(plan_map, separators=(",", ":"), sort_keys=True)
     packs = json.dumps(pack_map, separators=(",", ":"), sort_keys=True)
     return f"SOLUS_STRIPE_PLAN_PRICES='{plans}'\nSOLUS_STRIPE_PACK_CREDITS='{packs}'"
@@ -458,7 +458,7 @@ async def run_bootstrap(
         )
         for d in PACK_DOLLARS
     }
-    out("\nPaste into .env.mega, then run `pnpm env:sync` and restart the API:\n")
+    out("\nPaste into the root .env, then restart the API:\n")
     out(format_env_lines(plan_map, pack_map))
     return plan_map, pack_map
 
@@ -596,7 +596,7 @@ async def run_webhook(
     out(f"{created.id}: created.")
     out(
         "Signing secret — shown once, not retrievable again. Store it in AWS Secrets "
-        "Manager (or .env.mega locally, then `pnpm env:sync`); never commit it:"
+        "Manager (or the root .env locally); never commit it:"
     )
     out(f"SOLUS_STRIPE_WEBHOOK_SECRET={secret}")
 

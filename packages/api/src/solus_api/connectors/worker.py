@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.connectors.contracts import AuthKind, Credentials, SyncContext
 from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry, build_registry
-from solus_api.connectors.runtime import run_sync
+from solus_api.connectors.runtime import _resolve_credentials, run_sync
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore, build_secret_store
 from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.models import Source, SourceStatus, SyncTrigger
@@ -139,12 +139,16 @@ async def run_change_detection(
                 # Committed-export (EDA) connectors carry no tool credential
                 # by design (SOLUSDEV-100) — probe with empty credentials
                 # instead of skipping, same posture as `runtime.run_sync`.
-                token = ""
+                credentials = Credentials(token="")
             elif not secret_ref:
                 continue
             else:
-                token = await secret_store.get(secret_ref)
-            ctx = SyncContext(credentials=Credentials(token=token), config=config, cursor=cursor)
+                # Resolve the REFRESH token too (SOLUS-CAD-01). Without it, every
+                # Onshape probe 401s once the 60-minute access token expires, the
+                # fail-safe reports "changed", and the sweep enqueues a full export
+                # +parse every hour for a document nobody touched.
+                credentials = await _resolve_credentials(secret_store, secret_ref)
+            ctx = SyncContext(credentials=credentials, config=config, cursor=cursor)
             async with asyncio.timeout(probe_timeout_seconds):
                 changed = await connector.detect_changes(ctx)
         except SecretNotFoundError:

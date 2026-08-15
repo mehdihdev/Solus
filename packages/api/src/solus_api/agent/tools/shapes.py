@@ -49,6 +49,20 @@ class ToolDescriptor(BaseModel):
     # the gate is enforced centrally, not hand-rolled per tool; the registry stays a pure
     # dispatcher and does not read it.
     requires_confirmation: bool = False
+    #: Solus-authored text for the CONSENT surface, when `description` cannot be
+    #: trusted for it. A bridge/MCP tool's `description` is advertised by an
+    #: upstream fork — fine as model context (it is length-capped and the model
+    #: treats it as data), but it must not phrase the sentence a human reads
+    #: before approving a destructive action. Bridge tools set this from their
+    #: allowlist `reason`, which Solus writes and review sees.
+    consent_summary: str | None = None
+    #: Whether `description` is Solus-authored. False for a bridge/MCP tool,
+    #: whose description is advertised by an UPSTREAM FORK. Such a description
+    #: still has to reach the model — it is how the model picks the right tool —
+    #: but prompt assembly fences it so it cannot pose as a Solus instruction.
+    #: Deliberately NOT inferred from `consent_summary is not None`: the two
+    #: meanings will diverge.
+    description_trusted: bool = True
 
 
 class ToolCall(BaseModel):

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -80,6 +80,78 @@ class ProviderTransientError(ProviderError):
     """A RETRYABLE provider-side failure: 429 rate limit, overload/5xx, or a
     transient network error. The gateway's MO-03 backoff retries exactly these
     (and nothing else), only before the first streamed chunk."""
+
+
+class ToolCallingUnsupportedError(ProviderError):
+    """This provider's adapter cannot carry a multi-turn/tool conversation.
+
+    A `ProviderError` (so the gateway's taxonomy classifies it) but NOT a
+    `ProviderTransientError` — retrying a structural gap burns the whole budget
+    on something that can never succeed. Raised rather than silently dropping
+    the tools array: a model that cannot act still TALKS about acting, which is
+    indistinguishable from it choosing not to.
+    """
+
+
+class ToolSpec(BaseModel):
+    """One tool advertised to the model. Provider-neutral; each adapter maps it
+    to its own wire shape. `input_schema` is a `ToolDescriptor.params` verbatim —
+    which is why a tool's params are now literally model-facing wire content."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+class ToolUse(BaseModel):
+    """A call the MODEL proposed. Solus code decides whether it runs — this shape
+    carries no way to execute itself. `id` is the provider's own tool-use id and
+    MUST be echoed on the matching result."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    name: str
+    args: dict[str, Any] = {}
+
+
+class ToolOutcome(BaseModel):
+    """The result of one dispatched call, going back to the model as DATA.
+    `content` is always a string on the wire; the runner JSON-encodes there."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str  # echoes ToolUse.id
+    content: str
+    is_error: bool = False
+
+
+class Turn(BaseModel):
+    """One provider-neutral conversation turn."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    role: Literal["user", "assistant"]
+    text: str | None = None
+    tool_uses: tuple[ToolUse, ...] = ()  # assistant turns only
+    tool_results: tuple[ToolOutcome, ...] = ()  # user turns only
+
+
+class ToolConversation(BaseModel):
+    """System prompt + multi-turn messages + tools, as ONE optional parameter.
+
+    Bundled rather than three loose kwargs so "the text-only path is untouched"
+    stays a single `if conversation is None` branch — the property every existing
+    caller depends on.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    system: str
+    messages: tuple[Turn, ...] = ()
+    tools: tuple[ToolSpec, ...] = ()
 
 
 class ImageBlock(BaseModel):
@@ -149,14 +221,109 @@ def gemini_contents(query: str, images: Sequence[ImageBlock] | None, types_modul
     ]
 
 
+def anthropic_tools(tools: Sequence[ToolSpec]) -> list[dict[str, object]]:
+    """Tool specs → Anthropic's wire shape. `input_schema` passes straight
+    through: `ToolDescriptor.params` is already JSON Schema."""
+    return [
+        {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+        for t in tools
+    ]
+
+
+def anthropic_messages(turns: Sequence[Turn]) -> list[dict[str, object]]:
+    """Provider-neutral turns → Anthropic messages.
+
+    A plain user turn stays a bare string (identical to the text-only path). An
+    assistant turn becomes text + tool_use blocks; a results turn becomes
+    tool_result blocks — ALL of a round's results in ONE user turn, because
+    splitting them across messages teaches the model to stop making parallel
+    calls.
+
+    An assistant turn with no text emits no text block: the API rejects an empty
+    one, and a model going straight to a tool call is the common case.
+    """
+    messages: list[dict[str, object]] = []
+    for turn in turns:
+        if turn.tool_results:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": r.id,
+                            "content": r.content,
+                            "is_error": r.is_error,
+                        }
+                        for r in turn.tool_results
+                    ],
+                }
+            )
+            continue
+        if turn.tool_uses:
+            blocks: list[dict[str, object]] = []
+            if turn.text:
+                blocks.append({"type": "text", "text": turn.text})
+            blocks.extend(
+                {"type": "tool_use", "id": u.id, "name": u.name, "input": u.args}
+                for u in turn.tool_uses
+            )
+            messages.append({"role": turn.role, "content": blocks})
+            continue
+        messages.append({"role": turn.role, "content": turn.text or ""})
+    return messages
+
+
+def anthropic_tool_uses(blocks: Sequence[Any]) -> tuple[ToolUse, ...]:
+    """Final-message content blocks → proposed calls.
+
+    Provider output is UNTRUSTED and providers add block types: an unknown block
+    is ignored rather than fatal, and a malformed tool_use (non-string name,
+    non-mapping input) is DROPPED rather than guessed at — args must be a mapping
+    before the registry's JSON-Schema validation can mean anything.
+    """
+    uses: list[ToolUse] = []
+    for block in blocks:
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        name = getattr(block, "name", None)
+        identifier = getattr(block, "id", None)
+        if not isinstance(name, str) or not isinstance(identifier, str):
+            continue
+        raw = getattr(block, "input", {})
+        if not isinstance(raw, dict):
+            continue
+        uses.append(ToolUse(id=identifier, name=name, args=dict(raw)))
+    return tuple(uses)
+
+
+def _refuse_conversation(provider: str, conversation: ToolConversation | None) -> None:
+    """Adapters that send exactly one user message refuse a conversation OUTRIGHT.
+
+    Not just when tools are present: silently keeping the last turn and dropping
+    the rest would lose the conversation without any signal.
+    """
+    if conversation is not None:
+        raise ToolCallingUnsupportedError(
+            f"{provider} adapter does not implement tool calling or multi-turn "
+            "conversations; route this interaction to a tool-capable provider in models.yaml"
+        )
+
+
 class ProviderAdapter(Protocol):
     """One streaming call surface per provider.
 
-    Contract: yield zero or more ``str`` text chunks, then EXACTLY ONE `Usage`,
-    last, after the provider stream closes. On provider failure: raise — never
-    yield a `Usage`. The gateway's `complete()` drains this same stream for
-    request-response calls, so both paths share one implementation and report
-    identical usage numbers.
+    Contract: yield zero or more ``str`` text chunks, then zero or more
+    `ToolUse`, then EXACTLY ONE `Usage`, last, after the provider stream closes.
+    On provider failure: raise — never yield a `Usage`. The gateway's
+    `complete()` drains this same stream for request-response calls, so both
+    paths share one implementation and report identical usage numbers.
+
+    `conversation` is None for the text-only path: the adapter sends exactly one
+    user message built from `query`, with no system prompt — byte-identical to
+    the pre-tool-calling behaviour every existing caller depends on. When
+    supplied, `conversation` IS the request and `query` is used only upstream in
+    the gateway, for routing and token estimation.
     """
 
     def stream(
@@ -166,7 +333,8 @@ class ProviderAdapter(Protocol):
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]: ...
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]: ...
 
 
 class _BaseAdapter:
@@ -200,14 +368,28 @@ class AnthropicAdapter(_BaseAdapter):
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]:
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
         api_key = await self._api_key()
         import anthropic  # lazy: keyless environments never touch provider SDKs
 
-        content = anthropic_content(query, images)
-
         # max_retries=0 keeps the SDK's silent default retries from preempting
         # the gateway's MO-03 backoff (which retries ProviderTransientError).
+        # SDK boundary: plain-dict content blocks are accepted at runtime; the
+        # typed overloads want SDK TypedDicts.
+        if conversation is None:
+            request: dict[str, Any] = {
+                "messages": cast(
+                    "Any", [{"role": "user", "content": anthropic_content(query, images)}]
+                )
+            }
+        else:
+            request = {
+                "system": conversation.system,
+                "messages": cast("Any", anthropic_messages(conversation.messages)),
+                "tools": cast("Any", anthropic_tools(conversation.tools)),
+            }
+
         client = anthropic.AsyncAnthropic(
             api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS, max_retries=0
         )
@@ -215,16 +397,20 @@ class AnthropicAdapter(_BaseAdapter):
             async with (
                 client,
                 client.messages.stream(
-                    model=model_name,
-                    max_tokens=max_tokens,
-                    # SDK boundary: plain-dict content blocks are accepted at
-                    # runtime; the typed overloads want SDK TypedDicts.
-                    messages=cast("Any", [{"role": "user", "content": content}]),
+                    model=model_name, max_tokens=max_tokens, **request
                 ) as stream,
             ):
+                # `text_stream` filters to text blocks, so the streaming text path
+                # is unchanged when tools are present.
                 async for text in stream.text_stream:
                     yield text
                 final = await stream.get_final_message()
+                # Tool calls arrive assembled: the SDK accumulates input_json_delta
+                # internally, so no second non-streaming path is needed. Partial
+                # args would be useless anyway — half an argument object cannot
+                # be dispatched.
+                for use in anthropic_tool_uses(final.content):
+                    yield use
                 yield Usage(
                     tokens_in=final.usage.input_tokens, tokens_out=final.usage.output_tokens
                 )
@@ -249,7 +435,9 @@ class OpenAIAdapter(_BaseAdapter):
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]:
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
+        _refuse_conversation(self.provider, conversation)
         api_key = await self._api_key()
         import openai  # lazy: keyless environments never touch provider SDKs
 
@@ -300,7 +488,9 @@ class GeminiAdapter(_BaseAdapter):
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]:
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
+        _refuse_conversation(self.provider, conversation)
         api_key = await self._api_key()
         from google import genai  # lazy: keyless environments never touch provider SDKs
         from google.genai import errors as genai_errors

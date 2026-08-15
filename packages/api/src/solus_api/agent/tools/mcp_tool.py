@@ -98,6 +98,13 @@ class MCPServerSpec(BaseModel):
     # W0-04 confirmation gate. The server's own destructiveHint is untrusted and
     # deliberately ignored (per the MCP SDK's own warning about annotations).
     requires_confirmation: bool = False
+    #: Plain notice shown to the user when they connect this tool. Catalog DATA
+    #: so any surface that offers a tool can render it without knowing which
+    #: tool it is — the same generic treatment `access_modes` and `selection`
+    #: get on connectors. Used for licence terms Solus must surface but must not
+    #: enforce: Fusion Personal forbids commercial use, and Autodesk asks
+    #: integrations to say so. It INFORMS; it never blocks a connection.
+    connect_notice: str | None = None
 
     @model_validator(mode="after")
     def _exactly_one_transport(self) -> Self:
@@ -347,11 +354,20 @@ async def discover_mcp_tools(
                 _skip(spec, remote.name, "is not allowlisted")
                 continue
             requires_confirmation = allowed.requires_confirmation
+        elif spec.requires_confirmation:
+            # SEC-C1: a destructive tool with no allowlist entry has no
+            # Solus-authored consent text — it must not be dispatchable at all,
+            # or the approval sentence would be phrased by the fork.
+            _skip(spec, remote.name, "declares a destructive default with no consent text")
+            continue
         else:
-            requires_confirmation = spec.requires_confirmation
+            requires_confirmation = False
         descriptor = ToolDescriptor(
             name=f"{spec.name}.{remote.name}",
             description=(remote.description or "")[:_UNTRUSTED_TEXT_CAP],
+            # SEC-C1/H1: introspected from the fork — never Solus-authored. The
+            # prompt layer fences it and the consent card refuses to render it.
+            description_trusted=False,
             params=remote.inputSchema,
             returns=remote.outputSchema if remote.outputSchema is not None else _FALLBACK_RETURNS,
             timeout_seconds=None,  # the registry default owns the bound

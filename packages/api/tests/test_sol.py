@@ -10,6 +10,7 @@ tool call.
 import asyncio
 import json
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 from conftest import (
@@ -19,6 +20,7 @@ from conftest import (
     create_team,
     me,
 )
+from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.agent.conversation import ConversationService
 from solus_api.agent.runtime import MAX_TOOL_CALLS
@@ -376,3 +378,116 @@ async def test_turn_timeout_is_enforced(
     error = next(d for t, d in events if t == "error")
     assert error["code"] == "timeout"
     assert [t for t, _ in events][-1] == "done"
+
+
+# ------------------------------------------------ bounded history (RUN-01)
+
+
+async def test_history_is_bounded_to_the_most_recent_turns(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """A model-backed runner puts every history turn into a paid prompt, so an
+    unbounded read is both a cost bomb and a permanent injection foothold: one
+    poisoned turn would replay into every future prompt forever.
+
+    Bounded to the MOST RECENT turns — dropping the oldest keeps the live thread
+    coherent, which is what the runner actually needs."""
+    from solus_api.agent.conversation import HISTORY_TURN_LIMIT
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    service = ConversationService()
+    total = HISTORY_TURN_LIMIT + 12
+    for i in range(total):
+        await service.append_turn(
+            db,
+            conversation_id=uuid.UUID(convo["id"]),
+            project_id=uuid.UUID(project["id"]),
+            role=TurnRole.USER,
+            content=f"turn-{i:04d}",
+        )
+    await db.commit()
+
+    turns = await service.history(
+        db,
+        conversation_id=uuid.UUID(convo["id"]),
+        project_id=uuid.UUID(project["id"]),
+    )
+
+    assert len(turns) == HISTORY_TURN_LIMIT
+    # Chronological order survives, and it is the TAIL that is kept.
+    contents = [t.content for t in turns]
+    assert contents == sorted(contents)
+    assert contents[-1] == f"turn-{total - 1:04d}"
+
+
+async def test_the_router_hands_the_runner_the_identity_it_needs(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    """RUN-01 wiring guard. The shipped runner REFUSES without user_id,
+    sessionmaker and secret_store — so if the router stops supplying them, every
+    SOL turn breaks in production while the scaffold-backed transport tests stay
+    green. This asserts the context the router actually builds."""
+    from solus_api.agent.runtime import AgentRunContext
+
+    seen: list[AgentRunContext] = []
+
+    class _Capture:
+        async def run(self, ctx: AgentRunContext) -> AsyncIterator[AgentEvent]:
+            seen.append(ctx)
+            yield AgentEvent.message("ok")
+
+    app.state.agent_runner = _Capture()
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "hello"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+
+    ctx = seen[0]
+    assert ctx.user_id is not None
+    assert ctx.sessionmaker is not None
+    assert ctx.secret_store is not None
+
+
+async def test_persisted_tool_turns_carry_no_secret_shaped_values(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
+) -> None:
+    """A tool result is persisted AND served back out of /turns to the browser.
+    `onshape.get_variables` returns raw Onshape variables, so a variable holding
+    a token would otherwise be written to Postgres in the clear and rendered.
+
+    The same `redact_value` gate that guards model context guards the row."""
+    from fixtures.injection_corpus import SECRET_SHAPED_VALUE
+    from solus_api.agent.runtime import AgentRunContext
+    from solus_api.agent.tools.shapes import ToolCall, ToolResult
+
+    class _Leaky:
+        async def run(self, ctx: AgentRunContext) -> AsyncIterator[AgentEvent]:
+            call = ToolCall(tool="onshape.get_variables", args={}, call_id="t1")
+            yield AgentEvent.tool_call(call)
+            yield AgentEvent.tool_result(
+                ToolResult.success("t1", {"variables": [{"api_key": SECRET_SHAPED_VALUE}]})
+            )
+            yield AgentEvent.message("done")
+
+    app.state.agent_runner = _Leaky()
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "what variables?"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+
+    turns = await client.get(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/turns",
+        headers=alice_headers,
+    )
+    assert SECRET_SHAPED_VALUE not in turns.text

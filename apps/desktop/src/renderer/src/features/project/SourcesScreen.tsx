@@ -21,14 +21,25 @@ import { useOfflineReason } from '../workspace/workspaceOnline'
 import { ConnectTile } from '../onboarding/ConnectTile'
 import { type CatalogEntry } from '../onboarding/integrationCatalog'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
+import { plural } from '../onboarding/selectionConfigureStep'
+import { EditSelectionModal } from './EditSelectionModal'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
-import { useGithubConnect } from '../onboarding/useGithubConnect'
+import { noBridgeError } from '../onboarding/oauthConnect'
+import { connectOptions, useOAuthConnect } from '../onboarding/useOAuthConnect'
 import { useEdaConnect } from '../onboarding/useEdaConnect'
 import { sourceErrorText, sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectSources } from './useProjectSources'
 
 const EXPORT_FILE_ACCEPT = '.xml,.net'
-const NO_BRIDGE_ERROR = 'GitHub connect needs the Solus desktop app.'
+
+/** What a source tracks today, read from its own config under the connector's
+ *  declared key. A single-select connector stores a scalar, multi stores a list. */
+function trackedIds(source: Source, configKey?: string): string[] {
+  if (!configKey) return []
+  const value = (source.config as Record<string, unknown> | undefined)?.[configKey]
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string')
+  return typeof value === 'string' ? [value] : []
+}
 
 export function SourcesScreen(): React.JSX.Element {
   const project = useWorkspaceStore((s) => s.project)
@@ -68,7 +79,7 @@ function SourcesView({ projectId }: { projectId: string }): React.JSX.Element {
             </div>
           </Card>
         ) : (
-          <ConnectedList sources={data.sources} actions={data.actions} />
+          <ConnectedList sources={data.sources} actions={data.actions} projectId={projectId} />
         )}
 
         <ConnectPanel projectId={projectId} onConnected={() => void data.actions.refresh()} />
@@ -79,10 +90,12 @@ function SourcesView({ projectId }: { projectId: string }): React.JSX.Element {
 
 function ConnectedList({
   sources,
-  actions
+  actions,
+  projectId
 }: {
   sources: Source[]
   actions: ReturnType<typeof useProjectSources>['actions']
+  projectId: string
 }): React.JSX.Element {
   return (
     <>
@@ -99,9 +112,11 @@ function ConnectedList({
             <SourceRow
               key={s.id}
               source={s}
+              projectId={projectId}
               last={i === sources.length - 1}
               onSync={() => void actions.syncNow(s.id)}
               onDisconnect={() => actions.disconnect(s.id)}
+              onSelectionSaved={() => void actions.refresh()}
             />
           ))}
         </Card>
@@ -110,21 +125,71 @@ function ConnectedList({
   )
 }
 
-function SourceRow({
+/** "Choose documents…" — shown only when the CONNECTOR declares a selection, per
+ *  the live registry. No provider check appears here, so a new connector gains
+ *  the action for free. */
+function SelectionAction({
   source,
-  last,
-  onSync,
-  onDisconnect
+  projectId,
+  onSaved
 }: {
   source: Source
+  projectId: string
+  onSaved: () => void
+}): React.JSX.Element | null {
+  const [editing, setEditing] = useState(false)
+  const selection = useIntegrationCatalog().find((e) => e.id === source.type)?.selection ?? null
+  if (!selection) return null
+
+  return (
+    <>
+      <Button
+        kind="ghost"
+        size="sm"
+        aria-label={`Choose ${plural(selection.label)} for ${source.name}`}
+        onClick={() => setEditing(true)}
+      >
+        {plural(selection.label)}
+      </Button>
+      {editing && (
+        <EditSelectionModal
+          projectId={projectId}
+          sourceId={source.id}
+          sourceName={source.name}
+          selection={selection}
+          current={trackedIds(source, selection.config_key)}
+          onClose={() => setEditing(false)}
+          onSaved={onSaved}
+        />
+      )}
+    </>
+  )
+}
+
+function SourceRow({
+  source,
+  projectId,
+  last,
+  onSync,
+  onDisconnect,
+  onSelectionSaved
+}: {
+  source: Source
+  projectId: string
   last: boolean
   onSync: () => void
   onDisconnect: () => Promise<boolean>
+  onSelectionSaved: () => void
 }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
   const synced = source.last_synced_at
     ? `Synced ${relativeTime(source.last_synced_at)}`
     : 'Never synced'
+  // WHICH account this source is connected as. Providers differ in how much
+  // they will tell us: GitHub gives a login, Onshape under its read-only scope
+  // gives only an opaque account id. Show whichever is real and never invent
+  // one — an unlabelled source is more honest than a fabricated name.
+  const account = source.account_login?.trim() || null
   const entities =
     typeof source.entity_count === 'number' ? ` · ${source.entity_count} entities` : ''
   const errorText = sourceErrorText(source.last_error)
@@ -152,7 +217,8 @@ function SourceRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{source.name}</div>
         <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
-          {sourceTypeLabel(source.type)} · {synced}
+          {sourceTypeLabel(source.type)}
+          {account && ` · ${account}`} · {synced}
           {entities}
         </div>
         {errorText && (
@@ -165,6 +231,7 @@ function SourceRow({
       <Button kind="ghost" size="sm" onClick={onSync}>
         <Icons.play size={11} /> Sync now
       </Button>
+      <SelectionAction source={source} projectId={projectId} onSaved={onSelectionSaved} />
       <Button
         kind="ghost"
         size="sm"
@@ -237,7 +304,7 @@ function ConnectPanel({
   const catalog = useIntegrationCatalog()
   const connections = useOnboardingStore((s) => s.connections)
   const failConnect = useOnboardingStore((s) => s.failConnect)
-  const github = useGithubConnect()
+  const oauth = useOAuthConnect()
   const eda = useEdaConnect()
   const exportInput = useRef<HTMLInputElement | null>(null)
   const pendingProvider = useRef<string | null>(null)
@@ -249,12 +316,12 @@ function ConnectPanel({
   }, [])
 
   const connect = (integ: CatalogEntry): void => {
-    if (integ.mode === 'github-oauth') {
+    if (integ.mode === 'oauth') {
       if (!getDesktopOAuthBridge()) {
-        failConnect(integ.id, NO_BRIDGE_ERROR)
+        failConnect(integ.id, noBridgeError(integ.name))
         return
       }
-      void github.start(projectId).then(onConnected)
+      void oauth.start(projectId, integ.id, connectOptions(integ)).then(onConnected)
       return
     }
     pendingProvider.current = integ.id
@@ -290,7 +357,9 @@ function ConnectPanel({
             integration={integ}
             state={connections[integ.id]}
             onConnect={() => connect(integ)}
-            onChooseRepo={github.chooseRepo}
+            onSelect={oauth.select}
+            onSubmitConfig={oauth.submitConfig}
+            onChooseAccess={oauth.chooseAccess}
             onRetry={() => connect(integ)}
           />
         ))}

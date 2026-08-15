@@ -463,3 +463,44 @@ logs-and-ignores `credential_ack`).
   remains deliberately unbuilt, per MCP-01), no validation of the license against the vendor
   (that happens customer-side when the tool runs — BYO-paid tools are NOT on the in-house QA
   path), no read-back frame (values are write-only over the wire).
+
+---
+
+## Addendum D — artifact transfer frames (SOLUS-CAD-00c)
+
+`metadata-extraction.md` §2.1 requires bulk export bytes to ride an `ArtifactRef`
+(`ArtifactStorage.CLIENT`) and **never** be inlined into a tool result. Until this addendum the
+companion had nowhere to put them, so `dispatch.map_result` dropped every non-text content block
+with the note *"non-text content omitted (ArtifactRef plumbing pending)"* — a STEP export could
+not cross the channel at all. Two new frame types close that, per the §4 extension rule (**no
+`protocol_version` bump**; an old peer ignores them as unknown).
+
+| type | direction | data |
+| --- | --- | --- |
+| `artifact_fetch` | cloud → companion | `{artifact_id, fetch_id}` |
+| `artifact_chunk` | companion → cloud | `{fetch_id, data, final, error}` |
+
+**Staging.** When a tool returns non-text content the companion stages the bytes in memory and the
+result block carries a handle instead: `{type, inlined: false, artifact_id, media_type,
+size_bytes}`. The bytes themselves never appear in a `tool_result`. Staging is bounded — per
+artifact, in total, and by count — and evicts oldest-first, because the artifact a fetch wants is
+the newest one. Nothing is written to disk, so a crash leaves nothing behind on a customer's
+machine.
+
+**Pull.** The cloud sends `artifact_fetch` with a fresh `fetch_id` and reads `artifact_chunk`
+frames until one carries `final: true`. `data` is base64 so bytes survive a JSON text frame;
+chunks are 512 KiB of raw bytes, comfortably under the 1 MiB frame cap once base64 inflates them.
+
+**`fetch_id` is its own id space**, distinct from a `tool_call`'s `call_id`, so a chunk can never
+resolve a tool call. An unknown `fetch_id` is dropped and logged — the same replay defence
+`ingest_result` applies.
+
+**Bounds (everything the companion sends is untrusted, CLAUDE.md §7).** A pull fails — never
+returning a partial artifact — on any of: total bytes exceeding the transfer limit (checked
+*while chunks arrive*, not after reassembly), the whole-transfer deadline elapsing, malformed
+base64, an `error` chunk, or the session dying. Every failure is a `ToolException`, so callers keep
+the W0-04 never-raises story.
+
+**Lifecycle.** `clear()` on disconnect: the companion never buffers across reconnects (§5), so a
+handle minted in one session must not resolve in the next. Waiting pulls are unblocked with an
+error chunk when the socket dies.

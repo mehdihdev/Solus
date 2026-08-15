@@ -48,14 +48,33 @@ class ToolException(Exception):  # noqa: N818 — name fixed by the W0-04 contra
         self.retryable = retryable
 
 
+#: What a confirmation-gated tool answers when asked "what exactly will change?"
+#: — the rows the user approves. Generic across tool kinds: a CAD edit, a
+#: firmware flash and a robot command all render the same `{label, before,
+#: after}` shape (SOLUS-ONS-A5).
+ToolPreview = Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]]
+
+
 class InProcessTool:
     """v1 Tool kind: wraps an async Python callable. The descriptor is fixed at
     construction; `invoke` just runs the handler — arg validation and failure handling
-    live in the registry, so the handler stays a plain async function."""
+    live in the registry, so the handler stays a plain async function.
 
-    def __init__(self, descriptor: ToolDescriptor, handler: ToolHandler) -> None:
+    `preview` is optional and NOT part of the `Tool` protocol: the confirmation
+    flow duck-types it, exactly like a connector's `list_selectable`. A gated
+    tool that can describe its change supplies one; one that cannot simply does
+    not, and its summary carries the consent."""
+
+    def __init__(
+        self,
+        descriptor: ToolDescriptor,
+        handler: ToolHandler,
+        preview: ToolPreview | None = None,
+    ) -> None:
         self._descriptor = descriptor
         self._handler = handler
+        if preview is not None:
+            self.preview = preview
 
     @property
     def descriptor(self) -> ToolDescriptor:

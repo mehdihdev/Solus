@@ -26,6 +26,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     text,
 )
@@ -180,6 +181,22 @@ class ArtifactStorage(enum.StrEnum):
     S3 = "s3"
     LOCAL = "local"
     CLIENT = "client"
+
+
+class ConfirmationStatus(enum.StrEnum):
+    """Lifecycle of one destructive-action approval (SOLUS-ONS-A5). Terminal in
+    every state but PENDING — an approval is SINGLE USE, so a decided row can
+    never be replayed into a second execution."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    #: Approved, but what the action would DO had changed since the user was
+    #: shown it — so nothing ran. Distinct from EXPIRED: time did not run out,
+    #: the world moved. Recorded rather than silently re-previewed, because a
+    #: user who approved one thing did not consent to another.
+    STALE = "stale"
 
 
 class SourceType(enum.StrEnum):
@@ -649,6 +666,52 @@ class ErrorSolution(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), default=None)
 
 
+class ToolConfirmation(UuidPkMixin, TimestampMixin, Base):
+    """A destructive tool call parked awaiting the user's explicit approval
+    (SOLUS-ONS-A5, CLAUDE.md §7 "no silent execution").
+
+    A SOL turn is a one-shot SSE stream and cannot block for a click, so a gated
+    call records what it wants to do here, the turn ends, and the user decides
+    through `POST .../sol/confirmations/{id}`.
+
+    **`args` is the load-bearing column.** It holds the exact arguments the user
+    was shown, and they are what executes — the decide endpoint accepts a
+    decision and nothing else. Letting a client re-supply arguments at approval
+    time would mean approving "change width" and executing "change everything".
+    """
+
+    __tablename__ = "tool_confirmations"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    #: Only this user may decide — a teammate never saw the proposed action.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), default=None, index=True
+    )
+    tool: Mapped[str] = mapped_column(String(128))
+    args: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    #: The concrete action in words. A user cannot meaningfully approve an id.
+    summary: Mapped[str] = mapped_column(String(2048))
+    #: The DIFF the user is approving: `[{"label", "before", "after"}, ...]`.
+    #: Generic across every tool kind — a CAD edit, a firmware flash and a robot
+    #: command all render the same way — and computed at PARK time, so what is
+    #: displayed is derived from the same stored args that will execute. Empty
+    #: when a tool offers no preview; the summary alone is then the consent.
+    preview: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    status: Mapped[ConfirmationStatus] = mapped_column(
+        _enum_column(ConfirmationStatus), default=ConfirmationStatus.PENDING
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
 # --------------------------------------------------------------------- artifacts
 class Artifact(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     """Registry row for a large/binary tool output (image, point cloud, screenshot).
@@ -815,6 +878,82 @@ class Sync(UuidPkMixin, Base):
     )
 
 
+class PanelBinding(UuidPkMixin, TimestampMixin, Base):
+    """An Onshape panel linked to a Solus user (SOLUS-A7-01).
+
+    THE PANEL'S CREDENTIAL, and the reason `{$userId}` is not one. Onshape hands
+    the iframe a `{$userId}` query param, but that is an unsigned identifier
+    from a third party — and Onshape user ids are visible to anyone sharing a
+    document, so treating a match as access would let a collaborator read
+    someone's Solus graph. The panel therefore holds a SECRET obtained through
+    an explicit pairing the user approved while authenticated in Solus.
+
+    `onshape_user_id` is a LABEL, never a lookup key: it exists so the
+    revocation UI can say which panel this is, and it is validated to Onshape's
+    id charset so it cannot carry markup onto that screen.
+
+    References `User`, not `Source`: a Source is project-scoped and its CASCADE
+    would silently destroy the pairing when someone disconnects and reconnects
+    Onshape. Authorization is never carried here — it is re-derived per request
+    from live membership, so this row is identity only.
+    """
+
+    __tablename__ = "panel_bindings"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    #: sha256 hex of the token. HASHED AT REST: a 90-day silent full-user
+    #: credential must not be readable from a DB dump or a stray repr. sha256
+    #: rather than a KDF because the secret is 256 bits of entropy — a KDF only
+    #: slows guesses of LOW-entropy secrets and would destroy indexed lookup.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    onshape_user_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PanelPairing(Base):
+    """One in-flight panel pairing — an OAuth-device-flow-shaped handshake.
+
+    The panel is unauthenticated and the Solus app is authenticated, in two
+    different browser contexts, so the user carries a short code between them.
+
+    `OAuthState` cannot be reused for this despite the similar shape: its
+    `source_id` is a NOT NULL FK to `sources.id`, it has no approval column, and
+    it has no attempt counter. Its row models a redirect round-trip with a
+    10-minute life; a binding outlives the handshake indefinitely. One table
+    doing both jobs would be half NULL columns and a CASCADE that is an outright
+    correctness bug for the binding case.
+    """
+
+    __tablename__ = "panel_pairings"
+
+    #: sha256 of the device code — the panel's bearer while polling. The
+    #: plaintext is never stored, not even for the 10-minute window: the panel
+    #: token is minted at REDEMPTION, not at approval.
+    device_code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    #: The short code a human reads off the panel and types into Solus. Low
+    #: entropy by necessity, which is why redeeming it requires an already
+    #: authenticated caller.
+    user_code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    onshape_user_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    approved_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), default=None
+    )
+    #: Durable across ECS tasks, unlike the in-process rate limiter — which
+    #: cannot see the client IP behind the ALB and so shares one bucket across
+    #: every unauthenticated caller.
+    poll_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class OAuthState(Base):
     """Short-lived CSRF state for the connector OAuth handshake (CLAUDE.md §7).
 
@@ -871,6 +1010,59 @@ class DataEvent(UuidPkMixin, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+
+
+class ToolDoc(UuidPkMixin, Base):
+    """Vendor API knowledge SOL consults to build a valid tool call (ADR-033).
+
+    THE FIRST GLOBAL CONTENT-BEARING TABLE. Every other table storing text is
+    project-scoped by `ForeignKey("projects.id", ondelete="CASCADE")`, and that
+    FK is what makes cross-tenant leakage structurally impossible. This one has
+    no such anchor, so its containment comes from three properties instead:
+
+    1. **No tenant column and no FK.** There is nowhere to put a project, team
+       or user reference — absence of the column IS the enforcement.
+    2. **Typed columns only.** `parameters` holds structured vendor parameter
+       specs with a known shape; there is deliberately no open `payload`/`extra`
+       a request handler could stuff customer text (or a prompt) into.
+    3. **No runtime write path.** Written only by the ingestion job in
+       `tool_docs.py`, over VENDOR documentation — never by a sync, a tool call,
+       or anything holding a `SyncContext` or a `GraphEntity`.
+
+    Contrast `DataEvent`: also FK-free, but tenant-attributed and carrying an
+    open payload. "No FK" alone is not containment.
+    """
+
+    __tablename__ = "tool_docs"
+    __table_args__ = (
+        UniqueConstraint("tool", "version", "symbol", name="uq_tool_docs_identity"),
+        Index("ix_tool_docs_lookup", "tool", "version", "symbol"),
+    )
+
+    #: The vendor tool this documents: "onshape", "fusion", …
+    tool: Mapped[str] = mapped_column(String(32))
+    #: Vendor API version the entry was derived from, so a stale entry is
+    #: identifiable rather than silently wrong.
+    version: Mapped[str] = mapped_column(String(32))
+    #: What is documented — a feature type, an endpoint, a FeatureScript symbol.
+    symbol: Mapped[str] = mapped_column(String(128))
+    summary: Mapped[str] = mapped_column(String(1024))
+    #: Structured parameter specs: `[{id, name, kind, quantity_type?, options?}]`.
+    parameters: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    #: Where it came from. An entry nobody can trace is one nobody can re-derive.
+    source_url: Mapped[str] = mapped_column(String(512))
+    #: 0-1. Machine-readable sources score high; anything inferred scores lower.
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    #: How it was acquired ("openapi", "featurespecs", …) — MCP-04 §2.1 wants
+    #: identity content-derived and provenance explicit.
+    acquisition_method: Mapped[str] = mapped_column(String(32))
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    #: Reserved so adding vectors later is a backfill rather than a migration.
+    #: Stays NULL: `embed()` does not exist yet (docs/api/gateway-embeddings.md
+    #: is a deferred MO-01 proposal), and nothing may pretend otherwise.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), default=None)
 
 
 # --------------------------------------------------------------------- SOL chat

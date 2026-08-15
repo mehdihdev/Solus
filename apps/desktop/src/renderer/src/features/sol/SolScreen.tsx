@@ -1,44 +1,39 @@
-// SOL screen. Chat wiring to the real SOL backend lands with SOLUSDEV-132/134;
-// SOLUSDEV-152 removed the scripted prototype conversation, fake think-delays,
-// the fabricated grounding footer, and the fake apply-&-flash flow. Until the
-// backend is wired this is an honest not-connected state that keeps SOL's
-// visual identity (the orb) and the universal Guide/Expert mode setting
-// (ADR-016).
+// SOL screen (SOLX-02 / SOLUSDEV-201): the full-page chat surface. The
+// SOLUSDEV-152 honest not-connected state is retired — the SOLUSDEV-135
+// backend is live, and the screen reuses OrbChat (the same surface as the
+// persistent orb's panel). Keeps SOL's visual identity and the universal
+// Guide/Expert mode setting (ADR-016) in the header.
 import { Mono } from '../../components/ui/Mono'
 import { Segmented } from '../../components/ui/Segmented'
 import { SolOrb } from '../../components/ui/SolOrb'
 import { useSettingsStore, type SolMode } from '../../store/settingsStore'
-import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import { OrbChat } from './OrbChat'
+import { selectOrbPulse, useOrbStore } from './orbStore'
 
 export function SolScreen(): React.JSX.Element {
   const solMode = useSettingsStore((s) => s.solMode)
   const setSolMode = useSettingsStore((s) => s.setSolMode)
+  const project = useWorkspaceStore((s) => s.project)
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-      <SolHeader solMode={solMode} setSolMode={setSolMode} />
-      <ScreenEmptyState
-        icon={<SolOrb size={44} />}
-        title="SOL isn't wired to this workspace yet"
-        body={
-          <>
-            Once connected, SOL answers questions about your robot with evidence from the graph —
-            tracing causes across firmware, electronics, CAD, and runtime — in the mode you choose
-            above. Chat arrives in an upcoming update.
-          </>
-        }
-      />
+      <SolHeader solMode={solMode} setSolMode={setSolMode} projectName={project?.name ?? null} />
+      <OrbChat projectId={project?.id ?? null} layout="page" />
     </div>
   )
 }
 
 function SolHeader({
   solMode,
-  setSolMode
+  setSolMode,
+  projectName
 }: {
   solMode: SolMode
   setSolMode: (m: SolMode) => void
+  projectName: string | null
 }): React.JSX.Element {
+  const pulse = useOrbStore(selectOrbPulse)
   return (
     <div
       style={{
@@ -52,15 +47,20 @@ function SolHeader({
         boxSizing: 'border-box'
       }}
     >
-      <SolOrb size={56} />
+      <SolOrb size={56} pulse={pulse} />
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 16, fontWeight: 600 }}>SOL</div>
         <Mono size={9.5} color="var(--mut)">
-          NOT CONNECTED
+          {projectName ?? 'NO PROJECT'}
         </Mono>
       </div>
       <div style={{ textAlign: 'right' }}>
-        <Segmented options={['Guide', 'Expert']} value={solMode} onChange={setSolMode} />
+        <Segmented
+          options={['Guide', 'Expert']}
+          value={solMode}
+          onChange={setSolMode}
+          ariaLabel="SOL mode"
+        />
         <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 5 }}>
           {solMode === 'Guide' ? 'explains and teaches' : 'terse, direct'}
         </div>

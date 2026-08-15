@@ -3,9 +3,12 @@
 // the other workspace hooks (SOLUSDEV-152).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
-import { useProjectSources } from './useProjectSources'
+import { useProjectSources, SOURCES_POLL_MS } from './useProjectSources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
+import { useInterval } from '../../lib/useInterval'
+
+vi.mock('../../lib/useInterval', () => ({ useInterval: vi.fn() }))
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -84,5 +87,45 @@ describe('useProjectSources', () => {
       ok = await result.current.actions.disconnect('s1')
     })
     expect(ok).toBe(false)
+  })
+})
+
+describe('useProjectSources — live refresh', () => {
+  it('re-reads the list on a timer so status and counts stay current', async () => {
+    vi.mocked(resources.listSources).mockResolvedValue([SOURCE])
+
+    renderHook(() => useProjectSources())
+    await waitFor(() => expect(resources.listSources).toHaveBeenCalled())
+
+    // The page refreshes itself rather than waiting for a click. This polls OUR
+    // api only — the connector never talks to the provider on this timer.
+    const [, ms, enabled] = vi.mocked(useInterval).mock.calls.at(-1)!
+    expect(ms).toBe(SOURCES_POLL_MS)
+    expect(enabled).toBe(true)
+  })
+
+  it('is not polling when there is no project to poll for', async () => {
+    useWorkspaceStore.setState({ project: null })
+
+    renderHook(() => useProjectSources())
+
+    await waitFor(() => expect(vi.mocked(useInterval).mock.calls.length).toBeGreaterThan(0))
+    expect(vi.mocked(useInterval).mock.calls.at(-1)![2]).toBe(false)
+  })
+
+  it('keeps the list on screen when a refresh fails', async () => {
+    // On a 10s timer one blip must not blank the page and restore it a moment
+    // later; only an empty list may report offline.
+    vi.mocked(resources.listSources).mockResolvedValue([SOURCE])
+    const { result } = renderHook(() => useProjectSources())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    vi.mocked(resources.listSources).mockRejectedValueOnce(new Error('blip'))
+    await act(async () => {
+      await result.current.actions.refresh()
+    })
+
+    expect(result.current.sources).toHaveLength(1)
+    expect(result.current.status).toBe('ready')
   })
 })

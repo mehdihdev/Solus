@@ -1,0 +1,197 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Solus · Onshape panel message harness</title>
+<!--
+  SOLUS-ONS-A7 STEP 0 — the capture harness. NOT a product, not shipped.
+
+  Why this exists
+  ---------------
+  Onshape's element-right-panel postMessage bridge is only half documented. The
+  OUTBOUND direction (what we send in) has a published message list. The INBOUND
+  direction does not: the `SELECTION` push is mentioned in the docs but no field
+  list is published anywhere, and every "field list" circulating in blog posts
+  and open-source apps is either reverse-engineered from Onshape's minified
+  bundle or copied from someone who did that. Building against those is exactly
+  the fabricated-data failure mode we refuse elsewhere.
+
+  So: nothing here asserts a payload shape. It logs whatever arrives, verbatim,
+  and a human pastes the result into docs/integrations/onshape-panel-messages.md.
+  That is the ONLY thing that can retire the unknown, and an agent cannot do it —
+  it needs an authenticated, licensed Onshape session in a real browser.
+
+  Deliberately dependency-free: one file, no build step, no framework, no Solus
+  code, no network calls of its own. Serve it and open it. If it ever grows an
+  import, it has stopped being a harness.
+
+  How to run — see README.md in this directory.
+-->
+<style>
+  :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+  body { margin: 0; padding: 12px; font-size: 13px; }
+  h1 { font-size: 14px; margin: 0 0 8px; }
+  #ctx { font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap;
+         background: rgba(127,127,127,.12); padding: 8px; border-radius: 4px; }
+  #ctx.bad { background: rgba(220,50,50,.18); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  button { font-size: 12px; padding: 5px 8px; cursor: pointer; }
+  #log { font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap;
+         word-break: break-all; border-top: 1px solid rgba(127,127,127,.4); padding-top: 8px; }
+  .entry { border-bottom: 1px dashed rgba(127,127,127,.3); padding: 6px 0; }
+  .rejected { color: #c33; }
+  .out { color: #06c; }
+</style>
+
+<h1>Solus · Onshape message harness</h1>
+<div id="ctx"></div>
+
+<div class="row">
+  <button id="init">applicationInit</button>
+  <button id="sel-face">requestSelection FACE</button>
+  <button id="sel-edge">requestSelection EDGE</button>
+  <button id="sel-any">requestSelection (no filter)</button>
+  <button id="stop">stopRequest</button>
+  <button id="hl">requestSelectionHighlight</button>
+  <button id="cam">requestCameraProperties</button>
+  <button id="img">requestViewerImage</button>
+</div>
+<div class="row">
+  <button id="copy">Copy log as JSON</button>
+  <button id="clear">Clear</button>
+  <label><input type="checkbox" id="autoinit" checked /> auto-send applicationInit on load</label>
+</div>
+
+<div id="log"></div>
+
+<script>
+  // ---- context, straight off the query string -----------------------------
+  // NOTE the substitution names: an Element right panel does NOT receive
+  // documentId/workspaceId/elementId automatically (only server, companyId,
+  // userId, locale, clientId). They arrive only because the extension's Action
+  // URL asks for them via {$documentId} etc. And it is {$workspaceOrVersionId},
+  // not the deprecated {$workspaceId}. See README.md.
+  const q = new URLSearchParams(location.search)
+  const ctx = {
+    server: q.get('server') || '',
+    documentId: q.get('documentId') || '',
+    workspaceOrVersion: q.get('workspaceOrVersion') || 'w',
+    workspaceOrVersionId: q.get('workspaceOrVersionId') || '',
+    elementId: q.get('elementId') || '',
+    userId: q.get('userId') || '',
+    companyId: q.get('companyId') || '',
+    clientId: q.get('clientId') || '',
+    locale: q.get('locale') || ''
+  }
+
+  const log = document.getElementById('log')
+  const entries = []
+
+  function record(kind, payload, note) {
+    entries.push({ kind, at: new Date().toISOString(), note: note || null, payload })
+    const el = document.createElement('div')
+    el.className = 'entry' + (kind === 'REJECTED' ? ' rejected' : kind === 'OUT' ? ' out' : '')
+    el.textContent = `[${entries.length}] ${kind}${note ? ' · ' + note : ''}\n` +
+      JSON.stringify(payload, null, 1)
+    log.prepend(el)
+  }
+
+  const ctxEl = document.getElementById('ctx')
+  ctxEl.textContent = JSON.stringify(ctx, null, 1)
+  if (!ctx.server) {
+    // Without `server` there is no origin to validate against, and validating
+    // against '*' is the mistake this harness exists partly to avoid teaching.
+    ctxEl.className = 'bad'
+    ctxEl.textContent += '\n\nNO `server` PARAM — origin cannot be validated. Refusing to post.'
+  }
+
+  // ---- inbound: log EVERYTHING, filter NOTHING ----------------------------
+  // Two things are being captured at once: the payloads themselves, and whether
+  // anything arrives from an origin other than `server` (which would matter).
+  window.addEventListener('message', (e) => {
+    if (e.origin !== ctx.server) {
+      record('REJECTED', { origin: e.origin, data: e.data }, 'origin !== server')
+      return
+    }
+    record('IN', e.data)
+  })
+
+  // ---- outbound -----------------------------------------------------------
+  function post(message) {
+    if (!ctx.server) return
+    // Explicit targetOrigin, never '*': a wildcard would broadcast document ids
+    // to whatever happens to be hosting the frame.
+    record('OUT', message)
+    window.parent.postMessage(message, ctx.server)
+  }
+
+  // Every outbound message echoes the document/workspace/element it concerns,
+  // per the extension security guidance.
+  function scoped(extra) {
+    return Object.assign({
+      documentId: ctx.documentId,
+      workspaceId: ctx.workspaceOrVersionId,
+      elementId: ctx.elementId
+    }, extra)
+  }
+
+  let requestId = 0
+  const nextId = () => `solus-harness-${++requestId}`
+
+  document.getElementById('init').onclick = () =>
+    post(scoped({ messageName: 'applicationInit' }))
+
+  // entityTypeSpecifier values are themselves under test — try each and see
+  // what comes back rather than assuming the enum.
+  const requestSelection = (specifier) =>
+    post(scoped({
+      messageName: 'requestSelection',
+      requestId: nextId(),
+      ...(specifier ? { entityTypeSpecifier: [specifier] } : {}),
+      requiredSelectionCount: 1
+    }))
+
+  document.getElementById('sel-face').onclick = () => requestSelection('FACE')
+  document.getElementById('sel-edge').onclick = () => requestSelection('EDGE')
+  document.getElementById('sel-any').onclick = () => requestSelection(null)
+
+  document.getElementById('stop').onclick = () =>
+    // The docs disagree with the bundle on whether the field is `stoppedRequestId`
+    // or `stoppedMessageId`. Send the request and record which the reply uses.
+    post(scoped({ messageName: 'stopRequest', requestId: `solus-harness-${requestId}` }))
+
+  document.getElementById('hl').onclick = () => {
+    const id = prompt('deterministicId to highlight (from GET .../bodydetails):')
+    if (id) post(scoped({ messageName: 'requestSelectionHighlight', selectionId: id }))
+  }
+
+  document.getElementById('cam').onclick = () =>
+    // Expected to be ignored by a right panel — capture the silence as evidence.
+    post(scoped({ messageName: 'requestCameraProperties', requestId: nextId() }))
+
+  document.getElementById('img').onclick = () =>
+    post(scoped({ messageName: 'requestViewerImage', requestId: nextId() }))
+
+  document.getElementById('copy').onclick = async () => {
+    const text = JSON.stringify({ context: ctx, entries }, null, 2)
+    try {
+      await navigator.clipboard.writeText(text)
+      record('NOTE', { copied: entries.length })
+    } catch {
+      // Clipboard is often blocked in a cross-origin iframe — fall back to
+      // something a human can select by hand.
+      const box = document.createElement('textarea')
+      box.value = text
+      box.style.width = '100%'
+      box.style.height = '160px'
+      log.prepend(box)
+    }
+  }
+
+  document.getElementById('clear').onclick = () => {
+    entries.length = 0
+    log.textContent = ''
+  }
+
+  if (document.getElementById('autoinit').checked) {
+    post(scoped({ messageName: 'applicationInit' }))
+  }
+</script>

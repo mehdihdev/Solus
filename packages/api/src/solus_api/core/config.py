@@ -1,12 +1,35 @@
 """Application settings. All secrets come from the environment (CLAUDE.md §7)."""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: `<root>/packages/api/src/solus_api/core/config.py` -> `<root>`. The install is
+#: editable in both the dev venv and the image (`uv sync --package solus-api`
+#: leaves a `.pth`), so this anchor holds as `/app` in the container too.
+#:
+#: PUBLIC because it is the one authoritative repo-root anchor: anything that
+#: needs the root `.env` (the single env file) must resolve it this way rather
+#: than by a CWD-relative path, which silently reads nothing from a subdirectory.
+REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 class Settings(BaseSettings):
     """Runtime configuration, sourced from `SOLUS_*` environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="SOLUS_", env_file=".env", extra="ignore")
+    # ANCHORED, not CWD-relative. A bare `.env` is resolved against the process's
+    # working directory, and every launcher cd's into a subdirectory first
+    # (`pnpm dev:api`, `make dev-api`, `scripts/dev-all.sh`) — so the API read
+    # `packages/api/.env` and the real root file was invisible to it. That is one
+    # bug that surfaced as many: no secret store, no Redis, no Stripe key, no
+    # OAuth credentials — each degrading quietly rather than failing. The repo
+    # root is the ONE env file; `REPO_ROOT` is the same `__file__` anchor
+    # `bridge_allowlist_root` already relies on, so this holds in the container
+    # (`/app`) too. Env vars still win over the file, which is how dev-all.sh
+    # injects the Stripe CLI's signing secret.
+    model_config = SettingsConfigDict(
+        env_prefix="SOLUS_", env_file=REPO_ROOT / ".env", extra="ignore"
+    )
 
     app_env: str = "dev"
     api_version: str = "0.1.0"
@@ -22,6 +45,9 @@ class Settings(BaseSettings):
     # Comma-separated origins allowed to call the API from a browser/renderer.
     # The Electron renderer dev server (electron-vite) defaults to :5173.
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
+    #: A7-01: who may frame `/panel`. Set on that response only — `frame-ancestors`
+    #: is a no-op on JSON, and a global policy would break the CDN-loaded Swagger UI.
+    panel_frame_ancestors: str = "https://*.onshape.com https://onshape.com"
 
     # Dev convenience only: create tables from the ORM metadata on startup when
     # there are no migrations yet. MUST stay false in any shared/prod env —
@@ -118,9 +144,20 @@ class Settings(BaseSettings):
     gitlab_client_id: str | None = None
     gitlab_client_secret: str | None = None
     gitlab_base_url: str = "https://gitlab.com"
+
+    # Onshape "Integrated Cloud App" OAuth application (SOLUSDEV-96 / CAD-01),
+    # registered in Onshape Developer Settings. OAuth ONLY: an Onshape API key
+    # pair authenticates the DEVELOPER, not the customer, so it can never reach
+    # a customer's documents.
+    onshape_client_id: str | None = None
+    onshape_client_secret: str | None = None
+
     # Where the OAuth callback sends the user back to (the desktop app deep
-    # link or a local page). Defaults to the renderer dev origin.
-    github_oauth_redirect_app: str = "http://localhost:5173/#/onboarding"
+    # link or a local page). Defaults to the renderer dev origin. Renamed from
+    # `github_oauth_redirect_app` in CAD-01: it was always provider-agnostic
+    # (GitLab already used it) and Onshape made the GitHub name actively
+    # misleading. Env var: SOLUS_OAUTH_REDIRECT_APP.
+    oauth_redirect_app: str = "http://localhost:5173/#/onboarding"
     # Public base URL the provider redirects to for the callback (this API).
     public_api_base_url: str = "http://localhost:8000"
     # Run source syncs inline in the request instead of dispatching to ARQ /
@@ -146,7 +183,13 @@ class Settings(BaseSettings):
     # Every contract tunable is config, never hardcoded (bridge-protocol §6/§7).
     # Allowlist root: one allowlist.yaml per vendored fork (ADR-031); tests
     # point this at a fixture directory.
-    bridge_allowlist_root: str = "integrations/mcp"
+    #
+    # ANCHORED, not relative. A relative default globs against the CWD, and the
+    # repo's own `make dev-api` runs from `packages/api/` — so the default only
+    # worked when you happened to launch from the root. It failed silently: an
+    # empty allowlist drops every companion-advertised tool as "not allowlisted"
+    # rather than erroring, so the bridge simply appears to have nothing on it.
+    bridge_allowlist_root: str = str(REPO_ROOT / "integrations" / "mcp")
     bridge_control_frame_max_bytes: int = 16_384
     bridge_tool_call_max_bytes: int = 262_144
     bridge_tool_result_max_bytes: int = 1_048_576

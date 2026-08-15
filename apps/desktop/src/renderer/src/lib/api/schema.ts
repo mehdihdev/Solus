@@ -125,6 +125,75 @@ export interface paths {
         patch: operations["update_subscription_api_v1_users_me_subscription_patch"];
         trace?: never;
     };
+    "/api/v1/users/me/credits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Credits
+         * @description Current credit balance (ADR-024). Always answerable — 0 before any ledger row
+         *     exists. The desktop Billing screen reads this to reflect credit-pack purchases.
+         */
+        get: operations["get_credits_api_v1_users_me_credits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/panel-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Panel Links
+         * @description Live panel links, so revoking one is possible without guessing its id.
+         */
+        get: operations["list_panel_links_api_v1_users_me_panel_links_get"];
+        put?: never;
+        /**
+         * Approve Panel Link
+         * @description Approve a pairing by its user code. Mints nothing.
+         *
+         *     The token is minted at redemption inside `panel/pair/poll`, so the plaintext
+         *     never exists on this side and cannot be logged with the request body.
+         */
+        post: operations["approve_panel_link_api_v1_users_me_panel_links_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/panel-links/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Panel Link
+         * @description Revoke immediately — `get_panel_binding` re-reads the row per request, so
+         *     there is no cache for a revocation to lag behind.
+         */
+        delete: operations["revoke_panel_link_api_v1_users_me_panel_links__binding_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/notifications": {
         parameters: {
             query?: never;
@@ -552,6 +621,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billing/packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Credit Packs
+         * @description The credit packs available for purchase (ADR-024), from server config so the
+         *     UI never hard-codes environment-specific Stripe Price ids. Price ids are not
+         *     secrets. Sorted by credit amount ascending. `usd` is the display price (whole
+         *     dollars) when configured; the charged amount is always the Stripe Price.
+         */
+        get: operations["list_credit_packs_api_v1_billing_packs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing/checkout-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Checkout Session
+         * @description Start a Stripe Checkout for a subscription plan or a credit pack, returning
+         *     the hosted redirect URL. The entitlement is applied by the webhook once Stripe
+         *     confirms payment — never from this request (SOLUSDEV-83 / ADR-024).
+         */
+        post: operations["create_checkout_session_api_v1_billing_checkout_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing/portal-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Portal Session
+         * @description Open the Stripe-hosted billing portal (manage payment method, cancel,
+         *     switch plan). Requires an existing Stripe customer (i.e. a prior checkout).
+         */
+        post: operations["create_portal_session_api_v1_billing_portal_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/sources": {
         parameters: {
             query?: never;
@@ -640,7 +775,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{project_id}/sources/{source_id}/repos": {
+    "/api/v1/projects/{project_id}/sources/{source_id}/selectable": {
         parameters: {
             query?: never;
             header?: never;
@@ -648,11 +783,67 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Repos
-         * @description Repo picker for the connect flow (GitHub). Lists repositories the
-         *     connected account can access.
+         * List Selectable
+         * @description What this connected source can be pointed at: repositories, CAD documents,
+         *     …. One generic picker route, so a new connector becomes pickable by
+         *     implementing `list_selectable` — no route and no frontend change.
+         *
+         *     Credentials go through the refresh path: an Onshape access token lives 60
+         *     minutes, so editing a selection an hour after connecting must refresh rather
+         *     than 502.
          */
-        get: operations["list_repos_api_v1_projects__project_id__sources__source_id__repos_get"];
+        get: operations["list_selectable_api_v1_projects__project_id__sources__source_id__selectable_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Artifact */
+        post: operations["upload_artifact_api_v1_projects__project_id__artifacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Artifact */
+        get: operations["get_artifact_api_v1_projects__project_id__artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/artifacts/{artifact_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Artifact Content */
+        get: operations["get_artifact_content_api_v1_projects__project_id__artifacts__artifact_id__content_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -704,6 +895,30 @@ export interface paths {
         };
         /** Get Entity Relations */
         get: operations["get_entity_relations_api_v1_projects__project_id__entities__entity_id__relations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subgraph
+         * @description Subgraph extraction around a focused entity — the read WS-01's shared-focus engine uses to
+         *     re-scope every mounted widget in one call, and the same traversal SOL reasons over.
+         *
+         *     Bounded by construction: `depth` is capped at `MAX_DEPTH` and `limit` at `MAX_LIMIT`, and
+         *     `truncated` says so when the cap bit — a silently capped subgraph reads as the whole picture.
+         */
+        get: operations["get_subgraph_api_v1_projects__project_id__graph_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -825,6 +1040,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Tool Confirmation
+         * @description Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
+         *
+         *     The turn that proposed it has long since ended — a one-shot SSE stream cannot
+         *     block for a click — so the tool runs HERE, with the registry rebuilt under
+         *     the deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.
+         *     The request body carries a decision and nothing else, so what the user
+         *     approved is what executes (CLAUDE.md §7).
+         */
+        post: operations["decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Telemetry */
+        post: operations["ingest_telemetry_api_v1_projects__project_id__bench_telemetry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/recent/{entity_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent Values */
+        get: operations["recent_values_api_v1_projects__project_id__bench_recent__entity_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Telemetry Summary */
+        get: operations["telemetry_summary_api_v1_projects__project_id__bench_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent Events */
+        get: operations["recent_events_api_v1_projects__project_id__bench_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/bridge": {
         parameters: {
             query?: never;
@@ -834,9 +1143,10 @@ export interface paths {
         };
         /**
          * Bridge Status
-         * @description The requesting user's bridge state for this project (BRG-03). PER-USER
-         *     semantics: the registry is keyed (user, team, project) — you see YOUR
-         *     companion, not a teammate's. No DB writes; liveness is ephemeral.
+         * @description The requesting user's bridge state for this project (BRG-03 + MCP-05
+         *     license_state). PER-USER semantics: the registry is keyed (user, team,
+         *     project) — you see YOUR companion, not a teammate's. Read-only: no DB
+         *     writes beyond the entitlement read; liveness is ephemeral.
          */
         get: operations["bridge_status_api_v1_projects__project_id__bridge_get"];
         put?: never;
@@ -864,10 +1174,113 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/panel/pair/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pair Start
+         * @description Begin a pairing. Grants nothing — it only mints a code to be approved.
+         */
+        post: operations["pair_start_api_v1_panel_pair_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/panel/pair/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pair Poll
+         * @description Exchange an approved device code for a panel token, exactly once.
+         *
+         *     The device code travels as a Bearer so this loop lands in a per-credential
+         *     rate-limit bucket rather than the shared unauthenticated one.
+         */
+        post: operations["pair_poll_api_v1_panel_pair_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/panel/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panel Context
+         * @description Which Solus projects this user can see that track this Onshape document.
+         *
+         *     Resolved at REQUEST time from live membership rather than stored on the
+         *     binding: a document can appear in several projects, one Onshape account maps
+         *     to many projects, and a stored answer would go stale the moment someone
+         *     edits a source's document selection.
+         *
+         *     Zero matches is an empty list, never a 403 — a panel must not become an
+         *     existence oracle for other tenants' documents.
+         */
+        get: operations["panel_context_api_v1_panel_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/panel/projects/{project_id}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Panel Parts
+         * @description Parts Solus knows for this document/element, in this project.
+         *
+         *     The project the panel names carries NO authority: `get_project_context` is
+         *     called directly with the user resolved from the binding, so a project the
+         *     binding cannot see 404s exactly as it would for any other caller. Calling it
+         *     as a plain function (the `routers/bridge.py` precedent) means it never
+         *     touches the provisioning dependency.
+         */
+        get: operations["panel_parts_api_v1_panel_projects__project_id__parts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ActionMode
+         * @description How SOL is allowed to act on this request: explain, or operate.
+         * @enum {string}
+         */
+        ActionMode: "guide" | "do";
         /**
          * AttachmentIn
          * @description A measurable attachment fact for classify/completion requests (MO-04):
@@ -881,6 +1294,23 @@ export interface components {
              * @default 0
              */
             tokens: number;
+        };
+        /**
+         * CheckoutSessionCreate
+         * @description Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,
+         *     month/year); `pack` needs a price_id that maps to a configured credit pack.
+         */
+        CheckoutSessionCreate: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "subscription" | "pack";
+            plan?: components["schemas"]["PlanType"] | null;
+            /** Interval */
+            interval?: ("month" | "year") | null;
+            /** Price Id */
+            price_id?: string | null;
         };
         /**
          * ClassifyRequest
@@ -903,6 +1333,22 @@ export interface components {
          * @enum {string}
          */
         Complexity: "trivial" | "standard" | "hard";
+        /**
+         * ConfirmationDecision
+         * @description Approve or reject one parked destructive action (SOLUS-ONS-A5).
+         *
+         *     A decision and NOTHING ELSE. `StrictModel` forbids extra fields, so a body
+         *     carrying its own `args` is a 422 rather than a merge — the arguments that
+         *     execute are the stored ones the user was shown. That is the whole security
+         *     property of the round-trip.
+         */
+        ConfirmationDecision: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "reject";
+        };
         /** ConversationCreate */
         ConversationCreate: {
             /** Title */
@@ -956,6 +1402,8 @@ export interface components {
         MessageCreate: {
             /** Content */
             content: string;
+            /** @default guide */
+            action_mode: components["schemas"]["ActionMode"];
         };
         /**
          * OAuthExchange
@@ -978,6 +1426,42 @@ export interface components {
             name?: string | null;
             /** Redirect Uri */
             redirect_uri?: string | null;
+            /** Access */
+            access?: string | null;
+        };
+        /**
+         * ObserverEventIn
+         * @description Wire shape of an edge-observer event (mirrors livebench's ObserverEvent).
+         */
+        ObserverEventIn: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "threshold_breach" | "change_point" | "stream_gap";
+            /** Device Id */
+            device_id: string;
+            /** Signal */
+            signal: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Value */
+            value?: number | null;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PanelLinkApprove
+         * @description Reject unknown fields: this endpoint hands out a 90-day credential.
+         */
+        PanelLinkApprove: {
+            /** User Code */
+            user_code: string;
         };
         /**
          * PlanType
@@ -1072,6 +1556,15 @@ export interface components {
             /** Name */
             name?: string | null;
             settings?: components["schemas"]["TeamSettings"] | null;
+        };
+        /** TelemetryBatchIn */
+        TelemetryBatchIn: {
+            /** Packets */
+            packets: {
+                [key: string]: unknown;
+            }[];
+            /** Events */
+            events?: components["schemas"]["ObserverEventIn"][];
         };
         /** UserUpdate */
         UserUpdate: {
@@ -1343,6 +1836,114 @@ export interface operations {
                         [key: string]: unknown;
                     };
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_credits_api_v1_users_me_credits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_panel_links_api_v1_users_me_panel_links_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    approve_panel_link_api_v1_users_me_panel_links_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PanelLinkApprove"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_panel_link_api_v1_users_me_panel_links__binding_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -2376,6 +2977,85 @@ export interface operations {
             };
         };
     };
+    list_credit_packs_api_v1_billing_packs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    create_checkout_session_api_v1_billing_checkout_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckoutSessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_portal_session_api_v1_billing_portal_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_sources_api_v1_projects__project_id__sources_get: {
         parameters: {
             query?: {
@@ -2663,7 +3343,7 @@ export interface operations {
             };
         };
     };
-    list_repos_api_v1_projects__project_id__sources__source_id__repos_get: {
+    list_selectable_api_v1_projects__project_id__sources__source_id__selectable_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -2697,6 +3377,103 @@ export interface operations {
             };
         };
     };
+    upload_artifact_api_v1_projects__project_id__artifacts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_artifact_api_v1_projects__project_id__artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_artifact_content_api_v1_projects__project_id__artifacts__artifact_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_entities_api_v1_projects__project_id__entities_get: {
         parameters: {
             query?: {
@@ -2704,6 +3481,7 @@ export interface operations {
                 source_id?: string | null;
                 domain?: string | null;
                 q?: string | null;
+                external_ref_prefix?: string | null;
                 cursor?: string | null;
                 limit?: number;
             };
@@ -2782,6 +3560,45 @@ export interface operations {
             header?: never;
             path: {
                 entity_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_subgraph_api_v1_projects__project_id__graph_get: {
+        parameters: {
+            query: {
+                root: string;
+                depth?: number;
+                entity_types?: string | null;
+                relation_types?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
                 project_id: string;
             };
             cookie?: never;
@@ -3090,6 +3907,189 @@ export interface operations {
             };
         };
     };
+    decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                confirmation_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmationDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_telemetry_api_v1_projects__project_id__bench_telemetry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetryBatchIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recent_values_api_v1_projects__project_id__bench_recent__entity_id__get: {
+        parameters: {
+            query?: {
+                signals?: string[] | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                entity_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    telemetry_summary_api_v1_projects__project_id__bench_summary_get: {
+        parameters: {
+            query: {
+                duration_seconds: number;
+                signals?: string[] | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recent_events_api_v1_projects__project_id__bench_events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bridge_status_api_v1_projects__project_id__bridge_get: {
         parameters: {
             query?: never;
@@ -3135,6 +4135,135 @@ export interface operations {
                 "application/json": components["schemas"]["ClassifyRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pair_start_api_v1_panel_pair_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                } | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pair_poll_api_v1_panel_pair_poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    panel_context_api_v1_panel_context_get: {
+        parameters: {
+            query: {
+                document_id: string;
+                element_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    panel_parts_api_v1_panel_projects__project_id__parts_get: {
+        parameters: {
+            query: {
+                document_id: string;
+                element_id: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

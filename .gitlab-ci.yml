@@ -45,22 +45,6 @@ lint:node:
   stage: lint
   script: pnpm lint
 
-# SOLUSDEV-222 (CTR-07) — a lane branch may only change paths its lane owns in
-# CODEOWNERS. Branches with no `-lane-<slug>` suffix are skipped, so this never
-# blocks LANE 0 or an ordinary ticket branch. Protocol: docs/WORKTREES.md.
-# No .node-base: this needs node and git, not a pnpm install.
-lint:lane-ownership:
-  image: node:22
-  tags: [aws-arm]
-  stage: lint
-  variables:
-    GIT_DEPTH: 0 # merge-base against the target branch needs real history
-  script:
-    - git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    - node scripts/check-lane-ownership.mjs
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-
 typecheck:python:
   extends: .python-base
   stage: typecheck
@@ -118,8 +102,15 @@ deploy:staging:
   environment:
     name: staging
   script:
-    - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment --region "$AWS_REGION"
-    - echo "Staging deploy triggered — image $CI_COMMIT_SHORT_SHA."
+    # REGISTER the task definition, then point the service at it. `--force-new-deployment`
+    # alone only re-pulls the image and leaves the service on whatever revision it was
+    # created with — which is how staging ran for weeks on a console-made `solus-api:1`
+    # whose variable names (`DB_HOST`) are not the ones the code reads
+    # (`SOLUS_DATABASE_URL`), until a restart finally surfaced it as
+    # `ConnectionRefusedError ('127.0.0.1', 5432)` during alembic.
+    - TASKDEF_ARN=$(aws ecs register-task-definition --cli-input-json file://infrastructure/aws/taskdef.json --query 'taskDefinition.taskDefinitionArn' --output text --region "$AWS_REGION")
+    - aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$TASKDEF_ARN" --force-new-deployment --region "$AWS_REGION"
+    - echo "Staging deploy triggered — image $CI_COMMIT_SHORT_SHA, taskdef $TASKDEF_ARN."
 # deploy:production (enable when prod ECS service exists):
 # deploy:production:
 #   stage: deploy

@@ -1,18 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { deriveProjectName, provisionWorkspace, ensureWorkspace } from './provisioning'
 import * as resources from '../../lib/api/resources'
+import { ApiError } from '../../lib/api/envelope.types'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
   return {
     ...actual,
     getMe: vi.fn(),
+    getProject: vi.fn(),
     createProject: vi.fn(),
     updateSolMode: vi.fn()
   }
 })
 
 const mockedGetMe = vi.mocked(resources.getMe)
+const mockedGetProject = vi.mocked(resources.getProject)
 const mockedCreateProject = vi.mocked(resources.createProject)
 const mockedUpdateSolMode = vi.mocked(resources.updateSolMode)
 
@@ -113,6 +116,8 @@ describe('ensureWorkspace', () => {
   })
 
   it('reuses an existing project without creating a second one', async () => {
+    mockedGetProject.mockResolvedValue({ id: 'p1', name: 'Strider' } as never)
+
     const result = await ensureWorkspace({
       description: 'whatever',
       solMode: 'Guide',
@@ -120,6 +125,45 @@ describe('ensureWorkspace', () => {
     })
     expect(result).toEqual({ linked: true, teamId: 't1', project: { id: 'p1', name: 'Strider' } })
     expect(mockedGetMe).not.toHaveBeenCalled()
+    expect(mockedCreateProject).not.toHaveBeenCalled()
+  })
+
+  // A persisted project id outlives the row it names: a teammate deletes the
+  // project, the user leaves the team, the database is restored. Reusing it
+  // blindly leaves every project-scoped screen 404ing with no way back.
+  it('discards a persisted project the server no longer has, and creates a fresh one', async () => {
+    mockedGetProject.mockRejectedValue(new ApiError(404, 'not_found', 'Project not found'))
+    mockedGetMe.mockResolvedValue(personalUser('a@b.dev'))
+    mockedCreateProject.mockResolvedValue(createdProject('Strider'))
+    mockedUpdateSolMode.mockResolvedValue({})
+
+    const result = await ensureWorkspace({
+      description: 'Strider',
+      solMode: 'Guide',
+      existing: { teamId: 't1', project: { id: 'dead', name: 'Gone' } }
+    })
+
+    expect(mockedCreateProject).toHaveBeenCalled()
+    expect(result.linked).toBe(true)
+    expect(result.project?.id).not.toBe('dead')
+  })
+
+  // The other half: "could not reach the server" must never be read as "your
+  // project is gone", or a blip silently discards a good workspace.
+  it.each([
+    ['401', new ApiError(401, 'unauthorized', 'nope')],
+    ['500', new ApiError(500, 'server_error', 'boom')],
+    ['network failure', new Error('Failed to fetch')]
+  ])('keeps the persisted project when validation fails with %s', async (_label, error) => {
+    mockedGetProject.mockRejectedValue(error)
+
+    const result = await ensureWorkspace({
+      description: 'whatever',
+      solMode: 'Guide',
+      existing: { teamId: 't1', project: { id: 'p1', name: 'Strider' } }
+    })
+
+    expect(result).toEqual({ linked: true, teamId: 't1', project: { id: 'p1', name: 'Strider' } })
     expect(mockedCreateProject).not.toHaveBeenCalled()
   })
 

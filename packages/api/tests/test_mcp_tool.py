@@ -36,9 +36,20 @@ from solus_api.agent.tools import (
     ToolException,
     ToolRegistry,
 )
-from solus_api.agent.tools.mcp_servers import FUSION, KICAD, ONSHAPE, WEB_SEARCH
+from solus_api.agent.tools.mcp_servers import FUSION, KICAD, WEB_SEARCH
 from solus_api.agent.tools.mcp_tool import MCPServerSpec, MCPTool, discover_mcp_tools
 from solus_api.connectors.secrets import InMemorySecretStore
+
+#: A url-transport, credential-gated spec. This was `ONSHAPE` until SOLUS-ONS-A1
+#: retired it (an API key pair authenticates the developer, not the customer —
+#: see the `mcp_servers` docstring). What these tests actually exercise is the
+#: keyless gate and the streamable-http path, not any particular vendor, so a
+#: purpose-built spec says so.
+URL_SPEC = MCPServerSpec(
+    name="remote_demo",
+    url="https://mcp.example.invalid/mcp",
+    required_secrets=("demo_api_key", "demo_secret_key"),
+)
 
 MOCK_SERVER = Path(__file__).parent / "fixtures" / "mcp_mock_server.py"
 
@@ -236,7 +247,7 @@ async def test_registry_timeout_bounds_a_hanging_mcp_tool() -> None:
 # --- keyless-safe real-server specs --------------------------------------------
 
 
-@pytest.mark.parametrize("spec", [ONSHAPE, WEB_SEARCH], ids=lambda s: s.name)
+@pytest.mark.parametrize("spec", [URL_SPEC, WEB_SEARCH], ids=lambda s: s.name)
 async def test_missing_credentials_fail_before_any_connection(
     spec: MCPServerSpec, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -263,15 +274,15 @@ async def test_missing_credentials_fail_before_any_connection(
 
 async def test_partially_missing_credentials_name_only_the_missing_keys() -> None:
     store = InMemorySecretStore()
-    await store.put("onshape_access_key", "sk-LIVE-SENTINEL")
+    await store.put("demo_api_key", "sk-LIVE-SENTINEL")
     registry = ToolRegistry()
-    registry.register(_manual_tool(ONSHAPE, store=store))
-    result = await registry.invoke(ToolCall(tool="onshape.echo", args={}))
+    registry.register(_manual_tool(URL_SPEC, store=store))
+    result = await registry.invoke(ToolCall(tool="remote_demo.echo", args={}))
     assert result.ok is False
     assert result.error is not None
     assert result.error.code is ToolErrorCode.UNAUTHORIZED
-    assert "onshape_secret_key" in result.error.message
-    assert "onshape_access_key" not in result.error.message  # it is configured
+    assert "demo_secret_key" in result.error.message
+    assert "demo_api_key" not in result.error.message  # it is configured
     assert "sk-LIVE-SENTINEL" not in result.error.message  # ...and NEVER a value
 
 
@@ -285,7 +296,7 @@ async def test_discovery_checks_credentials_before_connecting(
 
     monkeypatch.setattr(mcp_tool_module, "_open_session", _no_connect)
     with pytest.raises(ToolException) as excinfo:
-        await discover_mcp_tools(ONSHAPE, InMemorySecretStore())
+        await discover_mcp_tools(URL_SPEC, InMemorySecretStore())
     assert excinfo.value.code is ToolErrorCode.UNAUTHORIZED
 
 
@@ -458,12 +469,11 @@ async def test_binary_content_is_never_inlined() -> None:
     assert blocks and blocks[0]["inlined"] is False
 
 
-async def test_requires_confirmation_propagates_from_spec() -> None:
-    """The confirmation gate is Solus-authored per server spec — never taken from
-    the server's own (untrusted) annotations. This spec has NO allowlist.yaml
-    on disk (no `integrations/mcp/confirm/` fork dir exists), so the blanket
-    spec-level flag is the fallback (Phase 4 H4: gating is conditional on an
-    allowlist actually being found for the server)."""
+async def test_destructive_spec_without_consent_text_registers_nothing() -> None:
+    """SOLX-01 SEC-C1 (supersedes the Phase 4 H4 fallback): a spec-level
+    destructive default with NO allowlist entry means no Solus-authored
+    consent text exists — so the tool must not be dispatchable at all, or the
+    approval sentence a human reads would be phrased by the fork."""
     spec = MCPServerSpec(
         name="confirm",
         command=sys.executable,
@@ -471,8 +481,17 @@ async def test_requires_confirmation_propagates_from_spec() -> None:
         requires_confirmation=True,
     )
     tools = await discover_mcp_tools(spec, InMemorySecretStore())
+    assert tools == []
+
+
+async def test_introspected_descriptions_are_never_trusted() -> None:
+    """SEC-C1/H1: every MCP-introspected descriptor is fork-authored text — the
+    prompt layer fences it and the consent card refuses to render it."""
+    spec = MCPServerSpec(name="echo", command=sys.executable, args=(str(MOCK_SERVER),))
+    tools = await discover_mcp_tools(spec, InMemorySecretStore())
     assert tools
-    assert all(t.descriptor.requires_confirmation for t in tools)
+    assert all(t.descriptor.description_trusted is False for t in tools)
+    assert all(t.descriptor.requires_confirmation is False for t in tools)
 
 
 # --------------------------- Phase 4 H4: allowlist-gated stdio discovery -------
@@ -559,15 +578,33 @@ async def test_set_symbol_property_can_never_be_confirmation_false_through_disco
 # ------------------------------- Phase 4 H4: absolute-resolving fork commands --
 
 
-@pytest.mark.parametrize("spec", [KICAD, FUSION], ids=lambda s: s.name)
+@pytest.mark.parametrize("spec", [KICAD], ids=lambda s: s.name)
 def test_fork_launcher_commands_are_pinned_absolute_paths(spec: MCPServerSpec) -> None:
-    """The KICAD/FUSION catalog commands must never be PATH/CWD-resolved
+    """A vendored fork's catalog command must never be PATH/CWD-resolved
     (CLAUDE.md §7: subprocess binaries pinned to expected paths) — a relative
-    command string spawned via a different process CWD than the repo root
+    command string spawned from a different process CWD than the repo root
     could silently resolve to an attacker-controlled binary on PATH. Whether
-    the launcher has actually been vendored yet (KICAD's has; FUSION's has
-    not) is orthogonal to this property — either way, the path is absolute
-    and anchored at the repo root, never PATH-resolved."""
+    the launcher has actually been vendored yet is orthogonal: either way the
+    path is absolute and anchored at the repo root.
+
+    Fusion is NOT in this list — see the test below."""
     assert spec.command is not None
     assert Path(spec.command).is_absolute()
     assert spec.command.endswith(f"integrations/mcp/{spec.name}/bin/launch")
+
+
+def test_fusion_is_a_vendor_run_url_server_not_a_fork() -> None:
+    """CAD-02, kept as a positive assertion so dropping Fusion from the
+    launcher parametrize above does not silently become "untested".
+
+    Autodesk ships its own MCP server and it runs on the CUSTOMER's machine, so
+    there is nothing to vendor: no bin/launch, no PROVENANCE, no fork security
+    review. Reaching it through the companion is a LICENSING requirement, not a
+    networking preference — hosting or multiplexing a licensed seat would
+    breach the EULA. Giving Fusion a `command` here would re-assert the fork
+    model that decision rejected.
+    """
+    assert FUSION.command is None
+    assert FUSION.url == "http://127.0.0.1:27182/mcp"
+    # Loopback is the security boundary the companion re-checks at connect.
+    assert FUSION.url.startswith("http://127.0.0.1")

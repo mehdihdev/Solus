@@ -30,6 +30,8 @@ from solus_api.orchestration.providers import (
     ProviderCredentialsMissingError,
     ProviderError,
     ProviderTransientError,
+    ToolConversation,
+    ToolUse,
     UnknownProviderError,
     Usage,
     build_adapter_registry,
@@ -80,7 +82,8 @@ class MockAdapter:
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]:
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
         self.calls.append(model_name)
         self.images_seen.append(images)
         for i, chunk in enumerate(self.chunks):
@@ -688,7 +691,8 @@ class TransientMockAdapter:
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]:
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
         self.starts += 1
         if self.starts <= self.fail_times:
             raise ProviderTransientError("simulated provider 429")
@@ -710,7 +714,8 @@ class MidStreamTransientAdapter:
         *,
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
-    ) -> AsyncIterator[str | Usage]:
+        conversation: ToolConversation | None = None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
         self.starts += 1
         yield "partial"
         raise ProviderTransientError("simulated mid-stream 429")

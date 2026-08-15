@@ -21,10 +21,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 
-from solus_api.connectors.contracts import ConnectorError, OAuthConnector
+from solus_api.connectors.contracts import Connector, ConnectorError, OAuthConnector
 from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
-from solus_api.connectors.runtime import connector_error_payload
+from solus_api.connectors.runtime import connector_error_payload, refresh_secret_ref
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
@@ -87,6 +88,49 @@ def _resolve_redirect_uri(provider: str, requested: str | None, settings: Settin
     return requested
 
 
+async def _reusable_source(
+    session: SessionDep,
+    project: Project,
+    source_type: SourceType,
+    connector: Connector,
+) -> Source | None:
+    """The source a re-connect should REUSE, or None to create a new one.
+
+    Retrying a connect used to mint a fresh `Source` every time, so each attempt
+    that reached the provider left another row behind and the project filled up
+    with duplicates of one account.
+
+    Whether a second source is meaningful is the CONNECTOR's business, read from
+    the `selection` it declares:
+
+    * **account-level** (`mode: "multi"` — Onshape and every CAD tool after it):
+      one grant covers the whole account and the tracked set lives in that one
+      source's config, so a second row for the same provider is never anything
+      but a duplicate. Reuse it — which doubles as "switch account".
+    * **item-level** (`mode: "single"` — GitHub, GitLab): a source names ONE
+      repository, so several per project is a legitimate, wanted setup. Never
+      collapse those.
+
+    A connector that declares no selection keeps the old create-every-time
+    behaviour rather than having a rule guessed for it.
+    """
+    selection = getattr(connector, "selection", None)
+    if not isinstance(selection, dict) or selection.get("mode") != "multi":
+        return None
+    return (
+        await session.scalars(
+            select(Source)
+            .where(
+                Source.project_id == project.id,
+                Source.type == source_type,
+                Source.status != SourceStatus.DISCONNECTED,
+            )
+            .order_by(Source.created_at)
+            .limit(1)
+        )
+    ).first()
+
+
 @router.post("/{provider}/oauth/start", status_code=201)
 async def oauth_start(
     provider: str,
@@ -118,16 +162,22 @@ async def oauth_start(
         raise APIError(400, "not_oauth", f"'{provider}' does not use OAuth")
 
     config: dict[str, Any] = {"repo": body.repo} if body.repo else {}
-    source = Source(
-        project_id=project.id,
-        team_id=project.team_id,
-        type=source_type,
-        name=body.name or body.repo or provider,
-        status=SourceStatus.PENDING,
-        config=config,
-        created_by=user.id,
-    )
-    session.add(source)
+    if body.access:
+        # What the user actually granted, so "can Solus edit this?" is
+        # answerable without re-deriving it from the token.
+        config["access"] = body.access
+    source = await _reusable_source(session, project, source_type, connector)
+    if source is None:
+        source = Source(
+            project_id=project.id,
+            team_id=project.team_id,
+            type=source_type,
+            name=body.name or body.repo or provider,
+            status=SourceStatus.PENDING,
+            config=config,
+            created_by=user.id,
+        )
+        session.add(source)
     await session.flush()
 
     state = pysecrets.token_urlsafe(32)
@@ -143,9 +193,15 @@ async def oauth_start(
         )
     )
     try:
-        authorize_url = connector.authorize_url(state=state, redirect_uri=redirect_uri)
+        authorize_url = connector.authorize_url(
+            state=state, redirect_uri=redirect_uri, access=body.access
+        )
     except ConnectorError as exc:
         raise APIError(400, exc.code, exc.message) from exc
+    except ValueError as exc:
+        # An unknown access mode is a caller error, not a 500 — the connector
+        # refuses rather than silently defaulting (SOLUS-ONS-A2).
+        raise APIError(400, "invalid_access_mode", str(exc)) from exc
 
     emit_event(
         session,
@@ -179,7 +235,7 @@ async def oauth_callback(
     state: Annotated[str | None, Query()] = None,
     error: Annotated[str | None, Query()] = None,
 ) -> RedirectResponse:
-    app_url = settings.github_oauth_redirect_app
+    app_url = settings.oauth_redirect_app
     if error or not code or not state:
         return RedirectResponse(_app_redirect(app_url, solus_connect="error"), status_code=302)
 
@@ -233,6 +289,11 @@ async def _complete_oauth(
 
     secret_ref = f"source/{source.id}/{provider}"
     await secret_store.put(secret_ref, creds.token)
+    if creds.refresh_token:
+        # SOLUS-CAD-01: providers with short-lived access tokens (Onshape: 60
+        # minutes) need the refresh token at sync time. Stored under its own ref
+        # so the access-token read path is unchanged for every existing source.
+        await secret_store.put(refresh_secret_ref(secret_ref), creds.refresh_token)
     source.secret_ref = secret_ref
     source.status = SourceStatus.CONNECTED
     source.account_login = account.login

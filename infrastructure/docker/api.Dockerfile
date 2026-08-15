@@ -22,6 +22,13 @@ COPY packages/api/migrations ./packages/api/migrations
 # Now install the workspace package itself from the real sources.
 RUN uv sync --frozen --no-dev --package solus-api
 
+# The bridge allowlists (~250K). Without these the image has no
+# `integrations/` at all, `load_allowlist` finds nothing, and every tool a
+# companion advertises is rejected as "not allowlisted" — a silently dead
+# bridge rather than a failure anyone would notice. After the second
+# `uv sync` deliberately: editing an allowlist must not re-run the install.
+COPY integrations/mcp ./integrations/mcp
+
 # Boot sequence: migrate (bounded, fail-fast, logged) → serve.
 # - `alembic upgrade head` is idempotent; a fresh RDS database gets its schema
 #   here (nothing else in the deploy path creates tables).

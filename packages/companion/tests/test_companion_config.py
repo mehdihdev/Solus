@@ -50,26 +50,28 @@ def test_discover_servers_omits_the_workspace_env_when_not_configured() -> None:
     empty, exactly as before this fix (fail closed: the fork's own
     `workspace_root()` then refuses rather than defaulting to its cwd)."""
     servers = discover_servers(FIXTURE_ROOT)
-    assert servers[0].env == {}
+    assert "SOLUS_MCP_WORKSPACE" not in servers[0].env
 
 
 def test_discover_servers_omits_the_workspace_env_when_explicitly_none() -> None:
     servers = discover_servers(FIXTURE_ROOT, workspace=None)
-    assert servers[0].env == {}
+    assert "SOLUS_MCP_WORKSPACE" not in servers[0].env
 
 
 def test_discover_servers_omits_the_workspace_env_when_empty_string() -> None:
     """An empty string is "not configured", not a workspace of the empty
     path — the same optionality `SOLUS_COMPANION_WORKSPACE` documents."""
     servers = discover_servers(FIXTURE_ROOT, workspace="")
-    assert servers[0].env == {}
+    assert "SOLUS_MCP_WORKSPACE" not in servers[0].env
 
 
 def test_discover_servers_sets_solus_mcp_workspace_on_every_server_when_configured() -> None:
     servers = discover_servers(FIXTURE_ROOT, workspace="/projects/robot")
     assert servers
     for server in servers:
-        assert server.env == {"SOLUS_MCP_WORKSPACE": "/projects/robot"}
+        # Presence, not exact equality: CAD-00b also sets SOLUS_MCP_PYTHON for a
+        # fork with a private env, and both variables must survive together.
+        assert server.env["SOLUS_MCP_WORKSPACE"] == "/projects/robot"
 
 
 def test_symlink_escaping_root_is_refused(tmp_path: Path) -> None:

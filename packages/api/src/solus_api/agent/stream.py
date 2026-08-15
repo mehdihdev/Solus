@@ -16,6 +16,7 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict
 
 from solus_api.agent.tools import ToolCall, ToolResult
+from solus_api.agent.tools.untrusted import redact_value
 
 
 class AgentEventType(enum.StrEnum):
@@ -26,6 +27,8 @@ class AgentEventType(enum.StrEnum):
     TOKEN = "token"  # noqa: S105 — an event-type label, not a credential
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    #: SOLUS-ONS-A5: a destructive action is parked awaiting the user.
+    TOOL_CONFIRMATION = "tool_confirmation"
     MESSAGE = "message"
     ERROR = "error"
     DONE = "done"
@@ -46,9 +49,42 @@ class AgentEvent(BaseModel):
 
     @classmethod
     def tool_call(cls, call: ToolCall) -> Self:
+        # redact_value (SOLX-04 SEC-H3): model-proposed args stream to the
+        # browser BEFORE validation/dispatch — a secret-shaped value the model
+        # echoes must not cross the wire in the clear. Persistence already
+        # redacts (_persist_turn); the live frame gets the same gate.
         return cls(
             type=AgentEventType.TOOL_CALL,
-            data={"call_id": call.call_id, "tool": call.tool, "args": call.args},
+            data={"call_id": call.call_id, "tool": call.tool, "args": redact_value(call.args)},
+        )
+
+    @classmethod
+    def tool_confirmation(
+        cls,
+        *,
+        confirmation_id: str,
+        tool: str,
+        args: dict[str, Any],
+        summary: str,
+        preview: list[dict[str, Any]] | None = None,
+    ) -> Self:
+        """A destructive action awaiting approval (SOLUS-ONS-A5).
+
+        Carries the CONCRETE action — tool, arguments and a readable summary —
+        because a user cannot meaningfully approve an opaque id. The client
+        decides via `POST .../sol/confirmations/{confirmation_id}` and sends back
+        a decision only; the arguments that execute are the stored ones.
+        """
+        return cls(
+            type=AgentEventType.TOOL_CONFIRMATION,
+            data={
+                "confirmation_id": confirmation_id,
+                "tool": tool,
+                "args": args,
+                "summary": summary,
+                # The diff being approved, generic across tool kinds.
+                "preview": preview or [],
+            },
         )
 
     @classmethod
@@ -56,8 +92,17 @@ class AgentEvent(BaseModel):
         return cls(type=AgentEventType.TOOL_RESULT, data=result.model_dump(mode="json"))
 
     @classmethod
-    def message(cls, content: str, role: str = "assistant") -> Self:
-        return cls(type=AgentEventType.MESSAGE, data={"role": role, "content": content})
+    def message(
+        cls, content: str, role: str = "assistant", citations: tuple[str, ...] = ()
+    ) -> Self:
+        """`citations` is the AUTHORITATIVE provenance surface (SOL-02): verified
+        by Solus code, carried as structured data so model prose can never
+        impersonate it. Renderers show it in a region model text cannot reach,
+        never linkified, display-capped."""
+        return cls(
+            type=AgentEventType.MESSAGE,
+            data={"role": role, "content": content, "citations": list(citations)},
+        )
 
     @classmethod
     def error(cls, code: str, message: str) -> Self:

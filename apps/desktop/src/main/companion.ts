@@ -9,7 +9,9 @@
 // discipline (single-flight, settle-once, no lingering resources).
 import { app } from 'electron'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { companionEnv, findIntegrationsRoot } from './companionEnv'
+import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { join } from 'node:path'
 
 export const BACKOFF_BASE_MS = 1_000
@@ -130,6 +132,19 @@ let spawnedAt = 0
 let restartTimer: NodeJS.Timeout | null = null
 /** Latest token seen; undefined ⇒ never set, so nothing to replay on spawn. */
 let latestToken: string | null | undefined
+/**
+ * The project this companion serves. Null ⇒ do not spawn at all.
+ *
+ * The bridge route is `/api/v1/projects/{project_id}/bridge`, and the companion
+ * parses that id back OUT of its `SOLUS_COMPANION_URL`, so the project is baked
+ * into the child's environment at spawn time — there is no stdin control line
+ * to re-point a running one. A project change therefore means a new process.
+ *
+ * Spawning without a project is worse than not spawning: no URL can be derived,
+ * and the companion exits with "SOLUS_COMPANION_URL is required" on every
+ * attempt, which is a crash loop rather than an idle bridge.
+ */
+let activeProjectId: string | null = null
 
 function pidfilePath(): string {
   return join(app.getPath('userData'), 'companion.pid')
@@ -209,13 +224,44 @@ function writeStdin(target: ChildProcess, line: string): void {
   }
 }
 
+/** The API base the companion should dial back to. Same source the renderer
+ *  uses, so a build points both at one origin.
+ *
+ *  Read from `import.meta.env`, NOT `process.env`: Vite inlines env values into
+ *  the bundle and never writes them back to `process.env`, so the old
+ *  `process.env.VITE_API_BASE_URL` was always undefined and this silently always
+ *  returned localhost — a packaged build pointed the companion at localhost
+ *  while the renderer talked to the real API. electron-vite applies the same
+ *  `VITE_`prefix to the main build (envPrefix `MAIN_VITE_`/`VITE_`), and envDir
+ *  is the repo root, so both halves now resolve from the one root `.env`. */
+function apiBaseUrl(): string {
+  return resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+}
+
 function spawnChild(cmd: { command: string; args: string[] }): void {
   restartTimer = null
   if (stopped) return
   const c = spawn(cmd.command, cmd.args, {
     detached: process.platform !== 'win32', // own process group ⇒ tree kill works
-    stdio: ['pipe', 'ignore', 'ignore'],
-    env: process.env
+    // stderr is PIPED, not ignored. The companion validates its own config and
+    // exits; with stderr discarded that surfaced as a silent restart loop and
+    // was why the bridge never came up (CAD-02).
+    stdio: ['pipe', 'ignore', 'pipe'],
+    // Inherited PLUS the variables the companion cannot start without.
+    //
+    // The integrations root is resolved only for a dev run: a packaged build
+    // finds the tree beside its own binary, and passing a path derived from the
+    // app directory would override that with something wrong. `null` when
+    // nothing resolves, so the companion still reports the missing variable
+    // itself instead of running with zero MCP servers.
+    env: companionEnv(process.env, apiBaseUrl(), {
+      integrationsRoot: app.isPackaged ? null : findIntegrationsRoot(app.getAppPath(), existsSync),
+      projectId: activeProjectId
+    })
+  })
+  c.stderr?.on('data', (chunk: Buffer) => {
+    // Bounded: a crash-looping child must not fill the log.
+    console.warn('[companion]', chunk.toString('utf8').slice(0, 2_000).trimEnd())
   })
   child = c
   spawnedAt = Date.now()
@@ -241,12 +287,9 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   c.on('error', onDown) // spawn failure (e.g. bad dev cmd) retries on the same schedule
 }
 
-/** Start (once) the companion for this app run. No-op when already started or
- *  when no command resolves (dev without SOLUS_COMPANION_DEV_CMD). */
-export function startCompanion(): void {
-  if (started) return
-  started = true
-  stopped = false
+/** Spawn if — and only if — there is something to serve. Idempotent. */
+function maybeSpawn(): void {
+  if (stopped || child !== null || activeProjectId === null) return
   const cmd = resolveCompanionCommand({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -257,8 +300,38 @@ export function startCompanion(): void {
     console.warn('[companion] disabled: not packaged and SOLUS_COMPANION_DEV_CMD is not set')
     return
   }
-  reapOrphan()
   spawnChild(cmd)
+}
+
+/** Arm the companion for this app run. It does not spawn until a project is
+ *  selected — see `setCompanionProject`. */
+export function startCompanion(): void {
+  if (started) return
+  started = true
+  stopped = false
+  reapOrphan()
+  maybeSpawn()
+}
+
+/**
+ * Point the companion at a project (null ⇒ none), respawning if it changed.
+ *
+ * The project is fixed in the child's environment at spawn, so switching means
+ * replacing the process. The old child is killed WITHOUT setting `stopped`, so
+ * the normal restart path stays available for the new one.
+ */
+export function setCompanionProject(projectId: string | null): void {
+  if (projectId === activeProjectId) return
+  activeProjectId = projectId
+  if (restartTimer) {
+    clearTimeout(restartTimer)
+    restartTimer = null
+  }
+  const previous = child
+  child = null // detach first: onDown must not schedule a restart for the old project
+  previous?.kill('SIGTERM')
+  attempt = -1 // a deliberate switch is not a failure; start from the 1 s step
+  if (started) maybeSpawn()
 }
 
 /** Relay the current access token (null ⇒ signout) to the companion's stdin.

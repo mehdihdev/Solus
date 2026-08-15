@@ -18,14 +18,14 @@ import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 import { type CatalogEntry } from './integrationCatalog'
 import { useIntegrationCatalog } from './useIntegrationCatalog'
 import { useOnboardingStore, connectedCount, canBuildModel } from './onboardingStore'
+import { noBridgeError } from './oauthConnect'
 import { ensureWorkspace } from './provisioning'
 import { useEdaConnect } from './useEdaConnect'
-import { useGithubConnect } from './useGithubConnect'
+import { connectOptions, useOAuthConnect } from './useOAuthConnect'
 
 /** Committed netlist exports a user can pick (KiCad XML netlist first). */
 const EXPORT_FILE_ACCEPT = '.xml,.net'
 const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
-const NO_BRIDGE_ERROR = 'GitHub connect needs the Solus desktop app.'
 
 interface ConnectStepProps {
   onBuild: () => void
@@ -38,7 +38,7 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
   const solMode = useSettingsStore((s) => s.solMode)
   const workspace = useWorkspaceStore()
   const catalog = useIntegrationCatalog()
-  const github = useGithubConnect()
+  const oauth = useOAuthConnect()
   const eda = useEdaConnect()
   const exportInput = useRef<HTMLInputElement | null>(null)
   // Which export-file provider's picker is open (set on tile click).
@@ -66,19 +66,19 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
   }, [])
 
   const connect = (integ: CatalogEntry): void => {
-    // Real flows need a linked project (and GitHub the OAuth bridge). When a
-    // precondition is missing the tile errors honestly and stays retryable —
+    // Real flows need a linked project (and OAuth ones the desktop bridge). When
+    // a precondition is missing the tile errors honestly and stays retryable —
     // nothing is ever faked.
     if (!workspace.linked || !workspace.project) {
       failConnect(integ.id, NOT_LINKED_ERROR)
       return
     }
-    if (integ.mode === 'github-oauth') {
+    if (integ.mode === 'oauth') {
       if (!getDesktopOAuthBridge()) {
-        failConnect(integ.id, NO_BRIDGE_ERROR)
+        failConnect(integ.id, noBridgeError(integ.name))
         return
       }
-      void github.start(workspace.project.id)
+      void oauth.start(workspace.project.id, integ.id, connectOptions(integ))
       return
     }
     // Committed-export EDA connect: pick the netlist export, then sync it.
@@ -123,7 +123,9 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
             integration={integ}
             state={connections[integ.id]}
             onConnect={() => connect(integ)}
-            onChooseRepo={github.chooseRepo}
+            onSelect={oauth.select}
+            onSubmitConfig={oauth.submitConfig}
+            onChooseAccess={oauth.chooseAccess}
             onRetry={() => connect(integ)}
           />
         ))}

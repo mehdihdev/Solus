@@ -8,6 +8,7 @@ structured, timeouts are cloud-owned, and companion death fails fast.
 """
 
 import asyncio
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from conftest import ALICE, TEST_DATABASE_URL, bearer, make_token
 from fastapi import FastAPI
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools import ToolCall, ToolErrorCode, ToolRegistry
+from solus_api.bridge.service import fetch_artifact
 from solus_api.core.config import Settings
 from solus_api.main import create_app
 from solus_companion.channel import ChannelState, run_channel
@@ -34,6 +36,7 @@ MCP_ROOT = Path(__file__).parent.parent.parent / "companion" / "tests" / "fixtur
 @pytest.fixture
 async def e2e_server(engine: AsyncEngine) -> Any:
     settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
         supabase_jwt_secret="dummy-jwt-signing-value-tests-only",
         supabase_jwt_audience="authenticated",
         database_url=TEST_DATABASE_URL,
@@ -137,6 +140,18 @@ async def test_full_companion_cloud_round_trip(e2e_server: Any) -> None:
         boom = await registry.invoke(ToolCall(tool="mock.boom", args={}))
         assert boom.ok is False and boom.error is not None
         assert boom.error.code is ToolErrorCode.TOOL_ERROR
+
+        # 3b. SOLUS-CAD-00c: binary output is STAGED, never inlined, and the
+        # cloud pulls the real bytes back over the channel. This is the path a
+        # STEP export takes for CAD-02/03/04 — before it existed the companion
+        # dropped every non-text block outright.
+        pic = await registry.invoke(ToolCall(tool="mock.pic", args={}))
+        assert pic.ok is True and pic.value is not None
+        block = pic.value["content"][0]
+        assert block["inlined"] is False
+        assert "BINARYSENTINEL" not in json.dumps(pic.value)  # bytes never rode the frame
+        fetched = await fetch_artifact(session, block["artifact_id"])
+        assert fetched == b"BINARYSENTINEL"
 
         # 4. Timeouts are cloud-owned; the late result is dropped as unknown.
         short = _registry_for(app, scope, timeout=0.5)

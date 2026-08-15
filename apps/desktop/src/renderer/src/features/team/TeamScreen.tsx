@@ -36,8 +36,37 @@ export function TeamScreen({ onOpenProject }: TeamScreenProps = {}): React.JSX.E
       </div>
     )
   }
+  if (data.status === 'gone') return <TeamScreenGone />
   if (data.status === 'offline') return <TeamScreenOffline />
   return <TeamScreenLive data={data} onOpenProject={onOpenProject} />
+}
+
+/* ===================== GONE (answered, and it's not there) ===================== */
+
+/**
+ * The server answered: this team does not exist, or is no longer mine.
+ *
+ * Kept separate from the offline state because the advice is opposite. "Make
+ * sure the backend is running" is actively harmful here — it points at a service
+ * that is working, and a user followed it for hours. Reloading is the useful
+ * action: the next load re-resolves to a team they do have.
+ */
+function TeamScreenGone(): React.JSX.Element {
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
+      <div style={{ maxWidth: 920, margin: '0 auto', padding: '22px 24px 48px' }}>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
+          Team
+        </h1>
+        <Card pad={20} style={{ marginTop: 20 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+            That team no longer exists, or you no longer have access to it. Your API is reachable —
+            nothing to restart. Reload and Solus will open a team you do belong to.
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
 }
 
 /* ============================ OFFLINE (honest) ============================ */

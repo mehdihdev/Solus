@@ -1,0 +1,246 @@
+// SOLX-02: the chat surface. Pins the SOL-02 security obligations — citations
+// render from the STRUCTURED array in a dedicated region, never linkified,
+// display-capped; the tool trace shows names + ok/error, never raw args — and
+// the guide/do toggle posting action_mode.
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
+import * as solApi from './solApi'
+import * as resources from '../../lib/api/resources'
+import { useOrbStore } from './orbStore'
+import { OrbChat } from './OrbChat'
+
+vi.mock('./solApi', () => ({
+  createSolConversation: vi.fn(),
+  listSolTurns: vi.fn(),
+  streamSolMessage: vi.fn()
+}))
+vi.mock('../../lib/api/resources', () => ({
+  classifyQuery: vi.fn(),
+  decideSolConfirmation: vi.fn()
+}))
+const createSolConversation = vi.mocked(solApi.createSolConversation)
+const listSolTurns = vi.mocked(solApi.listSolTurns)
+const streamSolMessage = vi.mocked(solApi.streamSolMessage)
+const classifyQuery = vi.mocked(resources.classifyQuery)
+const decideSolConfirmation = vi.mocked(resources.decideSolConfirmation)
+
+const LONG_CITATION = `entity:${'x'.repeat(90)}`
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  localStorage.clear()
+  useOrbStore.setState({
+    corner: 'br',
+    expanded: false,
+    detached: false,
+    streaming: false,
+    conversationByProject: {}
+  })
+  createSolConversation.mockResolvedValue({ id: 'c1' } as solApi.SolConversation)
+  listSolTurns.mockResolvedValue([])
+  classifyQuery.mockReturnValue(new Promise(() => undefined))
+})
+
+function sendMessage(text: string): void {
+  fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
+    target: { value: text }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+}
+
+// CTR-03 / CLAUDE.md §7: a destructive action must be shown and approved before
+// it runs. LANE C's orb chat had no confirmation path at all, so the backend
+// could park an action this surface never rendered — invisible to every test
+// because ConfirmationCard's own suite renders it directly.
+describe('OrbChat destructive-action approval', () => {
+  it('shows a parked action with its diff, inline in the conversation', async () => {
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({
+        type: 'tool_confirmation',
+        pending: {
+          confirmationId: 'cf1',
+          tool: 'onshape.set_variable',
+          summary: 'Set WIDTH to 120 mm',
+          preview: [{ label: 'WIDTH', before: '100 mm', after: '120 mm' }]
+        }
+      })
+    })
+    render(<OrbChat projectId="p1" />)
+    sendMessage('make it wider')
+    const card = await screen.findByLabelText('Action needs your approval')
+    expect(within(card).getByText('WIDTH')).toBeInTheDocument()
+    expect(within(card).getByText('100 mm')).toBeInTheDocument()
+    expect(within(card).getByText('120 mm')).toBeInTheDocument()
+  })
+
+  it('records an approval and clears the card', async () => {
+    decideSolConfirmation.mockResolvedValue({ ok: true } as Awaited<
+      ReturnType<typeof resources.decideSolConfirmation>
+    >)
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({
+        type: 'tool_confirmation',
+        pending: {
+          confirmationId: 'cf1',
+          tool: 'onshape.set_variable',
+          summary: 'Set WIDTH to 120 mm',
+          preview: []
+        }
+      })
+    })
+    render(<OrbChat projectId="p1" />)
+    sendMessage('make it wider')
+    const card = await screen.findByLabelText('Action needs your approval')
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Approve' }))
+    })
+    // The decision names the confirmation only — the arguments that execute are
+    // the stored server-side ones the user was shown, never re-sent from here.
+    expect(decideSolConfirmation).toHaveBeenCalledWith('p1', 'cf1', 'approve')
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Action needs your approval')).not.toBeInTheDocument()
+    )
+  })
+
+  it('keeps the card, with the server reason, when the decision fails', async () => {
+    // The action really is still parked, so removing the card would strand it:
+    // the user could no longer approve what the server is still holding.
+    decideSolConfirmation.mockRejectedValue(new Error('That confirmation has expired.'))
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({
+        type: 'tool_confirmation',
+        pending: {
+          confirmationId: 'cf1',
+          tool: 'onshape.set_variable',
+          summary: 'Set WIDTH to 120 mm',
+          preview: []
+        }
+      })
+    })
+    render(<OrbChat projectId="p1" />)
+    sendMessage('make it wider')
+    const card = await screen.findByLabelText('Action needs your approval')
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Approve' }))
+    })
+    expect(screen.getByLabelText('Action needs your approval')).toBeInTheDocument()
+    expect(screen.getByText(/That confirmation has expired/)).toBeInTheDocument()
+  })
+})
+
+describe('OrbChat basics', () => {
+  it('asks for a project when none is open — no input rendered', () => {
+    render(<OrbChat projectId={null} />)
+    expect(screen.getByText(/Open a project to chat with SOL/)).toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText('Ask about a signal, a change, a part…')
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders the composer and loads per-project history', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([
+      {
+        id: 't1',
+        conversation_id: 'c1',
+        role: 'user',
+        content: 'earlier question',
+        attrs: {},
+        created_at: ''
+      }
+    ])
+    render(<OrbChat projectId="p1" />)
+    expect(screen.getByPlaceholderText('Ask about a signal, a change, a part…')).toBeInTheDocument()
+    expect(await screen.findByText('earlier question')).toBeInTheDocument()
+    expect(listSolTurns).toHaveBeenCalledWith('p1', 'c1')
+  })
+})
+
+describe('OrbChat streaming render (SOL-02 obligations)', () => {
+  it('renders streamed tokens progressively, then citations in a dedicated non-link region, capped', async () => {
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'token', text: 'The IMU ' })
+      onEvent({ type: 'token', text: 'shares the bus.' })
+      onEvent({
+        type: 'message',
+        role: 'assistant',
+        content: 'The IMU shares the bus. See https://example.com/x',
+        citations: ['entity:imu_bno085', LONG_CITATION]
+      })
+      onEvent({ type: 'done', conversationId: 'c1', turnId: 't1' })
+    })
+    render(<OrbChat projectId="p1" />)
+    sendMessage('why?')
+    await waitFor(() => expect(screen.getByText(/shares the bus/)).toBeInTheDocument())
+    const region = screen.getByTestId('citations-region')
+    // Structured tokens only, never anchors — even when prose contains a URL.
+    expect(within(region).queryAllByRole('link')).toEqual([])
+    expect(screen.queryAllByRole('link')).toEqual([])
+    expect(within(region).getByText('entity:imu_bno085')).toBeInTheDocument()
+    const capped = within(region).getByText(/^entity:x+…$/)
+    expect(capped.textContent?.length).toBeLessThanOrEqual(64)
+    // Citations come only from the structured array, never parsed out of prose.
+    expect(within(region).queryByText(/example\.com/)).not.toBeInTheDocument()
+  })
+
+  it('collapses the tool trace to names + outcomes, never raw args', async () => {
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'tool_call', callId: 'k1', tool: 'get_entity' })
+      onEvent({ type: 'tool_result', callId: 'k1', ok: true, errorCode: null })
+      onEvent({ type: 'tool_call', callId: 'k2', tool: 'run_checker' })
+      onEvent({ type: 'tool_result', callId: 'k2', ok: false, errorCode: 'not_found' })
+      onEvent({ type: 'message', role: 'assistant', content: 'Done.', citations: [] })
+    })
+    render(<OrbChat projectId="p1" />)
+    sendMessage('check it')
+    await waitFor(() => expect(screen.getByTestId('tool-trace')).toBeInTheDocument())
+    const trace = screen.getByTestId('tool-trace')
+    expect(within(trace).getByText('2 tool steps')).toBeInTheDocument()
+    expect(within(trace).getByText(/get_entity — ok/)).toBeInTheDocument()
+    expect(within(trace).getByText(/run_checker — not_found/)).toBeInTheDocument()
+    expect(trace).not.toHaveAttribute('open')
+  })
+
+  it('shows the author-safe error frame text', async () => {
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'error', code: 'timeout', message: 'The SOL turn timed out.' })
+    })
+    render(<OrbChat projectId="p1" />)
+    sendMessage('hi')
+    expect(await screen.findByText('The SOL turn timed out.')).toBeInTheDocument()
+  })
+})
+
+describe('OrbChat composer', () => {
+  it('posts action_mode from the guide/do toggle and clears the input after send', async () => {
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<OrbChat projectId="p1" />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Do' }))
+    sendMessage('flash the board')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ actionMode: 'do', content: 'flash the board' })
+      )
+    )
+    expect(screen.getByPlaceholderText('Ask about a signal, a change, a part…')).toHaveValue('')
+    // Guide stays the safe default until the user opts in per panel instance.
+    expect(screen.getByRole('radio', { name: 'Do' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('wires the classify preview onto the input (debounced, never per keystroke)', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<OrbChat projectId="p1" />)
+      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
+        target: { value: 'why is the IMU noisy' }
+      })
+      expect(classifyQuery).not.toHaveBeenCalled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(classifyQuery).toHaveBeenCalledWith({ query: 'why is the IMU noisy' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

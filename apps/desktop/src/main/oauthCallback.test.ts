@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   loopbackRedirectUrl,
+  connectorRedirectUrl,
   isValidAuthorizeUrl,
   parseOAuthCallback,
   OAUTH_LOOPBACK_PORT
@@ -13,6 +14,22 @@ describe('loopbackRedirectUrl', () => {
     expect(loopbackRedirectUrl(STATE)).toBe(
       `http://127.0.0.1:${OAUTH_LOOPBACK_PORT}/auth/callback?solus_cb=nonce-123`
     )
+  })
+})
+
+describe('connectorRedirectUrl', () => {
+  // Onshape (and any strict provider) matches the registered redirect URI
+  // EXACTLY, so the connector flow's URI must be constant — no per-flow nonce.
+  it('is constant and carries no query string', () => {
+    expect(connectorRedirectUrl()).toBe(connectorRedirectUrl())
+    expect(connectorRedirectUrl()).not.toContain('?')
+  })
+
+  // Onshape's OAuth app refuses a bare IP in a redirect URL, so this must read
+  // `localhost`. The loopback server binds BOTH ::1 and 127.0.0.1 to match.
+  it('uses localhost, not a bare IP', () => {
+    expect(connectorRedirectUrl()).toBe(`http://localhost:${OAUTH_LOOPBACK_PORT}/auth/callback`)
+    expect(connectorRedirectUrl()).not.toContain('127.0.0.1')
   })
 })
 
@@ -71,5 +88,40 @@ describe('parseOAuthCallback', () => {
   it('handles a full absolute callback URL', () => {
     const full = `http://127.0.0.1:${OAUTH_LOOPBACK_PORT}/auth/callback?solus_cb=${STATE}&code=xyz`
     expect(parseOAuthCallback(full, STATE)).toEqual({ code: 'xyz' })
+  })
+
+  // Connector OAuth carries no solus_cb (the redirect URI must stay constant),
+  // so it matches on the provider's `state` — which is the backend's own
+  // server-side OAuthState token, a stronger nonce than the local uuid.
+  describe('matching on the provider state param', () => {
+    it('extracts the code when the provider state matches', () => {
+      expect(
+        parseOAuthCallback(`/auth/callback?state=${STATE}&code=abc`, STATE, undefined, 'state')
+      ).toEqual({ code: 'abc' })
+    })
+
+    it('ignores a mismatched or absent provider state', () => {
+      expect(
+        parseOAuthCallback('/auth/callback?state=wrong&code=abc', STATE, undefined, 'state')
+      ).toBeNull()
+      expect(parseOAuthCallback('/auth/callback?code=abc', STATE, undefined, 'state')).toBeNull()
+    })
+
+    it('does not accept a solus_cb match when matching on state', () => {
+      expect(
+        parseOAuthCallback(`/auth/callback?solus_cb=${STATE}&code=abc`, STATE, undefined, 'state')
+      ).toBeNull()
+    })
+
+    it('surfaces a provider error when the provider state matches', () => {
+      expect(
+        parseOAuthCallback(
+          `/auth/callback?state=${STATE}&error=invalid_grant&error_description=bad+redirect`,
+          STATE,
+          undefined,
+          'state'
+        )
+      ).toEqual({ error: 'bad redirect' })
+    })
   })
 })

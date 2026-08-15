@@ -12,12 +12,12 @@ import { useOnboardingStore } from '../onboarding/onboardingStore'
 import type { Source } from '../../lib/api/resources'
 import * as sourcesHook from './useProjectSources'
 import * as catalogHook from '../onboarding/useIntegrationCatalog'
-import * as githubHook from '../onboarding/useGithubConnect'
+import * as oauthHook from '../onboarding/useOAuthConnect'
 import * as edaHook from '../onboarding/useEdaConnect'
 
 vi.mock('./useProjectSources', () => ({ useProjectSources: vi.fn() }))
 vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: vi.fn() }))
-vi.mock('../onboarding/useGithubConnect', () => ({ useGithubConnect: vi.fn() }))
+vi.mock('../onboarding/useOAuthConnect', () => ({ useOAuthConnect: vi.fn() }))
 vi.mock('../onboarding/useEdaConnect', () => ({ useEdaConnect: vi.fn() }))
 
 const SOURCE = (over: Partial<Source> = {}): Source =>
@@ -57,14 +57,52 @@ beforeEach(() => {
   syncNow.mockResolvedValue(true)
   disconnect.mockResolvedValue(true)
   vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([
-    { id: 'github', name: 'GitHub', kind: 'Code', mark: 'GH', mode: 'github-oauth' },
-    { id: 'kicad', name: 'KiCad', kind: 'PCB', mark: 'Ki', mode: 'export-file' }
+    {
+      id: 'github',
+      name: 'GitHub',
+      kind: 'Code',
+      mark: 'GH',
+      mode: 'oauth',
+      configFields: ['repo', 'branch'],
+      selection: { mode: 'single', config_key: 'repo', label: 'repository' },
+      accessModes: null
+    },
+    {
+      id: 'kicad',
+      name: 'KiCad',
+      kind: 'PCB',
+      mark: 'Ki',
+      mode: 'export-file',
+      configFields: ['export'],
+      selection: null,
+      accessModes: null
+    }
   ])
-  vi.mocked(githubHook.useGithubConnect).mockReturnValue({ start: vi.fn(), chooseRepo: vi.fn() })
+  vi.mocked(oauthHook.useOAuthConnect).mockReturnValue({
+    start: vi.fn(),
+    select: vi.fn(),
+    submitConfig: vi.fn(),
+    chooseAccess: vi.fn()
+  })
   vi.mocked(edaHook.useEdaConnect).mockReturnValue({ start: vi.fn() })
 })
 
 describe('SourcesScreen', () => {
+  it('shows which account a source is connected as', async () => {
+    mockSources([SOURCE({ account_login: 'octocat' })])
+    render(<SourcesScreen />)
+    expect(await screen.findByText(/octocat/)).toBeInTheDocument()
+  })
+
+  it('shows no account rather than an invented one when the provider gives none', async () => {
+    // Onshape's read-only scope carries no PII, so there may genuinely be no
+    // human-readable login. A blank is honest; a placeholder name is not.
+    mockSources([SOURCE({ account_login: null, name: 'Onshape' })])
+    render(<SourcesScreen />)
+    await screen.findByText('Onshape')
+    expect(screen.queryByText(/onshape-user/)).not.toBeInTheDocument()
+  })
+
   it('prompts to pick a project when none is open', () => {
     useWorkspaceStore.setState({ project: null })
     mockSources([], 'offline')

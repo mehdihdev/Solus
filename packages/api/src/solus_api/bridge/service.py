@@ -7,15 +7,24 @@ owned by `ToolRegistry.invoke`'s asyncio.wait_for — nothing here re-times.
 """
 
 import asyncio
+import base64
+import binascii
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from solus_api.agent.tools.shapes import ToolCall, ToolResult
+from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import ToolException
-from solus_api.bridge.frames import redact_text, redact_value, tool_call_frame
+from solus_api.bridge.frames import (
+    ArtifactChunkData,
+    artifact_fetch_frame,
+    redact_text,
+    redact_value,
+    tool_call_frame,
+)
 from solus_api.bridge.registry import BridgeSession
 from solus_api.models import User
 from solus_api.services.events import emit_event
@@ -23,6 +32,14 @@ from solus_api.services.events import emit_event
 logger = logging.getLogger("solus.bridge.service")
 
 SUPERSEDED_EVENT = "bridge.session_superseded"
+
+#: Hard ceiling on one pulled artifact. Matches the CAD export bound so the two
+#: ends agree on what is transferable (SOLUS-CAD-00c).
+MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+
+#: Whole-transfer deadline. Per-chunk stalls are covered by it too, so a
+#: companion that goes quiet mid-stream cannot pin a worker.
+ARTIFACT_FETCH_TIMEOUT_SECONDS = 300.0
 
 
 async def dispatch(
@@ -179,3 +196,89 @@ class ConnectRateLimiter:
             self._counts.clear()  # ponytail: crude reset at the bound, like core/ratelimit
         self._counts[key] = (window_start, count + 1)
         return True
+
+
+async def fetch_artifact(
+    session: BridgeSession,
+    artifact_id: str,
+    *,
+    max_bytes: int = MAX_ARTIFACT_BYTES,
+    timeout_seconds: float = ARTIFACT_FETCH_TIMEOUT_SECONDS,
+) -> bytes:
+    """Pull the bytes behind a staged handle (SOLUS-CAD-00c).
+
+    The companion answers with `artifact_chunk` frames until one carries
+    `final`. Bounded three ways — total size, whole-transfer deadline, and the
+    session dying — because everything the companion sends is untrusted input
+    (CLAUDE.md §7) and a bulk channel is the obvious place to exhaust a worker.
+
+    Raises `ToolException` on every failure path so callers keep the W0-04
+    never-raises story; nothing here returns a partial artifact.
+    """
+    fetch_id = uuid.uuid4().hex
+    queue: asyncio.Queue[ArtifactChunkData] = asyncio.Queue()
+    session.artifact_fetches[fetch_id] = queue
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        await session.send(artifact_fetch_frame(artifact_id=artifact_id, fetch_id=fetch_id))
+    except Exception as exc:
+        session.artifact_fetches.pop(fetch_id, None)
+        raise ToolException(
+            "bridge disconnected", code=ToolErrorCode.UNAVAILABLE, retryable=True
+        ) from exc
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            while True:
+                chunk = await queue.get()
+                if chunk.error:
+                    raise ToolException(
+                        f"artifact unavailable: {chunk.error[:200]}",
+                        code=ToolErrorCode.NOT_FOUND,
+                        retryable=False,
+                    )
+                try:
+                    payload = base64.b64decode(chunk.data, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise ToolException(
+                        "artifact chunk was not valid base64",
+                        code=ToolErrorCode.TOOL_ERROR,
+                        retryable=False,
+                    ) from exc
+                total += len(payload)
+                if total > max_bytes:
+                    raise ToolException(
+                        "artifact exceeds the transfer limit",
+                        code=ToolErrorCode.TOOL_ERROR,
+                        retryable=False,
+                    )
+                chunks.append(payload)
+                if chunk.final:
+                    return b"".join(chunks)
+    except TimeoutError as exc:
+        raise ToolException(
+            "artifact transfer timed out", code=ToolErrorCode.TIMEOUT, retryable=True
+        ) from exc
+    finally:
+        session.artifact_fetches.pop(fetch_id, None)
+
+
+def ingest_artifact_chunk(session: BridgeSession, chunk: ArtifactChunkData) -> None:
+    """Route one inbound chunk to its waiting fetch. An unknown `fetch_id` is
+    dropped and logged — the same replay defence `ingest_result` applies."""
+    queue = session.artifact_fetches.get(chunk.fetch_id)
+    if queue is None:
+        logger.warning(
+            "bridge session %s dropped chunk for unknown fetch_id %.64s",
+            session.session_id,
+            chunk.fetch_id,
+        )
+        return
+    queue.put_nowait(chunk)
+
+
+def fail_artifact_fetches(session: BridgeSession) -> None:
+    """Disconnect: unblock every waiting pull with an error chunk."""
+    for fetch_id, queue in list(session.artifact_fetches.items()):
+        queue.put_nowait(ArtifactChunkData(fetch_id=fetch_id, final=True, error="bridge offline"))
+    session.artifact_fetches.clear()

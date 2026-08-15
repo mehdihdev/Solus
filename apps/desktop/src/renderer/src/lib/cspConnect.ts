@@ -14,15 +14,25 @@
 export const DEFAULT_API_BASE_URL = 'http://localhost:8000/api/v1'
 
 /**
+ * The API base the renderer will actually call. A missing value and a
+ * PRESENT-BUT-BLANK one (`VITE_API_BASE_URL=`, which is what apps/desktop/.env
+ * ships) both mean "unset" — the blank case is the one `??` misses, and getting
+ * it wrong yields a relative base that quietly misses the API entirely. Shared
+ * by the CSP derivation and `api/client.ts` so the two cannot drift.
+ */
+export function resolveApiBaseUrl(apiBaseUrl: string | undefined): string {
+  return apiBaseUrl && apiBaseUrl.trim() ? apiBaseUrl.trim() : DEFAULT_API_BASE_URL
+}
+
+/**
  * The origin (`scheme://host:port`) the renderer will call for the REST API,
  * derived from `apiBaseUrl` (or the default when it is absent/blank). Returns
  * null when the value cannot be parsed as a URL, so the CSP is left untouched
  * rather than corrupted.
  */
 export function apiOriginForCsp(apiBaseUrl: string | undefined): string | null {
-  const raw = apiBaseUrl && apiBaseUrl.trim() ? apiBaseUrl.trim() : DEFAULT_API_BASE_URL
   try {
-    return new URL(raw).origin
+    return new URL(resolveApiBaseUrl(apiBaseUrl)).origin
   } catch {
     return null
   }

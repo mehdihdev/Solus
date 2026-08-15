@@ -8,9 +8,15 @@ import { loadIntegrationCatalog, FALLBACK_CATALOG } from './integrationCatalog'
 
 const LIVE: ApiIntegration[] = [
   { type: 'altium', auth_kind: 'none', config_fields: ['export'], scopes: [] },
-  { type: 'github', auth_kind: 'oauth', config_fields: ['repo'], scopes: ['repo'] },
-  { type: 'gitlab', auth_kind: 'oauth', config_fields: ['repo'], scopes: ['read_api'] },
-  { type: 'kicad', auth_kind: 'none', config_fields: ['export'], scopes: [] }
+  { type: 'github', auth_kind: 'oauth', config_fields: ['repo', 'branch'], scopes: ['repo'] },
+  { type: 'gitlab', auth_kind: 'oauth', config_fields: ['repo', 'branch'], scopes: ['read_api'] },
+  { type: 'kicad', auth_kind: 'none', config_fields: ['export'], scopes: [] },
+  {
+    type: 'onshape',
+    auth_kind: 'oauth',
+    config_fields: ['document_id', 'workspace_id', 'element_id'],
+    scopes: ['OAuth2Read', 'OAuth2Write']
+  }
 ]
 
 describe('loadIntegrationCatalog', () => {
@@ -18,23 +24,60 @@ describe('loadIntegrationCatalog', () => {
     const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
     const byId = new Map(catalog.map((e) => [e.id, e]))
     expect(byId.get('kicad')?.mode).toBe('export-file')
-    expect(byId.get('github')?.mode).toBe('github-oauth')
+    expect(byId.get('github')?.mode).toBe('oauth')
   })
 
-  it('never lists providers the backend does not register (onshape, ros)', async () => {
+  it('offers every live OAuth provider, not just github', async () => {
     const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
-    expect(catalog.find((e) => e.id === 'onshape')).toBeUndefined()
+    const byId = new Map(catalog.map((e) => [e.id, e]))
+    expect(byId.get('gitlab')?.mode).toBe('oauth')
+    expect(byId.get('onshape')?.mode).toBe('oauth')
+    expect(byId.get('onshape')?.name).toBe('Onshape')
+  })
+
+  // The acceptance bar: the NEXT OAuth connector must need no frontend edit.
+  it('offers an OAuth provider the frontend has never heard of', async () => {
+    const withFuture: ApiIntegration[] = [
+      ...LIVE,
+      { type: 'fusion', auth_kind: 'oauth', config_fields: ['hub_id', 'project_id'], scopes: [] }
+    ]
+    const catalog = await loadIntegrationCatalog(vi.fn(async () => withFuture))
+    const fusion = catalog.find((e) => e.id === 'fusion')
+    expect(fusion?.mode).toBe('oauth')
+    // No display copy exists for it yet, so it gets the generic tile — but it
+    // is still connectable, which is the point.
+    expect(fusion?.name).toBe('Fusion')
+    expect(fusion?.configFields).toEqual(['hub_id', 'project_id'])
+  })
+
+  it('carries the live config fields so the configure step can be chosen', async () => {
+    const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
+    const byId = new Map(catalog.map((e) => [e.id, e]))
+    expect(byId.get('github')?.configFields).toEqual(['repo', 'branch'])
+    expect(byId.get('onshape')?.configFields).toEqual(['document_id', 'workspace_id', 'element_id'])
+  })
+
+  it('still hides providers the app cannot drive (unregistered ros, token-only auth)', async () => {
+    // The hiding rule stays: a tile is only offered when a REAL connect flow
+    // exists. `ros` is not registered at all; a token-auth connector has no
+    // drivable flow in the app yet.
+    const withToken: ApiIntegration[] = [
+      ...LIVE,
+      { type: 'jira', auth_kind: 'token', config_fields: ['board'], scopes: [] }
+    ]
+    const catalog = await loadIntegrationCatalog(vi.fn(async () => withToken))
     expect(catalog.find((e) => e.id === 'ros')).toBeUndefined()
+    expect(catalog.find((e) => e.id === 'jira')).toBeUndefined()
   })
 
   it('drops a curated provider the live registry no longer carries', async () => {
     const withoutKicad = LIVE.filter((integration) => integration.type !== 'kicad')
     const catalog = await loadIntegrationCatalog(vi.fn(async () => withoutKicad))
     expect(catalog.find((e) => e.id === 'kicad')).toBeUndefined()
-    expect(catalog.find((e) => e.id === 'github')?.mode).toBe('github-oauth')
+    expect(catalog.find((e) => e.id === 'github')?.mode).toBe('oauth')
   })
 
-  it('appends non-curated live export connectors (altium) with display metadata', async () => {
+  it('appends non-curated live connectors with display metadata', async () => {
     const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
     const altium = catalog.find((e) => e.id === 'altium')
     expect(altium?.mode).toBe('export-file')
@@ -43,11 +86,6 @@ describe('loadIntegrationCatalog', () => {
     expect(catalog.findIndex((e) => e.id === 'altium')).toBeGreaterThan(
       catalog.findIndex((e) => e.id === 'kicad')
     )
-  })
-
-  it('hides live providers the app cannot drive yet (gitlab oauth has no bridge flow)', async () => {
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
-    expect(catalog.find((e) => e.id === 'gitlab')).toBeUndefined()
   })
 
   it('falls back to the drivable curated catalog when the API is unreachable', async () => {
@@ -62,7 +100,8 @@ describe('loadIntegrationCatalog', () => {
 
   it('fallback keeps github and kicad optimistically connectable (guards decide at click time)', () => {
     const byId = new Map(FALLBACK_CATALOG.map((e) => [e.id, e]))
-    expect(byId.get('github')?.mode).toBe('github-oauth')
+    expect(byId.get('github')?.mode).toBe('oauth')
+    expect(byId.get('github')?.configFields).toEqual(['repo', 'branch'])
     expect(byId.get('kicad')?.mode).toBe('export-file')
   })
 })

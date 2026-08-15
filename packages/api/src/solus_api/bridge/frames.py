@@ -11,7 +11,6 @@ ok/value/error invariant is enforced at ingress; unknown types are ignored
 import enum
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -19,6 +18,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from solus_api.agent.tools.shapes import ToolCall, ToolResult
+
+# Redaction moved to the shared untrusted-input module (SOLUS-RUN-01) so the
+# agent's tool-result path gets the same gate. Explicit `as` re-export: this
+# module's own callers import these from here and are unchanged.
+from solus_api.agent.tools.untrusted import REDACTED as REDACTED
+from solus_api.agent.tools.untrusted import redact_text as redact_text
+from solus_api.agent.tools.untrusted import redact_value as redact_value
 
 logger = logging.getLogger("solus.bridge.frames")
 
@@ -129,10 +135,39 @@ class CredentialSubmitData(BaseModel):
     __str__ = __repr__
 
 
+class ArtifactChunkData(BaseModel):
+    """One slice of a staged artifact (SOLUS-CAD-00c, inbound).
+
+    Bulk export bytes never ride a tool result (`metadata-extraction.md` §2.1);
+    the companion stages them and the cloud pulls them in chunks. `data` is
+    base64 so bytes survive a JSON text frame. `error` set means the fetch
+    cannot be served — that one fetch fails, the socket survives. New frame
+    type per the §4 extension rule; no protocol_version bump."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fetch_id: str
+    data: str = ""
+    final: bool = False
+    error: str | None = None
+
+
 # Inbound (companion → cloud) frame types and the outbound-only set — a known
 # outbound type arriving inbound is a protocol violation, not an unknown.
-INBOUND_TYPES = frozenset({"hello", "ping", "status", "error", "tool_result", "credential_submit"})
-OUTBOUND_TYPES = frozenset({"hello_ack", "pong", "tool_call", "credential_ack"})
+INBOUND_TYPES = frozenset(
+    {
+        "hello",
+        "ping",
+        "status",
+        "error",
+        "tool_result",
+        "credential_submit",
+        "artifact_chunk",
+    }
+)
+OUTBOUND_TYPES = frozenset(
+    {"hello_ack", "pong", "tool_call", "credential_ack", "artifact_fetch"}
+)
 
 
 @dataclass(frozen=True)
@@ -141,7 +176,15 @@ class InboundFrame:
     # hello → HelloData · tool_result → ToolResult · error → ErrorData ·
     # status → StatusData (BRG-03) · credential_submit → CredentialSubmitData
     # (MCP-05) · ping → None
-    payload: HelloData | ToolResult | ErrorData | StatusData | CredentialSubmitData | None
+    payload: (
+        HelloData
+        | ToolResult
+        | ErrorData
+        | StatusData
+        | CredentialSubmitData
+        | ArtifactChunkData
+        | None
+    )
 
 
 @dataclass(frozen=True)
@@ -192,6 +235,10 @@ def _parse_payload(frame_type: str, data: dict[str, Any]) -> InboundFrame | Fram
         if frame_type == "credential_submit":
             return InboundFrame(
                 type="credential_submit", payload=CredentialSubmitData.model_validate(data)
+            )
+        if frame_type == "artifact_chunk":
+            return InboundFrame(
+                type="artifact_chunk", payload=ArtifactChunkData.model_validate(data)
             )
     except ValidationError as exc:
         return FrameViolation(
@@ -257,56 +304,8 @@ def credential_ack_frame(server: str, *, ok: bool, stored: list[str], error: str
 
 # --- Ingress redaction (contract §6) -----------------------------------------
 
-_SECRET_KEY = re.compile(
-    r"token|secret|passw(or)?d|api[_-]?key|authorization|cookie|private[_-]?key|credential",
-    re.IGNORECASE,
-)
-_ENTROPIC_CHARSET = re.compile(r"^[A-Za-z0-9+/=_.-]+$")
-# ponytail: length/charset/distinct-chars heuristic — ≥40 spares uuid4().hex
-# call-id-shaped values; a base64 secret under 40 chars slips through. Tighten
-# with a real detector (e.g. detect-secrets) if field data shows leaks.
-_ENTROPIC_MIN_LEN = 40
-_ENTROPIC_MIN_DISTINCT = 16
-
-REDACTED = "[REDACTED]"
 
 
-def _looks_entropic(value: str) -> bool:
-    return (
-        len(value) >= _ENTROPIC_MIN_LEN
-        and _ENTROPIC_CHARSET.fullmatch(value) is not None
-        and len(set(value)) >= _ENTROPIC_MIN_DISTINCT
-    )
-
-
-def redact_value(value: Any) -> Any:
-    """Recursively redact secret-shaped content from an untrusted result before
-    it is persisted or enters model context. Returns a new structure."""
-    if isinstance(value, dict):
-        return {
-            key: (
-                REDACTED if isinstance(key, str) and _SECRET_KEY.search(key) else redact_value(item)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [redact_value(item) for item in value]
-    if isinstance(value, str) and _looks_entropic(value):
-        return REDACTED
-    return value
-
-
-_SECRET_ASSIGNMENT = re.compile(
-    r"((?:token|secret|passw(?:or)?d|api[_-]?key|authorization|cookie|private[_-]?key|credential)"
-    r"[A-Za-z0-9_-]*\s*[=:]\s*)(\S+)",
-    re.IGNORECASE,
-)
-
-
-def redact_text(text: str) -> str:
-    """Scalar redaction for untrusted free text (SEC-M3): secret-shaped
-    `key=value`/`key: value` assignments and entropic tokens are masked before
-    the text can reach model context or persistence."""
-    masked = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, text)
-    tokens = [REDACTED if _looks_entropic(token) else token for token in masked.split(" ")]
-    return " ".join(tokens)
+def artifact_fetch_frame(*, artifact_id: str, fetch_id: str) -> str:
+    """Ask the companion for the bytes behind a staged handle (SOLUS-CAD-00c)."""
+    return _dump("artifact_fetch", {"artifact_id": artifact_id, "fetch_id": fetch_id})

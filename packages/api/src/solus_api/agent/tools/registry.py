@@ -55,6 +55,15 @@ class ToolRegistry:
         validator = Draft202012Validator(params, format_checker=Draft202012Validator.FORMAT_CHECKER)
         self._registry[name] = _Registration(tool=tool, validator=validator)
 
+    def tools(self) -> list[Tool]:
+        """The registered tool OBJECTS, name-sorted.
+
+        `list()` returns descriptors — the model's view. This is for SOLUS CODE
+        that needs the tool itself, e.g. the confirmation flow asking a tool to
+        describe its own diff (SOLUS-ONS-A5). Never handed to a model.
+        """
+        return [self._registry[name].tool for name in sorted(self._registry)]
+
     def list(self) -> list[ToolDescriptor]:
         """Every registered tool's descriptor, name-sorted for a stable model view."""
         descriptors = (reg.tool.descriptor for reg in self._registry.values())

@@ -122,6 +122,7 @@ class _FakeAnthropicRecorder:
     def __init__(self) -> None:
         self.events: list[str] = []
         self.client_kwargs: dict[str, object] = {}
+        self.stream_kwargs: dict[str, object] = {}
 
 
 def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder) -> type:
@@ -131,6 +132,9 @@ def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder) -> type:
 
     class FakeFinalMessage:
         usage = FakeUsage()
+        # Real messages always carry content blocks; the adapter now scans them
+        # for tool_use (SOLUS-RUN-01). Empty = a text-only reply.
+        content: list[object] = []
 
     class FakeStreamManager:
         async def __aenter__(self) -> "FakeStreamManager":
@@ -154,6 +158,7 @@ def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder) -> type:
 
     class FakeMessages:
         def stream(self, **kwargs: object) -> FakeStreamManager:
+            recorder.stream_kwargs = dict(kwargs)
             return FakeStreamManager()
 
     class FakeAsyncAnthropic:
@@ -190,6 +195,48 @@ async def test_anthropic_adapter_full_consumption_reports_sdk_usage(
     # §7 timeout + the MO-01 no-retry fence, enforced functionally:
     assert recorder.client_kwargs["max_retries"] == 0
     assert recorder.client_kwargs["timeout"] == DEFAULT_TIMEOUT_SECONDS
+
+
+async def test_the_text_only_request_is_unchanged_by_tool_calling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUS-RUN-01's load-bearing invariant: with `conversation=None` the wire
+    request is exactly what it was before tool calling existed — one user
+    message, NO system prompt, NO tools key. `fingerprint/escalation.py` and
+    `visual.py` go down this path and were not edited."""
+    recorder = _FakeAnthropicRecorder()
+    monkeypatch.setattr("anthropic.AsyncAnthropic", _fake_anthropic_cls(recorder))
+    adapter = await _keyed_anthropic_adapter()
+
+    async for _ in adapter.stream("some-model", "q", max_tokens=8):
+        pass
+
+    assert recorder.stream_kwargs["messages"] == [{"role": "user", "content": "q"}]
+    assert "system" not in recorder.stream_kwargs
+    assert "tools" not in recorder.stream_kwargs
+
+
+async def test_a_conversation_sends_system_and_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """...and the tool path sends the system prompt and tool array it must."""
+    from solus_api.orchestration.providers import ToolConversation, ToolSpec, Turn
+
+    recorder = _FakeAnthropicRecorder()
+    monkeypatch.setattr("anthropic.AsyncAnthropic", _fake_anthropic_cls(recorder))
+    adapter = await _keyed_anthropic_adapter()
+    conversation = ToolConversation(
+        system="You are SOL.",
+        messages=(Turn(role="user", text="what changed?"),),
+        tools=(ToolSpec(name="get_entity", description="d", input_schema={"type": "object"}),),
+    )
+
+    async for _ in adapter.stream("some-model", "ignored", max_tokens=8, conversation=conversation):
+        pass
+
+    assert recorder.stream_kwargs["system"] == "You are SOL."
+    assert recorder.stream_kwargs["messages"] == [{"role": "user", "content": "what changed?"}]
+    tools = recorder.stream_kwargs["tools"]
+    assert isinstance(tools, list)
+    assert tools[0]["name"] == "get_entity"
 
 
 def test_transient_error_is_a_provider_error() -> None:

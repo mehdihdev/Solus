@@ -121,7 +121,8 @@ body {
   animation: ob-logline-in 0.25s ease-out;
 }
 
-/* The SOL "ball of energy" pulse. */
+/* The SOL "ball of energy" pulse (SOLX-02 perf budget: transform/opacity only,
+ * applied solely while SOL streams/thinks — the idle orb runs no animation). */
 @keyframes sol-orb-pulse {
   0%,
   100% {
@@ -131,5 +132,13 @@ body {
   50% {
     opacity: 1;
     transform: scale(1.06);
+  }
+}
+.sol-orb-pulse {
+  animation: sol-orb-pulse 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sol-orb-pulse {
+    animation: none;
   }
 }

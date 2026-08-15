@@ -1,0 +1,22 @@
+[
+  "bool_ts",
+  "empty_device_id",
+  "empty_values",
+  "float_seq",
+  "float_ts",
+  "huge_seq",
+  "inf_value",
+  "long_device_id",
+  "long_signal_name",
+  "long_unit",
+  "missing_ts",
+  "nan_value",
+  "negative_seq",
+  "not_a_map",
+  "string_ts",
+  "too_many_signals",
+  "unit_for_absent_signal",
+  "unit_named_tostring",
+  "unsafe_ts",
+  "zero_schema_version"
+]

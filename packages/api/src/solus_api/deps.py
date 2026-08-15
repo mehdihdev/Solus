@@ -5,6 +5,7 @@ ad-hoc per-endpoint auth. Non-members receive 404 (no existence leak);
 insufficient role within a team receives 403.
 """
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -31,6 +32,7 @@ from solus_api.models import (
     ROLE_RANK,
     DeletedAccount,
     Membership,
+    PanelBinding,
     PlanType,
     Project,
     ProjectMembership,
@@ -41,6 +43,7 @@ from solus_api.models import (
     TeamKind,
     User,
     default_limits,
+    ensure_utc,
     utcnow,
 )
 from solus_api.services.supabase_admin import SupabaseAdmin
@@ -236,6 +239,100 @@ async def live_membership(
         )
     )
     return membership
+
+
+# ------------------------------------------------------- panel credentials
+#
+# A SECOND, DISJOINT CREDENTIAL CLASS (SOLUS-A7-01). Supabase JWTs may
+# provision an account; panel tokens are provisioning-free by construction. The
+# two namespaces never touch: a panel route hashes its bearer and looks the
+# digest up in `panel_bindings`, so a JWT simply misses. No format sniffing, no
+# shared decode path, and nothing here calls `get_current_user`.
+#
+# These live in `deps.py` with the other dependencies deliberately, so
+# CLAUDE.md §7's "per-endpoint ad-hoc auth logic is forbidden" holds literally
+# rather than by exception.
+
+PANEL_TOKEN_TTL_DAYS = 90
+#: How stale `last_used_at` may get before it is rewritten.
+PANEL_LAST_USED_RESOLUTION = timedelta(hours=1)
+
+
+def panel_token_hash(token: str) -> str:
+    """Digest used for lookup. sha256 rather than a KDF: the token carries 256
+    bits of entropy, so there is nothing to slow down, and a KDF would force a
+    full-table scan instead of an indexed equality."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def get_panel_binding(
+    session: SessionDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)] = None,
+) -> PanelBinding:
+    """The live binding behind a panel bearer token, or 401.
+
+    Never provisions and never creates: an unknown token is simply
+    unauthenticated. Revocation and expiry are effective on the very next
+    request because the row is re-read every time — there is no cache anywhere
+    in this path.
+    """
+    if credentials is None:
+        raise APIError(401, "unauthenticated", "Panel token required")
+    binding: PanelBinding | None = await session.scalar(
+        select(PanelBinding).where(
+            PanelBinding.token_hash == panel_token_hash(credentials.credentials)
+        )
+    )
+    now = utcnow()
+    if binding is None or binding.revoked_at is not None or ensure_utc(binding.expires_at) <= now:
+        raise APIError(401, "unauthenticated", "Panel token required")
+    # Coarse: the revoke UI needs "last used" to be recognisable, not exact, and
+    # the panel polls often enough that a write per request would be pure noise.
+    last = binding.last_used_at
+    if last is None or (now - ensure_utc(last)) > PANEL_LAST_USED_RESOLUTION:
+        binding.last_used_at = now
+        await session.commit()
+    return binding
+
+
+async def get_panel_user(
+    session: SessionDep, binding: Annotated[PanelBinding, Depends(get_panel_binding)]
+) -> User:
+    """The Solus user a panel acts for.
+
+    Resolved by FK from a binding the user themselves approved — the
+    `routers/bridge.py` precedent of looking a user up by hand rather than
+    letting FastAPI inject `CurrentUser`, which is what would provision.
+    """
+    user = await session.get(User, binding.user_id)
+    if user is None or user.deleted_at is not None:
+        raise APIError(401, "unauthenticated", "Panel token required")
+    return user
+
+
+async def visible_project_ids(session: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """Every project this user may read — team membership OR a direct project
+    share (ADR-025), which is the same set `get_project_context` admits."""
+    by_team = await session.scalars(
+        select(Project.id)
+        .join(Membership, Membership.team_id == Project.team_id)
+        .where(
+            Membership.user_id == user_id,
+            Membership.deleted_at.is_(None),
+            Project.deleted_at.is_(None),
+        )
+    )
+    shared = await session.scalars(
+        select(ProjectMembership.project_id).where(
+            ProjectMembership.user_id == user_id,
+            ProjectMembership.deleted_at.is_(None),
+        )
+    )
+    return set(by_team.all()) | set(shared.all())
+
+
+PanelBindingDep = Annotated[PanelBinding, Depends(get_panel_binding)]
+PanelUser = Annotated[User, Depends(get_panel_user)]
 
 
 async def get_team_context(

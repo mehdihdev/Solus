@@ -1,10 +1,18 @@
-#!/usr/bin/env python3
-"""ADR-031 launch entrypoint for the vendored mock MCP server fixture."""
+#!/bin/sh
+# ADR-031 / CAD-00b launch entrypoint — the worked example a vendored fork copies.
+#
+# `#!/bin/sh` is an ABSOLUTE path: no PATH resolution anywhere, per the MCP-03
+# launcher contract. The interpreter comes from SOLUS_MCP_PYTHON, which the
+# companion sets to the fork's own private-env python (also absolute). A fork
+# with no private env falls back to nothing and fails loudly rather than
+# silently running under whatever `python3` the customer happens to have.
+#
+# cwd is the server directory, set by the companion — so `solus/` is relative.
+set -eu
 
-import os
-import sys
-from pathlib import Path
+if [ -z "${SOLUS_MCP_PYTHON:-}" ]; then
+    echo "solus: SOLUS_MCP_PYTHON is not set; the private environment is missing" >&2
+    exit 78
+fi
 
-SERVER = Path(__file__).resolve().parent.parent / "solus" / "server.py"
-
-os.execv(sys.executable, [sys.executable, str(SERVER)])
+exec "$SOLUS_MCP_PYTHON" "$(dirname "$0")/../solus/server.py"

@@ -4,14 +4,24 @@ handshake, including CSRF-state rejection and exchange-failure handling."""
 from typing import Any
 
 import pytest
-from conftest import create_project, create_team, me
+from conftest import FakeGitHub, create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.connectors.registry import ConnectorRegistry
 
 
+class _FakeAccountLevel(FakeGitHub):
+    """An ACCOUNT-level connector (Onshape and every CAD tool after it): one
+    grant covers the whole account and the tracked set lives in that source's
+    config, so a second source for the same provider is only ever a duplicate."""
+
+    provider = "onshape"
+    selection = {"mode": "multi", "config_key": "documents", "label": "document"}
+
+
 @pytest.fixture(autouse=True)
 def _install_fake_github(app: FastAPI, fake_registry: ConnectorRegistry) -> None:
+    fake_registry.register("onshape", _FakeAccountLevel)
     app.state.connector_registry = fake_registry
 
 
@@ -32,6 +42,53 @@ async def _start(client: AsyncClient, headers: dict[str, str], project_id: str) 
     assert resp.status_code == 201, resp.text
     data: dict[str, Any] = resp.json()["data"]
     return data
+
+
+async def _start_provider(
+    client: AsyncClient, headers: dict[str, str], project_id: str, provider: str
+) -> dict[str, Any]:
+    resp = await client.post(
+        f"/api/v1/integrations/{provider}/oauth/start",
+        json={"project_id": project_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    data: dict[str, Any] = resp.json()["data"]
+    return data
+
+
+async def _source_ids(client: AsyncClient, headers: dict[str, str], project_id: str) -> list[str]:
+    resp = await client.get(f"/api/v1/projects/{project_id}/sources", headers=headers)
+    assert resp.status_code == 200, resp.text
+    return [s["id"] for s in resp.json()["data"]]
+
+
+async def test_reconnecting_an_account_level_provider_reuses_one_source(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """Retrying a connect used to mint a fresh source every time, so each attempt
+    that reached the provider left another duplicate of the same account behind."""
+    project_id = await _project(client, alice_headers)
+
+    first = await _start_provider(client, alice_headers, project_id, "onshape")
+    second = await _start_provider(client, alice_headers, project_id, "onshape")
+
+    assert first["source_id"] == second["source_id"]
+    assert len(await _source_ids(client, alice_headers, project_id)) == 1
+
+
+async def test_repo_level_providers_still_get_a_source_each(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """The other half: a GitHub source names ONE repository, so two sources in a
+    project is a legitimate setup and must never be collapsed."""
+    project_id = await _project(client, alice_headers)
+
+    first = await _start(client, alice_headers, project_id)
+    second = await _start(client, alice_headers, project_id)
+
+    assert first["source_id"] != second["source_id"]
+    assert len(await _source_ids(client, alice_headers, project_id)) == 2
 
 
 async def test_catalog_lists_github(client: AsyncClient, alice_headers: dict[str, str]) -> None:

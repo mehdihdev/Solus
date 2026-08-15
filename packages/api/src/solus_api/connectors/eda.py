@@ -28,7 +28,6 @@ without eval/exec/subprocess and under a size bound (CLAUDE.md §7).
 from __future__ import annotations
 
 import abc
-import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final
@@ -49,6 +48,10 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.connectors.export_common import MAX_SYNC_ERRORS as _MAX_SYNC_ERRORS
+from solus_api.connectors.export_common import ErrorRecorder as _ErrorRecorder
+from solus_api.connectors.export_common import content_sha as _content_sha
+from solus_api.connectors.export_common import label as _label
 
 #: Structured-logging channel for acquisition degradation (§2.1 invariant 3):
 #: "why did this user's sync degrade?" must be answerable from here.
@@ -65,8 +68,9 @@ MAX_EXPORT_BYTES: Final = 8 * 1024 * 1024
 #: Cap on per-sync `SyncError`s (§7 — bound message sizes): an adversarial export
 #: full of duplicates must not amplify into megabytes of error objects persisted
 #: on one Sync row and echoed by every sync-history read. Overflow collapses
-#: into a single truncation note.
-MAX_SYNC_ERRORS: Final = 100
+#: into a single truncation note. Shared with the mechanical family so the two
+#: cannot drift (`export_common`, SOLUS-CAD-00).
+MAX_SYNC_ERRORS: Final = _MAX_SYNC_ERRORS
 
 #: `net` entity keys are namespaced so a net named like a designator can't collide
 #: with a component's key (source_keys must be unique within a sync — W0-05 §10).
@@ -190,32 +194,6 @@ def build_graph(
 
     entities = [*components.values(), *nets.values()]
     return entities, relations, recorder.finish()
-
-
-class _ErrorRecorder:
-    """Collects SyncErrors under the `MAX_SYNC_ERRORS` cap (§7): overflow is
-    counted and collapsed into one truncation note by `finish`."""
-
-    def __init__(self) -> None:
-        self._errors: list[SyncError] = []
-        self._suppressed = 0
-
-    def record(self, item: str, message: str) -> None:
-        if len(self._errors) < MAX_SYNC_ERRORS:
-            self._errors.append(SyncError(item=item, message=message))
-        else:
-            self._suppressed += 1
-
-    def finish(self) -> list[SyncError]:
-        if self._suppressed:
-            return [
-                *self._errors,
-                SyncError(
-                    item="parse",
-                    message=f"{self._suppressed} further issue(s) truncated",
-                ),
-            ]
-        return self._errors
 
 
 def _map_components(netlist: Netlist, recorder: _ErrorRecorder) -> dict[str, EntityOut]:
@@ -399,13 +377,3 @@ def _byte_len(text: str) -> int:
     # surrogatepass (not "ignore") so a surrogate-heavy adversarial string can't
     # under-count its way past the size bound; never raises on lone surrogates.
     return len(text.encode("utf-8", "surrogatepass"))
-
-
-def _content_sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-
-
-def _label(token: str, limit: int = 64) -> str:
-    """A short, safe label for a SyncError item — an over-long adversarial token
-    never bloats the error record."""
-    return token if len(token) <= limit else f"{token[:limit]}…"

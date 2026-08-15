@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in for a vendored fork's PRIVATE-ENV interpreter (CAD-00b).
+#
+# In a shipped build this path is a real interpreter, materialized at install
+# time from the fork's committed lockfile with hash verification. A git fixture
+# cannot carry a binary, so this shim forwards to the host python — which is
+# fine HERE because what the fixture exercises is the companion's side of the
+# contract: that it discovers `<tool>/.venv/bin/python`, verifies the path
+# resolves inside the integrations root, and hands it over as SOLUS_MCP_PYTHON.
+exec python3 "$@"

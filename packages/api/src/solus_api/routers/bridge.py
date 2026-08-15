@@ -35,6 +35,7 @@ from solus_api.bridge.frames import (
     CLOSE_UNAUTHENTICATED,
     CLOSE_UNSUPPORTED_VERSION,
     PROTOCOL_VERSION,
+    ArtifactChunkData,
     CredentialSubmitData,
     FrameViolation,
     HelloData,
@@ -48,7 +49,14 @@ from solus_api.bridge.frames import (
     pong_frame,
 )
 from solus_api.bridge.registry import BridgeSession
-from solus_api.bridge.service import TokenBucket, fail_inflight, ingest_result, supersede
+from solus_api.bridge.service import (
+    TokenBucket,
+    fail_artifact_fetches,
+    fail_inflight,
+    ingest_artifact_chunk,
+    ingest_result,
+    supersede,
+)
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
@@ -328,6 +336,12 @@ async def _handle_parsed(
         assert isinstance(frame.payload, StatusData)
         _store_status(session, frame.payload, known_servers)
         return None, False
+    if frame.type == "artifact_chunk":
+        assert isinstance(frame.payload, ArtifactChunkData)
+        # SOLUS-CAD-00c: bulk bytes for a pull this cloud started. Routed by
+        # fetch_id; an unknown one is dropped inside, never an error frame.
+        ingest_artifact_chunk(session, frame.payload)
+        return None, False
     if frame.type == "credential_submit":
         assert isinstance(frame.payload, CredentialSubmitData)
         return await _handle_credential_submit(state, session, frame.payload, submit_bucket), False
@@ -460,6 +474,7 @@ async def bridge_ws(ws: WebSocket, project_id: uuid.UUID) -> None:
         if session is not None:
             state.bridge_sessions.remove(session)  # only-if-current
             fail_inflight(session, "bridge disconnected")
+            fail_artifact_fetches(session)
             logger.info("bridge session %s closed", session.session_id)
 
 

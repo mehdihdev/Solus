@@ -1,0 +1,13 @@
+{
+  "$comment": "SOLUS-TU-06 seed catalog — control ids named by KiCad's own documentation (docs.kicad.org). Grown by TU-01 (geometry audit) and TU-02 (docs ingestion); curation is human-signed-off (Phase 0 §7.5).",
+  "tool": "kicad",
+  "controls": [
+    "kicad.eeschema.place_net_label",
+    "kicad.eeschema.place_wire",
+    "kicad.eeschema.place_symbol",
+    "kicad.eeschema.run_erc",
+    "kicad.pcbnew.route_track",
+    "kicad.pcbnew.fill_zones",
+    "kicad.pcbnew.run_drc"
+  ]
+}

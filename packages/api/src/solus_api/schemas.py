@@ -164,6 +164,18 @@ class SourceDisconnect(StrictModel):
     retain_entities: bool = False
 
 
+class ConfirmationDecision(StrictModel):
+    """Approve or reject one parked destructive action (SOLUS-ONS-A5).
+
+    A decision and NOTHING ELSE. `StrictModel` forbids extra fields, so a body
+    carrying its own `args` is a 422 rather than a merge — the arguments that
+    execute are the stored ones the user was shown. That is the whole security
+    property of the round-trip.
+    """
+
+    decision: Literal["approve", "reject"]
+
+
 class OAuthStart(StrictModel):
     project_id: str = Field(min_length=1)
     # Optional repo to pre-select; the user can also pick after connecting.
@@ -172,6 +184,10 @@ class OAuthStart(StrictModel):
     # Desktop loopback flow supplies its 127.0.0.1 callback here; web defaults
     # to the API's own callback. Validated against an allowlist server-side.
     redirect_uri: str | None = Field(default=None, max_length=2048)
+    # Which access mode to request, for connectors that offer a choice
+    # (SOLUS-ONS-A2). Omitted means the connector's declared DEFAULT, which is
+    # always the narrowest — an absent choice can only ever under-grant.
+    access: str | None = Field(default=None, max_length=32)
 
 
 class OAuthExchange(StrictModel):

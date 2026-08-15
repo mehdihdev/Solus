@@ -58,9 +58,9 @@ describe('formatMissingSupabaseEnvError', () => {
     expect(message).toContain('production')
   })
 
-  it('tells the developer how to fix it (env:sync) and how to build without auth (dev mode)', () => {
+  it('names the one env file to fix and how to build without auth (dev mode)', () => {
     const message = formatMissingSupabaseEnvError(['VITE_SUPABASE_ANON_KEY'], 'production')
-    expect(message).toContain('pnpm env:sync')
+    expect(message).toContain('.env at the repo root')
     expect(message).toContain('--mode development')
   })
 })

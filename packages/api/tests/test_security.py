@@ -27,6 +27,7 @@ KID = "test-signing-key"
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
+        _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
         supabase_jwt_secret=TEST_JWT_SECRET,
         supabase_jwt_audience=TEST_AUDIENCE,
         supabase_url=SUPABASE_URL,

@@ -21,6 +21,8 @@ function makeBridge(overrides: Partial<OAuthBridge> = {}): OAuthBridge {
   return {
     getRedirectUrl: vi.fn().mockResolvedValue('http://localhost:53682/auth/callback'),
     awaitGithub: vi.fn().mockResolvedValue({ code: 'auth-code-1' }),
+    getConnectorRedirectUrl: vi.fn().mockResolvedValue('http://localhost:53682/auth/callback'),
+    awaitOAuth: vi.fn().mockResolvedValue({ code: 'auth-code-1' }),
     ...overrides
   }
 }

@@ -20,7 +20,7 @@ from typing import Protocol
 
 from solus_api.agent.tools.shapes import ToolResult
 from solus_api.bridge.allowlist import BridgeToolSpec
-from solus_api.bridge.frames import StatusData
+from solus_api.bridge.frames import ArtifactChunkData, StatusData
 
 ScopeKey = tuple[uuid.UUID, uuid.UUID, uuid.UUID]  # (user_id, team_id, project_id)
 
@@ -48,6 +48,9 @@ class BridgeSession:
     # BRG-03: the last status snapshot (advisory, UI-facing; dies with the session).
     last_status: StatusData | None = None
     status_updated_at: datetime | None = None
+    # SOLUS-CAD-00c: in-flight artifact pulls, keyed by fetch_id. Separate id
+    # space from `inflight` (tool calls) so a chunk can never resolve a call.
+    artifact_fetches: dict[str, "asyncio.Queue[ArtifactChunkData]"] = field(default_factory=dict)
     entered: int = 0  # dispatchers inside dispatch() (running + queued)
     slots: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 

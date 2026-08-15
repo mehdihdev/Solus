@@ -90,7 +90,21 @@ re-validate the composed name in `discover_mcp_tools` so the bound is enforced m
   inside `integrations/mcp/`**.
 - Dependencies are materialized at companion **install/update time** from the fork's committed
   lockfile with hash verification (`pip install --require-hashes` / `npm ci --ignore-scripts`)
-  into a per-tool private env. Never at launch. `bin/launch` performs **zero network I/O**.
+  into a per-tool private env at **`<tool>/.venv/`**. Never at launch. `bin/launch` performs
+  **zero network I/O**.
+- **The companion tells the fork where its interpreter is** (CAD-00b). `bin/launch` may not
+  resolve one itself: PATH resolution is forbidden, and a PyInstaller-frozen companion's
+  `sys.executable` is the *companion binary*, so a launcher that re-execs it re-execs the
+  companion. The companion discovers `<tool>/.venv/bin/python`, verifies it resolves inside the
+  integrations root and is executable, and passes it as **`SOLUS_MCP_PYTHON`**. A launcher with
+  no interpreter exits 78 rather than falling back to an ambient `python3`. See
+  `packages/companion/tests/fixtures/mcp_root/mock/bin/launch` for the worked example.
+- **cwd is the tool's own directory**, set by the companion.
+- **The env allowlist is `<tool>/solus/env.allow`** — one variable NAME per line, `#` comments
+  allowed, Solus-authored and reviewed with the fork. Only those names are inherited from the
+  host; everything else in the companion's environment stays out. Values Solus *sets*
+  (`SOLUS_MCP_PYTHON`, and delivered license credentials once the bridge carries them) are
+  applied last, so a hostile ambient value cannot redirect a fork.
 
 ## `allowlist.yaml` — the single source of truth for exposed tools
 
@@ -177,3 +191,74 @@ is no sign-off path around it. Apache-2.0 carries the NOTICE-preservation obliga
 ships `upstream/NOTICE` verbatim). Recommended CI (proposed, human-owned `.gitlab-ci.yml`):
 spec↔dir↔allowlist name agreement; PROVENANCE tree-hash recompute; a no-`npx`/`uvx` grep over
 stdio specs; and the license/SCA audit job CLAUDE.md §7 already promises.
+
+---
+
+## Vendor-run servers: when NOT to fork (CAD-02)
+
+Not every tool becomes a fork. Autodesk ships its own MCP server that runs **on the customer's
+machine** — Preferences → General → API → "Fusion MCP Server (Runs locally on this device)",
+default port **27182**, available on the free **Personal** tier. Solus connects to it as a client.
+There is nothing to vendor: no `bin/launch`, no private env, no `PROVENANCE.md`, and no fork
+security review, because no upstream code is being taken.
+
+Declare one with a `url:` in its `allowlist.yaml` instead of a launcher:
+
+```yaml
+server: fusion
+url: http://127.0.0.1:27182/mcp
+tools:
+  - name: get_design_info
+    requires_confirmation: false
+```
+
+Everything else about the allowlist is unchanged — it is still the single source of truth for which
+tools are exposed, and per-tool `requires_confirmation` is still Solus-authored.
+
+### Loopback only — this is a security boundary, not a convention
+
+The companion runs **inside the customer's network**. A companion that will dial an arbitrary URL is
+an SSRF primitive reachable through whatever can influence an allowlist file, with the cloud
+metadata endpoint (`169.254.169.254`) as the classic target. So a `url:` is validated at discovery
+and again at connect: `http`/`https` only, host matched exactly against the loopback names or inside
+`127.0.0.0/8`. A hostname that merely *starts* with `127.0.0.1` is a different host and is refused.
+A non-loopback url refuses the whole server rather than downgrading it to stdio.
+
+### Why the companion is a LICENSING requirement, not an optimisation
+
+This is the durable answer to "why not just run Fusion in the cloud and skip the companion?"
+
+**Autodesk prohibits hosting or multiplexing a licensed seat.** Running Fusion server-side and
+exposing it to multiple Solus users through one installation would breach the EULA regardless of how
+the networking is arranged. Solus is permitted to drive a customer's own locally licensed instance
+as an external client calling *their* loopback — which is precisely what the bridge already does, by
+construction.
+
+The legal route for any future **cloud-side** Fusion automation is the **Fusion Automation API via
+APS** (pay-per-use), not the local MCP server. If someone proposes moving this into the cloud, that
+is the API to reach for, and it is a different integration.
+
+### Personal-tier commercial use
+
+Fusion **Personal** forbids commercial use and generating more than $1,000/year. A paying Solus
+customer driving a free-tier Fusion for business work violates Autodesk's terms, and Autodesk
+explicitly recommends that integrations warn about it. Solus shows a plain notice at connect and
+does **not** block the connection — the licence is the customer's to hold, and refusing to connect
+would neither enforce it nor help them.
+
+### Dynamic tooling: never hardcode tool names
+
+The Fusion server is closed source and its tool set is dynamic. Names and schemas come from
+`tools/list` at connect. Because there is no source to read, the only honest source for test
+fixtures is a **live `tools/list` capture** against a real install — a cheap human step, since the
+free tier suffices. Fixtures invented from documentation would be exactly the fabricated-data
+failure the vendoring rules exist to prevent.
+
+### Marketplace manifests (informational)
+
+Autodesk's MCP **Tool Manifest** requirements — declaring `tools`, `resources`, `prompts`,
+`external_endpoints`, `autodesk_apis_used`, `ai_llm_providers` — apply **only** to servers submitted
+for Design-and-Make Marketplace certification. Solus connects to a customer's own local Fusion and
+publishes nothing, so CAD-02 is not gated by them. Worth knowing anyway: `allowlist.yaml` is already
+manifest-shaped (server, tools, per-tool reason), so publishing later would be a translation rather
+than a redesign.

@@ -16,7 +16,13 @@ from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from sqlalchemy import delete, select, update
 
 from solus_api.connectors.contracts import AuthKind, ConnectorError, Credentials
-from solus_api.connectors.runtime import source_entity_count, source_entity_counts
+from solus_api.connectors.runtime import (
+    call_with_refresh,
+    refresh_secret_ref,
+    resolve_credentials,
+    source_entity_count,
+    source_entity_counts,
+)
 from solus_api.connectors.worker import execute_source_sync
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
@@ -209,6 +215,11 @@ async def disconnect_source(
     source = await _scoped_source(session, ctx, source_id)
     if source.secret_ref:
         await secret_store.delete(source.secret_ref)
+        # The OAuth refresh token lives under its own ref (SOLUS-CAD-01) and
+        # outlives the access token unless it is deleted here. Leaving it would
+        # let Solus keep minting access tokens against the user's documents
+        # after they believe they revoked us. `delete` no-ops when absent.
+        await secret_store.delete(refresh_secret_ref(source.secret_ref))
     if retain_entities:
         # Orphan the graph data into manual, user-owned entities rather than
         # removing it with the source.
@@ -335,29 +346,41 @@ async def get_sync(
     return envelope(serialize_sync(sync))
 
 
-@router.get("/{source_id}/repos")
-async def list_repos(
+@router.get("/{source_id}/selectable")
+async def list_selectable(
     source_id: uuid.UUID,
     ctx: ProjectCtx,
     session: SessionDep,
     registry: RegistryDep,
     secret_store: SecretStoreDep,
 ) -> dict[str, Any]:
-    """Repo picker for the connect flow (GitHub). Lists repositories the
-    connected account can access."""
+    """What this connected source can be pointed at: repositories, CAD documents,
+    …. One generic picker route, so a new connector becomes pickable by
+    implementing `list_selectable` — no route and no frontend change.
+
+    Credentials go through the refresh path: an Onshape access token lives 60
+    minutes, so editing a selection an hour after connecting must refresh rather
+    than 502.
+    """
     source = await _scoped_source(session, ctx, source_id)
     if not source.secret_ref:
         raise APIError(409, "not_connected", "Source is not connected yet")
     connector = _resolve_connector(registry, source.type.value)
-    lister = getattr(connector, "list_repositories", None)
+    lister = getattr(connector, "list_selectable", None)
     if lister is None:
-        raise APIError(400, "unsupported", "This provider does not list repositories")
-    token = await secret_store.get(source.secret_ref)
+        raise APIError(400, "unsupported", "This provider has nothing to select")
+    credentials = await resolve_credentials(secret_store, source.secret_ref)
     try:
-        repos = await lister(Credentials(token=token))
+        items = await call_with_refresh(
+            connector=connector,
+            credentials=credentials,
+            secret_store=secret_store,
+            secret_ref=source.secret_ref,
+            run=lister,
+        )
     except ConnectorError as exc:
         raise APIError(502, exc.code, exc.message) from exc
-    return envelope(repos)
+    return envelope(items)
 
 
 # --- sync dispatch (ADR-005) ---

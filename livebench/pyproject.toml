@@ -1,0 +1,33 @@
+[project]
+name = "solus-livebench"
+version = "0.1.0"
+description = "Live Bench runtime — telemetry transports, sim connectors, edge observers, robot recognition, deployment (SOLUSDEV-66)"
+requires-python = ">=3.12"
+dependencies = [
+    "solus-api",
+    "mcap>=1.3",
+    "websockets>=14",
+    "pydantic>=2.7",
+    "mujoco>=3.11.0",
+    "pyserial>=3.5",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-cpp>=0.23.4",
+    "tree-sitter-python>=0.25.0",
+]
+
+[tool.uv.sources]
+solus-api = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "types-pyserial>=3.5.0.20260712",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/livebench"]

@@ -12,12 +12,17 @@ generator opens after the response has started streaming.
 """
 
 import uuid
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.models import Conversation, ConversationTurn, TurnRole
+
+#: How many past turns reach the runner's context. Bounded because every one of
+#: them is billed on every turn and is attacker-influenceable text that would
+#: otherwise replay forever (CLAUDE.md §7).
+HISTORY_TURN_LIMIT: Final = 20
 
 
 class ConversationService:
@@ -117,16 +122,33 @@ class ConversationService:
         )
 
     async def history(
-        self, session: AsyncSession, *, conversation_id: uuid.UUID, project_id: uuid.UUID
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: uuid.UUID,
+        project_id: uuid.UUID,
+        limit: int = HISTORY_TURN_LIMIT,
     ) -> list[ConversationTurn]:
-        """The full ordered turn history (used to build the runner's live context)."""
-        return list(
-            (
-                await session.scalars(
-                    self.turns_query(conversation_id=conversation_id, project_id=project_id)
-                )
-            ).all()
-        )
+        """The recent ordered turn history, for the runner's live context.
+
+        BOUNDED, deliberately. A model-backed runner puts every one of these
+        turns into a paid prompt, so reading the whole log would be both a cost
+        bomb on a long thread and a permanent injection foothold — one poisoned
+        turn replaying into every future prompt forever.
+
+        The newest `limit` turns are taken (DESC + limit, then re-sorted into
+        chronological order), because dropping the OLDEST is what keeps the live
+        thread coherent. The paginated `/turns` endpoint is unaffected: it reads
+        `turns_query` directly and still serves the full transcript.
+        """
+        rows = (
+            await session.scalars(
+                self.turns_query(
+                    conversation_id=conversation_id, project_id=project_id, newest_first=True
+                ).limit(limit)
+            )
+        ).all()
+        return sorted(rows, key=lambda turn: (turn.created_at, turn.id))
 
 
 def serialize_conversation(conversation: Conversation) -> dict[str, Any]:
