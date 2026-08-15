@@ -1,19 +1,31 @@
-// Context Model screen (SOLUSDEV-152): the prototype demo graph is gone.
-// The screen keeps its layout shell (canvas backdrop + inspector rail),
-// renders an honest empty state, and shows REAL counts from the graph API
-// where the prototype displayed fabricated ones.
+// Context Model screen: honest empty states (SOLUSDEV-152) plus the entity
+// list (SOLUSDEV-70) — the project's entities render as selectable rows, and
+// selecting one drives the shared focus store (one bounded neighbourhood
+// fetch re-scopes every mounted widget).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { GraphScreen } from './GraphScreen'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useFocusStore } from '../workspace/focusStore'
+import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
-  return { ...actual, getProject: vi.fn(), listSources: vi.fn() }
+  return {
+    ...actual,
+    getProject: vi.fn(),
+    listAllEntities: vi.fn(),
+    getGraphNeighborhood: vi.fn()
+  }
 })
 
-function detailWith(entities: number, relations: number): resources.ProjectDetail {
+function detailWith(
+  entities: number,
+  relations: number,
+  sources: unknown[] = []
+): resources.ProjectDetail {
   return {
     id: 'p1',
     team_id: 't1',
@@ -23,8 +35,12 @@ function detailWith(entities: number, relations: number): resources.ProjectDetai
     created_at: '',
     updated_at: '',
     stats: { entities, relations },
-    sources: []
+    sources
   }
+}
+
+function entity(id: string, name: string): resources.Entity {
+  return { id, type: 'part', domain: 'mechanical', name, source_key: `onshape:${id}` }
 }
 
 function linkProject(): void {
@@ -34,6 +50,7 @@ function linkProject(): void {
 beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
+  useFocusStore.getState().reset()
 })
 
 describe('GraphScreen — unlinked (dev bypass)', () => {
@@ -59,7 +76,7 @@ describe('GraphScreen — linked', () => {
   it('prompts to connect a source when none are connected', async () => {
     linkProject()
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0))
-    vi.mocked(resources.listSources).mockResolvedValue([])
+    vi.mocked(resources.listAllEntities).mockResolvedValue([])
     render(<GraphScreen />)
     expect(
       await screen.findByText("Connect a source to start building your robot's graph")
@@ -68,27 +85,70 @@ describe('GraphScreen — linked', () => {
 
   it('prompts to sync when sources exist but no entities do', async () => {
     linkProject()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0))
-    vi.mocked(resources.listSources).mockResolvedValue([{ id: 's1' } as resources.Source])
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([])
     render(<GraphScreen />)
     expect(await screen.findByText('Waiting for your first sync')).toBeInTheDocument()
   })
 
-  it('shows real entity and relation counts once the graph has data', async () => {
+  it('lists entities sorted by name, with real counts in the corner', async () => {
     linkProject()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(12, 30))
-    vi.mocked(resources.listSources).mockResolvedValue([{ id: 's1' } as resources.Source])
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 5, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([
+      entity('e2', 'wrist servo'),
+      entity('e1', 'elbow motor')
+    ])
     render(<GraphScreen />)
     await waitFor(() =>
-      expect(screen.getByText('12 ENTITIES · 30 RELATIONS · 1 SOURCE')).toBeInTheDocument()
+      expect(screen.getByText('2 ENTITIES · 5 RELATIONS · 1 SOURCE')).toBeInTheDocument()
     )
-    expect(screen.getByText('Your graph is taking shape')).toBeInTheDocument()
+    const rows = screen.getAllByRole('button', { name: /elbow motor|wrist servo/ })
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining('elbow motor'),
+      expect.stringContaining('wrist servo')
+    ])
+    expect(screen.queryByText('Your graph is taking shape')).not.toBeInTheDocument()
+  })
+
+  it('selecting a row drives the shared focus store', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([entity('e1', 'elbow motor')])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [entity('e1', 'elbow motor')],
+      edges: [],
+      truncated: false
+    })
+    render(<GraphScreen />)
+    await userEvent.click(await screen.findByRole('button', { name: /elbow motor/ }))
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('e1'))
+    expect(vi.mocked(resources.getGraphNeighborhood)).toHaveBeenCalledWith('p1', 'e1', {
+      depth: 1
+    })
+  })
+
+  it('says so honestly when the entity list fails but counts succeeded', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(3, 5, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockRejectedValue(new Error('boom'))
+    render(<GraphScreen />)
+    expect(await screen.findByText("Couldn't load this project's entities")).toBeInTheDocument()
+    expect(screen.getByText('3 ENTITIES · 5 RELATIONS · 1 SOURCE')).toBeInTheDocument()
+  })
+
+  it('renders the refusal state — not "backend unreachable" — on a 403', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockRejectedValue(new ApiError(403, 'forbidden', 'nope'))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([])
+    render(<GraphScreen />)
+    expect(await screen.findByText("You don't have access to this project")).toBeInTheDocument()
+    expect(screen.queryByText(/can't reach its API/)).not.toBeInTheDocument()
   })
 
   it('shows a loading line while the summary fetches', () => {
     linkProject()
     vi.mocked(resources.getProject).mockReturnValue(new Promise(() => undefined))
-    vi.mocked(resources.listSources).mockReturnValue(new Promise(() => undefined))
+    vi.mocked(resources.listAllEntities).mockReturnValue(new Promise(() => undefined))
     render(<GraphScreen />)
     expect(screen.getByText(/LOADING CONTEXT MODEL/)).toBeInTheDocument()
   })

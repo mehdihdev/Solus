@@ -185,6 +185,28 @@ describe('integration + source calls', () => {
     await listEntities('p1', {}, client)
     expect(calls[0].path).toBe('/projects/p1/entities')
   })
+
+  it('listAllEntities follows the cursor until the last page', async () => {
+    const pages = [
+      { data: [{ id: 'e1' }, { id: 'e2' }], meta: { has_next: true, next_cursor: 'cur2' } },
+      { data: [{ id: 'e3' }], meta: { has_next: false, next_cursor: null } }
+    ]
+    const calls: string[] = []
+    const client: ApiClient = {
+      request: vi.fn(),
+      requestPage: vi.fn(async (path: string) => {
+        calls.push(path)
+        return pages[calls.length - 1] as never
+      })
+    }
+    const { listAllEntities } = await import('./resources')
+    const all = await listAllEntities('p1', client)
+    expect(all.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(calls).toEqual([
+      '/projects/p1/entities?limit=500',
+      '/projects/p1/entities?limit=500&cursor=cur2'
+    ])
+  })
 })
 
 // The bug this generalisation exists to prevent: the provider must reach the

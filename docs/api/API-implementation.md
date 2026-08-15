@@ -970,4 +970,3 @@ later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the wind
 to continuous delivery without a contract change. Durable telemetry history stays out of scope
 (LNK-06 decision: live ephemeral values only).
 
-> > > > > > > SOLUSDEV-66-lane-telemetry

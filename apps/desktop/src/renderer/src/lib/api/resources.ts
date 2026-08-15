@@ -537,6 +537,31 @@ export function listEntities(
   return client.request<Entity[]>(`/projects/${projectId}/entities${query ? `?${query}` : ''}`)
 }
 
+/**
+ * Every entity in the project. The server pages this route (default 200, cap
+ * 500) and `client.request` discards the envelope's `meta`, so a single call
+ * silently truncates any project past one page — this walks the cursor to the
+ * end instead.
+ */
+// ponytail: sequential cursor walk; the canvas ticket owns search/virtualization when projects hit many thousands
+export async function listAllEntities(
+  projectId: string,
+  client: ApiClient = api
+): Promise<Entity[]> {
+  const all: Entity[] = []
+  let cursor: string | null = null
+  do {
+    const params = new URLSearchParams({ limit: '500' })
+    if (cursor) params.set('cursor', cursor)
+    const page = await client.requestPage<Entity[]>(
+      `/projects/${projectId}/entities?${params.toString()}`
+    )
+    all.push(...page.data)
+    cursor = page.meta.has_next ? (page.meta.next_cursor ?? null) : null
+  } while (cursor)
+  return all
+}
+
 /* ---------------- Teams (§2.2) — members, invites, activity ---------------- */
 
 export type TeamRole = 'owner' | 'admin' | 'member' | 'viewer'

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useValidateProject } from './useValidateProject'
+import { useFocusStore } from './focusStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
 import * as resources from '../../lib/api/resources'
@@ -25,12 +26,16 @@ beforeEach(() => {
 })
 
 describe('useValidateProject', () => {
-  it('drops a project the server no longer has', async () => {
+  it('drops a project the server no longer has — and the focus scoped to it', async () => {
     vi.mocked(resources.getProject).mockRejectedValue(new ApiError(404, 'not_found', 'gone'))
+    // A focus scoped to the dead project must not survive it: this is the one
+    // setProject path outside WorkspaceShell, and it must clear like the others.
+    useFocusStore.setState({ focusedEntityId: 'e1', status: 'ready' })
 
     renderHook(() => useValidateProject())
 
     await waitFor(() => expect(useWorkspaceStore.getState().project).toBeNull())
+    expect(useFocusStore.getState().focusedEntityId).toBeNull()
   })
 
   it('keeps a project that still resolves', async () => {

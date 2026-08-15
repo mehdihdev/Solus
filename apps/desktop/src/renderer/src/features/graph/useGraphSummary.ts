@@ -1,23 +1,33 @@
-// Live counts for the Context Model screen (API.md §2.3/§2.5): the linked
-// project's entity/relation stats plus its connected sources. Degrades to
-// `offline` when the workspace isn't linked (dev bypass), no project is
-// selected, or the API is unreachable — callers then render the honest
-// sign-in/connect empty state, never placeholder robot data (SOLUSDEV-152).
+// Live summary for the Context Model screen: counts from getProject (whose
+// payload already carries the sources array — no second sources request) plus
+// the full entity list for the list view. Degrades honestly: `offline` when
+// the workspace isn't linked, no project is selected, or the API can't answer;
+// `error` when the API answers with a refusal (saying "can't reach the API"
+// there would be a lie); and a failed LIST call keeps status `ready` with
+// `entities: null` — the counts and the list are independent truths.
 import { useEffect, useState } from 'react'
-import { getProject, listSources } from '../../lib/api/resources'
+import { getProject, listAllEntities, type Entity } from '../../lib/api/resources'
+import { classifyFetchError } from '../../lib/api/errors'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
-export type GraphSummaryStatus = 'loading' | 'ready' | 'offline'
+export type GraphSummaryStatus = 'loading' | 'ready' | 'offline' | 'error'
 
 export interface GraphSummary {
   status: GraphSummaryStatus
   entityCount: number
   relationCount: number
   sourceCount: number
+  /** The project's entities, or null when the list call failed (counts may still be honest). */
+  entities: Entity[] | null
 }
 
-const ZERO_COUNTS = { entityCount: 0, relationCount: 0, sourceCount: 0 } as const
+const ZERO_COUNTS = {
+  entityCount: 0,
+  relationCount: 0,
+  sourceCount: 0,
+  entities: null
+} as const
 
 export function useGraphSummary(): GraphSummary {
   const fetchEnabled = useWorkspaceFetchEnabled()
@@ -34,19 +44,23 @@ export function useGraphSummary(): GraphSummary {
     }
     let cancelled = false
     setSummary({ status: 'loading', ...ZERO_COUNTS })
-    Promise.all([getProject(projectId), listSources(projectId)])
-      .then(([detail, sources]) => {
+    void Promise.allSettled([getProject(projectId), listAllEntities(projectId)]).then(
+      ([detail, entities]) => {
         if (cancelled) return
+        if (detail.status === 'rejected') {
+          const status = classifyFetchError(detail.reason) === 'unauthorized' ? 'error' : 'offline'
+          setSummary({ status, ...ZERO_COUNTS })
+          return
+        }
         setSummary({
           status: 'ready',
-          entityCount: detail.stats.entities,
-          relationCount: detail.stats.relations,
-          sourceCount: sources.length
+          entityCount: detail.value.stats.entities,
+          relationCount: detail.value.stats.relations,
+          sourceCount: detail.value.sources.length,
+          entities: entities.status === 'fulfilled' ? entities.value : null
         })
-      })
-      .catch(() => {
-        if (!cancelled) setSummary({ status: 'offline', ...ZERO_COUNTS })
-      })
+      }
+    )
     return () => {
       cancelled = true
     }
