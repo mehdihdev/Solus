@@ -73,6 +73,15 @@ _ID_RE = re.compile(r"^[A-Za-z0-9]{1,40}$")
 ONSHAPE_ID_RE = _ID_RE
 
 _REQUEST_TIMEOUT = 30.0
+#: Onshape rate-caps private OAuth apps, and one sync fires a translation job
+#: per assembly plus ~1/s status polls — so a 429 is an expected operating
+#: condition, not a failure. Retries are bounded (§7: never an unbounded loop
+#: against a third-party API) and the server's Retry-After is honored but
+#: capped, because the header is untrusted upstream input and must never park
+#: a sync worker.
+_RATE_LIMIT_RETRIES = 3
+_RATE_LIMIT_MAX_WAIT_SECONDS = 30.0
+_RATE_LIMIT_BACKOFF_SECONDS = 1.0
 #: httpx's timeout is per-read, so a slow trickle never trips it. The download
 #: carries its own total deadline on top.
 _DOWNLOAD_DEADLINE_SECONDS = 300.0
@@ -148,6 +157,15 @@ def _text(value: Any) -> str:
 def _owner_name(document: dict[str, Any]) -> str:
     owner = document.get("owner")
     return _text(owner.get("name")) if isinstance(owner, dict) else ""
+
+
+def _retry_wait(response: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retrying a 429. Honors Retry-After when it is a
+    plain integer, falls back to exponential backoff — capped either way,
+    because the header is untrusted upstream input (CLAUDE.md §7)."""
+    header = response.headers.get("Retry-After", "").strip()
+    wait = float(header) if header.isdigit() else _RATE_LIMIT_BACKOFF_SECONDS * (2**attempt)
+    return min(wait, _RATE_LIMIT_MAX_WAIT_SECONDS)
 
 
 def _safe_upstream_id(value: str) -> str:
@@ -620,36 +638,48 @@ class OnshapeConnector(OAuthConnector):
         Buffering first and measuring after cannot work: the bound exists to stop
         a huge body exhausting the worker, and by the time `response.content` is
         populated the damage is done. A trickling response would also never trip
-        httpx's per-read timeout, so the whole download carries a hard deadline.
+        httpx's per-read timeout, so the whole download carries a hard deadline
+        — covering the 429 retry waits too, so retries can never stretch the
+        download past it.
         """
-        chunks: list[bytes] = []
-        total = 0
         try:
             async with asyncio.timeout(_DOWNLOAD_DEADLINE_SECONDS):
-                async with client.stream("GET", path) as response:
-                    if response.status_code in (401, 403):
-                        raise ConnectorError(
-                            "invalid_credentials", "Onshape rejected the credentials"
-                        )
-                    if response.status_code >= 400:
-                        raise ConnectorError(
-                            "api_error",
-                            f"Onshape returned {response.status_code} for STEP download",
-                        )
-                    declared = response.headers.get("content-length")
-                    if declared and declared.isdigit() and int(declared) > MAX_CAD_EXPORT_BYTES:
-                        raise ConnectorError("export_too_large", _TOO_LARGE)
-                    async for chunk in response.aiter_bytes():
-                        total += len(chunk)
-                        if total > MAX_CAD_EXPORT_BYTES:
-                            raise ConnectorError("export_too_large", _TOO_LARGE)
-                        chunks.append(chunk)
+                for attempt in range(_RATE_LIMIT_RETRIES + 1):
+                    async with client.stream("GET", path) as response:
+                        if response.status_code != 429:
+                            return await self._read_export(response)
+                        wait = _retry_wait(response, attempt)
+                    if attempt < _RATE_LIMIT_RETRIES:
+                        await asyncio.sleep(wait)
         except TimeoutError as exc:
             raise ConnectorError("export_timeout", "the STEP download did not complete") from exc
         except httpx.HTTPError as exc:
             raise ConnectorError(
                 "api_unreachable", "could not reach Onshape for the export"
             ) from exc
+        raise ConnectorError(
+            "rate_limited", "Onshape's rate limit outlasted every retry of the STEP download"
+        )
+
+    @staticmethod
+    async def _read_export(response: httpx.Response) -> str:
+        """One download attempt's body, bounded as it streams."""
+        if response.status_code in (401, 403):
+            raise ConnectorError("invalid_credentials", "Onshape rejected the credentials")
+        if response.status_code >= 400:
+            raise ConnectorError(
+                "api_error", f"Onshape returned {response.status_code} for STEP download"
+            )
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_CAD_EXPORT_BYTES:
+            raise ConnectorError("export_too_large", _TOO_LARGE)
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_CAD_EXPORT_BYTES:
+                raise ConnectorError("export_too_large", _TOO_LARGE)
+            chunks.append(chunk)
         return b"".join(chunks).decode("utf-8", "replace")
 
     async def _poll_translation(self, client: httpx.AsyncClient, request_id: str) -> str:
@@ -769,10 +799,21 @@ class OnshapeConnector(OAuthConnector):
         json_body: dict[str, Any] | list[Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        try:
-            response = await client.request(method, path, json=json_body, params=params)
-        except httpx.HTTPError as exc:
-            raise ConnectorError("api_unreachable", f"could not reach Onshape for {what}") from exc
+        for attempt in range(_RATE_LIMIT_RETRIES + 1):
+            try:
+                response = await client.request(method, path, json=json_body, params=params)
+            except httpx.HTTPError as exc:
+                raise ConnectorError(
+                    "api_unreachable", f"could not reach Onshape for {what}"
+                ) from exc
+            if response.status_code != 429:
+                break
+            if attempt < _RATE_LIMIT_RETRIES:
+                await asyncio.sleep(_retry_wait(response, attempt))
+        if response.status_code == 429:
+            raise ConnectorError(
+                "rate_limited", f"Onshape's rate limit outlasted every retry of the {what}"
+            )
         if response.status_code in (401, 403):
             # The exact code `runtime._sync_with_refresh` keys off to refresh
             # the 60-minute token and retry once.
