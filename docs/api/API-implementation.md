@@ -969,3 +969,48 @@ Deliberately poll/push REST for this cycle: the WS/SSE streaming upgrade stays o
 later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the windowed shapes carry
 to continuous delivery without a contract change. Durable telemetry history stays out of scope
 (LNK-06 decision: live ephemeral values only).
+
+## 15b. Bench sessions & local sources (SOLUSDEV-72) — LIVE
+
+Tier-1 route-plan amendment (ADR-032), documented alongside implementation and called out in the
+SOLUSDEV-72 completion report. Implements the session subset of §2.10 plus the sources /
+device-recent amendment: the UI can now START a local connection — the gap `stream_live.py`
+recorded ("no route exists yet") is closed, with the LB-05 isolation tests it demanded.
+
+A session runs the provider's `LiveConnection` pump **in the API process** and tees every packet
+into `TelemetryPlumbing` — the §15 ingest sink stays the ONE telemetry path. Providers load via
+an optional runtime import of `livebench.local` (never a declared dependency; the package arrow
+points livebench → solus-api): a server without livebench answers `GET /sources` with
+`runner.available=false` and refuses session starts with `503 source_unavailable`. This is
+honest for today's dev topology (API on the user's machine); a future companion-hosted runner
+swaps in behind these same routes.
+
+| Method | Path                                                             | Purpose                                                                                          | Success |
+| ------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------- |
+| GET    | `/api/v1/projects/{project_id}/bench/sources`                    | Honest machine inventory: simulators (available/not + reason), serial devices, runner state      | `200`   |
+| POST   | `/api/v1/projects/{project_id}/bench/sessions`                   | Start a session (`{mode, config}` discriminated on `config.provider`; member role)               | `201`   |
+| GET    | `/api/v1/projects/{project_id}/bench/sessions`                   | List sessions, `?status=active\|ended&mode=sim\|real` (bounded ended ring)                       | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/sessions/{session_id}`      | Session detail: status, live link state, device_ids seen, counts, last window summary            | `200`   |
+| POST   | `/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop` | Stop (idempotent; `aclose` teardown flushes the pending window; member role)                     | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/device-recent`              | `?device_id=…` (repeated, 1–16) `&limit=` — batched recent values for devices with NO graph entity yet (pre-RBT-05); one request covers every polled panel | `200`   |
+
+Providers and their config (all bodies `extra="forbid"`): `mujoco` (inline MJCF ≤2 MB or the
+built-in demo scene; realtime forced, bounded duration — a non-realtime run would busy-loop the
+event loop), `gazebo` (bounded topic list, flag-shaped topics refused; pinned `gz` CLI),
+`mcap-replay` (path confined under `Settings.bench_data_root`; unset root refuses MCAP outright),
+`serial` (**bound by USB serial number**, resolved to `/dev/serial/by-id`; ambiguous or absent
+serials refuse with candidates — `409 device_ambiguous` — unless an explicit still-enumerated
+`confirmed_device_path` pick is supplied). Errors: `409 too_many_sessions` (per-project cap 4),
+`404 device_not_found`, `503 source_unavailable`, `422` for config/path violations.
+
+Session state is in-memory and project-keyed (BenchEventRing posture — lifecycle, not history;
+no migration). Lifespan shutdown closes every pump/subprocess/port. Data events:
+`bench.session_started` / `bench.session_stopped`.
+
+Related (§2.5 amendment): `GET /api/v1/integrations/local-tools` lists vendor-run loopback MCP
+servers from the ADR-031 catalog (Fusion today) for the desktop's generic `local-bridge` tile —
+the next bridge-hosted tool is a backend catalog entry, zero frontend edits.
+
+Isaac Sim stays a read-target (ADR-014): MCAP replay is the recorded path, and
+`livebench/sim/isaac_direct.py` (run under Isaac's own python, stdlib-only, token via env) is the
+ROS-free live path POSTing straight into §15's ingest route — zero new API surface.

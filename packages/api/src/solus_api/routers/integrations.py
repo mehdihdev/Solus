@@ -62,6 +62,30 @@ async def list_integrations(registry: RegistryDep, _user: CurrentUser) -> dict[s
     return envelope(registry.catalog())
 
 
+@router.get("/local-tools")
+async def list_local_tools(_user: CurrentUser) -> dict[str, Any]:
+    """Bridge-hosted desktop tools (SOLUSDEV-72): vendor-run loopback MCP servers
+    from the ADR-031 catalog (Fusion today). These are not connectors — they run
+    on the customer's machine, reached through the companion — so they surface as
+    the generic `local-bridge` tile: the next tool is a catalog entry here, never
+    a frontend edit."""
+    from solus_api.agent.tools.mcp_servers import MCP_SERVER_CATALOG
+
+    tools = [
+        {
+            "type": spec.name,
+            "display_name": spec.name.replace("_", " ").capitalize(),
+            "hosting": "vendor-run",
+            "url_host": urlsplit(spec.url).netloc,
+            "connect_notice": spec.connect_notice,
+            "requires": "companion",
+        }
+        for spec in MCP_SERVER_CATALOG.values()
+        if spec.url is not None  # command-launched forks are companion-managed, not tiles
+    ]
+    return envelope(tools)
+
+
 def _provider_type(provider: str) -> SourceType:
     try:
         return SourceType(provider)

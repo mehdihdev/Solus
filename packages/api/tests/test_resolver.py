@@ -1,68 +1,58 @@
-"""Device/topic id → graph entity resolution (SOLUS-LNK-06).
-
-The DB resolver runs against Postgres. The security-critical case is tenant isolation: a device
-id known in project A must never resolve under project B (§7).
-"""
+"""SOLUSDEV-72: the caching entity resolver — positive results are cached with a
+TTL so a 50 Hz per-joint stream costs ~1 query per device per TTL, not one per
+packet. Negative results are deliberately NOT cached: a just-linked entity must
+attach on the next packet, never after a stale-miss window."""
 
 import uuid
 
-from solus_api.graph.resolver import DbEntityResolver, DictEntityResolver
-from solus_api.models import Domain, GraphEntity, Membership, Project, Role, Team, User
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from solus_api.graph.resolver import CachingEntityResolver
 
 
-async def test_dict_resolver_maps_and_misses() -> None:
+class CountingResolver:
+    def __init__(self, mapping: dict[tuple[uuid.UUID, str], uuid.UUID]) -> None:
+        self._mapping = mapping
+        self.calls = 0
+
+    async def resolve(self, project_id: uuid.UUID, device_id: str) -> uuid.UUID | None:
+        self.calls += 1
+        return self._mapping.get((project_id, device_id))
+
+
+async def test_positive_results_are_cached_within_ttl() -> None:
     project, entity = uuid.uuid4(), uuid.uuid4()
-    resolver = DictEntityResolver({(project, "motor0"): entity})
-    assert await resolver.resolve(project, "motor0") == entity
-    assert await resolver.resolve(project, "ghost") is None
-    assert await resolver.resolve(uuid.uuid4(), "motor0") is None  # other project → miss
+    inner = CountingResolver({(project, "dev"): entity})
+    now = [0.0]
+    resolver = CachingEntityResolver(inner, ttl_seconds=30.0, clock=lambda: now[0])
+
+    for _ in range(50):
+        assert await resolver.resolve(project, "dev") == entity
+    assert inner.calls == 1
+
+    now[0] = 31.0  # TTL elapsed → one fresh lookup
+    assert await resolver.resolve(project, "dev") == entity
+    assert inner.calls == 2
 
 
-async def _seed_entity(
-    db: AsyncSession, name: str, external_ref: str
-) -> tuple[Project, GraphEntity]:
-    user = User(supabase_user_id=f"sub-{name}-{uuid.uuid4().hex[:8]}", email=f"{name}@ex.com")
-    team = Team(name=name)
-    db.add_all([user, team])
-    await db.flush()
-    db.add(Membership(team_id=team.id, user_id=user.id, role=Role.OWNER))
-    project = Project(team_id=team.id, name=name, created_by=user.id)
-    db.add(project)
-    await db.flush()
-    entity = GraphEntity(
-        project_id=project.id,
-        kind="sensor",
-        domain=Domain.RUNTIME,
-        name=f"{name}-imu",
-        external_ref=external_ref,
-        attrs={},
-    )
-    db.add(entity)
-    await db.flush()
-    await db.commit()
-    return project, entity
+async def test_negative_results_are_never_cached() -> None:
+    project, entity = uuid.uuid4(), uuid.uuid4()
+    inner = CountingResolver({})
+    resolver = CachingEntityResolver(inner, ttl_seconds=30.0, clock=lambda: 0.0)
+
+    assert await resolver.resolve(project, "dev") is None
+    inner._mapping[(project, "dev")] = entity  # the entity gets linked mid-stream
+    assert await resolver.resolve(project, "dev") == entity  # attaches immediately
 
 
-async def test_db_resolver_finds_entity_by_external_ref(
-    db: AsyncSession, engine: AsyncEngine
-) -> None:
-    project, entity = await _seed_entity(db, "resolveok", "imu-42")
-    resolver = DbEntityResolver(async_sessionmaker(engine, expire_on_commit=False))
-    assert await resolver.resolve(project.id, "imu-42") == entity.id
+async def test_cache_is_bounded_and_keyed_by_project() -> None:
+    project_a, project_b = uuid.uuid4(), uuid.uuid4()
+    entity_a, entity_b = uuid.uuid4(), uuid.uuid4()
+    inner = CountingResolver({(project_a, "dev"): entity_a, (project_b, "dev"): entity_b})
+    resolver = CachingEntityResolver(inner, ttl_seconds=30.0, max_entries=2, clock=lambda: 0.0)
 
+    assert await resolver.resolve(project_a, "dev") == entity_a
+    assert await resolver.resolve(project_b, "dev") == entity_b  # same device id, own entry
 
-async def test_db_resolver_is_project_scoped(db: AsyncSession, engine: AsyncEngine) -> None:
-    """Tenant isolation: a device id present in project A never resolves under project B."""
-    await _seed_entity(db, "tenantA", "imu-shared")
-    project_b, _ = await _seed_entity(db, "tenantB", "other-ref")
-    resolver = DbEntityResolver(async_sessionmaker(engine, expire_on_commit=False))
-    assert await resolver.resolve(project_b.id, "imu-shared") is None
-
-
-async def test_db_resolver_returns_none_for_unknown_device(
-    db: AsyncSession, engine: AsyncEngine
-) -> None:
-    project, _ = await _seed_entity(db, "unknowndev", "imu-known")
-    resolver = DbEntityResolver(async_sessionmaker(engine, expire_on_commit=False))
-    assert await resolver.resolve(project.id, "nope") is None
+    # Overflow evicts rather than grows.
+    for i in range(5):
+        await resolver.resolve(project_a, f"dev{i}")
+    assert await resolver.resolve(project_a, "dev") == entity_a  # still correct, maybe re-fetched

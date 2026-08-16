@@ -16,6 +16,7 @@ construction. All reads are project-scoped.
 """
 
 import logging
+from collections import deque
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -27,12 +28,26 @@ from solus_api.agent.interfaces import (
     TelemetryWindowSummary,
 )
 from solus_api.graph.buffer import TelemetryBuffer
-from solus_api.graph.packet import RecentSample, RecentValuesView, SignalSeries, TelemetryPacket
+from solus_api.graph.packet import (
+    DeviceRecentView,
+    RecentSample,
+    RecentValuesView,
+    SignalSeries,
+    TelemetryPacket,
+)
 from solus_api.graph.resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SUMMARY_BUCKETS = 6  # sub-windows get_telemetry splits a window into (a progression)
+#: SOLUSDEV-72 device ring bounds — drop-new at the cap so a hostile stream can
+#: grow neither the per-project device-key space nor the per-device signal space.
+#: Sized for a "watch the arm before it's in the graph" view, not an archive:
+#: worst case ≈ 16×16×256 samples ≈ tens of MB per project, not the ~1 GB the
+#: security review measured at 64×64×512. ponytail: drop-new; LRU if churn matters.
+DEFAULT_UNRESOLVED_DEVICE_CAP = 16
+DEFAULT_UNRESOLVED_SIGNALS_PER_DEVICE = 16
+DEFAULT_UNRESOLVED_SAMPLES_CAP = 256
 
 
 class IngestResult(BaseModel):
@@ -67,27 +82,74 @@ class TelemetryPlumbing:
         resolver: EntityResolver,
         *,
         summary_buckets: int = DEFAULT_SUMMARY_BUCKETS,
+        unresolved_device_cap: int = DEFAULT_UNRESOLVED_DEVICE_CAP,
+        unresolved_samples_cap: int = DEFAULT_UNRESOLVED_SAMPLES_CAP,
     ) -> None:
         if summary_buckets <= 0:
             raise ValueError("summary_buckets must be positive")
         self._buffer = buffer
         self._resolver = resolver
         self._buckets = summary_buckets
+        self._device_cap = unresolved_device_cap
+        self._device_samples_cap = unresolved_samples_cap
+        #: SOLUSDEV-72: project → device_id → signal → bounded samples. Holds the
+        #: stream for devices with NO graph entity yet, so Live Bench can show a
+        #: connected arm before RBT-05 reconciles it. Ephemeral, like the buffer.
+        self._device_rings: dict[UUID, dict[str, dict[str, deque[RecentSample]]]] = {}
 
     async def ingest(self, project_id: UUID, packet: TelemetryPacket) -> IngestResult:
         entity_id = await self._resolver.resolve(project_id, packet.device_id)
         if entity_id is None:
-            logger.debug(
-                "telemetry packet dropped: unresolved device project=%s device_id=%r",
-                project_id,
-                packet.device_id[:64],
-            )
+            self._buffer_unresolved(project_id, packet)
             return IngestResult(entity_id=None, accepted=0, signals=[])
+        # A device that just resolved (RBT-05 confirmed it) drops its unresolved
+        # ring: the entity feed is the home now — stale pre-link samples must not
+        # keep serving from the device view.
+        devices = self._device_rings.get(project_id)
+        if devices is not None:
+            devices.pop(packet.device_id, None)
         for signal, value in packet.values.items():
             await self._buffer.append(project_id, entity_id, signal, packet.timestamp, value)
         return IngestResult(
             entity_id=entity_id, accepted=len(packet.values), signals=sorted(packet.values)
         )
+
+    def _buffer_unresolved(self, project_id: UUID, packet: TelemetryPacket) -> None:
+        devices = self._device_rings.setdefault(project_id, {})
+        ring = devices.get(packet.device_id)
+        if ring is None:
+            if len(devices) >= self._device_cap:
+                logger.debug(
+                    "unresolved device dropped at cap: project=%s device_id=%r",
+                    project_id,
+                    packet.device_id[:64],
+                )
+                return
+            ring = devices[packet.device_id] = {}
+        for signal, value in packet.values.items():
+            samples = ring.get(signal)
+            if samples is None:
+                if len(ring) >= DEFAULT_UNRESOLVED_SIGNALS_PER_DEVICE:
+                    continue  # drop-new: bounded signal-name space per device
+                samples = ring[signal] = deque(maxlen=self._device_samples_cap)
+            samples.append(RecentSample(timestamp=packet.timestamp, value=value))
+
+    async def get_device_recent(
+        self, project_id: UUID, device_id: str, *, limit: int | None = None
+    ) -> DeviceRecentView:
+        """Recent values for one device, entity or not (SOLUSDEV-72). Resolved
+        devices report their entity id and an empty series — the entity feed is
+        the home for that data; the ring only holds the unreconciled stream."""
+        entity_id = await self._resolver.resolve(project_id, device_id)
+        ring = self._device_rings.get(project_id, {}).get(device_id, {})
+        series = [
+            SignalSeries(
+                signal=name,
+                points=list(samples)[-limit:] if limit is not None else list(samples),
+            )
+            for name, samples in sorted(ring.items())
+        ]
+        return DeviceRecentView(device_id=device_id, resolved_entity_id=entity_id, signals=series)
 
     async def get_recent_values(
         self,

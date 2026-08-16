@@ -10,7 +10,7 @@ from httpx import AsyncClient
 from solus_api.connectors.registry import ConnectorRegistry
 
 
-class _FakeAccountLevel(FakeGitHub):
+class _FakeAccountLevel(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
     """An ACCOUNT-level connector (Onshape and every CAD tool after it): one
     grant covers the whole account and the tracked set lives in that source's
     config, so a second source for the same provider is only ever a duplicate."""
@@ -247,3 +247,31 @@ async def test_oauth_start_requires_membership(
         headers=bob_headers,
     )
     assert resp.status_code == 404
+
+
+# ── SOLUSDEV-72: bridge-hosted local tools (the generic Fusion-tile source) ─────
+
+
+async def test_local_tools_lists_vendor_run_loopback_servers(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    await me(client, alice_headers)
+    resp = await client.get("/api/v1/integrations/local-tools", headers=alice_headers)
+    assert resp.status_code == 200, resp.text
+    tools = resp.json()["data"]
+    by_type = {t["type"]: t for t in tools}
+    # Fusion is the one vendor-run loopback server today; the next tool appears
+    # here by catalog entry alone — zero frontend edits.
+    fusion = by_type["fusion"]
+    assert fusion["display_name"] == "Fusion"
+    assert fusion["hosting"] == "vendor-run"
+    assert fusion["url_host"] == "127.0.0.1:27182"
+    assert fusion["requires"] == "companion"
+    assert "licen" in fusion["connect_notice"].lower()
+    # Command-launched forks (kicad, altium…) are NOT local-bridge tiles.
+    assert "kicad" not in by_type and "web_search" not in by_type
+
+
+async def test_local_tools_requires_authentication(client: AsyncClient) -> None:
+    resp = await client.get("/api/v1/integrations/local-tools")
+    assert resp.status_code == 401

@@ -190,6 +190,10 @@ class Settings(BaseSettings):
     # empty allowlist drops every companion-advertised tool as "not allowlisted"
     # rather than erroring, so the bridge simply appears to have nothing on it.
     bridge_allowlist_root: str = str(REPO_ROOT / "integrations" / "mcp")
+    # SOLUSDEV-72: the only directory MCAP-replay sessions may read recordings
+    # from. Unset (the default) refuses MCAP sessions outright — an unbounded
+    # server-side file read keyed off a request body is not a feature (§7).
+    bench_data_root: str | None = None
     bridge_control_frame_max_bytes: int = 16_384
     bridge_tool_call_max_bytes: int = 262_144
     bridge_tool_result_max_bytes: int = 1_048_576

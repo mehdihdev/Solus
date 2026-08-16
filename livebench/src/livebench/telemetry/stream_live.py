@@ -21,7 +21,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
@@ -32,6 +32,12 @@ from solus_api.graph.packet import TelemetryPacket
 from livebench.telemetry.windowing import WindowAggregator
 
 logger = logging.getLogger(__name__)
+
+#: Per-packet observer (SOLUSDEV-72): the bench-session route tees every pumped
+#: packet into the project's telemetry plumbing through this. It sees the healed,
+#: identity-pinned stream (post ReconnectingSource), and a failing tap never
+#: kills the pump — same posture as a broken batch callback.
+PacketTap = Callable[[TelemetryPacket], Awaitable[None]]
 
 
 class PacketSource(Protocol):
@@ -48,6 +54,8 @@ class PacketStreamLiveConnection(LiveConnection):
     def __init__(self, source: PacketSource, *, project_id: UUID | None = None) -> None:
         self._source = source
         self.project_id = project_id
+        #: Set before the first `subscribe` (the pump starts lazily there).
+        self.tap: PacketTap | None = None
         self._aggregators: dict[str, WindowAggregator] = {}
         self._callbacks: dict[str, BatchCallback] = {}
         self._status = LiveStatus.DISCONNECTED
@@ -109,6 +117,11 @@ class PacketStreamLiveConnection(LiveConnection):
     async def _run(self) -> None:
         try:
             async for packet in self._source:
+                if self.tap is not None:
+                    try:
+                        await self.tap(packet)
+                    except Exception:
+                        logger.exception("packet tap failed; pump continues")
                 for handle, aggregator in list(self._aggregators.items()):
                     summary = aggregator.add(packet)
                     if summary is None:

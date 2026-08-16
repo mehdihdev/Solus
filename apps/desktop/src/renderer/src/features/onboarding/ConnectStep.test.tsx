@@ -219,6 +219,46 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
   })
 })
 
+describe('ConnectStep — local-bridge routing (SOLUSDEV-72)', () => {
+  beforeEach(reset)
+
+  it('a local-bridge tile opens the companion guidance, not a credential flow', async () => {
+    mockedCatalog.mockResolvedValue([
+      ...FALLBACK_CATALOG,
+      {
+        id: 'fusion',
+        name: 'Fusion',
+        kind: 'Local tool — companion bridge',
+        mark: 'Fu',
+        mode: 'local-bridge',
+        configFields: [],
+        selection: null,
+        accessModes: null,
+        localTool: {
+          type: 'fusion',
+          display_name: 'Fusion',
+          hosting: 'vendor-run',
+          url_host: '127.0.0.1:27182',
+          connect_notice: 'Launch Fusion and enable the MCP server',
+          requires: 'companion'
+        }
+      }
+    ])
+    // Deliberately NOT linked: guidance needs no project and no OAuth bridge.
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    await userEvent.click(await screen.findByText('Fusion'))
+
+    expect(await screen.findByText('Connect Fusion')).toBeInTheDocument()
+    expect(screen.getByText('Launch Fusion and enable the MCP server')).toBeInTheDocument()
+    expect(mockedRun).not.toHaveBeenCalled()
+    expect(mockedEda).not.toHaveBeenCalled()
+    // No error state was invented for the tile either.
+    expect(useOnboardingStore.getState().connections.fusion).toBeUndefined()
+  })
+})
+
 describe('ConnectStep — skip path (FND-08)', () => {
   beforeEach(reset)
 

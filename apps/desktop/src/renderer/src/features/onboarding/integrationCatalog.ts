@@ -6,16 +6,19 @@
 // drivable pair; click-time guards report honest errors if connect can't run.
 import {
   listIntegrations,
+  listLocalTools,
   type Integration as ApiIntegration,
   type IntegrationAccessModes,
-  type IntegrationSelection
+  type IntegrationSelection,
+  type LocalTool
 } from '../../lib/api/resources'
 import { INTEGRATIONS, type Integration } from './integrations.constants'
 
-/** How a tile really connects: the desktop OAuth bridge (any provider) or a
- * committed-export file pick. There is no simulated mode — undrivable
- * providers are hidden. */
-export type ConnectMode = 'oauth' | 'export-file'
+/** How a tile really connects: the desktop OAuth bridge (any provider), a
+ * committed-export file pick, or the local companion bridge (SOLUSDEV-72 —
+ * the connect action is guidance, not a credential flow). There is no
+ * simulated mode — undrivable providers are hidden. */
+export type ConnectMode = 'oauth' | 'export-file' | 'local-bridge'
 
 export interface CatalogEntry extends Integration {
   readonly mode: ConnectMode
@@ -29,6 +32,9 @@ export interface CatalogEntry extends Integration {
   /** The grants the connector offers at connect time, or null when there is no
    * choice. Drives the generic access picker (SOLUS-ONS-A2). */
   readonly accessModes: IntegrationAccessModes | null
+  /** Present ONLY on local-bridge tiles: the live registry row the tile
+   * derives from, so the connect action shows its guidance directly. */
+  readonly localTool?: LocalTool
 }
 
 /** Display metadata for live providers outside the curated onboarding pair.
@@ -99,14 +105,32 @@ export const FALLBACK_CATALOG: readonly CatalogEntry[] = INTEGRATIONS.map((displ
   ...CURATED[display.id]
 }))
 
+/** A local-bridge tile, derived ENTIRELY from the live local-tools registry —
+ * the next tool needs zero frontend edits. */
+function localBridgeEntry(tool: LocalTool): CatalogEntry {
+  return {
+    id: tool.type,
+    name: tool.display_name,
+    kind: 'Local tool — companion bridge',
+    mark: tool.display_name.slice(0, 2),
+    mode: 'local-bridge',
+    configFields: [],
+    selection: null,
+    accessModes: null,
+    localTool: tool
+  }
+}
+
 /**
  * Build the tile list from the live connector registry: curated tiles first
  * (only when the backend registers them), then any additional drivable live
- * providers. Falls back to the curated drivable pair when the API is
- * unreachable. Undrivable providers are never listed.
+ * providers, then local-bridge tools from the local-tools registry. Falls back
+ * to the curated drivable pair when the API is unreachable. Undrivable
+ * providers are never listed.
  */
 export async function loadIntegrationCatalog(
-  fetchIntegrations: () => Promise<ApiIntegration[]> = listIntegrations
+  fetchIntegrations: () => Promise<ApiIntegration[]> = listIntegrations,
+  fetchLocalTools: () => Promise<LocalTool[]> = listLocalTools
 ): Promise<readonly CatalogEntry[]> {
   let live: ApiIntegration[]
   try {
@@ -135,5 +159,18 @@ export async function loadIntegrationCatalog(
     .filter((integration) => !INTEGRATIONS.some((c) => c.id === integration.type))
     .flatMap((integration) => entry(integration, displayFor(integration.type)))
 
-  return [...curated, ...extras]
+  // Local-bridge tools: best-effort — a failing fetch means no bridge tiles,
+  // never a broken catalog. A type that already has a drivable tile keeps it.
+  let localTools: LocalTool[] = []
+  try {
+    localTools = await fetchLocalTools()
+  } catch {
+    localTools = []
+  }
+  const listed = [...curated, ...extras]
+  const bridgeTiles = localTools
+    .filter((tool) => !listed.some((e) => e.id === tool.type))
+    .map(localBridgeEntry)
+
+  return [...listed, ...bridgeTiles]
 }

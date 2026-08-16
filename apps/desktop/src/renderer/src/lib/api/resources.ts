@@ -898,3 +898,217 @@ export function approvePanelLink(
 export function revokePanelLink(linkId: string, client: ApiClient = api): Promise<void> {
   return client.request<void>(`/users/me/panel-links/${linkId}`, { method: 'DELETE' })
 }
+
+// --- Local connections: bench sources + sessions (SOLUSDEV-72) --------------
+
+/** Whether livebench is installed server-side. `available=false` disables every
+ *  simulator/device control, explained by `reason` — never silently. */
+export interface BenchRunner {
+  available: boolean
+  reason: string | null
+}
+
+export type BenchSimulatorKind = 'mujoco' | 'gazebo' | 'isaac' | 'mcap-replay'
+
+export interface BenchSimulator {
+  kind: BenchSimulatorKind
+  available: boolean
+  reason: string | null
+}
+
+/** A serial device as the backend detected it. Everything here is a CLAIM the
+ *  UI must render verbatim — a `usb_bridge` board class means the MCU behind
+ *  the bridge is unknown, and the UI must never guess a board for it. */
+export interface BenchDevice {
+  device_path: string
+  by_id_path: string | null
+  serial_number: string | null
+  vid: string
+  pid: string
+  board: string | null
+  board_class: string
+  mcu_known: boolean
+  confidence: number
+  /** Two+ devices share a serial or lack one — connect requires an explicit
+   *  user pick of the device_path (propose, never assert). */
+  ambiguous: boolean
+  note: string | null
+}
+
+export interface BenchSources {
+  runner: BenchRunner
+  simulators: BenchSimulator[]
+  devices: BenchDevice[]
+}
+
+export function getBenchSources(projectId: string, client: ApiClient = api): Promise<BenchSources> {
+  return client.request<BenchSources>(`/projects/${projectId}/bench/sources`)
+}
+
+export interface MujocoSimConfig {
+  provider: 'mujoco'
+  /** Omit mjcf_xml → the builtin demo scene. */
+  scene_name?: string
+  mjcf_xml?: string
+  sample_hz?: number
+  duration_seconds?: number
+  window_seconds?: number
+}
+
+export interface GazeboSimConfig {
+  provider: 'gazebo'
+  topics: string[]
+}
+
+export interface McapReplayConfig {
+  provider: 'mcap-replay'
+  /** Path under the server's bench data root — never a client filesystem path. */
+  mcap_path: string
+  topics?: string[]
+}
+
+/** ALWAYS send serial_number when the device has one; confirmed_device_path is
+ *  ONLY for a user-confirmed pick of a serial-less/ambiguous device. */
+export interface SerialRealConfig {
+  provider: 'serial'
+  serial_number?: string
+  confirmed_device_path?: string
+  baud?: number
+}
+
+export type CreateBenchSessionInput =
+  | { mode: 'sim'; config: MujocoSimConfig | GazeboSimConfig | McapReplayConfig }
+  | { mode: 'real'; config: SerialRealConfig }
+
+export type BenchSessionStatus = 'starting' | 'active' | 'ended'
+/** Honest live link state — a dead pump reads `disconnected`, never "streaming". */
+export type BenchLinkState = 'disconnected' | 'connected' | 'streaming'
+
+export interface BenchWindowSummary {
+  window_start: string
+  window_end: string
+  summary: string
+  signals: Record<string, unknown>
+  anomalies: unknown
+}
+
+/** The device echo on a real session — NOT a full BenchDevice. `device_path`
+ *  is set only when the session was started from an explicit user pick. */
+export interface BenchSessionDevice {
+  serial_number: string | null
+  device_path: string | null
+  baud: number
+}
+
+export interface BenchSession {
+  id: string
+  mode: 'sim' | 'real'
+  provider: string
+  status: BenchSessionStatus
+  link: BenchLinkState
+  label: string
+  created_at: string
+  ended_at: string | null
+  device: BenchSessionDevice | null
+  device_ids: string[]
+  counts: { ingested: number; unresolved: number }
+  last_summary: BenchWindowSummary | null
+}
+
+/** Start a bench session. Errors worth branching on (ApiError.code):
+ *  409 `too_many_sessions`, 409 `device_ambiguous` (candidates in details),
+ *  503 `source_unavailable`, 422 validation. */
+export function createBenchSession(
+  projectId: string,
+  input: CreateBenchSessionInput,
+  client: ApiClient = api
+): Promise<BenchSession> {
+  return client.request<BenchSession>(`/projects/${projectId}/bench/sessions`, {
+    method: 'POST',
+    body: input
+  })
+}
+
+export function listBenchSessions(
+  projectId: string,
+  filters: { status?: BenchSessionStatus; mode?: 'sim' | 'real' } = {},
+  client: ApiClient = api
+): Promise<BenchSession[]> {
+  const params = new URLSearchParams()
+  if (filters.status) params.set('status', filters.status)
+  if (filters.mode) params.set('mode', filters.mode)
+  const query = params.toString()
+  return client.request<BenchSession[]>(
+    `/projects/${projectId}/bench/sessions${query ? `?${query}` : ''}`
+  )
+}
+
+export function getBenchSession(
+  projectId: string,
+  sessionId: string,
+  client: ApiClient = api
+): Promise<BenchSession> {
+  return client.request<BenchSession>(`/projects/${projectId}/bench/sessions/${sessionId}`)
+}
+
+/** Stop a session. Idempotent — stopping an ended session is not an error. */
+export function stopBenchSession(
+  projectId: string,
+  sessionId: string,
+  client: ApiClient = api
+): Promise<BenchSession> {
+  return client.request<BenchSession>(`/projects/${projectId}/bench/sessions/${sessionId}/stop`, {
+    method: 'POST'
+  })
+}
+
+export interface BenchSignalPoint {
+  timestamp: string
+  value: number
+}
+
+export interface BenchSignalSeries {
+  signal: string
+  points: BenchSignalPoint[]
+}
+
+/** Recent telemetry for a DEVICE (serves devices with no graph entity;
+ *  `resolved_entity_id` non-null means the entity view also works). */
+export interface BenchDeviceRecent {
+  device_id: string
+  resolved_entity_id: string | null
+  signals: BenchSignalSeries[]
+}
+
+/** Batched read: 1..16 repeated `device_id` params, one entry per requested
+ *  id in the same order. One call per poll cycle — never one per device. */
+export function getBenchDeviceRecent(
+  projectId: string,
+  deviceIds: readonly string[],
+  options: { limit?: number } = {},
+  client: ApiClient = api
+): Promise<BenchDeviceRecent[]> {
+  const params = new URLSearchParams()
+  for (const deviceId of deviceIds) params.append('device_id', deviceId)
+  if (options.limit) params.set('limit', String(options.limit))
+  return client
+    .request<{
+      devices: BenchDeviceRecent[]
+    }>(`/projects/${projectId}/bench/device-recent?${params.toString()}`)
+    .then((r) => r.devices)
+}
+
+/** A vendor-run local tool reachable through the companion bridge (no project
+ *  scope). Copy fields are shown verbatim — honest guidance, never invented. */
+export interface LocalTool {
+  type: string
+  display_name: string
+  hosting: string
+  url_host: string
+  connect_notice: string
+  requires: string
+}
+
+export function listLocalTools(client: ApiClient = api): Promise<LocalTool[]> {
+  return client.request<LocalTool[]>('/integrations/local-tools')
+}

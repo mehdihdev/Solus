@@ -27,10 +27,11 @@ from solus_api.core.errors import register_error_handlers
 from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
-from solus_api.graph.resolver import DbEntityResolver
+from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.livebench.bench_router import BenchEventRing
 from solus_api.livebench.bench_router import router as bench_router
+from solus_api.livebench.sessions import SessionManager, load_local
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.routers import (
@@ -133,10 +134,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         )
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(served: FastAPI) -> AsyncIterator[None]:
         if resolved_settings.auto_create_tables:
             await create_all_tables(resolved_engine)
         yield
+        # SOLUSDEV-72: close every live bench session — pump tasks, gz
+        # subprocesses, and open serial ports must not outlive the server.
+        await served.state.bench_sessions.aclose_all()
 
     app = FastAPI(
         title="Solus API",
@@ -200,9 +204,19 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # in-memory buffer + DB entity resolver + per-project observer-event ring.
     # Redis buffer backend is a one-line swap here when multi-process serving needs it.
     app.state.telemetry_plumbing = TelemetryPlumbing(
-        InMemoryTelemetryBuffer(), DbEntityResolver(app.state.sessionmaker)
+        InMemoryTelemetryBuffer(),
+        # SOLUSDEV-72: positive-TTL cache — a 50 Hz per-joint stream must not
+        # cost one DB query per packet. Negatives are never cached, so a
+        # freshly-linked entity attaches on the next packet.
+        CachingEntityResolver(DbEntityResolver(app.state.sessionmaker)),
     )
     app.state.bench_events = BenchEventRing()
+    # SOLUSDEV-72: bench sessions — the server-side start/stop of local
+    # connections. `bench_local` is the OPTIONAL runtime import of
+    # livebench.local (never a declared dependency): on a server without
+    # livebench it is None and every local source reports honestly unavailable.
+    app.state.bench_sessions = SessionManager(app.state.telemetry_plumbing)
+    app.state.bench_local = load_local()
     # SYS-04 (SOLUSDEV-138): SOL answers from the REAL W0-07 feeds — graph,
     # telemetry buffer, SYS-02 retrieval — never from canned fixtures. Sits after
     # the telemetry plumbing it wraps. Embeds at this seam are unmetered by
