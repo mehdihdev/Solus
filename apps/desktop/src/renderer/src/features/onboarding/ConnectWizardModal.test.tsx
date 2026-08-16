@@ -36,8 +36,8 @@ const OAUTH_ACCESS: CatalogEntry = {
   accessModes: {
     default: 'read',
     modes: [
-      { id: 'read', label: 'Read-only', description: 'Read models' },
-      { id: 'write', label: 'Read and edit', description: 'Read and change models' }
+      { id: 'read', label: 'Read-only', description: 'Read models', scopes: [] },
+      { id: 'write', label: 'Read and edit', description: 'Read and change models', scopes: [] }
     ]
   }
 }

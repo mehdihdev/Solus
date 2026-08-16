@@ -18,8 +18,8 @@ const SELECTION: IntegrationSelection = { mode: 'single', config_key: 'repo', la
 const ACCESS: IntegrationAccessModes = {
   default: 'read',
   modes: [
-    { id: 'read', label: 'Read-only', description: 'Read models' },
-    { id: 'write', label: 'Read and edit', description: 'Read and change models' }
+    { id: 'read', label: 'Read-only', description: 'Read models', scopes: [] },
+    { id: 'write', label: 'Read and edit', description: 'Read and change models', scopes: [] }
   ]
 }
 
@@ -111,7 +111,7 @@ describe('stepInstruction', () => {
     const ids = ['access', 'authorize', 'configure', 'file', 'index'] as const
     for (const id of ids) {
       for (const mode of ['Guide', 'Expert'] as const) {
-        expect(stepInstruction({ id, title: 't' }, ctx, mode).length).toBeGreaterThan(0)
+        expect(stepInstruction({ id }, ctx, mode).length).toBeGreaterThan(0)
       }
     }
   })
