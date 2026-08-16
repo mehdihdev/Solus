@@ -139,7 +139,7 @@ element:
 6. `parse_step` → `build_mechanical_graph` → `part` entities + `part_of` edges.
 
 **Entity keys are namespaced `{document_id}:{element_id}:{occurrence_path}`.** A STEP occurrence
-path is unique only *within* one export, but a source now spans many documents and the runtime
+path is unique only _within_ one export, but a source now spans many documents and the runtime
 upserts on `(source_id, external_ref)` — so two documents each holding a `Bracket` would otherwise
 collapse into ONE graph row. That is a false merge created at the ingestion key, upstream of every
 fingerprint guard, which is why the scope is not optional. Each entity also carries
@@ -202,6 +202,12 @@ returns rows, and Solus deliberately does not use it — see the API-terms note 
 - A **private (unpublished) OAuth app's calls still count against the API rate cap** exactly like
   API keys — the exemption is a property of the _published_ app. Plan for App Store publication
   before high-volume use.
+- **429 handling (SOLUSDEV-64):** the connector treats a 429 as an expected operating condition —
+  every API call (and the externaldata download) retries up to 3 times, honoring `Retry-After`
+  when it is a plain integer (capped at 30s; the header is untrusted) and falling back to
+  exponential backoff otherwise. Rate limiting that outlasts the retries surfaces as a
+  `rate_limited` connector error rather than a generic `api_error`, and the sync aborts without
+  tombstoning existing entities.
 
 ## 10. Not yet built
 

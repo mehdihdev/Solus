@@ -410,6 +410,92 @@ async def test_a_translation_that_never_finishes_gives_up_bounded() -> None:
 
 
 @respx.mock
+async def test_a_rate_limited_request_is_retried_after_the_wait() -> None:
+    """Onshape rate-caps private OAuth apps, so a 429 is an expected operating
+    condition — the call retries after the server's wait instead of failing."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/users/sessioninfo").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(200, json=SESSION_INFO),
+        ]
+    )
+
+    account = await _connector().validate_credentials(
+        Credentials(token="access", refresh_token="refresh")
+    )
+
+    assert account.external_id
+
+
+@respx.mock
+async def test_rate_limiting_that_never_lifts_is_a_typed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded retries (§7 — never an unbounded loop against a third-party API),
+    then a `rate_limited` error the UI can render as 'try again shortly' rather
+    than a generic API failure."""
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
+        return_value=httpx.Response(200, json=CURRENT_MICROVERSION)
+    )
+    respx.post(f"{ONSHAPE_API_BASE}/api/v6/assemblies/d/{DID}/w/{WID}/e/{EID}/translations").mock(
+        return_value=httpx.Response(429)
+    )
+
+    with pytest.raises(ConnectorError) as excinfo:
+        await _connector().sync(_ctx())
+
+    assert excinfo.value.code == "rate_limited"
+
+
+@respx.mock
+async def test_the_retry_wait_honors_but_bounds_the_retry_after_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry-After is untrusted upstream input: honored when sane, capped always,
+    so a hostile header can never park a sync worker."""
+    waits: list[float] = []
+
+    async def _record(delay: float) -> None:
+        waits.append(delay)
+
+    monkeypatch.setattr("asyncio.sleep", _record)
+    respx.get(f"{ONSHAPE_API_BASE}/api/users/sessioninfo").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "999999"}),
+            httpx.Response(200, json=SESSION_INFO),
+        ]
+    )
+
+    await _connector().validate_credentials(Credentials(token="access", refresh_token="refresh"))
+
+    assert waits and all(wait <= 30.0 for wait in waits)
+
+
+@requires_occt
+@respx.mock
+async def test_a_rate_limited_download_is_retried() -> None:
+    """The externaldata download sits outside `request()`, so it carries its own
+    429 handling — a transient cap must not abort a sync whose translation
+    already succeeded."""
+    _mock_export()
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/externaldata/external-data-1").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(200, text=STEP_EXPORT),
+        ]
+    )
+
+    result = await _connector().sync(_ctx())
+
+    assert result.entities
+
+
+async def _no_sleep(_delay: float) -> None:
+    return None
+
+
+@respx.mock
 async def test_expired_token_during_sync_is_invalid_credentials() -> None:
     """Lets the runtime refresh and retry rather than recording a hard failure."""
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
