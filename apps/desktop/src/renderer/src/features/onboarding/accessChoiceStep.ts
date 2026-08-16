@@ -37,6 +37,7 @@ export function accessChoiceStep(deps: AccessChoiceDeps): AccessChoiceStep {
 
     deps.onProgress({
       phase: 'busy',
+      stage: 'access',
       label: 'How much access should Solus have?',
       accessModes: offered
     })

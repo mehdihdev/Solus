@@ -11,7 +11,7 @@
 import type { OAuthStartResponse, Source, Sync } from '../../lib/api/resources'
 import type { OAuthBridge } from '../auth/githubOAuth'
 import type { AccessChoiceStep } from './accessChoiceStep'
-import type { ConnectionState } from './onboardingStore'
+import type { ConnectionState, ConnectStage } from './onboardingStore'
 import { pollSync, syncErrorMessage } from './sourceSync'
 
 /** The slice of the typed API surface this orchestration depends on. */
@@ -84,8 +84,8 @@ export function noBridgeError(displayName: string): string {
   return `${displayName} connect needs the desktop app.`
 }
 
-function busy(label: string, sourceId?: string): ConnectionState {
-  return { phase: 'busy', label, sourceId }
+function busy(stage: ConnectStage, label: string, sourceId?: string): ConnectionState {
+  return { phase: 'busy', stage, label, sourceId }
 }
 
 /**
@@ -114,7 +114,7 @@ export async function runOAuthConnect(
       return { ok: false, error: authorized.error, sourceId: authorized.sourceId }
     }
 
-    deps.onProgress(busy(`Linking your ${label} account…`, authorized.sourceId))
+    deps.onProgress(busy('link', `Linking your ${label} account…`, authorized.sourceId))
     const source = await deps.api.exchangeOAuth(provider, {
       state: authorized.state,
       code: authorized.code
@@ -156,7 +156,7 @@ async function authorize(
   const access = deps.chooseAccess ? await deps.chooseAccess() : { access: undefined }
   if ('error' in access) return { error: access.error }
 
-  deps.onProgress(busy(`Authorizing with ${label}…`))
+  deps.onProgress(busy('authorize', `Authorizing with ${label}…`))
   const start = await deps.api.startOAuth(projectId, provider, {
     redirect_uri: options.redirectUri,
     ...(access.access ? { access: access.access } : {})
@@ -181,7 +181,7 @@ async function indexSource(
   outcome: { config: Record<string, unknown>; label?: string },
   displayName: string
 ): Promise<OAuthConnectResult> {
-  deps.onProgress(busy(`Indexing ${outcome.label ?? displayName}…`, sourceId))
+  deps.onProgress(busy('index', `Indexing ${outcome.label ?? displayName}…`, sourceId))
   await deps.api.updateSource(projectId, sourceId, { config: outcome.config })
   await deps.api.triggerSync(projectId, sourceId)
 

@@ -61,6 +61,23 @@ describe('onboardingStore', () => {
     })
   })
 
+  it('setConnection carries the machine-readable stage for the wizard step rail', () => {
+    const store = useOnboardingStore.getState()
+    store.setConnection('github', { phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
+    const state = useOnboardingStore.getState().connections.github
+    expect(state).toEqual({ phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
+  })
+
+  it('clearConnection removes only the named source, back to "not started"', () => {
+    const store = useOnboardingStore.getState()
+    store.setConnection('github', { phase: 'busy', label: 'Authorizing…' })
+    store.setConnection('kicad', { phase: 'done' })
+    store.clearConnection('github')
+    const conns = useOnboardingStore.getState().connections
+    expect(conns.github).toBeUndefined()
+    expect(conns.kicad).toEqual({ phase: 'done' })
+  })
+
   it('failConnect marks a source errored and keeps it out of the connected count', () => {
     const store = useOnboardingStore.getState()
     store.setConnection('kicad', { phase: 'done' })

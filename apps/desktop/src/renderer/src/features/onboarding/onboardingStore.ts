@@ -8,6 +8,15 @@ import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 export type OnboardingStep = 0 | 1 | 2
 
 /**
+ * Machine-readable position of a busy connect flow, emitted by the flow
+ * engines so the connect wizard's step rail never parses label strings:
+ * `access` (pre-auth grant choice) → `authorize` (provider handshake) →
+ * `link` (token exchange) → `configure` (pick/enter what to track) →
+ * `index` (sync + graph build).
+ */
+export type ConnectStage = 'access' | 'authorize' | 'link' | 'configure' | 'index'
+
+/**
  * Per-source connection state, fed by the real connectors (OAuth,
  * committed-export EDA): a live `label` for progress copy, the `sourceId` once
  * one exists, the discovered `selectable` items when a picker is needed, the
@@ -19,6 +28,8 @@ export type ConnectionState =
   | {
       phase: 'busy'
       label?: string
+      /** Where the flow is, machine-readable (drives the wizard step rail). */
+      stage?: ConnectStage
       sourceId?: string
       /** What this source can be pointed at, when a picker is open. */
       selectable?: readonly SelectableItem[]
@@ -55,6 +66,8 @@ export interface OnboardingState {
   setConnection: (id: string, state: ConnectionState) => void
   /** Mark a source's connect attempt as failed with a message. */
   failConnect: (id: string, error: string) => void
+  /** Forget a source's connect attempt entirely (cancelled wizard). */
+  clearConnection: (id: string) => void
   /** Replace the build log with the latest real sync lines. */
   setBuildLog: (lines: readonly BuildLine[]) => void
   finishBuild: (entityCount?: number) => void
@@ -92,6 +105,11 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
 
   failConnect: (id, error) =>
     set((s) => ({ connections: { ...s.connections, [id]: { phase: 'error', error } } })),
+
+  clearConnection: (id) =>
+    set((s) => ({
+      connections: Object.fromEntries(Object.entries(s.connections).filter(([key]) => key !== id))
+    })),
 
   setBuildLog: (lines) => set({ buildLog: lines }),
   finishBuild: (entityCount) => set({ buildDone: true, buildEntityCount: entityCount ?? null }),

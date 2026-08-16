@@ -43,8 +43,12 @@ export interface EdaConnectResult {
  * fast with a friendly message instead of a rejected upload. */
 export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 
+export const EMPTY_EXPORT_ERROR = 'The selected file is empty.'
+export const OVERSIZE_EXPORT_ERROR = 'The selected file is too large (limit 8 MB).'
+
 function busy(label: string, sourceId?: string): ConnectionState {
-  return { phase: 'busy', label, sourceId }
+  // Everything after the file pick is indexing work from the wizard's view.
+  return { phase: 'busy', stage: 'index', label, sourceId }
 }
 
 /** "power-board.xml" → "power-board"; falls back to the provider id. */
@@ -107,10 +111,10 @@ export async function runEdaConnect(
 
 function validateExport(file: EdaExportFile): string | null {
   if (!file.content.trim()) {
-    return 'The selected file is empty.'
+    return EMPTY_EXPORT_ERROR
   }
   if (new TextEncoder().encode(file.content).length > MAX_EXPORT_BYTES) {
-    return 'The selected file is too large (limit 8 MB).'
+    return OVERSIZE_EXPORT_ERROR
   }
   return null
 }

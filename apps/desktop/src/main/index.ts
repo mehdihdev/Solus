@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import {
   awaitGithubCallback,
   awaitOAuthCallback,
+  cancelActiveOAuth,
   getConnectorRedirectUrl,
   getRedirectUrl
 } from './oauthLoopback'
@@ -172,6 +173,14 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('oauth:connector:await', (event, authorizeUrl: string, expectedState: string) =>
       isMainRendererSender(event)
         ? awaitOAuthCallback(authorizeUrl, expectedState)
+        : Promise.reject(new Error('unauthorized sender'))
+    )
+    // Cancel seam (SOLUSDEV-165): closing the connect wizard mid-handshake
+    // settles the parked flow now instead of leaving the loopback armed for
+    // five minutes. Sender-gated like the await it cancels.
+    ipcMain.handle('oauth:connector:cancel', (event) =>
+      isMainRendererSender(event)
+        ? cancelActiveOAuth()
         : Promise.reject(new Error('unauthorized sender'))
     )
 

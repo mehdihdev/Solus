@@ -143,6 +143,75 @@ body {
   }
 }
 
+/* Connect wizard (SOLUSDEV-165). Transform/opacity only; tokens only. */
+@keyframes cw-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.cw-pop {
+  animation: cw-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* The Solus ↔ integration link: dots light up in sequence while busy. */
+@keyframes cw-dot-travel {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(1);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.35);
+  }
+}
+.cw-dot-busy {
+  animation: cw-dot-travel 1.2s ease-in-out infinite;
+}
+
+/* Gentle breath on the two endpoint marks while the flow works. */
+@keyframes cw-mark-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+.cw-mark-busy {
+  animation: cw-mark-breathe 1.8s ease-in-out infinite;
+}
+
+/* Step body swap: retriggered by keying the block on the current step. */
+@keyframes cw-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.cw-step-in {
+  animation: cw-step-in 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-pop,
+  .cw-dot-busy,
+  .cw-mark-busy,
+  .cw-step-in {
+    animation: none;
+  }
+}
+
 /* SOL chat markdown (features/sol/Markdown.tsx). Scoped typography for model
  * text — design tokens only, so theme switches re-skin it like everything
  * else. Sized to sit inside the 12.5px chat column. */

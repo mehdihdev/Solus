@@ -30,7 +30,9 @@ const api = {
     getConnectorRedirectUrl: (): Promise<string> =>
       ipcRenderer.invoke('oauth:connector:redirect-url'),
     awaitOAuth: (authorizeUrl: string, expectedState: string): Promise<OAuthCallbackResult> =>
-      ipcRenderer.invoke('oauth:connector:await', authorizeUrl, expectedState)
+      ipcRenderer.invoke('oauth:connector:await', authorizeUrl, expectedState),
+    // Settle the in-flight connector handshake NOW (wizard closed mid-flow).
+    cancelOAuth: (): Promise<boolean> => ipcRenderer.invoke('oauth:connector:cancel')
   },
   bridge: {
     setToken: (token: string | null): Promise<void> => ipcRenderer.invoke('bridge:token', token),

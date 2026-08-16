@@ -1,31 +1,22 @@
 // Onboarding step 1 — "Connect your tools". Tiles are listed from the LIVE
-// backend catalog (SOLUSDEV-100; curated drivable fallback offline). GitHub
-// drives the REAL OAuth connector (SOLUSDEV-103); committed-export EDA
-// connectors (KiCad, Altium) drive the REAL file-pick connect. There is no
-// simulated connect (SOLUSDEV-152): when a real connect can't run (workspace
-// unlinked / no Electron bridge) the tile reports an honest, retryable error.
-// On entering this step we ensure a project exists so a real connect has
-// something to attach a source to.
-import { useEffect, useRef } from 'react'
+// backend catalog (SOLUSDEV-100; curated drivable fallback offline) and open
+// the connect wizard (SOLUSDEV-165), which drives the REAL flows — OAuth
+// bridge or committed-export file pick. There is no simulated connect
+// (SOLUSDEV-152): when a real connect can't run (workspace unlinked / no
+// Electron bridge) the wizard reports an honest, retryable error. On entering
+// this step we ensure a project exists so a real connect has something to
+// attach a source to.
+import { useEffect } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
-import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSettingsStore } from '../../store/settingsStore'
-import { ConnectTile } from './ConnectTile'
+import { ConnectCatalog } from './ConnectCatalog'
 import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
-import { type CatalogEntry } from './integrationCatalog'
 import { useIntegrationCatalog } from './useIntegrationCatalog'
 import { useOnboardingStore, connectedCount, canBuildModel } from './onboardingStore'
-import { noBridgeError } from './oauthConnect'
 import { ensureWorkspace } from './provisioning'
-import { useEdaConnect } from './useEdaConnect'
-import { connectOptions, useOAuthConnect } from './useOAuthConnect'
-
-/** Committed netlist exports a user can pick (KiCad XML netlist first). */
-const EXPORT_FILE_ACCEPT = '.xml,.net'
-const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
 
 interface ConnectStepProps {
   onBuild: () => void
@@ -33,16 +24,10 @@ interface ConnectStepProps {
 
 export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
   const connections = useOnboardingStore((s) => s.connections)
-  const failConnect = useOnboardingStore((s) => s.failConnect)
   const description = useOnboardingStore((s) => s.description)
   const solMode = useSettingsStore((s) => s.solMode)
   const workspace = useWorkspaceStore()
   const catalog = useIntegrationCatalog()
-  const oauth = useOAuthConnect()
-  const eda = useEdaConnect()
-  const exportInput = useRef<HTMLInputElement | null>(null)
-  // Which export-file provider's picker is open (set on tile click).
-  const pendingProvider = useRef<string | null>(null)
 
   // Ensure a project exists as soon as we reach the connect step, reusing one
   // already created earlier in the flow. Best-effort; never blocks the UI.
@@ -65,37 +50,6 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const connect = (integ: CatalogEntry): void => {
-    // Real flows need a linked project (and OAuth ones the desktop bridge). When
-    // a precondition is missing the tile errors honestly and stays retryable —
-    // nothing is ever faked.
-    if (!workspace.linked || !workspace.project) {
-      failConnect(integ.id, NOT_LINKED_ERROR)
-      return
-    }
-    if (integ.mode === 'oauth') {
-      if (!getDesktopOAuthBridge()) {
-        failConnect(integ.id, noBridgeError(integ.name))
-        return
-      }
-      void oauth.start(workspace.project.id, integ.id, connectOptions(integ))
-      return
-    }
-    // Committed-export EDA connect: pick the netlist export, then sync it.
-    pendingProvider.current = integ.id
-    exportInput.current?.click()
-  }
-
-  const onExportPicked = async (input: HTMLInputElement): Promise<void> => {
-    const provider = pendingProvider.current
-    pendingProvider.current = null
-    const file = input.files?.[0]
-    input.value = ''
-    if (!provider || !file || !workspace.project) return
-    const content = await file.text()
-    await eda.start(workspace.project.id, provider, { fileName: file.name, content })
-  }
-
   const count = connectedCount(connections)
   const ready = canBuildModel(connections)
 
@@ -108,28 +62,33 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
         Each source becomes a domain in your context model. Connect at least two — cross-domain
         checks need something to cross.
       </p>
-      <input
-        ref={exportInput}
-        type="file"
-        accept={EXPORT_FILE_ACCEPT}
-        aria-label="Choose a committed netlist export"
-        style={{ display: 'none' }}
-        onChange={(e) => void onExportPicked(e.currentTarget)}
+      <ConnectCatalog
+        projectId={workspace.linked && workspace.project ? workspace.project.id : null}
+        gridStyle={{ marginTop: 24 }}
       />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 24 }}>
-        {catalog.map((integ) => (
-          <ConnectTile
-            key={integ.id}
-            integration={integ}
-            state={connections[integ.id]}
-            onConnect={() => connect(integ)}
-            onSelect={oauth.select}
-            onSubmitConfig={oauth.submitConfig}
-            onChooseAccess={oauth.chooseAccess}
-            onRetry={() => connect(integ)}
-          />
-        ))}
-      </div>
+      <StepFooter
+        connectedTotal={count}
+        catalogTotal={catalog.length}
+        ready={ready}
+        onBuild={onBuild}
+      />
+    </div>
+  )
+}
+
+function StepFooter({
+  connectedTotal,
+  catalogTotal,
+  ready,
+  onBuild
+}: {
+  connectedTotal: number
+  catalogTotal: number
+  ready: boolean
+  onBuild: () => void
+}): React.JSX.Element {
+  return (
+    <>
       <div
         style={{
           display: 'flex',
@@ -139,7 +98,7 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
         }}
       >
         <Mono size={10} color={ready ? 'var(--ok)' : 'var(--mut)'}>
-          {count} OF {catalog.length} CONNECTED{' '}
+          {connectedTotal} OF {catalogTotal} CONNECTED{' '}
           {ready ? '— READY' : `(${MIN_SOURCES_TO_BUILD}+ RECOMMENDED)`}
         </Mono>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -158,6 +117,6 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
       <p style={{ color: 'var(--mut)', fontSize: 11.5, marginTop: 10, textAlign: 'right' }}>
         You can connect tools anytime later — skipping takes you straight to your workspace.
       </p>
-    </div>
+    </>
   )
 }

@@ -31,6 +31,7 @@ export function fieldsConfigureStep(deps: FieldsConfigureDeps): ConfigureStep {
 
     deps.onProgress({
       phase: 'busy',
+      stage: 'configure',
       label: 'Enter the connector details…',
       sourceId,
       configFields: deps.fields

@@ -10,9 +10,12 @@ import { Spinner } from '../../components/ui/Spinner'
 /** Shared modal chrome: dim backdrop, centered card, click-out to close. */
 export function ModalShell({
   onClose,
+  width = 360,
   children
 }: {
   onClose: () => void
+  /** Card width; the default fits the single-field dialogs. */
+  width?: number
   children: React.ReactNode
 }): React.JSX.Element {
   return (
@@ -29,7 +32,7 @@ export function ModalShell({
       onClick={onClose}
     >
       <div onClick={(e) => e.stopPropagation()}>
-        <Card pad={24} style={{ width: 360, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
+        <Card pad={24} style={{ width, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
           {children}
         </Card>
       </div>

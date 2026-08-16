@@ -229,6 +229,34 @@ describe('awaitGithubCallback', () => {
   )
 })
 
+// The cancel seam (SOLUSDEV-165): closing the connect wizard mid-handshake must
+// resolve the parked flow NOW — not leave the loopback armed for five minutes
+// capturing a code the user no longer wants handled.
+describe('cancelActiveOAuth', () => {
+  it(
+    'resolves the in-flight flow with a cancelled error and frees the port for a retry',
+    async () => {
+      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'cx-state', PORT)
+      // Wait until the server listens (a wrong-state probe 404s once it is up).
+      await hitCallback(`${base()}?state=wrong`)
+
+      expect(oauth.cancelActiveOAuth()).toBe(true)
+      expect(await pending).toEqual({ error: 'Sign-in was cancelled.' })
+
+      // The sockets are released: a fresh flow on the SAME port succeeds.
+      const again = oauth.awaitOAuthCallback(AUTHORIZE, 'cy-state', PORT)
+      const status = await hitCallback(`${base()}?state=cy-state&code=c2`)
+      expect(status).toBe(200)
+      expect(await again).toEqual({ code: 'c2' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  it('reports false when nothing is in flight', () => {
+    expect(oauth.cancelActiveOAuth()).toBe(false)
+  })
+})
+
 // The defect that turned ONE environmental hiccup into THREE CI failures.
 //
 // `oauthLoopback` refuses a second flow while one is in flight, and holds that
