@@ -147,6 +147,8 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 **Status:** Accepted
 **Decision:** The per-user/per-team rate limits, token/cost budgets, spending caps, and loop guards mandated by CLAUDE.md §7 (model orchestration security) are the same mechanism that enforces ADR-017/018 billing. Build once, serve both.
 
+**Amended — 2026-08-15, SOLUSDEV-138/139 (approved in-chat during Lane E Phase 1):** Query embeddings issued by the W0-07 systems seam (`DbSolSystems`) run `allow_unmetered=True`. Rationale: the seam deliberately carries no user identity; embed volume is bounded upstream by the credit-gated (402) and frequency-capped (429) turn admission, so no capped or anonymous path can reach an embed; per-call cost is sub-cent. Revisit when identity plumbing reaches the seam or embed volume becomes material in billing.
+
 ## ADR-020: The orchestration protocol governs all feature development
 
 **Status:** Accepted
@@ -492,13 +494,13 @@ identical for every customer, and must never mix with customer data. Today there
 it: every table that stores text is project-scoped by `ForeignKey("projects.id",
 ondelete="CASCADE")`, and the four non-tenant-scoped tables (`processed_stripe_events`,
 `deleted_accounts`, `connector_secrets`, `oauth_states`) hold opaque ids, ciphertext, or tombstones
-— never prose. The nearest global *knowledge* precedent is `integrations/mcp/*/allowlist.yaml`:
+— never prose. The nearest global _knowledge_ precedent is `integrations/mcp/*/allowlist.yaml`:
 Solus-authored, loaded at startup, with no runtime write path.
 
 **Decision.** A `tool_doc` table with **no tenant scoping**, contained by four rules:
 
 1. **No `project_id`/`team_id`/`user_id` column and no FK to those tables.** Absence of the column
-   *is* the enforcement — there is nowhere to put a tenant reference, so none can be added by
+   _is_ the enforcement — there is nowhere to put a tenant reference, so none can be added by
    accident.
 2. **Typed columns only** (`tool`, `version`, `symbol`, `summary`, `parameters`, `source_url`,
    `confidence`, `acquisition_method`, `fetched_at`). No free-text JSONB a request handler could

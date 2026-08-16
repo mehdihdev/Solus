@@ -471,3 +471,15 @@ def make_app() -> Iterator[Callable[..., FastAPI]]:
 @pytest.fixture
 def bridge_app(make_app: Callable[..., FastAPI]) -> FastAPI:
     return make_app()
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breaker() -> Iterator[None]:
+    """SYS-05: the process-wide provider circuit breaker accumulates consecutive
+    failures across calls BY DESIGN; across tests that would let one suite's
+    deliberate provider failures trip the circuit for the next. Reset per test."""
+    from solus_api.orchestration.retry import DEFAULT_BREAKER
+
+    DEFAULT_BREAKER.reset()
+    yield
+    DEFAULT_BREAKER.reset()

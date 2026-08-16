@@ -10,7 +10,7 @@ call.
 
 import uuid
 
-from solus_api.agent.fake_systems import FakeSolSystems
+from fixtures.fake_systems import FakeSolSystems
 from solus_api.agent.runtime import (
     MAX_TOOL_CALLS,
     AgentRunContext,
@@ -274,3 +274,20 @@ def test_only_the_gated_dispatcher_reaches_registry_invoke() -> None:
     ]
 
     assert offenders == [], f"ungated dispatch path(s): {offenders}"
+
+
+def test_no_runner_path_reaches_the_flywheel_write() -> None:
+    """SEC M6 ratchet (SYS-04): `record_error_solution` opens a session and COMMITS
+    model-adjacent text to the graph store. It is deliberately NOT a registered
+    tool and sits outside the confirmation gate — so no runner, tool, or context
+    code may ever call it. The only sanctioned caller in the agent package is the
+    feeds implementation itself."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "src" / "solus_api"
+    offenders = [
+        str(path.relative_to(root))
+        for path in (root / "agent").rglob("*.py")
+        if path.name != "feeds.py" and ".record_error_solution(" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"ungated flywheel write path(s): {offenders}"

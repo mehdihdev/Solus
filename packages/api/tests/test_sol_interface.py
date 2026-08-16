@@ -5,20 +5,18 @@ returns a well-formed, model-consumable shape — so reasoning can build against
 in the real systems impl later with no change. Pure unit — no DB.
 """
 
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from solus_api.agent.fake_systems import FakeSolSystems
+from fixtures.fake_systems import FakeSolSystems
+from fixtures.sol_contract import assert_core_contract
 from solus_api.agent.interfaces import (
     ContextBudget,
-    GraphContext,
     GraphScope,
     RetrievalFilter,
     SolSystems,
-    TelemetrySummaryView,
     TelemetryWindow,
 )
 from solus_api.agent.tools import ArtifactRef
-from solus_api.fingerprint.contract import SourceRef
 
 # Structural conformance proven at TYPE-CHECK time: mypy verifies FakeSolSystems satisfies the
 # SolSystems Protocol — the method set, parameter types/order/count, and return types (NOT param
@@ -26,45 +24,19 @@ from solus_api.fingerprint.contract import SourceRef
 _STRUCTURAL: SolSystems = FakeSolSystems()
 
 
-async def _assert_conforms(systems: SolSystems, project_id: UUID) -> None:
-    """The reusable shape of a conformance check — every method returns a well-formed result.
-    Systems (Mehdi) can run the same against the real impl, and MUST additionally add a cross-tenant
-    ISOLATION case (write under team A, then read under team B returns none of A's data) — the fake
-    is exempt because it ignores `project_id` by design and cannot model isolation (§7)."""
-    ctx = await systems.get_graph_context(
-        project_id, GraphScope(anchor_entity_ids=[uuid4()], degree=2)
-    )
-    assert isinstance(ctx, GraphContext)
-    entity_ids = {e.id for e in ctx.entities}
-    assert all(e.kind and e.name for e in ctx.entities)
-    for edge in ctx.edges:  # intra-context: edges reference only entities that were returned
-        assert edge.src_id in entity_ids and edge.dst_id in entity_ids
-
-    telemetry = await systems.get_telemetry(project_id, TelemetryWindow(duration_seconds=10))
-    assert isinstance(telemetry, TelemetrySummaryView)
-    assert telemetry.windows  # a SEQUENCE, not one static snapshot
-    for window in telemetry.windows:
-        assert window.window_start <= window.window_end and window.summary
-    assert any(isinstance(w.raw_ref, ArtifactRef) for w in telemetry.windows)  # reused W0-04 shape
-
-    errors = await systems.get_error_history("brownout", k=1)
-    assert len(errors) <= 1
-    for error_hit in errors:
-        assert isinstance(error_hit.source_ref, SourceRef) and isinstance(error_hit.score, float)
-
-    rag = await systems.rag_query("lm358", k=2)
-    assert len(rag) <= 2
-    for rag_hit in rag:
-        assert rag_hit.chunk and isinstance(
-            rag_hit.source_ref, SourceRef
-        )  # reused W0-06 provenance
-
-    recorded = await systems.record_error_solution(project_id, "err", "fix", "electrical")
-    assert isinstance(recorded, UUID)  # the flywheel returns the stored error_solution id
-
-
 async def test_fake_sol_systems_conforms() -> None:
-    await _assert_conforms(FakeSolSystems(), uuid4())
+    """The contract half lives in `fixtures.sol_contract.assert_core_contract`, shared with the
+    real impl's suite (test_sol_feeds.py). The rest of this test pins FAKE-specific behaviors —
+    canned non-empty telemetry with a `raw_ref`, and tolerance of unfiltered tenant retrieval —
+    which the contract does not require (a real impl correctly refuses the unfiltered read)."""
+    systems = FakeSolSystems()
+    await assert_core_contract(systems, uuid4())
+
+    telemetry = await systems.get_telemetry(uuid4(), TelemetryWindow(duration_seconds=10))
+    assert telemetry.windows  # the fake always ships a progression
+    assert any(isinstance(w.raw_ref, ArtifactRef) for w in telemetry.windows)
+    assert await systems.get_error_history("brownout", k=1)  # unfiltered: fake has no tenants
+    assert await systems.rag_query("lm358", k=2)
 
 
 async def test_graph_budget_forces_truncation() -> None:

@@ -211,6 +211,97 @@ describe('OrbChat streaming render (SOL-02 obligations)', () => {
   })
 })
 
+describe('OrbChat auto-scroll', () => {
+  // jsdom has no layout: scrollHeight/clientHeight are always 0 and no test can
+  // measure pixels. Stub the geometry on HTMLElement.prototype (shadowing
+  // jsdom's Element accessors) and record scrollTop assignments instead.
+  function stubScrollGeometry(): { pins: number[]; restore: () => void } {
+    const proto = window.HTMLElement.prototype
+    const pins: number[] = []
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get: () => 1000 })
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => 200 })
+    Object.defineProperty(proto, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: (v: number) => {
+        pins.push(v)
+      }
+    })
+    return {
+      pins,
+      restore: () => {
+        delete (proto as { scrollHeight?: unknown }).scrollHeight
+        delete (proto as { clientHeight?: unknown }).clientHeight
+        delete (proto as { scrollTop?: unknown }).scrollTop
+      }
+    }
+  }
+
+  it('follows the stream to the bottom as tokens grow a message in place', async () => {
+    // The regression this pins: token events mutate one item's CONTENT without
+    // changing the item COUNT, so a count-keyed effect never scrolls mid-stream
+    // and the reply runs off-screen.
+    const { pins, restore } = stubScrollGeometry()
+    try {
+      let emit:
+        | ((e: Parameters<Parameters<typeof streamSolMessage>[0]['onEvent']>[0]) => void)
+        | null = null
+      streamSolMessage.mockImplementation(async ({ onEvent }) => {
+        emit = onEvent
+      })
+      render(<OrbChat projectId="p1" />)
+      sendMessage('why?')
+      await waitFor(() => expect(emit).not.toBeNull())
+      const pinsAfterSend = pins.length
+      expect(pinsAfterSend).toBeGreaterThan(0) // the send itself pinned to bottom
+      await act(async () => {
+        emit?.({ type: 'token', text: 'a long streamed line ' })
+      })
+      await act(async () => {
+        emit?.({ type: 'token', text: 'and another one' })
+      })
+      // Each token growth re-pinned the list (count never changed).
+      expect(pins.length).toBeGreaterThan(pinsAfterSend)
+      expect(pins.every((v) => v === 1000)).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  it('stops following when the user scrolls up to read, and resumes on a new row', async () => {
+    const { pins, restore } = stubScrollGeometry()
+    try {
+      let emit:
+        | ((e: Parameters<Parameters<typeof streamSolMessage>[0]['onEvent']>[0]) => void)
+        | null = null
+      streamSolMessage.mockImplementation(async ({ onEvent }) => {
+        emit = onEvent
+      })
+      render(<OrbChat projectId="p1" />)
+      sendMessage('why?')
+      await waitFor(() => expect(emit).not.toBeNull())
+      // scrollTop reads 0 from the stub, so the list believes the user is
+      // 1000-0-200 = 800px above the bottom — far beyond the follow slack.
+      const list = screen.getByText('thinking…').parentElement?.parentElement as HTMLElement
+      fireEvent.scroll(list)
+      const pinned = pins.length
+      await act(async () => {
+        emit?.({ type: 'token', text: 'more text' })
+      })
+      expect(pins.length).toBe(pinned) // reading position respected — no yank
+      await act(async () => {
+        emit?.({ type: 'message', role: 'assistant', content: 'done', citations: [] })
+        emit?.({ type: 'done', conversationId: 'c1', turnId: 't1' })
+      })
+      sendMessage('follow up')
+      // A new row re-engages follow.
+      await waitFor(() => expect(pins.length).toBeGreaterThan(pinned))
+    } finally {
+      restore()
+    }
+  })
+})
+
 describe('OrbChat composer', () => {
   it('posts action_mode from the guide/do toggle and clears the input after send', async () => {
     streamSolMessage.mockResolvedValue(undefined)

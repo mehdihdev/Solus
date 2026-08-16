@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from solus_api.agent.fake_systems import FakeSolSystems
+from solus_api.agent.feeds import DbSolSystems
+from solus_api.agent.perf import SemanticCache
 from solus_api.agent.runtime import LlmRunner
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
@@ -31,6 +32,7 @@ from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.livebench.bench_router import BenchEventRing
 from solus_api.livebench.bench_router import router as bench_router
 from solus_api.models import Base
+from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.routers import (
     activity,
     artifacts,
@@ -176,10 +178,6 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # HS256 tokens validate. Keys are cached in-process; the auth path never fetches
     # per request once warm.
     app.state.jwks_client = build_jwks_client(resolved_settings)
-    # SOL chat seam (SOLUSDEV-135, mock-and-swap): the W0-07 systems impl and the
-    # reasoning-loop runner. Swap these for the real systems impl / SOL-01/02 reasoning
-    # with a one-line change here and no endpoint edit.
-    app.state.sol_systems = FakeSolSystems()
     # SOLUS-RUN-01: the real model-driven runner. `ScaffoldRunner` stays in
     # runtime.py as the model-free double the transport tests pin (conftest), so
     # the loop guard / timeout / error-masking suites still run with no API key.
@@ -205,6 +203,19 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         InMemoryTelemetryBuffer(), DbEntityResolver(app.state.sessionmaker)
     )
     app.state.bench_events = BenchEventRing()
+    # SYS-04 (SOLUSDEV-138): SOL answers from the REAL W0-07 feeds — graph,
+    # telemetry buffer, SYS-02 retrieval — never from canned fixtures. Sits after
+    # the telemetry plumbing it wraps. Embeds at this seam are unmetered by
+    # decision (ADR-018 ambient posture; volume is bounded by the metered,
+    # frequency-capped turn admission) and degrade loudly to full-text retrieval
+    # while `openai_api_key` is unseeded.
+    app.state.sol_systems = DbSolSystems(
+        app.state.sessionmaker,
+        app.state.telemetry_plumbing,
+        embed=build_embed_fn(app.state.secret_store, allow_unmetered=True),
+        # SYS-05: TTL'd semantic cache over the retrieval feeds (hit-rate logged).
+        cache=SemanticCache(),
+    )
     # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
     # + the §4.5 upload-route budgets (separate from the global rate limiter).
     app.state.artifact_store = build_artifact_store(resolved_settings)

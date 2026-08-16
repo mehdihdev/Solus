@@ -1,4 +1,4 @@
-.PHONY: bootstrap hooks db-up db-down dev-api dev-desktop dev-web lint typecheck test gen-openapi companion-bin
+.PHONY: bootstrap hooks db-up db-down dev-api dev-desktop dev-web lint typecheck test gen-openapi companion-bin seed-secrets
 
 bootstrap: ## one-command setup (run after cloning)
 	corepack enable && pnpm install
@@ -39,6 +39,9 @@ mcp-forks: ## materialize the vendored MCP forks' private virtualenvs (hash-veri
 
 companion-bin: ## build the companion binary + vendored MCP servers into dist/companion (BRG-04)
 	bash scripts/build-companion.sh
+
+seed-secrets: ## seed every env-sourced SecretStore ref from the root .env (idempotent; prints names+lengths only)
+	uv run python scripts/seed-provider-keys.py
 
 gen-openapi: ## regenerate packages/api/openapi.json + desktop TS types (run after model changes)
 	cd packages/api && SOLUS_SUPABASE_JWT_SECRET=openapi-dump-dummy uv run python -c "import json, pathlib; from solus_api.main import create_app; pathlib.Path('openapi.json').write_text(json.dumps(create_app().openapi(), indent=2) + '\n')"

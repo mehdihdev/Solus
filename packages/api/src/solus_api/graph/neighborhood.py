@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from solus_api.agent.interfaces import EdgeRead, EntityRead, GraphContext
-from solus_api.models import GraphEdge, GraphEntity
+from solus_api.models import Domain, GraphEdge, GraphEntity
 
 #: Hard ceiling on traversal depth. Anything deeper is a query, not a neighbourhood — and ADR-027
 #: explicitly defers deep multi-hop traversal until it is a MEASURED bottleneck.
@@ -74,6 +74,7 @@ async def _load_entities(
     project_id: UUID,
     ids: Sequence[UUID],
     entity_types: Sequence[str] | None,
+    domains: Sequence[Domain] | None = None,
     *,
     limit: int,
 ) -> list[GraphEntity]:
@@ -100,6 +101,10 @@ async def _load_entities(
     )
     if entity_types:
         stmt = stmt.where(GraphEntity.kind.in_(entity_types))
+    if domains is not None:
+        # May be empty after sanitizing unknown names — `IN ()` matches nothing,
+        # which is the correct reading of "restrict to these domains".
+        stmt = stmt.where(GraphEntity.domain.in_(domains))
     # Stable order so TRUNCATION is deterministic: without it, two identical requests could keep
     # different neighbours, and a user refreshing a capped view would see it shuffle.
     stmt = stmt.order_by(GraphEntity.created_at, GraphEntity.id).limit(limit)
@@ -125,7 +130,12 @@ async def _adjacent_ids(
     )
     if relation_types:
         stmt = stmt.where(GraphEdge.relation_type.in_(relation_types))
-    stmt = stmt.order_by(GraphEdge.created_at, GraphEdge.id).limit(MAX_EDGE_SCAN + 1)
+    # Confidence-first (SYS-05 relevance pruning): discovery order decides which
+    # neighbours survive a binding budget, so rank by edge confidence, with the
+    # old created_at/id order as the deterministic tiebreak.
+    stmt = stmt.order_by(GraphEdge.confidence.desc(), GraphEdge.created_at, GraphEdge.id).limit(
+        MAX_EDGE_SCAN + 1
+    )
 
     rows = (await session.execute(stmt)).all()
     capped = len(rows) > MAX_EDGE_SCAN
@@ -181,6 +191,7 @@ async def load_neighborhood(
     depth: int = 1,
     entity_types: Sequence[str] | None = None,
     relation_types: Sequence[str] | None = None,
+    domains: Sequence[str] | None = None,
     max_entities: int = DEFAULT_MAX_ENTITIES,
 ) -> Neighborhood:
     """The induced subgraph within `depth` hops of `roots`, project-scoped and bounded.
@@ -188,15 +199,20 @@ async def load_neighborhood(
     Traversal is UNDIRECTED — focus is a question about what an entity relates to, not about
     which way an edge happens to point, so selecting an IC must reveal the motor driving it.
 
-    `entity_types` narrows which entities are reached AND traversed through (a filtered-out node
-    is not a stepping stone); roots are always kept so a focused entity never vanishes from its
-    own neighbourhood. Unknown or out-of-project roots simply yield nothing — the caller decides
-    whether that is a 404, and there is no existence oracle here.
+    `entity_types` and `domains` narrow which entities are reached AND traversed through (a
+    filtered-out node is not a stepping stone); roots are always kept so a focused entity never
+    vanishes from its own neighbourhood. Unknown or out-of-project roots simply yield nothing —
+    the caller decides whether that is a 404, and there is no existence oracle here. Unknown
+    `domains` values match nothing (they are filtered in-query, never post-hoc).
     """
     if not 0 <= depth <= MAX_DEPTH:
         raise ValueError(f"depth must be between 0 and {MAX_DEPTH}")
     if max_entities <= 0:
         raise ValueError("max_entities must be positive")
+    # Sanitize to enum members BEFORE the query: the VARCHAR+CHECK enum column's bind
+    # processor raises LookupError on values outside the vocabulary, and an unknown
+    # domain must mean "matches nothing", not a 500.
+    domain_filter = [Domain(d) for d in domains if d in Domain] if domains is not None else None
 
     # Roots are loaded WITHOUT the kind filter: the entity you focused is always part of its own
     # neighbourhood, even when you are filtering the view down to other kinds.
@@ -223,11 +239,22 @@ async def load_neighborhood(
             # Bind-parameter ceiling, not a display cap: exceeding asyncpg's limit raises rather
             # than returning less, so this slice is what keeps a hub node a bounded read.
             fresh, truncated = fresh[:MAX_BIND_IDS], True
+        if not entity_types and domain_filter is None and len(fresh) > room:
+            # SYS-05 relevance pruning: when the budget binds within a hop, keep the
+            # candidates discovered through the highest-confidence edges (discovery
+            # order is confidence-ranked above) instead of letting the hydrate
+            # query's created_at LIMIT pick arbitrarily. Skipped under kind/domain
+            # filters, where the filter needs the full candidate pool to fill the
+            # room. ponytail: sliced-away ids that were soft-deleted over-report
+            # `truncated`; harmless and conservative.
+            fresh, truncated = fresh[:room], True
 
         # `_load_entities` re-applies the project scope, so an edge pointing at another project's
         # entity silently resolves to nothing rather than leaking it. `limit=room + 1` bounds the
         # rows the DB hydrates, so the cap is on work done, not on work discarded.
-        rows = await _load_entities(session, project_id, fresh, entity_types, limit=room + 1)
+        rows = await _load_entities(
+            session, project_id, fresh, entity_types, domain_filter, limit=room + 1
+        )
         if len(rows) > room:
             rows, truncated = rows[:room], True
         for row in rows:

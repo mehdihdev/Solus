@@ -2,9 +2,9 @@
 #
 # build_context assembles the reasoning context for one query by pulling graph,
 # telemetry, error history, and documents through the W0-07 `SolSystems`
-# Protocol ONLY — never systems internals. Today the only implementation is
-# FakeSolSystems (SYS-04/ERR-02 are systems-lane work); the seam is the design,
-# and the real feeds slot in behind the same calls with no change here.
+# Protocol ONLY — never systems internals. The real feeds (`agent/feeds.py`,
+# SYS-04) sit behind the same calls; the seam is the design, and doubles slot
+# in behind it for tests with no change here.
 #
 # Properties the tests pin:
 # - RANKED, not dumped: retrieval hits from every feed interleave by score,

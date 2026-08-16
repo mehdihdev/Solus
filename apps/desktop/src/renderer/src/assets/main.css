@@ -142,3 +142,95 @@ body {
     animation: none;
   }
 }
+
+/* SOL chat markdown (features/sol/Markdown.tsx). Scoped typography for model
+ * text — design tokens only, so theme switches re-skin it like everything
+ * else. Sized to sit inside the 12.5px chat column. */
+.sol-md > :first-child {
+  margin-top: 0;
+}
+.sol-md > :last-child {
+  margin-bottom: 0;
+}
+.sol-md p,
+.sol-md ul,
+.sol-md ol,
+.sol-md pre,
+.sol-md blockquote,
+.sol-md table {
+  margin: 6px 0;
+}
+.sol-md h1,
+.sol-md h2,
+.sol-md h3,
+.sol-md h4,
+.sol-md h5,
+.sol-md h6 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sol-md h1 {
+  font-size: 14.5px;
+}
+.sol-md h2 {
+  font-size: 13.5px;
+}
+.sol-md ul,
+.sol-md ol {
+  padding-left: 18px;
+}
+.sol-md li {
+  margin: 2px 0;
+}
+.sol-md code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--sur2);
+  border: 1px solid var(--bd);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.sol-md pre {
+  background: var(--sur2);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.sol-md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11.5px;
+}
+.sol-md blockquote {
+  border-left: 2px solid var(--bd);
+  margin-left: 0;
+  padding-left: 10px;
+  color: var(--mut);
+}
+.sol-md hr {
+  border: none;
+  border-top: 1px solid var(--bd);
+  margin: 8px 0;
+}
+.sol-md table {
+  border-collapse: collapse;
+  font-size: 11.5px;
+  display: block;
+  overflow-x: auto;
+}
+.sol-md th,
+.sol-md td {
+  border: 1px solid var(--bd);
+  padding: 3px 8px;
+  text-align: left;
+}
+.sol-md th {
+  background: var(--sur2);
+}
+/* Model-supplied links are inert text (no anchors — see Markdown.tsx). */
+.sol-md-link {
+  text-decoration: underline dotted;
+}

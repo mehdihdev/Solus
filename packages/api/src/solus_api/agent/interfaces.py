@@ -3,8 +3,8 @@
 The COMPLETE list of what the REASONING layer (context construction, orchestration) can ask of
 the SYSTEMS layer (stored/retrievable data access + the flywheel write-back). Reasoning depends
 ONLY on `SolSystems` and these shapes — NEVER on systems internals; systems provides a concrete
-impl. Locking this seam lets both halves be built in parallel and meet at the Protocol
-(mock-and-swap; see `fake_systems.FakeSolSystems`).
+impl (`agent/feeds.py`). Locking this seam lets both halves be built in parallel and meet at the
+Protocol (mock-and-swap; the canned double lives in the test fixtures).
 
 Boundary:
 - Systems serves STORED context (graph, telemetry, errors, RAG). Reasoning COMBINES that with the
@@ -183,7 +183,7 @@ class ErrorHit(RagHit):
 
 class SolSystems(Protocol):
     """The reasoning↔systems seam. Reasoning imports THIS (and the shapes above) and nothing else
-    from systems. A concrete impl (systems) or `FakeSolSystems` (for reasoning to build against)
+    from systems. A concrete impl (`agent/feeds.py`) or a canned test double
     satisfies it structurally, verified by `systems: SolSystems = <impl>()` — mypy checks the
     method set, parameter TYPES/order/count, and return types. It does NOT check parameter NAMES
     for positional-or-keyword params; making these params keyword-only (a `*`) would enforce names

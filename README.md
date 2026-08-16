@@ -86,15 +86,16 @@ misses the process actually holding the port while matching things you didn't me
 
 ### LLM provider keys
 
-Provider keys are **not** read from env at request time — the orchestrator reads them from
-the secret store. Put `ANTHROPIC_API_KEY` (and/or `OPENAI_API_KEY`, `GOOGLE_API_KEY`) in
-`.env`, then run once:
+Provider and tool keys are **not** read from env at request time — the code reads them from
+the secret store. Put `ANTHROPIC_API_KEY` (and/or `OPENAI_API_KEY`, `GOOGLE_API_KEY` /
+`GEMINI_API_KEY`, `BRAVE_API_KEY`) in `.env`, then run once:
 
 ```bash
-python3 scripts/seed-provider-keys.py
+make seed-secrets
 ```
 
-Skip it and every SOL turn fails with `ProviderCredentialsMissingError`.
+Skip it and every SOL turn fails with `ProviderCredentialsMissingError`, and web search
+stays `UNAUTHORIZED`.
 
 ## Billing (Stripe)
 

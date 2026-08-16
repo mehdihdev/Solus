@@ -49,10 +49,10 @@ LANE=workspace            # the CODEOWNERS slug
 EPIC=214                  # the lane's epic number
 
 git worktree add ../solus-$LANE -b SOLUSDEV-$EPIC-lane-$LANE main
-cp .env.mega ../solus-$LANE/          # secrets: never committed, never generated
+cp .env ../solus-$LANE/               # secrets: never committed, one ROOT .env per checkout
 cd ../solus-$LANE
 make bootstrap                        # pnpm install + uv sync --all-packages + make hooks
-pnpm env:sync                         # .env.mega -> .env, apps/*/.env, packages/api/.env
+make seed-secrets                     # env-sourced keys -> the encrypted SecretStore
 ```
 
 Notes that cost an hour each if skipped:
@@ -60,9 +60,11 @@ Notes that cost an hour each if skipped:
 - **`make hooks` is part of `make bootstrap`** and does `chmod +x .claude/hooks/*.sh`. A
   worktree without it has every guard silently disabled — no branch check, no secret
   scan, no Stop gate.
-- **`.env.mega` is the only file you copy by hand.** Every per-package `.env` is
-  _generated_ from it by `pnpm env:sync`; never hand-edit a generated file
-  (`docs/env-consolidation.md`).
+- **The root `.env` is the only file you copy by hand.** Every process reads it directly
+  by absolute path (`core/config.py`, desktop `envDir`) — there are no generated
+  per-package `.env` files anymore (`env:sync`/`.env.mega` were retired in 698374c).
+  Keys the code reads by SecretStore ref still need `make seed-secrets` once per
+  database.
 - **The test database is already per-worktree.** `packages/api/tests/conftest.py:64-74`
   derives `solus_test_<sha1(abs path to packages/api)[:8]>` and creates it on demand, so
   two worktrees never share a suite DB. You only need to export

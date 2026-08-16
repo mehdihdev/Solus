@@ -150,6 +150,7 @@ async def list_tools(
     settings: SettingsDep,
     secret_store: SecretStoreDep,
     connector_registry: RegistryDep,
+    systems: SolSystemsDep,
 ) -> dict[str, Any]:
     """The tool set SOL may invoke for this project — the W0-04 descriptors the model
     reads. The set is fixed by Solus code, identical for every caller in the project."""
@@ -162,6 +163,7 @@ async def list_tools(
         bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
         secret_store=secret_store,
         connectors=connector_registry,
+        systems=systems,
     )
     return envelope(_tool_descriptors(registry))
 
@@ -499,6 +501,7 @@ async def post_message(
         bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
         secret_store=secret_store,
         connectors=connector_registry,
+        systems=systems,
     )
     parked_calls: list[ParkedCall] = []
 
@@ -580,6 +583,7 @@ async def decide_tool_confirmation(
     settings: SettingsDep,
     secret_store: SecretStoreDep,
     connector_registry: RegistryDep,
+    systems: SolSystemsDep,
     _verified: RequireVerified,
 ) -> dict[str, Any]:
     """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
@@ -613,6 +617,7 @@ async def decide_tool_confirmation(
         bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
         secret_store=secret_store,
         connectors=connector_registry,
+        systems=systems,
     )
     result = await decide_confirmation(
         session,

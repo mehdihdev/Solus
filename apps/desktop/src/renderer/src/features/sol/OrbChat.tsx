@@ -7,12 +7,15 @@
 //   never parsed out of prose;
 // - the tool trace shows tool name + ok/error only — raw args never reach this
 //   component (solStream drops them at the parse boundary);
-// - model text renders as React text nodes (no HTML injection path).
+// - model text renders as markdown through SolMarkdown, which emits React
+//   elements only (no HTML injection path — raw HTML is skipped, links are
+//   inert, images dropped; pinned by Markdown.test.tsx).
 import { useEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Segmented } from '../../components/ui/Segmented'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ConfirmationCard } from './ConfirmationCard'
+import { SolMarkdown } from './Markdown'
 import { useClassifyPreview } from './useClassifyPreview'
 import type { SolActionMode } from './solApi'
 import { useSolChat, type ChatItem, type SolChat, type TraceEntry } from './useSolChat'
@@ -111,9 +114,7 @@ function MessageRow({
     <div style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
       <TraceView trace={item.trace} />
       {item.content ? (
-        <div style={{ fontSize: 12.5, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-          {item.content}
-        </div>
+        <SolMarkdown content={item.content} />
       ) : item.pending ? (
         <div style={MUTED}>thinking…</div>
       ) : null}
@@ -131,16 +132,40 @@ function MessageRow({
   )
 }
 
+/** Stick-to-bottom margin: within this many px of the bottom counts as "following". */
+const FOLLOW_SLACK_PX = 48
+
 function MessageList({ chat, page }: { chat: SolChat; page: boolean }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
+  const followRef = useRef(true)
+  const lastCountRef = useRef(0)
   const count = chat.items.length
+  // Streamed tokens grow an item's CONTENT without changing the item count, so
+  // the follow signal must track total text length, not just rows — the old
+  // count-only dep is why replies ran off-screen mid-stream.
+  const textSize = chat.items.reduce((n, item) => n + item.content.length, 0)
   useEffect(() => {
     const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [count])
+    if (!el) return
+    if (count !== lastCountRef.current) {
+      // A new row (the user's send, SOL's reply starting) re-engages follow
+      // even if they had scrolled up to read history.
+      lastCountRef.current = count
+      followRef.current = true
+    }
+    if (followRef.current) el.scrollTop = el.scrollHeight
+  }, [count, textSize])
+  const handleScroll = (): void => {
+    const el = listRef.current
+    if (!el) return
+    // The user's intent, read from where they left the scrollbar: near the
+    // bottom = follow the stream; scrolled up = reading, don't yank them back.
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX
+  }
   return (
     <div
       ref={listRef}
+      onScroll={handleScroll}
       style={{
         flex: 1,
         minHeight: 0,

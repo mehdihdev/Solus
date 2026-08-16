@@ -7,8 +7,8 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 
+from fixtures.fake_systems import FakeSolSystems
 from solus_api.agent.context import build_context
-from solus_api.agent.fake_systems import FakeSolSystems
 from solus_api.agent.interfaces import GraphScope
 from solus_api.agent.reason import plan_query, verified_citations
 from solus_api.orchestration.providers import ToolConversation, ToolUse, Usage

@@ -1,10 +1,12 @@
-"""`FakeSolSystems` — a canned `SolSystems` reasoning builds against NOW (SOLUS-W0-07).
+"""`FakeSolSystems` — the canned `SolSystems` TEST DOUBLE (SOLUS-W0-07).
 
-The mock-and-swap seam: reasoning (Pratham) develops and tests against this fake today; systems
-(Mehdi) provides the real impl behind the SAME `SolSystems` Protocol; they swap with no change to
-reasoning. The fake is deterministic (fixed timestamps, no `now()`) and exercises every corner of
-the contract — the SYS-05 budget sub-sampling, the telemetry window sequence with a `raw_ref`, and
-resolvable `SourceRef` provenance on hits.
+Demoted from production wiring by SYS-04: `agent/feeds.py` (`DbSolSystems`) is the real
+implementation behind the same Protocol, and a ratchet in `test_feeds.py` keeps this fake out
+of `src/` forever — its LM358/`camera_node` fictions once shipped as SOL's "context". It stays
+valuable HERE: deterministic (fixed timestamps, no `now()`), and it exercises corners of the
+contract real data rarely hits — the SYS-05 budget sub-sampling, the telemetry window sequence
+with a `raw_ref`, and resolvable `SourceRef` provenance on hits. Several suites subclass it to
+inject hostile or recording behaviors.
 """
 
 from datetime import UTC, datetime, timedelta

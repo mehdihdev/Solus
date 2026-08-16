@@ -10,8 +10,8 @@ This is the wiring the reasoning loop runs on, NOT the reasoning itself. It ship
   A runner consumes the live context (prompt + history), the W0-04 registry, and the
   W0-07 `SolSystems` data access, and STREAMS `AgentEvent`s. The transport never learns
   which runner produced them.
-- `ScaffoldRunner` — a deterministic, model-free runner (mock-and-swap, like
-  `FakeSolSystems`). It proves the plumbing end to end: it lists tools, invokes the
+- `ScaffoldRunner` — a deterministic, model-free runner (mock-and-swap, like the
+  systems test double). It proves the plumbing end to end: it lists tools, invokes the
   W0-04 reference tool through the registry, pulls W0-07 graph context, respects the
   per-user SOL mode (ADR-016), and honors a bounded tool-call loop guard (§7). The real
   model-backed loop swaps in behind `AgentRunner` with NO transport or endpoint change.
@@ -81,6 +81,7 @@ def build_sol_registry(
     bridge_call_cap_bytes: int = 262_144,
     secret_store: "SecretStore | None" = None,
     connectors: "ConnectorRegistry | None" = None,
+    systems: SolSystems | None = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -93,6 +94,16 @@ def build_sol_registry(
     package relays JSON only, so the reasoning import graph stays MCP-free."""
     registry = ToolRegistry()
     registry.register(build_get_entity_tool(session_factory, project_id))
+    if systems is not None:
+        # SYS-03: the four builtin reads (query_graph / get_telemetry /
+        # retrieve_errors / run_checkers) as thin closures over the real
+        # SolSystems, sharing build_context's data paths. Function-local import
+        # (house pattern) so the reasoning import graph grows the checker
+        # dependency only when wired.
+        from solus_api.agent.tools.builtin import build_builtin_tools
+
+        for tool in build_builtin_tools(systems, project_id):
+            registry.register(tool)
     if connectors is not None:
         # SOLUS-ONS-A1: Onshape operations as in-process tools. Function-local
         # import for the same reason the bridge one is — the reasoning import
@@ -125,42 +136,68 @@ def build_sol_registry(
         for tool in build_integration_tools(deps):
             registry.register(tool)
     if bridge is not None and user_id is not None and team_id is not None:
-        # Function-local like BridgeTool: the reasoning import graph stays
-        # MCP-ignorant; the catalog is consulted only when a bridge is wired.
-        from solus_api.agent.tools.mcp_servers import (
-            MCP_SERVER_CATALOG,
-            build_license_preflight,
+        _register_bridge_tools(
+            registry,
+            session_factory,
+            project_id,
+            bridge=bridge,
+            user_id=user_id,
+            team_id=team_id,
+            bridge_call_cap_bytes=bridge_call_cap_bytes,
+            secret_store=secret_store,
         )
-        from solus_api.agent.tools.mcp_tool import LicenseTier
-        from solus_api.bridge.tool import BridgeTool
-
-        session = bridge.get(user_id, team_id, project_id)
-        if session is not None:
-            for spec in session.inventory:
-                # MCP-05: byo_paid servers get the invoke-time license gate;
-                # free-tier and uncataloged servers get zero new checks.
-                catalog_spec = MCP_SERVER_CATALOG.get(spec.server)
-                preflight = None
-                if catalog_spec is not None and catalog_spec.license_tier is LicenseTier.BYO_PAID:
-                    preflight = build_license_preflight(
-                        catalog_spec,
-                        session_factory=session_factory,
-                        user_id=user_id,
-                        team_id=team_id,
-                        secret_store=secret_store,
-                    )
-                registry.register(
-                    BridgeTool(
-                        descriptor=spec.descriptor,
-                        sessions=bridge,
-                        user_id=user_id,
-                        team_id=team_id,
-                        project_id=project_id,
-                        call_cap_bytes=bridge_call_cap_bytes,
-                        preflight=preflight,
-                    )
-                )
     return registry
+
+
+def _register_bridge_tools(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry",
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    bridge_call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+) -> None:
+    """One BridgeTool per entry of the LIVE session's cloud-validated inventory.
+
+    Function-local imports like BridgeTool itself: the reasoning import graph
+    stays MCP-ignorant; the catalog is consulted only when a bridge is wired."""
+    from solus_api.agent.tools.mcp_servers import (
+        MCP_SERVER_CATALOG,
+        build_license_preflight,
+    )
+    from solus_api.agent.tools.mcp_tool import LicenseTier
+    from solus_api.bridge.tool import BridgeTool
+
+    session = bridge.get(user_id, team_id, project_id)
+    if session is None:
+        return
+    for spec in session.inventory:
+        # MCP-05: byo_paid servers get the invoke-time license gate;
+        # free-tier and uncataloged servers get zero new checks.
+        catalog_spec = MCP_SERVER_CATALOG.get(spec.server)
+        preflight = None
+        if catalog_spec is not None and catalog_spec.license_tier is LicenseTier.BYO_PAID:
+            preflight = build_license_preflight(
+                catalog_spec,
+                session_factory=session_factory,
+                user_id=user_id,
+                team_id=team_id,
+                secret_store=secret_store,
+            )
+        registry.register(
+            BridgeTool(
+                descriptor=spec.descriptor,
+                sessions=bridge,
+                user_id=user_id,
+                team_id=team_id,
+                project_id=project_id,
+                call_cap_bytes=bridge_call_cap_bytes,
+                preflight=preflight,
+            )
+        )
 
 
 def parse_entity_ids(prompt: str) -> list[uuid.UUID]:

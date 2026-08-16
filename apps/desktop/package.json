@@ -32,7 +32,9 @@
     "@solus/shared-types": "workspace:*",
     "@supabase/supabase-js": "2.108.2",
     "electron-updater": "6.3.9",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "7.18.0",
+    "remark-gfm": "^4.0.1",
     "zustand": "5.0.14"
   },
   "devDependencies": {

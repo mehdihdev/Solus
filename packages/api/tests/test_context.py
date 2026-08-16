@@ -9,10 +9,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from fixtures.fake_systems import FakeSolSystems
 from fixtures.injection_corpus import PAYLOADS, Payload
 from httpx import AsyncClient
 from solus_api.agent.context import Context, build_context
-from solus_api.agent.fake_systems import FakeSolSystems
 from solus_api.agent.interfaces import (
     ContextBudget,
     GraphScope,

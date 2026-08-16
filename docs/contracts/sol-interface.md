@@ -1,19 +1,20 @@
 # SOL Reasoning↔Systems Interface — Design Contract (SOLUS-W0-07)
 
-**Status:** Design contract + Protocol + a reference `FakeSolSystems` + conformance test. Ships the
-`SolSystems` Protocol, all the shapes, the fake reasoning builds against, and this doc. The real
-systems impls (Mehdi's SYS tickets), the telemetry streaming transport (Live Bench), the reasoning
-layer (Pratham), and the RAG/pgvector wiring are separate tickets.
+**Status:** Design contract + Protocol + conformance suite — and the REAL systems impl is SHIPPED
+(SYS-04, SOLUSDEV-138): `agent/feeds.py` (`DbSolSystems`), wired in production (`main.py`).
+`FakeSolSystems` is a test double at `packages/api/tests/fixtures/fake_systems.py` (the old
+`agent/fake_systems.py` path is gone; a ratchet keeps it out of `src/`). The telemetry streaming
+transport (Live Bench) remains a separate ticket.
 **Authority:** ADR-028 (Week-0 human-owned contract), ADR-027 + `models.py` (graph/error shapes),
 ADR-026 (model routing — a SEPARATE interface), ADR-010 (SOL is an orchestrator). Reuses W0-01
 (`graph_entity`/`graph_edge`/`error_solution`), W0-04 (`ArtifactRef`; the tool interface is separate),
 W0-06 (`SourceRef` as provenance). Code: `packages/api/src/solus_api/agent/interfaces.py`.
 
-Consumers — **the mock-and-swap seam.** This is the second critical coordination seam splitting SOL.
-Reasoning (Pratham — context construction, orchestration) imports ONLY `SolSystems` + these shapes and
-builds against `FakeSolSystems` NOW. Systems (Mehdi — stored data access + execution) provides the real
-impl behind the SAME Protocol. They meet at the Protocol and swap with no change to reasoning. The
-interface is the COMPLETE list of what reasoning can ask of systems — nothing reasoning needs is
+Consumers — **the mock-and-swap seam, now swapped.** This is the second critical coordination seam
+splitting SOL. Reasoning (Pratham — context construction, orchestration) imports ONLY `SolSystems` +
+these shapes; it was built against the fake and now runs against the real impl (`DbSolSystems`)
+behind the SAME Protocol — the swap happened with no change to reasoning, which is the seam's proof.
+The interface is the COMPLETE list of what reasoning can ask of systems — nothing reasoning needs is
 missing, and no systems internals leak.
 
 ---
@@ -171,29 +172,34 @@ would pass mypy yet break at the first keyword call site. **Recommended hardenin
 params keyword-only (`*`) so mypy enforces names too. `FakeSolSystems` returns deterministic canned
 data covering every corner (budget
 sub-sampling with `truncated`, a telemetry window sequence with a `raw_ref`, resolvable `SourceRef`
-provenance, a recorded id), so reasoning is built and tested against it NOW while systems builds the
-real impl — they meet at the Protocol. `test_sol_interface.py` calls every method and asserts
-well-formed shapes; systems runs the same checks against its real impl.
+provenance, a recorded id) — corners real data rarely hits, which is why it stays valuable as a test
+double. The CORE contract assertions live in `tests/fixtures/sol_contract.py::assert_core_contract`
+and run against BOTH the fake and the real impl (`test_feeds.py`). Three fake behaviors are
+deliberately NOT contract: telemetry may be honestly empty (`windows=[]`); `raw_ref` is Optional and
+a real impl may never set it (Live Bench work); unfiltered tenant retrieval is REFUSED by a real
+impl (`ValueError`, §5) rather than tolerated. The real impl's suite additionally covers the
+§7-mandated cross-tenant isolation case and asserts the unfiltered refusal as a passing guarantee.
 
 ---
 
 ## 9. Functional vs. future in W0-07
 
-| Component                                       | W0-07 status                                     |
-| ----------------------------------------------- | ------------------------------------------------ |
-| `SolSystems` Protocol + all shapes              | **Functional**                                   |
-| `FakeSolSystems` + conformance test             | **Functional**                                   |
-| SYS-05 budget/degree sub-sampling (`truncated`) | **Hook in place; the perf work is SYS-05**       |
-| Telemetry streaming (stream-of-summaries)       | **Same-shape extension — Live Bench, not built** |
-| The real systems impls                          | **Mehdi's SYS tickets**                          |
-| The reasoning layer                             | **Pratham's SOL reasoning tickets**              |
-| The RAG / pgvector wiring                       | **Downstream**                                   |
+| Component                                       | W0-07 status                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------ |
+| `SolSystems` Protocol + all shapes              | **Functional**                                               |
+| `FakeSolSystems` + conformance test             | **Functional**                                               |
+| SYS-05 budget/degree sub-sampling (`truncated`) | **Functional (SYS-05 — relevance pruning + semantic cache)** |
+| Telemetry streaming (stream-of-summaries)       | **Same-shape extension — Live Bench, not built**             |
+| The real systems impls                          | **Functional (SYS-04, SOLUSDEV-138)**                        |
+| The reasoning layer                             | **Pratham's SOL reasoning tickets**                          |
+| The RAG / pgvector wiring                       | **Downstream**                                               |
 
 ---
 
 **Cross-references:** ADR-028 (human-owned), ADR-027 + `models.py` (`graph_entity`/`graph_edge`/
 `error_solution`), ADR-026 (routing — separate, `orchestration`), ADR-010/011 (orchestrator + flywheel).
 Reused: `ArtifactRef` (`agent/tools/shapes.py`, W0-04), `SourceRef` (`fingerprint/contract.py`, W0-06).
-Code: `packages/api/src/solus_api/agent/interfaces.py`, `agent/fake_systems.py`. Separate interfaces:
+Code: `packages/api/src/solus_api/agent/interfaces.py`, `agent/feeds.py` (the real impl); test
+double: `packages/api/tests/fixtures/fake_systems.py`. Separate interfaces:
 `agent-tool.md` (W0-04 tools), `model-orchestration.md` (W0-03 routing). Sibling seam:
 `fingerprint-output.md` (W0-06) — the other mock-and-swap contract.

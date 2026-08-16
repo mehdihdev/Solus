@@ -826,7 +826,7 @@ completes. SSE `event:` names and their `data` payloads:
 - `done` — `{"conversation_id","turn_id"}` terminal marker
 
 The reasoning loop runs behind the `agent.runtime.AgentRunner` seam. This cycle ships a
-deterministic, model-free `ScaffoldRunner` (mock-and-swap, like `FakeSolSystems`) that proves
+deterministic, model-free `ScaffoldRunner` (mock-and-swap, like the systems test double) that proves
 the plumbing end to end — lists tools, invokes the reference `get_entity` tool through the
 per-request registry, pulls W0-07 graph context, and honors a bounded tool-call loop guard.
 Model routing / credit metering (W0-03 `route()`/`track_cost`) remain MO-01 stubs, so no live
@@ -969,4 +969,3 @@ Deliberately poll/push REST for this cycle: the WS/SSE streaming upgrade stays o
 later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the windowed shapes carry
 to continuous delivery without a contract change. Durable telemetry history stays out of scope
 (LNK-06 decision: live ephemeral values only).
-

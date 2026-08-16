@@ -96,8 +96,8 @@ def get_sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
 
 
 def get_sol_systems(request: Request) -> SolSystems:
-    """The W0-07 systems impl (mock-and-swap): `FakeSolSystems` now, the real impl later
-    — swapped on app.state with no endpoint change."""
+    """The W0-07 systems impl: `DbSolSystems` (agent/feeds.py, SYS-04) — the real
+    feeds, wired on app.state; tests may swap a double there with no endpoint change."""
     systems: SolSystems = request.app.state.sol_systems
     return systems
 

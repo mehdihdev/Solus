@@ -19,8 +19,8 @@ cd packages/api && uv run alembic upgrade head && cd -
 # 3. The vendored MCP forks' private virtualenvs (once per checkout)
 make mcp-forks
 
-# 4. LLM provider key into the SecretStore (once per database)
-uv run python scripts/seed-provider-keys.py --only anthropic
+# 4. Every env-sourced key into the SecretStore (once per database; idempotent)
+make seed-secrets
 
 # 5. Everything: API :8000 + desktop + companion
 pnpm dev:all
@@ -77,8 +77,10 @@ request — which is also how you make a second tenant for isolation testing.
 
 ## 2. SOL — a real turn
 
-> ⚠️ SOL currently answers from `FakeSolSystems`, not your graph. It will describe entities that do
-> not exist in your project. See CAPABILITIES.md. The mechanics below work; the grounding does not.
+> SOL answers from the REAL W0-07 feeds (SYS-04, `agent/feeds.py`): your project's graph,
+> the live telemetry buffer, and SYS-02 retrieval — project-scoped in-query, and honestly
+> empty where no data exists. Verified 2026-08-15: a turn against the 243-entity Onshape
+> project cited its actual Kinova Gen3 parts and invoked real Onshape tools.
 
 ```bash
 P=<project_id>

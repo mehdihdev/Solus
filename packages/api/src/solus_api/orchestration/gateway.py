@@ -36,7 +36,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -70,6 +70,7 @@ from solus_api.orchestration.resolution import (
     OverrideNotViableError,
     resolve_routing,
 )
+from solus_api.orchestration.retry import retry_transient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -275,35 +276,27 @@ class CompletionStream:
                 session=self._session,
             )
             await assert_can_spend(self._user_id, session=self._session, limits=self._config.limits)
-        limits = self._config.limits
-        attempt = 1
-        while True:
+
+        async def _attempt() -> tuple[Any, str | ToolUse | Usage]:
             inner = self._inner_factory()
             try:
                 event = await inner.__anext__()
-            except ProviderTransientError as exc:
+            except ProviderTransientError:
+                # The attempt owns its cleanup: close the failed stream before
+                # the shared loop decides whether to retry (SYS-05 retry.py).
                 await _close_generator(inner)
-                if attempt >= limits.retry_max_attempts:
-                    raise ProviderTransientError(
-                        f"{self._model.provider}/{self._model.model_name} is "
-                        f"rate-limiting or overloaded; retries exhausted after "
-                        f"{attempt} attempts"
-                    ) from exc
-                delay = limits.retry_backoff_seconds * (2 ** (attempt - 1))
-                logger.info(
-                    "transient provider error; retrying call_id=%s provider=%s "
-                    "attempt=%d/%d delay=%.2fs",
-                    self._call_id,
-                    self._model.provider,
-                    attempt,
-                    limits.retry_max_attempts,
-                    delay,
-                )
-                await _sleep(delay)
-                attempt += 1
-                continue
-            self._inner = inner
-            return event
+                raise
+            return inner, event
+
+        self._inner, event = await retry_transient(
+            _attempt,
+            limits=self._config.limits,
+            label=f"{self._model.provider}/{self._model.model_name}",
+            call_id=self._call_id,
+            sleep=lambda delay: _sleep(delay),
+            breaker_key=self._model.provider,
+        )
+        return event
 
     async def aclose(self) -> None:
         """Abandon the stream early (caller stopped consuming)."""

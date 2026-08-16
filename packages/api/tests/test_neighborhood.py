@@ -420,3 +420,51 @@ async def test_adapts_to_the_w0_07_graph_context_shape(db: AsyncSession) -> None
     assert context.truncated is False
     # EntityRead deliberately omits the embedding — a 1536-float vector is noise in a prompt.
     assert not hasattr(context.entities[0], "embedding")
+
+
+# ------------------------------------------------------- SYS-05 relevance pruning
+
+
+async def test_budget_pruning_keeps_the_highest_confidence_neighbours(db: AsyncSession) -> None:
+    """When `max_entities` binds within a hop, the survivors are the neighbours
+    discovered through the HIGHEST-confidence edges — not whichever rows happened
+    to be created first. The weak neighbours are inserted first so a created_at
+    ordering would pick wrongly."""
+    project = await _project(db, "prune")
+    hub = await _entity(db, project, "hub")
+    weak = await _entity(db, project, "weak")
+    mid = await _entity(db, project, "mid")
+    strong = await _entity(db, project, "strong")
+    for target, confidence in ((weak, 0.2), (mid, 0.5), (strong, 0.9)):
+        db.add(
+            GraphEdge(
+                project_id=project.id,
+                src_id=hub.id,
+                dst_id=target.id,
+                relation_type="drives",
+                domain_pair="electrical<->electrical",
+                confidence=confidence,
+                attrs={},
+            )
+        )
+    await db.flush()
+
+    result = await load_neighborhood(db, project.id, roots=[hub.id], depth=1, max_entities=2)
+    assert {e.name for e in result.entities} == {"hub", "strong"}
+    assert result.truncated is True
+
+
+async def test_domains_filter_traversal_in_query(db: AsyncSession) -> None:
+    """`domains` narrows reach like `entity_types` does — in the SQL, roots exempt;
+    unknown values match nothing rather than erroring (SYS-04)."""
+    project = await _project(db, "domains-q")
+    root = await _entity(db, project, "root")
+    peer = await _entity(db, project, "peer")
+    await _edge(db, project, root, peer)
+
+    both = await load_neighborhood(db, project.id, roots=[root.id], depth=1, domains=["electrical"])
+    assert {e.name for e in both.entities} == {"root", "peer"}
+    none = await load_neighborhood(
+        db, project.id, roots=[root.id], depth=1, domains=["no-such-domain"]
+    )
+    assert {e.name for e in none.entities} == {"root"}

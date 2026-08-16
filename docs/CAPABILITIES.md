@@ -17,9 +17,11 @@ the missing piece.
 
 ---
 
-## Headline: SOL answers from fixtures, not from your project
+## Headline: SOL answers from your project — grounding FIXED (SYS-04, 2026-08-15)
 
-**Classification: BROKEN (grounding) / WORKS (everything around it)**
+**Classification: WORKS (grounding fixed by `agent/feeds.py` — see the end of this section)**
+
+The findings below are the 2026-08-14 snapshot that motivated the fix, kept for the record.
 
 The provider error you hit was a missing step, not a bug — `scripts/seed-provider-keys.py` exists
 and nothing had ever run it. After seeding, a real turn completes:
@@ -54,27 +56,27 @@ part | GEN3 SIMPLIFIED SHOULDER
 part | KR10643
 ```
 
-The source is `agent/fake_systems.py` — it contains `relation_type="soldered_to"` and
-`chunk="camera_node publishes /image_raw at 30Hz"` verbatim. And `main.py:182`:
+The source was `agent/fake_systems.py` — it contained `relation_type="soldered_to"` and
+`chunk="camera_node publishes /image_raw at 30Hz"` verbatim, wired as `app.state.sol_systems`
+in production. A real Anthropic model reasoned fluently over **fabricated project context** and
+presented it as yours, with citations to documents that did not exist — the
+confident-wrong-answer failure class, invisible from the outside: the stream, the citations and
+the mode-switching all looked right.
 
-```python
-app.state.sol_systems = FakeSolSystems()   # graph/retrieval context: FAKE
-app.state.agent_runner = LlmRunner()       # the model call: REAL
-```
+**The fix (SYS-04, SOLUSDEV-138).** `agent/feeds.py` (`DbSolSystems`) implements the W0-07
+`SolSystems` Protocol against the real subsystems — `load_neighborhood`/`to_graph_context` for
+graph context (degree clamped to 2, `domains` filtered in-query), `TelemetryPlumbing` for
+telemetry, SYS-02 `rag/retrieval.py` for RAG/error history/the flywheel — and `main.py` wires it
+in production. The fake now lives in `tests/fixtures/`, and a ratchet
+(`test_feeds.py::test_fake_sol_systems_is_banished_from_production`) keeps every reference out of
+`src/` forever. Every feed is project-scoped in the query; a feed with no data returns an honest
+empty, never invented content.
 
-`deps.py:99` calls this out — _"`FakeSolSystems` now, the real impl later"_. So a real Anthropic
-model reasons fluently over **fabricated project context** and presents it as yours, with citations
-to documents that do not exist. This is the confident-wrong-answer failure class, and it is
-invisible from the outside: the stream, the citations and the mode-switching all look right.
-
-The real pieces exist but nothing assembles them: `graph/neighborhood.py:246` has
-`to_graph_context` ("adapt to the W0-07 shape a real `SolSystems.get_graph_context` returns") and
-`graph/telemetry.py` has the `get_telemetry` shape. **No class implements the `SolSystems`
-protocol against them.** That adapter is the whole gap.
-
-**What works:** provider auth, SecretStore, conversation persistence, SSE streaming, Guide-mode
-narration (ADR-016), citation formatting. **No tool-call events fired** in this turn — the model
-offered to "look through the actual documents" rather than calling a tool.
+**Verified live (2026-08-15)**, same project, same question class: the turn streamed 4 real tool
+calls (`onshape.list_documents`, `onshape.list_elements` ×2, `onshape.get_assembly_definition`,
+all `ok`) and the answer described the actual Kinova Gen3 assembly — `Base_assembly`,
+`GEN3_SIMPLIFIED_SHOULDER-86587__ASM`, `Kinova_link1–4`, the Robotiq 2F-85 gripper — with zero
+mentions of the LM358/`camera_node` fictions. Turns persisted; no `error` frames.
 
 ---
 

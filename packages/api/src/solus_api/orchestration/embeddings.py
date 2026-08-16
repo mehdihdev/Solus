@@ -33,12 +33,14 @@ from solus_api.orchestration.gateway import default_orchestration_config
 from solus_api.orchestration.providers import (
     DEFAULT_TIMEOUT_SECONDS,
     OPENAI_API_KEY_NAME,
+    ProviderCredentialsMissingError,
     ProviderError,
     ProviderTransientError,
     UnknownProviderError,
     Usage,
     _BaseAdapter,
 )
+from solus_api.orchestration.retry import retry_transient
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -153,29 +155,16 @@ async def _call_with_retry(
     call_id: str,
 ) -> tuple[list[list[float]], Usage]:
     """The gateway's MO-03 transient retry/backoff, embedding-shaped: a full-call
-    retry is safe here because nothing has streamed to the caller."""
-    attempt = 1
-    while True:
-        try:
-            return await adapter.embed(entry.name, texts, dimensions=entry.dimensions)
-        except ProviderTransientError as exc:
-            if attempt >= limits.retry_max_attempts:
-                raise ProviderTransientError(
-                    f"{entry.provider}/{entry.name} is rate-limiting or overloaded; "
-                    f"retries exhausted after {attempt} attempts"
-                ) from exc
-            delay = limits.retry_backoff_seconds * (2 ** (attempt - 1))
-            logger.info(
-                "transient embedding error; retrying call_id=%s provider=%s "
-                "attempt=%d/%d delay=%.2fs",
-                call_id,
-                entry.provider,
-                attempt,
-                limits.retry_max_attempts,
-                delay,
-            )
-            await _retry_sleep(delay)
-            attempt += 1
+    retry is safe here because nothing has streamed to the caller. Delegates to
+    the ONE shared loop (SYS-05 retry.py)."""
+    return await retry_transient(
+        lambda: adapter.embed(entry.name, texts, dimensions=entry.dimensions),
+        limits=limits,
+        label=f"{entry.provider}/{entry.name}",
+        call_id=call_id,
+        sleep=lambda delay: _retry_sleep(delay),
+        breaker_key=entry.provider,
+    )
 
 
 async def embed(
@@ -315,6 +304,16 @@ def build_embed_fn(
                 enqueue=enqueue,
                 allow_unmetered=allow_unmetered,
             )
+        except ProviderCredentialsMissingError as exc:
+            # Loud but compact: the fix is a seeding step, not a code bug — a
+            # traceback here buries the one actionable line.
+            logger.warning("embed_one degraded to no-signal: %s — run `make seed-secrets`", exc)
+            return None
+        except ProviderTransientError as exc:
+            # Expected operational states (retries exhausted, circuit open) —
+            # compact, no traceback, or an open circuit floods the log.
+            logger.warning("embed_one degraded to no-signal: %s", exc)
+            return None
         except Exception:  # noqa: BLE001 — embedding is best-effort no-signal
             logger.warning("embed_one failed; treating as no-signal", exc_info=True)
             return None

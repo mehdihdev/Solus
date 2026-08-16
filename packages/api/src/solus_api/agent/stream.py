@@ -89,7 +89,12 @@ class AgentEvent(BaseModel):
 
     @classmethod
     def tool_result(cls, result: ToolResult) -> Self:
-        return cls(type=AgentEventType.TOOL_RESULT, data=result.model_dump(mode="json"))
+        # redact_value (SYS-04 SEC M5): tool values carry connector-ingested
+        # content — a synced attrs key literally named `api_key` must not stream
+        # to the client in the clear. Same gate the persisted turn already gets.
+        return cls(
+            type=AgentEventType.TOOL_RESULT, data=redact_value(result.model_dump(mode="json"))
+        )
 
     @classmethod
     def message(

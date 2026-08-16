@@ -11,9 +11,10 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
-from solus_api.agent.fake_systems import FakeSolSystems
 from solus_api.agent.interfaces import ErrorHit, RagHit, RetrievalFilter
 from solus_api.fingerprint.contract import SourceRef
+
+from fixtures.fake_systems import FakeSolSystems
 
 
 class LabeledChunk(NamedTuple):
