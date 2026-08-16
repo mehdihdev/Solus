@@ -121,6 +121,9 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     }
     const attempt = beginAttempt(entry)
     const content = await file.text()
+    // The wizard may have closed during the read — a cancelled attempt must
+    // not go on to create and sync a source.
+    if (attempt.cancelled) return
     const result = await eda.start(projectId!, entry.id, { fileName: file.name, content })
     settle(entry, attempt, result)
   }
@@ -134,10 +137,10 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     // stays retryable, a done stays done. Only an in-flight attempt cancels.
     if (!attempt || attempt.settled) return
     attempt.cancelled = true
-    // Unblock any waiting input step and abort the browser handshake so the
-    // flow settles; suppress both engines' further progress writes.
-    oauth.cancel()
-    eda.cancel()
+    // Unblock any waiting input step / abort the browser handshake so the
+    // flow settles, and suppress the owning engine's further progress writes.
+    if (entry.mode === 'oauth') oauth.cancel()
+    else eda.cancel()
     useOnboardingStore.getState().clearConnection(entry.id)
   }
 

@@ -174,8 +174,12 @@ export function useOAuthConnect(): UseOAuthConnect {
     accessChoice.current?.(null)
     // Settle a flow parked on the browser handshake NOW — otherwise the
     // loopback stays armed and a later browser completion would mint and
-    // store a token for an attempt the user abandoned.
-    void getDesktopOAuthBridge()?.cancelOAuth?.()
+    // store a token for an attempt the user abandoned. A rejected invoke is
+    // swallowed: nothing depends on the result, and the flow's own timeout
+    // remains the backstop.
+    void getDesktopOAuthBridge()
+      ?.cancelOAuth?.()
+      ?.catch(() => undefined)
   }
 
   return {

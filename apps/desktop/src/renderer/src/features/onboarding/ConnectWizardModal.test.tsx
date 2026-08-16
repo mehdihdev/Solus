@@ -245,6 +245,82 @@ describe('ConnectWizardModal', () => {
   })
 })
 
+// Connector-ingested content (repo/document names, registry copy) is untrusted
+// input to the UI (CLAUDE.md §7). This is the standing regression guard that it
+// renders as literal TEXT — a markup-named repository must never become markup.
+describe('untrusted content rendering', () => {
+  const PAYLOAD = '<img src=x onerror="alert(1)">'
+
+  it('renders a markup-named selectable item as literal text, creating no element', () => {
+    const { container } = render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        state={{
+          phase: 'busy',
+          stage: 'configure',
+          selectable: [
+            { id: 'a', name: PAYLOAD },
+            { id: 'b', name: 'safe' }
+          ],
+          selectionMode: 'multi'
+        }}
+        onBegin={vi.fn()}
+        onPickFile={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText(PAYLOAD)).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('renders markup in access-mode labels and descriptions as literal text', () => {
+    const entry: CatalogEntry = {
+      ...OAUTH_ACCESS,
+      accessModes: {
+        default: 'read',
+        modes: [
+          { id: 'read', label: PAYLOAD, description: `desc ${PAYLOAD}`, scopes: [] },
+          { id: 'write', label: 'safe', description: 'safe desc', scopes: [] }
+        ]
+      }
+    }
+    const { container } = render(
+      <ConnectWizardModal
+        entry={entry}
+        state={{ phase: 'busy', stage: 'access', accessModes: entry.accessModes! }}
+        onBegin={vi.fn()}
+        onPickFile={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText(`desc ${PAYLOAD}`)).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('renders a markup-carrying live error verbatim as text', () => {
+    const { container } = render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        state={{ phase: 'error', error: `failed: ${PAYLOAD}` }}
+        onBegin={vi.fn()}
+        onPickFile={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText(`failed: ${PAYLOAD}`)).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+  })
+})
+
 describe('isSecretField', () => {
   it('masks keys, tokens, licenses and passwords; leaves ids alone', () => {
     for (const field of ['license_key', 'api_token', 'client_secret', 'password']) {

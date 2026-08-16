@@ -176,6 +176,23 @@ describe('useConnectWizard', () => {
     })
   })
 
+  it('close DURING the file read cancels: no source is created for the abandoned pick', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    const file = new File(['<x/>'], 'a.xml')
+    let finishRead: (content: string) => void = () => undefined
+    vi.spyOn(file, 'text').mockImplementation(() => new Promise((r) => (finishRead = r)))
+
+    act(() => {
+      void result.current.pickFile(file)
+    })
+    act(() => result.current.close())
+    await act(async () => finishRead('<x/>'))
+
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toBeUndefined()
+  })
+
   it('close mid-flight cancels: clears the tile state and NEVER deletes a source', async () => {
     withBridge()
     const onConnected = vi.fn()
