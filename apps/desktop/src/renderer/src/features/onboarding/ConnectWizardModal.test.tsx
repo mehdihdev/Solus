@@ -134,6 +134,37 @@ describe('ConnectWizardModal', () => {
     expect(handlers.onSubmitConfig).toHaveBeenCalledWith({ document_id: 'd1', license_key: 'k1' })
   })
 
+  it('will not submit a partially filled details form', () => {
+    const handlers = renderWizard(OAUTH_FIELDS, {
+      phase: 'busy',
+      stage: 'configure',
+      configFields: ['document_id', 'license_key']
+    })
+    fireEvent.change(screen.getByLabelText('Document id'), { target: { value: 'd1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(handlers.onSubmitConfig).not.toHaveBeenCalled()
+  })
+
+  it('lets a multi-select picker submit an empty selection (connected but idle)', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'busy',
+      stage: 'configure',
+      selectable: [{ id: 'docA', name: 'Rover chassis' }],
+      selectionMode: 'multi'
+    })
+    fireEvent.click(screen.getByRole('button', { name: /track none/i }))
+    expect(handlers.onSelect).toHaveBeenCalledWith([])
+  })
+
+  it('starts the grant choice on the connector’s own default, not the widest', () => {
+    renderWizard(OAUTH_ACCESS, {
+      phase: 'busy',
+      stage: 'access',
+      accessModes: OAUTH_ACCESS.accessModes!
+    })
+    expect((screen.getByLabelText('Read-only') as HTMLInputElement).checked).toBe(true)
+  })
+
   it('renders the grant choice with descriptions and confirms the chosen mode', () => {
     const handlers = renderWizard(OAUTH_ACCESS, {
       phase: 'busy',

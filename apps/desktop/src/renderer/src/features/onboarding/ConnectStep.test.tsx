@@ -88,7 +88,9 @@ describe('ConnectStep — OAuth routing', () => {
     // The mount effect linked the workspace.
     await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
 
+    // The tile opens the wizard; its Connect action starts the real flow.
     await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
 
     await vi.waitFor(() => expect(mockedRun).toHaveBeenCalledTimes(1))
     const [, projectId, provider, options] = mockedRun.mock.calls[0]
@@ -106,6 +108,7 @@ describe('ConnectStep — OAuth routing', () => {
     })
     await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
     await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
 
     expect(mockedRun).not.toHaveBeenCalled()
     const github = useOnboardingStore.getState().connections.github
@@ -127,6 +130,7 @@ describe('ConnectStep — OAuth routing', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
 
     expect(mockedRun).not.toHaveBeenCalled()
     const github = useOnboardingStore.getState().connections.github
@@ -134,14 +138,15 @@ describe('ConnectStep — OAuth routing', () => {
     expect(github).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
   })
 
-  it('renders a picker when a busy state carries selectable items', async () => {
+  it('renders a picker in the wizard when a busy state carries selectable items', async () => {
     const selectable: SelectableItem[] = [
       { id: 'a/one', name: 'a/one' },
       { id: 'a/two', name: 'a/two' }
     ]
     useOnboardingStore.getState().setConnection('github', {
       phase: 'busy',
-      label: 'Choose repositorys to track…',
+      stage: 'configure',
+      label: 'Choose repositories to track…',
       sourceId: 's1',
       selectable,
       selectionMode: 'single'
@@ -149,6 +154,8 @@ describe('ConnectStep — OAuth routing', () => {
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
+    // The picker lives in the wizard now — opening the tile surfaces it.
+    await userEvent.click(screen.getByText('GitHub'))
     const picker = await screen.findByLabelText('Choose an item to track')
     expect(picker).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
@@ -165,8 +172,8 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
     })
     await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
 
-    // Clicking the tile opens the (hidden) netlist picker; picking a file
-    // hands its CONTENT to the orchestration.
+    // The tile opens the wizard, whose file step hosts the (hidden) netlist
+    // picker; picking a file hands its CONTENT to the orchestration.
     await userEvent.click(screen.getByText('KiCad'))
     const input = screen.getByLabelText('Choose a committed netlist export')
     const netlist = '<export version="E"><components/><nets/></export>'
@@ -187,6 +194,11 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     await userEvent.click(screen.getByText('KiCad'))
+    const input = screen.getByLabelText('Choose a committed netlist export')
+    const file = new File(['<x/>'], 'a.xml', { type: 'text/xml' })
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } })
+    })
 
     expect(mockedEda).not.toHaveBeenCalled()
     const kicad = useOnboardingStore.getState().connections.kicad
