@@ -60,6 +60,7 @@ export function selectionConfigureStep(deps: SelectionConfigureDeps): ConfigureS
   return async ({ projectId, sourceId }: ConfigureContext): Promise<ConfigureOutcome> => {
     deps.onProgress({
       phase: 'busy',
+      stage: 'configure',
       label: `Discovering ${plural(selection.label)}…`,
       sourceId
     })
@@ -91,6 +92,7 @@ function pick(
 ): Promise<SelectableItem[] | null> {
   deps.onProgress({
     phase: 'busy',
+    stage: 'configure',
     label: `Choose ${plural(deps.selection.label)} to track…`,
     sourceId,
     selectable: items,

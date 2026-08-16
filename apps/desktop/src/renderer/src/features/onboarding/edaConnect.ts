@@ -44,7 +44,8 @@ export interface EdaConnectResult {
 export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 
 function busy(label: string, sourceId?: string): ConnectionState {
-  return { phase: 'busy', label, sourceId }
+  // Everything after the file pick is indexing work from the wizard's view.
+  return { phase: 'busy', stage: 'index', label, sourceId }
 }
 
 /** "power-board.xml" → "power-board"; falls back to the provider id. */

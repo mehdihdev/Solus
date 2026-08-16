@@ -135,6 +135,13 @@ describe('runOAuthConnect', () => {
     })
   })
 
+  it('emits machine-readable stages so the wizard step rail never parses labels', async () => {
+    const { deps, states } = makeDeps(stubApi(), stubBridge({ code: 'cd' }))
+    await runOAuthConnect(deps, 'p1', PROVIDER, OPTS)
+    const stages = states.map((s) => (s.phase === 'busy' ? s.stage : undefined))
+    expect(stages).toEqual(['authorize', 'link', 'index', undefined])
+  })
+
   it('names the provider in its progress copy rather than a hardcoded vendor', async () => {
     const { deps, states } = makeDeps(stubApi(), stubBridge({ code: 'cd' }))
     await runOAuthConnect(deps, 'p1', PROVIDER, OPTS)

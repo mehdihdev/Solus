@@ -133,6 +133,81 @@ describe('useOAuthConnect', () => {
     await expect(outcome).resolves.toEqual({ config: { document_id: 'd1', element_id: 'e1' } })
   })
 
+  it('returns the orchestration result so callers can clean up after a cancel', async () => {
+    withBridge()
+    mockedRun.mockResolvedValue({ ok: false, error: 'Nothing selected.', sourceId: 's9' })
+    const { result } = renderHook(() => useOAuthConnect())
+    let settled: oauthConnect.OAuthConnectResult | undefined
+    await act(async () => {
+      settled = await result.current.start('p1', 'github', { configFields: ['repo'] })
+    })
+    expect(settled).toEqual({ ok: false, error: 'Nothing selected.', sourceId: 's9' })
+  })
+
+  it('cancel resolves a pending in-wizard input with null', async () => {
+    withBridge()
+    const { result } = renderHook(() => useOAuthConnect())
+
+    let captured: oauthConnect.ConfigureStep | undefined
+    mockedRun.mockImplementation(async (deps) => {
+      captured = deps.configure
+      return { ok: true }
+    })
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+
+    const outcome = captured!({ projectId: 'p1', sourceId: 's1', provider: 'someFutureCad' })
+    await act(async () => undefined) // let the form register its resolver
+    act(() => result.current.cancel())
+    await expect(outcome).resolves.toEqual({ error: 'Configuration cancelled.' })
+  })
+
+  it('after cancel, a LATER input request resolves null immediately instead of parking forever', async () => {
+    withBridge()
+    const { result } = renderHook(() => useOAuthConnect())
+
+    let captured: oauthConnect.ConfigureStep | undefined
+    mockedRun.mockImplementation(async (deps) => {
+      captured = deps.configure
+      return { ok: true }
+    })
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+
+    // Cancel BEFORE the flow reaches its configure step (e.g. user closed the
+    // wizard while the browser OAuth handshake was still in flight).
+    act(() => result.current.cancel())
+    const outcome = captured!({ projectId: 'p1', sourceId: 's1', provider: 'someFutureCad' })
+    await expect(outcome).resolves.toEqual({ error: 'Configuration cancelled.' })
+  })
+
+  it('a fresh start clears the cancelled latch from a previous attempt', async () => {
+    withBridge()
+    const { result } = renderHook(() => useOAuthConnect())
+
+    let captured: oauthConnect.ConfigureStep | undefined
+    mockedRun.mockImplementation(async (deps) => {
+      captured = deps.configure
+      return { ok: true }
+    })
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+    act(() => result.current.cancel())
+
+    // Retry: the new attempt must await input normally again.
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+    const outcome = captured!({ projectId: 'p1', sourceId: 's1', provider: 'someFutureCad' })
+    await act(async () => {
+      result.current.submitConfig({ document_id: 'd2' })
+    })
+    await expect(outcome).resolves.toEqual({ config: { document_id: 'd2' } })
+  })
+
   it('routes progress into the onboarding store under the provider key', async () => {
     vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
     mockedRun.mockImplementation(async (deps) => {
