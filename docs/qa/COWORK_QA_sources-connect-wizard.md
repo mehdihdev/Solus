@@ -65,15 +65,21 @@ and nothing else.
 1. Click GitHub → **Connect GitHub**; when the browser opens, do NOT approve.
 2. Close the wizard with **X** (also try clicking the dim backdrop in a second
    run). Expected: modal closes immediately; the GitHub tile returns to "Not
-   connected / Connect" (no stuck busy state).
-3. Now approve or cancel in the browser anyway. Expected: no zombie source
-   row appears under CONNECTED SOURCES after a refresh/sync — a half-made
-   source is deleted in the background. EDGE: if the handshake actually
-   completed before your close, the source is KEPT and listed (work is not
-   thrown away) — either outcome is a pass; a lingering broken/pending source
-   is a fail.
+   connected / Connect" (no stuck busy state), and the tile NEVER flips back
+   to busy/error on its own afterwards.
+3. Try to finish the sign-in in the still-open browser tab. Expected: the
+   loopback was aborted, so the tab shows a connection error and NO source
+   gets connected. EDGE: if the handshake completed a beat before the close,
+   the source is KEPT and listed (work is not thrown away) — that is also a
+   pass; a stuck busy tile is a fail.
 4. Repeat: start GitHub connect, reach the repository picker, close the
-   wizard. Expected: tile resets to "Connect"; no dangling source in the list.
+   wizard. Expected: tile resets to "Connect". A half-configured source row
+   MAY appear under CONNECTED SOURCES (never synced, 0 entities) — cancel
+   deliberately deletes nothing; removing it via the confirmed Disconnect
+   must work. CRITICAL check: with an Onshape-style (multi-selection)
+   connector already connected and synced, cancelling a RE-connect attempt
+   must NOT delete or empty the existing source — its entity count must be
+   unchanged after a refresh.
 
 ## Flow 4 — Error and retry
 

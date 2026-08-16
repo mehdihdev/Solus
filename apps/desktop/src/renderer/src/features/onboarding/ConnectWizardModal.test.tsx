@@ -3,7 +3,7 @@
 // action area (button / grant choice / picker / details form / file pick /
 // progress / done / error). Assertions avoid provider ids on purpose.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { ConnectWizardModal, isSecretField } from './ConnectWizardModal'
 import type { CatalogEntry } from './integrationCatalog'
 import type { ConnectionState } from './onboardingStore'
@@ -177,17 +177,24 @@ describe('ConnectWizardModal', () => {
     expect(handlers.onChooseAccess).toHaveBeenCalledWith('write')
   })
 
-  it('lets a committed-export connector pick its file and hands back the content', async () => {
+  it('lets a committed-export connector pick its file and hands over the FILE unread', () => {
     const handlers = renderWizard(EXPORT_FILE)
     const input = screen.getByLabelText('Choose a committed netlist export') as HTMLInputElement
     const file = new File(['<netlist/>'], 'power-board.xml', { type: 'text/xml' })
+    const text = vi.spyOn(file, 'text')
     fireEvent.change(input, { target: { files: [file] } })
-    await waitFor(() =>
-      expect(handlers.onPickFile).toHaveBeenCalledWith({
-        fileName: 'power-board.xml',
-        content: '<netlist/>'
-      })
-    )
+    expect(handlers.onPickFile).toHaveBeenCalledWith(file)
+    // The wizard never reads the file — the glue validates size FIRST.
+    expect(text).not.toHaveBeenCalled()
+  })
+
+  it('retries a committed-export connector with the file picker, never the OAuth path', () => {
+    const handlers = renderWizard(EXPORT_FILE, { phase: 'error', error: 'Sync failed.' })
+    expect(screen.getByText('Sync failed.')).toBeTruthy()
+    const again = screen.getByRole('button', { name: /choose export file/i })
+    expect(again).toBeTruthy()
+    fireEvent.click(again)
+    expect(handlers.onBegin).not.toHaveBeenCalled()
   })
 
   it('shows the honest error and retries through onBegin', () => {

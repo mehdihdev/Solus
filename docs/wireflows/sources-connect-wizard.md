@@ -58,16 +58,16 @@ always shown verbatim — never fabricated.
 
 ## Action area by state
 
-| State                 | Action area                                                                                                                                          |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| idle, oauth           | `Connect <name>` primary button → `begin()`                                                                                                          |
-| idle, export-file     | `Choose export file` → hidden `.xml,.net` input → flow                                                                                               |
-| busy + `accessModes`  | radio grant choice (descriptions shown, connector default pre-selected) → Continue                                                                   |
-| busy + `selectable`   | `SelectionPicker` (single dropdown / multi checkboxes; empty multi allowed)                                                                          |
-| busy + `configFields` | one input per field; credential-shaped names (`key/secret/token/license/password`) render masked (`type=password`); Continue disabled until complete |
-| busy otherwise        | spinner + live engine label                                                                                                                          |
-| error                 | honest error + Retry (→ `begin()` again)                                                                                                             |
-| done                  | real result ("Connected — N entities indexed") + Done                                                                                                |
+| State                 | Action area                                                                                                                                                                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| idle, oauth           | `Connect <name>` primary button → `begin()`                                                                                                                                                                                                    |
+| idle, export-file     | `Choose export file` → hidden `.xml,.net` input → flow                                                                                                                                                                                         |
+| busy + `accessModes`  | radio grant choice (descriptions shown, connector default pre-selected) → Continue                                                                                                                                                             |
+| busy + `selectable`   | `SelectionPicker` (single dropdown / multi checkboxes; empty multi allowed)                                                                                                                                                                    |
+| busy + `configFields` | one input per field; credential-shaped names (key/secret/token/license/password/passphrase/credential) render masked — on-screen hygiene only, real secrets must use SecretStore refs, never `config_fields`; Continue disabled until complete |
+| busy otherwise        | spinner + live engine label                                                                                                                                                                                                                    |
+| error                 | honest error + Retry (OAuth → `begin()` again; export-file → the file picker again)                                                                                                                                                                                                       |
+| done                  | real result ("Connected — N entities indexed") + Done                                                                                                                                                                                          |
 
 ## Flows
 
@@ -83,17 +83,25 @@ always shown verbatim — never fabricated.
 
 ## Cancel contract (close mid-flight)
 
-Closing the wizard (X or backdrop) while the flow is busy **cancels the
-attempt** (`useConnectWizard.close`):
+Closing the wizard (X or backdrop) while a flow is in flight — from the moment
+`begin()`/`pickFile()` runs, even before the first progress write — **cancels
+the attempt** (`useConnectWizard.close`, per-attempt latches):
 
 - Pending and future in-wizard inputs resolve null (`useOAuthConnect.cancel`),
-  so the flow always settles — nothing parks forever.
-- The tile's connection entry is forgotten immediately (back to "Connect").
-- When the abandoned flow settles: a failed attempt that created a source has
-  that dangling source deleted (`DELETE …?retain_entities=false` — it produced
-  no graph data). A flow that **completed successfully anyway** (e.g. the
-  browser handshake finished during the close) keeps its source and reports
-  through `onConnected` — finished work is never silently discarded.
+  and the browser handshake is aborted (`bridge.cancelOAuth` →
+  `oauthLoopback.cancelActiveOAuth`) so the flow always settles now — nothing
+  parks forever and no token is minted for an abandoned handshake.
+- The tile's connection entry is forgotten immediately (back to "Connect"),
+  and the cancelled attempt's further progress writes are suppressed — they
+  can never resurrect the forgotten tile state or clobber a newer attempt.
+- **Cancel never deletes anything.** For multi-selection connectors the
+  backend REUSES the existing connected source, so the flow's `sourceId` can
+  name live, populated graph data — auto-deleting it would violate the §7
+  no-unconfirmed-destruction rule. A genuinely half-configured source stays
+  visible on the Sources page, where the confirmed Disconnect already lives.
+- A flow that **completed successfully anyway** (the handshake finished before
+  the abort landed) keeps its source and reports through `onConnected` —
+  finished work is never silently discarded.
 - Closing on an **error** keeps the error state so the tile stays retryable.
 - Closing on **done** just closes.
 

@@ -29,8 +29,10 @@ export interface ConnectWizardModalProps {
   state?: ConnectionState
   /** Start (or retry) the flow — OAuth path. */
   onBegin: () => void
-  /** Start the flow with the picked committed export — file path. */
-  onPickFile: (file: { fileName: string; content: string }) => void
+  /** Start the flow with the user's picked committed export. The FILE is
+   * handed over unread — the wizard glue validates its size first, so a
+   * multi-GB pick never gets slurped into renderer memory. */
+  onPickFile: (file: File) => void
   /** Resolve the picker step (null cancels). */
   onSelect: (items: SelectableItem[] | null) => void
   /** Resolve the details-form step. */
@@ -42,9 +44,14 @@ export interface ConnectWizardModalProps {
 }
 
 /** A config field whose VALUE should never be shown while typed. The registry
- * names the fields; anything credential-shaped gets a masked input. */
+ * names the fields; anything credential-shaped gets a masked input.
+ *
+ * The masking is on-screen hygiene ONLY: source `config` is stored and echoed
+ * back by the API in plaintext, so connectors must NOT declare real secrets as
+ * `config_fields` — credentials belong in the SecretStore (`secret_ref`).
+ * Heuristic by design; a false positive only masks a harmless value. */
 export function isSecretField(field: string): boolean {
-  return /(key|secret|token|license|password)/i.test(field)
+  return /(key|secret|token|license|password|passphrase|credential)/i.test(field)
 }
 
 /** `document_id` → `Document id`. */
@@ -267,11 +274,10 @@ function IdleAction({
 }: Pick<ConnectWizardModalProps, 'entry' | 'onBegin' | 'onPickFile'>): React.JSX.Element {
   const fileInput = useRef<HTMLInputElement | null>(null)
 
-  const pickFile = async (input: HTMLInputElement): Promise<void> => {
+  const pickFile = (input: HTMLInputElement): void => {
     const file = input.files?.[0]
     input.value = ''
-    if (!file) return
-    onPickFile({ fileName: file.name, content: await file.text() })
+    if (file) onPickFile(file)
   }
 
   if (entry.mode !== 'export-file') {
@@ -289,7 +295,7 @@ function IdleAction({
         accept={EXPORT_FILE_ACCEPT}
         aria-label="Choose a committed netlist export"
         style={{ display: 'none' }}
-        onChange={(e) => void pickFile(e.currentTarget)}
+        onChange={(e) => pickFile(e.currentTarget)}
       />
       <Button kind="primary" size="sm" onClick={() => fileInput.current?.click()}>
         <Icons.file size={12} /> Choose export file
@@ -348,6 +354,9 @@ function ActionArea(
     )
   }
   if (props.status === 'error') {
+    // A committed-export connector retries by picking the file again — its
+    // begin() is the OAuth path and would honestly (but uselessly) fail.
+    if (props.entry.mode === 'export-file') return <IdleAction {...props} />
     return (
       <Button kind="primary" size="sm" onClick={props.onBegin}>
         Retry

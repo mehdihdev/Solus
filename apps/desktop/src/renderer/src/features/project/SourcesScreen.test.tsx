@@ -85,7 +85,10 @@ beforeEach(() => {
     chooseAccess: vi.fn(),
     cancel: vi.fn()
   })
-  vi.mocked(edaHook.useEdaConnect).mockReturnValue({ start: vi.fn() })
+  vi.mocked(edaHook.useEdaConnect).mockReturnValue({
+    start: vi.fn(async () => ({ ok: true })),
+    cancel: vi.fn()
+  })
 })
 
 describe('SourcesScreen', () => {

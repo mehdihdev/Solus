@@ -34,12 +34,15 @@ const REPO: SelectableItem = {
   config: { repo: 'a/one', branch: 'main' }
 }
 
+const cancelOAuth = vi.fn(async () => true)
+
 function withBridge(): void {
   vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue({
     getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
     awaitGithub: vi.fn(async () => ({ code: 'cd' })),
     getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
-    awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
+    awaitOAuth: vi.fn(async () => ({ code: 'cd' })),
+    cancelOAuth
   })
 }
 
@@ -181,6 +184,69 @@ describe('useOAuthConnect', () => {
     act(() => result.current.cancel())
     const outcome = captured!({ projectId: 'p1', sourceId: 's1', provider: 'someFutureCad' })
     await expect(outcome).resolves.toEqual({ error: 'Configuration cancelled.' })
+  })
+
+  it('cancel aborts the browser handshake so a parked flow settles now', async () => {
+    withBridge()
+    const { result } = renderHook(() => useOAuthConnect())
+    await act(async () => {
+      await result.current.start('p1', 'github', { configFields: ['repo'] })
+    })
+    act(() => result.current.cancel())
+    expect(cancelOAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('a cancelled attempt goes quiet: its progress no longer reaches the store', async () => {
+    withBridge()
+    let emit: ((state: import('./onboardingStore').ConnectionState) => void) | undefined
+    mockedRun.mockImplementation(
+      (deps) =>
+        new Promise((resolve) => {
+          emit = deps.onProgress
+          deps.onProgress({ phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
+          setTimeout(() => resolve({ ok: false, error: 'x' }), 0)
+        })
+    )
+    const { result } = renderHook(() => useOAuthConnect())
+    act(() => {
+      void result.current.start('p1', 'github', { configFields: ['repo'] })
+    })
+    await act(async () => undefined)
+    expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
+
+    act(() => result.current.cancel())
+    useOnboardingStore.getState().clearConnection('github')
+    // The abandoned flow keeps emitting — nothing may reach the store now.
+    act(() => emit?.({ phase: 'busy', stage: 'link', label: 'Linking…' }))
+    expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+  })
+
+  it("a superseded attempt's input request resolves null instead of stealing the new attempt's resolver", async () => {
+    withBridge()
+    const { result } = renderHook(() => useOAuthConnect())
+
+    const captured: oauthConnect.ConfigureStep[] = []
+    mockedRun.mockImplementation(async (deps) => {
+      captured.push(deps.configure)
+      return { ok: true }
+    })
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+
+    // The OLD attempt's configure step arrives late: it must settle null-cancelled.
+    const stale = captured[0]({ projectId: 'p1', sourceId: 's1', provider: 'someFutureCad' })
+    await expect(stale).resolves.toEqual({ error: 'Configuration cancelled.' })
+
+    // The NEW attempt still awaits input normally.
+    const live = captured[1]({ projectId: 'p1', sourceId: 's2', provider: 'someFutureCad' })
+    await act(async () => {
+      result.current.submitConfig({ document_id: 'd9' })
+    })
+    await expect(live).resolves.toEqual({ config: { document_id: 'd9' } })
   })
 
   it('a fresh start clears the cancelled latch from a previous attempt', async () => {

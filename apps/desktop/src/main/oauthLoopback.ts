@@ -29,6 +29,18 @@ const DONE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Solus
 
 let active: Server[] = []
 let currentState = ''
+/** The in-flight flow's `finish`, so a wizard close can settle it NOW instead
+ *  of leaving the loopback armed for TIMEOUT_MS (SOLUSDEV-165 cancel seam). */
+let activeFinish: ((result: OAuthCallbackResult) => void) | null = null
+
+/** Cancel the in-flight OAuth capture, if any: the parked promise resolves with
+ *  a cancelled error and every loopback socket is released. Returns whether a
+ *  flow was actually cancelled. */
+export function cancelActiveOAuth(): boolean {
+  if (!activeFinish) return false
+  activeFinish({ error: 'Sign-in was cancelled.' })
+  return true
+}
 
 /** Issue a fresh CSRF state and return the loopback redirect URL carrying it.
  *  Supabase sign-in flow only. */
@@ -90,6 +102,7 @@ function captureCallback(
     const finish = (result: OAuthCallbackResult): void => {
       if (settled) return
       settled = true
+      activeFinish = null
       clearTimeout(timer)
       const servers = active
       active = []
@@ -124,6 +137,7 @@ function captureCallback(
     }
 
     const timer = setTimeout(() => finish({ error: 'Sign-in timed out.' }), TIMEOUT_MS)
+    activeFinish = finish
 
     // BOTH loopback stacks. The connector redirect URL says `localhost` (Onshape
     // rejects a bare IP), and `localhost` resolves to ::1 first on many systems —

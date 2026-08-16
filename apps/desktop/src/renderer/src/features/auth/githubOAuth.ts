@@ -19,6 +19,10 @@ export interface OAuthBridge {
     authorizeUrl: string,
     expectedState: string
   ) => Promise<{ code?: string; error?: string }>
+  /** Cancel the in-flight connector handshake so `awaitOAuth` settles now
+   *  (wizard closed mid-flow — SOLUSDEV-165). Optional: older preloads and
+   *  test stubs without it degrade to letting the flow time out. */
+  cancelOAuth?: () => Promise<boolean>
 }
 
 export interface GithubOAuthResult {

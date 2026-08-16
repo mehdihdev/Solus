@@ -1,13 +1,15 @@
 // The wizard's surface glue: open/begin/pickFile/close for the active catalog
 // entry, shared by the Sources page and onboarding. Close mid-flight CANCELS
-// the attempt (SOLUSDEV-165): the connection entry is forgotten immediately,
-// and once the flow settles a dangling half-configured source is deleted
-// (retain_entities=false — it produced no graph data). A flow that completed
-// successfully despite the cancel keeps its source: real work is never thrown
-// away silently.
+// the attempt (SOLUSDEV-165): the tile state is forgotten immediately and the
+// abandoned flow settles quietly. Cancel NEVER deletes a source — for
+// multi-selection connectors the backend reuses the existing connected source,
+// so `result.sourceId` can name live, populated graph data (security review
+// C1). A flow that completed successfully despite the cancel keeps its source
+// and is reported: real work is never thrown away silently.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useConnectWizard, NOT_LINKED_ERROR } from './useConnectWizard'
+import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
 import { useOnboardingStore } from './onboardingStore'
 import * as oauthConnect from './oauthConnect'
 import * as edaConnect from './edaConnect'
@@ -57,12 +59,15 @@ const KICAD: CatalogEntry = {
   accessModes: null
 }
 
+const cancelOAuth = vi.fn(async () => true)
+
 function withBridge(): void {
   vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue({
     getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
     awaitGithub: vi.fn(async () => ({ code: 'cd' })),
     getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
-    awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
+    awaitOAuth: vi.fn(async () => ({ code: 'cd' })),
+    cancelOAuth
   })
 }
 
@@ -74,6 +79,21 @@ beforeEach(() => {
 })
 
 afterEach(() => vi.restoreAllMocks())
+
+/** Park runOAuthConnect and hand the test its resolve. */
+function parkOAuth(firstProgress?: import('./onboardingStore').ConnectionState): {
+  settle: (r: oauthConnect.OAuthConnectResult) => void
+} {
+  const parked = { settle: (() => undefined) as (r: oauthConnect.OAuthConnectResult) => void }
+  mockedOAuth.mockImplementation(
+    (deps) =>
+      new Promise((resolve) => {
+        if (firstProgress) deps.onProgress(firstProgress)
+        parked.settle = resolve
+      })
+  )
+  return parked
+}
 
 describe('useConnectWizard', () => {
   it('open exposes the active entry; close forgets it', () => {
@@ -101,8 +121,7 @@ describe('useConnectWizard', () => {
     act(() => result.current.open(GITHUB))
     await act(async () => result.current.begin())
     expect(mockedOAuth).not.toHaveBeenCalled()
-    const state = useOnboardingStore.getState().connections.github
-    expect(state?.phase).toBe('error')
+    expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
   })
 
   it('begin drives the OAuth flow and reports success through onConnected', async () => {
@@ -117,60 +136,95 @@ describe('useConnectWizard', () => {
     expect(onConnected).toHaveBeenCalledTimes(1)
   })
 
-  it('pickFile drives the committed-export flow and reports success', async () => {
+  it('pickFile reads the file and drives the committed-export flow', async () => {
     const onConnected = vi.fn()
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1', onConnected }))
     act(() => result.current.open(KICAD))
-    await act(async () => result.current.pickFile({ fileName: 'a.xml', content: '<x/>' }))
+    await act(async () => result.current.pickFile(new File(['<x/>'], 'a.xml')))
     expect(mockedEda).toHaveBeenCalledTimes(1)
     expect(mockedEda.mock.calls[0][2]).toBe('kicad')
+    expect(mockedEda.mock.calls[0][3]).toEqual({ fileName: 'a.xml', content: '<x/>' })
     expect(onConnected).toHaveBeenCalledTimes(1)
   })
 
-  it('close mid-flight cancels: clears the tile state and deletes the dangling source', async () => {
+  it('rejects an empty pick without reading it and without starting a flow', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    const file = new File([], 'empty.xml')
+    const text = vi.spyOn(file, 'text')
+    await act(async () => result.current.pickFile(file))
+    expect(text).not.toHaveBeenCalled()
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toEqual({
+      phase: 'error',
+      error: EMPTY_EXPORT_ERROR
+    })
+  })
+
+  it('rejects an oversized pick by SIZE, before file.text() can hang the renderer', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    const file = new File(['x'], 'huge.xml')
+    Object.defineProperty(file, 'size', { value: MAX_EXPORT_BYTES + 1 })
+    const text = vi.spyOn(file, 'text')
+    await act(async () => result.current.pickFile(file))
+    expect(text).not.toHaveBeenCalled()
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toEqual({
+      phase: 'error',
+      error: OVERSIZE_EXPORT_ERROR
+    })
+  })
+
+  it('close mid-flight cancels: clears the tile state and NEVER deletes a source', async () => {
     withBridge()
     const onConnected = vi.fn()
-    let settle: (r: oauthConnect.OAuthConnectResult) => void = () => undefined
-    mockedOAuth.mockImplementation(
-      (deps) =>
-        new Promise((resolve) => {
-          deps.onProgress({ phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
-          settle = resolve
-        })
-    )
+    const parked = parkOAuth({ phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1', onConnected }))
     act(() => result.current.open(GITHUB))
     act(() => {
       void result.current.begin()
     })
-    // Let the hook reach the engine (it awaits the bridge redirect URL first).
-    await act(async () => undefined)
+    await act(async () => undefined) // let the hook reach the engine
     expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
 
     act(() => result.current.close())
     expect(result.current.active).toBeNull()
     expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+    // The browser handshake is aborted so the flow settles now.
+    expect(cancelOAuth).toHaveBeenCalled()
 
-    // The abandoned flow settles later with a half-made source: it is deleted,
-    // its data too (it has none), and the tile stays clean.
-    act(() => settle({ ok: false, error: 'Configuration cancelled.', sourceId: 's7' }))
-    await waitFor(() => expect(mockedDisconnect).toHaveBeenCalledTimes(1))
-    expect(mockedDisconnect).toHaveBeenCalledWith('p1', 's7', { retainEntities: false })
+    // The abandoned flow settles as a failure that DID create a source. It is
+    // NOT deleted — for reused-source connectors that id can be live graph
+    // data, and cancel must never destroy anything (CLAUDE.md §7).
+    act(() => parked.settle({ ok: false, error: 'Configuration cancelled.', sourceId: 's7' }))
+    await act(async () => undefined)
+    expect(mockedDisconnect).not.toHaveBeenCalled()
     expect(useOnboardingStore.getState().connections.github).toBeUndefined()
     expect(onConnected).not.toHaveBeenCalled()
+  })
+
+  it('close BEFORE the first progress write still cancels the attempt', async () => {
+    withBridge()
+    const parked = parkOAuth()
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(GITHUB))
+    act(() => {
+      void result.current.begin()
+    })
+    // No progress has been written yet — the attempt must still be cancellable.
+    act(() => result.current.close())
+    expect(cancelOAuth).toHaveBeenCalled()
+
+    act(() => parked.settle({ ok: false, error: 'Connect cancelled.' }))
+    await act(async () => undefined)
+    expect(useOnboardingStore.getState().connections.github).toBeUndefined()
   })
 
   it('a cancelled flow that still completed keeps its source — work is not thrown away', async () => {
     withBridge()
     const onConnected = vi.fn()
-    let settle: (r: oauthConnect.OAuthConnectResult) => void = () => undefined
-    mockedOAuth.mockImplementation(
-      (deps) =>
-        new Promise((resolve) => {
-          deps.onProgress({ phase: 'busy', stage: 'index', label: 'Indexing…' })
-          settle = resolve
-        })
-    )
+    const parked = parkOAuth({ phase: 'busy', stage: 'index', label: 'Indexing…' })
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1', onConnected }))
     act(() => result.current.open(GITHUB))
     act(() => {
@@ -179,9 +233,39 @@ describe('useConnectWizard', () => {
     await act(async () => undefined)
     act(() => result.current.close())
 
-    act(() => settle({ ok: true, sourceId: 's8', result: 'Connected — 3 entities indexed' }))
+    act(() => parked.settle({ ok: true, sourceId: 's8', result: 'Connected — 3 entities indexed' }))
     await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1))
     expect(mockedDisconnect).not.toHaveBeenCalled()
+  })
+
+  it("a stale cancelled attempt cannot clear a NEWER attempt's tile state", async () => {
+    withBridge()
+    const parked = parkOAuth({ phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(GITHUB))
+    act(() => {
+      void result.current.begin()
+    })
+    await act(async () => undefined)
+    const settleA = parked.settle
+    act(() => result.current.close()) // cancel attempt A
+
+    // Retry: attempt B is live and busy.
+    const parkedB = parkOAuth({ phase: 'busy', stage: 'authorize', label: 'Authorizing…' })
+    act(() => result.current.open(GITHUB))
+    act(() => {
+      void result.current.begin()
+    })
+    await act(async () => undefined)
+    expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
+
+    // A settles late, as a cancelled failure — B's busy tile must survive.
+    act(() => settleA({ ok: false, error: 'Configuration cancelled.', sourceId: 's7' }))
+    await act(async () => undefined)
+    expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
+    expect(mockedDisconnect).not.toHaveBeenCalled()
+
+    act(() => parkedB.settle({ ok: true, sourceId: 's9' }))
   })
 
   it('closing on an error keeps the error state so the tile stays retryable', async () => {
@@ -198,5 +282,6 @@ describe('useConnectWizard', () => {
       phase: 'error',
       error: 'GitHub sign-in was cancelled.'
     })
+    expect(cancelOAuth).not.toHaveBeenCalled()
   })
 })

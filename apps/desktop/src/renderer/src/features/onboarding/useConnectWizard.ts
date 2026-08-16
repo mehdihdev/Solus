@@ -1,15 +1,20 @@
 // Surface glue for the connect wizard (SOLUSDEV-165), shared by the Sources
 // page and onboarding: tracks which catalog entry the wizard is open for,
 // starts the right real flow (OAuth bridge / committed-export), and implements
-// the cancel contract — closing mid-flight forgets the attempt immediately and,
-// once the abandoned flow settles, deletes the dangling half-configured source
-// (retain_entities=false: it produced no graph data). A flow that completed
-// successfully despite the cancel keeps its source; finished work is reported,
-// never silently discarded.
+// the cancel contract — closing mid-flight forgets the attempt immediately
+// (the flow's own progress is suppressed and the browser handshake aborted).
+//
+// Cancel NEVER deletes anything. For multi-selection connectors the backend
+// REUSES the existing connected source, so `result.sourceId` can name a live,
+// populated source — deleting it here would destroy real graph data on a
+// stray backdrop click (CLAUDE.md §7: destructive actions need explicit
+// confirmation). A genuinely half-configured source stays visible on the
+// Sources page, where the confirmed Disconnect already lives. And a flow that
+// completed successfully despite the cancel keeps its source and is reported —
+// finished work is never silently discarded.
 import { useRef, useState } from 'react'
-import { disconnectSource } from '../../lib/api/resources'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
-import type { EdaExportFile } from './edaConnect'
+import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
 import type { CatalogEntry } from './integrationCatalog'
 import { noBridgeError } from './oauthConnect'
 import { useOnboardingStore } from './onboardingStore'
@@ -18,10 +23,11 @@ import { connectOptions, useOAuthConnect } from './useOAuthConnect'
 
 export const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
 
-/** What both flow engines resolve with, as far as cleanup is concerned. */
-interface SettledResult {
-  ok: boolean
-  sourceId?: string
+/** One begin/pickFile invocation for one entry. Latches are PER ATTEMPT so a
+ * late-settling abandoned flow is never governed by a newer attempt's cancel. */
+interface Attempt {
+  cancelled: boolean
+  settled: boolean
 }
 
 export interface UseConnectWizardOptions {
@@ -37,8 +43,9 @@ export interface UseConnectWizard {
   open: (entry: CatalogEntry) => void
   /** Start (or retry) the flow for the active entry — OAuth path. */
   begin: () => Promise<void>
-  /** Start the flow with the picked committed export — file path. */
-  pickFile: (file: EdaExportFile) => Promise<void>
+  /** Start the flow with the user's picked export file — validated by size
+   * BEFORE it is read into memory. */
+  pickFile: (file: File) => Promise<void>
   /** Close the wizard. Mid-flight this cancels the attempt. */
   close: () => void
   select: ReturnType<typeof useOAuthConnect>['select']
@@ -51,31 +58,30 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
   const [active, setActive] = useState<CatalogEntry | null>(null)
   const oauth = useOAuthConnect()
   const eda = useEdaConnect()
-  // Latched by close() while a flow is in flight; cleared on the next start.
-  const cancelled = useRef(false)
+  /** The latest attempt per entry id. */
+  const attempts = useRef<Record<string, Attempt>>({})
 
-  /** One settlement path for both engines: cleanup after a cancel, report
-   * success otherwise. Runs strictly after the flow's final progress write. */
-  const settle = (entry: CatalogEntry, result: SettledResult): void => {
-    if (!cancelled.current) {
-      if (result.ok) onConnected?.()
-      return
-    }
+  const beginAttempt = (entry: CatalogEntry): Attempt => {
+    const attempt: Attempt = { cancelled: false, settled: false }
+    attempts.current[entry.id] = attempt
+    return attempt
+  }
+
+  /** One settlement path for both engines, keyed to ITS OWN attempt. */
+  const settle = (entry: CatalogEntry, attempt: Attempt, result: { ok: boolean }): void => {
+    attempt.settled = true
     if (result.ok) {
-      // The user closed the wizard but the connect finished anyway: keep the
-      // source and its 'done' state — deleting finished work on a stale cancel
-      // would be destructive, not tidy.
+      // Success is reported even after a cancel: the work is real, the source
+      // exists, and hiding it would be dishonest. The list refresh surfaces it.
       onConnected?.()
       return
     }
-    if (result.sourceId && projectId) {
-      // Best-effort: a failed cleanup only leaves a disconnected-looking
-      // source the user can remove from the Sources list.
-      void disconnectSource(projectId, result.sourceId, { retainEntities: false }).catch(
-        () => undefined
-      )
+    // A cancelled failure ends quiet: progress was suppressed and the state
+    // cleared at close(). Sweep once more in case a write predated the latch —
+    // but only when no newer attempt owns this entry's tile.
+    if (attempt.cancelled && attempts.current[entry.id] === attempt) {
+      useOnboardingStore.getState().clearConnection(entry.id)
     }
-    useOnboardingStore.getState().clearConnection(entry.id)
   }
 
   const guard = (entry: CatalogEntry): boolean => {
@@ -94,29 +100,44 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
   const begin = async (): Promise<void> => {
     const entry = active
     if (!entry || !guard(entry)) return
-    cancelled.current = false
+    const attempt = beginAttempt(entry)
     const result = await oauth.start(projectId!, entry.id, connectOptions(entry))
-    settle(entry, result)
+    settle(entry, attempt, result)
   }
 
-  const pickFile = async (file: EdaExportFile): Promise<void> => {
+  const pickFile = async (file: File): Promise<void> => {
     const entry = active
     if (!entry || !guard(entry)) return
-    cancelled.current = false
-    const result = await eda.start(projectId!, entry.id, file)
-    settle(entry, result)
+    // Bound by size BEFORE file.text() — reading a multi-GB pick into a string
+    // would hang the renderer long before the engine's own validation runs.
+    const { failConnect } = useOnboardingStore.getState()
+    if (file.size === 0) {
+      failConnect(entry.id, EMPTY_EXPORT_ERROR)
+      return
+    }
+    if (file.size > MAX_EXPORT_BYTES) {
+      failConnect(entry.id, OVERSIZE_EXPORT_ERROR)
+      return
+    }
+    const attempt = beginAttempt(entry)
+    const content = await file.text()
+    const result = await eda.start(projectId!, entry.id, { fileName: file.name, content })
+    settle(entry, attempt, result)
   }
 
   const close = (): void => {
     const entry = active
     setActive(null)
     if (!entry) return
-    const state = useOnboardingStore.getState().connections[entry.id]
-    if (state?.phase !== 'busy') return
-    // Cancel the in-flight attempt: unblock any waiting input step so the flow
-    // settles, and forget the tile state right away. settle() finishes the job.
-    cancelled.current = true
+    const attempt = attempts.current[entry.id]
+    // Settled (done, error, or never started): keep the tile state — an error
+    // stays retryable, a done stays done. Only an in-flight attempt cancels.
+    if (!attempt || attempt.settled) return
+    attempt.cancelled = true
+    // Unblock any waiting input step and abort the browser handshake so the
+    // flow settles; suppress both engines' further progress writes.
     oauth.cancel()
+    eda.cancel()
     useOnboardingStore.getState().clearConnection(entry.id)
   }
 

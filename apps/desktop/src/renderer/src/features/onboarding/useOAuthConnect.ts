@@ -92,13 +92,21 @@ export function connectOptions(integ: {
 
 type Resolver<T> = ((value: T | null) => void) | null
 
-/** Park until the flow's own handler resolves the choice — unless the attempt
- * was already cancelled, in which case the choice is null immediately. */
+/** One `start()` invocation. Cancellation is PER ATTEMPT so a late-settling
+ * abandoned flow can neither consume a newer attempt's input nor be governed
+ * by a newer attempt's latch. */
+interface Attempt {
+  cancelled: boolean
+}
+
+/** Park until the flow's own handler resolves the choice. A cancelled or
+ * superseded attempt gets null immediately — it must settle, never park. */
 function awaitChoice<T>(
   ref: { current: Resolver<T> },
-  cancelled: { current: boolean }
+  attempt: Attempt,
+  current: { current: Attempt | null }
 ): Promise<T | null> {
-  if (cancelled.current) return Promise.resolve(null)
+  if (attempt.cancelled || current.current !== attempt) return Promise.resolve(null)
   return new Promise<T | null>((resolve) => {
     ref.current = (value) => {
       ref.current = null
@@ -113,38 +121,42 @@ export function useOAuthConnect(): UseOAuthConnect {
   const selectChoice = useRef<Resolver<SelectableItem[]>>(null)
   const configSubmit = useRef<Resolver<Record<string, string>>>(null)
   const accessChoice = useRef<Resolver<string>>(null)
-  // Latched by cancel() for the current attempt; cleared by the next start().
-  const cancelled = useRef(false)
+  const currentAttempt = useRef<Attempt | null>(null)
 
   const start = async (
     projectId: string,
     provider: string,
     options: OAuthConnectStartOptions = {}
   ): Promise<OAuthConnectResult> => {
-    cancelled.current = false
+    const attempt: Attempt = { cancelled: false }
+    currentAttempt.current = attempt
     const bridge = getDesktopOAuthBridge()
     // The CONNECTOR redirect URL — constant, no per-flow query. Sign-in keeps
     // its own nonce-carrying URL; only strict connector providers need this.
     const redirectUri = bridge ? await bridge.getConnectorRedirectUrl() : ''
-    const onProgress = (state: ConnectionState): void => setConnection(provider, state)
+    // A cancelled attempt goes quiet: its progress must not resurrect tile
+    // state the wizard already forgot.
+    const onProgress = (state: ConnectionState): void => {
+      if (!attempt.cancelled) setConnection(provider, state)
+    }
 
     const configure: ConfigureStep = options.selection
       ? selectionConfigureStep({
           selection: options.selection,
           listSelectable,
           onProgress,
-          onSelect: () => awaitChoice(selectChoice, cancelled)
+          onSelect: () => awaitChoice(selectChoice, attempt, currentAttempt)
         })
       : fieldsConfigureStep({
           fields: options.configFields ?? [],
           onProgress,
-          onSubmitConfig: () => awaitChoice(configSubmit, cancelled)
+          onSubmitConfig: () => awaitChoice(configSubmit, attempt, currentAttempt)
         })
 
     const chooseAccess = accessChoiceStep({
       accessModes: options.accessModes,
       onProgress,
-      onChoose: () => awaitChoice(accessChoice, cancelled)
+      onChoose: () => awaitChoice(accessChoice, attempt, currentAttempt)
     })
 
     return runOAuthConnect(
@@ -156,10 +168,14 @@ export function useOAuthConnect(): UseOAuthConnect {
   }
 
   const cancel = (): void => {
-    cancelled.current = true
+    if (currentAttempt.current) currentAttempt.current.cancelled = true
     selectChoice.current?.(null)
     configSubmit.current?.(null)
     accessChoice.current?.(null)
+    // Settle a flow parked on the browser handshake NOW — otherwise the
+    // loopback stays armed and a later browser completion would mint and
+    // store a token for an attempt the user abandoned.
+    void getDesktopOAuthBridge()?.cancelOAuth?.()
   }
 
   return {
