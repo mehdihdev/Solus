@@ -248,8 +248,15 @@ describe('ConnectWizardModal', () => {
 // Connector-ingested content (repo/document names, registry copy) is untrusted
 // input to the UI (CLAUDE.md §7). This is the standing regression guard that it
 // renders as literal TEXT — a markup-named repository must never become markup.
+// Legitimate <img>s exist (bundled logos), so the guard is payload-specific:
+// no element carries the payload's src or an onerror handler.
 describe('untrusted content rendering', () => {
   const PAYLOAD = '<img src=x onerror="alert(1)">'
+
+  const assertInert = (container: HTMLElement): void => {
+    expect(container.querySelector('img[src="x"]')).toBeNull()
+    expect(container.querySelector('[onerror]')).toBeNull()
+  }
 
   it('renders a markup-named selectable item as literal text, creating no element', () => {
     const { container } = render(
@@ -273,7 +280,7 @@ describe('untrusted content rendering', () => {
       />
     )
     expect(screen.getByText(PAYLOAD)).toBeTruthy()
-    expect(container.querySelector('img')).toBeNull()
+    assertInert(container)
   })
 
   it('renders markup in access-mode labels and descriptions as literal text', () => {
@@ -300,7 +307,7 @@ describe('untrusted content rendering', () => {
       />
     )
     expect(screen.getByText(`desc ${PAYLOAD}`)).toBeTruthy()
-    expect(container.querySelector('img')).toBeNull()
+    assertInert(container)
   })
 
   it('renders a markup-carrying live error verbatim as text', () => {
@@ -317,7 +324,7 @@ describe('untrusted content rendering', () => {
       />
     )
     expect(screen.getByText(`failed: ${PAYLOAD}`)).toBeTruthy()
-    expect(container.querySelector('img')).toBeNull()
+    assertInert(container)
   })
 })
 

@@ -64,7 +64,15 @@ describe('ConnectTile', () => {
   })
 
   it('falls back to the letter mark when no logo asset is bundled', () => {
-    render(<ConnectTile integration={github} onOpen={vi.fn()} />)
-    expect(screen.getByText(github.mark)).toBeInTheDocument()
+    // A provider the bundle has no asset for — github et al. ship real logos.
+    const future = { id: 'someFutureCad', name: 'FutureCAD', kind: 'CAD', mark: 'FC' }
+    render(<ConnectTile integration={future} onOpen={vi.fn()} />)
+    expect(screen.getByText('FC')).toBeInTheDocument()
+  })
+
+  it('shows the bundled logo instead of the letter mark when one exists', () => {
+    const { container } = render(<ConnectTile integration={github} onOpen={vi.fn()} />)
+    expect(container.querySelector('img')).not.toBeNull()
+    expect(screen.queryByText(github.mark)).toBeNull()
   })
 })
