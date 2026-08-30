@@ -130,6 +130,24 @@ def test_instance_id_persists_across_loads(tmp_path: Path) -> None:
     assert mode == 0o600
 
 
+def test_instance_dir_created_private(tmp_path: Path) -> None:
+    # ADR-034 (SOLUSDEV-166): ~/.solus is 0700 — MCP forks inherit HOME, so the
+    # directory must never be group/world readable.
+    path = tmp_path / "dot-solus" / "companion_id"
+    load_instance_id(path)
+    assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
+
+
+def test_instance_dir_tightened_when_pre_existing(tmp_path: Path) -> None:
+    # Older builds created ~/.solus with the default umask; creating a fresh id
+    # in one tightens it (ADR-034 consequence).
+    parent = tmp_path / "dot-solus"
+    parent.mkdir(mode=0o755)
+    fresh = load_instance_id(parent / "companion_id")
+    assert len(fresh) == 32
+    assert stat.S_IMODE(os.stat(parent).st_mode) == 0o700
+
+
 def test_instance_id_replaces_garbage(tmp_path: Path) -> None:
     path = tmp_path / "companion_id"
     path.write_text("not-a-uuid\n")

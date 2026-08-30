@@ -356,9 +356,7 @@ def _private_interpreter(root_resolved: Path, server_dir: Path, name: str) -> Pa
         return None
     resolved = interpreter.resolve()
     if not resolved.is_relative_to(root_resolved):
-        logger.error(
-            "REFUSED private interpreter for %r: resolves outside %s", name, root_resolved
-        )
+        logger.error("REFUSED private interpreter for %r: resolves outside %s", name, root_resolved)
         return None
     if not os.access(resolved, os.X_OK):
         logger.error("REFUSED private interpreter for %r: %s is not executable", name, interpreter)
@@ -465,6 +463,10 @@ def load_instance_id(path: Path) -> str:
         pass
     instance_id = uuid.uuid4().hex
     path.parent.mkdir(parents=True, exist_ok=True)
+    # ADR-034 (SOLUSDEV-166): ~/.solus is private to the user — MCP forks
+    # inherit HOME, so the directory must never be group/world readable. The
+    # chmod also tightens a dir an older build created with the default umask.
+    os.chmod(path.parent, 0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(instance_id)
