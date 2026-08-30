@@ -3,7 +3,7 @@
 // Logic is tested against an in-memory fake of the injected fs surface; one
 // small real-fs suite covers what a fake cannot prove (atomic replace on a
 // real filesystem, directory modes).
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -54,6 +54,10 @@ function fakeDeps(overrides: Partial<LocalStateDeps> = {}): LocalStateDeps & {
     // Default: any absolute path that is not itself a registry file is a real
     // directory. Individual tests override to exercise the not-a-directory path.
     isDirectory: () => true,
+    // Default: identity canonicalization (no symlinks/.. in the fake FS).
+    // Tests override to exercise `..`/symlink resolution.
+    realpath: (path) => path,
+    platform: 'linux',
     remove: (path) => {
       files.delete(path)
     },
@@ -155,21 +159,36 @@ describe('linkProjectFolder', () => {
     expect(deps.files.size).toBe(0)
   })
 
-  // SOLUSDEV-166 security review C1/M4: a forged IPC path must not reach the
-  // fork's workspace root. These never occur in a dialog-chosen path.
+  // Control characters are rejected on EVERY platform: NUL makes spawn throw,
+  // a newline corrupts the env line (SOLUSDEV-166 review C1/M4).
   test.each([
     ['a NUL byte', '/ws/\x00evil'],
     ['a newline', '/ws/a\nb'],
-    ['a cmd.exe ampersand', '/ws/a" & calc "'],
+    ['a tab', '/ws/a\tb']
+  ])('rejects a path with %s on any platform', (_why, path) => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const deps = fakeDeps({ platform })
+      expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+      expect(deps.files.size).toBe(0)
+    }
+  })
+
+  // The cmd.exe metacharacter class is fatal ONLY on Windows (the launch.cmd
+  // sink). On POSIX these are legal directory names the dialog can produce.
+  test.each([
+    ['an ampersand', '/ws/a & calc'],
     ['a caret', '/ws/a^b'],
     ['a pipe', '/ws/a|b'],
     ['a redirect', '/ws/a>b'],
-    ['a percent (cmd env expansion)', '/ws/%USERPROFILE%'],
-    ['a glob star', '/ws/*']
-  ])('rejects a path with %s', (_why, path) => {
-    const deps = fakeDeps()
-    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
+    ['a percent', '/ws/%USERPROFILE%'],
+    ['a glob star', '/ws/proj*']
+  ])('rejects %s on Windows but accepts it on POSIX', (_why, path) => {
+    const win = fakeDeps({ platform: 'win32' })
+    expect(linkProjectFolder('p1', { path }, win)).toBe(false)
+    expect(win.files.size).toBe(0)
+
+    const posix = fakeDeps({ platform: 'linux' })
+    expect(linkProjectFolder('p1', { path }, posix)).toBe(true)
   })
 
   test('rejects a path that is not an existing directory', () => {
@@ -178,15 +197,56 @@ describe('linkProjectFolder', () => {
     expect(deps.files.size).toBe(0)
   })
 
+  test('rejects a path that does not resolve (realpath null)', () => {
+    const deps = fakeDeps({ realpath: () => null })
+    expect(linkProjectFolder('p1', { path: '/ws/vanished' }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  // review C1-a: the forbidden set is compared AFTER canonicalization, so
+  // dot-segments, doubled separators, and symlinks cannot dodge it.
   test.each([
     ['the filesystem root', '/'],
+    ['a doubled-separator root', '//'],
+    ['a dot-segment resolving to root', '/tmp/..'],
     ['the user home', '/home/tester'],
+    ['the home via a dot-segment', '/home/tester/x/..'],
     ['the home with a trailing slash', '/home/tester/'],
-    ['~/.solus itself', HOME]
+    ['~/.solus itself', HOME],
+    ['a path under ~/.solus', `${HOME}/projects/p1`],
+    ['a symlink resolving to home', '/ws/link-to-home']
   ])('refuses %s as a workspace (too much fork reach)', (_why, path) => {
-    const deps = fakeDeps()
+    // realpath resolves dot-segments and the symlink fixture to their targets.
+    const deps = fakeDeps({
+      realpath: (p) => {
+        if (p === '/ws/link-to-home') return '/home/tester'
+        if (p === '/tmp/..' || p === '//') return '/'
+        if (p === '/home/tester/x/..') return '/home/tester'
+        return p.replace(/\/+$/, '') || '/'
+      }
+    })
     expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
     expect(deps.files.size).toBe(0)
+  })
+
+  test('rejects a case-variant of home on a case-insensitive platform', () => {
+    const deps = fakeDeps({ platform: 'darwin', realpath: (p) => p })
+    expect(linkProjectFolder('p1', { path: '/HOME/TESTER' }, deps)).toBe(false)
+  })
+
+  test('rejects a Windows drive root', () => {
+    const deps = fakeDeps({
+      platform: 'win32',
+      homedir: () => 'C:\\Users\\tester',
+      realpath: (p) => p
+    })
+    expect(linkProjectFolder('p1', { path: 'C:\\' }, deps)).toBe(false)
+  })
+
+  test('stores the CANONICAL path, not the raw input', () => {
+    const deps = fakeDeps({ realpath: (p) => (p === '/ws/link' ? '/ws/real' : p) })
+    linkProjectFolder('p1', { path: '/ws/link' }, deps)
+    expect(JSON.parse(deps.files.get(FILE) as string).projects.p1.path).toBe('/ws/real')
   })
 
   // SOLUSDEV-166 security review H2: the registry is fork-readable, so a clone
@@ -240,6 +300,24 @@ describe('unlinkProjectFolder', () => {
   test('rejects an unsafe project id', () => {
     expect(unlinkProjectFolder('../evil', fakeDeps())).toBe(false)
   })
+
+  test.each([['__proto__'], ['constructor'], ['prototype']])(
+    'rejects the reserved id %j at the write boundary',
+    (projectId) => {
+      const deps = fakeDeps()
+      expect(linkProjectFolder(projectId, { path: '/ws' }, deps)).toBe(false)
+      expect(unlinkProjectFolder(projectId, deps)).toBe(false)
+      expect(deps.files.size).toBe(0)
+    }
+  )
+
+  test('a reserved-id link cannot poison the registry (review L7 write path)', () => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws/rover' }, deps)
+    expect(linkProjectFolder('__proto__', { path: '/ws/evil' }, deps)).toBe(false)
+    // p1 survives and the registry still reads back cleanly.
+    expect(readRegistry(deps).registry.projects.p1?.path).toBe('/ws/rover')
+  })
 })
 
 describe('projectWorkspace', () => {
@@ -254,6 +332,55 @@ describe('projectWorkspace', () => {
     expect(projectWorkspace('p1', deps)).toBeNull()
     expect(projectWorkspace(null, deps)).toBeNull()
     expect(projectWorkspace('../evil', deps)).toBeNull()
+  })
+
+  // review C1-b: the registry file is fork-writable, so the stored value is
+  // re-validated at the sink. A hostile/hand-edited path yields null and the
+  // fork fails closed.
+  test.each([
+    ['a cmd.exe metacharacter', '/ws" & calc & "', 'win32'],
+    ['the filesystem root', '/', 'linux'],
+    ['the user home', '/home/tester', 'linux'],
+    ['a NUL byte', '/ws/\x00x', 'linux']
+  ])('returns null for a stored %s', (_why, path, platform) => {
+    const deps = fakeDeps({ platform: platform as NodeJS.Platform })
+    // Plant the hostile value directly on disk, bypassing the write guard.
+    deps.files.set(FILE, JSON.stringify({ schema_version: 1, projects: { p1: { path } } }))
+    expect(projectWorkspace('p1', deps)).toBeNull()
+  })
+})
+
+describe('repo URL credential handling (SOLUSDEV-166 review H2)', () => {
+  test.each([
+    ['https userinfo', 'https://oauth2:glpat-X@gitlab.com/t/r.git', 'https://gitlab.com/t/r.git'],
+    ['https token as user', 'https://ghp_TOKEN@github.com/o/r.git', 'https://github.com/o/r.git'],
+    ['scp-style (no credential)', 'git@github.com:team/rover.git', 'git@github.com:team/rover.git'],
+    ['ssh with required git user', 'ssh://git@github.com/o/r.git', 'ssh://git@github.com/o/r.git']
+  ])('%s → keeps it usable without leaking a secret', (_why, input, expected) => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws', repoUrl: input }, deps)
+    expect(JSON.parse(deps.files.get(FILE) as string).projects.p1.repoUrl).toBe(expected)
+  })
+
+  test.each([
+    ['opaque-scheme token', 'oauth2:TOKEN@github.com'],
+    ['x-access-token opaque form', 'x-access-token:ghp_SECRET@github.com/o/r.git']
+  ])('drops a credential-bearing non-URL value entirely (%s)', (_why, input) => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws', repoUrl: input }, deps)
+    expect(JSON.parse(deps.files.get(FILE) as string).projects.p1.repoUrl).toBeUndefined()
+  })
+
+  test('a legacy registry credential is stripped on read (review H2-c)', () => {
+    const deps = fakeDeps()
+    deps.files.set(
+      FILE,
+      JSON.stringify({
+        schema_version: 1,
+        projects: { p1: { path: '/ws', repoUrl: 'https://oauth2:glpat-X@gitlab.com/t/r.git' } }
+      })
+    )
+    expect(readRegistry(deps).registry.projects.p1?.repoUrl).toBe('https://gitlab.com/t/r.git')
   })
 })
 
@@ -300,7 +427,8 @@ describe('real filesystem deps', () => {
     const solusDir = join(home, '.solus')
     const file = join(solusDir, 'projects.json')
     const written = JSON.parse(readFileSync(file, 'utf8'))
-    expect(written.projects.p1.path).toBe(wsTwo)
+    // The stored value is canonical (realpath resolves e.g. /var → /private/var).
+    expect(written.projects.p1.path).toBe(realpathSync.native(wsTwo))
     if (process.platform !== 'win32') {
       expect(statSync(solusDir).mode & 0o777).toBe(0o700)
       expect(statSync(file).mode & 0o777).toBe(0o600)

@@ -21,7 +21,7 @@ Python bridges via serialization aliases, so dump with ``by_alias=True``.
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 SOLUS_HOME_DIRNAME = ".solus"
 PROJECTS_FILENAME = "projects.json"
@@ -35,6 +35,12 @@ PROJECT_REGISTRY_SCHEMA_VERSION = 1
 PROJECT_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 
 ProjectId = Annotated[str, StringConstraints(pattern=PROJECT_ID_PATTERN)]
+
+#: Ids that collide with object internals on the TS side (``__proto__`` &c.).
+#: Rejected here too so the two parsers agree on exactly what is valid — the
+#: shared fixtures would otherwise validate on one side and not the other
+#: (SOLUSDEV-166 review L7 cross-language drift).
+RESERVED_PROJECT_IDS = frozenset({"__proto__", "constructor", "prototype"})
 
 
 class ProjectFolderLink(BaseModel):
@@ -57,3 +63,13 @@ class ProjectRegistry(BaseModel):
 
     schema_version: Literal[1]
     projects: dict[ProjectId, ProjectFolderLink] = Field(default_factory=dict)
+
+    @field_validator("projects")
+    @classmethod
+    def _no_reserved_ids(
+        cls, projects: dict[str, ProjectFolderLink]
+    ) -> dict[str, ProjectFolderLink]:
+        reserved = RESERVED_PROJECT_IDS & projects.keys()
+        if reserved:
+            raise ValueError(f"reserved project ids are not allowed: {sorted(reserved)}")
+        return projects

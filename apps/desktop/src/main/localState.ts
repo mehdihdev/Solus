@@ -15,8 +15,8 @@
 // unit-testable without a real filesystem.
 import {
   emptyProjectRegistry,
+  isSafeProjectId,
   parseProjectRegistry,
-  PROJECT_ID_RE,
   PROJECTS_FILENAME,
   SOLUS_HOME_DIRNAME,
   SOLUS_HOME_MODE,
@@ -28,13 +28,14 @@ import {
   chmodSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, parse as parsePath, relative } from 'node:path'
 
 /** Registry files hold private machine paths — owner read/write only. */
 const REGISTRY_FILE_MODE = 0o600
@@ -45,17 +46,22 @@ const REGISTRY_FILE_MODE = 0o600
  *  cap). Over it, degrade to empty like any other invalid file. */
 const MAX_REGISTRY_BYTES = 1024 * 1024
 
-/**
- * Characters banned from a workspace path (SOLUSDEV-166 security review C1/M4).
- * This value is persisted, then exported as SOLUS_COMPANION_WORKSPACE and
- * consumed by each MCP fork's `bin/launch` — the Windows `launch.cmd` twin
- * interpolates it into a cmd.exe line before parsing, so `" & ^ | < > %` there
- * are command separators. Control characters (NUL included) additionally make
- * `child_process.spawn` throw, and glob chars never appear in a real directory
- * path. A dialog-chosen path never contains these; only a forged IPC value can.
- */
+/** Control characters (NUL included) are banned everywhere: NUL makes
+ *  `child_process.spawn` throw, and a newline corrupts the env line. */
 // eslint-disable-next-line no-control-regex
-const UNSAFE_PATH_CHARS = /[\x00-\x1f"<>|&^%!*?]/
+const CONTROL_CHARS = /[\x00-\x1f]/
+
+/**
+ * Characters additionally banned on Windows (SOLUSDEV-166 security review C1).
+ * The workspace is exported as SOLUS_COMPANION_WORKSPACE and the Windows
+ * `launch.cmd` fork twin interpolates it into a cmd.exe line BEFORE parsing, so
+ * `" & ^ | < > %` are command separators there. The POSIX `bin/launch` quotes
+ * the value under `env -i`, so these are safe on macOS/Linux and legal in real
+ * directory names (`R&D`, `100% done`) — banning them there would wrongly
+ * refuse folders a user actually picked. Glob chars `* ?` are never valid in a
+ * real path on any platform, but only matter for the cmd.exe sink.
+ */
+const WINDOWS_UNSAFE_PATH_CHARS = /["<>|&^%!*?]/
 
 export interface LocalStateDeps {
   homedir: () => string
@@ -70,6 +76,13 @@ export interface LocalStateDeps {
   /** Whether `path` exists and is a directory — a workspace must be a real
    *  directory the user chose, not a file or a phantom. */
   isDirectory: (path: string) => boolean
+  /** Canonical absolute path (symlinks + `.`/`..` resolved), or null when it
+   *  does not exist. The value we validate and store, so a `..`/symlink dodge
+   *  cannot land somewhere other than what was checked. */
+  realpath: (path: string) => string | null
+  /** The platform whose path rules apply — injected so the win32 branch is
+   *  testable off Windows. */
+  platform: NodeJS.Platform
   /** Best-effort delete (temp cleanup). */
   remove: (path: string) => void
   /** Unpredictable suffix for the temp file name. */
@@ -94,6 +107,23 @@ export interface RegistryRead {
   writable: boolean
 }
 
+/** Re-run the credential stripper over every entry as it comes off disk, so a
+ *  registry written before the write-time sanitizer (or hand-edited) never
+ *  hands a live token back to the renderer through folder:links (review H2-c).
+ *  Preserves the null-prototype map from parseProjects. */
+function sanitizeRegistryOnRead(registry: ProjectRegistry): ProjectRegistry {
+  const projects: Record<string, ProjectFolderLink> = Object.create(null)
+  for (const [projectId, link] of Object.entries(registry.projects)) {
+    const repoUrl = link.repoUrl !== undefined ? sanitizeRepoUrl(link.repoUrl) : undefined
+    projects[projectId] = {
+      path: link.path,
+      ...(repoUrl !== undefined ? { repoUrl } : {}),
+      ...(link.lastOpenedAt !== undefined ? { lastOpenedAt: link.lastOpenedAt } : {})
+    }
+  }
+  return { ...registry, projects }
+}
+
 /** Read `~/.solus/projects.json`, degrading — never throwing — per contract:
  *  missing/corrupt ⇒ empty and writable; newer ⇒ empty and READ-ONLY. */
 export function readRegistry(deps: LocalStateDeps): RegistryRead {
@@ -115,7 +145,7 @@ export function readRegistry(deps: LocalStateDeps): RegistryRead {
     return { registry: emptyProjectRegistry(), writable: true }
   }
   const parsed = parseProjectRegistry(value)
-  if (parsed.ok) return { registry: parsed.registry, writable: true }
+  if (parsed.ok) return { registry: sanitizeRegistryOnRead(parsed.registry), writable: true }
   if (parsed.reason === 'newer') {
     deps.warn('[local-state] projects.json has a newer schema_version; leaving it untouched')
     return { registry: emptyProjectRegistry(), writable: false }
@@ -142,45 +172,78 @@ function writeRegistry(registry: ProjectRegistry, deps: LocalStateDeps): void {
   }
 }
 
-/** Trailing-separator-normalized path, for identity comparisons. */
-function normalizePath(path: string): string {
-  return path.replace(/[/\\]+$/, '') || path
+/** Case-fold for path identity: POSIX is case-sensitive, macOS/Windows are not,
+ *  so a `/USERS/me` variant must still match `/home` on those platforms. */
+function foldPath(path: string, deps: LocalStateDeps): string {
+  const trimmed = path.replace(/[/\\]+$/, '') || path
+  return deps.platform === 'linux' ? trimmed : trimmed.toLowerCase()
+}
+
+/** Whether `child` is `parent` or nested under it (both already canonical). */
+function isAtOrUnder(parent: string, child: string, deps: LocalStateDeps): boolean {
+  const rel = relative(foldPath(parent, deps), foldPath(child, deps))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
 /**
- * Whether a path is safe to persist and hand to a fork as its workspace root
- * (SOLUSDEV-166 security review C1). It must be an absolute, real directory,
- * carry no shell/control characters, and not be a location that would give a
- * fork sweeping reach — the filesystem root, the user's home, or ~/.solus
- * itself. The path normally comes from the OS folder dialog; these checks exist
- * to defeat a forged IPC value.
+ * The canonical form of a path safe to hand a fork as its workspace root, or
+ * null (SOLUSDEV-166 security review C1). Applied at BOTH the write boundary
+ * and the read boundary, because the registry file is itself untrusted — forks
+ * run as the user and can write ~/.solus, and a legacy/hand-edited file may
+ * hold anything.
+ *
+ * Rejects: control characters anywhere; the cmd.exe metacharacter class on
+ * Windows; anything that does not resolve to a real directory; and — after
+ * canonicalizing symlinks and `.`/`..` — the filesystem root, the user's home,
+ * and ~/.solus or anything beneath it (which would hand a fork the registry
+ * and every other project's private paths). Returns the CANONICAL path so the
+ * stored value is exactly what was validated.
  */
-function isSafeWorkspacePath(path: string, deps: LocalStateDeps): boolean {
-  if (path.length === 0 || !isAbsolute(path) || UNSAFE_PATH_CHARS.test(path)) return false
-  const normalized = normalizePath(path)
-  const forbidden = new Set([deps.homedir(), solusHomePath(deps), '/'].map(normalizePath))
-  if (forbidden.has(normalized)) return false
-  return deps.isDirectory(path)
+/** The raw-string half of the check: shape + dangerous characters, before any
+ *  filesystem access. */
+function hasSafePathShape(path: string, deps: LocalStateDeps): boolean {
+  if (path.length === 0 || !isAbsolute(path) || CONTROL_CHARS.test(path)) return false
+  return !(deps.platform === 'win32' && WINDOWS_UNSAFE_PATH_CHARS.test(path))
+}
+
+function safeWorkspacePath(path: string, deps: LocalStateDeps): string | null {
+  if (!hasSafePathShape(path, deps)) return null
+  const real = deps.realpath(path)
+  if (real === null || !deps.isDirectory(real)) return null
+  const folded = foldPath(real, deps)
+  if (folded === foldPath(parsePath(real).root, deps)) return null // any fs / drive root
+  if (folded === foldPath(deps.homedir(), deps)) return null
+  if (isAtOrUnder(solusHomePath(deps), real, deps)) return null // ~/.solus and its subtree
+  return real
 }
 
 /**
- * Strip any embedded credentials from a repo URL before it is persisted — the
- * registry is fork-readable, so a `https://oauth2:TOKEN@host/…` clone URL must
- * not leave a live token on disk (SOLUSDEV-166 security review H2, ADR-034
- * rule 5). scp-style `git@host:path` URLs carry no password by shape and are
- * kept; anything that parses as a URL is rebuilt without userinfo; an
- * unparseable value that still smells of `:secret@` is dropped (it is only
- * informational).
+ * Strip any embedded credentials from a repo URL before it is persisted or
+ * returned to the renderer — the registry is fork-readable, so a
+ * `https://oauth2:TOKEN@host/…` clone URL must not leave a live token on disk
+ * (SOLUSDEV-166 security review H2, ADR-034 rule 5). For an http(s) URL both
+ * username and password are dropped (GitHub PATs ride as the username); for
+ * ssh/git the username (`git`) is required to clone, so only a password is
+ * dropped. A value that is not a proper `//`-authority URL but still embeds a
+ * `:secret@` is dropped entirely (it is only informational); a credential-free
+ * scp-style `git@host:path` is kept verbatim.
  */
 function sanitizeRepoUrl(repoUrl: string): string | undefined {
+  const trimmed = repoUrl.trim()
+  let url: URL | null = null
   try {
-    const url = new URL(repoUrl)
-    url.username = ''
+    url = new URL(trimmed)
+  } catch {
+    url = null
+  }
+  if (url && url.host) {
+    if (url.protocol === 'http:' || url.protocol === 'https:') url.username = ''
     url.password = ''
     return url.toString()
-  } catch {
-    return /:[^@/]*@/.test(repoUrl) ? undefined : repoUrl
   }
+  // Opaque-scheme (`oauth2:TOKEN@host`), scp-style, or junk: keep only if it
+  // carries no `:secret@` credential segment.
+  return /:[^@\s/]*@/.test(trimmed) ? undefined : trimmed
 }
 
 /**
@@ -192,10 +255,12 @@ export function linkProjectFolder(
   link: { path: string; repoUrl?: string },
   deps: LocalStateDeps
 ): boolean {
-  if (!PROJECT_ID_RE.test(projectId) || !isSafeWorkspacePath(link.path, deps)) return false
+  if (!isSafeProjectId(projectId)) return false
+  const canonicalPath = safeWorkspacePath(link.path, deps)
+  if (canonicalPath === null) return false
   const repoUrl = link.repoUrl !== undefined ? sanitizeRepoUrl(link.repoUrl) : undefined
   const entry: ProjectFolderLink = {
-    path: link.path,
+    path: canonicalPath,
     ...(repoUrl !== undefined ? { repoUrl } : {}),
     lastOpenedAt: deps.now().toISOString()
   }
@@ -207,7 +272,7 @@ export function linkProjectFolder(
 
 /** Remove one project's link. Absent is a success (the goal state holds). */
 export function unlinkProjectFolder(projectId: string, deps: LocalStateDeps): boolean {
-  if (!PROJECT_ID_RE.test(projectId)) return false
+  if (!isSafeProjectId(projectId)) return false
   const { registry, writable } = readRegistry(deps)
   if (!(projectId in registry.projects)) return true
   if (!writable) return false
@@ -235,10 +300,18 @@ export function folderLinkInput(value: unknown): FolderLinkInput | null {
 }
 
 /** The working-copy path for a project, or null — what the companion spawn
- *  feeds into SOLUS_COMPANION_WORKSPACE. */
+ *  feeds into SOLUS_COMPANION_WORKSPACE. The stored value is RE-VALIDATED here
+ *  (review C1-b): the registry file is fork-writable and may be hand-edited or
+ *  predate the write-time checks, so the sink cannot trust what it reads. A
+ *  path that no longer passes (deleted directory, hostile edit) yields null,
+ *  and the fork fails closed rather than confining somewhere unsafe. */
 export function projectWorkspace(projectId: string | null, deps: LocalStateDeps): string | null {
-  if (projectId === null || !PROJECT_ID_RE.test(projectId)) return null
-  return readRegistry(deps).registry.projects[projectId]?.path ?? null
+  if (projectId === null || !isSafeProjectId(projectId)) return null
+  const stored = readRegistry(deps).registry.projects[projectId]?.path
+  if (stored === undefined) return null
+  const safe = safeWorkspacePath(stored, deps)
+  if (safe === null) deps.warn('[local-state] stored workspace failed validation; ignoring it')
+  return safe
 }
 
 /** Production deps: node fs/os/crypto. `replaceFile` falls back to
@@ -269,6 +342,14 @@ export const realLocalStateDeps: LocalStateDeps = {
       return false
     }
   },
+  realpath: (path) => {
+    try {
+      return realpathSync.native(path)
+    } catch {
+      return null
+    }
+  },
+  platform: process.platform,
   remove: (path) => {
     rmSync(path, { force: true })
   },

@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import manifest from "../fixtures/local-state/_fields.json";
 import minimal from "../fixtures/local-state/registry-minimal.json";
 import registry from "../fixtures/local-state/registry.json";
+import reservedId from "../fixtures/local-state/reserved-id.invalid.json";
 import type { JsonShapeOf } from "./json";
 import {
   PROJECT_FOLDER_LINK_FIELDS,
@@ -124,6 +125,13 @@ describe("prototype-pollution-shaped ids (SOLUSDEV-166 L7)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(Object.getPrototypeOf(result.registry.projects)).toBeNull();
+  });
+
+  test("the shared reserved-id fixture is rejected (parity with the Python parser)", () => {
+    expect(parseProjectRegistry(reservedId)).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
   });
 });
 

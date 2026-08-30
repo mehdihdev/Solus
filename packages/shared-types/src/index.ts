@@ -131,6 +131,7 @@ export {
   SOLUS_HOME_DIRNAME,
   SOLUS_HOME_MODE,
   emptyProjectRegistry,
+  isSafeProjectId,
   parseProjectRegistry,
   type ProjectFolderLink,
   type ProjectRegistry,

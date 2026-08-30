@@ -36,6 +36,14 @@ export const PROJECT_ID_RE = /^[A-Za-z0-9_-]+$/;
  *  L7). PROJECT_ID_RE admits them, so they are excluded explicitly. */
 const RESERVED_PROJECT_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
+/** A project id safe to use as both a registry key and a later path segment:
+ *  matches the id shape AND is not an object-internal name. The single gate
+ *  every write and read boundary shares, so the parse side and the desktop
+ *  main process cannot disagree about what is valid (SOLUSDEV-166 review L7). */
+export function isSafeProjectId(id: string): boolean {
+  return PROJECT_ID_RE.test(id) && !RESERVED_PROJECT_IDS.has(id);
+}
+
 /** One project's link to a working copy on THIS machine. */
 export interface ProjectFolderLink {
   /** Absolute path of the working copy. Non-empty. */
@@ -71,9 +79,14 @@ export type RegistryParseResult =
 
 const INVALID: RegistryParseResult = { ok: false, reason: "invalid" };
 
-/** A registry with nothing in it — what a fresh machine starts from. */
+/** A registry with nothing in it — what a fresh machine starts from. The
+ *  projects map is null-prototype for symmetry with `parseProjects`, so an
+ *  `in` check never reports an inherited `constructor`/`toString` (review L7). */
 export function emptyProjectRegistry(): ProjectRegistry {
-  return { schema_version: PROJECT_REGISTRY_SCHEMA_VERSION, projects: {} };
+  return {
+    schema_version: PROJECT_REGISTRY_SCHEMA_VERSION,
+    projects: Object.create(null),
+  };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -116,8 +129,7 @@ function parseProjects(
   // Null-prototype map so a hostile id cannot reach Object.prototype at all.
   const projects: Record<string, ProjectFolderLink> = Object.create(null);
   for (const [projectId, raw] of Object.entries(value)) {
-    if (!PROJECT_ID_RE.test(projectId) || RESERVED_PROJECT_IDS.has(projectId))
-      return null;
+    if (!isSafeProjectId(projectId)) return null;
     const link = parseFolderLink(raw);
     if (link === null) return null;
     projects[projectId] = link;

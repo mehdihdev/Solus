@@ -74,10 +74,21 @@ def test_the_field_manifest_is_current() -> None:
 # --- strict rejection, mirroring the TS parse ------------------------------
 
 
+def test_reserved_id_fixture_is_rejected() -> None:
+    # Parity with the TS parser: the shared reserved-id fixture must be invalid
+    # to BOTH sides, or the "fixtures prevent drift" guarantee is false.
+    with pytest.raises(ValidationError):
+        ProjectRegistry.model_validate(_load("reserved-id.invalid.json"))
+
+
 @pytest.mark.parametrize(
     ("why", "value"),
     [
         ("missing schema_version", {"projects": {}}),
+        (
+            "a reserved __proto__ id",
+            {"schema_version": 1, "projects": {"__proto__": {"path": "/a"}}},
+        ),
         ("zero schema_version", {"schema_version": 0, "projects": {}}),
         ("newer schema_version", {"schema_version": 2, "projects": {}}),
         ("unknown top-level field", {"schema_version": 1, "projects": {}, "extra": True}),
