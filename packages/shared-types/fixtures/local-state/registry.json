@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "projects": {
+    "proj_a1B2c3": {
+      "path": "/Users/alex/robots/rover",
+      "repoUrl": "https://gitlab.com/team/rover.git",
+      "lastOpenedAt": "2026-08-30T17:05:00Z"
+    },
+    "solo-project": {
+      "path": "/home/sam/ws/arm"
+    }
+  }
+}

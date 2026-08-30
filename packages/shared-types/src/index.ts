@@ -121,5 +121,21 @@ export {
   type WindowBounds,
 } from "./orb-overlay";
 
+// SOLUSDEV-166 (ADR-034) — machine-local ~/.solus state. docs/contracts/local-state.md
+export {
+  PROJECT_FOLDER_LINK_FIELDS,
+  PROJECT_ID_RE,
+  PROJECT_REGISTRY_FIELDS,
+  PROJECT_REGISTRY_SCHEMA_VERSION,
+  PROJECTS_FILENAME,
+  SOLUS_HOME_DIRNAME,
+  SOLUS_HOME_MODE,
+  emptyProjectRegistry,
+  parseProjectRegistry,
+  type ProjectFolderLink,
+  type ProjectRegistry,
+  type RegistryParseResult,
+} from "./local-state";
+
 /** Fixture typing support — see src/json.ts. */
 export type { JsonShapeOf } from "./json";

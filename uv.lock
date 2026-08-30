@@ -2054,6 +2054,7 @@ source = { editable = "packages/companion" }
 dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
+    { name = "solus-contracts" },
     { name = "websockets" },
 ]
 
@@ -2067,6 +2068,7 @@ dev = [
 requires-dist = [
     { name = "mcp", specifier = ">=1.28.1,<2.0" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "solus-contracts", editable = "packages/contracts/python" },
     { name = "websockets", specifier = ">=14" },
 ]
 

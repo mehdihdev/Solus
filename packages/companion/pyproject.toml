@@ -7,7 +7,11 @@ dependencies = [
     "websockets>=14",
     "mcp>=1.28.1,<2.0",
     "pydantic>=2.7",
+    "solus-contracts",
 ]
+
+[tool.uv.sources]
+solus-contracts = { workspace = true }
 
 [dependency-groups]
 dev = [
