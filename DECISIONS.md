@@ -523,6 +523,42 @@ includes custom features a customer imported, so those are read live and never s
 are versioned and attributable rather than scraped prose. A hand-maintained schema table would rot;
 this one is regenerable from its sources.
 
+## ADR-034: Two-layer local state — `~/.solus` (machine-private) and repo `.solus/` (team-shared)
+
+**Status:** Accepted (2026-08-30 — ratified in-session against the concrete text below; review at
+the SOLUSDEV-166 MR)
+**Context:** The project→working-copy link lives only in renderer localStorage, unreadable from
+the Electron main process, so `SOLUS_COMPANION_WORKSPACE` is never set and workspace-gated MCP
+forks (Altium) fail closed on every launch. Team-shared robot configuration (artifact manifests,
+environment requirements, part declarations) has no home at all. Design:
+docs/architecture/solus-folder.md.
+
+**Decision.** Local and team state split into two layers that never mix:
+
+1. **`~/.solus/` — machine-local, private, never synced.** Layout: `companion_id` (existing,
+   unchanged), `config.json` (machine prefs), `projects.json` (registry
+   `{ schema_version, projects: { <projectId>: { path, repoUrl?, lastOpenedAt } } }`),
+   `projects/<projectId>/` (overrides + cache), `logs/`. Machine-written files are JSON only,
+   carry `schema_version`, and are written atomically (temp + rename); the directory is 0700.
+   The desktop MAIN process owns `projects.json`; the renderer's localStorage copy is a display
+   cache. `SOLUS_COMPANION_WORKSPACE` derives from the registry at companion spawn. Because HOME
+   survives the companion's `env -i` scrub, MCP forks can read `~/.solus`: no secrets, tokens,
+   or credentials ever live there, nor server-owned settings (sol_mode, consent, onboarding).
+2. **Repo-committed `<project>/.solus/` — team-shared, versioned, TOML** (`project.toml`,
+   `parts/*.toml`), ingested by the git connector per ADR-030 and treated as untrusted input per
+   CLAUDE.md §7 (strict schemas, unknown-field rejection, size caps, no executable fields).
+   Implemented in later tickets; custom SOL instructions are explicitly excluded pending their
+   own ADR.
+
+**Why.** Machine state and team state have opposite privacy/sync semantics; conflating them
+either leaks private machine paths to the team or hides team config from the graph. JSON
+machine-side keeps the companion's zero-YAML posture; TOML repo-side parses with stdlib `tomllib`
+and stays hand-editable.
+
+**Consequences.** The registry closes the Altium fail-closed gap. `~/.solus` creation is
+tightened to 0700 wherever it is created. Schemas are documented in
+docs/contracts/local-state.md; layout/format changes to `~/.solus` require amending this ADR.
+
 ---
 
 ## How to add or change a decision
