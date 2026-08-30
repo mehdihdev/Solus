@@ -210,9 +210,11 @@ function safeWorkspacePath(path: string, deps: LocalStateDeps): string | null {
   if (!hasSafePathShape(path, deps)) return null
   const real = deps.realpath(path)
   if (real === null || !deps.isDirectory(real)) return null
-  const folded = foldPath(real, deps)
-  if (folded === foldPath(parsePath(real).root, deps)) return null // any fs / drive root
-  if (folded === foldPath(deps.homedir(), deps)) return null
+  if (foldPath(real, deps) === foldPath(parsePath(real).root, deps)) return null // any fs / drive root
+  // Reject the home directory AND every ancestor of it (`/`, `/Users`,
+  // `/home`, …): each CONTAINS ~/.solus, so a fork confined there could still
+  // reach the registry and other projects' private paths (review C1-a final).
+  if (isAtOrUnder(real, deps.homedir(), deps)) return null
   if (isAtOrUnder(solusHomePath(deps), real, deps)) return null // ~/.solus and its subtree
   return real
 }

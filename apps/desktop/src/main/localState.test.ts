@@ -229,6 +229,23 @@ describe('linkProjectFolder', () => {
     expect(deps.files.size).toBe(0)
   })
 
+  test.each([
+    ['the parent of home', '/home'],
+    ['a grandparent of home', '/'],
+    ['a dot-segment ancestor of home', '/home/tester/..']
+  ])('refuses %s — an ancestor of home contains ~/.solus (review C1-a)', (_why, path) => {
+    const deps = fakeDeps({
+      realpath: (p) => (p === '/home/tester/..' ? '/home' : p.replace(/\/+$/, '') || '/')
+    })
+    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  test('still accepts a normal project directory UNDER home', () => {
+    const deps = fakeDeps()
+    expect(linkProjectFolder('p1', { path: '/home/tester/robots/rover' }, deps)).toBe(true)
+  })
+
   test('rejects a case-variant of home on a case-insensitive platform', () => {
     const deps = fakeDeps({ platform: 'darwin', realpath: (p) => p })
     expect(linkProjectFolder('p1', { path: '/HOME/TESTER' }, deps)).toBe(false)
