@@ -227,7 +227,6 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
   graph: GraphScreen,
   sources: SourcesScreen,
-  bench: BenchScreen,
   sol: SolScreen,
   billing: BillingScreen,
   settings: SettingsScreen
@@ -249,6 +248,9 @@ function ScreenView({
       return <HomeScreen onOpenProject={openProject} />
     case 'overview':
       return <ProjectOverview onNavigate={navigate} />
+    case 'bench':
+      // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
+      return <BenchScreen onNavigate={navigate} />
     case 'team':
       return <TeamScreen onOpenProject={openProject} />
     case 'alert':

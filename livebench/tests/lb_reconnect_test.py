@@ -136,3 +136,26 @@ async def test_aclose_stops_promptly() -> None:
         await source.aclose()
 
     assert len(received) == 1
+
+
+async def test_factory_runs_off_the_event_loop_thread() -> None:
+    # The serial factory blocks (pyserial open can wedge for seconds); a reconnect
+    # must never stall the event loop while re-opening the device (SOLUSDEV-72).
+    import threading
+
+    loop_thread = threading.get_ident()
+    factory_threads: list[int] = []
+
+    def factory() -> Burst:
+        factory_threads.append(threading.get_ident())
+        return Burst([packet(float(len(factory_threads)))])
+
+    source = ReconnectingSource(factory, sleep=asyncio.sleep)
+    received = []
+    async for p in source:
+        received.append(p)
+        if len(received) == 2:  # second packet proves the RE-open also ran off-loop
+            await source.aclose()
+
+    assert len(factory_threads) >= 2
+    assert all(t != loop_thread for t in factory_threads)

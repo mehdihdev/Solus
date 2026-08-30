@@ -140,3 +140,15 @@ class RecentValuesView(BaseModel):
 
     entity_id: UUID
     signals: list[SignalSeries]
+
+
+class DeviceRecentView(BaseModel):
+    """Recent values keyed by DEVICE, for streams with no graph entity yet
+    (SOLUSDEV-72). `resolved_entity_id` non-None says the device does resolve —
+    the entity feed (`RecentValuesView`) is the home for that data."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    device_id: str
+    resolved_entity_id: UUID | None
+    signals: list[SignalSeries]

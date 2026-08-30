@@ -52,7 +52,9 @@ class ReconnectingSource:
     async def __aiter__(self) -> AsyncIterator[TelemetryPacket]:
         backoff = self._start
         while not self._is_closed():
-            source = self._factory()
+            # Off-loop: a serial factory blocks in `pyserial.Serial(...)`, and a
+            # wedged USB open must never stall the event loop (SOLUSDEV-72).
+            source = await asyncio.to_thread(self._factory)
             self._current = source
             try:
                 async for packet in source:

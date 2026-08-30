@@ -1,0 +1,77 @@
+# Wireflow — Local Connections (SOLUSDEV-72)
+
+Documents the local-connections surface exactly as implemented. Authority: this file governs the
+flow; visual polish within it is implementer judgment (CLAUDE.md §3). Companion doc:
+`docs/api/API-implementation.md` §15b for the routes every step calls.
+
+## Where it lives
+
+A **section of the Sources screen** (`features/project/SourcesScreen.tsx` →
+`features/project/localconnections/LocalConnectionsSection.tsx`), below the integration tile
+grid. Machine-local streams are a sources concern, but they are NOT connector tiles: the section
+renders what is on THIS machine, from live backend claims only. Offline / runner-absent degrades
+to honest copy with disabled controls — never fabricated availability.
+
+## Flow 1 — start a simulator
+
+1. Sources screen → **LOCAL CONNECTIONS → SIMULATORS**. One row per simulator from
+   `GET /bench/sources`: MuJoCo, Gazebo, Isaac, MCAP replay.
+2. An available simulator shows a **Start** control (MuJoCo: one click starts the built-in demo
+   scene; Gazebo: topics input; MCAP: path input relative to the server's data root). An
+   unavailable one shows its reason verbatim ("Gazebo is not installed (no `gz` CLI on PATH)")
+   and **cannot be started** — the control is disabled, not hidden.
+3. Start → `POST /bench/sessions` → an active **session chip** appears inline on the row: status,
+   live link state (`connected`/`streaming`/`disconnected` — derived, never asserted), packet
+   counts, Stop.
+4. Stop → `POST /bench/sessions/{id}/stop` (idempotent). Sessions whose source row vanished
+   (device unplugged mid-session) stay listed and stoppable under an "unmatched sessions" group.
+5. Isaac renders its honest state: installed-but-no-live-adapter, pointing at the direct script
+   (`livebench/sim/isaac_direct.py`, run under Isaac's python) or an MCAP recording. ROS is never
+   required.
+
+## Flow 2 — connect a robot (the identity-safety flow)
+
+1. **DEVICES** lists every enumerated USB-serial device with exactly what recognition claims:
+   board name or "unknown", `usb_bridge` renders as "USB-serial bridge — MCU unknown" with its
+   confidence (the CH343 case), never a guessed board.
+2. The **USB serial number is the identity discriminator** and is always shown. User labels
+   ("leader" / "follower") are edited inline and persist locally **keyed by serial** —
+   so the binding survives replugging into a different port. A device with no serial falls back
+   to a `vid:pid:path` key and is marked **unverified after replug**.
+3. Connect → `POST /bench/sessions {mode: real, config: {provider: serial, serial_number}}`. The
+   backend re-resolves serial → `/dev/serial/by-id` at open, so reconnects reopen the same
+   physical arm.
+4. **Two identical devices** (same or missing serials) render as `ambiguous`: connect requires an
+   explicit per-device pick (`confirmed_device_path`), shown with the device path as the visible
+   tiebreaker. Propose, never assert (RBT-03 posture). A `409 device_ambiguous` from the backend
+   surfaces its candidates.
+
+## Flow 3 — see the data without a graph entity
+
+1. Live Bench (`features/bench/BenchScreen.tsx`): a focused graph entity behaves as before.
+2. **No focused entity but active sessions** → the device-keyed view (`DeviceBenchView`) renders
+   one panel per streaming `device_id` (from the sessions' `device_ids`), polling
+   `GET /bench/device-recent` — a connected arm is watchable BEFORE RBT-05 reconciles it into the
+   graph. When the device later resolves to an entity, the entity view is the home for its data
+   and the views converge (`device_id == external_ref`).
+3. The empty state stays honest and becomes actionable: "no telemetry yet — connect a device"
+   navigates to the Sources screen's Local Connections section.
+
+## Flow 4 — bridge-hosted tools (Fusion, and every tool after it)
+
+1. **LOCAL TOOLS** rows merge the static `GET /api/v1/integrations/local-tools` catalog with the
+   per-project live bridge status: tool name, companion state, server state, and launch guidance
+   ("Launch Fusion and enable Preferences → General → API → Fusion MCP Server"). A `ready` server
+   with zero allowlisted tools says "connected — no tools callable yet"; connected ≠ callable.
+2. The integrations catalog (onboarding + Sources tile grid) grows a **generic `local-bridge`
+   tile** derived entirely from the same route — clicking opens guidance + bridge state
+   (`LocalBridgeConnectModal`), never a fake OAuth or file-picker flow. The next bridge-hosted
+   tool (SolidWorks, AutoCAD) is a backend catalog entry; zero frontend edits.
+
+## Empty/failure states (all honest)
+
+- Runner absent (livebench not installed server-side): every control disabled with that reason.
+- API unreachable: section renders offline copy; no cached inventions.
+- No devices: "no serial devices detected", not an empty void.
+- Session start failure: the backend's error verbatim (`too_many_sessions`, `device_ambiguous` +
+  candidates, `source_unavailable`, validation text).

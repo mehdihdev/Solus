@@ -17,14 +17,18 @@ guarantees the windowed shapes carry over to continuous delivery without a
 contract change.
 """
 
+import asyncio
 import json
+import logging
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from solus_api.agent.interfaces import TelemetryWindow
 from solus_api.core.errors import APIError
@@ -32,7 +36,18 @@ from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
 from solus_api.graph.codec import PacketDecodeError, from_wire
 from solus_api.graph.telemetry import TelemetryPlumbing
+from solus_api.livebench.sessions import (
+    AmbiguousDeviceError,
+    DeviceNotFoundError,
+    SessionManager,
+    SessionNotFoundError,
+    SessionStillStartingError,
+    TooManySessionsError,
+)
 from solus_api.models import GraphEntity, Role
+from solus_api.services.events import emit_event
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/bench")
 
@@ -201,3 +216,361 @@ async def recent_events(
     limit: Annotated[int, Query(ge=1, le=MAX_EVENTS_KEPT)] = 100,
 ) -> dict[str, Any]:
     return envelope(get_event_ring(request).recent(ctx.project.id, limit))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SOLUSDEV-72: local-connections surface — sources, sessions, device-recent.
+# The session subset of API.md §2.10, plus the sources/device-recent amendment.
+# Providers come from `livebench.local` via the app-state optional runtime import
+# (`app.state.bench_local`); absent → every local source is honestly unavailable.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+MAX_MJCF_BYTES = 2_000_000
+MAX_TOPICS = 32
+MAX_TOPIC_LEN = 256
+MAX_SESSION_SECONDS = 3600.0
+MAX_WINDOW_SECONDS = 60.0
+_RUNNER_ABSENT = "livebench is not installed on this server"
+_SIM_PROVIDERS = {"mujoco", "gazebo", "mcap-replay"}
+
+
+def _clean_topics(topics: list[str]) -> list[str]:
+    for topic in topics:
+        if not 1 <= len(topic) <= MAX_TOPIC_LEN:
+            raise ValueError("topic length out of range")
+        if topic.startswith("-"):
+            raise ValueError(f"topic may not look like a CLI flag: {topic[:32]!r}")
+        if not topic.isprintable():
+            raise ValueError("topic contains non-printable characters")
+    return topics
+
+
+class MujocoSimConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["mujoco"]
+    scene_name: str = Field(default="demo", min_length=1, max_length=64, pattern=r"^[\w.-]+$")
+    mjcf_xml: str | None = Field(default=None, min_length=1, max_length=MAX_MJCF_BYTES)
+    sample_hz: float = Field(default=50.0, gt=0, le=200)
+    duration_seconds: float = Field(default=300.0, gt=0, le=MAX_SESSION_SECONDS)
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+
+
+class GazeboSimConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["gazebo"]
+    topics: list[str] = Field(min_length=1, max_length=MAX_TOPICS)
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+
+    @field_validator("topics")
+    @classmethod
+    def _bound_topics(cls, topics: list[str]) -> list[str]:
+        return _clean_topics(topics)
+
+
+class McapSimConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["mcap-replay"]
+    mcap_path: str = Field(min_length=1, max_length=4096)
+    topics: list[str] | None = Field(default=None, max_length=MAX_TOPICS)
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+
+    @field_validator("topics")
+    @classmethod
+    def _bound_topics(cls, topics: list[str] | None) -> list[str] | None:
+        return None if topics is None else _clean_topics(topics)
+
+
+class SerialRealConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["serial"]
+    serial_number: str | None = Field(default=None, min_length=1, max_length=128)
+    confirmed_device_path: str | None = Field(default=None, min_length=1, max_length=256)
+    baud: int = Field(default=115200, ge=300, le=3_000_000)
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+
+
+class BenchSessionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["sim", "real"]
+    config: Annotated[
+        MujocoSimConfig | GazeboSimConfig | McapSimConfig | SerialRealConfig,
+        Field(discriminator="provider"),
+    ]
+
+    @model_validator(mode="after")
+    def _mode_matches_provider(self) -> "BenchSessionIn":
+        is_sim = self.config.provider in _SIM_PROVIDERS
+        if is_sim != (self.mode == "sim"):
+            raise ValueError(f"provider {self.config.provider!r} does not run in {self.mode} mode")
+        return self
+
+
+def get_session_manager(request: Request) -> SessionManager:
+    manager: SessionManager = request.app.state.bench_sessions
+    return manager
+
+
+def get_bench_local(request: Request) -> Any:
+    return request.app.state.bench_local
+
+
+def _device_wire(device: Any) -> dict[str, Any]:
+    """LocalDevice → wire dict (duck-typed: livebench types cross an optional
+    import boundary, so this never imports them)."""
+    identity = device.identity
+    board = identity.board
+    return {
+        "device_path": identity.device,
+        "by_id_path": device.by_id_path,
+        "serial_number": identity.serial,
+        "vid": f"{identity.vid:04x}",
+        "pid": f"{identity.pid:04x}",
+        "board": board.name if board is not None else None,
+        "board_class": board.kind.value if board is not None else None,
+        "mcu_known": identity.mcu_known,
+        "confidence": identity.evidence.confidence,
+        "ambiguous": device.ambiguous,
+        "note": str(identity.evidence.evidence.get("note", "")),
+    }
+
+
+def _unavailable_sources() -> dict[str, Any]:
+    reason = _RUNNER_ABSENT
+    return {
+        "runner": {"available": False, "reason": reason},
+        "simulators": [
+            {"kind": kind, "available": False, "reason": reason}
+            for kind in ("mujoco", "gazebo", "isaac", "mcap-replay")
+        ],
+        "devices": [],
+    }
+
+
+@router.get("/sources")
+async def bench_sources(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
+    local = get_bench_local(request)
+    if local is None:
+        return envelope(_unavailable_sources())
+    settings = request.app.state.settings
+    # Probes and pyserial enumeration hit the OS — off the event loop (§7:
+    # a slow udev walk must not stall every other tenant's request).
+    probed = await asyncio.to_thread(local.available_simulators)
+    devices = await asyncio.to_thread(local.list_devices)
+    simulators = [
+        {"kind": s.kind, "available": s.available, "reason": s.reason} for s in probed
+    ]
+    mcap_ready = bool(settings.bench_data_root)
+    simulators.append(
+        {
+            "kind": "mcap-replay",
+            "available": mcap_ready,
+            "reason": None if mcap_ready else "bench_data_root is not configured on this server",
+        }
+    )
+    return envelope(
+        {
+            "runner": {"available": True, "reason": None},
+            "simulators": simulators,
+            "devices": [_device_wire(d) for d in devices],
+        }
+    )
+
+
+def _validated_mcap_path(settings: Any, raw: str) -> Path:
+    root = settings.bench_data_root
+    if not root:
+        raise APIError(
+            503,
+            "source_unavailable",
+            "MCAP replay is not configured on this server (bench_data_root unset)",
+        )
+    root_path = Path(root).resolve()
+    candidate = Path(raw)
+    resolved = (candidate if candidate.is_absolute() else root_path / candidate).resolve()
+    if not resolved.is_relative_to(root_path):
+        raise APIError(422, "validation_error", "mcap_path escapes the bench data root")
+    if resolved.suffix != ".mcap":
+        raise APIError(422, "validation_error", "mcap_path must name a .mcap file")
+    if not resolved.is_file():
+        raise APIError(422, "validation_error", "mcap_path does not exist")
+    return resolved
+
+
+def _session_opener(
+    local: Any, settings: Any, project_id: uuid.UUID, body: BenchSessionIn
+) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any] | None]:
+    """(open_conn, label, device) for the validated session config."""
+    cfg = body.config
+    if isinstance(cfg, MujocoSimConfig):
+
+        async def open_mujoco() -> Any:
+            return await local.open_mujoco(
+                project_id=project_id,
+                xml=cfg.mjcf_xml,
+                scene_name=cfg.scene_name,
+                sample_hz=cfg.sample_hz,
+                duration_seconds=cfg.duration_seconds,
+            )
+
+        return open_mujoco, f"MuJoCo {cfg.scene_name}", None
+    if isinstance(cfg, GazeboSimConfig):
+
+        async def open_gazebo() -> Any:
+            return await local.open_gazebo(list(cfg.topics), project_id=project_id)
+
+        return open_gazebo, f"Gazebo ({len(cfg.topics)} topic(s))", None
+    if isinstance(cfg, McapSimConfig):
+        mcap_path = _validated_mcap_path(settings, cfg.mcap_path)
+
+        async def open_mcap() -> Any:
+            return await local.open_mcap(mcap_path, project_id=project_id, topics=cfg.topics)
+
+        return open_mcap, f"MCAP replay {mcap_path.name}", None
+    serial_cfg = cfg
+
+    async def open_serial() -> Any:
+        return await local.open_serial(
+            serial_cfg.serial_number,
+            project_id=project_id,
+            baud=serial_cfg.baud,
+            confirmed_device_path=serial_cfg.confirmed_device_path,
+        )
+
+    # Wire contract with the desktop's session-to-device matching: an explicit
+    # pick rides `device_path`; serial-bound sessions leave it None.
+    device = {
+        "serial_number": serial_cfg.serial_number,
+        "device_path": serial_cfg.confirmed_device_path,
+        "baud": serial_cfg.baud,
+    }
+    return (
+        open_serial,
+        f"Serial {serial_cfg.serial_number or serial_cfg.confirmed_device_path}",
+        device,
+    )
+
+
+@router.post("/sessions", status_code=201)
+async def start_session(
+    ctx: ProjectCtx, session: SessionDep, body: BenchSessionIn, request: Request
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    local = get_bench_local(request)
+    if local is None:
+        raise APIError(503, "source_unavailable", _RUNNER_ABSENT)
+    settings = request.app.state.settings
+    open_conn, label, device = _session_opener(local, settings, ctx.project.id, body)
+    manager = get_session_manager(request)
+    try:
+        record = await manager.start(
+            ctx.project.id,
+            mode=body.mode,
+            provider=body.config.provider,
+            label=label,
+            open_conn=open_conn,
+            window_seconds=body.config.window_seconds,
+            device=device,
+        )
+    except TooManySessionsError as exc:
+        raise APIError(409, "too_many_sessions", str(exc)) from exc
+    except AmbiguousDeviceError as exc:
+        raise APIError(
+            409,
+            "device_ambiguous",
+            "More than one device matches — pick one explicitly",
+            details=[_device_wire(c) for c in exc.candidates],
+        ) from exc
+    except DeviceNotFoundError as exc:
+        raise APIError(404, "device_not_found", str(exc)) from exc
+    except APIError:
+        raise
+    except ValueError as exc:
+        raise APIError(422, "validation_error", str(exc)) from exc
+    except Exception as exc:
+        # Honest degradation (§7): a source that cannot start is unavailable —
+        # log the cause, never crash the route on device/simulator input.
+        logger.exception("bench session start failed: provider=%s", body.config.provider)
+        raise APIError(
+            503, "source_unavailable", f"{body.config.provider} could not be started"
+        ) from exc
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="bench.session_started",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={"provider": body.config.provider, "mode": body.mode, "session_id": str(record.id)},
+    )
+    await session.commit()
+    return envelope(record.model_dump(mode="json"))
+
+
+@router.get("/sessions")
+async def list_sessions(
+    ctx: ProjectCtx,
+    request: Request,
+    status: Annotated[Literal["active", "ended"] | None, Query()] = None,
+    mode: Annotated[Literal["sim", "real"] | None, Query()] = None,
+) -> dict[str, Any]:
+    records = get_session_manager(request).list(ctx.project.id, status=status, mode=mode)
+    return envelope([r.model_dump(mode="json") for r in records])
+
+
+@router.get("/sessions/{session_id}")
+async def session_detail(
+    ctx: ProjectCtx, request: Request, session_id: uuid.UUID
+) -> dict[str, Any]:
+    try:
+        record = get_session_manager(request).get(ctx.project.id, session_id)
+    except SessionNotFoundError as exc:
+        raise APIError(404, "not_found", "Session not found") from exc
+    return envelope(record.model_dump(mode="json"))
+
+
+@router.post("/sessions/{session_id}/stop")
+async def stop_session(
+    ctx: ProjectCtx, session: SessionDep, request: Request, session_id: uuid.UUID
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    manager = get_session_manager(request)
+    try:
+        record = await manager.stop(ctx.project.id, session_id)
+    except SessionNotFoundError as exc:
+        raise APIError(404, "not_found", "Session not found") from exc
+    except SessionStillStartingError as exc:
+        raise APIError(409, "session_starting", "Session is still starting") from exc
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="bench.session_stopped",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={"provider": record.provider, "mode": record.mode, "session_id": str(record.id)},
+    )
+    await session.commit()
+    return envelope(record.model_dump(mode="json"))
+
+
+@router.get("/device-recent")
+async def device_recent(
+    ctx: ProjectCtx,
+    request: Request,
+    device_id: Annotated[list[str], Query(min_length=1, max_length=16)],
+    limit: Annotated[int | None, Query(ge=1, le=512)] = None,
+) -> dict[str, Any]:
+    """Batched by design: the desktop polls every visible device panel in ONE
+    request per cycle, so N streaming devices never multiply the request rate
+    into the shared per-user budget."""
+    plumbing = get_plumbing(request)
+    for one in device_id:
+        if not 1 <= len(one) <= 512:
+            raise APIError(422, "validation_error", "device_id length out of range")
+    views = [
+        await plumbing.get_device_recent(ctx.project.id, one, limit=limit) for one in device_id
+    ]
+    return envelope({"devices": [v.model_dump(mode="json") for v in views]})

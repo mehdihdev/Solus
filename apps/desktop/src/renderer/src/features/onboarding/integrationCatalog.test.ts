@@ -1,10 +1,14 @@
 // Tests for the live integration catalog (SOLUSDEV-100, de-simulated in
-// SOLUSDEV-152): the tile list is driven by GET /integrations so only
+// SOLUSDEV-152): the tile list is driven by GET /integrations (and, for
+// local-bridge tools, GET /integrations/local-tools — SOLUSDEV-72) so only
 // connectors the backend actually registers — and the app can actually drive —
 // are offered. No tile ever fakes a connect.
 import { describe, it, expect, vi } from 'vitest'
-import type { Integration as ApiIntegration } from '../../lib/api/resources'
+import type { Integration as ApiIntegration, LocalTool } from '../../lib/api/resources'
 import { loadIntegrationCatalog, FALLBACK_CATALOG } from './integrationCatalog'
+
+/** Explicit empty local-tools fetch so these tests never touch the network. */
+const NO_TOOLS = async (): Promise<LocalTool[]> => []
 
 const LIVE: ApiIntegration[] = [
   { type: 'altium', auth_kind: 'none', config_fields: ['export'], scopes: [] },
@@ -19,16 +23,31 @@ const LIVE: ApiIntegration[] = [
   }
 ]
 
+const FUSION_TOOL: LocalTool = {
+  type: 'fusion',
+  display_name: 'Fusion',
+  hosting: 'vendor-run',
+  url_host: '127.0.0.1:27182',
+  connect_notice: 'Launch Fusion and enable Preferences → General → API → Fusion MCP Server',
+  requires: 'companion'
+}
+
 describe('loadIntegrationCatalog', () => {
   it('marks live committed-export providers as export-file connectable', async () => {
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      NO_TOOLS
+    )
     const byId = new Map(catalog.map((e) => [e.id, e]))
     expect(byId.get('kicad')?.mode).toBe('export-file')
     expect(byId.get('github')?.mode).toBe('oauth')
   })
 
   it('offers every live OAuth provider, not just github', async () => {
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      NO_TOOLS
+    )
     const byId = new Map(catalog.map((e) => [e.id, e]))
     expect(byId.get('gitlab')?.mode).toBe('oauth')
     expect(byId.get('onshape')?.mode).toBe('oauth')
@@ -41,7 +60,10 @@ describe('loadIntegrationCatalog', () => {
       ...LIVE,
       { type: 'fusion', auth_kind: 'oauth', config_fields: ['hub_id', 'project_id'], scopes: [] }
     ]
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => withFuture))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => withFuture),
+      NO_TOOLS
+    )
     const fusion = catalog.find((e) => e.id === 'fusion')
     expect(fusion?.mode).toBe('oauth')
     // No display copy exists for it yet, so it gets the generic tile — but it
@@ -51,7 +73,10 @@ describe('loadIntegrationCatalog', () => {
   })
 
   it('carries the live config fields so the configure step can be chosen', async () => {
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      NO_TOOLS
+    )
     const byId = new Map(catalog.map((e) => [e.id, e]))
     expect(byId.get('github')?.configFields).toEqual(['repo', 'branch'])
     expect(byId.get('onshape')?.configFields).toEqual(['document_id', 'workspace_id', 'element_id'])
@@ -65,20 +90,29 @@ describe('loadIntegrationCatalog', () => {
       ...LIVE,
       { type: 'jira', auth_kind: 'token', config_fields: ['board'], scopes: [] }
     ]
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => withToken))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => withToken),
+      NO_TOOLS
+    )
     expect(catalog.find((e) => e.id === 'ros')).toBeUndefined()
     expect(catalog.find((e) => e.id === 'jira')).toBeUndefined()
   })
 
   it('drops a curated provider the live registry no longer carries', async () => {
     const withoutKicad = LIVE.filter((integration) => integration.type !== 'kicad')
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => withoutKicad))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => withoutKicad),
+      NO_TOOLS
+    )
     expect(catalog.find((e) => e.id === 'kicad')).toBeUndefined()
     expect(catalog.find((e) => e.id === 'github')?.mode).toBe('oauth')
   })
 
   it('appends non-curated live connectors with display metadata', async () => {
-    const catalog = await loadIntegrationCatalog(vi.fn(async () => LIVE))
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      NO_TOOLS
+    )
     const altium = catalog.find((e) => e.id === 'altium')
     expect(altium?.mode).toBe('export-file')
     expect(altium?.name).toBe('Altium')
@@ -92,7 +126,8 @@ describe('loadIntegrationCatalog', () => {
     const catalog = await loadIntegrationCatalog(
       vi.fn(async () => {
         throw new Error('offline')
-      })
+      }),
+      NO_TOOLS
     )
     expect(catalog).toEqual(FALLBACK_CATALOG)
     expect(catalog.map((e) => e.id)).toEqual(['github', 'kicad'])
@@ -103,5 +138,53 @@ describe('loadIntegrationCatalog', () => {
     expect(byId.get('github')?.mode).toBe('oauth')
     expect(byId.get('github')?.configFields).toEqual(['repo', 'branch'])
     expect(byId.get('kicad')?.mode).toBe('export-file')
+  })
+})
+
+describe('loadIntegrationCatalog — local-bridge tiles (SOLUSDEV-72)', () => {
+  // The acceptance bar: the NEXT local tool must need zero frontend edits.
+  it('derives a REAL local-bridge tile from the live local-tools registry', async () => {
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => [FUSION_TOOL])
+    )
+    const fusion = catalog.find((e) => e.id === 'fusion')
+    expect(fusion?.mode).toBe('local-bridge')
+    expect(fusion?.name).toBe('Fusion')
+    // The registry entry rides along so the connect action can show its
+    // guidance without a per-tool lookup.
+    expect(fusion?.localTool).toEqual(FUSION_TOOL)
+  })
+
+  it('a tool the frontend has never heard of still gets a tile', async () => {
+    const next: LocalTool = { ...FUSION_TOOL, type: 'blender', display_name: 'Blender' }
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => [next])
+    )
+    expect(catalog.find((e) => e.id === 'blender')?.mode).toBe('local-bridge')
+    expect(catalog.find((e) => e.id === 'blender')?.name).toBe('Blender')
+  })
+
+  it('never duplicates a provider that already has a drivable tile', async () => {
+    const githubTool: LocalTool = { ...FUSION_TOOL, type: 'github', display_name: 'GitHub' }
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => [githubTool])
+    )
+    const github = catalog.filter((e) => e.id === 'github')
+    expect(github).toHaveLength(1)
+    expect(github[0].mode).toBe('oauth')
+  })
+
+  it('a failing local-tools fetch degrades to no bridge tiles, not an error', async () => {
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => {
+        throw new Error('offline')
+      })
+    )
+    expect(catalog.find((e) => e.mode === 'local-bridge')).toBeUndefined()
+    expect(catalog.find((e) => e.id === 'github')?.mode).toBe('oauth')
   })
 })

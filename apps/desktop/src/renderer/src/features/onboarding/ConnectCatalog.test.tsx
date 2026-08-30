@@ -45,3 +45,34 @@ describe('ConnectCatalog', () => {
     expect(screen.getByText('No connectors are available to add right now.')).toBeTruthy()
   })
 })
+
+describe('ConnectCatalog — local-bridge tiles (SOLUSDEV-72)', () => {
+  const FUSION: CatalogEntry = {
+    id: 'fusion',
+    name: 'Fusion',
+    kind: 'Local tool — companion bridge',
+    mark: 'Fu',
+    mode: 'local-bridge',
+    configFields: [],
+    selection: null,
+    accessModes: null,
+    localTool: {
+      type: 'fusion',
+      display_name: 'Fusion',
+      hosting: 'vendor-run',
+      url_host: '127.0.0.1:27182',
+      connect_notice: 'Launch Fusion and enable the MCP server',
+      requires: 'companion'
+    }
+  }
+
+  it('opens the companion guidance, never the credential wizard', () => {
+    vi.spyOn(catalogHook, 'useIntegrationCatalog').mockReturnValue([FUSION])
+    render(<ConnectCatalog projectId="p1" />)
+    fireEvent.click(screen.getByText('Fusion'))
+    // Guidance modal (dismissed with "Got it"), not the wizard (which has "Close").
+    expect(screen.getByText('Launch Fusion and enable the MCP server')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Got it' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+  })
+})

@@ -25,6 +25,7 @@ import { EditSelectionModal } from './EditSelectionModal'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { sourceErrorText, sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectSources } from './useProjectSources'
+import { LocalConnectionsSection } from './localconnections/LocalConnectionsSection'
 
 /** What a source tracks today, read from its own config under the connector's
  *  declared key. A single-select connector stores a scalar, multi stores a list. */
@@ -77,6 +78,9 @@ function SourcesView({ projectId }: { projectId: string }): React.JSX.Element {
         )}
 
         <ConnectPanel projectId={projectId} onConnected={() => void data.actions.refresh()} />
+
+        {/* Local streams (simulators, serial devices, bridge tools) — SOLUSDEV-72. */}
+        <LocalConnectionsSection projectId={projectId} />
       </div>
     </div>
   )

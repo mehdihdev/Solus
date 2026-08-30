@@ -143,3 +143,78 @@ async def test_get_telemetry_stats_are_correct() -> None:
     stats = next(w.signals["load"] for w in view.windows if "load" in w.signals)
     assert stats["min"] == 2.0 and stats["max"] == 6.0
     assert stats["mean"] == 4.0 and stats["last"] == 6.0 and stats["count"] == 3.0
+
+
+# ── SOLUSDEV-72: device-keyed recent values for UNRESOLVED devices ──────────────
+
+
+async def test_unresolved_packet_lands_in_the_device_ring() -> None:
+    project = uuid.uuid4()
+    plumbing = TelemetryPlumbing(InMemoryTelemetryBuffer(), DictEntityResolver({}))
+    for i in range(3):
+        await plumbing.ingest(project, _packet("serial:arm", i, qvel=float(i)))
+    view = await plumbing.get_device_recent(project, "serial:arm")
+    assert view.device_id == "serial:arm"
+    assert view.resolved_entity_id is None
+    series = {s.signal: s for s in view.signals}
+    assert [p.value for p in series["qvel"].points] == [0.0, 1.0, 2.0]
+
+
+async def test_resolved_devices_read_through_with_entity_id_not_the_ring() -> None:
+    project, entity = uuid.uuid4(), uuid.uuid4()
+    plumbing = _plumbing_with(project, entity, "motor0")
+    await plumbing.ingest(project, _packet("motor0", 0.0, a=1.0))
+    view = await plumbing.get_device_recent(project, "motor0")
+    # The entity buffer is the home for resolved data; the view points there.
+    assert view.resolved_entity_id == entity
+    assert view.signals == []
+
+
+async def test_device_ring_caps_distinct_devices_drop_new() -> None:
+    project = uuid.uuid4()
+    plumbing = TelemetryPlumbing(
+        InMemoryTelemetryBuffer(), DictEntityResolver({}), unresolved_device_cap=2
+    )
+    for name in ("d1", "d2", "d3"):
+        await plumbing.ingest(project, _packet(name, 0.0, v=1.0))
+    assert (await plumbing.get_device_recent(project, "d1")).signals
+    assert (await plumbing.get_device_recent(project, "d2")).signals
+    assert (await plumbing.get_device_recent(project, "d3")).signals == []  # dropped, not grown
+
+
+async def test_device_ring_is_project_scoped() -> None:
+    project_a, project_b = uuid.uuid4(), uuid.uuid4()
+    plumbing = TelemetryPlumbing(InMemoryTelemetryBuffer(), DictEntityResolver({}))
+    await plumbing.ingest(project_a, _packet("serial:arm", 0.0, v=1.0))
+    assert (await plumbing.get_device_recent(project_a, "serial:arm")).signals
+    assert (await plumbing.get_device_recent(project_b, "serial:arm")).signals == []
+
+
+async def test_device_ring_bounds_samples_and_limit_narrows_reads() -> None:
+    project = uuid.uuid4()
+    plumbing = TelemetryPlumbing(
+        InMemoryTelemetryBuffer(), DictEntityResolver({}), unresolved_samples_cap=4
+    )
+    for i in range(10):
+        await plumbing.ingest(project, _packet("dev", i, v=float(i)))
+    view = await plumbing.get_device_recent(project, "dev")
+    points = view.signals[0].points
+    assert [p.value for p in points] == [6.0, 7.0, 8.0, 9.0]  # bounded ring, oldest evicted
+    narrowed = await plumbing.get_device_recent(project, "dev", limit=2)
+    assert [p.value for p in narrowed.signals[0].points] == [8.0, 9.0]
+
+
+async def test_device_ring_clears_when_the_device_resolves() -> None:
+    # The RBT-05 transition: stream while unresolved, then the entity gets linked.
+    project, entity = uuid.uuid4(), uuid.uuid4()
+    resolver = DictEntityResolver({})
+    plumbing = TelemetryPlumbing(InMemoryTelemetryBuffer(), resolver)
+    await plumbing.ingest(project, _packet("serial:arm", 0.0, qvel=1.0))
+    assert (await plumbing.get_device_recent(project, "serial:arm")).signals
+
+    resolver._mapping[(project, "serial:arm")] = entity  # RBT-05 confirms the link
+    await plumbing.ingest(project, _packet("serial:arm", 1.0, qvel=2.0))
+
+    view = await plumbing.get_device_recent(project, "serial:arm")
+    assert view.resolved_entity_id == entity
+    assert view.signals == []  # the entity feed is the home now; no stale ring

@@ -19,6 +19,16 @@ vi.mock('./useProjectSources', () => ({ useProjectSources: vi.fn() }))
 vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: vi.fn() }))
 vi.mock('../onboarding/useOAuthConnect', () => ({ useOAuthConnect: vi.fn() }))
 vi.mock('../onboarding/useEdaConnect', () => ({ useEdaConnect: vi.fn() }))
+// Local Connections data hooks (SOLUSDEV-72): stubbed to their honest offline
+// shapes so this screen's tests never touch the network.
+vi.mock('./localconnections/useLocalConnections', () => ({
+  useLocalConnections: vi.fn(() => ({ data: null, refresh: vi.fn() })),
+  useLocalTools: vi.fn(() => null)
+}))
+vi.mock('../workspace/useBridgeStatus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/useBridgeStatus')>()
+  return { ...actual, useBridgeStatus: vi.fn(() => null) }
+})
 
 const SOURCE = (over: Partial<Source> = {}): Source =>
   ({
@@ -166,6 +176,41 @@ describe('SourcesScreen', () => {
   it('shows an honest offline note instead of a source list', () => {
     mockSources([], 'offline')
     render(<SourcesScreen />)
-    expect(screen.getByText(/can't reach its API/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/can't reach its API/i).length).toBeGreaterThan(0)
+  })
+
+  it('renders the Local Connections section below the connect catalog (SOLUSDEV-72)', () => {
+    mockSources([])
+    render(<SourcesScreen />)
+    expect(screen.getByText('LOCAL CONNECTIONS')).toBeInTheDocument()
+    expect(screen.getByText('LOCAL TOOLS (BRIDGE)')).toBeInTheDocument()
+  })
+
+  it('a local-bridge tile opens the companion guidance, not a credential flow', async () => {
+    mockSources([])
+    vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([
+      {
+        id: 'fusion',
+        name: 'Fusion',
+        kind: 'Local tool — companion bridge',
+        mark: 'Fu',
+        mode: 'local-bridge',
+        configFields: [],
+        selection: null,
+        accessModes: null,
+        localTool: {
+          type: 'fusion',
+          display_name: 'Fusion',
+          hosting: 'vendor-run',
+          url_host: '127.0.0.1:27182',
+          connect_notice: 'Launch Fusion and enable the MCP server',
+          requires: 'companion'
+        }
+      }
+    ])
+    render(<SourcesScreen />)
+    await userEvent.click(screen.getByText('Fusion'))
+    expect(await screen.findByText('Connect Fusion')).toBeInTheDocument()
+    expect(screen.getByText('Launch Fusion and enable the MCP server')).toBeInTheDocument()
   })
 })
