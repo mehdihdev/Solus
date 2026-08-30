@@ -147,6 +147,23 @@ export function unlinkProjectFolder(projectId: string, deps: LocalStateDeps): bo
   return true
 }
 
+export interface FolderLinkInput {
+  path: string
+  repoUrl?: string
+}
+
+/** Validate untrusted renderer input for the folder:link IPC channel. Picks
+ *  ONLY the known fields — extra renderer properties never reach the registry.
+ *  Null means invalid; deeper checks (absolute path, safe id) stay in
+ *  linkProjectFolder. */
+export function folderLinkInput(value: unknown): FolderLinkInput | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const { path, repoUrl } = value as Record<string, unknown>
+  if (typeof path !== 'string' || path.length === 0) return null
+  if (repoUrl !== undefined && typeof repoUrl !== 'string') return null
+  return { path, ...(repoUrl !== undefined ? { repoUrl } : {}) }
+}
+
 /** The working-copy path for a project, or null — what the companion spawn
  *  feeds into SOLUS_COMPANION_WORKSPACE. */
 export function projectWorkspace(projectId: string | null, deps: LocalStateDeps): string | null {

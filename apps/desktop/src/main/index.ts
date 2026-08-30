@@ -10,6 +10,7 @@ import {
   getRedirectUrl
 } from './oauthLoopback'
 import {
+  notifyProjectFolderChanged,
   startCompanion,
   stopCompanion,
   sendAccessToken,
@@ -17,6 +18,13 @@ import {
   writeCredential
 } from './companion'
 import { cloneRepo, cloneDeps, vscodeFolderUrl, type CloneInput } from './projectFolder'
+import {
+  folderLinkInput,
+  linkProjectFolder,
+  readRegistry,
+  realLocalStateDeps,
+  unlinkProjectFolder
+} from './localState'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
@@ -34,6 +42,36 @@ async function openBillingUrl(url: string): Promise<{ ok: boolean }> {
 // The app's own renderer window — the only legitimate sender for privileged
 // IPC (billing), and the parent for the checkout window.
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
+ * machine-local project→folder links the companion's workspace derives from.
+ * All three channels carry private machine paths, so — like billing and
+ * bridge — only the app's own renderer may invoke them. Inputs are untrusted:
+ * folderLinkInput picks only the known fields, and linkProjectFolder
+ * re-validates id and path before any write. A successful link/unlink of the
+ * ACTIVE project respawns the companion so SOLUS_COMPANION_WORKSPACE picks up
+ * the change.
+ */
+function registerFolderRegistryHandlers(): void {
+  ipcMain.handle('folder:link', (event, projectId: unknown, link: unknown) => {
+    if (!isMainRendererSender(event) || typeof projectId !== 'string') return { ok: false }
+    const input = folderLinkInput(link)
+    if (input === null) return { ok: false }
+    const ok = linkProjectFolder(projectId, input, realLocalStateDeps)
+    if (ok) notifyProjectFolderChanged(projectId)
+    return { ok }
+  })
+  ipcMain.handle('folder:unlink', (event, projectId: unknown) => {
+    if (!isMainRendererSender(event) || typeof projectId !== 'string') return { ok: false }
+    const ok = unlinkProjectFolder(projectId, realLocalStateDeps)
+    if (ok) notifyProjectFolderChanged(projectId)
+    return { ok }
+  })
+  ipcMain.handle('folder:links', (event) =>
+    isMainRendererSender(event) ? readRegistry(realLocalStateDeps).registry.projects : {}
+  )
+}
 
 /** True when the invoke came from the app's own renderer, not some other
  *  webContents that gained IPC reach. The decision itself lives in
@@ -135,6 +173,8 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
     ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
+
+    registerFolderRegistryHandlers()
 
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
     // portal URL (returned by our API) in the system browser. Only the app's

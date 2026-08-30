@@ -123,6 +123,46 @@ describe('companionEnv', () => {
   })
 })
 
+// SOLUSDEV-166 (ADR-034): the fourth of the same kind. Read in two places,
+// previously written nowhere — the Altium fork fails closed without it.
+describe('companionEnv — workspace', () => {
+  const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
+
+  it('passes the registry-derived workspace to the companion', () => {
+    const env = companionEnv({}, 'https://api.solusforge.com/api/v1', {
+      projectId: P,
+      workspace: '/Users/alex/robots/rover'
+    })
+
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBe('/Users/alex/robots/rover')
+  })
+
+  it('leaves the variable ABSENT with no workspace, so forks fail closed', () => {
+    const env = companionEnv({}, 'https://api.solusforge.com/api/v1', { projectId: P })
+
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBeUndefined()
+  })
+
+  it('leaves the variable absent for a null workspace (project not linked)', () => {
+    const env = companionEnv({}, 'https://api.solusforge.com/api/v1', {
+      projectId: P,
+      workspace: null
+    })
+
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBeUndefined()
+  })
+
+  it('lets an explicit inherited override win, like the other variables', () => {
+    const env = companionEnv(
+      { SOLUS_COMPANION_WORKSPACE: '/explicit/override' },
+      'https://api.solusforge.com/api/v1',
+      { projectId: P, workspace: '/from/registry' }
+    )
+
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBe('/explicit/override')
+  })
+})
+
 // The SAME failure as the URL above, one variable along, and it cost another
 // debugging session: config.py falls back to a vendored `mcp/` tree next to
 // `sys.executable`, which is right for the packaged binary and impossible in

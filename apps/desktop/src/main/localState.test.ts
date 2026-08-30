@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import {
+  folderLinkInput,
   linkProjectFolder,
   projectWorkspace,
   readRegistry,
@@ -196,6 +197,28 @@ describe('projectWorkspace', () => {
     expect(projectWorkspace('p1', deps)).toBeNull()
     expect(projectWorkspace(null, deps)).toBeNull()
     expect(projectWorkspace('../evil', deps)).toBeNull()
+  })
+})
+
+describe('folderLinkInput — untrusted renderer input for folder:link', () => {
+  test('accepts a minimal and a full link, picking ONLY the known fields', () => {
+    expect(folderLinkInput({ path: '/ws' })).toEqual({ path: '/ws' })
+    expect(folderLinkInput({ path: '/ws', repoUrl: 'https://g/x.git', evil: 'x' })).toEqual({
+      path: '/ws',
+      repoUrl: 'https://g/x.git'
+    })
+  })
+
+  test.each([
+    ['null', null],
+    ['a string', '/ws'],
+    ['an array', ['/ws']],
+    ['a missing path', { repoUrl: 'r' }],
+    ['an empty path', { path: '' }],
+    ['a non-string path', { path: 7 }],
+    ['a non-string repoUrl', { path: '/ws', repoUrl: 7 }]
+  ])('rejects %s', (_why, value) => {
+    expect(folderLinkInput(value)).toBeNull()
   })
 })
 

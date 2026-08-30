@@ -11,6 +11,7 @@ import { app } from 'electron'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { companionEnv, findIntegrationsRoot } from './companionEnv'
+import { projectWorkspace, realLocalStateDeps } from './localState'
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { join } from 'node:path'
 
@@ -256,7 +257,11 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     // itself instead of running with zero MCP servers.
     env: companionEnv(process.env, apiBaseUrl(), {
       integrationsRoot: app.isPackaged ? null : findIntegrationsRoot(app.getAppPath(), existsSync),
-      projectId: activeProjectId
+      projectId: activeProjectId,
+      // The ~/.solus registry (SOLUSDEV-166 / ADR-034): the project's linked
+      // working copy, read fresh at every spawn. Null (variable absent) when
+      // the project has no linked folder — workspace-gated forks fail closed.
+      workspace: projectWorkspace(activeProjectId, realLocalStateDeps)
     })
   })
   c.stderr?.on('data', (chunk: Buffer) => {
@@ -323,14 +328,33 @@ export function startCompanion(): void {
 export function setCompanionProject(projectId: string | null): void {
   if (projectId === activeProjectId) return
   activeProjectId = projectId
+  replaceChild()
+}
+
+/**
+ * A project's folder link changed in the ~/.solus registry (SOLUSDEV-166).
+ * The workspace is baked into the child's environment at spawn — exactly like
+ * the project id — so when it is the ACTIVE project's link that changed, the
+ * companion respawns to pick it up. Other projects' links are irrelevant to
+ * the running child.
+ */
+export function notifyProjectFolderChanged(projectId: string): void {
+  if (activeProjectId === null || projectId !== activeProjectId) return
+  replaceChild()
+}
+
+/** Kill the current child (if any) and spawn a fresh one against the current
+ *  project + registry state. A deliberate replacement is not a failure, so the
+ *  backoff schedule resets to the 1 s step. */
+function replaceChild(): void {
   if (restartTimer) {
     clearTimeout(restartTimer)
     restartTimer = null
   }
   const previous = child
-  child = null // detach first: onDown must not schedule a restart for the old project
+  child = null // detach first: onDown must not schedule a restart for the old config
   previous?.kill('SIGTERM')
-  attempt = -1 // a deliberate switch is not a failure; start from the 1 s step
+  attempt = -1
   if (started) maybeSpawn()
 }
 

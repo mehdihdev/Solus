@@ -14,7 +14,10 @@ export interface CompanionBridge {
 
 /** Machine-local folder bridge (SOLUSDEV-164): pick a directory, clone a repo,
  *  reveal a linked folder, or open it in VSCode. Only present under the
- *  Electron desktop app. */
+ *  Electron desktop app.
+ *  SOLUSDEV-166 (ADR-034) adds the ~/.solus registry surface: `link`/`unlink`
+ *  write the durable machine copy the companion's workspace derives from, and
+ *  `links` reads it back for cache hydration. */
 export interface FolderBridge {
   pick: () => Promise<string | null>
   reveal: (path: string) => Promise<{ ok: boolean }>
@@ -23,6 +26,9 @@ export interface FolderBridge {
     repoUrl: string
     parentDir: string
   }) => Promise<{ path?: string; error?: string }>
+  link: (projectId: string, link: { path: string; repoUrl?: string }) => Promise<{ ok: boolean }>
+  unlink: (projectId: string) => Promise<{ ok: boolean }>
+  links: () => Promise<Record<string, { path: string; repoUrl?: string; lastOpenedAt?: string }>>
 }
 
 interface SolusWindow {

@@ -108,6 +108,11 @@ export interface CompanionEnvOptions {
   /** The project this companion serves. The bridge URL is project-scoped, so
    *  without one there is no URL to derive and the companion stays idle. */
   projectId?: string | null
+  /** The project's working copy on this machine, from the ~/.solus registry
+   *  (SOLUSDEV-166 / ADR-034). Null when the project has no linked folder —
+   *  the variable is then left ABSENT so workspace-gated forks (Altium) fail
+   *  closed rather than confining to an arbitrary directory. */
+  workspace?: string | null
 }
 
 export function companionEnv(
@@ -127,17 +132,27 @@ export function companionEnv(
     const url = companionWsUrl(apiBaseUrl, options.projectId ?? null)
     if (url) env.SOLUS_COMPANION_URL = url
   }
+  // Fourth of the same kind (see CAPABILITIES.md: "read in two places, written
+  // nowhere"). Same rules as its siblings: an explicit inherited value wins,
+  // and nothing resolved means ABSENT, never empty.
+  if (!env.SOLUS_COMPANION_WORKSPACE && options.workspace) {
+    env.SOLUS_COMPANION_WORKSPACE = options.workspace
+  }
   if (!env.SOLUS_COMPANION_ALLOWED_HOSTS) {
-    const hosts = new Set<string>(LOOPBACK_HOSTS)
-    const configured = env.SOLUS_COMPANION_URL
-    if (configured) {
-      try {
-        hosts.add(new URL(configured).hostname)
-      } catch {
-        /* a malformed override is the companion's to report, not ours */
-      }
-    }
-    env.SOLUS_COMPANION_ALLOWED_HOSTS = [...hosts].join(',')
+    env.SOLUS_COMPANION_ALLOWED_HOSTS = allowedHosts(env.SOLUS_COMPANION_URL)
   }
   return env
+}
+
+/** Loopback always, plus the configured URL's host when it parses. */
+function allowedHosts(configuredUrl: string | undefined): string {
+  const hosts = new Set<string>(LOOPBACK_HOSTS)
+  if (configuredUrl) {
+    try {
+      hosts.add(new URL(configuredUrl).hostname)
+    } catch {
+      /* a malformed override is the companion's to report, not ours */
+    }
+  }
+  return [...hosts].join(',')
 }
