@@ -133,19 +133,31 @@ def test_instance_id_persists_across_loads(tmp_path: Path) -> None:
 def test_instance_dir_created_private(tmp_path: Path) -> None:
     # ADR-034 (SOLUSDEV-166): ~/.solus is 0700 — MCP forks inherit HOME, so the
     # directory must never be group/world readable.
-    path = tmp_path / "dot-solus" / "companion_id"
+    path = tmp_path / ".solus" / "companion_id"
     load_instance_id(path)
     assert stat.S_IMODE(os.stat(path.parent).st_mode) == 0o700
 
 
-def test_instance_dir_tightened_when_pre_existing(tmp_path: Path) -> None:
-    # Older builds created ~/.solus with the default umask; creating a fresh id
-    # in one tightens it (ADR-034 consequence).
-    parent = tmp_path / "dot-solus"
+def test_instance_dir_tightened_when_id_already_present(tmp_path: Path) -> None:
+    # The realistic upgrade case (review HIGH): ~/.solus already holds a VALID
+    # companion_id, so load returns early — but must still tighten a dir an
+    # older build left at the default umask.
+    parent = tmp_path / ".solus"
     parent.mkdir(mode=0o755)
-    fresh = load_instance_id(parent / "companion_id")
-    assert len(fresh) == 32
+    valid_id = "0" * 32
+    (parent / "companion_id").write_text(valid_id)
+    os.chmod(parent, 0o755)  # simulate the loose pre-existing dir
+    assert load_instance_id(parent / "companion_id") == valid_id
     assert stat.S_IMODE(os.stat(parent).st_mode) == 0o700
+
+
+def test_custom_instance_dir_outside_solus_home_is_not_chmodded(tmp_path: Path) -> None:
+    # review M6: a custom SOLUS_COMPANION_INSTANCE_FILE points elsewhere (e.g.
+    # /tmp); tightening THAT dir would be wrong and could break startup.
+    parent = tmp_path / "custom-loc"
+    parent.mkdir(mode=0o755)
+    load_instance_id(parent / "companion_id")
+    assert stat.S_IMODE(os.stat(parent).st_mode) == 0o755
 
 
 def test_instance_id_replaces_garbage(tmp_path: Path) -> None:

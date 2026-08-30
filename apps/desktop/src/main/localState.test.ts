@@ -3,7 +3,7 @@
 // Logic is tested against an in-memory fake of the injected fs surface; one
 // small real-fs suite covers what a fake cannot prove (atomic replace on a
 // real filesystem, directory modes).
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -51,6 +51,9 @@ function fakeDeps(overrides: Partial<LocalStateDeps> = {}): LocalStateDeps & {
     chmod: (path, mode) => {
       modes.set(path, mode)
     },
+    // Default: any absolute path that is not itself a registry file is a real
+    // directory. Individual tests override to exercise the not-a-directory path.
+    isDirectory: () => true,
     remove: (path) => {
       files.delete(path)
     },
@@ -152,6 +155,60 @@ describe('linkProjectFolder', () => {
     expect(deps.files.size).toBe(0)
   })
 
+  // SOLUSDEV-166 security review C1/M4: a forged IPC path must not reach the
+  // fork's workspace root. These never occur in a dialog-chosen path.
+  test.each([
+    ['a NUL byte', '/ws/\x00evil'],
+    ['a newline', '/ws/a\nb'],
+    ['a cmd.exe ampersand', '/ws/a" & calc "'],
+    ['a caret', '/ws/a^b'],
+    ['a pipe', '/ws/a|b'],
+    ['a redirect', '/ws/a>b'],
+    ['a percent (cmd env expansion)', '/ws/%USERPROFILE%'],
+    ['a glob star', '/ws/*']
+  ])('rejects a path with %s', (_why, path) => {
+    const deps = fakeDeps()
+    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  test('rejects a path that is not an existing directory', () => {
+    const deps = fakeDeps({ isDirectory: () => false })
+    expect(linkProjectFolder('p1', { path: '/ws/gone' }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  test.each([
+    ['the filesystem root', '/'],
+    ['the user home', '/home/tester'],
+    ['the home with a trailing slash', '/home/tester/'],
+    ['~/.solus itself', HOME]
+  ])('refuses %s as a workspace (too much fork reach)', (_why, path) => {
+    const deps = fakeDeps()
+    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  // SOLUSDEV-166 security review H2: the registry is fork-readable, so a clone
+  // URL's embedded credentials must never be persisted.
+  test('strips userinfo from repoUrl before persisting', () => {
+    const deps = fakeDeps()
+    linkProjectFolder(
+      'p1',
+      { path: '/ws/rover', repoUrl: 'https://oauth2:glpat-SECRET@gitlab.com/team/rover.git' },
+      deps
+    )
+    const written = JSON.parse(deps.files.get(FILE) as string)
+    expect(written.projects.p1.repoUrl).toBe('https://gitlab.com/team/rover.git')
+  })
+
+  test('keeps a credential-free scp-style repoUrl unchanged', () => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws/rover', repoUrl: 'git@gitlab.com:team/rover.git' }, deps)
+    const written = JSON.parse(deps.files.get(FILE) as string)
+    expect(written.projects.p1.repoUrl).toBe('git@gitlab.com:team/rover.git')
+  })
+
   test('refuses to clobber a registry written by a NEWER schema version', () => {
     const deps = fakeDeps()
     deps.files.set(FILE, JSON.stringify({ schema_version: 99, projects: {} }))
@@ -232,14 +289,21 @@ describe('real filesystem deps', () => {
   test('writes atomically under a 0700 home and replaces an existing file', () => {
     dir = mkdtempSync(join(tmpdir(), 'solus-localstate-'))
     const home = dir
+    // Real workspaces must be real directories now (isDirectory guard).
+    const wsOne = join(dir, 'one')
+    const wsTwo = join(dir, 'two')
+    mkdirSync(wsOne)
+    mkdirSync(wsTwo)
     const deps: LocalStateDeps = { ...realLocalStateDeps, homedir: () => home }
-    expect(linkProjectFolder('p1', { path: '/ws/one' }, deps)).toBe(true)
-    expect(linkProjectFolder('p1', { path: '/ws/two' }, deps)).toBe(true)
+    expect(linkProjectFolder('p1', { path: wsOne }, deps)).toBe(true)
+    expect(linkProjectFolder('p1', { path: wsTwo }, deps)).toBe(true)
     const solusDir = join(home, '.solus')
-    const written = JSON.parse(readFileSync(join(solusDir, 'projects.json'), 'utf8'))
-    expect(written.projects.p1.path).toBe('/ws/two')
+    const file = join(solusDir, 'projects.json')
+    const written = JSON.parse(readFileSync(file, 'utf8'))
+    expect(written.projects.p1.path).toBe(wsTwo)
     if (process.platform !== 'win32') {
       expect(statSync(solusDir).mode & 0o777).toBe(0o700)
+      expect(statSync(file).mode & 0o777).toBe(0o600)
     }
   })
 })

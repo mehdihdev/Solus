@@ -106,6 +106,27 @@ describe("strict rejection of malformed content", () => {
   );
 });
 
+describe("prototype-pollution-shaped ids (SOLUSDEV-166 L7)", () => {
+  test.each([["__proto__"], ["constructor"], ["prototype"]])(
+    "rejects the reserved id %j",
+    (projectId) => {
+      expect(
+        parseProjectRegistry({
+          schema_version: 1,
+          projects: { [projectId]: { path: "/a" } },
+        }),
+      ).toEqual({ ok: false, reason: "invalid" });
+    },
+  );
+
+  test("a valid registry parses to a null-prototype projects map", () => {
+    const result = parseProjectRegistry(FULL);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(Object.getPrototypeOf(result.registry.projects)).toBeNull();
+  });
+});
+
 describe("forward compatibility", () => {
   test("a newer schema_version is 'newer', never 'invalid' — readers must not rewrite it", () => {
     expect(

@@ -31,6 +31,11 @@ export const PROJECT_REGISTRY_SCHEMA_VERSION = 1;
  */
 export const PROJECT_ID_RE = /^[A-Za-z0-9_-]+$/;
 
+/** Ids that collide with object internals — `projects["__proto__"] = link`
+ *  hits the prototype setter and silently drops the entry (SOLUSDEV-166 review
+ *  L7). PROJECT_ID_RE admits them, so they are excluded explicitly. */
+const RESERVED_PROJECT_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
 /** One project's link to a working copy on THIS machine. */
 export interface ProjectFolderLink {
   /** Absolute path of the working copy. Non-empty. */
@@ -108,9 +113,11 @@ function parseProjects(
   value: unknown,
 ): Record<string, ProjectFolderLink> | null {
   if (!isPlainObject(value)) return null;
-  const projects: Record<string, ProjectFolderLink> = {};
+  // Null-prototype map so a hostile id cannot reach Object.prototype at all.
+  const projects: Record<string, ProjectFolderLink> = Object.create(null);
   for (const [projectId, raw] of Object.entries(value)) {
-    if (!PROJECT_ID_RE.test(projectId)) return null;
+    if (!PROJECT_ID_RE.test(projectId) || RESERVED_PROJECT_IDS.has(projectId))
+      return null;
     const link = parseFolderLink(raw);
     if (link === null) return null;
     projects[projectId] = link;

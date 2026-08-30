@@ -94,11 +94,11 @@ What each buys the context model:
 - **Environment requirements (`project.toml`)**: ROS distro, CUDA version, library/toolchain
   versions, deployment targets. This is precisely the input the "this package needs CUDA 12 but
   your Jetson has 11.8" autocomplete checker needs and currently has no source for.
-- **Per-part declarations (`parts/*.toml`)**: MPN, manufacturer, cross-tool aliases ("CAM*v2 in
-  Onshape = OV9281_IC in the schematic"), datasheet URL. Direct, high-confidence hints to the
+- **Per-part declarations (`parts/*.toml`)**: MPN, manufacturer, cross-tool aliases (`CAM_v2` in
+  Onshape = `OV9281_IC` in the schematic), datasheet URL. Direct, high-confidence hints to the
   fingerprint matcher — the supply-chain signal handed to us instead of inferred; a team-authored
-  alias is effectively a pre-confirmed match. *(Open sub-question: these seed `graph_entity` rows
-  with what `origin`? Probably a new well-known value like `"declared"` — an ADR-027 amendment.)\_
+  alias is effectively a pre-confirmed match. (Open sub-question: these seed `graph_entity` rows
+  with what `origin`? Probably a new well-known value like `declared` — an ADR-027 amendment.)
 
 **Format: TOML** for the repo-committed files — Python 3.12 has `tomllib` in the stdlib (zero new
 backend dependency), it's human-friendly for hand-editing, and it's parsed server-side during sync,
