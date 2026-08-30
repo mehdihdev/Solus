@@ -63,6 +63,25 @@ packages) before the first byte is written to them.
 7. **Corrupt files never crash a reader**; parse failures degrade to the empty registry (and the
    corrupt file may then be overwritten — only _newer_ files are protected).
 
+## The registry file is untrusted input
+
+Because forks run as the user and can write `~/.solus`, and the file can be hand-edited or predate
+the current build, every value is validated at **both** the write and the read boundary — the read
+side is the real trust boundary for the companion sink:
+
+- **Project ids** must satisfy `isSafeProjectId` (the id shape AND not an object-internal name —
+  `__proto__`/`constructor`/`prototype`), enforced by both the TS and Python parsers.
+- **Workspace paths** handed to a fork (`SOLUS_COMPANION_WORKSPACE`) are canonicalized (symlinks
+  and `.`/`..` resolved) and rejected if they carry control characters, resolve to the filesystem
+  root / the user's home / `~/.solus` or its subtree, or — on Windows only — contain the cmd.exe
+  metacharacter class (`" & ^ | < > % ! * ?`) that the `launch.cmd` fork twin would interpret. The
+  canonical value is what gets stored. On POSIX those metacharacters are legal directory-name
+  characters and are allowed (`bin/launch` quotes the value under `env -i`).
+- **`repoUrl`** is stripped of embedded credentials before being persisted or returned to the
+  renderer: http(s) userinfo (including a bare `token@host`) is removed, an ssh `git@` username is
+  kept (it is required to clone), and a credential-bearing opaque value is dropped entirely. Legacy
+  files are cleaned on read.
+
 ## Consumers
 
 - **Desktop main** (`apps/desktop/src/main/`): owns registry writes; derives
