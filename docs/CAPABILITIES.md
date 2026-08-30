@@ -196,11 +196,13 @@ kicad overlay: registered ['analyze_bom','analyze_schematic_connections','export
 Handshake **101, not 403**. KiCad launches with 7 tools.
 
 - **kicad — WORKS.**
-- **altium — BROKEN, and the cause is confirmed still live:**
+- **altium — wiring landed (SOLUSDEV-166), pending a live re-verify.** The historical failure was
   `refusing to start: SOLUS_MCP_WORKSPACE is not set; refusing rather than confining to the
-process cwd`. The companion only passes that variable when `SOLUS_COMPANION_WORKSPACE` is
-  configured, and the desktop never sets it from the project's linked folder. Failing closed is
-  correct behaviour; the missing wiring is the defect.
+process cwd`: the companion only passes that variable when `SOLUS_COMPANION_WORKSPACE` is
+  configured, and the desktop never set it. The desktop main process now derives it at companion
+  spawn from the `~/.solus/projects.json` registry (ADR-034) and respawns the companion when the
+  active project's folder link changes. Failing closed with no linked folder remains the correct
+  behaviour.
 - **fusion — correctly not a fork.** Its `allowlist.yaml` says so: Autodesk ships it and it runs on
   the customer's machine at `127.0.0.1:27182`. It fails here because no Fusion is running, and its
   tool list is deliberately empty pending a live `tools/list` capture.
@@ -295,13 +297,13 @@ Most are tunables with defaults and are fine unset (`SOLUS_BRIDGE_*` rate limits
 (`SOLUS_ECS_*`, `SOLUS_VPC`, `SOLUS_TG_NAME`, `SOLUS_SENTRY_DSN`). These are the ones that **gate
 functionality**:
 
-| Variable                                                 | Consequence of being unset                                                                                                                                                 |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SOLUS_COMPANION_WORKSPACE`                              | **Altium never starts.** The companion omits `SOLUS_MCP_WORKSPACE`, and the fork fails closed. Read in two places, written nowhere — the third instance of this exact bug. |
-| `SOLUS_MCP_WORKSPACE`                                    | The fork-side half of the same gap                                                                                                                                         |
-| `SOLUS_ARTIFACT_LOCAL_ROOT` / `SOLUS_ARTIFACT_S3_BUCKET` | Artifact store falls back to a process-local tmp dir; uploaded bytes are lost on cleanup. Warned on every boot                                                             |
-| `SOLUS_BRIDGE_ALLOWLIST_ROOT`, `SOLUS_MCP_PYTHON`        | Fork launch paths; defaults happen to work here                                                                                                                            |
-| `SOLUS_TOOLKB_VOTE_SALT`                                 | Ephemeral per-process salt ⇒ vote de-dup does not survive a restart. Warned on every boot                                                                                  |
+| Variable                                                 | Consequence of being unset                                                                                                                                                                                                                            |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SOLUS_COMPANION_WORKSPACE`                              | Without it the companion omits `SOLUS_MCP_WORKSPACE` and workspace-gated forks (Altium) fail closed. Since SOLUSDEV-166 the desktop derives it from the `~/.solus/projects.json` registry at spawn; unset only when the project has no linked folder. |
+| `SOLUS_MCP_WORKSPACE`                                    | The fork-side half of the same gap                                                                                                                                                                                                                    |
+| `SOLUS_ARTIFACT_LOCAL_ROOT` / `SOLUS_ARTIFACT_S3_BUCKET` | Artifact store falls back to a process-local tmp dir; uploaded bytes are lost on cleanup. Warned on every boot                                                                                                                                        |
+| `SOLUS_BRIDGE_ALLOWLIST_ROOT`, `SOLUS_MCP_PYTHON`        | Fork launch paths; defaults happen to work here                                                                                                                                                                                                       |
+| `SOLUS_TOOLKB_VOTE_SALT`                                 | Ephemeral per-process salt ⇒ vote de-dup does not survive a restart. Warned on every boot                                                                                                                                                             |
 
 ---
 
@@ -312,7 +314,7 @@ functionality**:
 | **SOL reads fake context**            | Implement the `SolSystems` protocol against the real graph. The parts exist (`to_graph_context`, `get_telemetry`); nothing assembles them. This is the single highest-value fix in the repo — until it lands, every SOL answer is fiction. |
 | **No workspace canvas**               | LANE B, or wire `discoverWidgets()` + `WidgetHost` into a route. Until then every widget is unreachable.                                                                                                                                   |
 | **Impact not exposed**                | An HTTP route over the existing `impact/` module                                                                                                                                                                                           |
-| **Altium fork**                       | Set `SOLUS_COMPANION_WORKSPACE` from the project's linked folder (desktop side), same mechanism as the project id                                                                                                                          |
+| **Altium fork**                       | Wiring landed (SOLUSDEV-166: `~/.solus/projects.json` → `SOLUS_COMPANION_WORKSPACE` at spawn). Remaining: link a folder to a project in the desktop app and re-verify the fork starts                                                      |
 | **Isaac telemetry**                   | One Isaac-produced `.mcap` recording                                                                                                                                                                                                       |
 | **Gazebo**                            | Not installed on this machine                                                                                                                                                                                                              |
 | **RBT-02/03/04**                      | A board that answers a protocol on `/dev/ttyACM0` (Dynamixel chain, or an MCU running firmware)                                                                                                                                            |
