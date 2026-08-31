@@ -44,6 +44,10 @@ class BridgeSession:
     send: Callable[[str], Awaitable[None]]
     close: Callable[[int], Awaitable[None]]
     max_inflight: int
+    #: SOLUSDEV-167: may this socket's principal trigger a graph WRITE? Resolved
+    #: from membership at bind (MEMBER or above), server-derived like every other
+    #: scope field — never inferred from a frame.
+    may_write: bool = False
     inflight: dict[str, asyncio.Future[ToolResult]] = field(default_factory=dict)
     # BRG-03: the last status snapshot (advisory, UI-facing; dies with the session).
     last_status: StatusData | None = None

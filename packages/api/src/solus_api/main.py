@@ -18,6 +18,7 @@ from solus_api.agent.runtime import LlmRunner
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
+from solus_api.connectors.httpcache import InMemoryCacheStore, RedisCacheStore
 from solus_api.connectors.mcp_acquire import BridgeExportAcquirer
 from solus_api.connectors.registry import AcquirerFactory, ConnectorContext, build_registry
 from solus_api.connectors.secrets import build_secret_store
@@ -27,6 +28,7 @@ from solus_api.core.errors import register_error_handlers
 from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
+from solus_api.graph.live import LiveHub
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.livebench.bench_router import BenchEventRing
@@ -43,6 +45,7 @@ from solus_api.routers import (
     integrations,
     invites,
     jobs,
+    live,
     members,
     meta,
     notifications,
@@ -53,6 +56,7 @@ from solus_api.routers import (
     sources,
     teams,
     users,
+    webhooks,
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
@@ -137,7 +141,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     async def lifespan(served: FastAPI) -> AsyncIterator[None]:
         if resolved_settings.auto_create_tables:
             await create_all_tables(resolved_engine)
+        # SOLUSDEV-167: begin relaying cross-process graph frames. No-op without
+        # Redis, in which case the hub still fans out within this process.
+        await served.state.graph_hub.start()
         yield
+        await served.state.graph_hub.stop()
         # SOLUSDEV-72: close every live bench session — pump tasks, gz
         # subprocesses, and open serial ports must not outlive the server.
         await served.state.bench_sessions.aclose_all()
@@ -165,6 +173,23 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         if resolved_settings.redis_url
         else None
     )
+    # SOLUSDEV-167: the integration cache + single-flight store. Redis when one
+    # is configured (shared across processes AND users — two engineers on one
+    # Onshape document then cost ONE fetch), otherwise per-process, which
+    # coalesces this worker's callers only. Same assembly-time backend choice as
+    # the telemetry buffer and the entity resolver below.
+    app.state.integration_store = (
+        RedisCacheStore(app.state.redis) if app.state.redis is not None else InMemoryCacheStore()
+    )
+    if app.state.redis is None:
+        logging.getLogger("solus.main").warning(
+            "integration cache is per-process (no SOLUS_REDIS_URL): concurrent "
+            "syncs coalesce within one API process only"
+        )
+    # SOLUSDEV-167: project-scoped graph-change fan-out. Routing is structural
+    # — one channel per project — so a frame's channel, never its body, decides
+    # who receives it.
+    app.state.graph_hub = LiveHub(app.state.redis)
     app.state.sessionmaker = build_sessionmaker(resolved_engine)
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     # T4b (MCP-04): the EDA family also gets a bridge export acquirer factory
@@ -233,6 +258,14 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
     # + the §4.5 upload-route budgets (separate from the global rate limiter).
     app.state.artifact_store = build_artifact_store(resolved_settings)
+    # SOLUSDEV-167: per-source webhook delivery budget, in DAYS. One delivery
+    # schedules a sync whose probe loops per tracked document, so a per-minute
+    # window could authorise hundreds of upstream calls a minute against an
+    # allowance of 2,500 a YEAR. See WEBHOOK_DELIVERIES_PER_DAY for the
+    # arithmetic. ponytail: per-process like every FixedWindowLimiter here, so
+    # the real ceiling is budget x instances — a shared Redis counter is the
+    # upgrade, and the quota meter is the backstop underneath either way.
+    app.state.webhook_limiter = FixedWindowLimiter(window_seconds=86_400)
     app.state.artifact_upload_request_limiter = FixedWindowLimiter(window_seconds=60)
     app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
 
@@ -283,4 +316,6 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(orchestration.router)
     app.include_router(panel.router)
     app.include_router(toolkb.router)
+    app.include_router(webhooks.router)
+    app.include_router(live.router)
     return app

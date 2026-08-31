@@ -64,16 +64,29 @@ from solus_api.core.responses import envelope
 from solus_api.core.security import decode_token
 from solus_api.deps import (
     BridgeSessionsDep,
+    ProjectContext,
     ProjectCtx,
     SecretStoreDep,
     SessionDep,
     get_project_context,
+    require_role,
 )
-from solus_api.models import User
+from solus_api.models import Role, User
 from solus_api.services.events import emit_event
 from solus_api.services.limits import user_has_byo_entitlement
 
 logger = logging.getLogger("solus.bridge.ws")
+
+#: Strong refs to in-flight background tasks; without these the event loop
+#: may garbage-collect one mid-flight.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+#: At most one in-flight local resync per bridge session, keyed by session id.
+_INFLIGHT_RESYNC: dict[str, "asyncio.Task[None]"] = {}
+
+#: Bound the fan-out. A project with a pathological number of local sources
+#: must not turn one frame into an unbounded serial walk.
+_MAX_RESYNC_SOURCES = 25
 
 router = APIRouter()
 
@@ -105,6 +118,13 @@ class _ConnectAuth:
     user: User
     team_id: uuid.UUID
     token_exp: datetime
+    #: SOLUSDEV-167. Server-derived at bind, never inferred from a frame. A
+    #: bridge socket is authorized for READS by membership alone, but the
+    #: `change` frame triggers a graph WRITE, so it needs the same MEMBER floor
+    #: the equivalent HTTP action (`POST .../sources/{id}/sync`) enforces.
+    #: Without this a viewer — or a share-only user, whose membership is None —
+    #: could tombstone the team's local subtree through a degraded export.
+    may_write: bool = False
 
 
 async def _admit(ws: WebSocket, project_id: uuid.UUID, settings: Settings) -> _ConnectAuth:
@@ -147,7 +167,22 @@ async def _authenticate(
         ctx = await get_project_context(project_id, user, session)
     except APIError as exc:
         raise _CloseError(CLOSE_NOT_FOUND) from exc
-    return _ConnectAuth(user=user, team_id=ctx.team.id, token_exp=_token_exp(token))
+    return _ConnectAuth(
+        user=user,
+        team_id=ctx.team.id,
+        token_exp=_token_exp(token),
+        may_write=_may_write(ctx),
+    )
+
+
+def _may_write(ctx: ProjectContext) -> bool:
+    """MEMBER or above. Mirrors `require_role(ctx, Role.MEMBER)`, but returns a
+    flag rather than raising: a viewer's socket is still legitimate for reads."""
+    try:
+        require_role(ctx, Role.MEMBER)
+    except APIError:
+        return False
+    return True
 
 
 async def _await_hello(ws: WebSocket, settings: Settings) -> HelloData:
@@ -305,12 +340,140 @@ async def _handle_credential_submit(
     return credential_ack_frame(data.server, ok=True, stored=sorted(data.secrets), error=None)
 
 
+def _schedule_local_resync(state: Any, session: BridgeSession) -> None:
+    """Fire-and-forget the probe for this companion's local sources.
+
+    CHEAP ENQUEUE ONLY. `_handle_parsed` is awaited inline in the recv loop, so
+    doing the probe here would stall pongs and every in-flight `tool_result`.
+
+    Scope comes from the SESSION, never the frame: `(user, team, project)` were
+    server-derived at bind. And the acting user is the COMPANION's user, not the
+    source's creator — the live acquirer looks a bridge session up by that exact
+    triple, so falling back to `created_by` would make a teammate's edit find no
+    session, decline, and silently re-read the stale committed export, producing
+    a "changed" notification containing no change.
+    """
+    # ONE in-flight resync per session. Without this every accepted frame spawned
+    # another task that fans out over all of the project's local sources, and
+    # single-flight does NOT collapse them — a loser waits up to 30s per source
+    # and then does the work anyway — so duplicates accumulate rather than merge.
+    # At 12 frames/min x 10 sessions per team that is ~120 new fan-outs a minute
+    # in the shared API process: one tenant starving the rest, which is exactly
+    # what §7's queue-concurrency rule forbids.
+    #
+    # A frame arriving while one runs is not lost: the running pass re-reads the
+    # workspace anyway, so it already covers the change that just landed.
+    existing = _INFLIGHT_RESYNC.get(session.session_id)
+    if existing is not None and not existing.done():
+        logger.debug("resync already in flight for session=%s", session.session_id)
+        return
+    task = asyncio.create_task(_resync_local_sources(state, session))
+    _INFLIGHT_RESYNC[session.session_id] = task
+    # Hold a reference or the loop may garbage-collect the task mid-flight.
+    _BACKGROUND_TASKS.add(task)
+
+    def _done(finished: "asyncio.Task[None]") -> None:
+        _BACKGROUND_TASKS.discard(finished)
+        if _INFLIGHT_RESYNC.get(session.session_id) is finished:
+            del _INFLIGHT_RESYNC[session.session_id]
+
+    task.add_done_callback(_done)
+
+
+async def _resync_local_sources(state: Any, session: BridgeSession) -> None:
+    from sqlalchemy import select
+
+    from solus_api.connectors.worker import execute_source_sync
+    from solus_api.models import Source, SourceStatus, SourceType, SyncTrigger
+
+    # Only the providers a companion can actually speak for. A change frame must
+    # not be able to trigger a cloud-API sync (and spend its quota).
+    local_types = (SourceType.KICAD, SourceType.ALTIUM)
+    try:
+        async with state.sessionmaker() as db:
+            source_ids = list(
+                (
+                    await db.scalars(
+                        select(Source.id)
+                        .where(
+                            Source.project_id == session.project_id,
+                            Source.type.in_(local_types),
+                            Source.status == SourceStatus.CONNECTED,
+                        )
+                        .order_by(Source.id)
+                        .limit(_MAX_RESYNC_SOURCES)
+                    )
+                ).all()
+            )
+        for source_id in source_ids:
+            await execute_source_sync(
+                sessionmaker=state.sessionmaker,
+                registry=state.connector_registry,
+                secret_store=state.secret_store,
+                source_id=source_id,
+                trigger=SyncTrigger.WEBHOOK,
+                acting_user_id=session.user_id,
+                store=getattr(state, "integration_store", None),
+                hub=getattr(state, "graph_hub", None),
+            )
+    except Exception:  # noqa: BLE001 — a companion frame must never kill the socket
+        logger.exception("local resync failed project=%s", session.project_id)
+
+
+#: Inbound frames the cloud absorbs and never answers. Grouped so the main
+#: dispatcher stays a flat, readable ladder as the protocol grows.
+_NOTIFICATION_TYPES = frozenset({"change", "status", "artifact_chunk"})
+
+
+def _handle_notification(
+    state: Any,
+    session: BridgeSession,
+    frame: InboundFrame,
+    known_servers: frozenset[str],
+    change_bucket: TokenBucket | None,
+) -> bool:
+    """→ counts-as-violation."""
+    if frame.type == "change":
+        # A graph WRITE trigger, so it needs the same MEMBER floor the
+        # equivalent HTTP action enforces. A bridge socket is authorized for
+        # reads by membership alone, and without this check a viewer (or a
+        # share-only user, whose membership is None) could tombstone the team's
+        # local subtree via a degraded export.
+        if not session.may_write:
+            logger.warning(
+                "change frame from a read-only principal user=%s project=%s",
+                session.user_id,
+                session.project_id,
+            )
+            return True
+        # SOLUSDEV-167: a HINT, never evidence. We do not trust it and do not act
+        # on it directly — it schedules the same per-source probe the sweep runs,
+        # which re-reads the change token with the source's own credentials. So a
+        # buggy or hostile companion can at worst cause one debounced probe of a
+        # source inside its own already-authenticated scope.
+        if change_bucket is not None and not change_bucket.allow():
+            logger.warning("change frame rate limit hit project=%s", session.project_id)
+            return False
+        _schedule_local_resync(state, session)
+        return False
+    if frame.type == "status":
+        assert isinstance(frame.payload, StatusData)
+        _store_status(session, frame.payload, known_servers)
+        return False
+    assert isinstance(frame.payload, ArtifactChunkData)
+    # SOLUS-CAD-00c: bulk bytes for a pull this cloud started. Routed by
+    # fetch_id; an unknown one is dropped inside, never an error frame.
+    ingest_artifact_chunk(session, frame.payload)
+    return False
+
+
 async def _handle_parsed(
     state: Any,
     session: BridgeSession,
     frame: InboundFrame | FrameViolation | UnknownFrame,
     known_servers: frozenset[str] = frozenset(),
     submit_bucket: TokenBucket | None = None,
+    change_bucket: TokenBucket | None = None,
 ) -> tuple[str | None, bool]:
     """→ (reply frame, counts-as-violation). Oversize raises 4413."""
     if isinstance(frame, FrameViolation):
@@ -332,16 +495,9 @@ async def _handle_parsed(
     if frame.type == "hello":
         logger.warning("bridge session %s sent hello twice", session.session_id)
         return None, True
-    if frame.type == "status":
-        assert isinstance(frame.payload, StatusData)
-        _store_status(session, frame.payload, known_servers)
-        return None, False
-    if frame.type == "artifact_chunk":
-        assert isinstance(frame.payload, ArtifactChunkData)
-        # SOLUS-CAD-00c: bulk bytes for a pull this cloud started. Routed by
-        # fetch_id; an unknown one is dropped inside, never an error frame.
-        ingest_artifact_chunk(session, frame.payload)
-        return None, False
+    if frame.type in _NOTIFICATION_TYPES:
+        violation = _handle_notification(state, session, frame, known_servers, change_bucket)
+        return None, violation
     if frame.type == "credential_submit":
         assert isinstance(frame.payload, CredentialSubmitData)
         return await _handle_credential_submit(state, session, frame.payload, submit_bucket), False
@@ -373,6 +529,15 @@ async def _frame_loop(
         rate=settings.bridge_credential_submit_rate_per_minute / 60.0,
         burst=settings.bridge_credential_submit_burst,
     )
+    # SOLUSDEV-167. Its own bucket, following the credential_submit precedent: a
+    # state-mutating unsolicited frame does not share the general one. A design
+    # change is a human saving a file, so a handful a minute is generous; past
+    # that the sensor is malfunctioning or lying, and either way the answer is to
+    # stop scheduling work, not to keep paying for it.
+    change_bucket = TokenBucket(
+        rate=settings.bridge_change_rate_per_minute / 60.0,
+        burst=settings.bridge_change_burst,
+    )
     violations = 0
 
     def _bump() -> None:
@@ -402,7 +567,7 @@ async def _frame_loop(
             tool_result_cap=settings.bridge_tool_result_max_bytes,
         )
         reply, is_violation = await _handle_parsed(
-            ws.app.state, session, frame, known_servers, submit_bucket
+            ws.app.state, session, frame, known_servers, submit_bucket, change_bucket
         )
         if is_violation:
             _bump()
@@ -434,6 +599,7 @@ async def bridge_ws(ws: WebSocket, project_id: uuid.UUID) -> None:
             send=ws.send_text,
             close=ws.close,
             max_inflight=settings.bridge_max_inflight,
+            may_write=auth.may_write,
         )
         # CR-M1: re-check the team cap synchronously with bind — the earlier
         # check raced across the hello await; no await sits between here and

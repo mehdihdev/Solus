@@ -98,18 +98,35 @@ connectors subclass to add their specific contents — not a frozen Pydantic mod
 ## 4. `Connector` — sync + detect_changes
 
 ```python
-class Connector(Integration):
+class Connector(abc.ABC):
     @abstractmethod
-    async def sync(self, session: Session) -> SyncResult: ...        # FULL current state
+    async def sync(self, ctx: SyncContext) -> SyncResult: ...        # FULL current state
     @abstractmethod
-    async def detect_changes(self, session: Session) -> Delta: ...   # the delta path
+    async def detect_changes(self, ctx: SyncContext) -> bool: ...    # the cheap probe
 ```
+
+> **Corrected — SOLUSDEV-167.** This section previously documented
+> `sync(session: Session) -> SyncResult` / `detect_changes(session: Session) -> Delta`, which never
+> shipped. The signatures above are what the ratified ABC actually declares (identically in both
+> copies — `packages/contracts/python/solus_contracts/connector.py` and the in-tree
+> `solus_api.connectors.contracts`, held together field-for-field by
+> `test_contracts_package.py`). Per-source state arrives on `SyncContext.cursor` and leaves on
+> `SyncResult.cursor`; there is no `Session` parameter and no `Delta` return.
 
 - **`sync()`** returns the FULL current entity/relation set for the source. Full-sync is v1;
   incremental sync is a later optimization. Ingestion runs it as a background job (`API.md §2.5`:
   `POST …/sources/{id}/sync` → `202` + a Job), never in the request path.
-- **`detect_changes()`** returns a `Delta` keyed by stable `source_id`. This is the method
-  automatic event-driven sync calls (§8).
+- **`detect_changes()`** is the CHEAP probe: has anything moved since `ctx.cursor`? It returns a
+  bool, and the connector carries whatever change token it needs inside the JSON cursor it round-
+  trips (a microversion map, a commit SHA, a content hash). This is the method automatic
+  event-driven sync calls (§8), and — since SOLUSDEV-167 — the gate `run_sync` consults before
+  paying for a full sync, so a connector that cannot answer "nothing changed" cheaply re-syncs
+  forever and burns the provider's quota. The conformance suite enforces it: `sync()` must return
+  a non-empty cursor, and `detect_changes()` handed that cursor must answer `False`.
+- **Freshness policy is not a contract field.** A connector declares nothing extra to inherit
+  caching, conditional requests, quota metering and live propagation — those live in the shared
+  HTTP layer and the sync runtime, below the interface. That is deliberate: if adding the next
+  integration required bespoke caching, the abstraction would be wrong.
 
 ---
 
@@ -267,7 +284,7 @@ cross-source relation and duplicate `source_id`s.
 | `read_secret` (Secrets Manager seam)                                       | **Stub — boto3 in an infra ticket** |
 | `LiveConnection` streaming sibling (Live Bench)                            | **Documented, not built**           |
 | The ~9 real connectors                                                     | **Separate tickets (one each)**     |
-| Webhook receiver / event queue / sync-on-change plumbing                   | **Per-connector, later**            |
+| Webhook receiver / event queue / sync-on-change plumbing                   | **Built — SOLUSDEV-167** (`POST /api/v1/webhooks/{provider}/{token}`, the bridge `change` frame, and the hourly sweep all converge on one gate; see `docs/architecture/change-signal-spine.md`) |
 | Ingestion pipeline consuming `SyncResult`/`Delta`                          | **Downstream**                      |
 | Relation deltas on `Delta`                                                 | **Forward extension**               |
 

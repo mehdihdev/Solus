@@ -155,6 +155,19 @@ def status_frame(servers: Sequence[dict[str, Any]]) -> str:
     return _encode("status", {"servers": list(servers)})
 
 
+def change_frame() -> str:
+    """SOLUSDEV-167: "something under my workspace moved; come and ask."
+
+    EMPTY payload, and that is the whole design — the type is the message. It
+    deliberately carries no digest (nothing would read it; the connector's own
+    `detect_changes` is the authority) and no server name (the sensor watches ONE
+    workspace shared by both forks, so attributing kicad vs altium would be a
+    guess). The cloud rejects a change frame that carries data, so this stays
+    true rather than merely intended.
+    """
+    return _encode("change", {})
+
+
 def tool_result_ok(call_id: str, value: dict[str, Any]) -> str:
     return _encode("tool_result", {"call_id": call_id, "ok": True, "value": value})
 

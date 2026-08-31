@@ -163,11 +163,13 @@ INBOUND_TYPES = frozenset(
         "tool_result",
         "credential_submit",
         "artifact_chunk",
+        # SOLUSDEV-167: an unsolicited "something under my workspace moved".
+        # Added under the §4 extension rule — a new frame type does NOT bump
+        # protocol_version; an old peer logs and ignores it.
+        "change",
     }
 )
-OUTBOUND_TYPES = frozenset(
-    {"hello_ack", "pong", "tool_call", "credential_ack", "artifact_fetch"}
-)
+OUTBOUND_TYPES = frozenset({"hello_ack", "pong", "tool_call", "credential_ack", "artifact_fetch"})
 
 
 @dataclass(frozen=True)
@@ -222,32 +224,40 @@ def _parse_envelope(raw: str | bytes) -> tuple[str, dict[str, Any]] | FrameViola
     return frame_type, data
 
 
+#: Inbound types that carry a validated payload model. A table rather than an
+#: if-ladder so adding a frame type cannot quietly grow the dispatcher.
+_PAYLOAD_MODELS: dict[str, Any] = {
+    "hello": HelloData,
+    "tool_result": ToolResult,
+    "error": ErrorData,
+    "status": StatusData,
+    "credential_submit": CredentialSubmitData,
+    "artifact_chunk": ArtifactChunkData,
+}
+
+#: Inbound types whose `data` must be EMPTY — the type is the whole message.
+_EMPTY_PAYLOAD_TYPES = ("ping", "change")
+
+
 def _parse_payload(frame_type: str, data: dict[str, Any]) -> InboundFrame | FrameViolation:
-    try:
-        if frame_type == "hello":
-            return InboundFrame(type="hello", payload=HelloData.model_validate(data))
-        if frame_type == "tool_result":
-            return InboundFrame(type="tool_result", payload=ToolResult.model_validate(data))
-        if frame_type == "error":
-            return InboundFrame(type="error", payload=ErrorData.model_validate(data))
-        if frame_type == "status":
-            return InboundFrame(type="status", payload=StatusData.model_validate(data))
-        if frame_type == "credential_submit":
-            return InboundFrame(
-                type="credential_submit", payload=CredentialSubmitData.model_validate(data)
+    model = _PAYLOAD_MODELS.get(frame_type)
+    if model is not None:
+        try:
+            return InboundFrame(type=frame_type, payload=model.model_validate(data))
+        except ValidationError as exc:
+            return FrameViolation(
+                kind="invalid", reason=f"{frame_type} failed validation: {exc!s:.200}"
             )
-        if frame_type == "artifact_chunk":
-            return InboundFrame(
-                type="artifact_chunk", payload=ArtifactChunkData.model_validate(data)
-            )
-    except ValidationError as exc:
-        return FrameViolation(
-            kind="invalid", reason=f"{frame_type} failed validation: {exc!s:.200}"
-        )
-    if frame_type == "ping":
+    if frame_type in _EMPTY_PAYLOAD_TYPES:
+        # SOLUSDEV-167 for `change`: EMPTY BY DESIGN. Its whole meaning is its
+        # type — some design artifact under this companion's workspace moved,
+        # come and ask. No digest (the connector's own detect_changes is the
+        # authority) and no server name (the sensor watches one workspace shared
+        # by both forks, so attributing kicad vs altium would be a guess).
+        # Rejecting a payload keeps that true rather than merely intended.
         if data:
-            return FrameViolation(kind="invalid", reason="ping carries no data")
-        return InboundFrame(type="ping", payload=None)
+            return FrameViolation(kind="invalid", reason=f"{frame_type} carries no data")
+        return InboundFrame(type=frame_type, payload=None)
     raise AssertionError(f"unhandled inbound type {frame_type!r}")  # pragma: no cover
 
 
@@ -303,7 +313,6 @@ def credential_ack_frame(server: str, *, ok: bool, stored: list[str], error: str
 
 
 # --- Ingress redaction (contract §6) -----------------------------------------
-
 
 
 def artifact_fetch_frame(*, artifact_id: str, fetch_id: str) -> str:

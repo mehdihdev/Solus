@@ -31,6 +31,7 @@ from solus_api.connectors.code_host import (
     parent_key,
 )
 from solus_api.connectors.contracts import (
+    NO_SIGNAL_CODES,
     AccountInfo,
     ConnectorError,
     Credentials,
@@ -45,6 +46,13 @@ from solus_api.connectors.contracts import (
 
 GITHUB_API: Final = "https://api.github.com"
 GITHUB_OAUTH: Final = "https://github.com/login/oauth"
+
+#: Cursor key holding the last commit-endpoint ETag (SOLUSDEV-167). GitHub
+#: documents that a conditional request answered 304 does NOT count against the
+#: rate limit, so this makes the common "nothing changed" probe free. Durable in
+#: the cursor rather than a cache; losing it just means the next probe re-earns
+#: one.
+ETAG_KEY: Final = "commit_etag"
 REQUEST_TIMEOUT: Final = 30.0
 
 
@@ -206,7 +214,7 @@ class GitHubConnector(OAuthConnector):
                 if configured
                 else await self._default_branch(client, repo)
             )
-            sha = await self._head_sha(client, repo, branch)
+            sha, etag = await self._head_sha_and_etag(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
 
         entities, relations, errors = self._build_graph(repo, branch, sha, tree)
@@ -222,11 +230,30 @@ class GitHubConnector(OAuthConnector):
         return SyncResult(
             entities=entities,
             relations=relations,
-            cursor={"branch": branch, "sha": sha},
+            # The ETag key is present only when GitHub actually gave us one —
+            # a null placeholder would be noise in a cursor other code compares.
+            cursor=(
+                {"branch": branch, "sha": sha, ETAG_KEY: etag}
+                if etag
+                else {"branch": branch, "sha": sha}
+            ),
             errors=errors,
         )
 
     async def detect_changes(self, ctx: SyncContext) -> bool:
+        """Cheap probe, and against GitHub it can be FREE.
+
+        GitHub documents that a conditional request answered `304 Not Modified`
+        does not count against the rate limit. So when a previous probe left us
+        an ETag we send `If-None-Match`, and the overwhelmingly common answer —
+        nothing changed — costs nothing at all. Zero conditional requests existed
+        anywhere in this repo before SOLUSDEV-167; the only headers ever built
+        were Accept and Authorization.
+
+        The validator rides `ctx.cursor` beside the sha, so it is durable and
+        needs no cache. Losing it is harmless: the next probe is simply a normal
+        (counted) request that re-earns one.
+        """
         try:
             repo = _safe_repo(str(ctx.config["repo"]))
             configured = ctx.config.get("branch")
@@ -236,10 +263,28 @@ class GitHubConnector(OAuthConnector):
                     if configured
                     else await self._default_branch(client, repo)
                 )
+                etag = ctx.cursor.get(ETAG_KEY)
+                if isinstance(etag, str) and etag and ctx.cursor.get("branch") == resolved:
+                    unchanged = await self._head_unmodified(client, repo, resolved, etag)
+                    if unchanged:
+                        return False
                 sha = await self._head_sha(client, repo, resolved)
-        except ConnectorError:
-            return True  # On any probe failure, be safe and let a full sync decide.
+        except ConnectorError as exc:
+            if exc.code in NO_SIGNAL_CODES:
+                # "We could not ask" is not "it changed" (SOLUSDEV-167).
+                raise
+            return True  # On any other probe failure, let a full sync decide.
         return sha != ctx.cursor.get("sha")
+
+    async def _head_unmodified(
+        self, client: httpx.AsyncClient, repo: str, branch: str, etag: str
+    ) -> bool:
+        """True when GitHub answers 304 — a free "nothing changed"."""
+        ref = quote(branch, safe="")
+        response = await client.get(
+            f"{GITHUB_API}/repos/{repo}/commits/{ref}", headers={"If-None-Match": etag}
+        )
+        return response.status_code == 304
 
     # -------------------------------------------------------- graph building
 
@@ -310,10 +355,16 @@ class GitHubConnector(OAuthConnector):
         return str(body["default_branch"])
 
     async def _head_sha(self, client: httpx.AsyncClient, repo: str, branch: str) -> str:
+        sha, _etag = await self._head_sha_and_etag(client, repo, branch)
+        return sha
+
+    async def _head_sha_and_etag(
+        self, client: httpx.AsyncClient, repo: str, branch: str
+    ) -> tuple[str, str | None]:
         ref = quote(branch, safe="")
         response = await client.get(f"{GITHUB_API}/repos/{repo}/commits/{ref}")
         body = self._repo_json(response)
-        return str(body["sha"])
+        return str(body["sha"]), response.headers.get("etag")
 
     async def _tree(
         self, client: httpx.AsyncClient, repo: str, sha: str

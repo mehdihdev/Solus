@@ -504,3 +504,60 @@ the W0-04 never-raises story.
 **Lifecycle.** `clear()` on disconnect: the companion never buffers across reconnects (§5), so a
 handle minted in one session must not resolve in the next. Waiting pulls are unblocked with an
 error chunk when the socket dies.
+
+---
+
+## Addendum — the `change` frame (SOLUSDEV-167)
+
+A design change on the customer's machine had no way to reach the cloud. Local sources were
+discovered only by the scheduled sweep asking the companion to re-export — and for KiCad and Altium
+the change signal IS the payload (a hash over the full export), so "has this changed?" cost exactly
+as much as "give me everything". That makes local work invisible until the next sweep and makes the
+sweep expensive, which is the shape of the problem SOLUSDEV-167 exists to fix.
+
+One new frame type closes it, per the §4 extension rule (**no `protocol_version` bump**; an old peer
+ignores it as unknown).
+
+| type | direction | data |
+| --- | --- | --- |
+| `change` | companion → cloud | `{}` |
+
+**The payload is empty, and that is the design.** The frame's meaning is entirely in its type: *some
+design artifact under this companion's workspace moved; come and ask.* It deliberately carries no
+digest (nothing would read it — the connector's own `detect_changes` is the authority) and no server
+name (the sensor watches one workspace shared by both forks, so attributing a change to `kicad` vs
+`altium` would be a guess). A field nothing reads is a field that goes stale silently.
+
+**It is a hint, never evidence.** The cloud does not trust it and does not act on it directly: it
+schedules the same per-source probe the sweep runs, which re-reads the change token with the
+source's own credentials. So a buggy or hostile companion can, at worst, cause one debounced probe
+of a source inside its own already-authenticated scope.
+
+**Scope is server-derived, as always.** The frame body carries no ids. The cloud resolves
+`(user, team, project)` from the `BridgeSession` bound at connect (§3's routing invariant), exactly
+as it does for `status` and `credential_submit`. Two consequences that are easy to get wrong:
+
+- The resulting sync must forward the **companion's** user as the acting user, taken from the
+  session — not the source's creator. The live acquirer looks a session up by the exact
+  `(user, team, project)` triple; fall back to `source.created_by` and a teammate's edit finds no
+  session, declines, and silently reads the stale committed export instead — producing a "changed"
+  notification containing no change.
+- Handling must be a **cheap enqueue**. The frame handler is awaited inline in the recv loop, so
+  doing the probe there would stall pongs and every in-flight `tool_result`.
+
+**Abuse control.** `change` gets its own token bucket, following the `credential_submit` precedent
+(a state-mutating unsolicited frame does not share the general bucket). It rides the 16 KiB control
+cap and the violation ceiling unchanged; an empty payload makes the cap academic, which is a further
+argument for keeping it empty.
+
+**Sensor, companion side.** `st_mtime_ns` over `SOLUS_MCP_WORKSPACE`, excluding the forks' own
+artifact directory (they write into it and would otherwise self-trigger), evaluated on the existing
+health loop and pushed through a coalesced sender modelled on `_status_loop`. Stdlib only — no new
+dependency, no fork edit, no ADR-031 re-vendor event. The ceiling is the loop's period, and the
+upgrade path (a real watcher) is named in a `ponytail:` comment at the call site.
+
+**Altium is explicitly out of this signal's reach.** Its fork never reads a design file — the export
+sources entirely from live IPC — and Solus pins `force_recompile: False` so upstream never flushes
+dirty documents. An unsaved Altium edit therefore has no disk footprint at all: mtime is not lossy
+there, it is engineered stale. Altium's approximation is a periodic cheap IPC stat, and the UI says
+"saved changes only" rather than claiming live.

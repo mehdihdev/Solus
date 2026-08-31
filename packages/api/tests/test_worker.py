@@ -2,6 +2,7 @@
 and the scheduled change-detection sweep (SOLUSDEV-103 'schedules detect_changes')."""
 
 import uuid
+from typing import Any
 
 import pytest
 from solus_api.connectors.contracts import (
@@ -133,3 +134,75 @@ async def test_change_detection_enqueues_only_changed_sources(
         enqueue=fake_enqueue,
     )
     assert enqueued == []
+
+
+# ------------------------------------- SOLUSDEV-167: the sweep must stay fair
+
+
+async def test_one_large_tenant_cannot_starve_every_other_team(engine: Any) -> None:
+    """The bug the first attempt at this shipped: `LIMIT` in SQL with the
+    per-team cap applied afterwards in Python. One tenant with more sources than
+    the limit filled the whole snapshot, only 3 of theirs were probed, and NO
+    other team's sources entered the sweep at all — and because the skipped ones
+    were never synced, their NULL `last_synced_at` kept them pinned at the head
+    of `NULLS FIRST` forever. Self-sustaining starvation, produced by the
+    fairness code.
+    """
+    import uuid as _uuid
+
+    from solus_api.connectors.worker import (
+        _MAX_SOURCES_PER_SWEEP,
+        _MAX_SOURCES_PER_TEAM_PER_SWEEP,
+        _fair_sweep_query,
+    )
+    from solus_api.models import Project, Source, SourceStatus, SourceType, Team
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as db:
+        big, small = Team(name="big"), Team(name="small")
+        db.add_all([big, small])
+        await db.flush()
+        projects = {}
+        for team in (big, small):
+            project = Project(team_id=team.id, name=f"p-{team.name}")
+            db.add(project)
+            await db.flush()
+            projects[team.name] = project
+        # The big tenant alone exceeds the global sweep limit.
+        for i in range(_MAX_SOURCES_PER_SWEEP + 20):
+            db.add(
+                Source(
+                    project_id=projects["big"].id,
+                    team_id=big.id,
+                    type=SourceType.KICAD,
+                    name=f"big-{i}",
+                    status=SourceStatus.CONNECTED,
+                    config={},
+                )
+            )
+        db.add(
+            Source(
+                project_id=projects["small"].id,
+                team_id=small.id,
+                type=SourceType.KICAD,
+                name="small-1",
+                status=SourceStatus.CONNECTED,
+                config={},
+            )
+        )
+        await db.commit()
+        small_team_id = small.id
+        big_team_id = big.id
+
+    async with maker() as db:
+        picked = list((await db.scalars(_fair_sweep_query())).all())
+
+    by_team: dict[_uuid.UUID, int] = {}
+    for source in picked:
+        by_team[source.team_id] = by_team.get(source.team_id, 0) + 1
+
+    assert by_team.get(small_team_id, 0) >= 1, "the small tenant was starved out of the sweep"
+    assert by_team.get(big_team_id, 0) <= _MAX_SOURCES_PER_TEAM_PER_SWEEP, (
+        "one tenant took more than its per-sweep share"
+    )

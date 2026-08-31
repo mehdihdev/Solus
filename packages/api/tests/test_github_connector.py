@@ -341,3 +341,59 @@ async def test_sync_rejects_dot_segment_repo() -> None:
         with pytest.raises(ConnectorError) as exc:
             await GitHubConnector().sync(ctx)
         assert exc.value.code == "invalid_repo", bad_repo
+
+
+# ------------------------------------------------ SOLUSDEV-167: free probes
+
+
+@respx.mock
+async def test_a_304_probe_costs_nothing_and_reports_unchanged() -> None:
+    """GitHub documents that a conditional request answered 304 does NOT count
+    against the rate limit. So the common case — nothing changed — becomes free,
+    which is strictly better than a webhook for this provider.
+    """
+    from solus_api.connectors.github import ETAG_KEY
+
+    route = respx.get(f"{API}/repos/{REPO_FULL_NAME}/commits/{DEFAULT_BRANCH}").mock(
+        return_value=httpx.Response(304)
+    )
+    ctx = SyncContext(
+        credentials=Credentials(token="t"),
+        config={"repo": REPO_FULL_NAME, "branch": DEFAULT_BRANCH},
+        cursor={"branch": DEFAULT_BRANCH, "sha": "abc", ETAG_KEY: '"etag-1"'},
+    )
+
+    assert await GitHubConnector().detect_changes(ctx) is False
+    assert route.calls[0].request.headers["if-none-match"] == '"etag-1"'
+
+
+@respx.mock
+async def test_a_probe_without_a_stored_etag_falls_back_to_a_normal_request() -> None:
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/commits/{DEFAULT_BRANCH}").mock(
+        return_value=httpx.Response(200, json={"sha": "abc"})
+    )
+    ctx = SyncContext(
+        credentials=Credentials(token="t"),
+        config={"repo": REPO_FULL_NAME, "branch": DEFAULT_BRANCH},
+        cursor={"branch": DEFAULT_BRANCH, "sha": "abc"},
+    )
+
+    assert await GitHubConnector().detect_changes(ctx) is False
+
+
+@respx.mock
+async def test_a_stale_etag_for_another_branch_is_not_reused() -> None:
+    """The validator is per-URL. Reusing one across branches would answer 304 for
+    a branch nobody asked about."""
+    from solus_api.connectors.github import ETAG_KEY
+
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/commits/{DEFAULT_BRANCH}").mock(
+        return_value=httpx.Response(200, json={"sha": "zzz"})
+    )
+    ctx = SyncContext(
+        credentials=Credentials(token="t"),
+        config={"repo": REPO_FULL_NAME, "branch": DEFAULT_BRANCH},
+        cursor={"branch": "some-other-branch", "sha": "abc", ETAG_KEY: '"etag-1"'},
+    )
+
+    assert await GitHubConnector().detect_changes(ctx) is True

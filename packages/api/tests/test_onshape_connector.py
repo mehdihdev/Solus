@@ -32,6 +32,7 @@ from fixtures.onshape_sample import (
 )
 from solus_api.connectors.conformance import assert_connector_contract
 from solus_api.connectors.contracts import (
+    NO_SIGNAL_CODES,
     AuthKind,
     ConnectorError,
     Credentials,
@@ -44,7 +45,6 @@ from solus_api.connectors.onshape import (
     ONSHAPE_OAUTH_BASE,
     OnshapeConnector,
 )
-from solus_api.connectors.step_parser import step_reader_available
 
 DID, WID, EID = "d1", "w1", "e1"
 #: CAD-01 config named ONE element by its three ids. Kept as the default fixture
@@ -55,9 +55,7 @@ CONFIG = {"document_id": DID, "workspace_id": WID, "element_id": EID}
 #: many documents.
 SCOPE = f"{DID}:{EID}"
 
-requires_occt = pytest.mark.skipif(
-    not step_reader_available(), reason="STEP reading needs the optional 'cad' extra"
-)
+from conftest import requires_occt  # noqa: E402  (single definition)
 
 
 def _connector() -> OnshapeConnector:
@@ -252,9 +250,115 @@ async def test_detect_changes_is_true_when_the_microversion_moves() -> None:
 
 
 @respx.mock
-async def test_detect_changes_fails_safe_on_a_transport_error() -> None:
+async def test_the_probe_costs_one_call_once_the_workspace_is_known() -> None:
+    """SOLUSDEV-167. The microversion URL needs a workspace id, and resolving it
+    was a second `GET /documents/{did}` on EVERY probe — for a value that never
+    changes. Against an ANNUAL 2,500-call allowance that doubling is the whole
+    difference between affordable and not, so it is asserted as a call count.
+    """
+    mv = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
+        return_value=httpx.Response(200, json=CURRENT_MICROVERSION)
+    )
+    workspace = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/{DID}").mock(
+        return_value=httpx.Response(200, json={"defaultWorkspace": {"id": WID}})
+    )
+    ctx = SyncContext(
+        credentials=Credentials(token="at"),
+        config={"documents": [DID]},
+        cursor={"microversions": {DID: "abc123def456"}, "workspaces": {DID: WID}},
+    )
+
+    assert await _connector().detect_changes(ctx) is False
+
+    assert mv.call_count == 1
+    assert workspace.call_count == 0, "re-resolved a workspace the cursor already knew"
+
+
+@respx.mock
+async def test_the_probe_re_resolves_a_stale_workspace_before_declaring_gone() -> None:
+    """A remembered workspace that 404s must not tombstone a live document: the
+    probe re-resolves once and retries."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/stale/currentmicroversion").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/{DID}").mock(
+        return_value=httpx.Response(200, json={"defaultWorkspace": {"id": WID}})
+    )
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
+        return_value=httpx.Response(200, json=CURRENT_MICROVERSION_NEXT)
+    )
+    ctx = SyncContext(
+        credentials=Credentials(token="at"),
+        config={"documents": [DID]},
+        cursor={"microversions": {DID: "old"}, "workspaces": {DID: "stale"}},
+    )
+
+    assert await _connector().detect_changes(ctx) is True
+
+
+@respx.mock
+async def test_a_402_is_quota_exhausted_not_a_generic_api_error() -> None:
+    """SOLUSDEV-167. Onshape answers 402 when the account's ANNUAL allowance is
+    spent. It had no branch, so it read as `api_error` — which `detect_changes`
+    swallowed into "changed", enqueuing a full sync. Being out of quota must
+    never buy more requests, so it is its own terminal, no-signal code."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/users/sessioninfo").mock(return_value=httpx.Response(402))
+
+    with pytest.raises(ConnectorError) as caught:
+        await _connector().validate_credentials(Credentials(token="at"))
+
+    assert caught.value.code == "quota_exhausted"
+    assert caught.value.code in NO_SIGNAL_CODES
+
+
+@requires_occt
+@respx.mock
+async def test_the_translation_poll_backs_off_instead_of_spending_a_call_a_second() -> None:
+    """The dominant per-sync cost. A flat 1 s interval over 30 attempts meant up
+    to 30 QUOTA-COUNTED GETs per assembly; backing off makes a slow translation
+    cost a handful. Asserted as a CALL COUNT, since that is what the quota
+    charges for."""
+    _mock_export(poll_payloads=[TRANSLATION_ACTIVE] * 6 + [TRANSLATION_DONE])
+    connector = OnshapeConnector(client_id="cid", client_secret="csecret", poll_interval=0.0)
+
+    await connector.sync(_ctx())
+
+    polls = respx.calls.call_count and sum(
+        1 for call in respx.calls if "/api/v8/translations/" in call.request.url.path
+    )
+    assert polls == 7, f"expected the scripted 7 polls, saw {polls}"
+    # The knob that bounds the worst case, asserted so a future edit cannot
+    # quietly restore a 30-deep flat poll.
+    assert connector._poll_attempts <= 10
+
+
+@respx.mock
+async def test_detect_changes_reraises_a_transport_error_as_no_signal() -> None:
+    """SOLUSDEV-167: "we could not ask" is not "it changed".
+
+    This used to return True, so an unreachable API enqueued a FULL export. With
+    a rate limit that is an amplifier — being throttled bought more upstream
+    traffic. The probe now re-raises the no-signal codes so the sweep can skip
+    and ask again; a user's own explicit sync is unaffected, because the gate in
+    `run_sync` treats any probe failure as "go sync".
+    """
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
         side_effect=httpx.ConnectError("boom")
+    )
+
+    with pytest.raises(ConnectorError) as caught:
+        await _connector().detect_changes(_ctx({"microversion": "x"}))
+    assert caught.value.code == "api_unreachable"
+    assert caught.value.code in NO_SIGNAL_CODES
+
+
+@respx.mock
+async def test_detect_changes_still_fails_safe_on_an_ambiguous_error() -> None:
+    """The fail-safe survives for errors that are NOT no-signal: a 500 could
+    genuinely mean anything, so it still schedules a sync rather than risk
+    missing a change."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
+        return_value=httpx.Response(500)
     )
 
     assert await _connector().detect_changes(_ctx({"microversion": "x"})) is True
@@ -268,7 +372,7 @@ async def test_an_empty_selection_is_a_connected_idle_source_not_an_error() -> N
 
     assert result.entities == []
     assert result.relations == []
-    assert result.cursor == {"microversions": {}}
+    assert result.cursor == {"microversions": {}, "workspaces": {}}
 
 
 @pytest.mark.parametrize("bad", [{"documents": "d1"}, {"documents": [1]}, {"documents": ["../x"]}])

@@ -41,6 +41,7 @@ from urllib.parse import urlencode
 import httpx
 
 from solus_api.connectors.contracts import (
+    NO_SIGNAL_CODES,
     AccountInfo,
     ConnectorError,
     Credentials,
@@ -56,6 +57,7 @@ from solus_api.connectors.mechanical import (
     CadNode,
     build_mechanical_graph,
 )
+from solus_api.connectors.quota import CallMeter, QuotaBlockedError
 from solus_api.connectors.step_parser import parse_step
 
 logger = logging.getLogger("solus.connectors.onshape")
@@ -79,12 +81,20 @@ _REQUEST_TIMEOUT = 30.0
 #: against a third-party API) and the server's Retry-After is honored but
 #: capped, because the header is untrusted upstream input and must never park
 #: a sync worker.
-_RATE_LIMIT_RETRIES = 3
+#: SOLUSDEV-167: was 3 (four attempts). Two ladders hang off this — `request`
+#: and `_download_bounded` — so one export's worst case was 16 attempts against
+#: a provider already telling us to stop. Against an ANNUAL quota, retrying into
+#: a 429 storm buys nothing a later sync would not get for free.
+_RATE_LIMIT_RETRIES = 1
 _RATE_LIMIT_MAX_WAIT_SECONDS = 30.0
 _RATE_LIMIT_BACKOFF_SECONDS = 1.0
 #: httpx's timeout is per-read, so a slow trickle never trips it. The download
 #: carries its own total deadline on top.
 _DOWNLOAD_DEADLINE_SECONDS = 300.0
+#: The translation poll's own deadline. `_DOWNLOAD_DEADLINE_SECONDS` covers the
+#: download only, so before SOLUSDEV-167 the poll loop had none at all.
+_POLL_DEADLINE_SECONDS = 45.0
+_POLL_MAX_INTERVAL_SECONDS = 8.0
 _EXPORT_FORMAT = "STEP"
 _TOO_LARGE = f"export exceeds the {MAX_CAD_EXPORT_BYTES // (1024 * 1024)} MiB parse limit"
 
@@ -99,6 +109,10 @@ _METADATA_LIMIT = 128
 #: delete keys — a list value replaces wholesale, so deselecting actually shrinks
 #: the selection.
 SELECTION_KEY = "documents"
+
+#: Cursor key holding the resolved default workspace per document (SOLUSDEV-167).
+#: Lives beside the microversions rather than in a cache — see `_probe`.
+WORKSPACES_KEY = "workspaces"
 
 #: Cursor value for a tracked document Onshape no longer has. Recorded so the
 #: selection and the cursor keep the same key set — otherwise `detect_changes`
@@ -120,6 +134,39 @@ _MAX_DOCUMENT_PAGES = 10
 _PAGE_LIMIT = 20
 #: Onshape's own ceiling for that parameter; the request must never exceed it.
 ONSHAPE_MAX_PAGE_LIMIT = 20
+
+
+def _raise_for_status(response: httpx.Response, what: str) -> None:
+    """Map an Onshape status onto the connector's error vocabulary.
+
+    Split out of `request` so the retry/metering mechanics and the status
+    taxonomy can each be read on their own.
+    """
+    if response.status_code < 400:
+        return
+    if response.status_code == 429:
+        raise ConnectorError(
+            "rate_limited", f"Onshape's rate limit outlasted every retry of the {what}"
+        )
+    if response.status_code in (401, 403):
+        # The exact code `runtime._sync_with_refresh` keys off to refresh
+        # the 60-minute token and retry once.
+        raise ConnectorError("invalid_credentials", "Onshape rejected the credentials")
+    if response.status_code == 402:
+        # SOLUSDEV-167. Onshape answers 402 when the account's ANNUAL call
+        # allowance is spent. It had no branch here, so it read as a generic
+        # api_error — which `detect_changes` then swallowed into "changed",
+        # enqueuing a full sync. Being out of quota must never buy MORE
+        # requests, so it gets its own terminal code.
+        raise ConnectorError("quota_exhausted", "the Onshape account's API allowance is exhausted")
+    if response.status_code == 404:
+        # Distinct from a generic api_error: a tracked document that is GONE is
+        # dropped from the sync, and only a 404 may be read that way — every
+        # other failure aborts rather than tombstoning live entities.
+        raise ConnectorError("not_found", f"Onshape has no {what}")
+    # Upstream text is untrusted and may echo request material — never surface
+    # it; the status and our own label are enough to debug.
+    raise ConnectorError("api_error", f"Onshape returned {response.status_code} for {what}")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -237,11 +284,12 @@ class OnshapeConnector(OAuthConnector):
         *,
         client_id: str,
         client_secret: str,
-        poll_attempts: int = 30,
+        poll_attempts: int = 10,
         poll_interval: float = 1.0,
         max_documents: int = _MAX_DOCUMENTS,
         max_elements: int = _MAX_ELEMENTS,
         max_document_pages: int = _MAX_DOCUMENT_PAGES,
+        meter: CallMeter | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -250,6 +298,10 @@ class OnshapeConnector(OAuthConnector):
         self._max_documents = max_documents
         self._max_elements = max_elements
         self._max_document_pages = max_document_pages
+        # SOLUSDEV-167. Defaulted to None so every existing construction —
+        # tests, the picker, the plain registry factory — keeps working
+        # unmetered; the scoped factory supplies a real one.
+        self._meter = meter
 
     # ----------------------------------------------------------- oauth
 
@@ -341,8 +393,13 @@ class OnshapeConnector(OAuthConnector):
         A change to the SELECTION itself counts as changed, so newly picked
         documents are ingested and deselected ones are reconciled away.
 
-        Fails SAFE: an unreachable API counts as changed, so a transient outage
-        schedules a sync rather than silently skipping one.
+        Fails SAFE on a transient outage — an unreachable API counts as changed,
+        so a blip schedules a sync rather than silently skipping one.
+
+        But "we could not ask" is NOT "it changed" (SOLUSDEV-167). A rate-limit
+        or quota error swallowed into `True` enqueues a FULL sync — turning being
+        throttled into more traffic, which is precisely the loop that empties an
+        annual allowance. Those codes are re-raised so the caller can back off.
         """
         try:
             document_ids = self._selected_document_ids(ctx)
@@ -354,7 +411,9 @@ class OnshapeConnector(OAuthConnector):
                     current = await self._probe(client, ctx, document_id)
                     if current != stored.get(document_id):
                         return True
-        except ConnectorError:
+        except ConnectorError as exc:
+            if exc.code in NO_SIGNAL_CODES:
+                raise
             return True
         return False
 
@@ -373,6 +432,7 @@ class OnshapeConnector(OAuthConnector):
         entities: list[Any] = []
         relations: list[Any] = []
         microversions: dict[str, str] = {}
+        resolved_workspaces: dict[str, str] = {}
 
         async with self.http(ctx.credentials) as client:
             targets, workspaces = await self._resolve_targets(client, ctx, recorder)
@@ -388,6 +448,8 @@ class OnshapeConnector(OAuthConnector):
                     if workspace_id is None
                     else await self._current_microversion(client, document_id, workspace_id)
                 )
+                if workspace_id is not None:
+                    resolved_workspaces[document_id] = workspace_id
             for target in targets:
                 target_entities, target_relations = await self._ingest(client, target, recorder)
                 entities.extend(target_entities)
@@ -396,7 +458,10 @@ class OnshapeConnector(OAuthConnector):
         return SyncResult(
             entities=entities,
             relations=relations,
-            cursor={"microversions": microversions},
+            # `workspaces` rides beside the change tokens so the next probe costs
+            # ONE call instead of two (SOLUSDEV-167). `detect_changes` compares
+            # only the `microversions` key set, so the extra key is inert to it.
+            cursor={"microversions": microversions, WORKSPACES_KEY: resolved_workspaces},
             errors=recorder.finish(),
         )
 
@@ -523,19 +588,49 @@ class OnshapeConnector(OAuthConnector):
     async def _probe(self, client: httpx.AsyncClient, ctx: SyncContext, document_id: str) -> str:
         """This document's current change token, or `_GONE` when Onshape no
         longer has it — matching what `sync` records, so a deleted document that
-        is still selected settles instead of scheduling a sync forever."""
+        is still selected settles instead of scheduling a sync forever.
+
+        SOLUSDEV-167: costs ONE call, not two. The microversion URL needs a
+        workspace id, and resolving it was a second `GET /documents/{did}` on
+        every single probe — for a value that essentially never changes. It now
+        rides the cursor next to the microversion it is needed for. Not a cache:
+        a cache would need a TTL, and there is no version to key it on (the
+        workspace is what you fetch IN ORDER to learn the version), so a TTL'd
+        entry would be exactly the unversioned staleness this design avoids. In
+        the cursor it is durable, cross-process, and free. A stale entry is
+        self-healing — the microversion read 404s and we re-resolve once.
+        """
         try:
-            legacy = self._legacy_target(ctx)
-            workspace_id = (
-                legacy.workspace_id
-                if legacy is not None
-                else await self.default_workspace(client, document_id)
-            )
-            return await self._current_microversion(client, document_id, workspace_id)
+            workspace_id = self._known_workspace(ctx, document_id)
+            if workspace_id is None:
+                workspace_id = await self.default_workspace(client, document_id)
+            try:
+                return await self._current_microversion(client, document_id, workspace_id)
+            except ConnectorError as exc:
+                if exc.code != "not_found":
+                    raise
+                # Either the document is gone or the remembered workspace is.
+                # Re-resolve once before concluding GONE, so a moved default
+                # workspace does not tombstone a live document's subtree.
+                fresh = await self.default_workspace(client, document_id)
+                if fresh == workspace_id:
+                    raise
+                return await self._current_microversion(client, document_id, fresh)
         except ConnectorError as exc:
             if exc.code != "not_found":
                 raise
             return _GONE
+
+    def _known_workspace(self, ctx: SyncContext, document_id: str) -> str | None:
+        """The workspace id a previous sync or probe already resolved."""
+        legacy = self._legacy_target(ctx)
+        if legacy is not None:
+            return legacy.workspace_id
+        stored = ctx.cursor.get(WORKSPACES_KEY)
+        if not isinstance(stored, dict):
+            return None
+        value = stored.get(document_id)
+        return value if isinstance(value, str) and _ID_RE.fullmatch(value) else None
 
     async def default_workspace(self, client: httpx.AsyncClient, document_id: str) -> str:
         body = await self.get_json(client, f"/api/v6/documents/{document_id}", what="document")
@@ -644,8 +739,14 @@ class OnshapeConnector(OAuthConnector):
         """
         try:
             async with asyncio.timeout(_DOWNLOAD_DEADLINE_SECONDS):
+                if self._meter is not None:
+                    await self._admit()
                 for attempt in range(_RATE_LIMIT_RETRIES + 1):
                     async with client.stream("GET", path) as response:
+                        if self._meter is not None:
+                            # This path does NOT go through `request()`, which is
+                            # exactly why the audit found it uncounted.
+                            await self._meter.record(response.status_code)
                         if response.status_code != 429:
                             return await self._read_export(response)
                         wait = _retry_wait(response, attempt)
@@ -683,7 +784,27 @@ class OnshapeConnector(OAuthConnector):
         return b"".join(chunks).decode("utf-8", "replace")
 
     async def _poll_translation(self, client: httpx.AsyncClient, request_id: str) -> str:
-        """Bounded poll — never an unbounded loop against a third-party API (§7)."""
+        """Bounded poll — never an unbounded loop against a third-party API (§7).
+
+        SOLUSDEV-167: this was the single largest per-sync cost — a flat 1 s
+        interval for up to 30 attempts, i.e. up to 30 QUOTA-COUNTED GETs per
+        assembly. Backing off doubles the wait each time so a slow translation
+        costs ~4 calls instead of ~30, and the loop now carries its own deadline:
+        without one, backoff would make a stuck translation take LONGER to fail
+        rather than bounding it, and with `sync_inline` that time is held inside
+        an HTTP request.
+        """
+        try:
+            async with asyncio.timeout(_POLL_DEADLINE_SECONDS):
+                return await self._poll_until_done(client, request_id)
+        except TimeoutError as exc:
+            raise ConnectorError(
+                "export_timeout",
+                f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
+            ) from exc
+
+    async def _poll_until_done(self, client: httpx.AsyncClient, request_id: str) -> str:
+        delay = self._poll_interval
         for attempt in range(self._poll_attempts):
             body = await self.get_json(
                 client, f"/api/v8/translations/{request_id}", what="translation status"
@@ -703,7 +824,8 @@ class OnshapeConnector(OAuthConnector):
                     f"Onshape could not translate the element to {_EXPORT_FORMAT}",
                 )
             if attempt + 1 < self._poll_attempts:
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _POLL_MAX_INTERVAL_SECONDS)
         raise ConnectorError(
             "export_timeout",
             f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
@@ -787,6 +909,17 @@ class OnshapeConnector(OAuthConnector):
             },
         )
 
+    async def _admit(self) -> None:
+        """Ask the meter before spending. Its error is translated into a
+        `ConnectorError` so no caller has to learn a second exception type — and
+        both codes are in NO_SIGNAL_CODES, so a refusal reads as "could not ask"
+        rather than "it changed" and never buys a full re-sync."""
+        assert self._meter is not None
+        try:
+            await self._meter.admit()
+        except QuotaBlockedError as exc:
+            raise ConnectorError(exc.code, exc.message) from exc
+
     async def request(
         self,
         client: httpx.AsyncClient,
@@ -799,6 +932,10 @@ class OnshapeConnector(OAuthConnector):
         json_body: dict[str, Any] | list[Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> httpx.Response:
+        if self._meter is not None:
+            # Admission is UNCONDITIONAL — before the retry ladder, so a refused
+            # call is refused once rather than four times.
+            await self._admit()
         for attempt in range(_RATE_LIMIT_RETRIES + 1):
             try:
                 response = await client.request(method, path, json=json_body, params=params)
@@ -806,27 +943,16 @@ class OnshapeConnector(OAuthConnector):
                 raise ConnectorError(
                     "api_unreachable", f"could not reach Onshape for {what}"
                 ) from exc
+            if self._meter is not None:
+                # Recorded per ATTEMPT, because the provider counts attempts —
+                # and only 2xx/3xx move the ledger, so the 429 retries below are
+                # free in quota terms even though they cost wall-clock.
+                await self._meter.record(response.status_code)
             if response.status_code != 429:
                 break
             if attempt < _RATE_LIMIT_RETRIES:
                 await asyncio.sleep(_retry_wait(response, attempt))
-        if response.status_code == 429:
-            raise ConnectorError(
-                "rate_limited", f"Onshape's rate limit outlasted every retry of the {what}"
-            )
-        if response.status_code in (401, 403):
-            # The exact code `runtime._sync_with_refresh` keys off to refresh
-            # the 60-minute token and retry once.
-            raise ConnectorError("invalid_credentials", "Onshape rejected the credentials")
-        if response.status_code == 404:
-            # Distinct from a generic api_error: a tracked document that is GONE
-            # is dropped from the sync, and only a 404 may be read that way —
-            # every other failure aborts rather than tombstoning live entities.
-            raise ConnectorError("not_found", f"Onshape has no {what}")
-        if response.status_code >= 400:
-            # Upstream text is untrusted and may echo request material — never
-            # surface it; the status and our own label are enough to debug.
-            raise ConnectorError("api_error", f"Onshape returned {response.status_code} for {what}")
+        _raise_for_status(response, what)
         return response
 
     async def get_json(

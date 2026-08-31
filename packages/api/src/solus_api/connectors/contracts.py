@@ -113,6 +113,17 @@ class SyncResult(FrozenModel):
     errors: list[SyncError] = Field(default_factory=list)
 
 
+#: Error codes that mean "the probe could not run", NOT "the source changed"
+#: (SOLUSDEV-167). Swallowing these into a `True` change verdict is the
+#: amplifier that turns a rate limit into a full re-export, and a full
+#: re-export into a deeper rate limit. Callers treat them as "no signal":
+#: log, skip, ask again next time. Connector-wide vocabulary rather than
+#: per-connector, so the sweep can classify without knowing the provider.
+NO_SIGNAL_CODES = frozenset(
+    {"rate_limited", "quota_exhausted", "api_unreachable", "invalid_credentials"}
+)
+
+
 class ConnectorError(Exception):
     """Raised by a connector when a sync cannot proceed (auth, network, config).
 

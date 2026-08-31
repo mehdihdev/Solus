@@ -10,8 +10,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
 
+from solus_api.connectors import quota
 from solus_api.connectors.acquisition import ExportAcquirer
 from solus_api.connectors.contracts import Connector
 
@@ -33,6 +35,16 @@ class ConnectorContext:
     project_id: uuid.UUID
     team_id: uuid.UUID
     acting_user_id: uuid.UUID | None = None
+    # SOLUSDEV-167 quota accounting. All defaulted, so every existing
+    # construction site is unchanged.
+    #: The provider ACCOUNT the calls are charged to. Falls back to the source id
+    #: when absent — `Source.account_external_id` is nullable and Onshape's
+    #: read-only scope can yield "", and every such source sharing ONE ledger key
+    #: would let one team latch another team's 402.
+    account_ref: str | None = None
+    #: Who is spending. Only "user" survives the degraded band; scheduled sweeps
+    #: and agent turns can wait.
+    purpose: str = "user"
 
 
 ScopedConnectorFactory = Callable[[ConnectorContext], Connector]
@@ -115,10 +127,35 @@ class ConnectorRegistry:
 AcquirerFactory = Callable[[ConnectorContext, str], ExportAcquirer]
 
 
+def _onshape_meter(
+    settings: Settings, redis: object | None, ctx: ConnectorContext
+) -> quota.CallMeter:
+    """One meter per scoped construction, bound to the account being charged.
+
+    The year comes from the wall clock and the key embeds it, so the ledger rolls
+    over on 1 January. Onshape's licence year is the subscription anniversary,
+    which we do not know — documented in ADR-019's amendment rather than guessed.
+    """
+    return quota.CallMeter(
+        redis,
+        provider="onshape",
+        # Never empty: a blank account id would put every such source on ONE
+        # ledger key, letting one team exhaust and latch another team's quota.
+        account_ref=ctx.account_ref or f"source-scope:{ctx.project_id}",
+        year=datetime.now(UTC).year,
+        allowance=settings.onshape_annual_call_allowance,
+        degrade_ratio=settings.integration_degrade_ratio,
+        # Anything unrecognised is treated as deferrable: an unknown caller
+        # must not inherit a human's privilege to spend past the threshold.
+        purpose=cast("quota.Purpose", ctx.purpose if ctx.purpose == "user" else "scheduled"),
+    )
+
+
 def build_registry(
     settings: Settings,
     *,
     acquirer_factory: AcquirerFactory | None = None,
+    redis: object | None = None,
 ) -> ConnectorRegistry:
     """The default registry. Code hosts shipped (SOLUSDEV-103/104); the rest of
     the roster (KiCad, Onshape, ROS) registers here as each connector lands."""
@@ -155,6 +192,19 @@ def build_registry(
         lambda: OnshapeConnector(
             client_id=settings.onshape_client_id or "",
             client_secret=settings.onshape_client_secret or "",
+        ),
+    )
+    # SOLUSDEV-167: a SCOPED Onshape factory, so outbound calls are counted
+    # against the provider account that owns the allowance. Before this, only
+    # kicad and altium had scoped factories, so `create_scoped("onshape", ctx)`
+    # silently fell back to `create()` and the context was discarded — which is
+    # why nothing could attribute a call to a tenant.
+    registry.register_scoped(
+        "onshape",
+        lambda ctx: OnshapeConnector(
+            client_id=settings.onshape_client_id or "",
+            client_secret=settings.onshape_client_secret or "",
+            meter=_onshape_meter(settings, redis, ctx),
         ),
     )
     if acquirer_factory is not None:

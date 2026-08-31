@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.connectors.contracts import (
+    NO_SIGNAL_CODES,
     AuthKind,
     Connector,
     ConnectorError,
@@ -31,6 +32,7 @@ from solus_api.connectors.contracts import (
     SyncResult,
 )
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
+from solus_api.graph.live import graph_changed_frame
 from solus_api.models import (
     GraphEdge,
     GraphEntity,
@@ -80,13 +82,37 @@ def connector_error_payload(exc: Exception) -> dict[str, str]:
 
 
 class _Counts:
-    __slots__ = ("entities_created", "entities_updated", "relations_created", "relations_deleted")
+    __slots__ = (
+        "entities_created",
+        "entities_deleted",
+        "entities_updated",
+        "relations_created",
+        "relations_deleted",
+    )
 
     def __init__(self) -> None:
         self.entities_created = 0
         self.entities_updated = 0
+        self.entities_deleted = 0
         self.relations_created = 0
         self.relations_deleted = 0
+
+    @property
+    def changed(self) -> bool:
+        """Did this sync actually move the graph? (SOLUSDEV-167)
+
+        `entities_deleted` exists for this verdict. Without it a DELETE-ONLY
+        sync leaves every counter at zero and reads as "nothing happened" — so
+        the live-propagation publish would be suppressed and a teammate would
+        never learn entities were removed.
+        """
+        return bool(
+            self.entities_created
+            or self.entities_updated
+            or self.entities_deleted
+            or self.relations_created
+            or self.relations_deleted
+        )
 
 
 async def apply_sync_result(
@@ -100,6 +126,20 @@ async def apply_sync_result(
     """
     counts = _Counts()
     errors: list[dict[str, str]] = [dict(e) for e in _as_error_dicts(result)]
+
+    # Serialize per SOURCE (SOLUSDEV-167). Below is a read-modify-write: SELECT
+    # the live rows, then branch insert/update in Python. Two concurrent syncs of
+    # one source both SELECT before either commits, both INSERT, and the loser
+    # raises UniqueViolationError on uq_graph_entity_source_ref — the partial
+    # unique index turns the race into an error, not into correctness.
+    # Transaction-scoped, so it releases on commit; different sources and tenants
+    # never contend. Same idiom as fingerprint ingestion and the linker, which
+    # take the equivalent lock keyed on project.
+    # ponytail: a per-row ON CONFLICT upsert is the upgrade if this ever
+    # contends; serializing one source's syncs costs nothing today.
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(f"sync:{source.id}", 0)))
+    )
 
     existing = (
         await session.scalars(
@@ -160,6 +200,11 @@ async def apply_sync_result(
     stale = [row for key, row in by_key.items() if key not in seen]
     for row in stale:
         row.deleted_at = utcnow()
+        # A tombstone IS a change (SOLUSDEV-167). Without the bump a
+        # version-watching consumer sees the row's last live version forever and
+        # never learns it was removed.
+        row.version += 1
+        counts.entities_deleted += 1
     if stale:
         await session.flush()
     return counts, errors
@@ -341,6 +386,8 @@ async def run_sync(
     trigger: SyncTrigger = SyncTrigger.MANUAL,
     job_id: uuid.UUID | None = None,
     acting_user_id: uuid.UUID | None = None,
+    force: bool = False,
+    hub: Any | None = None,
 ) -> uuid.UUID | None:
     """Run one sync end-to-end. Records a Sync row and returns its id; failures
     are recorded on the Sync/Source/Job (never raised) so the caller's 202 stands
@@ -377,6 +424,11 @@ async def run_sync(
             raise ConnectorError("no_credentials", "Source has no stored credentials")
         else:
             credentials = await _resolve_credentials(secret_store, secret_ref)
+        if not force and await _unchanged(
+            connector=connector, credentials=credentials, config=config, cursor=cursor
+        ):
+            await _commit_skipped(sessionmaker, source_id, sync_id, job_id)
+            return sync_id
         result = await _sync_with_refresh(
             connector=connector,
             credentials=credentials,
@@ -390,11 +442,96 @@ async def run_sync(
         return sync_id
 
     try:
-        await _commit_success(sessionmaker, source_id, sync_id, job_id, result)
+        await _commit_success(sessionmaker, source_id, sync_id, job_id, result, hub)
     except Exception as exc:  # graph-write failure is still a sync failure
         logger.exception("sync apply failed for source=%s", source_id)
         await _record_failure(sessionmaker, source_id, sync_id, job_id, exc)
     return sync_id
+
+
+async def _unchanged(
+    *,
+    connector: Connector,
+    credentials: Credentials,
+    config: dict[str, object],
+    cursor: dict[str, object],
+) -> bool:
+    """The quota gate: ask the CHEAP question before paying the expensive one.
+
+    Every connector already ships a `detect_changes(ctx) -> bool` probe and a
+    JSON cursor, and until now nothing on the sync path consulted either — so a
+    triggered sync re-exported an unchanged document in full. For Onshape that
+    is a translation job plus a poll loop plus a download per assembly, against
+    a quota of 2,500 calls per YEAR (SOLUSDEV-167).
+
+    One guard here rather than one in each connector: all five providers funnel
+    through `run_sync`, and so does every producer that will ever trigger it.
+
+    Fails SAFE in the direction that costs money but never loses data — any
+    error means "go sync". A probe that cannot answer must not silently
+    tombstone a source's graph by being believed.
+    """
+    if not cursor:
+        return False  # never synced: there is nothing to compare against
+    if connector.auth_kind is AuthKind.NONE:
+        # The committed-export (EDA) family has NO cheap signal: its probe is
+        # `content_sha` over the FULL export, so `detect_changes` performs the
+        # same bridge round-trip / kicad-cli run that `sync()` is about to make.
+        # Gating here would HALVE nothing and DOUBLE the changed path. Their
+        # saving comes from the sensor upstream (the companion's `change` frame)
+        # deciding whether to trigger a sync at all.
+        # ponytail: revisit if the export tool ever grows a cheap fingerprint
+        # argument — then this branch becomes the same one-call probe as the rest.
+        return False
+    ctx = SyncContext(credentials=credentials, config=config, cursor=cursor)
+    try:
+        return not await connector.detect_changes(ctx)
+    except ConnectorError as exc:
+        if exc.code in NO_SIGNAL_CODES:
+            # "We could not ask" is not "it changed" — and it matters MORE here
+            # than on the sweep, because falling through means paying for a full
+            # export while already rate-limited or out of quota. The sweep
+            # honoured this from the start; `run_sync` caught the re-raise and
+            # spent anyway, so the amplifier survived on exactly the two NEW
+            # producer paths (webhook, bridge frame). Re-raised: the caller
+            # records a failed sync rather than buying a translation job, a poll
+            # loop and a download it cannot afford.
+            raise
+        logger.warning("freshness probe failed (%s); syncing anyway", exc.code)
+        return False
+    except Exception:  # noqa: BLE001 — a broken probe must never stall a source
+        logger.exception("freshness probe failed; syncing anyway")
+        return False
+
+
+async def _commit_skipped(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    source_id: uuid.UUID,
+    sync_id: uuid.UUID,
+    job_id: uuid.UUID | None,
+) -> None:
+    """Close out a sync that was not needed.
+
+    This CANNOT be a bare `return` from `run_sync`: `_begin_sync` has already
+    committed `Sync.status = RUNNING`, `Source.status = SYNCING` and the Job,
+    so returning early would leave the source permanently SYNCING — which 409s
+    every manual sync from then on and drops the source out of the change
+    sweep, since that selects only CONNECTED. The cursor is deliberately left
+    untouched: nothing was read, so there is nothing new to remember.
+    """
+    async with sessionmaker() as session:
+        source = await session.get(Source, source_id)
+        sync = await session.get(Sync, sync_id)
+        if source is None or sync is None:
+            raise ValueError("source/sync vanished mid-run")
+        source.status = SourceStatus.CONNECTED
+        source.last_synced_at = utcnow()
+        source.last_error = None
+        sync.status = JobStatus.SUCCEEDED
+        sync.finished_at = utcnow()
+        await _mark_job(session, job_id, JobStatus.SUCCEEDED, progress=100)
+        await session.commit()
+    logger.info("sync skipped (unchanged) source=%s sync=%s", source_id, sync_id)
 
 
 async def _begin_sync(
@@ -430,6 +567,7 @@ async def _commit_success(
     sync_id: uuid.UUID,
     job_id: uuid.UUID | None,
     result: SyncResult,
+    hub: Any | None = None,
 ) -> None:
     async with sessionmaker() as session:
         source = await session.get(Source, source_id)
@@ -450,6 +588,7 @@ async def _commit_success(
         sync.finished_at = utcnow()
         await _mark_job(session, job_id, JobStatus.SUCCEEDED, progress=100)
         await session.commit()
+        project_id = source.project_id
         logger.info(
             "sync ok source=%s sync=%s created=%d updated=%d rels=+%d/-%d errors=%d",
             source_id,
@@ -460,6 +599,30 @@ async def _commit_success(
             counts.relations_deleted,
             len(errors),
         )
+    # AFTER the commit, and in its own guard (SOLUSDEV-167). Publishing inside
+    # the transaction would let a subscriber refetch pre-commit state, and
+    # publishing unguarded would be worse: `_commit_success` is called inside
+    # `run_sync`'s try/except, so a dead Redis or a closed socket would flip an
+    # ALREADY-COMMITTED successful sync to FAILED. Fan-out is never worth a lie
+    # about whether the sync worked.
+    #
+    # Gated on `counts.changed` so a no-op sync does not wake every open session
+    # — which is also why `_Counts` had to learn about deletions: a delete-only
+    # sync leaves every other counter at zero.
+    if hub is not None and counts.changed:
+        try:
+            await hub.publish(
+                project_id,
+                graph_changed_frame(
+                    project_id=project_id,
+                    source_id=source_id,
+                    sync_id=sync_id,
+                    counts=counts,
+                    at=utcnow().isoformat(),
+                ),
+            )
+        except Exception:  # noqa: BLE001 — see above
+            logger.exception("graph fan-out failed source=%s (sync stands)", source_id)
 
 
 async def _record_failure(

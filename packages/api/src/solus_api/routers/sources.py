@@ -74,17 +74,81 @@ async def _scoped_source(session: SessionDep, ctx: ProjectCtx, source_id: uuid.U
     return source
 
 
-def _resolve_connector(registry: RegistryDep, provider: str) -> Any:
-    from solus_api.connectors.registry import UnknownConnectorError
+def _resolve_connector(
+    registry: RegistryDep,
+    provider: str,
+    *,
+    source: Source | None = None,
+    ctx: Any = None,
+    purpose: str = "user",
+) -> Any:
+    """A connector for a route, METERED whenever we know whose quota it spends.
+
+    SOLUSDEV-167. This used to call `registry.create()` unconditionally, which
+    returns the plain factory — no `CallMeter`. So the document picker, which
+    walks up to 10 quota-counted pages per invocation, spent an ANNUAL allowance
+    entirely unmetered and unlatched: a 402 could not even stop it. An opt-in
+    meter that most construction sites skip is not a budget, so the default here
+    is now scoped-and-metered, and the unmetered path has to be asked for.
+
+    `create_scoped` falls back to the plain factory for providers with no scoped
+    registration, so this is safe for every provider.
+    """
+    from solus_api.connectors.registry import ConnectorContext, UnknownConnectorError
 
     try:
+        if source is not None and ctx is not None:
+            return registry.create_scoped(
+                provider,
+                ConnectorContext(
+                    project_id=ctx.project.id,
+                    team_id=ctx.team.id,
+                    acting_user_id=ctx.user.id,
+                    account_ref=source.account_external_id,
+                    purpose=purpose,
+                ),
+            )
+        # Pre-source paths only (OAuth exchange, credential validation): there is
+        # no Source row yet, so there is no account to charge.
         return registry.create(provider)
     except UnknownConnectorError as exc:
         raise APIError(400, "connector_unavailable", f"No connector for '{provider}'") from exc
 
 
+async def _quota_states(request: Request, sources: list[Source]) -> dict[uuid.UUID, Any]:
+    """Provider-quota position per source, for the list view (SOLUSDEV-167).
+
+    Best-effort by construction: a source with no metered provider, or a missing
+    Redis, simply has no entry and the payload omits the block — a quota field
+    that silently reported "ok" because the ledger was unreachable would be worse
+    than no field at all.
+    """
+    from solus_api.connectors.registry import ConnectorContext, _onshape_meter
+
+    settings = request.app.state.settings
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        return {}
+    states: dict[uuid.UUID, Any] = {}
+    for source in sources:
+        if source.type is not SourceType.ONSHAPE:
+            continue
+        meter = _onshape_meter(
+            settings,
+            redis,
+            ConnectorContext(
+                project_id=source.project_id,
+                team_id=source.team_id,
+                account_ref=source.account_external_id,
+            ),
+        )
+        states[source.id] = await meter.state()
+    return states
+
+
 @router.get("")
 async def list_sources(
+    request: Request,
     ctx: ProjectCtx,
     session: SessionDep,
     cursor: Annotated[str | None, Query()] = None,
@@ -100,7 +164,11 @@ async def list_sources(
         stmt = stmt.where(cursor_filter(Source.created_at, Source.id, cursor))
     visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
     counts = await source_entity_counts(session, [s.id for s in visible])
-    out = [serialize_source(s, entity_count=counts.get(s.id, 0)) for s in visible]
+    quotas = await _quota_states(request, visible)
+    out = [
+        serialize_source(s, entity_count=counts.get(s.id, 0), quota=quotas.get(s.id))
+        for s in visible
+    ]
     return envelope(out, meta=meta)
 
 
@@ -362,10 +430,14 @@ async def list_selectable(
     minutes, so editing a selection an hour after connecting must refresh rather
     than 502.
     """
+    # A picker open costs up to 10 quota-counted provider calls, so it needs the
+    # same MEMBER floor its sibling routes have. Without it the lowest-privilege
+    # principal in the system could drain an annual allowance in minutes.
+    require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id)
     if not source.secret_ref:
         raise APIError(409, "not_connected", "Source is not connected yet")
-    connector = _resolve_connector(registry, source.type.value)
+    connector = _resolve_connector(registry, source.type.value, source=source, ctx=ctx)
     lister = getattr(connector, "list_selectable", None)
     if lister is None:
         raise APIError(400, "unsupported", "This provider has nothing to select")
@@ -418,6 +490,8 @@ async def _run_inline(
         source_id=source_id,
         job_id=job_id,
         acting_user_id=acting_user_id,
+        store=getattr(app.state, "integration_store", None),
+        hub=getattr(app.state, "graph_hub", None),
     )
 
 

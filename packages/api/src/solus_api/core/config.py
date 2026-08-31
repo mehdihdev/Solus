@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     # a customer's documents.
     onshape_client_id: str | None = None
     onshape_client_secret: str | None = None
+    #: SOLUSDEV-167 (ADR-019 amended). Onshape's real cap is 2,500/user/YEAR
+    #: on Free/Standard; the self-imposed default sits below it so we degrade
+    #: before the provider does — our count is a floor on our own spend, never
+    #: a remaining balance, so leaving headroom is the honest posture.
+    onshape_annual_call_allowance: int = 1800
+    #: Fraction of the allowance above which DEFERRABLE work (the sweep, agent
+    #: turns) pauses. A user's explicit action still reaches the provider.
+    integration_degrade_ratio: float = 0.7
 
     # Where the OAuth callback sends the user back to (the desktop app deep
     # link or a local page). Defaults to the renderer dev origin. Renamed from
@@ -203,6 +211,11 @@ class Settings(BaseSettings):
     # below the general frame rate so one companion can't burn write quota.
     bridge_credential_submit_rate_per_minute: float = 6.0
     bridge_credential_submit_burst: int = 3
+    #: SOLUSDEV-167: unsolicited local-change frames. A design change is a
+    #: human saving a file, so a handful a minute is generous; past that the
+    #: sensor is malfunctioning and the answer is to stop scheduling work.
+    bridge_change_rate_per_minute: int = 12
+    bridge_change_burst: int = 4
     bridge_connect_rate_per_minute: int = 30
     bridge_max_inflight: int = 8
     bridge_max_team_sessions: int = 10

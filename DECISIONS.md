@@ -149,6 +149,14 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 
 **Amended — 2026-08-15, SOLUSDEV-138/139 (approved in-chat during Lane E Phase 1):** Query embeddings issued by the W0-07 systems seam (`DbSolSystems`) run `allow_unmetered=True`. Rationale: the seam deliberately carries no user identity; embed volume is bounded upstream by the credit-gated (402) and frequency-capped (429) turn admission, so no capped or anonymous path can reach an embed; per-call cost is sub-cent. Revisit when identity plumbing reaches the seam or embed volume becomes material in billing.
 
+**Amended — 2026-08-30, SOLUSDEV-167 (approved in-chat during Phase 1):** "One budget system" governs **model** cost. **Third-party integration API quotas are a SECOND, separate budget and are metered separately**, because they are denominated in a unit Solus neither buys nor can convert: a provider's own call allowance. Onshape's is **2,500 calls per YEAR per Onshape user** on Free/Standard/EDU (only 2xx/3xx counted; exhaustion answers HTTP 402) — an annual, per-provider-account quantity that a credits-shaped mechanism cannot express, since a sliding window cannot bound a year and credits cannot be spent to buy more of it.
+
+Concretely: outbound provider calls are counted per **provider account** (not per team — the provider meters the user, so a team-keyed annual counter would hand one account N allowances), in Redis, at the connector's single HTTP chokepoint. Above a configured fraction of the allowance, `scheduled` and `agent` traffic degrades to cache-only while a user's explicit action still reaches the provider; above the allowance, or once an observed 402 latches, everything is refused. ADR-018's "sync is unmetered" **stands unchanged** — this meters provider quota, never credits, and nothing here reaches the credit ledger. Per ADR-024, an accounting write never fails a user's request: the meter fails **open**.
+
+**Honest limit, recorded because it shapes the UI:** the true remaining allowance is unknowable from inside. Solus counts only its own calls from whenever the counter was created, so the ledger reads low for an account that was already partly spent. The only authoritative exhaustion signal is the provider's own 402. Any surfaced position must be labelled an estimate.
+
+**Rejected:** extending the credits mechanism with a second unit (bends a credits-shaped system around an annual call count, and would imply provider quota is purchasable); leaving it unmetered (the failure this ticket exists to fix).
+
 ## ADR-020: The orchestration protocol governs all feature development
 
 **Status:** Accepted

@@ -92,4 +92,32 @@ async def assert_connector_contract(connector: Connector, ctx: SyncContext) -> S
 
     changed = await connector.detect_changes(ctx)
     assert isinstance(changed, bool), "detect_changes() must return a bool"
+
+    # --- SOLUSDEV-167: cheap change detection is a CONTRACT, not a courtesy ---
+    #
+    # A connector that cannot answer "nothing changed" without doing the full
+    # sync re-syncs forever and burns the provider's quota. That is what cost
+    # ~80% of an ANNUAL Onshape allowance in a single afternoon, so it is
+    # enforced mechanically here rather than left to each connector's diligence.
+    # These assertions are what make the caching/freshness layer general: a new
+    # integration inherits it by satisfying the contract, with no bespoke code.
+
+    assert result.cursor, (
+        "sync() must return a non-empty cursor — a connector with no cursor can "
+        "never answer 'nothing changed', so every sync pays full price"
+    )
+
+    settled = SyncContext(
+        credentials=ctx.credentials, config=ctx.config, cursor=dict(result.cursor)
+    )
+    assert await connector.detect_changes(settled) is False, (
+        "detect_changes() must return False for the cursor sync() just produced; "
+        "otherwise the source re-syncs on every sweep forever"
+    )
+
+    empty = SyncContext(credentials=ctx.credentials, config=ctx.config, cursor={})
+    assert await connector.detect_changes(empty) is True, (
+        "an empty cursor means 'never synced' and must report changed, or a new "
+        "source would never make its first sync"
+    )
     return result

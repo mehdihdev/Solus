@@ -14,6 +14,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from websockets.asyncio.client import ClientConnection, connect
@@ -32,11 +33,13 @@ from solus_companion.frames import (
     Pong,
     ToolCallIn,
     Unknown,
+    change_frame,
     hello_frame,
     parse_inbound,
     ping_frame,
     status_frame,
 )
+from solus_companion.watch import fingerprint, workspace_path
 
 logger = logging.getLogger("solus.companion.channel")
 
@@ -52,6 +55,10 @@ DEFAULT_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_BACKOFF_CAP_SECONDS = 60.0
 DEFAULT_HELLO_TIMEOUT_SECONDS = 10.0
 DEFAULT_STATUS_COALESCE_SECONDS = 1.0
+#: SOLUSDEV-167: how often the workspace is re-fingerprinted. This IS the
+#: local change-detection latency — a stat() sweep is cheap, but it is a poll,
+#: so the ceiling is honest and stated rather than implied to be instant.
+DEFAULT_CHANGE_INTERVAL_SECONDS = 15.0
 
 
 class BridgeSupervisor(ToolCaller, Protocol):
@@ -178,6 +185,36 @@ async def _status_loop(ws: ClientConnection, supervisor: BridgeSupervisor, coale
         return
 
 
+async def _change_loop(ws: ClientConnection, workspace: Path, interval: float) -> None:
+    """SOLUSDEV-167: push one `change` frame whenever the workspace fingerprint
+    moves.
+
+    Modelled on `_status_loop` deliberately — that shape (a side task pushing
+    unsolicited, coalesced frames alongside the recv loop) is already proven in
+    production, so a local change signal needs no new transport, only a sensor.
+
+    The FIRST fingerprint is recorded without sending: reconnecting is not a
+    change, and announcing one on every redial would turn a flapping network into
+    a re-sync loop.
+    """
+    previous = fingerprint(workspace)
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            current = fingerprint(workspace)
+            if not current or current == previous:
+                # Empty means "cannot observe" (workspace unmounted, permissions
+                # lost), NOT "empty workspace". Reporting a change we cannot see
+                # would spend a probe on nothing, and would flap every time a
+                # network drive blinked.
+                continue
+            previous = current
+            logger.info("workspace changed; notifying cloud")
+            await ws.send(change_frame())
+    except ConnectionClosed:
+        return
+
+
 async def _serve(
     ws: ClientConnection,
     supervisor: BridgeSupervisor,
@@ -186,6 +223,8 @@ async def _serve(
     status_coalesce: float,
     uploader: ArtifactUploader | None = None,
     relay: CredentialRelay | None = None,
+    workspace: Path | None = None,
+    change_interval: float = DEFAULT_CHANGE_INTERVAL_SECONDS,
 ) -> None:
     state.connected = True
     dispatcher = Dispatcher(supervisor, ws.send, uploader=uploader)
@@ -193,6 +232,8 @@ async def _serve(
     pinger = asyncio.create_task(_ping_loop(ws, liveness, ping_interval))
     status_task = asyncio.create_task(_status_loop(ws, supervisor, status_coalesce))
     side_tasks = [pinger, status_task]
+    if workspace is not None:
+        side_tasks.append(asyncio.create_task(_change_loop(ws, workspace, change_interval)))
     if relay is not None:
         side_tasks.append(asyncio.create_task(_credential_loop(ws, relay)))
     try:
@@ -241,6 +282,11 @@ async def _connect_once(
                 # config (non-bridge URL) the dispatcher fails closed (T4d).
                 uploader=ArtifactUploader.from_config(config),
                 relay=relay,
+                # SOLUSDEV-167: the local change sensor watches the SAME
+                # workspace the forks are confined to. None when unset, in which
+                # case no sensor runs and change detection stays cloud-side —
+                # the honest degradation, not a guessed directory.
+                workspace=workspace_path(config.workspace),
             )
     except ConnectionClosed as exc:
         code = exc.rcvd.code if exc.rcvd is not None else None

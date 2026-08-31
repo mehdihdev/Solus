@@ -48,6 +48,7 @@ from solus_api.connectors.contracts import (
     SyncResult,
 )
 from solus_api.connectors.registry import ConnectorRegistry
+from solus_api.connectors.step_parser import step_reader_available
 from solus_api.core.config import Settings
 from solus_api.main import create_app
 from solus_api.models import Base
@@ -483,3 +484,15 @@ def _reset_circuit_breaker() -> Iterator[None]:
     DEFAULT_BREAKER.reset()
     yield
     DEFAULT_BREAKER.reset()
+
+
+#: SOLUSDEV-167. The OCCT wheel imports only where an OpenGL runtime is present
+#: (`libGL.so.1`), which `bookworm-slim` does not ship. Every test that drives a
+#: REAL STEP parse carries this, so a box without the optional `cad` extra skips
+#: cleanly instead of failing with an assertion about something else entirely —
+#: the CI run that prompted this reported "assert 120 < 120" for a missing
+#: shared library. CI installs libgl1 and asserts the reader IS available, so
+#: these can never silently vanish where they are meant to run.
+requires_occt = pytest.mark.skipif(
+    not step_reader_available(), reason="STEP reading needs the optional 'cad' extra"
+)

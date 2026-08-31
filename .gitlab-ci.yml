@@ -67,7 +67,16 @@ test:python:
     POSTGRES_PASSWORD: solus
     POSTGRES_DB: solus
     SOLUS_TEST_DATABASE_URL: "postgresql+asyncpg://solus:solus@postgres:5432/solus_test"
-  script: uv run pytest -q
+  script:
+    # The OCCT wheel is in the dev group precisely so CI exercises the real STEP
+    # path (packages/api/pyproject.toml), but it dlopens libGL and bookworm-slim
+    # ships no OpenGL runtime — so it imported nowhere and ~40 CAD tests SKIPPED
+    # silently while the rest failed on unrelated-looking assertions.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1
+    # Fail LOUDLY if that ever regresses. A silent skip is the failure mode that
+    # hid this: the suite stays green while the CAD path goes entirely untested.
+    - uv run python -c 'from solus_api.connectors.step_parser import step_reader_available as ok; assert ok(), "OCCT unavailable — CAD tests would silently skip"'
+    - uv run pytest -q
 
 test:node:
   extends: .node-base

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
 from solus_api.models import (
     Activity,
@@ -207,7 +208,12 @@ class OAuthExchange(StrictModel):
 _BULK_CONFIG_KEYS = frozenset({"export"})
 
 
-def serialize_source(source: Source, *, entity_count: int | None = None) -> dict[str, Any]:
+def serialize_source(
+    source: Source,
+    *,
+    entity_count: int | None = None,
+    quota: "QuotaState | None" = None,
+) -> dict[str, Any]:
     """Source view for the API — secrets (secret_ref/token) are never included."""
     data: dict[str, Any] = {
         "id": source.id,
@@ -229,6 +235,22 @@ def serialize_source(source: Source, *, entity_count: int | None = None) -> dict
     }
     if entity_count is not None:
         data["entity_count"] = entity_count
+    if quota is not None:
+        # SOLUSDEV-167 acceptance #5: the degraded state, visible BEFORE the wall.
+        #
+        # Read from the meter, never inferred from `last_error` — that is only
+        # written when a SYNC fails, so a team pushed into the degraded band by
+        # SOL tool traffic and picker opens alone would have reported healthy.
+        #
+        # `estimated` is always true and the UI must say so: we count only our
+        # own calls from whenever the counter started, so this is a floor on our
+        # spend and never a remaining balance (ADR-019 as amended).
+        data["quota"] = {
+            "status": quota.status,
+            "used": quota.used,
+            "allowance": quota.allowance,
+            "estimated": quota.estimated,
+        }
     return data
 
 
