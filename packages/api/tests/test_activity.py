@@ -46,6 +46,48 @@ async def test_activity_filter_by_actor(
     assert all(a["actor_id"] == bob["id"] for a in rows)
 
 
+async def test_activity_meta_total_counts_matching_rows(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    for i in range(3):
+        await create_project(client, alice_headers, team["id"], f"P{i}")
+
+    everything = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?limit=100", headers=alice_headers
+    )
+    full_count = len(everything.json()["data"])
+    assert everything.json()["meta"]["total"] == full_count
+
+    # Total spans the whole feed, not just the returned page.
+    first = await client.get(f"/api/v1/teams/{team['id']}/activity?limit=2", headers=alice_headers)
+    body = first.json()
+    assert len(body["data"]) == 2
+    assert body["meta"]["total"] == full_count
+
+    # Total is stable when following the cursor.
+    rest = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?limit=2&cursor={body['meta']['next_cursor']}",
+        headers=alice_headers,
+    )
+    assert rest.json()["meta"]["total"] == full_count
+
+
+async def test_activity_meta_total_respects_filters(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    for i in range(2):
+        await create_project(client, alice_headers, team["id"], f"P{i}")
+
+    resp = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?type=project.created", headers=alice_headers
+    )
+    body = resp.json()
+    assert body["meta"]["total"] == 2
+    assert len(body["data"]) == 2
+
+
 async def test_activity_pagination(client: AsyncClient, alice_headers: dict[str, str]) -> None:
     team = await create_team(client, alice_headers)
     for i in range(3):

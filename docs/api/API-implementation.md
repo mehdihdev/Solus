@@ -494,10 +494,15 @@ actions in this phase:
   "meta": {
     "limit": 3,
     "has_next": true,
-    "next_cursor": "WyIyMDI2LTA2LTEzVDAwOjI4OjUzLjI3NzMyMSIsICIwMTllYmU2MS1hZTlkLTdlNjMtYmIwYi03MjYxYjEwMWFmMTUiXQ"
+    "next_cursor": "WyIyMDI2LTA2LTEzVDAwOjI4OjUzLjI3NzMyMSIsICIwMTllYmU2MS1hZTlkLTdlNjMtYmIwYi03MjYxYjEwMWFmMTUiXQ",
+    "total": 7
   }
 }
 ```
+
+`meta.total` (SOLUSDEV-233) is the count of ALL activity rows matching the team scope and any
+`type`/`domain`/`actor` filters — independent of `limit` and `cursor`, so it stays stable while
+paging. Clients use it for "View all activity (N)" affordances.
 
 ---
 
@@ -985,13 +990,13 @@ points livebench → solus-api): a server without livebench answers `GET /source
 honest for today's dev topology (API on the user's machine); a future companion-hosted runner
 swaps in behind these same routes.
 
-| Method | Path                                                             | Purpose                                                                                          | Success |
-| ------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------- |
-| GET    | `/api/v1/projects/{project_id}/bench/sources`                    | Honest machine inventory: simulators (available/not + reason), serial devices, runner state      | `200`   |
-| POST   | `/api/v1/projects/{project_id}/bench/sessions`                   | Start a session (`{mode, config}` discriminated on `config.provider`; member role)               | `201`   |
-| GET    | `/api/v1/projects/{project_id}/bench/sessions`                   | List sessions, `?status=active\|ended&mode=sim\|real` (bounded ended ring)                       | `200`   |
-| GET    | `/api/v1/projects/{project_id}/bench/sessions/{session_id}`      | Session detail: status, live link state, device_ids seen, counts, last window summary            | `200`   |
-| POST   | `/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop` | Stop (idempotent; `aclose` teardown flushes the pending window; member role)                     | `200`   |
+| Method | Path                                                             | Purpose                                                                                                                                                    | Success |
+| ------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| GET    | `/api/v1/projects/{project_id}/bench/sources`                    | Honest machine inventory: simulators (available/not + reason), serial devices, runner state                                                                | `200`   |
+| POST   | `/api/v1/projects/{project_id}/bench/sessions`                   | Start a session (`{mode, config}` discriminated on `config.provider`; member role)                                                                         | `201`   |
+| GET    | `/api/v1/projects/{project_id}/bench/sessions`                   | List sessions, `?status=active\|ended&mode=sim\|real` (bounded ended ring)                                                                                 | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/sessions/{session_id}`      | Session detail: status, live link state, device_ids seen, counts, last window summary                                                                      | `200`   |
+| POST   | `/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop` | Stop (idempotent; `aclose` teardown flushes the pending window; member role)                                                                               | `200`   |
 | GET    | `/api/v1/projects/{project_id}/bench/device-recent`              | `?device_id=…` (repeated, 1–16) `&limit=` — batched recent values for devices with NO graph entity yet (pre-RBT-05); one request covers every polled panel | `200`   |
 
 Providers and their config (all bodies `extra="forbid"`): `mujoco` (inline MJCF ≤2 MB or the
