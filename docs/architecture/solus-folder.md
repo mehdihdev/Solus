@@ -1,13 +1,15 @@
 # The `.solus` Folder — Two-Layer Local & Project Config
 
-> **Status: PLANNED — not yet implemented.** This is the agreed design for the `.solus` initiative
-> (tickets A–E below). Code does not yet match this document; nothing here is buildable without the
-> ADR approvals called out per ticket. Written under SOLUSDEV-166 so future agent sessions inherit
-> the design context instead of re-deriving it.
+> **Status: Ticket A IMPLEMENTED (SOLUSDEV-166); Tickets B–E planned.** ADR-034 is ratified and
+> Layer 1 is live: the `~/.solus/projects.json` registry (contract in
+> `docs/contracts/local-state.md`, shapes in `packages/shared-types` + `solus_contracts`), the
+> desktop write-through and hydration, `SOLUS_COMPANION_WORKSPACE` derivation at companion spawn,
+> and the 0700 tightening. `config.json`, `projects/<id>/`, `logs/`, and the whole repo-committed
+> `.solus/` layer (Tickets B–E) remain design only.
 >
-> Governing docs: DECISIONS.md ADR-021 (branch discipline), ADR-027 (graph schema conventions),
-> ADR-030 (parse committed Git exports, not live plugins), ADR-032 (two-tier governance),
-> CLAUDE.md §7 (security). A new ADR (working number ADR-034) must be approved before Ticket A code.
+> Governing docs: DECISIONS.md ADR-034 (this design), ADR-021 (branch discipline), ADR-027 (graph
+> schema conventions), ADR-030 (parse committed Git exports, not live plugins), ADR-032 (two-tier
+> governance), CLAUDE.md §7 (security).
 
 ---
 
@@ -92,11 +94,11 @@ What each buys the context model:
 - **Environment requirements (`project.toml`)**: ROS distro, CUDA version, library/toolchain
   versions, deployment targets. This is precisely the input the "this package needs CUDA 12 but
   your Jetson has 11.8" autocomplete checker needs and currently has no source for.
-- **Per-part declarations (`parts/*.toml`)**: MPN, manufacturer, cross-tool aliases ("CAM_v2 in
-  Onshape = OV9281_IC in the schematic"), datasheet URL. Direct, high-confidence hints to the
+- **Per-part declarations (`parts/*.toml`)**: MPN, manufacturer, cross-tool aliases (`CAM_v2` in
+  Onshape = `OV9281_IC` in the schematic), datasheet URL. Direct, high-confidence hints to the
   fingerprint matcher — the supply-chain signal handed to us instead of inferred; a team-authored
-  alias is effectively a pre-confirmed match. _(Open sub-question: these seed `graph_entity` rows
-  with what `origin`? Probably a new well-known value like `"declared"` — an ADR-027 amendment.)_
+  alias is effectively a pre-confirmed match. (Open sub-question: these seed `graph_entity` rows
+  with what `origin`? Probably a new well-known value like `declared` — an ADR-027 amendment.)
 
 **Format: TOML** for the repo-committed files — Python 3.12 has `tomllib` in the stdlib (zero new
 backend dependency), it's human-friendly for hand-editing, and it's parsed server-side during sync,
@@ -159,7 +161,9 @@ would break documented operational procedures.
 
 ## 8. Open questions (blocking Ticket A unless answered)
 
-Status at time of writing: **all open** — carry them into Ticket A's Phase 1 design review.
+Status: **1 and 3 resolved at the Ticket A gate** (2026-08-30, in-session — repo-committed
+declarations with `~/.solus` machine overrides; JSON machine-side, TOML repo-side; both now in
+ADR-034). **2 and 4 remain open** for Tickets D and C respectively.
 
 1. **Per-project config home** — recommendation: repo-committed declarations with machine
    overrides in `~/.solus/projects/<id>/`. Alternatives: all-local or all-server-side.

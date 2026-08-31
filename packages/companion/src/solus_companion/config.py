@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from solus_contracts import SOLUS_HOME_DIRNAME
+
 from solus_companion import __version__
 from solus_companion.credentials import CredentialRelay
 
@@ -356,9 +358,7 @@ def _private_interpreter(root_resolved: Path, server_dir: Path, name: str) -> Pa
         return None
     resolved = interpreter.resolve()
     if not resolved.is_relative_to(root_resolved):
-        logger.error(
-            "REFUSED private interpreter for %r: resolves outside %s", name, root_resolved
-        )
+        logger.error("REFUSED private interpreter for %r: resolves outside %s", name, root_resolved)
         return None
     if not os.access(resolved, os.X_OK):
         logger.error("REFUSED private interpreter for %r: %s is not executable", name, interpreter)
@@ -455,8 +455,29 @@ def default_integrations_root(executable: str | None = None) -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
+def _tighten_solus_home(parent: Path) -> None:
+    """Ensure ~/.solus is 0700 (ADR-034, SOLUSDEV-166).
+
+    MCP forks inherit HOME, so the directory must never be group/world
+    readable. Runs on EVERY load — the common path reads a pre-existing valid
+    id and would otherwise never re-tighten a dir an older build created with
+    the default umask. Scoped to the Solus home ONLY: a custom
+    SOLUS_COMPANION_INSTANCE_FILE points elsewhere (e.g. /tmp), and chmodding
+    that would be wrong (review M6). Best-effort — a chmod failure must never
+    stop the companion from starting.
+    """
+    if parent.name != SOLUS_HOME_DIRNAME:
+        return
+    try:
+        if parent.is_dir():
+            os.chmod(parent, 0o700)
+    except OSError:
+        pass
+
+
 def load_instance_id(path: Path) -> str:
     """Read the persisted companion instance id, or create one (0600)."""
+    _tighten_solus_home(path.parent)
     try:
         existing = path.read_text(encoding="utf-8").strip()
         if re.fullmatch(r"[0-9a-f]{32}", existing):
@@ -465,6 +486,7 @@ def load_instance_id(path: Path) -> str:
         pass
     instance_id = uuid.uuid4().hex
     path.parent.mkdir(parents=True, exist_ok=True)
+    _tighten_solus_home(path.parent)  # a freshly created dir also gets 0700
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(instance_id)

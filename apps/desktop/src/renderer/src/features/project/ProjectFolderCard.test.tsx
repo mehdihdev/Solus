@@ -16,11 +16,26 @@ const pick = vi.fn()
 const reveal = vi.fn()
 const clone = vi.fn()
 const openInVscode = vi.fn()
+// The ~/.solus registry write-through (SOLUSDEV-166) rides on the same bridge.
+const link = vi.fn()
+const unlink = vi.fn()
+const links = vi.fn()
 
 beforeEach(() => {
   vi.clearAllMocks()
+  link.mockResolvedValue({ ok: true })
+  unlink.mockResolvedValue({ ok: true })
+  links.mockResolvedValue({})
   useProjectFolderStore.setState({ folders: {} })
-  vi.mocked(bridge.getDesktopFolderBridge).mockReturnValue({ pick, reveal, clone, openInVscode })
+  vi.mocked(bridge.getDesktopFolderBridge).mockReturnValue({
+    pick,
+    reveal,
+    clone,
+    openInVscode,
+    link,
+    unlink,
+    links
+  })
 })
 
 describe('ProjectFolderCard', () => {

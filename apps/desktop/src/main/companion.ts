@@ -11,6 +11,7 @@ import { app } from 'electron'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { companionEnv, findIntegrationsRoot } from './companionEnv'
+import { projectWorkspace, realLocalStateDeps } from './localState'
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { join } from 'node:path'
 
@@ -146,6 +147,12 @@ let latestToken: string | null | undefined
  */
 let activeProjectId: string | null = null
 
+/** The workspace baked into the CURRENT child at spawn (SOLUSDEV-166). Kept so
+ *  a folder-link change can respawn only when the value actually changed,
+ *  rather than churning the process (and its whole MCP fork tree) on every
+ *  write. `undefined` ⇒ no child has been spawned yet. */
+let activeWorkspace: string | null | undefined
+
 function pidfilePath(): string {
   return join(app.getPath('userData'), 'companion.pid')
 }
@@ -241,24 +248,45 @@ function apiBaseUrl(): string {
 function spawnChild(cmd: { command: string; args: string[] }): void {
   restartTimer = null
   if (stopped) return
-  const c = spawn(cmd.command, cmd.args, {
-    detached: process.platform !== 'win32', // own process group ⇒ tree kill works
-    // stderr is PIPED, not ignored. The companion validates its own config and
-    // exits; with stderr discarded that surfaced as a silent restart loop and
-    // was why the bridge never came up (CAD-02).
-    stdio: ['pipe', 'ignore', 'pipe'],
-    // Inherited PLUS the variables the companion cannot start without.
-    //
-    // The integrations root is resolved only for a dev run: a packaged build
-    // finds the tree beside its own binary, and passing a path derived from the
-    // app directory would override that with something wrong. `null` when
-    // nothing resolves, so the companion still reports the missing variable
-    // itself instead of running with zero MCP servers.
-    env: companionEnv(process.env, apiBaseUrl(), {
-      integrationsRoot: app.isPackaged ? null : findIntegrationsRoot(app.getAppPath(), existsSync),
-      projectId: activeProjectId
+  // The ~/.solus registry (SOLUSDEV-166 / ADR-034): the project's linked
+  // working copy, read fresh at every spawn. Null (variable absent) when the
+  // project has no linked folder — workspace-gated forks fail closed. Recorded
+  // so a folder-link change respawns only when the value actually changed.
+  const workspace = projectWorkspace(activeProjectId, realLocalStateDeps)
+  activeWorkspace = workspace
+  let c: ChildProcess
+  try {
+    c = spawn(cmd.command, cmd.args, {
+      detached: process.platform !== 'win32', // own process group ⇒ tree kill works
+      // stderr is PIPED, not ignored. The companion validates its own config and
+      // exits; with stderr discarded that surfaced as a silent restart loop and
+      // was why the bridge never came up (CAD-02).
+      stdio: ['pipe', 'ignore', 'pipe'],
+      // Inherited PLUS the variables the companion cannot start without.
+      //
+      // The integrations root is resolved only for a dev run: a packaged build
+      // finds the tree beside its own binary, and passing a path derived from the
+      // app directory would override that with something wrong. `null` when
+      // nothing resolves, so the companion still reports the missing variable
+      // itself instead of running with zero MCP servers.
+      env: companionEnv(process.env, apiBaseUrl(), {
+        integrationsRoot: app.isPackaged
+          ? null
+          : findIntegrationsRoot(app.getAppPath(), existsSync),
+        projectId: activeProjectId,
+        workspace
+      })
     })
-  })
+  } catch (error) {
+    // spawn throws synchronously for a malformed argument (e.g. a NUL byte in
+    // an env value). Do NOT leave the supervisor dead: schedule a backed-off
+    // retry on the same path a crash would take (SOLUSDEV-166 review M4).
+    console.warn('[companion] spawn failed:', error instanceof Error ? error.message : error)
+    child = null
+    attempt = nextRestartAttempt(attempt, 0)
+    restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
+    return
+  }
   c.stderr?.on('data', (chunk: Buffer) => {
     // Bounded: a crash-looping child must not fill the log.
     console.warn('[companion]', chunk.toString('utf8').slice(0, 2_000).trimEnd())
@@ -323,14 +351,37 @@ export function startCompanion(): void {
 export function setCompanionProject(projectId: string | null): void {
   if (projectId === activeProjectId) return
   activeProjectId = projectId
+  replaceChild()
+}
+
+/**
+ * A project's folder link changed in the ~/.solus registry (SOLUSDEV-166).
+ * The workspace is baked into the child's environment at spawn — exactly like
+ * the project id — so when it is the ACTIVE project's link that changed, the
+ * companion respawns to pick it up. Other projects' links are irrelevant.
+ *
+ * Respawn only when the resolved workspace ACTUALLY changed (review M5): a
+ * re-link to the same path, or any link event that leaves the value untouched,
+ * must not churn the process and its whole MCP fork tree.
+ */
+export function notifyProjectFolderChanged(projectId: string): void {
+  if (activeProjectId === null || projectId !== activeProjectId) return
+  if (projectWorkspace(activeProjectId, realLocalStateDeps) === activeWorkspace) return
+  replaceChild()
+}
+
+/** Kill the current child (if any) and spawn a fresh one against the current
+ *  project + registry state. A deliberate replacement is not a failure, so the
+ *  backoff schedule resets to the 1 s step. */
+function replaceChild(): void {
   if (restartTimer) {
     clearTimeout(restartTimer)
     restartTimer = null
   }
   const previous = child
-  child = null // detach first: onDown must not schedule a restart for the old project
+  child = null // detach first: onDown must not schedule a restart for the old config
   previous?.kill('SIGTERM')
-  attempt = -1 // a deliberate switch is not a failure; start from the 1 s step
+  attempt = -1
   if (started) maybeSpawn()
 }
 

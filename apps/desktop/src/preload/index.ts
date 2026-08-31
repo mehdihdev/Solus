@@ -56,7 +56,16 @@ const api = {
     openInVscode: (path: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('folder:open-vscode', path),
     clone: (input: { repoUrl: string; parentDir: string }): Promise<CloneResult> =>
-      ipcRenderer.invoke('git:clone', input)
+      ipcRenderer.invoke('git:clone', input),
+    // The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
+    // machine-local copy of project→folder links, owned by the main process.
+    // The renderer's localStorage store is a display cache over this.
+    link: (projectId: string, link: { path: string; repoUrl?: string }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('folder:link', projectId, link),
+    unlink: (projectId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('folder:unlink', projectId),
+    links: (): Promise<Record<string, { path: string; repoUrl?: string; lastOpenedAt?: string }>> =>
+      ipcRenderer.invoke('folder:links')
   },
   billing: {
     // Open a Stripe Checkout / billing-portal URL (from our API) in the browser.
