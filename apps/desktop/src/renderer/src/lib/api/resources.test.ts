@@ -328,8 +328,8 @@ describe('team resources', () => {
   it('paginated list variants pass the cursor through as a query param', async () => {
     const { listActivityPage, listNotificationsPage } = await import('./resources')
     const { client, calls } = stubClient([])
-    await listActivityPage('t1', 'cur9', client)
-    await listActivityPage('t1', undefined, client)
+    await listActivityPage('t1', { cursor: 'cur9' }, client)
+    await listActivityPage('t1', {}, client)
     await listNotificationsPage('cur9', client)
     await listNotificationsPage(undefined, client)
     expect(calls.map((c) => c.path)).toEqual([
@@ -337,6 +337,17 @@ describe('team resources', () => {
       '/teams/t1/activity',
       '/users/me/notifications?cursor=cur9',
       '/users/me/notifications'
+    ])
+  })
+
+  it('activity page requests carry limit and cursor together', async () => {
+    const { listActivityPage } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listActivityPage('t1', { limit: 100 }, client)
+    await listActivityPage('t1', { cursor: 'cur9', limit: 25 }, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1/activity?limit=100',
+      '/teams/t1/activity?cursor=cur9&limit=25'
     ])
   })
 

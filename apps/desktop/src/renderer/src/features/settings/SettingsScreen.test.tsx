@@ -60,6 +60,7 @@ function team(status: TeamData['status'] = 'ready'): TeamData {
     invites: [],
     activity: [],
     activityHasMore: false,
+    activityTotal: 0,
     loadMoreActivity: vi.fn(async () => undefined),
     projects: [],
     teams: [],

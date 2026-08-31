@@ -704,14 +704,24 @@ export function listActivity(teamId: string, client: ApiClient = api): Promise<A
   return client.request<ActivityApi[]>(`/teams/${teamId}/activity`)
 }
 
-/** One cursor page of the team activity feed (§2.2) — carries pagination meta. */
+export interface ActivityPageOptions {
+  cursor?: string
+  /** Server caps at 100 (API.md §2.2); defaults to 50 when omitted. */
+  limit?: number
+}
+
+/** One cursor page of the team activity feed (§2.2) — carries pagination meta
+ *  including `total`, the filter-matching row count across the whole feed. */
 export function listActivityPage(
   teamId: string,
-  cursor?: string,
+  options: ActivityPageOptions = {},
   client: ApiClient = api
 ): Promise<Page<ActivityApi[]>> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
-  return client.requestPage<ActivityApi[]>(`/teams/${teamId}/activity${query}`)
+  const params = new URLSearchParams()
+  if (options.cursor) params.set('cursor', options.cursor)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return client.requestPage<ActivityApi[]>(`/teams/${teamId}/activity${query ? `?${query}` : ''}`)
 }
 
 /* ---------------- Notifications (§2.1) ---------------- */

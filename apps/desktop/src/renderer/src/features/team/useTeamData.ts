@@ -70,6 +70,9 @@ export interface TeamData {
   invites: InviteApi[]
   activity: ActivityApi[]
   activityHasMore: boolean
+  /** Count of ALL activity rows for the team (server-reported); falls back to
+   *  the loaded count when the meta carries no total. */
+  activityTotal: number
   loadMoreActivity: () => Promise<void>
   /** Active (non-archived) projects owned by the current team. */
   projects: Project[]
@@ -257,7 +260,7 @@ export function useTeamData(): TeamData {
   const loadMoreActivity = async (): Promise<void> => {
     if (!teamId || !activityMeta.has_next || !activityMeta.next_cursor) return
     try {
-      const page = await listActivityPage(teamId, activityMeta.next_cursor)
+      const page = await listActivityPage(teamId, { cursor: activityMeta.next_cursor })
       setActivity((prev) => [...prev, ...page.data])
       setActivityMeta(page.meta)
     } catch {
@@ -273,6 +276,7 @@ export function useTeamData(): TeamData {
     invites,
     activity,
     activityHasMore: activityMeta.has_next ?? false,
+    activityTotal: activityMeta.total ?? activity.length,
     loadMoreActivity,
     projects,
     teams,

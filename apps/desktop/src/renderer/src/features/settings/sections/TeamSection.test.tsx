@@ -22,6 +22,7 @@ function teamData(overrides: Partial<TeamData> = {}, role: TeamRole = 'owner'): 
     invites: [],
     activity: [],
     activityHasMore: false,
+    activityTotal: 0,
     loadMoreActivity: vi.fn(async () => undefined),
     teams: [],
     myRole: role,
