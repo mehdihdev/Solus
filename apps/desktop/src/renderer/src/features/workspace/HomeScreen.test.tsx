@@ -2,7 +2,7 @@
 // and the honest offline sign-in state (SOLUSDEV-152 removed the demo project
 // card). The data hooks are mocked to drive each state.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeScreen } from './HomeScreen'
 import * as homeData from './useHomeData'
@@ -71,6 +71,7 @@ function mockHome(overrides: Partial<homeData.HomeData> = {}): homeData.HomeData
         created_at: '2026-07-06T00:00:00Z'
       }
     ],
+    activityTotal: 1,
     actions: homeActions(),
     ...overrides
   }
@@ -236,6 +237,32 @@ describe('HomeScreen', () => {
     expect(screen.getByText('Old Rig')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Unarchive Old Rig' }))
     expect(vi.mocked(home.actions.unarchiveProject)).toHaveBeenCalledWith('p2')
+  })
+
+  it('shows no view-all affordance when the feed fits the panel', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.queryByText(/View all activity/)).not.toBeInTheDocument()
+  })
+
+  it('truncates recent activity to six rows and opens the all-activity dialog', async () => {
+    const eight = Array.from({ length: 8 }, (_, i) => ({
+      id: `a${i + 1}`,
+      type: 'project.created',
+      domain: null,
+      actor_id: 'u1',
+      project_id: 'p1',
+      payload: { name: 'Rover MK2' },
+      created_at: `2026-07-06T00:00:${String(59 - i).padStart(2, '0')}Z`
+    }))
+    mockHome({ activity: eight, activityTotal: 20 })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getAllByText(/created the project/)).toHaveLength(6)
+    await userEvent.click(screen.getByRole('button', { name: /View all activity \(20\)/ }))
+    const dialog = screen.getByRole('dialog', { name: 'All activity' })
+    expect(within(dialog).getAllByText(/created the project/)).toHaveLength(8)
+    // The merged cross-team feed has no cursor to follow — no Load more here.
+    expect(within(dialog).queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
   })
 
   it('hides management actions for viewers', () => {

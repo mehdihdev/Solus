@@ -2,7 +2,7 @@
 // is gone. Linked workspaces render live API data; offline (dev bypass) shows
 // an honest sign-in state instead of a mock team.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TeamScreen } from './TeamScreen'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -116,6 +116,15 @@ const LIVE_ACTIVITY: resources.ActivityApi[] = [
     created_at: '2026-07-06T00:00:00Z'
   }
 ]
+
+/** N distinct invite.accepted rows, newest first, for truncation tests. */
+function manyActivity(count: number): resources.ActivityApi[] {
+  return Array.from({ length: count }, (_, i) => ({
+    ...LIVE_ACTIVITY[0],
+    id: `ac${i + 1}`,
+    created_at: `2026-07-06T00:00:${String(59 - i).padStart(2, '0')}Z`
+  }))
+}
 
 describe('TeamScreen — live (API-backed)', () => {
   beforeEach(() => {
@@ -241,6 +250,43 @@ describe('TeamScreen — live (API-backed)', () => {
     await waitFor(() => expect(screen.getByText('Rover Nav')).toBeInTheDocument())
     await userEvent.click(screen.getByText('Rover Nav'))
     expect(onOpen).toHaveBeenCalledWith({ id: 'p1', name: 'Rover Nav' })
+  })
+
+  it('shows no view-all affordance when the feed fits the panel', async () => {
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
+    expect(screen.queryByText(/View all activity/)).not.toBeInTheDocument()
+  })
+
+  it('truncates team activity to six rows and offers view-all with the server total', async () => {
+    vi.mocked(resources.listActivityPage).mockResolvedValue({
+      data: manyActivity(8),
+      meta: { total: 12, has_next: true, next_cursor: 'c2' }
+    })
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
+    expect(screen.getAllByText(/joined the team/)).toHaveLength(6)
+    expect(screen.getByRole('button', { name: /View all activity \(12\)/ })).toBeInTheDocument()
+  })
+
+  it('opens the all-activity dialog with every loaded row and pages further', async () => {
+    vi.mocked(resources.listActivityPage)
+      .mockResolvedValueOnce({
+        data: manyActivity(8),
+        meta: { total: 12, has_next: true, next_cursor: 'c2' }
+      })
+      .mockResolvedValueOnce({
+        data: manyActivity(1).map((a) => ({ ...a, id: 'ac-extra' })),
+        meta: { total: 12, has_next: false }
+      })
+    render(<TeamScreen />)
+    await waitFor(() => expect(screen.getByText('Vector Robotics')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: /View all activity/ }))
+    const dialog = screen.getByRole('dialog', { name: 'All activity' })
+    expect(within(dialog).getAllByText(/joined the team/)).toHaveLength(8)
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(within(dialog).getAllByText(/joined the team/)).toHaveLength(9))
+    expect(vi.mocked(resources.listActivityPage)).toHaveBeenLastCalledWith('t1', { cursor: 'c2' })
   })
 })
 
