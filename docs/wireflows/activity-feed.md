@@ -33,7 +33,20 @@ backdrop) → review feed → close via ✕, click-out.
   `has_next`; it appends the next cursor page (50/page) and disables itself
   with `Loading…` while in flight. A failed page keeps the current feed.
 - **Home**: no Load more — the merged feed is fetched at up to 50 rows per
-  team; the dialog shows everything loaded.
+  team; the dialog shows everything loaded. When the total exceeds the loaded
+  rows and no paging is offered, a muted footer states
+  "Showing the most recent X of N events." (feed honesty — the activity feed
+  is the team's audit surface, silent truncation is not acceptable).
+
+## Motion
+
+All modal chrome shares one entrance: the backdrop fades in (~160ms) and the
+card pops in with a small rise + scale (~220ms) — `ModalShell`, so every dialog
+(Invite, New team/project, Join, Delete confirm, Activity) behaves identically.
+Anchored popups (notifications popover, project switcher, row menus) slide down
+~4px while fading (~160ms); the toast slides in from the right. Transform and
+opacity only; every animation is disabled under `prefers-reduced-motion`.
+Closing unmounts immediately (no exit choreography).
 
 ## Failure / edge paths
 

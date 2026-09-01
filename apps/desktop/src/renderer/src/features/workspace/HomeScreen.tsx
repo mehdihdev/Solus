@@ -472,6 +472,7 @@ function MenuDropdown({
       <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={onClose} />
       <div
         role="menu"
+        className="popover-in"
         style={{
           position: 'absolute',
           right: 0,

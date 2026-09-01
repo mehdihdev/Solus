@@ -212,6 +212,73 @@ body {
   }
 }
 
+/* Modal & popover motion (SOLUSDEV-233). Transform/opacity only; tokens only.
+ * Entrance-only — closing unmounts immediately, so there is no exit pair. */
+@keyframes modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.modal-backdrop-in {
+  animation: modal-backdrop-in 0.16s ease-out;
+}
+
+@keyframes modal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.modal-card-in {
+  animation: modal-card-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* Anchored surfaces: dropdown menus, the notifications popover. */
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.popover-in {
+  animation: popover-in 0.16s ease-out;
+}
+
+/* Toast slides in from the right edge it anchors to. */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.toast-in {
+  animation: toast-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop-in,
+  .modal-card-in,
+  .popover-in,
+  .toast-in {
+    animation: none;
+  }
+}
+
 /* SOL chat markdown (features/sol/Markdown.tsx). Scoped typography for model
  * text — design tokens only, so theme switches re-skin it like everything
  * else. Sized to sit inside the 12.5px chat column. */

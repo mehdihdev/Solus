@@ -102,6 +102,7 @@ function SwitcherDropdown({
       <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={onClose} />
       <div
         role="menu"
+        className="popover-in"
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'absolute',

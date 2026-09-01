@@ -7,7 +7,8 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 
-/** Shared modal chrome: dim backdrop, centered card, click-out to close. */
+/** Shared modal chrome: dim backdrop, centered card, click-out to close.
+ *  Entrance motion via .modal-backdrop-in/.modal-card-in (main.css). */
 export function ModalShell({
   onClose,
   width = 360,
@@ -20,6 +21,7 @@ export function ModalShell({
 }): React.JSX.Element {
   return (
     <div
+      className="modal-backdrop-in"
       style={{
         position: 'fixed',
         inset: 0,
@@ -31,7 +33,7 @@ export function ModalShell({
       }}
       onClick={onClose}
     >
-      <div onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card-in" onClick={(e) => e.stopPropagation()}>
         <Card pad={24} style={{ width, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
           {children}
         </Card>

@@ -9,6 +9,7 @@ import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
+import { ModalShell } from '../workspace/modals'
 import type { TeamData } from './useTeamData'
 
 export const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
@@ -224,93 +225,78 @@ export function InviteModal({
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        zIndex: 70,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-      onClick={onClose}
-    >
-      <div onClick={(e) => e.stopPropagation()}>
-        <Card pad={24} style={{ width: 380, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>Invite a teammate</div>
-          {token ? (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-                Invite sent. Share this one-time join link — it&apos;s shown only now:
-              </div>
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: '9px 11px',
-                  background: 'var(--bg)',
-                  border: '1px solid var(--bd)',
-                  borderRadius: 3,
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  wordBreak: 'break-all'
-                }}
-              >
-                {token}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-                <Button kind="primary" size="sm" onClick={onClose}>
-                  Done
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 4, lineHeight: 1.5 }}>
-                They&apos;ll join with access to this team&apos;s projects.
-              </div>
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="teammate@team.dev"
-                autoFocus
-                onKeyDown={(e) => e.key === 'Enter' && void send()}
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  marginTop: 16,
-                  background: 'var(--bg)',
-                  color: 'var(--tx)',
-                  border: '1px solid var(--bd)',
-                  borderRadius: 3,
-                  padding: '10px 12px',
-                  fontSize: 13,
-                  fontFamily: 'var(--font-ui)',
-                  outline: 'none'
-                }}
-              />
-              {error && (
-                <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>
-              )}
-              <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-                <Button kind="ghost" size="sm" onClick={onClose}>
-                  Cancel
-                </Button>
-                <Button kind="primary" size="sm" onClick={() => void send()}>
-                  {sending ? (
-                    <>
-                      <Spinner size={11} color="var(--acc-ink)" /> Sending…
-                    </>
-                  ) : (
-                    'Send invite'
-                  )}
-                </Button>
-              </div>
-            </>
+    <ModalShell onClose={onClose} width={380}>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>Invite a teammate</div>
+      {token ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
+            Invite sent. Share this one-time join link — it&apos;s shown only now:
+          </div>
+          <div
+            style={{
+              marginTop: 10,
+              padding: '9px 11px',
+              background: 'var(--bg)',
+              border: '1px solid var(--bd)',
+              borderRadius: 3,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              wordBreak: 'break-all'
+            }}
+          >
+            {token}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <Button kind="primary" size="sm" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 4, lineHeight: 1.5 }}>
+            They&apos;ll join with access to this team&apos;s projects.
+          </div>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="teammate@team.dev"
+            autoFocus
+            onKeyDown={(e) => e.key === 'Enter' && void send()}
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              marginTop: 16,
+              background: 'var(--bg)',
+              color: 'var(--tx)',
+              border: '1px solid var(--bd)',
+              borderRadius: 3,
+              padding: '10px 12px',
+              fontSize: 13,
+              fontFamily: 'var(--font-ui)',
+              outline: 'none'
+            }}
+          />
+          {error && (
+            <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>
           )}
-        </Card>
-      </div>
-    </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+            <Button kind="ghost" size="sm" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button kind="primary" size="sm" onClick={() => void send()}>
+              {sending ? (
+                <>
+                  <Spinner size={11} color="var(--acc-ink)" /> Sending…
+                </>
+              ) : (
+                'Send invite'
+              )}
+            </Button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   )
 }
 
