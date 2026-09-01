@@ -192,10 +192,9 @@ async def test_runner_streams_context_used_before_any_model_output(
     """The first frame of a turn declares WHAT context the model was handed —
     kind/citation/tokens only, never section text (prompt internals stay
     server-side)."""
-    from test_sol_red_team import _funded_ctx, _registry
-
     from solus_api.agent.runtime import LlmRunner
     from solus_api.agent.stream import AgentEventType
+    from test_sol_red_team import _funded_ctx, _registry
 
     model = _CitingModel("All good [error_store:err-101].")
     runner = LlmRunner(adapters={"anthropic": model})
@@ -218,10 +217,9 @@ async def test_runner_hands_the_model_the_fenced_custom_instruction(
     fenced as data, after the Solus-authored base (SOLUSDEV-233)."""
     import dataclasses
 
-    from test_sol_red_team import _funded_ctx, _registry
-
     from solus_api.agent.prompt import system_prompt
     from solus_api.agent.runtime import LlmRunner
+    from test_sol_red_team import _funded_ctx, _registry
 
     model = _CitingModel("Understood.")
     runner = LlmRunner(adapters={"anthropic": model})

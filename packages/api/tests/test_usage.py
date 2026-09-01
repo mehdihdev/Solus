@@ -132,3 +132,30 @@ async def test_usage_allowance_follows_the_plan(
 async def test_usage_requires_auth(client: AsyncClient) -> None:
     resp = await client.get("/api/v1/users/me/usage")
     assert resp.status_code == 401
+
+
+async def test_usage_is_user_scoped(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    """Cross-tenant isolation (§7): bob's ledger never leaks into alice's meter."""
+    bob = await me(client, bob_headers)
+    bob_id = uuid.UUID(bob["id"])
+    async with app.state.sessionmaker() as db:
+        await credits.add_credits(
+            db, bob_id, 500, CreditTxnType.PURCHASE, idempotency_key="bob-buy-1"
+        )
+        await credits.debit_credits(db, bob_id, 123, idempotency_key="bob-call-1")
+
+    resp = await client.get("/api/v1/users/me/usage", headers=alice_headers)
+    data = resp.json()["data"]
+    assert data["used"] == 0  # none of bob's 123 usage credits count for alice
+    # Alice's balance is her own — exactly what her /credits route reports.
+    own = await client.get("/api/v1/users/me/credits", headers=alice_headers)
+    assert data["balance"] == own.json()["data"]["balance"]
+
+    # And bob's own meter sees his spend, proving the seed took effect.
+    resp = await client.get("/api/v1/users/me/usage", headers=bob_headers)
+    assert resp.json()["data"]["used"] == 123

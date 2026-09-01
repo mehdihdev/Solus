@@ -261,6 +261,11 @@ export function useSolChat(projectId: string | null): SolChat {
               })
               return
             }
+            // Mid-stream credit exhaustion arrives as an error FRAME, not a
+            // 402 — it must light the top-up card too (security review L2).
+            if (event.type === 'error' && event.code === 'insufficient_credits') {
+              setCreditsExhausted(true)
+            }
             applyEvent(patch, event)
           }
         })

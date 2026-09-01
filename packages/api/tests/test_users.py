@@ -244,3 +244,20 @@ async def test_custom_instruction_text_never_reaches_data_events(
     assert events, "consented settings change must emit an event"
     for event in events:
         assert secret_text not in str(event.payload)
+
+
+async def test_custom_instruction_is_private_to_its_owner(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """The instruction is per-user prompt input (§7): another user's settings
+    response must never carry it."""
+    secret_note = "Alice's private preference about project Falcon."
+    await client.patch(
+        "/api/v1/users/me/settings",
+        json={"sol_custom_instruction": secret_note},
+        headers=alice_headers,
+    )
+    resp = await client.get("/api/v1/users/me/settings", headers=bob_headers)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["sol_custom_instruction"] is None
+    assert secret_note not in resp.text

@@ -290,6 +290,12 @@ def _hnsw(name: str, column: str) -> Index:
 
 
 # ----------------------------------------------------------------------- tenancy
+#: SOLUSDEV-233: single source of truth for the custom-instruction cap —
+#: enforced at the column, the API schema, and prompt assembly alike so the
+#: three bounds can never drift apart on a prompt-input surface.
+SOL_CUSTOM_INSTRUCTION_CAP = 500
+
+
 class User(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "users"
 
@@ -301,7 +307,9 @@ class User(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     sol_mode: Mapped[SolMode] = mapped_column(_enum_column(SolMode), default=SolMode.GUIDE)
     # SOLUSDEV-233: user-authored standing preference for SOL answers. Enters the
     # prompt ONLY as a fenced data block (agent/prompt.py) — never instruction text.
-    sol_custom_instruction: Mapped[str | None] = mapped_column(String(500), default=None)
+    sol_custom_instruction: Mapped[str | None] = mapped_column(
+        String(SOL_CUSTOM_INSTRUCTION_CAP), default=None
+    )
     # ADR-011: collection is consent-gated; nothing is recorded until the user opts in.
     data_collection_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     # FND-08 first-run state machine: about -> connect -> build -> done.

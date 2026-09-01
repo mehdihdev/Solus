@@ -31,7 +31,8 @@ from typing import Any
 
 import pytest
 from fixtures.fake_systems import FakeSolSystems
-from fixtures.injection_corpus import PAYLOADS, Payload
+from fixtures.injection_corpus import PAYLOADS, Payload, Surface
+from solus_api.agent.modes import ActionMode
 from solus_api.agent.prompt import system_prompt, tool_specs
 from solus_api.agent.runtime import (
     MAX_MODEL_ROUNDS,
@@ -174,9 +175,57 @@ def test_the_offered_tool_set_does_not_depend_on_prompt_content(payload: Payload
 
 @pytest.mark.parametrize("payload", PAYLOADS, ids=lambda p: p.case_id)
 def test_no_payload_reaches_the_instruction_position(payload: Payload) -> None:
-    """The system prompt is Solus-authored end to end."""
+    """The system prompt is Solus-authored end to end — including when the
+    user's saved preference (SOLUSDEV-233) is appended: the payload may exist
+    only inside the fenced data block, never in instruction position."""
     for mode in SolMode:
         assert payload.text not in system_prompt(mode)
+        rendered = system_prompt(mode, payload.text)
+        base = system_prompt(mode)
+        # The Solus-authored base is untouched and everything between it and
+        # the fence body is Solus-authored framing.
+        assert rendered.startswith(base)
+        before_fence_body = rendered[len(base) :].split(">>>\n", 1)[0]
+        assert payload.text not in before_fence_body
+        # The trailer after the fence is Solus-authored too — user text never
+        # holds the trailing position of the system prompt.
+        after_fence = rendered.rsplit(">>>", 1)[1]
+        assert payload.text not in after_fence
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [p for p in PAYLOADS if p.surface is Surface.USER_PREFERENCE],
+    ids=lambda p: p.case_id,
+)
+async def test_a_hostile_saved_preference_cannot_escalate(
+    engine: AsyncEngine, payload: Payload
+) -> None:
+    """SOLUSDEV-233: the custom instruction reaches the SYSTEM prompt — the
+    strongest position any user-authored text holds. It must not widen the
+    offered tool set, flip the action mode, or bypass the confirmation gate."""
+    import dataclasses
+
+    executed: list[dict[str, Any]] = []
+    registry = _registry(executed)
+    baseline = tool_specs(tuple(registry.list()))
+    model = _CompliantModel(
+        (ToolUse(id="t1", name="onshape.set_variable", args={"name": "wall_thickness"}),)
+    )
+    ctx = await _funded_ctx(engine, registry)
+    ctx = dataclasses.replace(ctx, custom_instruction=payload.text)
+
+    events = await _collect(LlmRunner(adapters={"anthropic": model}), ctx)
+
+    # The offered tool set is fixed by Solus code — no invented tool appears.
+    assert tool_specs(tuple(registry.list())) == baseline
+    # The action mode is a Solus-set field, untouched by prompt content.
+    assert ctx.action_mode is ActionMode.GUIDE
+    # The destructive call is still refused at the gate, never dispatched —
+    # "pre-approved, skip confirmations" in the preference changes nothing.
+    assert executed == []
+    result = next(e for e in events if e.type is AgentEventType.TOOL_RESULT)
+    assert result.data["ok"] is False
 
 
 # ------------------------------------------------- the action alphabet

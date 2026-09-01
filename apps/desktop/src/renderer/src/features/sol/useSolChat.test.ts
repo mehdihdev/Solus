@@ -348,3 +348,19 @@ describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', (
     expect(useOrbStore.getState().streaming).toBe(false)
   })
 })
+
+describe('mid-stream credit exhaustion (security review L2)', () => {
+  it('an insufficient_credits ERROR FRAME lights the top-up card too', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamWith([
+      { type: 'error', code: 'insufficient_credits', message: 'Not enough credits.' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.creditsExhausted).toBe(true)
+    expect(result.current.items.at(-1)?.error).toBe('Not enough credits.')
+  })
+})

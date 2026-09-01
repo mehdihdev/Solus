@@ -156,7 +156,11 @@ function GraphChipsCard({
               background: 'var(--sur2)',
               border: '1px solid var(--bd)',
               borderRadius: 99,
-              padding: '3px 9px'
+              padding: '3px 9px',
+              maxWidth: '100%',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
             }}
           >
             {label}
@@ -171,8 +175,10 @@ function GraphChipsCard({
 }
 
 /** The extra-sections/truncation footnote, or null when there is nothing to say. */
-function manifestFootnote(context: ContextUsedInfo, accounted: number): string | null {
-  const other = context.sections.length - accounted
+function manifestFootnote(context: ContextUsedInfo): string | null {
+  // Counted by KIND, never by subtraction — an uncited graph section must not
+  // masquerade as telemetry (security review M2).
+  const other = context.sections.filter((s) => s.kind === 'telemetry' || s.kind === 'error').length
   const parts: string[] = []
   if (other > 0) parts.push(`+ ${other} telemetry/error section${other === 1 ? '' : 's'}`)
   if (context.truncated) parts.push('context truncated to budget')
@@ -191,14 +197,19 @@ function ManifestCards({ context }: { context: ContextUsedInfo | null }): React.
     )
   }
   const documents = context.sections.filter((s) => s.kind === 'document' && s.citation)
-  const graph = context.sections.filter((s) => s.kind === 'graph' && s.citation)
+  const graphCited = context.sections.filter((s) => s.kind === 'graph' && s.citation)
+  // The backend's graph floor carries no citation — it is still real grounding
+  // and must show, aggregated (security review M2: a grounding panel that
+  // hides the graph misrepresents grounding).
+  const graphUncited = context.sections.filter((s) => s.kind === 'graph' && !s.citation).length
+  const graphLabels = [
+    ...graphCited.map((s) => citationLabel(s.citation ?? '')),
+    ...(graphUncited > 0 ? [`graph context ×${graphUncited}`] : [])
+  ]
   return (
     <>
       <ContextFilesCard labels={documents.map((s) => citationLabel(s.citation ?? ''))} />
-      <GraphChipsCard
-        labels={graph.map((s) => citationLabel(s.citation ?? ''))}
-        footnote={manifestFootnote(context, documents.length + graph.length)}
-      />
+      <GraphChipsCard labels={graphLabels} footnote={manifestFootnote(context)} />
     </>
   )
 }

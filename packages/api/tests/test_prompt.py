@@ -347,9 +347,20 @@ def test_hostile_custom_instruction_cannot_escape_its_fence(payload: Payload) ->
     assert body.isascii()
 
 
-def test_custom_instruction_is_capped() -> None:
-    huge = "x" * 10_000
-    rendered = system_prompt(SolMode.GUIDE, huge)
-    base = system_prompt(SolMode.GUIDE)
-    # Fence + framing overhead only — the body itself is bounded by the cap.
-    assert len(rendered) - len(base) < CUSTOM_INSTRUCTION_CAP + 400
+@pytest.mark.parametrize(
+    "hostile",
+    ["x" * 10_000, "<" * 500, "指" * 500, "\x00\r\n" * 200],
+    ids=["ascii-flood", "angle-flood", "cjk-flood", "control-flood"],
+)
+def test_custom_instruction_is_capped(hostile: str) -> None:
+    """The fenced BODY is bounded even under worst-case JSON expansion (a `<`
+    escapes 6x, CJK 6x); everything around it is Solus-authored constants. The
+    bound that matters is the encoded body against DATA_CAP — the raw 500-char
+    cap happens first, the encoder cap is the backstop."""
+    rendered = system_prompt(SolMode.GUIDE, hostile)
+    body = rendered.split(">>>\n", 1)[1].rsplit("\n<<<END-SOLUS-DATA", 1)[0]
+    assert len(body) <= DATA_CAP
+    assert "\n" not in body
+    assert body.isascii()
+    # And the raw preference really was truncated to the cap before encoding.
+    assert len(json.loads(body.replace("\\u003c", "<"))) <= CUSTOM_INSTRUCTION_CAP

@@ -27,6 +27,9 @@ const CONTEXT: ContextUsedInfo = {
     { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 200 },
     { kind: 'document', citation: '[github:act_policy.py]', tokens: 150 },
     { kind: 'graph', citation: '[graph:motor_driver]', tokens: 80 },
+    // The backend's graph floor carries NO citation (context.py _graph_section)
+    // — the panel must still show it (security review M2).
+    { kind: 'graph', citation: null, tokens: 60 },
     { kind: 'telemetry', citation: null, tokens: 40 }
   ],
   truncated: true,
@@ -53,6 +56,9 @@ describe('ContextPanel', () => {
     expect(screen.getByText('so101.urdf')).toBeInTheDocument()
     expect(screen.getByText('act_policy.py')).toBeInTheDocument()
     expect(screen.getByText('motor_driver')).toBeInTheDocument()
+    // An uncited graph section (the backend's graph floor) still shows —
+    // a grounding panel that hides the graph misrepresents grounding.
+    expect(screen.getByText('graph context ×1')).toBeInTheDocument()
     expect(screen.getByText(/1 telemetry\/error section/)).toBeInTheDocument()
     expect(screen.getByText(/truncated to budget/)).toBeInTheDocument()
   })
