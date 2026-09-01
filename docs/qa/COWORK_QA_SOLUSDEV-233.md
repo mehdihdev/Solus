@@ -11,6 +11,10 @@ a `total` count in its pagination meta.
 
 - [ ] Solus API running locally with a reachable database; desktop app running
       and signed in (workspace linked — not the offline dev-bypass state).
+- [ ] **Migrations applied**: this branch adds a `users` column — run
+      `alembic upgrade head` in `packages/api` against your dev database before
+      starting the API (startup `create_all` creates new tables but never adds
+      columns to existing ones; skipping this 500s every authed request).
 - [ ] One team where your user is **owner**, with at least one project.
 - [ ] **Seed at least 8 activity events** in that team. Any mix of: creating /
       renaming / archiving / unarchiving projects, sending or revoking invites,
