@@ -322,3 +322,13 @@ and **SOL USAGE** (credit meter + low-credit top-up).
      delete a chat from another machine, reopen it here — the app clears the
      stale local copy instead of showing refused data).
 5. Pass/fail: [ ]
+
+## Flow 18 — Dock / taskbar icon
+
+1. Run the app in dev on macOS.
+   - Expected: the DOCK shows the Solus mark (rounded dark tile, transparent
+     margin) — not the Electron logo.
+2. (When packaging) `electron-builder` output on macOS/Windows carries the
+   Solus icon from `apps/desktop/build/icon.png`; Windows taskbar identity
+   groups under com.solusforge.solus.
+3. Pass/fail: [ ]

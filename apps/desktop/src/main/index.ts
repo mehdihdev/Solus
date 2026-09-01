@@ -2,6 +2,7 @@ import { app, shell, dialog, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import dockIcon from '../../build/icon.png?asset'
 import {
   awaitGithubCallback,
   awaitOAuthCallback,
@@ -156,8 +157,14 @@ if (!app.requestSingleInstanceLock()) {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   app.whenReady().then(() => {
-    // Set app user model id for windows
-    electronApp.setAppUserModelId('com.electron')
+    // Windows taskbar identity — must match electron-builder's appId, not the
+    // scaffold's 'com.electron' leftover (SOLUSDEV-233 logo work).
+    electronApp.setAppUserModelId('com.solusforge.solus')
+
+    // macOS DEV dock: without this the dock shows the Electron binary's own
+    // icon — resources/icon.png only feeds Linux windows and packaged builds
+    // (which get theirs from build/icon.png via electron-builder).
+    if (process.platform === 'darwin') app.dock?.setIcon(dockIcon)
 
     // Default open or close DevTools by F12 in development
     // and ignore CommandOrControl + R in production.
