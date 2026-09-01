@@ -16,7 +16,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field
+from pydantic import Field, field_validator
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from solus_api.agent.confirmations import ParkedCall, decide_confirmation, request_confirmation
@@ -127,6 +127,20 @@ _ABORT_MESSAGES = {
 
 class ConversationCreate(StrictModel):
     title: str | None = Field(default=None, max_length=512)
+
+
+class ConversationRename(StrictModel):
+    """SOLUSDEV-233: the sidebar rename action — a non-blank title, trimmed."""
+
+    title: str = Field(min_length=1, max_length=512)
+
+    @field_validator("title")
+    @classmethod
+    def _trimmed_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 class MessageCreate(StrictModel):
@@ -246,6 +260,28 @@ async def list_turns(
     rows = list((await session.scalars(stmt)).all())
     visible, meta = page_meta(rows, limit)
     return envelope([serialize_turn(t) for t in visible], meta=meta)
+
+
+@router.patch("/conversations/{conversation_id}")
+async def rename_conversation(
+    conversation_id: uuid.UUID, body: ConversationRename, ctx: ProjectCtx, session: SessionDep
+) -> dict[str, Any]:
+    """Rename an owned conversation (SOLUSDEV-233 sidebar context menu)."""
+    require_role(ctx, Role.MEMBER)
+    conversation = await _owned_or_404(ctx, session, conversation_id)
+    conversation.title = body.title
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="sol.conversation.renamed",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        # Identifier only — titles are user-authored text (§7 event hygiene).
+        payload={"conversation_id": str(conversation_id)},
+    )
+    await session.commit()
+    await session.refresh(conversation)
+    return envelope(serialize_conversation(conversation))
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
@@ -540,6 +576,8 @@ async def post_message(
         systems=systems,
         project_id=ctx.project.id,
         sol_mode=ctx.user.sol_mode,
+        # SOLUSDEV-233: reaches the prompt only as a fenced data block.
+        custom_instruction=ctx.user.sol_custom_instruction,
         action_mode=body.action_mode,
         history=history,
         # Model-call identity (ADR-018). Without these the gateway silently

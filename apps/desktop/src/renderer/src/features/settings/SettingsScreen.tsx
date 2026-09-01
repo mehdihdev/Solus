@@ -4,6 +4,7 @@
 // and team management require a live connection (dev bypass shows a sign-in
 // prompt instead of fabricated data).
 import { Card } from '../../components/ui/Card'
+import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Spinner } from '../../components/ui/Spinner'
 import { useSettingsData } from './useSettingsData'
 import { useTeamData } from '../team/useTeamData'
@@ -51,11 +52,13 @@ export function SettingsScreen(): React.JSX.Element {
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
       <div style={{ maxWidth: 680, margin: '0 auto', padding: '22px 24px 48px' }}>
-        <h1
-          style={{ margin: '0 0 18px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}
-        >
-          Settings
-        </h1>
+        {/* Brand row (SOLUSDEV-233): the Solus logo beside the title. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 18px' }}>
+          <SolusLogo size={30} />
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
+            Settings
+          </h1>
+        </div>
 
         {online && <ProfileSection data={settings} />}
         <PreferencesSection data={settings} />

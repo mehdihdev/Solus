@@ -301,17 +301,34 @@ describe('useTeamData', () => {
     }
     const a2: resources.ActivityApi = { ...a1, id: 'act2' }
     vi.mocked(resources.listActivityPage)
-      .mockResolvedValueOnce({ data: [a1], meta: { has_next: true, next_cursor: 'c2' } })
-      .mockResolvedValueOnce({ data: [a2], meta: { has_next: false } })
+      .mockResolvedValueOnce({ data: [a1], meta: { has_next: true, next_cursor: 'c2', total: 2 } })
+      .mockResolvedValueOnce({ data: [a2], meta: { has_next: false, total: 2 } })
     const { result } = renderHook(() => useTeamData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.activityHasMore).toBe(true)
+    expect(result.current.activityTotal).toBe(2)
     await act(async () => {
       await result.current.loadMoreActivity()
     })
     expect(result.current.activity.map((a) => a.id)).toEqual(['act1', 'act2'])
     expect(result.current.activityHasMore).toBe(false)
-    expect(vi.mocked(resources.listActivityPage)).toHaveBeenLastCalledWith('t1', 'c2')
+    expect(vi.mocked(resources.listActivityPage)).toHaveBeenLastCalledWith('t1', { cursor: 'c2' })
+  })
+
+  it('falls back to the loaded count when the feed meta has no total', async () => {
+    const a1: resources.ActivityApi = {
+      id: 'act1',
+      type: 'project.created',
+      domain: null,
+      actor_id: 'u1',
+      project_id: 'p1',
+      payload: {},
+      created_at: '2026-07-03T00:00:00Z'
+    }
+    vi.mocked(resources.listActivityPage).mockResolvedValue({ data: [a1], meta: {} })
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.activityTotal).toBe(1)
   })
 })
 

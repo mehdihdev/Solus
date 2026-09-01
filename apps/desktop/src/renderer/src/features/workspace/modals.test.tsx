@@ -1,7 +1,19 @@
 // Shared workspace modals: submit round-trips, error surfacing, close behavior.
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { NameModal, JoinTeamModal, DeleteConfirmModal } from './modals'
+import { NameModal, JoinTeamModal, DeleteConfirmModal, ModalShell } from './modals'
+
+describe('ModalShell', () => {
+  it('carries the entrance-motion classes on backdrop and card (SOLUSDEV-233)', () => {
+    const { container } = render(
+      <ModalShell onClose={vi.fn()}>
+        <div>body</div>
+      </ModalShell>
+    )
+    expect(container.querySelector('.modal-backdrop-in')).not.toBeNull()
+    expect(container.querySelector('.modal-card-in')).not.toBeNull()
+  })
+})
 
 describe('NameModal', () => {
   it('submits the trimmed value and closes on success', async () => {

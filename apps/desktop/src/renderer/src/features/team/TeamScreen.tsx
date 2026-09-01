@@ -13,6 +13,8 @@ import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { Project, TeamMemberApi } from '../../lib/api/resources'
 import { activityText, actorName } from './activityText'
+import { ActivityModal, ViewAllActivityButton } from './ActivityModal'
+import { ACTIVITY_PREVIEW_COUNT } from './activityFeed.constants'
 import { useTeamData, type TeamData } from './useTeamData'
 import { useOfflineReason } from '../workspace/workspaceOnline'
 import { NameModal, JoinTeamModal } from '../workspace/modals'
@@ -132,6 +134,46 @@ function TeamSwitcher({
 /** Which modal (if any) the team screen has open. */
 type TeamModal = 'invite' | 'newTeam' | 'join' | 'newProject' | null
 
+/** Title, member count, switcher, and the join/new/invite actions. */
+function TeamHeader({
+  data,
+  canManage,
+  openModal
+}: {
+  data: TeamData
+  canManage: boolean
+  openModal: (modal: TeamModal) => void
+}): React.JSX.Element {
+  const { team, members, teams, actions } = data
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
+          {team?.name ?? 'Team'}
+        </h1>
+        <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>
+          {members.length} {members.length === 1 ? 'member' : 'members'}
+          {team && !team.is_personal ? '' : ' · personal workspace'}
+        </div>
+        <TeamSwitcher teams={teams} currentId={team?.id} onSwitch={actions.switchTeam} />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button kind="ghost" size="sm" onClick={() => openModal('join')}>
+          <Icons.mail size={13} /> Join team
+        </Button>
+        <Button kind="ghost" size="sm" onClick={() => openModal('newTeam')}>
+          <Icons.team size={13} /> New team
+        </Button>
+        {canManage && (
+          <Button id="btn-invite" kind="primary" size="sm" onClick={() => openModal('invite')}>
+            <Icons.plus size={13} /> Invite teammate
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function TeamScreenLive({
   data,
   onOpenProject
@@ -139,7 +181,7 @@ function TeamScreenLive({
   data: TeamData
   onOpenProject?: TeamScreenProps['onOpenProject']
 }): React.JSX.Element {
-  const { team, members, invites, activity, projects, teams, myRole, actions } = data
+  const { members, invites, activity, projects, myRole, actions } = data
   const canManage = myRole !== null && MANAGER_ROLES.includes(myRole)
   // Project creation is member+ (viewers are read-only, API.md §2.3).
   const canCreateProject = myRole !== null && myRole !== 'viewer'
@@ -149,31 +191,7 @@ function TeamScreenLive({
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
       <div style={{ maxWidth: 920, margin: '0 auto', padding: '22px 24px 48px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
-              {team?.name ?? 'Team'}
-            </h1>
-            <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>
-              {members.length} {members.length === 1 ? 'member' : 'members'}
-              {team && !team.is_personal ? '' : ' · personal workspace'}
-            </div>
-            <TeamSwitcher teams={teams} currentId={team?.id} onSwitch={actions.switchTeam} />
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button kind="ghost" size="sm" onClick={() => setModal('join')}>
-              <Icons.mail size={13} /> Join team
-            </Button>
-            <Button kind="ghost" size="sm" onClick={() => setModal('newTeam')}>
-              <Icons.team size={13} /> New team
-            </Button>
-            {canManage && (
-              <Button id="btn-invite" kind="primary" size="sm" onClick={() => setModal('invite')}>
-                <Icons.plus size={13} /> Invite teammate
-              </Button>
-            )}
-          </div>
-        </div>
+        <TeamHeader data={data} canManage={canManage} openModal={setModal} />
 
         <ProjectsPanel
           projects={projects}
@@ -191,7 +209,13 @@ function TeamScreenLive({
             alignItems: 'start'
           }}
         >
-          <LiveActivity activity={activity} members={members} />
+          <LiveActivity
+            activity={activity}
+            members={members}
+            total={data.activityTotal}
+            hasMore={data.activityHasMore}
+            onLoadMore={data.loadMoreActivity}
+          />
           <LiveMembers
             members={members}
             invites={invites}
@@ -330,11 +354,20 @@ function ProjectsPanel({
 
 function LiveActivity({
   activity,
-  members
+  members,
+  total,
+  hasMore,
+  onLoadMore
 }: {
   activity: TeamData['activity']
   members: readonly TeamMemberApi[]
+  total: number
+  hasMore: boolean
+  onLoadMore: () => Promise<void>
 }): React.JSX.Element {
+  const [showAll, setShowAll] = useState(false)
+  // The panel is a preview (SOLUSDEV-233); the dialog carries the full feed.
+  const preview = activity.slice(0, ACTIVITY_PREVIEW_COUNT)
   return (
     <Card pad={0}>
       <div
@@ -354,7 +387,7 @@ function LiveActivity({
           No activity yet. Syncs, invites, and project changes will show up here.
         </div>
       )}
-      {activity.map((a) => (
+      {preview.map((a) => (
         <div
           key={a.id}
           style={{
@@ -378,6 +411,19 @@ function LiveActivity({
           </div>
         </div>
       ))}
+      {total > ACTIVITY_PREVIEW_COUNT && (
+        <ViewAllActivityButton total={total} onClick={() => setShowAll(true)} />
+      )}
+      {showAll && (
+        <ActivityModal
+          activity={activity}
+          total={total}
+          members={members}
+          hasMore={hasMore}
+          onLoadMore={onLoadMore}
+          onClose={() => setShowAll(false)}
+        />
+      )}
     </Card>
   )
 }

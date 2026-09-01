@@ -11,6 +11,8 @@ import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { Project } from '../../lib/api/resources'
 import { activityText } from '../team/activityText'
+import { ActivityModal, ViewAllActivityButton } from '../team/ActivityModal'
+import { ACTIVITY_PREVIEW_COUNT } from '../team/activityFeed.constants'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
 import { useOfflineReason } from './workspaceOnline'
@@ -111,18 +113,54 @@ function LiveHome({
           )}
         </div>
 
-        <RecentActivity activity={home.activity} />
+        <RecentActivity activity={home.activity} total={home.activityTotal} />
       </div>
 
+      <HomeModals
+        actions={home.actions}
+        onOpenProject={onOpenProject}
+        creatingFor={creatingFor}
+        creatingTeam={creatingTeam}
+        joining={joining}
+        closeProject={() => setCreatingFor(null)}
+        closeTeam={() => setCreatingTeam(false)}
+        closeJoin={() => setJoining(false)}
+      />
+    </>
+  )
+}
+
+/** The home screen's create-project / create-team / join dialogs. */
+function HomeModals({
+  actions,
+  onOpenProject,
+  creatingFor,
+  creatingTeam,
+  joining,
+  closeProject,
+  closeTeam,
+  closeJoin
+}: {
+  actions: HomeData['actions']
+  onOpenProject: HomeScreenProps['onOpenProject']
+  creatingFor: string | null
+  creatingTeam: boolean
+  joining: boolean
+  closeProject: () => void
+  closeTeam: () => void
+  closeJoin: () => void
+}): React.JSX.Element {
+  return (
+    <>
       {creatingFor && (
         <NameModal
           title="New project"
           label="Project name"
           submitLabel="Create"
           errorText="Couldn't create the project. Check your access and try again."
-          onClose={() => setCreatingFor(null)}
+          onClose={closeProject}
           onSubmit={async (name) => {
-            const created = await home.actions.createProject(creatingFor, name)
+            const created = await actions.createProject(creatingFor, name)
             if (created) onOpenProject({ id: created.id, name: created.name })
             return created !== null
           }}
@@ -134,13 +172,11 @@ function LiveHome({
           label="Team name"
           submitLabel="Create"
           errorText="Couldn't create the team. Please try again."
-          onClose={() => setCreatingTeam(false)}
-          onSubmit={(name) => home.actions.createTeam(name)}
+          onClose={closeTeam}
+          onSubmit={(name) => actions.createTeam(name)}
         />
       )}
-      {joining && (
-        <JoinTeamModal onClose={() => setJoining(false)} onJoin={home.actions.joinTeam} />
-      )}
+      {joining && <JoinTeamModal onClose={closeJoin} onJoin={actions.joinTeam} />}
     </>
   )
 }
@@ -436,6 +472,7 @@ function MenuDropdown({
       <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={onClose} />
       <div
         role="menu"
+        className="popover-in"
         style={{
           position: 'absolute',
           right: 0,
@@ -494,7 +531,16 @@ function MenuItem({
   )
 }
 
-function RecentActivity({ activity }: { activity: HomeData['activity'] }): React.JSX.Element {
+function RecentActivity({
+  activity,
+  total
+}: {
+  activity: HomeData['activity']
+  total: number
+}): React.JSX.Element {
+  const [showAll, setShowAll] = useState(false)
+  // The panel is a preview (SOLUSDEV-233); the dialog carries the full feed.
+  const preview = activity.slice(0, ACTIVITY_PREVIEW_COUNT)
   return (
     <Card pad={0}>
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--bd)' }}>
@@ -503,7 +549,7 @@ function RecentActivity({ activity }: { activity: HomeData['activity'] }): React
       {activity.length === 0 ? (
         <div style={{ padding: '16px', fontSize: 12, color: 'var(--mut)' }}>Nothing yet.</div>
       ) : (
-        activity.map((a) => (
+        preview.map((a) => (
           <div key={a.id} style={{ padding: '11px 16px', borderBottom: '1px solid var(--bd)' }}>
             <div style={{ fontSize: 12, lineHeight: 1.5 }}>{activityText(a)}</div>
             <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 3 }}>
@@ -511,6 +557,12 @@ function RecentActivity({ activity }: { activity: HomeData['activity'] }): React
             </div>
           </div>
         ))
+      )}
+      {total > ACTIVITY_PREVIEW_COUNT && (
+        <ViewAllActivityButton total={total} onClick={() => setShowAll(true)} />
+      )}
+      {showAll && (
+        <ActivityModal activity={activity} total={total} onClose={() => setShowAll(false)} />
       )}
     </Card>
   )

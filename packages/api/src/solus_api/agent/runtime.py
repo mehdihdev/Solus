@@ -258,6 +258,9 @@ class AgentRunContext:
     #: (see modes.build_mode_dispatch), this field just makes the choice explicit
     #: and inspectable. Guide is the safe default — it never mutates.
     action_mode: ActionMode = ActionMode.GUIDE
+    #: SOLUSDEV-233: the user's saved preference note. Reaches the prompt only
+    #: through prompt.system_prompt's fenced data block, never as raw text.
+    custom_instruction: str | None = None
     history: tuple[TurnView, ...] = ()
     interaction_context: InteractionContext = InteractionContext.SOL_OPEN_QUESTION
     #: Model-call identity (ADR-018). A runner that makes a PAID call MUST refuse
@@ -523,7 +526,7 @@ class LlmRunner:
             # generic error event, and it is obvious in dev.
             raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
 
-        system = prompt.system_prompt(ctx.sol_mode)
+        system = prompt.system_prompt(ctx.sol_mode, ctx.custom_instruction)
         tools = prompt.tool_specs(ctx.tools)
         nonce = prompt.new_nonce()
         # SOL-02: plan what to pull (deterministic, no model call), assemble
@@ -537,6 +540,16 @@ class LlmRunner:
             window=plan.window,
             budget=plan.budget,
             k=plan.k,
+        )
+        # SOLUSDEV-233: declare the turn's context up front so clients can show
+        # what SOL is grounded in. Manifest only — no section text.
+        yield AgentEvent.context_used(
+            sections=[
+                {"kind": s.kind, "citation": s.citation, "tokens": s.tokens}
+                for s in context.sections
+            ],
+            truncated=context.truncated,
+            dropped=len(context.dropped),
         )
         turns = self._opening_turns(ctx, nonce, context)
         completion = None

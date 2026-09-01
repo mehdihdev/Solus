@@ -67,7 +67,17 @@ export function ClassifyIndicator({
   onReset
 }: ClassifyIndicatorProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
-  if (!preview) return null
+  if (!preview) {
+    // Always-visible (SOLUSDEV-233): the row is a stable part of the composer,
+    // never popping in mid-typing. Without a classification (empty input, or
+    // the debounce/endpoint hasn't answered) it shows an honest idle line in
+    // the same spot — no invented tier/model, no layout shift.
+    return (
+      <div style={{ ...MUTED, marginTop: 6, textAlign: 'right', userSelect: 'none' }}>
+        auto routing · sizes each message to the cheapest capable model
+      </div>
+    )
+  }
   const overridden = override.complexity !== null || override.type !== null
   const tierLabel = `${preview.complexity}${override.complexity ? ' (you)' : ''}`
   const typeLabel = `${preview.type}${override.type ? ' (you)' : ''}`

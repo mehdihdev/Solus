@@ -11,7 +11,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     ...actual,
     getMe: vi.fn(),
     listProjects: vi.fn(),
-    listActivity: vi.fn(),
+    listActivityPage: vi.fn(),
     createProject: vi.fn(),
     createTeam: vi.fn(),
     acceptInvite: vi.fn(),
@@ -75,7 +75,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ linked: true })
   vi.mocked(resources.getMe).mockResolvedValue(ME)
   vi.mocked(resources.listProjects).mockResolvedValue([PROJECT])
-  vi.mocked(resources.listActivity).mockResolvedValue(ACTIVITY)
+  vi.mocked(resources.listActivityPage).mockResolvedValue({ data: ACTIVITY, meta: { total: 9 } })
 })
 
 describe('useHomeData', () => {
@@ -85,6 +85,32 @@ describe('useHomeData', () => {
     expect(result.current.groups).toHaveLength(1)
     expect(result.current.groups[0].projects[0].name).toBe('Rover MK2')
     expect(result.current.activity[0].id).toBe('a2') // newest first
+    expect(result.current.activityTotal).toBe(9) // the server total, not the loaded count
+    expect(vi.mocked(resources.listActivityPage)).toHaveBeenCalledWith('t1', { limit: 50 })
+  })
+
+  it('merges activity across teams and sums the server totals', async () => {
+    vi.mocked(resources.getMe).mockResolvedValue({
+      ...ME,
+      teams: [ME.teams[0], { ...ME.teams[0], team_id: 't2', name: 'Rocket Lab' }]
+    })
+    vi.mocked(resources.listActivityPage).mockImplementation(async (teamId) =>
+      teamId === 't1'
+        ? { data: [ACTIVITY[0]], meta: { total: 5 } }
+        : { data: [ACTIVITY[1]], meta: { total: 3 } }
+    )
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.activity.map((a) => a.id)).toEqual(['a2', 'a1'])
+    expect(result.current.activityTotal).toBe(8)
+  })
+
+  it('stays ready with an empty feed when a team activity fetch fails', async () => {
+    vi.mocked(resources.listActivityPage).mockRejectedValue(new Error('down'))
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.activity).toEqual([])
+    expect(result.current.activityTotal).toBe(0)
   })
 
   it('is offline when the workspace is not linked', async () => {

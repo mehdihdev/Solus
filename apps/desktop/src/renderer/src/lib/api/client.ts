@@ -47,6 +47,10 @@ export interface Page<T> {
 /** Normalize a parsed JSON body + status into data or a thrown ApiError. */
 export function unwrapEnvelope<T>(status: number, body: unknown): T {
   if (status >= 200 && status < 300) {
+    // 204 No Content (every DELETE route) has no body. Reading `.data` off the
+    // null body used to throw AFTER the server had already acted, so the UI
+    // reported a failure for a delete that succeeded (SOLUSDEV-233).
+    if (body === null) return undefined as T
     return (body as ApiSuccess<T>).data
   }
   throw envelopeError(status, body)

@@ -30,6 +30,8 @@ yarn-error.log*
 node_modules/
 dist/
 build/
+# electron-builder buildResources are SOURCE, not output (SOLUSDEV-233 app icon)
+!apps/desktop/build/
 out/
 .next/
 .npm-cache/

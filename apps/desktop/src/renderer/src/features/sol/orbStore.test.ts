@@ -111,3 +111,12 @@ describe('sign-out (SOLX-02 Phase-4 security)', () => {
     expect(useOrbStore.getState().expanded).toBe(false)
   })
 })
+
+describe('clearConversation (SOLUSDEV-233)', () => {
+  it('forgets only the given project’s conversation', () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    useOrbStore.getState().setConversation('p2', 'c2')
+    useOrbStore.getState().clearConversation('p1')
+    expect(useOrbStore.getState().conversationByProject).toEqual({ p2: 'c2' })
+  })
+})

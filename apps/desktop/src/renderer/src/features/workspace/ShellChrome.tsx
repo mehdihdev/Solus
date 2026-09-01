@@ -159,6 +159,7 @@ export function OfflineNotifPopover({ onClose }: { onClose: () => void }): React
   const reason = useOfflineReason()
   return (
     <div
+      className="popover-in"
       style={{ position: 'absolute', top: 46, right: 12, width: 350, zIndex: 50 }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -207,6 +208,7 @@ export function NotificationsPopover({
   const hasUnread = items.some((n) => !n.read_at)
   return (
     <div
+      className="popover-in"
       style={{ position: 'absolute', top: 46, right: 12, width: 350, zIndex: 50 }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -299,7 +301,10 @@ export function ToastView({
   if (!toast) return null
   const ok = toast.kind === 'ok'
   return (
-    <div style={{ position: 'fixed', top: 58, right: 16, width: 360, zIndex: 75 }}>
+    <div
+      className="toast-in"
+      style={{ position: 'fixed', top: 58, right: 16, width: 360, zIndex: 75 }}
+    >
       <Card
         pad={14}
         style={{

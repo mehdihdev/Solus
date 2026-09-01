@@ -2,6 +2,7 @@ import { app, shell, dialog, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import dockIcon from '../../build/icon.png?asset'
 import {
   awaitGithubCallback,
   awaitOAuthCallback,
@@ -26,6 +27,7 @@ import {
   unlinkProjectFolder
 } from './localState'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
+import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
@@ -70,6 +72,27 @@ function registerFolderRegistryHandlers(): void {
   })
   ipcMain.handle('folder:links', (event) =>
     isMainRendererSender(event) ? readRegistry(realLocalStateDeps).registry.projects : {}
+  )
+}
+
+/** The machine-local SOL chat cache (~/.solus, ADR-034 Layer 1 — SOLUSDEV-233).
+ *  Ids and sizes are re-validated inside solChatCache; content is an opaque
+ *  JSON string the renderer owns. */
+function registerSolChatCacheHandlers(): void {
+  const deps = realSolChatCacheDeps
+  ipcMain.handle('solchat:read', (event, projectId: unknown, conversationId: unknown) =>
+    solChatCacheIpc.read(isMainRendererSender(event), projectId, conversationId, deps)
+  )
+  ipcMain.handle(
+    'solchat:write',
+    (event, projectId: unknown, conversationId: unknown, content: unknown) =>
+      solChatCacheIpc.write(isMainRendererSender(event), projectId, conversationId, content, deps)
+  )
+  ipcMain.handle('solchat:remove', (event, projectId: unknown, conversationId: unknown) =>
+    solChatCacheIpc.remove(isMainRendererSender(event), projectId, conversationId, deps)
+  )
+  ipcMain.handle('solchat:clear', (event) =>
+    solChatCacheIpc.clear(isMainRendererSender(event), deps)
   )
 }
 
@@ -134,8 +157,14 @@ if (!app.requestSingleInstanceLock()) {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   app.whenReady().then(() => {
-    // Set app user model id for windows
-    electronApp.setAppUserModelId('com.electron')
+    // Windows taskbar identity — must match electron-builder's appId, not the
+    // scaffold's 'com.electron' leftover (SOLUSDEV-233 logo work).
+    electronApp.setAppUserModelId('com.solusforge.solus')
+
+    // macOS DEV dock: without this the dock shows the Electron binary's own
+    // icon — resources/icon.png only feeds Linux windows and packaged builds
+    // (which get theirs from build/icon.png via electron-builder).
+    if (process.platform === 'darwin') app.dock?.setIcon(dockIcon)
 
     // Default open or close DevTools by F12 in development
     // and ignore CommandOrControl + R in production.
@@ -175,6 +204,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
 
     registerFolderRegistryHandlers()
+    registerSolChatCacheHandlers()
 
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
     // portal URL (returned by our API) in the system browser. Only the app's

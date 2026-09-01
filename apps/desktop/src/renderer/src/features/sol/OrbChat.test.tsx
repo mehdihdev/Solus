@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import * as solApi from './solApi'
 import * as resources from '../../lib/api/resources'
 import { useOrbStore } from './orbStore'
+import { resetSolChatSessions } from './solChatStore'
 import { OrbChat } from './OrbChat'
 
 vi.mock('./solApi', () => ({
@@ -29,6 +30,8 @@ const LONG_CITATION = `entity:${'x'.repeat(90)}`
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
+  // Sessions outlive components (SOLUSDEV-233) — reset the singleton per test.
+  resetSolChatSessions()
   useOrbStore.setState({
     corner: 'br',
     expanded: false,
@@ -196,8 +199,9 @@ describe('OrbChat streaming render (SOL-02 obligations)', () => {
     await waitFor(() => expect(screen.getByTestId('tool-trace')).toBeInTheDocument())
     const trace = screen.getByTestId('tool-trace')
     expect(within(trace).getByText('2 tool steps')).toBeInTheDocument()
-    expect(within(trace).getByText(/get_entity — ok/)).toBeInTheDocument()
-    expect(within(trace).getByText(/run_checker — not_found/)).toBeInTheDocument()
+    // Arrow format matches the backend's persisted tool turns (SOLUSDEV-233).
+    expect(within(trace).getByText(/get_entity → ok/)).toBeInTheDocument()
+    expect(within(trace).getByText(/run_checker → not_found/)).toBeInTheDocument()
     expect(trace).not.toHaveAttribute('open')
   })
 

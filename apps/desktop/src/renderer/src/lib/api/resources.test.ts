@@ -328,8 +328,8 @@ describe('team resources', () => {
   it('paginated list variants pass the cursor through as a query param', async () => {
     const { listActivityPage, listNotificationsPage } = await import('./resources')
     const { client, calls } = stubClient([])
-    await listActivityPage('t1', 'cur9', client)
-    await listActivityPage('t1', undefined, client)
+    await listActivityPage('t1', { cursor: 'cur9' }, client)
+    await listActivityPage('t1', {}, client)
     await listNotificationsPage('cur9', client)
     await listNotificationsPage(undefined, client)
     expect(calls.map((c) => c.path)).toEqual([
@@ -338,6 +338,38 @@ describe('team resources', () => {
       '/users/me/notifications?cursor=cur9',
       '/users/me/notifications'
     ])
+  })
+
+  it('activity page requests carry limit and cursor together', async () => {
+    const { listActivityPage } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listActivityPage('t1', { limit: 100 }, client)
+    await listActivityPage('t1', { cursor: 'cur9', limit: 25 }, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1/activity?limit=100',
+      '/teams/t1/activity?cursor=cur9&limit=25'
+    ])
+  })
+
+  it('updates and clears the SOL custom instruction (SOLUSDEV-233)', async () => {
+    const { updateCustomInstruction } = await import('./resources')
+    const { client, calls } = stubClient({})
+    await updateCustomInstruction('Prefer metric units.', client)
+    await updateCustomInstruction(null, client)
+    expect(calls[0].path).toBe('/users/me/settings')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { sol_custom_instruction: 'Prefer metric units.' }
+    })
+    expect(calls[1].options).toMatchObject({ body: { sol_custom_instruction: null } })
+  })
+
+  it('fetches the credit usage meter (SOLUSDEV-233)', async () => {
+    const { getUsage } = await import('./resources')
+    const { client, calls } = stubClient({ used: 941, allowance: 10000, balance: 9059 })
+    const usage = await getUsage(client)
+    expect(calls[0].path).toBe('/users/me/usage')
+    expect(usage.used).toBe(941)
   })
 
   it('fetches team detail, activity, and notifications', async () => {

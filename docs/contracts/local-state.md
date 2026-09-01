@@ -12,13 +12,13 @@
 The machine-local, private, never-synced layer of ADR-034: files under `~/.solus/` on the user's
 computer. The team-shared repo `.solus/` layer (TOML) is a separate, later contract.
 
-| Path                      | Contents                                     | Writer               | Readers                 |
-| ------------------------- | -------------------------------------------- | -------------------- | ----------------------- |
-| `~/.solus/companion_id`   | 32-hex machine identity (pre-dates this)     | companion            | companion               |
-| `~/.solus/projects.json`  | `ProjectRegistry` — project→working-copy     | desktop MAIN process | desktop main, companion |
-| `~/.solus/config.json`    | machine prefs — **reserved**, schema TBD     | —                    | —                       |
-| `~/.solus/projects/<id>/` | per-project overrides + cache — **reserved** | —                    | —                       |
-| `~/.solus/logs/`          | log files — **reserved** (Ticket E)          | —                    | —                       |
+| Path                      | Contents                                                                                                                                                                                     | Writer               | Readers                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------------------- |
+| `~/.solus/companion_id`   | 32-hex machine identity (pre-dates this)                                                                                                                                                     | companion            | companion               |
+| `~/.solus/projects.json`  | `ProjectRegistry` — project→working-copy                                                                                                                                                     | desktop MAIN process | desktop main, companion |
+| `~/.solus/config.json`    | machine prefs — **reserved**, schema TBD                                                                                                                                                     | —                    | —                       |
+| `~/.solus/projects/<id>/` | `sol/<conversationId>.json` — SOL chat cache (`{schema_version: 1, items: [{role, content}]}`, 0600, atomic writes, 2 MB byte cap; ADR-034 amendment 2026-09-01). Other content **reserved** | desktop MAIN process | desktop main/renderer   |
+| `~/.solus/logs/`          | log files — **reserved** (Ticket E)                                                                                                                                                          | —                    | —                       |
 
 Reserved entries are named by ADR-034 but carry no schema yet; a schema lands here (and in both
 packages) before the first byte is written to them.

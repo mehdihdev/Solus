@@ -32,6 +32,7 @@ const ME: resources.Me = {
 }
 const SETTINGS: resources.UserSettings = {
   sol_mode: 'guide',
+  sol_custom_instruction: null,
   data_collection_consent: true,
   onboarding_step: 'done'
 }

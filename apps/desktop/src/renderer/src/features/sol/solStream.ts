@@ -14,8 +14,22 @@
 
 import { toPendingConfirmation, type PendingConfirmation } from '../../lib/api/solStream'
 
+/** One entry of the turn's context manifest (SOLUSDEV-233) — labels only. */
+export interface ContextSectionInfo {
+  kind: string
+  citation: string | null
+  tokens: number
+}
+
+export interface ContextUsedInfo {
+  sections: readonly ContextSectionInfo[]
+  truncated: boolean
+  dropped: number
+}
+
 export type SolStreamEvent =
   | { type: 'token'; text: string }
+  | ({ type: 'context_used' } & ContextUsedInfo)
   | { type: 'tool_call'; callId: string; tool: string }
   | { type: 'tool_result'; callId: string; ok: boolean; errorCode: string | null }
   | { type: 'tool_confirmation'; pending: PendingConfirmation }
@@ -40,8 +54,31 @@ function str(value: unknown): value is string {
 type Fields = Record<string, unknown>
 
 /** One small validator per frame name; anything unproven drops the frame. */
+function toSection(value: unknown): ContextSectionInfo | null {
+  if (typeof value !== 'object' || value === null) return null
+  const d = value as Fields
+  if (!str(d.kind) || typeof d.tokens !== 'number') return null
+  if (d.citation !== null && !str(d.citation)) return null
+  return { kind: d.kind, citation: d.citation, tokens: d.tokens }
+}
+
 const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
   token: (d) => (str(d.text) ? { type: 'token', text: d.text } : null),
+  // SOLUSDEV-233: the turn's context manifest — kind/citation/tokens labels
+  // only; the backend never sends section text and this validator would drop
+  // any frame that tried to smuggle a different shape.
+  context_used: (d) => {
+    if (!Array.isArray(d.sections)) return null
+    if (typeof d.truncated !== 'boolean' || typeof d.dropped !== 'number') return null
+    const sections = d.sections.map(toSection)
+    if (sections.some((s) => s === null)) return null
+    return {
+      type: 'context_used',
+      sections: sections as ContextSectionInfo[],
+      truncated: d.truncated,
+      dropped: d.dropped
+    }
+  },
   // args intentionally not carried across (see module header).
   tool_call: (d) =>
     str(d.call_id) && str(d.tool) ? { type: 'tool_call', callId: d.call_id, tool: d.tool } : null,

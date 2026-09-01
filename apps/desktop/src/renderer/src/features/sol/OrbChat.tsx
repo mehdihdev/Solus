@@ -42,7 +42,9 @@ function TraceView({ trace }: { trace: readonly TraceEntry[] }): React.JSX.Eleme
       </summary>
       {trace.map((t) => (
         <div key={t.callId} style={{ ...MUTED, fontFamily: 'var(--font-mono)', padding: '2px 0' }}>
-          {t.tool} — {t.ok === null ? 'running…' : t.ok ? 'ok' : (t.errorCode ?? 'error')}
+          {/* Same arrow format the backend persists (`tool → outcome`), so live
+              and reloaded turns read as one language (SOLUSDEV-233). */}
+          {t.tool} → {t.ok === null ? 'running…' : t.ok ? 'ok' : (t.errorCode ?? 'error')}
         </div>
       ))}
     </details>
@@ -88,7 +90,7 @@ function MessageRow({
 }): React.JSX.Element {
   if (item.role === 'user') {
     return (
-      <div style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
+      <div className="sol-msg-in" style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
         <div
           style={{
             background: 'var(--sur2)',
@@ -106,12 +108,17 @@ function MessageRow({
   }
   if (item.role === 'tool') {
     return (
-      <div style={{ ...MUTED, fontFamily: 'var(--font-mono)', fontSize: 10.5 }}>{item.content}</div>
+      <div
+        className="sol-msg-in"
+        style={{ ...MUTED, fontFamily: 'var(--font-mono)', fontSize: 10.5 }}
+      >
+        {item.content}
+      </div>
     )
   }
   const confirmation = item.confirmation
   return (
-    <div style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
+    <div className="sol-msg-in" style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
       <TraceView trace={item.trace} />
       {item.content ? (
         <SolMarkdown content={item.content} />
@@ -285,10 +292,20 @@ export interface OrbChatProps {
   projectId: string | null
   /** 'panel' fills the orb popover; 'page' is the SolScreen column. */
   layout?: 'panel' | 'page'
+  /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
+   *  context panel from the same one). Omitted, the surface owns its own. */
+  chat?: SolChat
 }
 
-export function OrbChat({ projectId, layout = 'panel' }: OrbChatProps): React.JSX.Element {
-  const chat = useSolChat(projectId)
+export function OrbChat({
+  projectId,
+  layout = 'panel',
+  chat: shared
+}: OrbChatProps): React.JSX.Element {
+  // Hooks run unconditionally; with a shared instance the internal hook is
+  // parked on a null project, which is inert (no fetch, no store writes).
+  const ownChat = useSolChat(shared ? null : projectId)
+  const chat = shared ?? ownChat
   if (!projectId) {
     return (
       <div style={{ ...MUTED, padding: 16, textAlign: 'center' }}>

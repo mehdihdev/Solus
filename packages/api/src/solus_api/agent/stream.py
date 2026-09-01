@@ -25,6 +25,9 @@ class AgentEventType(enum.StrEnum):
     the persisted ids."""
 
     TOKEN = "token"  # noqa: S105 — an event-type label, not a credential
+    #: SOLUSDEV-233: what context the model was handed this turn — kinds,
+    #: citations and token weights only, never section text.
+    CONTEXT_USED = "context_used"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     #: SOLUS-ONS-A5: a destructive action is parked awaiting the user.
@@ -46,6 +49,17 @@ class AgentEvent(BaseModel):
     @classmethod
     def token(cls, text: str) -> Self:
         return cls(type=AgentEventType.TOKEN, data={"text": text})
+
+    @classmethod
+    def context_used(cls, *, sections: list[dict[str, Any]], truncated: bool, dropped: int) -> Self:
+        """The turn's context manifest (SOLUSDEV-233): one frame at turn start
+        naming each assembled section by kind/citation/tokens. Section TEXT is
+        deliberately absent — prompt internals never cross the wire; the
+        citation is the same verified provenance surface `message` carries."""
+        return cls(
+            type=AgentEventType.CONTEXT_USED,
+            data={"sections": sections, "truncated": truncated, "dropped": dropped},
+        )
 
     @classmethod
     def tool_call(cls, call: ToolCall) -> Self:

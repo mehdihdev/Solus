@@ -7,7 +7,8 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 
-/** Shared modal chrome: dim backdrop, centered card, click-out to close. */
+/** Shared modal chrome: dim backdrop, centered card, click-out to close.
+ *  Entrance motion via .modal-backdrop-in/.modal-card-in (main.css). */
 export function ModalShell({
   onClose,
   width = 360,
@@ -20,6 +21,7 @@ export function ModalShell({
 }): React.JSX.Element {
   return (
     <div
+      className="modal-backdrop-in"
       style={{
         position: 'fixed',
         inset: 0,
@@ -31,7 +33,7 @@ export function ModalShell({
       }}
       onClick={onClose}
     >
-      <div onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card-in" onClick={(e) => e.stopPropagation()}>
         <Card pad={24} style={{ width, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
           {children}
         </Card>
@@ -60,6 +62,7 @@ export function NameModal({
   submitLabel = 'Create',
   initial = '',
   errorText = 'Something went wrong. Please try again.',
+  maxLength,
   onClose,
   onSubmit
 }: {
@@ -68,6 +71,8 @@ export function NameModal({
   submitLabel?: string
   initial?: string
   errorText?: string
+  /** Client-side mirror of the server's length cap, when the field has one. */
+  maxLength?: number
   onClose: () => void
   /** Resolve true on success (modal closes) or false to keep it open with an error. */
   onSubmit: (name: string) => Promise<boolean>
@@ -96,6 +101,7 @@ export function NameModal({
         onChange={(e) => setName(e.target.value)}
         placeholder={label}
         autoFocus
+        maxLength={maxLength}
         onKeyDown={(e) => e.key === 'Enter' && void submit()}
         style={MODAL_INPUT_STYLE}
       />
@@ -168,12 +174,18 @@ export function JoinTeamModal({
 export function DeleteConfirmModal({
   name,
   onClose,
-  onConfirm
+  onConfirm,
+  noun = 'project',
+  detail = 'and its graph'
 }: {
   name: string
   onClose: () => void
   /** Resolve true on success (modal closes) or false to keep it open with an error. */
   onConfirm: () => Promise<boolean>
+  /** What is being deleted — drives the heading, button, and error copy. */
+  noun?: string
+  /** What goes with it (e.g. "and its graph", "and its messages"). */
+  detail?: string
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -186,14 +198,14 @@ export function DeleteConfirmModal({
       return
     }
     setBusy(false)
-    setError("Couldn't delete this project. Check your access and try again.")
+    setError(`Couldn't delete this ${noun}. Check your access and try again.`)
   }
   return (
     <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Delete project</div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>Delete {noun}</div>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        Permanently delete <strong style={{ color: 'var(--tx)' }}>{name}</strong> and its graph.
-        This cannot be undone.
+        Permanently delete <strong style={{ color: 'var(--tx)' }}>{name}</strong> {detail}. This
+        cannot be undone.
       </div>
       {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
@@ -201,7 +213,7 @@ export function DeleteConfirmModal({
           Cancel
         </Button>
         <Button kind="danger" size="sm" onClick={() => void confirm()}>
-          {busy ? <Spinner size={11} /> : 'Delete project'}
+          {busy ? <Spinner size={11} /> : `Delete ${noun}`}
         </Button>
       </div>
     </ModalShell>

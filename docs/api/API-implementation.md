@@ -201,6 +201,7 @@ the **sole owner of a shared team** — transfer ownership first.
 {
   "data": {
     "sol_mode": "guide",
+    "sol_custom_instruction": null,
     "data_collection_consent": false,
     "onboarding_step": "about"
   }
@@ -209,7 +210,9 @@ the **sole owner of a shared team** — transfer ownership first.
 
 `data_collection_consent` is the ADR-011 opt-in/out switch (default **false**; see §9 —
 events are recorded only while consented). `onboarding_step`
-(`about|connect|build|done`) is the FND-08 resume point.
+(`about|connect|build|done`) is the FND-08 resume point. `sol_custom_instruction`
+(SOLUSDEV-233) is the user's standing preference note for SOL — 500 chars max; it
+reaches the prompt only as a fenced data block, never as instruction text (§7).
 
 ### PATCH /api/v1/users/me/settings
 
@@ -217,8 +220,34 @@ events are recorded only while consented). `onboarding_step`
 { "sol_mode": "expert" }
 ```
 
-`200` — same shape as GET with the change applied. All three fields are patchable
+`200` — same shape as GET with the change applied. All fields are patchable
 independently; ADR-016: `sol_mode` switchable any time. `"sol_mode":"yolo"` → `422`.
+`sol_custom_instruction` is tri-state: absent = unchanged, `null` = clear, a string
+sets it (`> 500` chars → `422`). The `settings.updated` data event records only
+`"set"`/`"cleared"` for this field — never the text.
+
+### GET /api/v1/users/me/usage
+
+`200` — the always-visible meter (ADR-018, SOLUSDEV-233). Credit-denominated
+(ADR-018 rejected raw token metering):
+
+```json
+{
+  "data": {
+    "used": 941,
+    "allowance": 10000,
+    "balance": 9059,
+    "cycle_start": "2026-08-10T00:00:00+00:00",
+    "cycle_end": "2026-09-10T00:00:00+00:00"
+  }
+}
+```
+
+`used` sums USAGE ledger debits inside the current cycle — the monthly anniversary
+window anchored at the subscription's creation (day clamped in short months,
+Stripe-style), UTC calendar month before a subscription exists. `allowance` is the
+plan's starting-credit grant (`settings.plan_credit_grants`; `null` = no
+plan-derived denominator — clients show the balance alone).
 
 ### GET /api/v1/users/me/subscription
 
@@ -494,10 +523,16 @@ actions in this phase:
   "meta": {
     "limit": 3,
     "has_next": true,
-    "next_cursor": "WyIyMDI2LTA2LTEzVDAwOjI4OjUzLjI3NzMyMSIsICIwMTllYmU2MS1hZTlkLTdlNjMtYmIwYi03MjYxYjEwMWFmMTUiXQ"
+    "next_cursor": "WyIyMDI2LTA2LTEzVDAwOjI4OjUzLjI3NzMyMSIsICIwMTllYmU2MS1hZTlkLTdlNjMtYmIwYi03MjYxYjEwMWFmMTUiXQ",
+    "total": 7
   }
 }
 ```
+
+`meta.total` (SOLUSDEV-233) is the count of ALL activity rows matching the team scope and any
+`type`/`domain`/`actor` filters — independent of `limit` and `cursor`, so it stays stable while
+paging. Clients use it for "View all activity (N)" affordances. The count scan is capped at
+1000 rows (`TOTAL_COUNT_CAP`, §7 cost control): a feed past the cap reports exactly 1000.
 
 ---
 
@@ -803,6 +838,7 @@ require the `member` role; reads need only a resolvable project.
 | GET    | `/sol/conversations/{id}`          | Get one owned conversation                                                              | `200`   |
 | DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                                                       | `204`   |
 | GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                                          | `200`   |
+| PATCH  | `/sol/conversations/{id}`          | Rename an owned conversation (`{title}`, non-blank, trimmed — SOLUSDEV-233)             | `200`   |
 | POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
 | POST   | `/sol/confirmations/{id}`          | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
 
@@ -817,6 +853,10 @@ Returns `text/event-stream`. The user turn is persisted
 completes. SSE `event:` names and their `data` payloads:
 
 - `token` — `{"text": "…"}` incremental reply delta
+- `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped"}`
+  (SOLUSDEV-233) the turn's context manifest, streamed once at turn start. Section
+  TEXT never crosses the wire — kinds (`graph|telemetry|error|document`), verified
+  citation tokens, and token weights only. Drives the client's "context in use" panel.
 - `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
 - `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
 - `message` — `{"role":"assistant","content":"…","citations":["…"]}` the finished reply;
@@ -985,13 +1025,13 @@ points livebench → solus-api): a server without livebench answers `GET /source
 honest for today's dev topology (API on the user's machine); a future companion-hosted runner
 swaps in behind these same routes.
 
-| Method | Path                                                             | Purpose                                                                                          | Success |
-| ------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------- |
-| GET    | `/api/v1/projects/{project_id}/bench/sources`                    | Honest machine inventory: simulators (available/not + reason), serial devices, runner state      | `200`   |
-| POST   | `/api/v1/projects/{project_id}/bench/sessions`                   | Start a session (`{mode, config}` discriminated on `config.provider`; member role)               | `201`   |
-| GET    | `/api/v1/projects/{project_id}/bench/sessions`                   | List sessions, `?status=active\|ended&mode=sim\|real` (bounded ended ring)                       | `200`   |
-| GET    | `/api/v1/projects/{project_id}/bench/sessions/{session_id}`      | Session detail: status, live link state, device_ids seen, counts, last window summary            | `200`   |
-| POST   | `/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop` | Stop (idempotent; `aclose` teardown flushes the pending window; member role)                     | `200`   |
+| Method | Path                                                             | Purpose                                                                                                                                                    | Success |
+| ------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| GET    | `/api/v1/projects/{project_id}/bench/sources`                    | Honest machine inventory: simulators (available/not + reason), serial devices, runner state                                                                | `200`   |
+| POST   | `/api/v1/projects/{project_id}/bench/sessions`                   | Start a session (`{mode, config}` discriminated on `config.provider`; member role)                                                                         | `201`   |
+| GET    | `/api/v1/projects/{project_id}/bench/sessions`                   | List sessions, `?status=active\|ended&mode=sim\|real` (bounded ended ring)                                                                                 | `200`   |
+| GET    | `/api/v1/projects/{project_id}/bench/sessions/{session_id}`      | Session detail: status, live link state, device_ids seen, counts, last window summary                                                                      | `200`   |
+| POST   | `/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop` | Stop (idempotent; `aclose` teardown flushes the pending window; member role)                                                                               | `200`   |
 | GET    | `/api/v1/projects/{project_id}/bench/device-recent`              | `?device_id=…` (repeated, 1–16) `&limit=` — batched recent values for devices with NO graph entity yet (pre-RBT-05); one request covers every polled panel | `200`   |
 
 Providers and their config (all bodies `extra="forbid"`): `mujoco` (inline MJCF ≤2 MB or the

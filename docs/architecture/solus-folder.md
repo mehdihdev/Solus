@@ -1,6 +1,10 @@
 # The `.solus` Folder — Two-Layer Local & Project Config
 
-> **Status: Ticket A IMPLEMENTED (SOLUSDEV-166); Tickets B–E planned.** ADR-034 is ratified and
+> **Status: Ticket A IMPLEMENTED (SOLUSDEV-166); Tickets B–E planned.** **SOLUSDEV-233 adds
+> the first `projects/<id>/` occupant: `projects/<id>/sol/<conversationId>.json` — a
+> machine-local CACHE of a SOL chat's settled turns (instant re-open, offline reading). The
+> server remains the source of truth for conversations; ids are validated main-process-side
+> and files are 0600 under the 0700 home.** ADR-034 is ratified and
 > Layer 1 is live: the `~/.solus/projects.json` registry (contract in
 > `docs/contracts/local-state.md`, shapes in `packages/shared-types` + `solus_contracts`), the
 > desktop write-through and hydration, `SOLUS_COMPANION_WORKSPACE` derivation at companion spawn,

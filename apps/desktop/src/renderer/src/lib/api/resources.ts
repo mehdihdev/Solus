@@ -215,6 +215,8 @@ export type OnboardingStepName = 'about' | 'connect' | 'build' | 'done'
 
 export interface UserSettings {
   sol_mode: ApiSolMode
+  /** Standing preference note for SOL (SOLUSDEV-233); null when unset. */
+  sol_custom_instruction: string | null
   data_collection_consent: boolean
   onboarding_step: OnboardingStepName | string
 }
@@ -229,6 +231,31 @@ export function updateConsent(consent: boolean, client: ApiClient = api): Promis
     method: 'PATCH',
     body: { data_collection_consent: consent }
   })
+}
+
+/** Set (string) or clear (null) the SOL custom instruction (SOLUSDEV-233). */
+export function updateCustomInstruction(
+  instruction: string | null,
+  client: ApiClient = api
+): Promise<UserSettings> {
+  return client.request<UserSettings>('/users/me/settings', {
+    method: 'PATCH',
+    body: { sol_custom_instruction: instruction }
+  })
+}
+
+/** GET /users/me/usage (SOLUSDEV-233): the ADR-018 always-visible meter,
+ *  credit-denominated. `allowance` null = no plan-derived denominator. */
+export interface UsageApi {
+  used: number
+  allowance: number | null
+  balance: number
+  cycle_start: string
+  cycle_end: string
+}
+
+export function getUsage(client: ApiClient = api): Promise<UsageApi> {
+  return client.request<UsageApi>('/users/me/usage')
 }
 
 /** Update the current user's profile (display name / avatar) — PATCH /users/me. */
@@ -704,14 +731,27 @@ export function listActivity(teamId: string, client: ApiClient = api): Promise<A
   return client.request<ActivityApi[]>(`/teams/${teamId}/activity`)
 }
 
-/** One cursor page of the team activity feed (§2.2) — carries pagination meta. */
+export interface ActivityPageOptions {
+  cursor?: string
+  /** Server caps at 100 (API.md §2.2); defaults to 50 when omitted. */
+  limit?: number
+}
+
+/** One cursor page of the team activity feed (§2.2) — carries pagination meta
+ *  including `total`, the filter-matching row count across the whole feed. */
 export function listActivityPage(
   teamId: string,
-  cursor?: string,
+  options: ActivityPageOptions = {},
   client: ApiClient = api
 ): Promise<Page<ActivityApi[]>> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
-  return client.requestPage<ActivityApi[]>(`/teams/${teamId}/activity${query}`)
+  const params = new URLSearchParams()
+  if (options.cursor) params.set('cursor', options.cursor)
+  if (options.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+  // teamId is server-issued today; encoded anyway so it can never alter the path.
+  return client.requestPage<ActivityApi[]>(
+    `/teams/${encodeURIComponent(teamId)}/activity${query ? `?${query}` : ''}`
+  )
 }
 
 /* ---------------- Notifications (§2.1) ---------------- */

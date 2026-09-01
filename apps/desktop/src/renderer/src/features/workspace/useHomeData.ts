@@ -10,7 +10,7 @@ import {
   createTeam as createTeamApi,
   deleteProject as deleteProjectApi,
   getMe,
-  listActivity,
+  listActivityPage,
   listProjects,
   unarchiveProject as unarchiveProjectApi,
   updateProject as updateProjectApi,
@@ -20,6 +20,7 @@ import {
   type Project,
   type TeamSummary
 } from '../../lib/api/resources'
+import type { Page } from '../../lib/api/client'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
@@ -46,15 +47,20 @@ export interface HomeData {
   me: Me | null
   groups: TeamProjects[]
   activity: ActivityApi[]
+  /** Combined server-reported activity count across all teams (SOLUSDEV-233). */
+  activityTotal: number
   actions: HomeActions
 }
 
-const RECENT_ACTIVITY_LIMIT = 12
+/** Per-team fetch depth for the merged feed — the panel previews it, the
+ *  all-activity dialog shows everything loaded. */
+const HOME_ACTIVITY_FETCH_LIMIT = 50
 
 interface HomeSnapshot {
   me: Me
   groups: TeamProjects[]
   activity: ActivityApi[]
+  activityTotal: number
 }
 
 /** Fetch the user's teams, their projects, and a merged recent-activity feed. */
@@ -66,12 +72,18 @@ async function fetchHome(): Promise<HomeSnapshot> {
       projects: await listProjects(team.team_id, { includeArchived: true })
     }))
   )
-  const feeds = await Promise.all(me.teams.map((t) => listActivity(t.team_id).catch(() => [])))
-  const activity = feeds
-    .flat()
+  // One team's failed feed must not blank the whole home screen.
+  const feeds = await Promise.all(
+    me.teams.map((t) =>
+      listActivityPage(t.team_id, { limit: HOME_ACTIVITY_FETCH_LIMIT }).catch(() => null)
+    )
+  )
+  const pages = feeds.filter((f): f is Page<ActivityApi[]> => f !== null)
+  const activity = pages
+    .flatMap((p) => p.data)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .slice(0, RECENT_ACTIVITY_LIMIT)
-  return { me, groups, activity }
+  const activityTotal = pages.reduce((sum, p) => sum + (p.meta.total ?? p.data.length), 0)
+  return { me, groups, activity, activityTotal }
 }
 
 export function useHomeData(): HomeData {
@@ -80,6 +92,7 @@ export function useHomeData(): HomeData {
   const [me, setMe] = useState<Me | null>(null)
   const [groups, setGroups] = useState<TeamProjects[]>([])
   const [activity, setActivity] = useState<ActivityApi[]>([])
+  const [activityTotal, setActivityTotal] = useState(0)
 
   const load = useCallback(async (): Promise<void> => {
     if (!fetchEnabled) {
@@ -91,6 +104,7 @@ export function useHomeData(): HomeData {
       setMe(snap.me)
       setGroups(snap.groups)
       setActivity(snap.activity)
+      setActivityTotal(snap.activityTotal)
       setStatus('ready')
     } catch {
       setStatus('offline')
@@ -144,5 +158,5 @@ export function useHomeData(): HomeData {
     refresh: load
   }
 
-  return { status, me, groups, activity, actions }
+  return { status, me, groups, activity, activityTotal, actions }
 }

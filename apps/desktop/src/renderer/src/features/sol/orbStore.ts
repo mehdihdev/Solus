@@ -28,6 +28,8 @@ export interface OrbState {
   setDetached: (detached: boolean) => void
   setStreaming: (streaming: boolean) => void
   setConversation: (projectId: string, conversationId: string) => void
+  /** Forget a project's active conversation (SOLUSDEV-233 "new chat"). */
+  clearConversation: (projectId: string) => void
   /** Clear per-account state on sign-out (SEC-M4). */
   resetForSignOut: () => void
 }
@@ -63,6 +65,12 @@ export const useOrbStore = create<OrbState>()(
         set((s) => ({
           conversationByProject: { ...s.conversationByProject, [projectId]: conversationId }
         })),
+      clearConversation: (projectId) =>
+        set((s) => ({
+          conversationByProject: Object.fromEntries(
+            Object.entries(s.conversationByProject).filter(([key]) => key !== projectId)
+          )
+        })),
       // SEC-M4: conversation ids are per-account. An account switch must not
       // leave the previous user's ids for the new token to request.
       resetForSignOut: () =>
@@ -85,10 +93,16 @@ export const useOrbStore = create<OrbState>()(
 )
 
 // SEC-M4: conversation ids are per-account and persisted, so an account switch
-// must not leave the previous user's ids for a new token to request. Subscribed
-// here (lane-owned) rather than edited into the shared authStore.
+// must not leave the previous user's ids for a new token to request — and an
+// in-place identity swap (OAuth loopback, magic link, another window) never
+// passes through 'unauthenticated', so key on the identity, not the status
+// (SOLUSDEV-233 security review H1). Lane-owned subscription.
 useAuthStore.subscribe((state, prev) => {
-  if (prev.status === 'authenticated' && state.status === 'unauthenticated') {
+  if (prev.status !== 'authenticated') return
+  const signedOut = state.status === 'unauthenticated'
+  const identitySwapped =
+    state.status === 'authenticated' && state.user?.email !== prev.user?.email
+  if (signedOut || identitySwapped) {
     useOrbStore.getState().resetForSignOut()
   }
 })

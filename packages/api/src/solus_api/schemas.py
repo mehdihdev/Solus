@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
 from solus_api.models import (
+    SOL_CUSTOM_INSTRUCTION_CAP,
     Activity,
     Artifact,
     ArtifactScope,
@@ -83,6 +84,9 @@ class UserUpdate(StrictModel):
 
 class SettingsUpdate(StrictModel):
     sol_mode: Literal["guide", "expert"] | None = None
+    # SOLUSDEV-233: standing preference note for SOL. Absent = unchanged;
+    # explicit null = clear. Single-source cap (models.SOL_CUSTOM_INSTRUCTION_CAP).
+    sol_custom_instruction: str | None = Field(default=None, max_length=SOL_CUSTOM_INSTRUCTION_CAP)
     # ADR-011: data collection is consent-gated; this is the opt-in/out switch.
     data_collection_consent: bool | None = None
     # FND-08 onboarding state machine; persisted so resume works anywhere.

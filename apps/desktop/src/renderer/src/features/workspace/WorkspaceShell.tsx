@@ -4,7 +4,7 @@
 // shows live API data or honest empty states, never fabricated robot data.
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { SolOrb } from '../../components/ui/SolOrb'
+import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
 import { useAuthStore } from '../../store/authStore'
@@ -154,7 +154,9 @@ export function WorkspaceShell(): React.JSX.Element {
       </div>
       <ToastView
         onView={(alertId) => {
+          const screen = useShellStore.getState().toast?.screen
           if (alertId) openAlert(alertId)
+          else if (screen) go(screen)
           useShellStore.getState().clearToast()
         }}
       />
@@ -243,23 +245,38 @@ function ScreenView({
   navigate: (screen: MainScreen) => void
   goBack: () => void
 }): React.JSX.Element | null {
-  switch (route.name) {
-    case 'home':
-      return <HomeScreen onOpenProject={openProject} />
-    case 'overview':
-      return <ProjectOverview onNavigate={navigate} />
-    case 'bench':
-      // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
-      return <BenchScreen onNavigate={navigate} />
-    case 'team':
-      return <TeamScreen onOpenProject={openProject} />
-    case 'alert':
-      return <AlertScreen onBack={goBack} />
-    default: {
-      const Screen = SIMPLE_SCREENS[route.name]
-      return Screen ? <Screen /> : null
+  const screen = ((): React.JSX.Element | null => {
+    switch (route.name) {
+      case 'home':
+        return <HomeScreen onOpenProject={openProject} />
+      case 'overview':
+        return <ProjectOverview onNavigate={navigate} />
+      case 'bench':
+        // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
+        return <BenchScreen onNavigate={navigate} />
+      case 'team':
+        return <TeamScreen onOpenProject={openProject} />
+      case 'alert':
+        return <AlertScreen onBack={goBack} />
+      default: {
+        const Screen = SIMPLE_SCREENS[route.name]
+        return Screen ? <Screen /> : null
+      }
     }
-  }
+  })()
+  if (!screen) return null
+  // SOLUSDEV-233: every screen switch enters with the app's fade-rise — keyed
+  // by route so the animation replays per navigation (CSS-only, reduced-motion
+  // guarded in main.css).
+  return (
+    <div
+      key={route.name === 'alert' ? `alert-${route.alertId}` : route.name}
+      className="screen-in"
+      style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}
+    >
+      {screen}
+    </div>
+  )
 }
 
 interface RailItem {
@@ -323,8 +340,14 @@ function Rail({
         background: 'var(--sur)'
       }}
     >
-      <div onClick={() => go('home')} style={{ marginBottom: 12, cursor: 'pointer' }}>
-        <SolOrb size={24} />
+      {/* Brand home button: the Solus logo (SOLUSDEV-233). The orb stays
+          SOL's presence — SOL page header + the floating mini-orb. */}
+      <div
+        onClick={() => go('home')}
+        className="interactive"
+        style={{ marginBottom: 12, cursor: 'pointer', borderRadius: 6 }}
+      >
+        <SolusLogo size={24} />
       </div>
       {RAIL_TOP.map(renderItem)}
       <div style={{ flex: 1 }} />

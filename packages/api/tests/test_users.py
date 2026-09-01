@@ -177,3 +177,87 @@ async def test_onboarding_step_rejects_unknown_value(
         "/api/v1/users/me/settings", json={"onboarding_step": "yolo"}, headers=alice_headers
     )
     assert resp.status_code == 422
+
+
+# --------------------------------------- custom instruction (SOLUSDEV-233)
+
+
+async def test_custom_instruction_defaults_none_and_round_trips(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    resp = await client.get("/api/v1/users/me/settings", headers=alice_headers)
+    assert resp.json()["data"]["sol_custom_instruction"] is None
+
+    resp = await client.patch(
+        "/api/v1/users/me/settings",
+        json={"sol_custom_instruction": "Prefer metric units."},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["sol_custom_instruction"] == "Prefer metric units."
+
+    # Absent field = no change; explicit null = clear.
+    resp = await client.patch(
+        "/api/v1/users/me/settings", json={"sol_mode": "expert"}, headers=alice_headers
+    )
+    assert resp.json()["data"]["sol_custom_instruction"] == "Prefer metric units."
+    resp = await client.patch(
+        "/api/v1/users/me/settings",
+        json={"sol_custom_instruction": None},
+        headers=alice_headers,
+    )
+    assert resp.json()["data"]["sol_custom_instruction"] is None
+
+
+async def test_custom_instruction_rejects_over_cap(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    resp = await client.patch(
+        "/api/v1/users/me/settings",
+        json={"sol_custom_instruction": "x" * 501},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_custom_instruction_text_never_reaches_data_events(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    """The instruction is user-authored prompt input — events record THAT it
+    changed, never WHAT it says (§7: prompt content stays out of stores)."""
+    from solus_api.models import DataEvent
+    from sqlalchemy import select
+
+    await client.patch(
+        "/api/v1/users/me/settings",
+        json={"data_collection_consent": True},
+        headers=alice_headers,
+    )
+    secret_text = "Prefer metric units and mention project Falcon."
+    await client.patch(
+        "/api/v1/users/me/settings",
+        json={"sol_custom_instruction": secret_text},
+        headers=alice_headers,
+    )
+    async with app.state.sessionmaker() as db:
+        events = (await db.scalars(select(DataEvent))).all()
+    assert events, "consented settings change must emit an event"
+    for event in events:
+        assert secret_text not in str(event.payload)
+
+
+async def test_custom_instruction_is_private_to_its_owner(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """The instruction is per-user prompt input (§7): another user's settings
+    response must never carry it."""
+    secret_note = "Alice's private preference about project Falcon."
+    await client.patch(
+        "/api/v1/users/me/settings",
+        json={"sol_custom_instruction": secret_note},
+        headers=alice_headers,
+    )
+    resp = await client.get("/api/v1/users/me/settings", headers=bob_headers)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["sol_custom_instruction"] is None
+    assert secret_note not in resp.text
