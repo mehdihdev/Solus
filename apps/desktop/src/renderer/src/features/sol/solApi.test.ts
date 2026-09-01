@@ -10,6 +10,7 @@ import {
   deleteSolConversation,
   listSolConversations,
   listSolTurns,
+  renameSolConversation,
   streamSolMessage
 } from './solApi'
 
@@ -154,6 +155,18 @@ describe('conversation list/delete (SOLUSDEV-233)', () => {
     expect(calls[0].options).toMatchObject({
       method: 'POST',
       body: { title: 'Why is joint 2 stalling?' }
+    })
+  })
+})
+
+describe('conversation rename (SOLUSDEV-233 context menu)', () => {
+  it('PATCHes the new title to the owned conversation', async () => {
+    const { client, calls } = fakeClient({ id: 'c1', title: 'Diagnose run 41' })
+    await renameSolConversation('p1', 'c1', 'Diagnose run 41', client)
+    expect(calls[0].path).toBe('/projects/p1/sol/conversations/c1')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { title: 'Diagnose run 41' }
     })
   })
 })

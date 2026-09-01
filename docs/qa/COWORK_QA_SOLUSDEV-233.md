@@ -261,3 +261,44 @@ and **SOL USAGE** (credit meter + low-credit top-up).
    its dark rounded tile (replaced `resources/icon.png`, static brand colors
    by design — the OS icon does not theme).
 7. Pass/fail: [ ]
+
+## Flow 14 — Chats survive navigation; background replies notify
+
+1. Ask SOL something slow, and while it's streaming, switch to Home.
+   - Expected: no error; when the reply finishes, a toast appears —
+     "SOL replied — '<your question>…'" with a **View** button.
+2. Click View.
+   - Expected: you land on the SOL page with the full finished reply in place
+     (nothing "disappears" any more).
+3. Repeat, but stay on the SOL page for the whole reply.
+   - Expected: no toast (you were watching).
+4. With the API killed mid-turn, leave the page: the toast says
+   "SOL turn failed" with no raw error text.
+5. Pass/fail: [ ]
+
+## Flow 15 — Right-click chat menu
+
+1. Right-click a chat in the sidebar.
+   - Expected: a small menu with **Rename** and **Delete** (red).
+2. Rename → dialog pre-filled with the current name → Save.
+   - Expected: the sidebar shows the new name immediately; it persists after
+     reload. Blank names are rejected.
+3. Delete → a confirm dialog ("Delete chat … and its messages") → Delete chat.
+   - Expected: the chat leaves the list; if it was open, the transcript clears
+     to a fresh chat. Cancel leaves everything untouched.
+4. Pass/fail: [ ]
+
+## Flow 16 — Local chat cache (~/.solus)
+
+1. Open a chat with history, then check
+   `~/.solus/projects/<projectId>/sol/` — a `<conversationId>.json` file
+   exists (0600 perms) containing the chat's settled turns.
+2. Kill the API and reload the app; open the SOL page.
+   - Expected: the previously opened chat's transcript still renders (from
+     the cache) instead of "history unavailable".
+3. Restart the API, send a message; re-open the chat later.
+   - Expected: switching back to the chat paints instantly (no loading
+     flash), then matches the server.
+4. Delete a chat via the context menu.
+   - Expected: its cache file is gone from `~/.solus`.
+5. Pass/fail: [ ]

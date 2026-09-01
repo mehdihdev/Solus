@@ -55,6 +55,19 @@ export function listSolConversations(
   )
 }
 
+/** Rename an owned conversation (SOLUSDEV-233 sidebar context menu). */
+export function renameSolConversation(
+  projectId: string,
+  conversationId: string,
+  title: string,
+  client: ApiClient = api
+): Promise<SolConversation> {
+  return client.request<SolConversation>(
+    `/projects/${encodeURIComponent(projectId)}/sol/conversations/${encodeURIComponent(conversationId)}`,
+    { method: 'PATCH', body: { title } }
+  )
+}
+
 /** Soft-delete an owned conversation (SOLUSDEV-233). */
 export function deleteSolConversation(
   projectId: string,

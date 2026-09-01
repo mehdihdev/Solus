@@ -83,31 +83,28 @@ function registerFolderRegistryHandlers(): void {
  *  Ids and sizes are re-validated inside solChatCache; content is an opaque
  *  JSON string the renderer owns. */
 function registerSolChatCacheHandlers(): void {
-  const strings = (...values: unknown[]): values is string[] =>
-    values.every((v) => typeof v === 'string')
+  const isString = (v: unknown): v is string => typeof v === 'string'
   ipcMain.handle('solchat:read', (event, projectId: unknown, conversationId: unknown) =>
-    isMainRendererSender(event) && strings(projectId, conversationId)
-      ? readChatCache(projectId as string, conversationId as string, realSolChatCacheDeps)
+    isMainRendererSender(event) && isString(projectId) && isString(conversationId)
+      ? readChatCache(projectId, conversationId, realSolChatCacheDeps)
       : null
   )
   ipcMain.handle(
     'solchat:write',
     (event, projectId: unknown, conversationId: unknown, content: unknown) => ({
       ok:
-        isMainRendererSender(event) && strings(projectId, conversationId, content)
-          ? writeChatCache(
-              projectId as string,
-              conversationId as string,
-              content as string,
-              realSolChatCacheDeps
-            )
+        isMainRendererSender(event) &&
+        isString(projectId) &&
+        isString(conversationId) &&
+        isString(content)
+          ? writeChatCache(projectId, conversationId, content, realSolChatCacheDeps)
           : false
     })
   )
   ipcMain.handle('solchat:remove', (event, projectId: unknown, conversationId: unknown) => ({
     ok:
-      isMainRendererSender(event) && strings(projectId, conversationId)
-        ? removeChatCache(projectId as string, conversationId as string, realSolChatCacheDeps)
+      isMainRendererSender(event) && isString(projectId) && isString(conversationId)
+        ? removeChatCache(projectId, conversationId, realSolChatCacheDeps)
         : false
   }))
 }

@@ -170,12 +170,18 @@ export function JoinTeamModal({
 export function DeleteConfirmModal({
   name,
   onClose,
-  onConfirm
+  onConfirm,
+  noun = 'project',
+  detail = 'and its graph'
 }: {
   name: string
   onClose: () => void
   /** Resolve true on success (modal closes) or false to keep it open with an error. */
   onConfirm: () => Promise<boolean>
+  /** What is being deleted — drives the heading, button, and error copy. */
+  noun?: string
+  /** What goes with it (e.g. "and its graph", "and its messages"). */
+  detail?: string
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -188,14 +194,14 @@ export function DeleteConfirmModal({
       return
     }
     setBusy(false)
-    setError("Couldn't delete this project. Check your access and try again.")
+    setError(`Couldn't delete this ${noun}. Check your access and try again.`)
   }
   return (
     <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Delete project</div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>Delete {noun}</div>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        Permanently delete <strong style={{ color: 'var(--tx)' }}>{name}</strong> and its graph.
-        This cannot be undone.
+        Permanently delete <strong style={{ color: 'var(--tx)' }}>{name}</strong> {detail}. This
+        cannot be undone.
       </div>
       {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
@@ -203,7 +209,7 @@ export function DeleteConfirmModal({
           Cancel
         </Button>
         <Button kind="danger" size="sm" onClick={() => void confirm()}>
-          {busy ? <Spinner size={11} /> : 'Delete project'}
+          {busy ? <Spinner size={11} /> : `Delete ${noun}`}
         </Button>
       </div>
     </ModalShell>

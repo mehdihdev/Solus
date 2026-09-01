@@ -17,6 +17,10 @@ chat surface (`OrbChat`) and stream protocol unchanged.
 - Click a row → the transcript reloads that conversation (any live turn is
   cancelled first). `+` → clears the active conversation; the next send
   creates a fresh one server-side.
+- **Right-click a row** → context menu: **Rename** (name dialog →
+  `PATCH /sol/conversations/{id}`) and **Delete** (confirm dialog →
+  soft-delete; the chat's `~/.solus` cache file is removed; deleting the open
+  chat clears the transcript to a fresh one). The list refreshes after either.
 - States: spinner on first empty load; "No chats yet…" when empty;
   "Chats unavailable — offline." on failure; "Open a project…" without one.
 
@@ -52,6 +56,20 @@ chat surface (`OrbChat`) and stream protocol unchanged.
 - Empty state before the first turn: "Send a message and SOL will show what
   it grounded the answer in…". Labels only — section text never reaches the
   client.
+
+## Session lifetime (SOLUSDEV-233)
+
+- A chat session OUTLIVES the page: leaving the SOL screen mid-response keeps
+  the turn streaming in the background; returning re-attaches to the live (or
+  finished) transcript. Streams are torn down only on chat switches and
+  sign-out — never by navigation.
+- A reply that finishes while the user is elsewhere raises the shell toast
+  ("SOL replied" / "SOL turn failed", author-safe) with a **View** action
+  jumping to the SOL page when the workspace is still on that project.
+- Each chat's settled turns mirror to `~/.solus/projects/<id>/sol/` (ADR-034
+  Layer 1 cache): returning to a chat paints instantly from the cache, the
+  server load then wins, and a cached chat stays readable when the API is
+  down. The server remains the source of truth.
 
 ## Right — SOL USAGE
 

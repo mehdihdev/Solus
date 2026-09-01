@@ -838,6 +838,7 @@ require the `member` role; reads need only a resolvable project.
 | GET    | `/sol/conversations/{id}`          | Get one owned conversation                                                              | `200`   |
 | DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                                                       | `204`   |
 | GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                                          | `200`   |
+| PATCH  | `/sol/conversations/{id}`          | Rename an owned conversation (`{title}`, non-blank, trimmed — SOLUSDEV-233)             | `200`   |
 | POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
 | POST   | `/sol/confirmations/{id}`          | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
 
