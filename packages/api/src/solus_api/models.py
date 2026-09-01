@@ -299,6 +299,9 @@ class User(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     display_name: Mapped[str | None] = mapped_column(String(255), default=None)
     avatar_url: Mapped[str | None] = mapped_column(String(2048), default=None)
     sol_mode: Mapped[SolMode] = mapped_column(_enum_column(SolMode), default=SolMode.GUIDE)
+    # SOLUSDEV-233: user-authored standing preference for SOL answers. Enters the
+    # prompt ONLY as a fenced data block (agent/prompt.py) — never instruction text.
+    sol_custom_instruction: Mapped[str | None] = mapped_column(String(500), default=None)
     # ADR-011: collection is consent-gated; nothing is recorded until the user opts in.
     data_collection_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     # FND-08 first-run state machine: about -> connect -> build -> done.
@@ -909,9 +912,7 @@ class PanelBinding(UuidPkMixin, TimestampMixin, Base):
     #: slows guesses of LOW-entropy secrets and would destroy indexed lookup.
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     onshape_user_id: Mapped[str | None] = mapped_column(String(64), default=None)
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -181,3 +181,55 @@ async def test_runner_scopes_the_context_pull_to_the_request_project(
     final = events[-1]
     # The poisoned chunk cannot mint provenance; only the genuine token is cited.
     assert final.data["citations"] == ["[error_store:err-101]"]
+
+
+# ------------------------------------ context_used frame (SOLUSDEV-233)
+
+
+async def test_runner_streams_context_used_before_any_model_output(
+    engine: AsyncEngine,
+) -> None:
+    """The first frame of a turn declares WHAT context the model was handed —
+    kind/citation/tokens only, never section text (prompt internals stay
+    server-side)."""
+    from test_sol_red_team import _funded_ctx, _registry
+
+    from solus_api.agent.runtime import LlmRunner
+    from solus_api.agent.stream import AgentEventType
+
+    model = _CitingModel("All good [error_store:err-101].")
+    runner = LlmRunner(adapters={"anthropic": model})
+    ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
+    events = [event async for event in runner.run(ctx)]
+
+    first = events[0]
+    assert first.type is AgentEventType.CONTEXT_USED
+    assert isinstance(first.data["sections"], list) and first.data["sections"]
+    for section in first.data["sections"]:
+        assert set(section) == {"kind", "citation", "tokens"}
+    assert isinstance(first.data["truncated"], bool)
+    assert isinstance(first.data["dropped"], int)
+
+
+async def test_runner_hands_the_model_the_fenced_custom_instruction(
+    engine: AsyncEngine,
+) -> None:
+    """ctx.custom_instruction reaches the provider inside the system prompt —
+    fenced as data, after the Solus-authored base (SOLUSDEV-233)."""
+    import dataclasses
+
+    from test_sol_red_team import _funded_ctx, _registry
+
+    from solus_api.agent.prompt import system_prompt
+    from solus_api.agent.runtime import LlmRunner
+
+    model = _CitingModel("Understood.")
+    runner = LlmRunner(adapters={"anthropic": model})
+    ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
+    ctx = dataclasses.replace(ctx, custom_instruction="Prefer metric units.")
+    _ = [event async for event in runner.run(ctx)]
+
+    seen = model.seen
+    assert seen is not None and seen.system is not None
+    assert seen.system.startswith(system_prompt(ctx.sol_mode))
+    assert '"Prefer metric units."' in seen.system

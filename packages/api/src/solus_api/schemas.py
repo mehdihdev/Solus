@@ -83,6 +83,9 @@ class UserUpdate(StrictModel):
 
 class SettingsUpdate(StrictModel):
     sol_mode: Literal["guide", "expert"] | None = None
+    # SOLUSDEV-233: standing preference note for SOL. Absent = unchanged;
+    # explicit null = clear. Cap mirrors prompt.CUSTOM_INSTRUCTION_CAP.
+    sol_custom_instruction: str | None = Field(default=None, max_length=500)
     # ADR-011: data collection is consent-gated; this is the opt-in/out switch.
     data_collection_consent: bool | None = None
     # FND-08 onboarding state machine; persisted so resume works anywhere.

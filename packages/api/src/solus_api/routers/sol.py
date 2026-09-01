@@ -540,6 +540,8 @@ async def post_message(
         systems=systems,
         project_id=ctx.project.id,
         sol_mode=ctx.user.sol_mode,
+        # SOLUSDEV-233: reaches the prompt only as a fenced data block.
+        custom_instruction=ctx.user.sol_custom_instruction,
         action_mode=body.action_mode,
         history=history,
         # Model-call identity (ADR-018). Without these the gateway silently

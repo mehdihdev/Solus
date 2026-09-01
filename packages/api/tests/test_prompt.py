@@ -32,6 +32,7 @@ import re
 import pytest
 from fixtures.injection_corpus import PAYLOADS, SECRET_SHAPED_VALUE, Payload, poisoned_variables
 from solus_api.agent.prompt import (
+    CUSTOM_INSTRUCTION_CAP,
     DATA_CAP,
     TOOL_RESULT_CAP,
     close_token,
@@ -306,3 +307,49 @@ def test_names_that_collide_after_translation_stay_distinct() -> None:
     assert len({s.name for s in specs}) == 3
     for spec, descriptor in zip(specs, descriptors, strict=True):
         assert resolve_tool_name(spec.name, descriptors) == descriptor.name
+
+
+# --------------------------------------- custom instruction (SOLUSDEV-233)
+#
+# A user-authored preference note enters the prompt — but only as a fenced,
+# JSON-encoded data block under a Solus-authored framing note. It is never
+# raw text in the instruction position.
+
+
+def test_system_prompt_without_instruction_is_unchanged() -> None:
+    assert system_prompt(SolMode.GUIDE) == system_prompt(SolMode.GUIDE, None)
+    assert system_prompt(SolMode.GUIDE) == system_prompt(SolMode.GUIDE, "   ")
+
+
+def test_custom_instruction_is_fenced_never_instruction_text() -> None:
+    text = "Prefer metric units. Flag servo commands past URDF limits."
+    rendered = system_prompt(SolMode.GUIDE, text)
+    base = system_prompt(SolMode.GUIDE)
+    # The Solus-authored base is untouched and comes first — the preference can
+    # only ever be appended after it, under the framing note.
+    assert rendered.startswith(base)
+    # The preference body is fenced and JSON-encoded, not raw prompt text.
+    assert "<<<SOLUS-DATA" in rendered[len(base) :]
+    assert json.dumps(text) in rendered
+
+
+@pytest.mark.parametrize("payload", PAYLOADS, ids=lambda p: p.case_id)
+def test_hostile_custom_instruction_cannot_escape_its_fence(payload: Payload) -> None:
+    rendered = system_prompt(SolMode.EXPERT, payload.text)
+    base = system_prompt(SolMode.EXPERT)
+    assert rendered.startswith(base)
+    tail = rendered[len(base) :]
+    # The body between the fences is one ASCII line that cannot contain a
+    # fence token — same invariant data_block pins for every other surface.
+    body = tail.split(">>>\n", 1)[1].rsplit("\n<<<END-SOLUS-DATA", 1)[0]
+    assert "\n" not in body
+    assert "<<<" not in body
+    assert body.isascii()
+
+
+def test_custom_instruction_is_capped() -> None:
+    huge = "x" * 10_000
+    rendered = system_prompt(SolMode.GUIDE, huge)
+    base = system_prompt(SolMode.GUIDE)
+    # Fence + framing overhead only — the body itself is bounded by the cap.
+    assert len(rendered) - len(base) < CUSTOM_INSTRUCTION_CAP + 400

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.billing import credits
+from solus_api.billing import credits, usage
 from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import SecretStore
@@ -251,6 +251,7 @@ async def delete_me(
 def _settings_payload(user: User) -> dict[str, Any]:
     return {
         "sol_mode": user.sol_mode.value,
+        "sol_custom_instruction": user.sol_custom_instruction,
         "data_collection_consent": user.data_collection_consent,
         "onboarding_step": user.onboarding_step,
     }
@@ -268,13 +269,24 @@ async def update_settings(
     updates = body.model_dump(exclude_unset=True)
     if updates.get("sol_mode") is not None:
         user.sol_mode = SolMode(updates["sol_mode"])
+    if "sol_custom_instruction" in updates:
+        # Tri-state on purpose: absent = unchanged, null = clear (SOLUSDEV-233).
+        raw = updates["sol_custom_instruction"]
+        user.sol_custom_instruction = raw.strip() or None if raw is not None else None
     if updates.get("data_collection_consent") is not None:
         # ADR-011 opt-in/out. Flip before emitting so the event itself honors
         # the new consent state.
         user.data_collection_consent = updates["data_collection_consent"]
     if updates.get("onboarding_step") is not None:
         user.onboarding_step = updates["onboarding_step"]
-    emit_event(session, user=user, event_type="settings.updated", payload=updates)
+    # The instruction is user-authored prompt input: the event records THAT it
+    # changed (set/cleared), never the text itself (§7).
+    event_payload = dict(updates)
+    if "sol_custom_instruction" in event_payload:
+        event_payload["sol_custom_instruction"] = (
+            "set" if user.sol_custom_instruction else "cleared"
+        )
+    emit_event(session, user=user, event_type="settings.updated", payload=event_payload)
     await session.commit()
     await session.refresh(user)
     return envelope(_settings_payload(user))
@@ -322,6 +334,40 @@ async def get_credits(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
     exists. The desktop Billing screen reads this to reflect credit-pack purchases."""
     balance = await credits.get_balance(session, user.id)
     return envelope(CreditBalanceView(user_id=user.id, balance=balance).model_dump(mode="json"))
+
+
+@router.get("/usage")
+async def get_usage(
+    user: CurrentUser, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
+    """The always-visible meter (ADR-018, SOLUSDEV-233): credit-denominated usage
+    for the current cycle. Windowed by the subscription's monthly anniversary;
+    UTC calendar month before a subscription exists. `allowance` is the plan's
+    starting-credit grant (ADR-023/024, provisional) — null means no plan-derived
+    denominator, and clients fall back to showing the balance alone."""
+    now = utcnow()
+    sub = await session.scalar(
+        select(Subscription).where(
+            Subscription.user_id == user.id, Subscription.deleted_at.is_(None)
+        )
+    )
+    if sub is not None:
+        since, until = usage.cycle_window(ensure_utc(sub.created_at), now)
+        allowance = settings.plan_credit_grants.get(sub.plan.value)
+    else:
+        since, until = usage.calendar_month_window(now)
+        allowance = None
+    used = await usage.cycle_spend(session, user.id, since=since, until=until)
+    balance = await credits.get_balance(session, user.id)
+    return envelope(
+        {
+            "used": used,
+            "allowance": allowance,
+            "balance": balance,
+            "cycle_start": since.isoformat(),
+            "cycle_end": until.isoformat(),
+        }
+    )
 
 
 # ------------------------------------------------------------ panel links
