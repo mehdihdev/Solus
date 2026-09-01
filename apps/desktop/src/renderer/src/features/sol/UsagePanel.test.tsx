@@ -85,4 +85,11 @@ describe('UsagePanel', () => {
     expect(screen.getByText(/Usage unavailable offline/)).toBeInTheDocument()
     expect(getUsage).not.toHaveBeenCalled()
   })
+
+  it('surfaces a failed usage fetch instead of loading forever (review M2)', async () => {
+    getUsage.mockRejectedValue(new Error('down'))
+    render(<UsagePanel creditsExhausted={false} />)
+    await waitFor(() => expect(screen.getByText(/Usage unavailable offline/)).toBeInTheDocument())
+    expect(screen.queryByText(/Loading usage/)).not.toBeInTheDocument()
+  })
 })

@@ -101,19 +101,30 @@ function TopUpCard({ exhausted }: { exhausted: boolean }): React.JSX.Element {
   )
 }
 
+type UsageStatus = 'loading' | 'ready' | 'offline'
+
 export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }): React.JSX.Element {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const [usage, setUsage] = useState<UsageApi | null>(null)
+  const [status, setStatus] = useState<UsageStatus>(fetchEnabled ? 'loading' : 'offline')
 
-  // Refetch on a 402 (the balance just proved stale) — and on mount.
+  // Refetch on a 402 (the balance just proved stale) — and on mount. A failed
+  // fetch is surfaced honestly, never a forever-"Loading…" (review M2).
   useEffect(() => {
-    if (!fetchEnabled) return
+    if (!fetchEnabled) {
+      setStatus('offline')
+      return
+    }
     let stale = false
     getUsage()
       .then((u) => {
-        if (!stale) setUsage(u)
+        if (stale) return
+        setUsage(u)
+        setStatus('ready')
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (!stale) setStatus('offline')
+      })
     return () => {
       stale = true
     }
@@ -127,7 +138,7 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
       <Card pad={12} className="sol-panel-in" style={{ marginTop: 10 }}>
         {usage === null ? (
           <div style={{ fontSize: 11, color: 'var(--mut)' }}>
-            {fetchEnabled ? 'Loading usage…' : 'Usage unavailable offline.'}
+            {status === 'loading' ? 'Loading usage…' : 'Usage unavailable offline.'}
           </div>
         ) : (
           <>

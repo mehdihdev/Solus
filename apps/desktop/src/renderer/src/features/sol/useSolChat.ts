@@ -156,8 +156,13 @@ export function useSolChat(projectId: string | null): SolChat {
   //#: The conversation id this hook just created mid-send. Its store write
   //  re-fires the history effect, which must NOT reload (and wipe) the live turn.
   const skipReloadRef = useRef<string | null>(null)
+  //#: Identity of the CURRENT send. A cancelled turn's fetch settles late
+  //  (abort is async), and its cleanup must not clobber the state a newer
+  //  send now owns — each send only cleans up while it still holds the token.
+  const turnTokenRef = useRef<object | null>(null)
 
   const cancelLiveTurn = useCallback((): void => {
+    turnTokenRef.current = null
     abortRef.current?.abort()
     abortRef.current = null
     sendingRef.current = false
@@ -219,6 +224,8 @@ export function useSolChat(projectId: string | null): SolChat {
     async (content: string, actionMode: SolActionMode): Promise<void> => {
       const text = content.trim()
       if (!text || !projectId || sendingRef.current) return
+      const turnToken = {}
+      turnTokenRef.current = turnToken
       sendingRef.current = true
       setCreditsExhausted(false)
       useOrbStore.getState().setStreaming(true)
@@ -264,9 +271,15 @@ export function useSolChat(projectId: string | null): SolChat {
         const note = turnFailureText(error)
         patch((m) => ({ ...m, pending: false, error: note }))
       } finally {
-        abortRef.current = null
-        sendingRef.current = false
-        useOrbStore.getState().setStreaming(false)
+        // Only the send that still owns the turn cleans up — a cancelled
+        // turn settling late must not orphan a newer send's abort handle,
+        // re-enable the composer, or stop the pulse mid-stream (review H1).
+        if (turnTokenRef.current === turnToken) {
+          turnTokenRef.current = null
+          abortRef.current = null
+          sendingRef.current = false
+          useOrbStore.getState().setStreaming(false)
+        }
       }
     },
     [projectId]

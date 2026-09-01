@@ -302,3 +302,49 @@ describe('SOL page additions (SOLUSDEV-233)', () => {
     expect(useOrbStore.getState().conversationByProject).toEqual({})
   })
 })
+
+describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', () => {
+  it('a stale send’s cleanup leaves the newer live turn streaming and abortable', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    let rejectTurnA: (e: unknown) => void = () => undefined
+    const signals: Array<AbortSignal | undefined> = []
+    streamSolMessage
+      .mockImplementationOnce(async ({ signal }) => {
+        signals.push(signal)
+        await new Promise((_, reject) => {
+          rejectTurnA = reject
+        })
+      })
+      .mockImplementationOnce(async ({ signal }) => {
+        signals.push(signal)
+        await new Promise(() => undefined) // turn B stays live
+      })
+
+    const { result, unmount } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      void result.current.send('turn A', 'guide')
+    })
+    // Switch chats (cancels A), then immediately send again on the new chat.
+    act(() => result.current.selectConversation('c2'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      void result.current.send('turn B', 'guide')
+    })
+    expect(useOrbStore.getState().streaming).toBe(true)
+
+    // Turn A's aborted fetch settles LATE — its cleanup must not turn off the
+    // pulse or orphan turn B's abort handle.
+    await act(async () => {
+      rejectTurnA(new Error('aborted'))
+      await Promise.resolve()
+    })
+    expect(useOrbStore.getState().streaming).toBe(true)
+
+    // Unmount must still be able to abort the live turn B.
+    unmount()
+    expect(signals[1]?.aborted).toBe(true)
+    expect(useOrbStore.getState().streaming).toBe(false)
+  })
+})
