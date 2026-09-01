@@ -567,6 +567,16 @@ and stays hand-editable.
 tightened to 0700 wherever it is created. Schemas are documented in
 docs/contracts/local-state.md; layout/format changes to `~/.solus` require amending this ADR.
 
+**Amended 2026-09-01 (SOLUSDEV-233):** `projects/<id>/` gains its first occupant —
+`projects/<id>/sol/<conversationId>.json`, a machine-local CACHE of a SOL chat's settled turns
+(schema_version 1). The server remains the source of truth for conversations. File rules per
+this ADR: JSON with schema_version, atomic temp+rename writes, 0600 files under the 0700 home,
+ids validated in the MAIN process, 2 MB byte cap, item/length caps on read, newer schema_version
+files are read-only. Accepted residual risk: user-TYPED message text is cached in plaintext on
+the user's own machine (fork-readable per Layer-1 rules; assistant/tool content is already
+secret-redacted server-side); mitigations: purge on account identity change, delete-with-chat.
+Format changes to this file require amending this ADR.
+
 ---
 
 ## How to add or change a decision
