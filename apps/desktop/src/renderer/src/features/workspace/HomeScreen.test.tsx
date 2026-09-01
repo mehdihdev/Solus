@@ -261,8 +261,10 @@ describe('HomeScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /View all activity \(20\)/ }))
     const dialog = screen.getByRole('dialog', { name: 'All activity' })
     expect(within(dialog).getAllByText(/created the project/)).toHaveLength(8)
-    // The merged cross-team feed has no cursor to follow — no Load more here.
+    // The merged cross-team feed has no cursor to follow — no Load more here,
+    // and the dialog says honestly that it shows fewer rows than the total.
     expect(within(dialog).queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+    expect(within(dialog).getByText(/most recent 8 of 20/)).toBeInTheDocument()
   })
 
   it('hides management actions for viewers', () => {

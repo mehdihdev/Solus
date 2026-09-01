@@ -14,6 +14,11 @@ from solus_api.schemas import serialize_activity
 
 router = APIRouter(prefix="/api/v1/teams/{team_id}/activity")
 
+# Activities are append-only, so an old team's feed grows without bound. The
+# total scan is capped so every feed request stays cheap (§7 cost control);
+# a team past the cap simply reports the cap.
+TOTAL_COUNT_CAP = 1000
+
 
 @router.get("")
 async def list_activity(
@@ -45,7 +50,8 @@ async def list_activity(
 
     # Total matching the filters across the whole feed (cursor-independent),
     # so clients can render an accurate "view all activity (N)" count.
-    total = await session.scalar(select(func.count()).select_from(Activity).where(*conditions))
+    capped_rows = select(Activity.id).where(*conditions).limit(TOTAL_COUNT_CAP).subquery()
+    total = (await session.scalar(select(func.count()).select_from(capped_rows))) or 0
 
     visible, meta = page_meta(rows, limit)
     return envelope([serialize_activity(a) for a in visible], meta={**meta, "total": total})

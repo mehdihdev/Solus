@@ -721,7 +721,10 @@ export function listActivityPage(
   if (options.cursor) params.set('cursor', options.cursor)
   if (options.limit !== undefined) params.set('limit', String(options.limit))
   const query = params.toString()
-  return client.requestPage<ActivityApi[]>(`/teams/${teamId}/activity${query ? `?${query}` : ''}`)
+  // teamId is server-issued today; encoded anyway so it can never alter the path.
+  return client.requestPage<ActivityApi[]>(
+    `/teams/${encodeURIComponent(teamId)}/activity${query ? `?${query}` : ''}`
+  )
 }
 
 /* ---------------- Notifications (§2.1) ---------------- */

@@ -502,7 +502,8 @@ actions in this phase:
 
 `meta.total` (SOLUSDEV-233) is the count of ALL activity rows matching the team scope and any
 `type`/`domain`/`actor` filters — independent of `limit` and `cursor`, so it stays stable while
-paging. Clients use it for "View all activity (N)" affordances.
+paging. Clients use it for "View all activity (N)" affordances. The count scan is capped at
+1000 rows (`TOTAL_COUNT_CAP`, §7 cost control): a feed past the cap reports exactly 1000.
 
 ---
 

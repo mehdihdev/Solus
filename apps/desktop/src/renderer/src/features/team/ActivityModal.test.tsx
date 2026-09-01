@@ -76,6 +76,37 @@ describe('ActivityModal', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
   })
 
+  it('renders hostile payload text as literal text, never as HTML', () => {
+    const hostile: ActivityApi = {
+      ...item('a1'),
+      type: 'project.created',
+      payload: { name: '<img src=x onerror="alert(1)">' }
+    }
+    const { container } = render(<ActivityModal activity={[hostile]} total={1} onClose={vi.fn()} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText(/<img src=x onerror="alert\(1\)">/)).toBeInTheDocument()
+  })
+
+  it('says honestly when it shows fewer rows than the total and cannot page', () => {
+    render(<ActivityModal activity={[item('a1'), item('a2')]} total={20} onClose={vi.fn()} />)
+    expect(screen.getByText(/most recent 2 of 20/)).toBeInTheDocument()
+  })
+
+  it('shows no truncation note while paging is offered or the feed is complete', () => {
+    const { rerender } = render(
+      <ActivityModal
+        activity={[item('a1')]}
+        total={20}
+        hasMore
+        onLoadMore={vi.fn(async () => undefined)}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.queryByText(/most recent/)).not.toBeInTheDocument()
+    rerender(<ActivityModal activity={[item('a1'), item('a2')]} total={2} onClose={vi.fn()} />)
+    expect(screen.queryByText(/most recent/)).not.toBeInTheDocument()
+  })
+
   it('closes from the explicit close button', async () => {
     const onClose = vi.fn()
     render(<ActivityModal activity={[item('a1')]} total={1} onClose={onClose} />)

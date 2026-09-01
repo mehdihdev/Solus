@@ -120,6 +120,11 @@ export function ActivityModal({
               </Button>
             </div>
           )}
+          {!hasMore && activity.length < total && (
+            <div style={{ padding: '12px 4px 2px', fontSize: 11, color: 'var(--mut)' }}>
+              Showing the most recent {activity.length} of {total} events.
+            </div>
+          )}
         </div>
       </div>
     </ModalShell>
