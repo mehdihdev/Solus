@@ -279,6 +279,46 @@ body {
   }
 }
 
+/* SOL page motion (SOLUSDEV-233). Transform/opacity only; tokens only.
+ * CSS-only by design — the orb perf ratchet (orbPerf.test) forbids JS timers. */
+@keyframes sol-fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* Chat messages appearing (user send, SOL reply starting). */
+.sol-msg-in {
+  animation: sol-fade-rise 0.18s ease-out;
+}
+/* Sidebar chat rows on first paint / refetch. */
+.sol-row-in {
+  animation: sol-fade-rise 0.18s ease-out;
+}
+/* Right-panel cards (context in use, usage, top-up). */
+.sol-panel-in {
+  animation: sol-fade-rise 0.22s ease-out;
+}
+/* The usage meter fill eases to its new width instead of snapping. */
+.sol-meter-fill {
+  transition: width 0.5s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sol-msg-in,
+  .sol-row-in,
+  .sol-panel-in {
+    animation: none;
+  }
+  .sol-meter-fill {
+    transition: none;
+  }
+}
+
 /* SOL chat markdown (features/sol/Markdown.tsx). Scoped typography for model
  * text — design tokens only, so theme switches re-skin it like everything
  * else. Sized to sit inside the 12.5px chat column. */

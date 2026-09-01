@@ -143,3 +143,40 @@ describe('solStream framing', () => {
     ])
   })
 })
+
+describe('context_used frame (SOLUSDEV-233)', () => {
+  it('parses the turn context manifest', () => {
+    const parser = createSolStreamParser()
+    const events = parser.push(
+      frame('context_used', {
+        sections: [
+          { kind: 'graph', citation: '[graph:motor_driver]', tokens: 120 },
+          { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 300 },
+          { kind: 'telemetry', citation: null, tokens: 40 }
+        ],
+        truncated: false,
+        dropped: 2
+      })
+    )
+    expect(events).toEqual([
+      {
+        type: 'context_used',
+        sections: [
+          { kind: 'graph', citation: '[graph:motor_driver]', tokens: 120 },
+          { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 300 },
+          { kind: 'telemetry', citation: null, tokens: 40 }
+        ],
+        truncated: false,
+        dropped: 2
+      }
+    ])
+  })
+
+  it('drops a manifest whose sections are malformed', () => {
+    const parser = createSolStreamParser()
+    const events = parser.push(
+      frame('context_used', { sections: [{ kind: 7 }], truncated: false, dropped: 0 })
+    )
+    expect(events).toEqual([])
+  })
+})

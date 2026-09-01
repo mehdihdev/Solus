@@ -299,18 +299,18 @@ One budget system serves security and billing. Admin-only routes marked (A).
 
 Usage and budget routes (the ADR-019 security half) are implementable now. The four provider-facing billing routes (checkout, portal, top-ups, billing webhook) are **[DEFERRED — §7.2.2]** until the payment-provider ADR lands; their shapes below are the plan of record once it does.
 
-| Method | Path                                           | Description                                                                                                       |
-| ------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/users/me/usage`                       | Always-visible meter: credits used/remaining this window, by category                                             |
-| GET    | `/api/v1/teams/{team_id}/usage`                | Pooled team meter; `?group_by=member\|category\|day` (A for member breakdown)                                     |
-| GET    | `/api/v1/teams/{team_id}/budget`               | Caps, alert thresholds, degradation ("lite mode") state                                                           |
-| PATCH  | `/api/v1/teams/{team_id}/budget`               | (A) Set spending caps, alert thresholds, overage opt-in — never silent charges                                    |
-| GET    | `/api/v1/teams/{team_id}/billing/subscription` | Plan, seats, trial state, renewal                                                                                 |
-| POST   | `/api/v1/teams/{team_id}/billing/checkout`     | **[DEFERRED]** (A) Start checkout/upgrade flow (seat changes, individual→team transition) → provider redirect URL |
-| POST   | `/api/v1/teams/{team_id}/billing/portal`       | **[DEFERRED]** (A) Billing-portal session (payment method, invoices)                                              |
-| POST   | `/api/v1/teams/{team_id}/billing/top-ups`      | **[DEFERRED]** (A) Purchase credit top-up pack (`Idempotency-Key` required)                                       |
-| GET    | `/api/v1/teams/{team_id}/billing/invoices`     | Invoice list                                                                                                      |
-| POST   | `/api/v1/webhooks/billing`                     | **[DEFERRED]** Payment-provider webhooks (signature-verified)                                                     |
+| Method | Path                                           | Description                                                                                                                                                                                       |
+| ------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/users/me/usage`                       | Always-visible meter (IMPLEMENTED, SOLUSDEV-233): `{used, allowance, balance, cycle_start, cycle_end}` — credits used this anniversary cycle vs. the plan grant; per-category split still planned |
+| GET    | `/api/v1/teams/{team_id}/usage`                | Pooled team meter; `?group_by=member\|category\|day` (A for member breakdown)                                                                                                                     |
+| GET    | `/api/v1/teams/{team_id}/budget`               | Caps, alert thresholds, degradation ("lite mode") state                                                                                                                                           |
+| PATCH  | `/api/v1/teams/{team_id}/budget`               | (A) Set spending caps, alert thresholds, overage opt-in — never silent charges                                                                                                                    |
+| GET    | `/api/v1/teams/{team_id}/billing/subscription` | Plan, seats, trial state, renewal                                                                                                                                                                 |
+| POST   | `/api/v1/teams/{team_id}/billing/checkout`     | **[DEFERRED]** (A) Start checkout/upgrade flow (seat changes, individual→team transition) → provider redirect URL                                                                                 |
+| POST   | `/api/v1/teams/{team_id}/billing/portal`       | **[DEFERRED]** (A) Billing-portal session (payment method, invoices)                                                                                                                              |
+| POST   | `/api/v1/teams/{team_id}/billing/top-ups`      | **[DEFERRED]** (A) Purchase credit top-up pack (`Idempotency-Key` required)                                                                                                                       |
+| GET    | `/api/v1/teams/{team_id}/billing/invoices`     | Invoice list                                                                                                                                                                                      |
+| POST   | `/api/v1/webhooks/billing`                     | **[DEFERRED]** Payment-provider webhooks (signature-verified)                                                                                                                                     |
 
 ### 2.15 Workspaces & tutorial overlay (feature area 12)
 

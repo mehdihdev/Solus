@@ -201,6 +201,7 @@ the **sole owner of a shared team** — transfer ownership first.
 {
   "data": {
     "sol_mode": "guide",
+    "sol_custom_instruction": null,
     "data_collection_consent": false,
     "onboarding_step": "about"
   }
@@ -209,7 +210,9 @@ the **sole owner of a shared team** — transfer ownership first.
 
 `data_collection_consent` is the ADR-011 opt-in/out switch (default **false**; see §9 —
 events are recorded only while consented). `onboarding_step`
-(`about|connect|build|done`) is the FND-08 resume point.
+(`about|connect|build|done`) is the FND-08 resume point. `sol_custom_instruction`
+(SOLUSDEV-233) is the user's standing preference note for SOL — 500 chars max; it
+reaches the prompt only as a fenced data block, never as instruction text (§7).
 
 ### PATCH /api/v1/users/me/settings
 
@@ -217,8 +220,34 @@ events are recorded only while consented). `onboarding_step`
 { "sol_mode": "expert" }
 ```
 
-`200` — same shape as GET with the change applied. All three fields are patchable
+`200` — same shape as GET with the change applied. All fields are patchable
 independently; ADR-016: `sol_mode` switchable any time. `"sol_mode":"yolo"` → `422`.
+`sol_custom_instruction` is tri-state: absent = unchanged, `null` = clear, a string
+sets it (`> 500` chars → `422`). The `settings.updated` data event records only
+`"set"`/`"cleared"` for this field — never the text.
+
+### GET /api/v1/users/me/usage
+
+`200` — the always-visible meter (ADR-018, SOLUSDEV-233). Credit-denominated
+(ADR-018 rejected raw token metering):
+
+```json
+{
+  "data": {
+    "used": 941,
+    "allowance": 10000,
+    "balance": 9059,
+    "cycle_start": "2026-08-10T00:00:00+00:00",
+    "cycle_end": "2026-09-10T00:00:00+00:00"
+  }
+}
+```
+
+`used` sums USAGE ledger debits inside the current cycle — the monthly anniversary
+window anchored at the subscription's creation (day clamped in short months,
+Stripe-style), UTC calendar month before a subscription exists. `allowance` is the
+plan's starting-credit grant (`settings.plan_credit_grants`; `null` = no
+plan-derived denominator — clients show the balance alone).
 
 ### GET /api/v1/users/me/subscription
 
@@ -823,6 +852,10 @@ Returns `text/event-stream`. The user turn is persisted
 completes. SSE `event:` names and their `data` payloads:
 
 - `token` — `{"text": "…"}` incremental reply delta
+- `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped"}`
+  (SOLUSDEV-233) the turn's context manifest, streamed once at turn start. Section
+  TEXT never crosses the wire — kinds (`graph|telemetry|error|document`), verified
+  citation tokens, and token weights only. Drives the client's "context in use" panel.
 - `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
 - `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
 - `message` — `{"role":"assistant","content":"…","citations":["…"]}` the finished reply;

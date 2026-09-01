@@ -11,8 +11,9 @@ import {
   type SolActionMode,
   type SolTurn
 } from './solApi'
-import type { SolStreamEvent } from './solStream'
+import type { ContextUsedInfo, SolStreamEvent } from './solStream'
 import { decideSolConfirmation } from '../../lib/api/resources'
+import { ApiError } from '../../lib/api/envelope.types'
 import type { PendingConfirmation } from '../../lib/api/solStream'
 import { selectConversationId, useOrbStore } from './orbStore'
 
@@ -45,7 +46,16 @@ export interface SolChat {
   items: readonly ChatItem[]
   status: ChatStatus
   streaming: boolean
+  /** SOLUSDEV-233: the latest turn's context manifest (labels only). */
+  contextUsed: ContextUsedInfo | null
+  /** True after a 402 turn rejection — drives the top-up card. */
+  creditsExhausted: boolean
+  activeConversationId: string | null
   send: (content: string, actionMode: SolActionMode) => Promise<void>
+  /** Switch to another owned conversation (cancels any live turn first). */
+  selectConversation: (conversationId: string) => void
+  /** Forget the active conversation so the next send starts a fresh chat. */
+  startNewChat: () => void
   /** CTR-03: record approve/reject for a parked action. Rejection is a decision
    *  too, so both clear the card; the arguments that execute are the stored
    *  server-side ones the user was shown, never re-sent from here. */
@@ -114,21 +124,59 @@ function applyEvent(patch: Patch, event: SolStreamEvent): void {
 /** Per-turn rendered-content ceiling (SEC-H3). Far above any real reply. */
 const MAX_TURN_CHARS = 200_000
 
+/** New-conversation titles are seeded from the first message (SOLUSDEV-233). */
+const TITLE_SEED_CHARS = 60
+
+/** Author-safe failure text for a rejected/failed turn — never the raw error. */
+function turnFailureText(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 402) return "You're out of SOL credits — top up to keep going."
+    if (error.status === 429) return 'Too many SOL turns right now — give it a few seconds.'
+  }
+  return 'SOL is unreachable right now.'
+}
+
+function blankItem(id: string, role: ChatItem['role'], content: string, pending = false): ChatItem {
+  return { id, role, content, citations: [], trace: [], pending, error: null, confirmation: null }
+}
+
 export function useSolChat(projectId: string | null): SolChat {
   const [items, setItems] = useState<ChatItem[]>([])
   const [status, setStatus] = useState<ChatStatus>('ready')
+  const [contextUsed, setContextUsed] = useState<ContextUsedInfo | null>(null)
+  const [creditsExhausted, setCreditsExhausted] = useState(false)
   const streaming = useOrbStore((s) => s.streaming)
+  // Subscribed (not read once): the chats sidebar switches conversations by
+  // writing this store, and the transcript must follow (SOLUSDEV-233).
+  const conversationId = useOrbStore((s) => selectConversationId(s, projectId))
   const sendingRef = useRef(false)
   //#: SEC-H3: the in-flight stream, so unmount and project switches cancel it
   //  rather than leaving a read running (and the composer wedged).
   const abortRef = useRef<AbortController | null>(null)
+  //#: The conversation id this hook just created mid-send. Its store write
+  //  re-fires the history effect, which must NOT reload (and wipe) the live turn.
+  const skipReloadRef = useRef<string | null>(null)
 
-  // Keyed on the PROJECT only: creating a conversation mid-send must not
-  // trigger a reload that wipes the streaming item. The stored conversation id
-  // is read once per project switch (detached-window sync rides persistence).
+  const cancelLiveTurn = useCallback((): void => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    sendingRef.current = false
+    useOrbStore.getState().setStreaming(false)
+  }, [])
+
+  // Unmount / project switch cancels any live turn: its tokens belong to a
+  // chat we are no longer showing. Conversation switches cancel through
+  // selectConversation/startNewChat instead, so a mid-send conversation
+  // creation never aborts its own stream.
+  useEffect(() => cancelLiveTurn, [projectId, cancelLiveTurn])
+
   useEffect(() => {
+    if (skipReloadRef.current !== null && skipReloadRef.current === conversationId) {
+      skipReloadRef.current = null
+      return
+    }
     setItems([])
-    const conversationId = selectConversationId(useOrbStore.getState(), projectId)
+    setContextUsed(null)
     if (!projectId || !conversationId) {
       setStatus('ready')
       return
@@ -149,66 +197,72 @@ export function useSolChat(projectId: string | null): SolChat {
       })
     return () => {
       stale = true
-      // Switching project (or unmounting) cancels any live turn: its tokens
-      // belong to a chat we are no longer showing.
-      abortRef.current?.abort()
-      abortRef.current = null
-      sendingRef.current = false
-      useOrbStore.getState().setStreaming(false)
     }
-  }, [projectId])
+  }, [projectId, conversationId])
+
+  const selectConversation = useCallback(
+    (id: string): void => {
+      if (!projectId) return
+      cancelLiveTurn()
+      useOrbStore.getState().setConversation(projectId, id)
+    },
+    [projectId, cancelLiveTurn]
+  )
+
+  const startNewChat = useCallback((): void => {
+    if (!projectId) return
+    cancelLiveTurn()
+    useOrbStore.getState().clearConversation(projectId)
+  }, [projectId, cancelLiveTurn])
 
   const send = useCallback(
     async (content: string, actionMode: SolActionMode): Promise<void> => {
       const text = content.trim()
       if (!text || !projectId || sendingRef.current) return
       sendingRef.current = true
+      setCreditsExhausted(false)
       useOrbStore.getState().setStreaming(true)
       const assistantId = nextItemId()
       const patch: Patch = (fn) =>
         setItems((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)))
       setItems((prev) => [
         ...prev,
-        {
-          id: nextItemId(),
-          role: 'user',
-          content: text,
-          citations: [],
-          trace: [],
-          pending: false,
-          error: null,
-          confirmation: null
-        },
-        {
-          id: assistantId,
-          role: 'assistant',
-          content: '',
-          citations: [],
-          trace: [],
-          pending: true,
-          error: null,
-          confirmation: null
-        }
+        blankItem(nextItemId(), 'user', text),
+        blankItem(assistantId, 'assistant', '', true)
       ])
       try {
-        let conversationId = selectConversationId(useOrbStore.getState(), projectId)
-        if (!conversationId) {
-          conversationId = (await createSolConversation(projectId)).id
-          useOrbStore.getState().setConversation(projectId, conversationId)
+        let activeId = selectConversationId(useOrbStore.getState(), projectId)
+        if (!activeId) {
+          activeId = (await createSolConversation(projectId, text.slice(0, TITLE_SEED_CHARS))).id
+          skipReloadRef.current = activeId
+          useOrbStore.getState().setConversation(projectId, activeId)
         }
         const controller = new AbortController()
         abortRef.current = controller
         await streamSolMessage({
           projectId,
-          conversationId,
+          conversationId: activeId,
           content: text,
           actionMode,
           signal: controller.signal,
-          onEvent: (event) => applyEvent(patch, event)
+          onEvent: (event) => {
+            if (event.type === 'context_used') {
+              setContextUsed({
+                sections: event.sections,
+                truncated: event.truncated,
+                dropped: event.dropped
+              })
+              return
+            }
+            applyEvent(patch, event)
+          }
         })
-      } catch {
-        // Transport failure: a local, author-safe note — never the raw error.
-        patch((m) => ({ ...m, pending: false, error: 'SOL is unreachable right now.' }))
+      } catch (error: unknown) {
+        // Turn rejection or transport failure: an author-safe note — never the
+        // raw error. A 402 additionally lights the top-up card (SOLUSDEV-233).
+        if (error instanceof ApiError && error.status === 402) setCreditsExhausted(true)
+        const note = turnFailureText(error)
+        patch((m) => ({ ...m, pending: false, error: note }))
       } finally {
         abortRef.current = null
         sendingRef.current = false
@@ -238,5 +292,16 @@ export function useSolChat(projectId: string | null): SolChat {
     [projectId]
   )
 
-  return { items, status, streaming, send, decide }
+  return {
+    items,
+    status,
+    streaming,
+    contextUsed,
+    creditsExhausted,
+    activeConversationId: conversationId,
+    send,
+    selectConversation,
+    startNewChat,
+    decide
+  }
 }

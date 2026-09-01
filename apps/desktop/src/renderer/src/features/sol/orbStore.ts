@@ -28,6 +28,8 @@ export interface OrbState {
   setDetached: (detached: boolean) => void
   setStreaming: (streaming: boolean) => void
   setConversation: (projectId: string, conversationId: string) => void
+  /** Forget a project's active conversation (SOLUSDEV-233 "new chat"). */
+  clearConversation: (projectId: string) => void
   /** Clear per-account state on sign-out (SEC-M4). */
   resetForSignOut: () => void
 }
@@ -62,6 +64,12 @@ export const useOrbStore = create<OrbState>()(
       setConversation: (projectId, conversationId) =>
         set((s) => ({
           conversationByProject: { ...s.conversationByProject, [projectId]: conversationId }
+        })),
+      clearConversation: (projectId) =>
+        set((s) => ({
+          conversationByProject: Object.fromEntries(
+            Object.entries(s.conversationByProject).filter(([key]) => key !== projectId)
+          )
         })),
       // SEC-M4: conversation ids are per-account. An account switch must not
       // leave the previous user's ids for the new token to request.

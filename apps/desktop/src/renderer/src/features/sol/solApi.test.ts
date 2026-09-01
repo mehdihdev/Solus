@@ -5,7 +5,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { ApiClient } from '../../lib/api/client'
 import type { SolStreamEvent } from './solStream'
-import { createSolConversation, listSolTurns, streamSolMessage } from './solApi'
+import {
+  createSolConversation,
+  deleteSolConversation,
+  listSolConversations,
+  listSolTurns,
+  streamSolMessage
+} from './solApi'
 
 function fakeClient(result: unknown): {
   client: ApiClient
@@ -35,7 +41,7 @@ function sseResponse(wire: string, init: { ok?: boolean; status?: number } = {})
 describe('conversation wrappers', () => {
   it('creates a conversation under the project scope', async () => {
     const { client, calls } = fakeClient({ id: 'c1' })
-    const conversation = await createSolConversation('p1', client)
+    const conversation = await createSolConversation('p1', undefined, client)
     expect(conversation.id).toBe('c1')
     expect(calls[0].path).toBe('/projects/p1/sol/conversations')
     expect(calls[0].options).toMatchObject({ method: 'POST' })
@@ -124,5 +130,30 @@ describe('path encoding (SOLX-02 Phase-4 security)', () => {
     await listSolTurns('p1', '../../admin', client)
     expect(calls[0].path).not.toContain('../../admin')
     expect(calls[0].path).toContain('%2F')
+  })
+})
+
+describe('conversation list/delete (SOLUSDEV-233)', () => {
+  it('lists the caller’s conversations for the project', async () => {
+    const { client, calls } = fakeClient([{ id: 'c1', title: 'Project recap' }])
+    const list = await listSolConversations('p1', client)
+    expect(list[0].id).toBe('c1')
+    expect(calls[0].path).toBe('/projects/p1/sol/conversations')
+  })
+
+  it('deletes an owned conversation', async () => {
+    const { client, calls } = fakeClient(undefined)
+    await deleteSolConversation('p1', 'c1', client)
+    expect(calls[0].path).toBe('/projects/p1/sol/conversations/c1')
+    expect(calls[0].options).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('creates a conversation with a title seeded from the first message', async () => {
+    const { client, calls } = fakeClient({ id: 'c9' })
+    await createSolConversation('p1', 'Why is joint 2 stalling?', client)
+    expect(calls[0].options).toMatchObject({
+      method: 'POST',
+      body: { title: 'Why is joint 2 stalling?' }
+    })
   })
 })

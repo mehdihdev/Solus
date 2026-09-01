@@ -351,6 +351,27 @@ describe('team resources', () => {
     ])
   })
 
+  it('updates and clears the SOL custom instruction (SOLUSDEV-233)', async () => {
+    const { updateCustomInstruction } = await import('./resources')
+    const { client, calls } = stubClient({})
+    await updateCustomInstruction('Prefer metric units.', client)
+    await updateCustomInstruction(null, client)
+    expect(calls[0].path).toBe('/users/me/settings')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { sol_custom_instruction: 'Prefer metric units.' }
+    })
+    expect(calls[1].options).toMatchObject({ body: { sol_custom_instruction: null } })
+  })
+
+  it('fetches the credit usage meter (SOLUSDEV-233)', async () => {
+    const { getUsage } = await import('./resources')
+    const { client, calls } = stubClient({ used: 941, allowance: 10000, balance: 9059 })
+    const usage = await getUsage(client)
+    expect(calls[0].path).toBe('/users/me/usage')
+    expect(usage.used).toBe(941)
+  })
+
   it('fetches team detail, activity, and notifications', async () => {
     const { getTeamDetail, listActivity, listNotifications, markNotificationRead, updateTeam } =
       await import('./resources')

@@ -33,14 +33,37 @@ export interface SolTurn {
 
 export function createSolConversation(
   projectId: string,
+  title?: string,
   client: ApiClient = api
 ): Promise<SolConversation> {
   return client.request<SolConversation>(
     `/projects/${encodeURIComponent(projectId)}/sol/conversations`,
     {
       method: 'POST',
-      body: {}
+      body: title === undefined ? {} : { title }
     }
+  )
+}
+
+/** The caller's conversations for the project, newest first (SOLUSDEV-233). */
+export function listSolConversations(
+  projectId: string,
+  client: ApiClient = api
+): Promise<SolConversation[]> {
+  return client.request<SolConversation[]>(
+    `/projects/${encodeURIComponent(projectId)}/sol/conversations`
+  )
+}
+
+/** Soft-delete an owned conversation (SOLUSDEV-233). */
+export function deleteSolConversation(
+  projectId: string,
+  conversationId: string,
+  client: ApiClient = api
+): Promise<void> {
+  return client.request<void>(
+    `/projects/${encodeURIComponent(projectId)}/sol/conversations/${encodeURIComponent(conversationId)}`,
+    { method: 'DELETE' }
   )
 }
 

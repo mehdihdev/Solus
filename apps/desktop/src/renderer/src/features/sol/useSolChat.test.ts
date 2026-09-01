@@ -73,7 +73,7 @@ describe('send', () => {
     await act(async () => {
       await result.current.send('hello', 'guide')
     })
-    expect(createSolConversation).toHaveBeenCalledWith('p1')
+    expect(createSolConversation).toHaveBeenCalledWith('p1', 'hello')
     expect(useOrbStore.getState().conversationByProject).toEqual({ p1: 'c9' })
     expect(streamSolMessage).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'c9', content: 'hello', actionMode: 'guide' })
@@ -204,5 +204,101 @@ describe('stream lifecycle (SOLX-02 Phase-4 security)', () => {
     })
     const assistant = result.current.items.at(-1)
     expect(assistant?.content.length).toBeLessThanOrEqual(200_000)
+  })
+})
+
+describe('SOL page additions (SOLUSDEV-233)', () => {
+  it('exposes the turn context manifest from the context_used frame', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamWith([
+      {
+        type: 'context_used',
+        sections: [{ kind: 'graph', citation: '[graph:motor]', tokens: 12 }],
+        truncated: false,
+        dropped: 1
+      },
+      { type: 'done', conversationId: 'c1', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.contextUsed).toEqual({
+      sections: [{ kind: 'graph', citation: '[graph:motor]', tokens: 12 }],
+      truncated: false,
+      dropped: 1
+    })
+  })
+
+  it('branches a 402 into the credits message and flag, and 429 into backoff', async () => {
+    const { ApiError } = await import('../../lib/api/envelope.types')
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamSolMessage.mockRejectedValue(new ApiError(402, 'insufficient_credits', 'no'))
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.creditsExhausted).toBe(true)
+    expect(result.current.items.at(-1)?.error).toMatch(/out of SOL credits/i)
+
+    streamSolMessage.mockRejectedValue(new ApiError(429, 'frequency_cap', 'slow down'))
+    await act(async () => {
+      await result.current.send('again', 'guide')
+    })
+    expect(result.current.items.at(-1)?.error).toMatch(/too many SOL turns/i)
+  })
+
+  it('seeds the conversation title from the first message', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
+    streamWith([{ type: 'done', conversationId: 'c9', turnId: 't1' }])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('Why is joint 2 stalling?', 'guide')
+    })
+    expect(createSolConversation).toHaveBeenCalledWith('p1', 'Why is joint 2 stalling?')
+  })
+
+  it('creating a conversation mid-send never reloads away the live turn', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
+    streamWith([
+      { type: 'message', role: 'assistant', content: 'Answer.', citations: [] },
+      { type: 'done', conversationId: 'c9', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hello', 'guide')
+    })
+    // The store now points at c9, but the just-created id must not trigger a
+    // history reload that wipes the streamed items.
+    expect(useOrbStore.getState().conversationByProject).toEqual({ p1: 'c9' })
+    expect(listSolTurns).not.toHaveBeenCalled()
+    expect(result.current.items.map((m) => m.content)).toEqual(['hello', 'Answer.'])
+  })
+
+  it('selectConversation reloads history for the chosen chat', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    listSolTurns.mockResolvedValue([turn('t9', 'user', 'other chat')])
+    act(() => result.current.selectConversation('c2'))
+    await waitFor(() => expect(result.current.items.map((m) => m.content)).toEqual(['other chat']))
+    expect(listSolTurns).toHaveBeenLastCalledWith('p1', 'c2')
+    expect(result.current.activeConversationId).toBe('c2')
+  })
+
+  it('startNewChat clears the active conversation and the transcript', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.items).toHaveLength(1))
+
+    act(() => result.current.startNewChat())
+    await waitFor(() => expect(result.current.items).toEqual([]))
+    expect(result.current.activeConversationId).toBeNull()
+    expect(useOrbStore.getState().conversationByProject).toEqual({})
   })
 })

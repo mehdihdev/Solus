@@ -196,8 +196,9 @@ describe('OrbChat streaming render (SOL-02 obligations)', () => {
     await waitFor(() => expect(screen.getByTestId('tool-trace')).toBeInTheDocument())
     const trace = screen.getByTestId('tool-trace')
     expect(within(trace).getByText('2 tool steps')).toBeInTheDocument()
-    expect(within(trace).getByText(/get_entity — ok/)).toBeInTheDocument()
-    expect(within(trace).getByText(/run_checker — not_found/)).toBeInTheDocument()
+    // Arrow format matches the backend's persisted tool turns (SOLUSDEV-233).
+    expect(within(trace).getByText(/get_entity → ok/)).toBeInTheDocument()
+    expect(within(trace).getByText(/run_checker → not_found/)).toBeInTheDocument()
     expect(trace).not.toHaveAttribute('open')
   })
 
