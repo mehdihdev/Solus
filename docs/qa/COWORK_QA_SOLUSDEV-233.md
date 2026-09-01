@@ -60,6 +60,9 @@ a `total` count in its pagination meta.
 3. Click it.
    - Expected: the same ALL ACTIVITY dialog, listing the merged feed (up to 50
      rows per team). **No Load more button** on Home — this is by design.
+   - If the total exceeds the rows listed, a muted footer reads
+     **"Showing the most recent X of N events."** — the dialog never silently
+     truncates.
 4. Pass/fail: [ ]
 
 ## Flow 4 — Feed that fits (no button)
@@ -94,6 +97,20 @@ a `total` count in its pagination meta.
       count N matches team A's own history.
 - [ ] **Permissions**: a `viewer`-role member sees the panel, button, and
       dialog identically (read-only feature — no role gating expected).
+
+## Flow 6 — Popup motion (all dialogs and popovers)
+
+1. Open each of these and watch the entrance:
+   - Any dialog (Invite teammate, New team, New project, Join team, Delete
+     confirm, the Activity dialog): backdrop fades in and the card pops in
+     with a small rise — quick (~0.2s), no flash of unstyled position.
+   - Notifications bell popover, the project switcher menu, and a project
+     row's ⋯ menu: slide down slightly while fading in.
+   - Trigger a toast (e.g. archive fails offline): it slides in from the right.
+2. Enable "Reduce motion" in macOS System Settings → Accessibility → Display,
+   reload, and reopen a dialog.
+   - Expected: everything appears instantly with **no** animation.
+3. Pass/fail: [ ]
 
 ## Cross-feature interactions
 
