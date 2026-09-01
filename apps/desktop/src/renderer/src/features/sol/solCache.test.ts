@@ -44,17 +44,30 @@ describe('solCache', () => {
     ])
     const written = write.mock.calls[0]
     expect(written[0]).toBe('p1')
+    expect(JSON.parse(written[2]).schema_version).toBe(1) // ADR-034 contract field
     read.mockResolvedValue(written[2])
     const items = await readCachedChat('p1', 'c1')
-    expect(items?.map((m) => m.id)).toEqual(['t1', 't2'])
+    expect(items?.map((m) => m.content)).toEqual(['q', 'a'])
+    // File-supplied ids never enter the live `local-` namespace (SEC H2).
+    expect(items?.every((m) => m.id.startsWith('cache-'))).toBe(true)
     expect(items?.every((m) => !m.pending && m.confirmation === null)).toBe(true)
   })
 
   it('discards malformed cache files instead of rendering them', async () => {
+    const oversizedItem = JSON.stringify({
+      schema_version: 1,
+      items: [{ role: 'assistant', content: 'x'.repeat(200_001) }]
+    })
+    const floodedItems = JSON.stringify({
+      schema_version: 1,
+      items: Array.from({ length: 501 }, () => ({ role: 'user', content: 'x' }))
+    })
     for (const raw of [
       'not json',
-      '{"version":9,"items":[]}',
-      '{"version":1,"items":[{"id":1}]}'
+      '{"schema_version":9,"items":[]}', // newer schema is read-only, never rendered
+      '{"schema_version":1,"items":[{"role":1}]}',
+      oversizedItem, // per-item render ceiling (SEC M2)
+      floodedItems // item-count cap (SEC M2)
     ]) {
       read.mockResolvedValue(raw)
       expect(await readCachedChat('p1', 'c1')).toBeNull()

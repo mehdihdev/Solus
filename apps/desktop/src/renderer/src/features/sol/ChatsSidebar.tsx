@@ -15,6 +15,19 @@ import { useSolConversations } from './useSolConversations'
 
 const UNTITLED = 'New chat'
 
+//: Approximate rendered menu box, used to clamp the context menu inside the
+//: viewport (a row near the bottom edge must not push Delete off-screen).
+const MENU_WIDTH = 150
+const MENU_HEIGHT = 90
+
+/** Pointer coordinates clamped so the menu box stays fully visible. */
+export function clampMenuPosition(x: number, y: number): { x: number; y: number } {
+  return {
+    x: Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH)),
+    y: Math.max(0, Math.min(y, window.innerHeight - MENU_HEIGHT))
+  }
+}
+
 /** Right-click menu state: which chat, and where the pointer was. */
 interface MenuState {
   conversation: SolConversation
@@ -106,7 +119,7 @@ function ChatRow({
       onKeyDown={(e) => e.key === 'Enter' && onSelect(conversation.id)}
       onContextMenu={(e) => {
         e.preventDefault()
-        onMenu({ conversation, x: e.clientX, y: e.clientY })
+        onMenu({ conversation, ...clampMenuPosition(e.clientX, e.clientY) })
       }}
       className="interactive sol-row-in"
       style={{
@@ -217,6 +230,7 @@ function ChatActions({
         label="Chat name"
         submitLabel="Save"
         initial={renaming.title?.trim() || UNTITLED}
+        maxLength={512}
         errorText="Couldn't rename the chat. Please try again."
         onClose={close}
         onSubmit={async (name) => {

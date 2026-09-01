@@ -154,10 +154,10 @@ describe('~/.solus cache (ADR-034 Layer 1)', () => {
     useOrbStore.getState().setConversation('p1', 'c1')
     cacheRead.mockResolvedValue(
       JSON.stringify({
-        version: 1,
+        schema_version: 1,
         items: [
-          { id: 't1', role: 'user', content: 'old question' },
-          { id: 't2', role: 'assistant', content: 'old answer' }
+          { role: 'user', content: 'old question' },
+          { role: 'assistant', content: 'old answer' }
         ]
       })
     )
@@ -173,7 +173,12 @@ describe('~/.solus cache (ADR-034 Layer 1)', () => {
   it('the server load wins over the cache and refreshes it', async () => {
     useOrbStore.getState().setConversation('p1', 'c1')
     cacheRead.mockResolvedValue(
-      JSON.stringify({ version: 1, items: [{ id: 'stale', role: 'user', content: 'stale' }] })
+      JSON.stringify({
+        schema_version: 1,
+        // Even an id posing as a live turn cannot survive the server load —
+        // file ids are rewritten to the cache- namespace (SEC review H2).
+        items: [{ id: 'local-999', role: 'user', content: 'stale' }]
+      })
     )
     vi.mocked(solApi.listSolTurns).mockResolvedValue([
       {
@@ -209,5 +214,80 @@ describe('~/.solus cache (ADR-034 Layer 1)', () => {
       'question',
       'cached reply'
     ])
+  })
+})
+
+describe('server refusals outrank the cache (SEC review H1)', () => {
+  const cacheRead = vi.fn()
+  const cacheWrite = vi.fn().mockResolvedValue({ ok: true })
+  const cacheRemove = vi.fn().mockResolvedValue({ ok: true })
+  const cacheClear = vi.fn().mockResolvedValue({ ok: true })
+  const CACHED = JSON.stringify({
+    schema_version: 1,
+    items: [{ role: 'assistant', content: 'previous owner content' }]
+  })
+
+  beforeEach(() => {
+    cacheRead.mockReset()
+    cacheRemove.mockClear()
+    cacheClear.mockClear()
+    ;(window as unknown as { solus?: unknown }).solus = {
+      solChat: { read: cacheRead, write: cacheWrite, remove: cacheRemove, clear: cacheClear }
+    }
+  })
+  afterEach(() => {
+    delete (window as unknown as { solus?: unknown }).solus
+  })
+
+  it('drops the painted cache AND the file on a 404 — never renders refused data', async () => {
+    const { ApiError } = await import('../../lib/api/envelope.types')
+    useOrbStore.getState().setConversation('p1', 'c1')
+    cacheRead.mockResolvedValue(CACHED)
+    vi.mocked(solApi.listSolTurns).mockRejectedValue(new ApiError(404, 'not_found', 'gone'))
+    await act(async () => {
+      await syncSession('p1')
+    })
+    const session = selectSession(useSolChatStore.getState(), 'p1')
+    expect(session.items).toEqual([])
+    expect(cacheRemove).toHaveBeenCalledWith('p1', 'c1')
+    // The stale conversation id is forgotten so the next send starts fresh.
+    expect(useOrbStore.getState().conversationByProject).toEqual({})
+  })
+
+  it('drops the painted cache on a 403 and shows offline, not the transcript', async () => {
+    const { ApiError } = await import('../../lib/api/envelope.types')
+    useOrbStore.getState().setConversation('p1', 'c1')
+    cacheRead.mockResolvedValue(CACHED)
+    vi.mocked(solApi.listSolTurns).mockRejectedValue(new ApiError(403, 'forbidden', 'no'))
+    await act(async () => {
+      await syncSession('p1')
+    })
+    const session = selectSession(useSolChatStore.getState(), 'p1')
+    expect(session.items).toEqual([])
+    expect(session.status).toBe('offline')
+    expect(cacheRemove).toHaveBeenCalledWith('p1', 'c1')
+  })
+
+  it('an in-place identity swap tears down sessions and purges the disk cache', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    let seen: AbortSignal | undefined
+    streamSolMessage.mockImplementation(async ({ signal }) => {
+      seen = signal
+      await new Promise(() => undefined)
+    })
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'a@x.dev' } })
+    void sendMessage('p1', 'hello', 'guide')
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(seen?.aborted).toBe(false)
+
+    // No 'unauthenticated' edge — the session is swapped in place (OAuth
+    // loopback / magic link / another window).
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'b@x.dev' } })
+    expect(seen?.aborted).toBe(true)
+    expect(useSolChatStore.getState().sessions).toEqual({})
+    expect(useOrbStore.getState().conversationByProject).toEqual({})
+    expect(cacheClear).toHaveBeenCalled()
   })
 })

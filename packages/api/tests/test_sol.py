@@ -537,3 +537,43 @@ async def test_rename_foreign_conversation_is_404(
         headers=bob_headers,
     )
     assert resp.status_code == 404
+
+
+async def test_rename_is_owner_private_within_a_team(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """SEC review H4: the MUTATING route must be owner-private, not merely
+    team-private — a same-team member gets 404 and the title is untouched."""
+    team, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"], title="Mine")
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"])
+    resp = await client.patch(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}",
+        json={"title": "hijacked"},
+        headers=bob_headers,
+    )
+    assert resp.status_code == 404, resp.text
+    assert bob is not None
+    # And the title is unchanged for the owner.
+    resp = await client.get(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}",
+        headers=alice_headers,
+    )
+    assert resp.json()["data"]["title"] == "Mine"
+
+
+async def test_rename_requires_member_role(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """A viewer cannot mutate conversations at all (403 from the role gate)."""
+    team, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"], role="viewer")
+    resp = await client.patch(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}",
+        json={"title": "nope"},
+        headers=bob_headers,
+    )
+    assert resp.status_code == 403, resp.text

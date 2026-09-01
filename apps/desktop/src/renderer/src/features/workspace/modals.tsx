@@ -62,6 +62,7 @@ export function NameModal({
   submitLabel = 'Create',
   initial = '',
   errorText = 'Something went wrong. Please try again.',
+  maxLength,
   onClose,
   onSubmit
 }: {
@@ -70,6 +71,8 @@ export function NameModal({
   submitLabel?: string
   initial?: string
   errorText?: string
+  /** Client-side mirror of the server's length cap, when the field has one. */
+  maxLength?: number
   onClose: () => void
   /** Resolve true on success (modal closes) or false to keep it open with an error. */
   onSubmit: (name: string) => Promise<boolean>
@@ -98,6 +101,7 @@ export function NameModal({
         onChange={(e) => setName(e.target.value)}
         placeholder={label}
         autoFocus
+        maxLength={maxLength}
         onKeyDown={(e) => e.key === 'Enter' && void submit()}
         style={MODAL_INPUT_STYLE}
       />

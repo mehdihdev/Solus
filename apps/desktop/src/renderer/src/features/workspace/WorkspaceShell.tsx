@@ -245,23 +245,38 @@ function ScreenView({
   navigate: (screen: MainScreen) => void
   goBack: () => void
 }): React.JSX.Element | null {
-  switch (route.name) {
-    case 'home':
-      return <HomeScreen onOpenProject={openProject} />
-    case 'overview':
-      return <ProjectOverview onNavigate={navigate} />
-    case 'bench':
-      // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
-      return <BenchScreen onNavigate={navigate} />
-    case 'team':
-      return <TeamScreen onOpenProject={openProject} />
-    case 'alert':
-      return <AlertScreen onBack={goBack} />
-    default: {
-      const Screen = SIMPLE_SCREENS[route.name]
-      return Screen ? <Screen /> : null
+  const screen = ((): React.JSX.Element | null => {
+    switch (route.name) {
+      case 'home':
+        return <HomeScreen onOpenProject={openProject} />
+      case 'overview':
+        return <ProjectOverview onNavigate={navigate} />
+      case 'bench':
+        // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
+        return <BenchScreen onNavigate={navigate} />
+      case 'team':
+        return <TeamScreen onOpenProject={openProject} />
+      case 'alert':
+        return <AlertScreen onBack={goBack} />
+      default: {
+        const Screen = SIMPLE_SCREENS[route.name]
+        return Screen ? <Screen /> : null
+      }
     }
-  }
+  })()
+  if (!screen) return null
+  // SOLUSDEV-233: every screen switch enters with the app's fade-rise — keyed
+  // by route so the animation replays per navigation (CSS-only, reduced-motion
+  // guarded in main.css).
+  return (
+    <div
+      key={route.name === 'alert' ? `alert-${route.alertId}` : route.name}
+      className="screen-in"
+      style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}
+    >
+      {screen}
+    </div>
+  )
 }
 
 interface RailItem {

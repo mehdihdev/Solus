@@ -138,3 +138,20 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     expect(await screen.findByText(/Couldn.t delete this chat/)).toBeInTheDocument()
   })
 })
+
+describe('menu positioning (code review M)', () => {
+  it('clamps the context menu inside the viewport near edges', async () => {
+    listSolConversations.mockResolvedValue([conversation('c1', 'Project recap')])
+    render(
+      <ChatsSidebar projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
+    )
+    const row = await screen.findByText('Project recap')
+    // Right-click at the very bottom-right corner of the window.
+    fireEvent.contextMenu(row, { clientX: window.innerWidth, clientY: window.innerHeight })
+    const menu = screen.getByRole('menu')
+    const left = Number.parseFloat(menu.style.left)
+    const top = Number.parseFloat(menu.style.top)
+    expect(left).toBeLessThanOrEqual(window.innerWidth - 150)
+    expect(top).toBeLessThanOrEqual(window.innerHeight - 90)
+  })
+})

@@ -26,12 +26,7 @@ import {
   unlinkProjectFolder
 } from './localState'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
-import {
-  readChatCache,
-  realSolChatCacheDeps,
-  removeChatCache,
-  writeChatCache
-} from './solChatCache'
+import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
@@ -83,30 +78,21 @@ function registerFolderRegistryHandlers(): void {
  *  Ids and sizes are re-validated inside solChatCache; content is an opaque
  *  JSON string the renderer owns. */
 function registerSolChatCacheHandlers(): void {
-  const isString = (v: unknown): v is string => typeof v === 'string'
+  const deps = realSolChatCacheDeps
   ipcMain.handle('solchat:read', (event, projectId: unknown, conversationId: unknown) =>
-    isMainRendererSender(event) && isString(projectId) && isString(conversationId)
-      ? readChatCache(projectId, conversationId, realSolChatCacheDeps)
-      : null
+    solChatCacheIpc.read(isMainRendererSender(event), projectId, conversationId, deps)
   )
   ipcMain.handle(
     'solchat:write',
-    (event, projectId: unknown, conversationId: unknown, content: unknown) => ({
-      ok:
-        isMainRendererSender(event) &&
-        isString(projectId) &&
-        isString(conversationId) &&
-        isString(content)
-          ? writeChatCache(projectId, conversationId, content, realSolChatCacheDeps)
-          : false
-    })
+    (event, projectId: unknown, conversationId: unknown, content: unknown) =>
+      solChatCacheIpc.write(isMainRendererSender(event), projectId, conversationId, content, deps)
   )
-  ipcMain.handle('solchat:remove', (event, projectId: unknown, conversationId: unknown) => ({
-    ok:
-      isMainRendererSender(event) && isString(projectId) && isString(conversationId)
-        ? removeChatCache(projectId, conversationId, realSolChatCacheDeps)
-        : false
-  }))
+  ipcMain.handle('solchat:remove', (event, projectId: unknown, conversationId: unknown) =>
+    solChatCacheIpc.remove(isMainRendererSender(event), projectId, conversationId, deps)
+  )
+  ipcMain.handle('solchat:clear', (event) =>
+    solChatCacheIpc.clear(isMainRendererSender(event), deps)
+  )
 }
 
 /** True when the invoke came from the app's own renderer, not some other

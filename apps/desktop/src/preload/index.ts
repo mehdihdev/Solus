@@ -87,7 +87,9 @@ const api = {
     write: (projectId: string, conversationId: string, content: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('solchat:write', projectId, conversationId, content),
     remove: (projectId: string, conversationId: string): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke('solchat:remove', projectId, conversationId)
+      ipcRenderer.invoke('solchat:remove', projectId, conversationId),
+    // Purge every cached chat — the account identity changed (ADR-034).
+    clear: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('solchat:clear')
   }
 }
 

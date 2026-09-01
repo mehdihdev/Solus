@@ -37,8 +37,12 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   the backend's persisted format (`tool → outcome`), citations region,
   confirmation cards (unchanged CTR-03 flow). Messages enter with a short
   fade-rise.
-- Composer: input + Guide/Do action-mode toggle + Send (unchanged), classify
-  indicator underneath.
+- Composer: input + Guide/Do action-mode toggle + Send (unchanged), routing
+  line underneath — ALWAYS present (SOLUSDEV-233): with a classification it
+  reads `tier · type · model` (click to override); with none (empty input /
+  endpoint hiccup) it shows the honest idle line "auto routing · sizes each
+  message to the cheapest capable model" in the same spot — no layout shift,
+  never a fabricated tier.
 - Turn rejections are named, not generic: 402 → "You're out of SOL credits —
   top up to keep going." (and the top-up card lights); 429 → "Too many SOL
   turns right now — give it a few seconds."
@@ -84,7 +88,8 @@ chat surface (`OrbChat`) and stream protocol unchanged.
 ## Motion
 
 Messages, sidebar rows, and panel cards enter with a 0.18–0.22s fade-rise; the
-meter fill eases to its new width. Transform/opacity only, tokens only, all
+meter fill eases to its new width. The same fade-rise now plays on EVERY
+workspace screen switch (app-wide, keyed per navigation in the shell). Transform/opacity only, tokens only, all
 disabled under `prefers-reduced-motion`, CSS-only (the orb perf ratchet forbids
 JS timers in orb-adjacent files).
 

@@ -93,10 +93,16 @@ export const useOrbStore = create<OrbState>()(
 )
 
 // SEC-M4: conversation ids are per-account and persisted, so an account switch
-// must not leave the previous user's ids for a new token to request. Subscribed
-// here (lane-owned) rather than edited into the shared authStore.
+// must not leave the previous user's ids for a new token to request — and an
+// in-place identity swap (OAuth loopback, magic link, another window) never
+// passes through 'unauthenticated', so key on the identity, not the status
+// (SOLUSDEV-233 security review H1). Lane-owned subscription.
 useAuthStore.subscribe((state, prev) => {
-  if (prev.status === 'authenticated' && state.status === 'unauthenticated') {
+  if (prev.status !== 'authenticated') return
+  const signedOut = state.status === 'unauthenticated'
+  const identitySwapped =
+    state.status === 'authenticated' && state.user?.email !== prev.user?.email
+  if (signedOut || identitySwapped) {
     useOrbStore.getState().resetForSignOut()
   }
 })

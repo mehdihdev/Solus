@@ -302,3 +302,23 @@ and **SOL USAGE** (credit meter + low-credit top-up).
 4. Delete a chat via the context menu.
    - Expected: its cache file is gone from `~/.solus`.
 5. Pass/fail: [ ]
+
+## Flow 17 — Routing line & app-wide motion
+
+1. Open SOL with an empty composer.
+   - Expected: the muted routing line under the composer is ALREADY there,
+     reading "auto routing · sizes each message to the cheapest capable
+     model". Start typing: after a beat it becomes the real
+     `tier · type · model` (e.g. "trivial · general · claude-haiku-4-5") with
+     no layout shift; clearing the input returns the idle line.
+2. Switch between screens (Home → Graph → Sources → Team → Settings → SOL).
+   - Expected: each screen enters with the same short fade-rise the SOL page
+     uses — no hard cut. With macOS "Reduce motion" on, switches are instant.
+3. Right-click a chat at the very bottom of the sidebar in a short window.
+   - Expected: the Rename/Delete menu stays fully on-screen.
+4. Sign out, or sign in as a different account in place.
+   - Expected: `~/.solus/projects/*/sol/` cache directories are purged; the
+     new account never sees the previous account's transcripts (also try:
+     delete a chat from another machine, reopen it here — the app clears the
+     stale local copy instead of showing refused data).
+5. Pass/fail: [ ]

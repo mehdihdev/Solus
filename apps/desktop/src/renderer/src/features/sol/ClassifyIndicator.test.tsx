@@ -53,8 +53,11 @@ const PREVIEW: ClassifyPreview = {
 
 const NO_OVERRIDE = { complexity: null, type: null }
 
-it('renders nothing without a preview (a hiccup never blocks the composer)', () => {
-  const { container } = render(
+it('shows an honest idle line without a preview — the row never pops in and out', () => {
+  // SOLUSDEV-233: the routing line is a permanent part of the composer. With
+  // no classification (empty input / endpoint hiccup) it says so instead of
+  // vanishing — and never fabricates a tier or model.
+  render(
     <ClassifyIndicator
       preview={null}
       override={NO_OVERRIDE}
@@ -62,7 +65,8 @@ it('renders nothing without a preview (a hiccup never blocks the composer)', () 
       onReset={() => {}}
     />
   )
-  expect(container).toBeEmptyDOMElement()
+  expect(screen.getByText(/auto routing/)).toBeInTheDocument()
+  expect(screen.queryByText(/claude-/)).not.toBeInTheDocument()
 })
 
 it('renders the muted one-line summary', () => {

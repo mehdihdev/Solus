@@ -5,9 +5,11 @@
 //
 // SEC-H3 evolution, deliberate: unmount-abort was the original no-orphaned-
 // streams control; ownership by this singleton is its successor. Every stream
-// is still held by exactly one AbortController, bounded to ONE live turn per
-// project, capped per turn (MAX_TURN_CHARS), and torn down on sign-out and on
-// explicit chat switches. Runtime-only — never persisted.
+// is still held by exactly one AbortController, bounded to one live turn per
+// project PER RENDERER (the detached orb window is its own process) and
+// MAX_CONCURRENT_TURNS across projects, capped per turn (MAX_TURN_CHARS), and
+// torn down on identity change (sign-out OR account switch) and on explicit
+// chat switches. Runtime-only — never persisted.
 import { create } from 'zustand'
 import { useAuthStore } from '../../store/authStore'
 import { useShellStore } from '../workspace/shellStore'
@@ -23,7 +25,7 @@ import {
 } from './solApi'
 import type { ContextUsedInfo, SolStreamEvent } from './solStream'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import { readCachedChat, writeCachedChat } from './solCache'
+import { purgeAllCachedChats, readCachedChat, removeCachedChat as removeCachedChatFile, writeCachedChat } from './solCache'
 import { selectConversationId, useOrbStore } from './orbStore'
 
 export interface TraceEntry {
@@ -85,6 +87,9 @@ const turnTokens = new Map<string, object>()
 
 /** Per-turn rendered-content ceiling (SEC-H3). Far above any real reply. */
 export const MAX_TURN_CHARS = 200_000
+/** Client-side ceiling on concurrent background turns across projects — the
+ *  server's frequency cap and budgets still gate each one (ADR-019). */
+export const MAX_CONCURRENT_TURNS = 3
 /** New-conversation titles are seeded from the first message (SOLUSDEV-233). */
 const TITLE_SEED_CHARS = 60
 
@@ -258,14 +263,33 @@ export async function syncSession(projectId: string): Promise<void> {
       status: 'ready'
     }))
     writeCachedChat(projectId, active, loaded)
-  } catch {
+  } catch (error: unknown) {
     if (selectConversationId(useOrbStore.getState(), projectId) !== active) return
-    // With a cache painted, the history IS readable — only a truly empty
-    // session degrades to the offline banner.
+    handleHistoryFailure(projectId, active, error)
+  }
+}
+
+/** A failed history load. Refusals (401/403/404) outrank the cache — the
+ *  server ANSWERED that this conversation is not (or is no longer) the
+ *  caller's, so the painted items AND the file are dropped (SEC review H1).
+ *  Only network/5xx keeps the cache readable. */
+function handleHistoryFailure(projectId: string, conversationId: string, error: unknown): void {
+  const refused =
+    error instanceof ApiError &&
+    (error.status === 401 || error.status === 403 || error.status === 404)
+  if (!refused) {
     patchSession(projectId, (s) => ({
       ...s,
       status: s.items.length > 0 ? 'ready' : 'offline'
     }))
+    return
+  }
+  removeCachedChatFile(projectId, conversationId)
+  if (error.status === 404) {
+    useOrbStore.getState().clearConversation(projectId)
+    patchSession(projectId, () => ({ ...EMPTY_SESSION }))
+  } else {
+    patchSession(projectId, (s) => ({ ...s, items: [], status: 'offline' }))
   }
 }
 
@@ -288,6 +312,19 @@ export async function sendMessage(
 ): Promise<void> {
   const text = content.trim()
   if (!text || controllers.has(projectId)) return
+  if (controllers.size >= MAX_CONCURRENT_TURNS) {
+    patchSession(projectId, (s) => ({
+      ...s,
+      items: [
+        ...s.items,
+        {
+          ...blankItem(nextItemId(), 'assistant', ''),
+          error: 'Too many chats are running — wait for one to finish.'
+        }
+      ]
+    }))
+    return
+  }
   const turnToken = {}
   turnTokens.set(projectId, turnToken)
   const assistantId = nextItemId()
@@ -396,11 +433,17 @@ export async function decideConfirmation(
   }))
 }
 
-// SEC-M4: sessions hold account data; an account switch must not leave the
-// previous user's transcripts (or live streams) behind. Lane-owned subscription,
-// same idiom as orbStore.
+// SEC-M4 / SEC review H1: sessions and the ~/.solus cache hold account data;
+// ANY identity change — sign-out or an in-place session swap (OAuth loopback,
+// magic link, another window) — must tear down streams, sessions, stored
+// conversation ids, and the on-disk cache. Lane-owned subscription.
 useAuthStore.subscribe((state, prev) => {
-  if (prev.status === 'authenticated' && state.status === 'unauthenticated') {
+  if (prev.status !== 'authenticated') return
+  const signedOut = state.status === 'unauthenticated'
+  const identitySwapped =
+    state.status === 'authenticated' && state.user?.email !== prev.user?.email
+  if (signedOut || identitySwapped) {
     resetSolChatSessions()
+    purgeAllCachedChats()
   }
 })

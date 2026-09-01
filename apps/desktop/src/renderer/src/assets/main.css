@@ -291,6 +291,12 @@ body {
     transform: translateY(0);
   }
 }
+/* Every workspace screen enters with the same fade-rise (SOLUSDEV-233 —
+ * app-wide motion; the wrapper is keyed per navigation in WorkspaceShell). */
+.screen-in {
+  animation: sol-fade-rise 0.22s ease-out;
+}
+
 /* Chat messages appearing (user send, SOL reply starting). */
 .sol-msg-in {
   animation: sol-fade-rise 0.18s ease-out;
@@ -309,6 +315,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .screen-in,
   .sol-msg-in,
   .sol-row-in,
   .sol-panel-in {
