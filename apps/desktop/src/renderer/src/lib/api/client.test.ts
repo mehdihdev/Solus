@@ -92,3 +92,25 @@ describe('createApiClient', () => {
     expect(page.meta).toEqual({ has_next: true, next_cursor: 'c2' })
   })
 })
+
+describe('204 No Content (SOLUSDEV-233 regression)', () => {
+  it('resolves a bodiless 2xx instead of throwing after the server acted', async () => {
+    // Every DELETE route returns 204 with an empty body. Reading `.data` off
+    // the null body used to throw AFTER the server had already deleted — the
+    // UI then showed "Couldn't delete…" for a delete that succeeded.
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(new Response(null, { status: 204 }))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    await expect(
+      client.request<void>('/projects/p1/sol/conversations/c1', { method: 'DELETE' })
+    ).resolves.toBeUndefined()
+  })
+
+  it('unwrapEnvelope treats a null 2xx body as void', () => {
+    expect(unwrapEnvelope<void>(204, null)).toBeUndefined()
+  })
+})
