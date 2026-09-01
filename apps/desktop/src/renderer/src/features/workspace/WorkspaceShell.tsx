@@ -154,7 +154,9 @@ export function WorkspaceShell(): React.JSX.Element {
       </div>
       <ToastView
         onView={(alertId) => {
+          const screen = useShellStore.getState().toast?.screen
           if (alertId) openAlert(alertId)
+          else if (screen) go(screen)
           useShellStore.getState().clearToast()
         }}
       />

@@ -10,6 +10,9 @@ export interface ShellToast {
   body: string
   action?: string
   alertId?: string
+  /** SOLUSDEV-233: the action button navigates to this main screen (e.g. a
+   *  backgrounded SOL reply's "View" jumps to the SOL page). */
+  screen?: MainScreen
 }
 
 export type MainScreen =

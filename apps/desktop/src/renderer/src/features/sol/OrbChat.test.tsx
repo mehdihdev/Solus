@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import * as solApi from './solApi'
 import * as resources from '../../lib/api/resources'
 import { useOrbStore } from './orbStore'
+import { resetSolChatSessions } from './solChatStore'
 import { OrbChat } from './OrbChat'
 
 vi.mock('./solApi', () => ({
@@ -29,6 +30,8 @@ const LONG_CITATION = `entity:${'x'.repeat(90)}`
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
+  // Sessions outlive components (SOLUSDEV-233) — reset the singleton per test.
+  resetSolChatSessions()
   useOrbStore.setState({
     corner: 'br',
     expanded: false,

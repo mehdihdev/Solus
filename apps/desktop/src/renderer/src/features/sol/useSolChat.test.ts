@@ -5,7 +5,9 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as solApi from './solApi'
 import type { SolStreamEvent } from './solStream'
+import { useShellStore } from '../workspace/shellStore'
 import { useOrbStore } from './orbStore'
+import { resetSolChatSessions } from './solChatStore'
 import { useSolChat } from './useSolChat'
 
 vi.mock('./solApi', () => ({
@@ -31,6 +33,9 @@ function streamWith(events: SolStreamEvent[]): void {
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
+  // Sessions outlive components (SOLUSDEV-233) — reset the singleton per test.
+  resetSolChatSessions()
+  useShellStore.getState().reset()
   useOrbStore.setState({
     corner: 'br',
     expanded: false,
@@ -167,25 +172,41 @@ describe('send', () => {
   })
 })
 
-describe('stream lifecycle (SOLX-02 Phase-4 security)', () => {
-  it('aborts the in-flight stream on unmount and clears the streaming flag', async () => {
-    // SEC-H3: an unmounted panel must not leave a read running.
+describe('stream lifecycle (SOLX-02 → SOLUSDEV-233: sessions outlive the page)', () => {
+  it('keeps the stream running on unmount and hands the reply to the next mount', async () => {
+    // SEC-H3 evolution: the singleton session store owns the stream now — an
+    // unmounted page no longer aborts it (leaving the SOL page mid-response
+    // used to eat the reply); sign-out teardown is pinned in solChatStore.test.
     let seen: AbortSignal | undefined
-    streamSolMessage.mockImplementation(async ({ signal }) => {
+    let finish: () => void = () => undefined
+    streamSolMessage.mockImplementation(async ({ signal, onEvent }) => {
       seen = signal
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      await new Promise<void>((resolve) => {
+        finish = () => {
+          onEvent({ type: 'message', role: 'assistant', content: 'Done.', citations: [] })
+          resolve()
+        }
+      })
     })
     listSolTurns.mockResolvedValue([])
     useOrbStore.getState().setConversation('p1', 'c1')
 
     const { result, unmount } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
     await act(async () => {
       void result.current.send('hello', 'guide')
     })
     unmount()
+    expect(seen?.aborted).toBe(false) // the turn is still running
 
-    expect(seen).toBeDefined()
-    expect(seen?.aborted).toBe(true)
+    await act(async () => {
+      finish()
+      await Promise.resolve()
+    })
+    // Returning to the page re-attaches to the finished transcript.
+    const { result: again } = renderHook(() => useSolChat('p1'))
+    expect(again.current.items.at(-1)?.content).toBe('Done.')
+    expect(again.current.streaming).toBe(false)
     expect(useOrbStore.getState().streaming).toBe(false)
   })
 
@@ -342,8 +363,11 @@ describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', (
     })
     expect(useOrbStore.getState().streaming).toBe(true)
 
-    // Unmount must still be able to abort the live turn B.
+    // Teardown (sign-out path) must still be able to abort the live turn B —
+    // unmount deliberately no longer does (sessions outlive the page).
     unmount()
+    expect(signals[1]?.aborted).toBe(false)
+    resetSolChatSessions()
     expect(signals[1]?.aborted).toBe(true)
     expect(useOrbStore.getState().streaming).toBe(false)
   })
@@ -353,9 +377,7 @@ describe('mid-stream credit exhaustion (security review L2)', () => {
   it('an insufficient_credits ERROR FRAME lights the top-up card too', async () => {
     useOrbStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
-    streamWith([
-      { type: 'error', code: 'insufficient_credits', message: 'Not enough credits.' }
-    ])
+    streamWith([{ type: 'error', code: 'insufficient_credits', message: 'Not enough credits.' }])
     const { result } = renderHook(() => useSolChat('p1'))
     await act(async () => {
       await result.current.send('hi', 'guide')
