@@ -249,4 +249,11 @@ and **SOL USAGE** (credit meter + low-credit top-up).
 4. The **SOL page header** and the **floating mini-orb** still use the orb
    (the orb is SOL's presence; the logo is the product's) — and the orb still
    pulses only while SOL streams.
-5. Pass/fail: [ ]
+5. **Theme-adaptive**: in Settings → Appearance, switch themes (Dark, Light,
+   Dark+, Monokai, Solarized) and accents (amber/teal/blue/violet). The in-app
+   logo re-skins live with each choice — its connector and rings follow the
+   accent, its tile follows the theme surfaces. No hardcoded blue remains.
+6. **App icon**: the dock/taskbar and packaged-app icon is the Solus mark on
+   its dark rounded tile (replaced `resources/icon.png`, static brand colors
+   by design — the OS icon does not theme).
+7. Pass/fail: [ ]
