@@ -77,6 +77,17 @@ const api = {
       url: string
     ): Promise<{ status: 'success' | 'cancel' | 'return' | 'closed' | 'blocked' | 'busy' }> =>
       ipcRenderer.invoke('billing:open-checkout', url)
+  },
+  solChat: {
+    // Machine-local SOL chat cache under ~/.solus (ADR-034 Layer 1 —
+    // SOLUSDEV-233). The server stays the source of truth; this makes
+    // returning to a chat instant and past chats readable offline.
+    read: (projectId: string, conversationId: string): Promise<string | null> =>
+      ipcRenderer.invoke('solchat:read', projectId, conversationId),
+    write: (projectId: string, conversationId: string, content: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('solchat:write', projectId, conversationId, content),
+    remove: (projectId: string, conversationId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('solchat:remove', projectId, conversationId)
   }
 }
 

@@ -1,14 +1,20 @@
 // SOLUSDEV-233: SOL chat sessions outlive the page — background completion,
 // the away toast, and sign-out teardown.
 import { act } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as solApi from './solApi'
 import type { SolStreamEvent } from './solStream'
 import { useAuthStore } from '../../store/authStore'
 import { useShellStore } from '../workspace/shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useOrbStore } from './orbStore'
-import { resetSolChatSessions, selectSession, sendMessage, useSolChatStore } from './solChatStore'
+import {
+  resetSolChatSessions,
+  selectSession,
+  sendMessage,
+  syncSession,
+  useSolChatStore
+} from './solChatStore'
 
 vi.mock('./solApi', () => ({
   createSolConversation: vi.fn(),
@@ -125,5 +131,83 @@ describe('sign-out teardown (SEC-M4)', () => {
     expect(seen?.aborted).toBe(true)
     expect(useSolChatStore.getState().sessions).toEqual({})
     expect(useOrbStore.getState().streaming).toBe(false)
+  })
+})
+
+describe('~/.solus cache (ADR-034 Layer 1)', () => {
+  const cacheRead = vi.fn()
+  const cacheWrite = vi.fn().mockResolvedValue({ ok: true })
+  const cacheRemove = vi.fn().mockResolvedValue({ ok: true })
+
+  beforeEach(() => {
+    cacheRead.mockReset()
+    cacheWrite.mockClear()
+    ;(window as unknown as { solus?: unknown }).solus = {
+      solChat: { read: cacheRead, write: cacheWrite, remove: cacheRemove }
+    }
+  })
+  afterEach(() => {
+    delete (window as unknown as { solus?: unknown }).solus
+  })
+
+  it('keeps a cached chat readable when the server cannot load it', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    cacheRead.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        items: [
+          { id: 't1', role: 'user', content: 'old question' },
+          { id: 't2', role: 'assistant', content: 'old answer' }
+        ]
+      })
+    )
+    vi.mocked(solApi.listSolTurns).mockRejectedValue(new Error('down'))
+    await act(async () => {
+      await syncSession('p1')
+    })
+    const session = selectSession(useSolChatStore.getState(), 'p1')
+    expect(session.items.map((m) => m.content)).toEqual(['old question', 'old answer'])
+    expect(session.status).toBe('ready') // the cache IS the readable history
+  })
+
+  it('the server load wins over the cache and refreshes it', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    cacheRead.mockResolvedValue(
+      JSON.stringify({ version: 1, items: [{ id: 'stale', role: 'user', content: 'stale' }] })
+    )
+    vi.mocked(solApi.listSolTurns).mockResolvedValue([
+      {
+        id: 't9',
+        conversation_id: 'c1',
+        role: 'assistant',
+        content: 'fresh from the server',
+        attrs: {},
+        created_at: ''
+      }
+    ])
+    await act(async () => {
+      await syncSession('p1')
+    })
+    const session = selectSession(useSolChatStore.getState(), 'p1')
+    expect(session.items.map((m) => m.content)).toEqual(['fresh from the server'])
+    expect(cacheWrite).toHaveBeenCalled() // refreshed with server truth
+  })
+
+  it('mirrors the transcript to the cache when a turn settles', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    cacheRead.mockResolvedValue(null)
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent(messageEvent('cached reply'))
+    })
+    await act(async () => {
+      await sendMessage('p1', 'question', 'guide')
+    })
+    const [pid, cid, payload] = cacheWrite.mock.calls.at(-1) as [string, string, string]
+    expect(pid).toBe('p1')
+    expect(cid).toBe('c1')
+    expect(JSON.parse(payload).items.map((m: { content: string }) => m.content)).toEqual([
+      'question',
+      'cached reply'
+    ])
   })
 })

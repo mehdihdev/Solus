@@ -23,6 +23,7 @@ import {
 } from './solApi'
 import type { ContextUsedInfo, SolStreamEvent } from './solStream'
 import type { PendingConfirmation } from '../../lib/api/solStream'
+import { readCachedChat, writeCachedChat } from './solCache'
 import { selectConversationId, useOrbStore } from './orbStore'
 
 export interface TraceEntry {
@@ -233,6 +234,17 @@ export async function syncSession(projectId: string): Promise<void> {
     streaming: s.streaming,
     status: 'loading'
   }))
+  // Paint the ~/.solus cache first (SOLUSDEV-233): returning to a chat is
+  // instant, and past chats stay readable offline. The server load below is
+  // still the source of truth and replaces it.
+  const cached = await readCachedChat(projectId, active)
+  if (cached !== null && cached.length > 0) {
+    patchSession(projectId, (s) =>
+      s.conversationId === active && s.status === 'loading' && s.items.length === 0
+        ? { ...s, items: cached }
+        : s
+    )
+  }
   try {
     const turns = await listSolTurns(projectId, active)
     // Still the active conversation? A switch mid-fetch discards this load.
@@ -245,9 +257,15 @@ export async function syncSession(projectId: string): Promise<void> {
       items: [...loaded, ...s.items.filter((m) => m.id.startsWith('local-'))],
       status: 'ready'
     }))
+    writeCachedChat(projectId, active, loaded)
   } catch {
     if (selectConversationId(useOrbStore.getState(), projectId) !== active) return
-    patchSession(projectId, (s) => ({ ...s, status: 'offline' }))
+    // With a cache painted, the history IS readable — only a truly empty
+    // session degrades to the offline banner.
+    patchSession(projectId, (s) => ({
+      ...s,
+      status: s.items.length > 0 ? 'ready' : 'offline'
+    }))
   }
 }
 
@@ -344,14 +362,23 @@ export async function sendMessage(
   } finally {
     // Only the send that still owns the turn cleans up — a cancelled turn
     // settling late must not clobber a newer send's state.
-    if (turnTokens.get(projectId) === turnToken) {
-      turnTokens.delete(projectId)
-      controllers.delete(projectId)
-      patchSession(projectId, (s) => ({ ...s, streaming: false }))
-      refreshOrbPulse()
-      notifyAway(projectId, text, failed)
-    }
+    if (turnTokens.get(projectId) === turnToken) settleTurn(projectId, text, failed)
   }
+}
+
+/** End-of-turn bookkeeping for the send that still owns the turn: release the
+ *  controller, stop the pulse, mirror the settled transcript to the ~/.solus
+ *  cache, and raise the away toast when nobody was watching. */
+function settleTurn(projectId: string, prompt: string, failed: boolean): void {
+  turnTokens.delete(projectId)
+  controllers.delete(projectId)
+  patchSession(projectId, (s) => ({ ...s, streaming: false }))
+  refreshOrbPulse()
+  const session = selectSession(useSolChatStore.getState(), projectId)
+  if (session.conversationId !== null) {
+    writeCachedChat(projectId, session.conversationId, session.items)
+  }
+  notifyAway(projectId, prompt, failed)
 }
 
 export async function decideConfirmation(

@@ -26,6 +26,12 @@ import {
   unlinkProjectFolder
 } from './localState'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
+import {
+  readChatCache,
+  realSolChatCacheDeps,
+  removeChatCache,
+  writeChatCache
+} from './solChatCache'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
@@ -71,6 +77,39 @@ function registerFolderRegistryHandlers(): void {
   ipcMain.handle('folder:links', (event) =>
     isMainRendererSender(event) ? readRegistry(realLocalStateDeps).registry.projects : {}
   )
+}
+
+/** The machine-local SOL chat cache (~/.solus, ADR-034 Layer 1 — SOLUSDEV-233).
+ *  Ids and sizes are re-validated inside solChatCache; content is an opaque
+ *  JSON string the renderer owns. */
+function registerSolChatCacheHandlers(): void {
+  const strings = (...values: unknown[]): values is string[] =>
+    values.every((v) => typeof v === 'string')
+  ipcMain.handle('solchat:read', (event, projectId: unknown, conversationId: unknown) =>
+    isMainRendererSender(event) && strings(projectId, conversationId)
+      ? readChatCache(projectId as string, conversationId as string, realSolChatCacheDeps)
+      : null
+  )
+  ipcMain.handle(
+    'solchat:write',
+    (event, projectId: unknown, conversationId: unknown, content: unknown) => ({
+      ok:
+        isMainRendererSender(event) && strings(projectId, conversationId, content)
+          ? writeChatCache(
+              projectId as string,
+              conversationId as string,
+              content as string,
+              realSolChatCacheDeps
+            )
+          : false
+    })
+  )
+  ipcMain.handle('solchat:remove', (event, projectId: unknown, conversationId: unknown) => ({
+    ok:
+      isMainRendererSender(event) && strings(projectId, conversationId)
+        ? removeChatCache(projectId as string, conversationId as string, realSolChatCacheDeps)
+        : false
+  }))
 }
 
 /** True when the invoke came from the app's own renderer, not some other
@@ -175,6 +214,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
 
     registerFolderRegistryHandlers()
+    registerSolChatCacheHandlers()
 
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
     // portal URL (returned by our API) in the system browser. Only the app's
