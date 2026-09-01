@@ -4,7 +4,7 @@
 // shows live API data or honest empty states, never fabricated robot data.
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { SolOrb } from '../../components/ui/SolOrb'
+import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
 import { useAuthStore } from '../../store/authStore'
@@ -323,8 +323,14 @@ function Rail({
         background: 'var(--sur)'
       }}
     >
-      <div onClick={() => go('home')} style={{ marginBottom: 12, cursor: 'pointer' }}>
-        <SolOrb size={24} />
+      {/* Brand home button: the Solus logo (SOLUSDEV-233). The orb stays
+          SOL's presence — SOL page header + the floating mini-orb. */}
+      <div
+        onClick={() => go('home')}
+        className="interactive"
+        style={{ marginBottom: 12, cursor: 'pointer', borderRadius: 6 }}
+      >
+        <SolusLogo size={24} />
       </div>
       {RAIL_TOP.map(renderItem)}
       <div style={{ flex: 1 }} />

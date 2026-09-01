@@ -1,5 +1,6 @@
-// Solus wordmark (orb + SOLUS), ported from SolusWordmark in TestDesign/app/auth.jsx.
-import { SolOrb } from './SolOrb'
+// Solus wordmark (logo + SOLUS). SOLUSDEV-233: the brand mark is the bundled
+// logo now; the orb remains SOL's presence on the SOL surfaces only.
+import { SolusLogo } from './SolusLogo'
 
 interface WordmarkProps {
   size?: number
@@ -17,7 +18,7 @@ export function Wordmark({ size = 16, onClick }: WordmarkProps): React.JSX.Eleme
         cursor: onClick ? 'pointer' : 'default'
       }}
     >
-      <SolOrb size={size + 2} />
+      <SolusLogo size={size + 6} />
       <span style={{ fontWeight: 700, fontSize: size, letterSpacing: '0.12em' }}>SOLUS</span>
     </div>
   )

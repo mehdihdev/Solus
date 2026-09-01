@@ -238,3 +238,15 @@ and **SOL USAGE** (credit meter + low-credit top-up).
       owner-private; verify with a second account in the same team).
 - [ ] The orb popover (mini orb on other screens) still chats normally — it
       shares the surface but not the page chrome.
+
+## Flow 13 — Solus logo (brand swap)
+
+1. Check the left rail's top button (home): it now shows the **Solus logo**
+   (blue graph mark on a dark rounded tile), not the orb; clicking it still
+   goes Home.
+2. Open **Settings**: the logo sits beside the "Settings" title.
+3. Sign out and check the auth pages: the SOLUS wordmark uses the logo too.
+4. The **SOL page header** and the **floating mini-orb** still use the orb
+   (the orb is SOL's presence; the logo is the product's) — and the orb still
+   pulses only while SOL streams.
+5. Pass/fail: [ ]
