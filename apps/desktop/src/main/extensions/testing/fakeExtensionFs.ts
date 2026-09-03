@@ -62,8 +62,10 @@ export function fakeExtensionFs(overrides: Partial<ExtensionFs> = {}): FakeExten
         if (mode !== undefined) modes.set(to + p.slice(from.length), mode)
       }
       for (const p of movedDirs) {
+        const mode = modes.get(p)
         dirs.delete(p)
         dirs.add(to + p.slice(from.length))
+        if (mode !== undefined) modes.set(to + p.slice(from.length), mode)
       }
     },
     mkdir: (path, mode) => {

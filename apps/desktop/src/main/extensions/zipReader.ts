@@ -91,10 +91,16 @@ export const openZip: OpenZip = async (bytes) => {
       strictFileNames: true
     }
   )
+  // Every entry is LISTED (a duplicate name is the installer's to refuse);
+  // reads resolve to the first entry carrying the name.
+  const all: Entry[] = []
   const byName = new Map<string, Entry>()
-  for await (const entry of zip.eachEntry()) byName.set(entry.fileName, entry)
+  for await (const entry of zip.eachEntry()) {
+    all.push(entry)
+    if (!byName.has(entry.fileName)) byName.set(entry.fileName, entry)
+  }
   return {
-    entries: [...byName.values()].map(describe),
+    entries: all.map(describe),
     read: (name, cap) => {
       const entry = byName.get(name)
       return entry === undefined
