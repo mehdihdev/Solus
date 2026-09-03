@@ -96,26 +96,36 @@ function reduceAttributes(el: Element): (readonly [string, string])[] | null {
   return kept
 }
 
+/** Text is kept only inside <title>; comments are dropped; a processing
+ *  instruction anywhere in the tree rejects the whole icon. */
+function reduceChildren(
+  el: Element,
+  keepText: boolean
+): { children: ReducedNode[]; text: string } | null {
+  const children: ReducedNode[] = []
+  let text = ''
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === Node.PROCESSING_INSTRUCTION_NODE) return null
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      const reduced = reduceElement(child as Element)
+      if (reduced === null) return null
+      children.push(reduced)
+      continue
+    }
+    const isText = child.nodeType === Node.TEXT_NODE || child.nodeType === Node.CDATA_SECTION_NODE
+    if (isText && keepText) text += child.nodeValue ?? ''
+  }
+  return { children, text }
+}
+
 function reduceElement(el: Element): ReducedNode | null {
   const name = el.tagName
   if (!SVG_ALLOWED_ELEMENTS.has(name)) return null
   const attrs = reduceAttributes(el)
   if (attrs === null) return null
-  const children: ReducedNode[] = []
-  let text = ''
-  for (const child of Array.from(el.childNodes)) {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      const reduced = reduceElement(child as Element)
-      if (reduced === null) return null
-      children.push(reduced)
-    } else if (child.nodeType === Node.TEXT_NODE || child.nodeType === Node.CDATA_SECTION_NODE) {
-      if (name === 'title') text += child.nodeValue ?? ''
-    } else if (child.nodeType === Node.PROCESSING_INSTRUCTION_NODE) {
-      return null
-    }
-    // Comments are dropped.
-  }
-  return { name, attrs, children, text }
+  const body = reduceChildren(el, name === 'title')
+  if (body === null) return null
+  return { name, attrs, children: body.children, text: body.text }
 }
 
 function serialize(node: ReducedNode): string {

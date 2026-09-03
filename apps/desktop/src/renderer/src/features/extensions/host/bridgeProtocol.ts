@@ -164,18 +164,25 @@ function serializedBytes(data: unknown): number | null {
  * yields null — the caller DROPS it without a response (a refusal would itself
  * be an oracle). The result is a fresh literal: undeclared keys never ride along.
  */
+function isValidRequestId(id: unknown): id is string {
+  return typeof id === 'string' && id.length <= BRIDGE_LIMITS.idLength && ID_RE.test(id)
+}
+
+function isValidMethodName(method: unknown): method is string {
+  return (
+    typeof method === 'string' && method.length > 0 && method.length <= BRIDGE_LIMITS.methodLength
+  )
+}
+
+function withinMessageCap(data: unknown): boolean {
+  const bytes = serializedBytes(data)
+  return bytes !== null && bytes <= BRIDGE_LIMITS.messageBytes
+}
+
 export function parseBridgeRequest(data: unknown): BridgeRequest | null {
   if (!isPlainRecord(data) || data.v !== BRIDGE_VERSION) return null
   const { id, method, params } = data
-  if (typeof id !== 'string' || id.length > BRIDGE_LIMITS.idLength || !ID_RE.test(id)) return null
-  if (
-    typeof method !== 'string' ||
-    method.length === 0 ||
-    method.length > BRIDGE_LIMITS.methodLength
-  )
-    return null
-  if (!isPlainRecord(params)) return null
-  const bytes = serializedBytes(data)
-  if (bytes === null || bytes > BRIDGE_LIMITS.messageBytes) return null
+  if (!isValidRequestId(id) || !isValidMethodName(method) || !isPlainRecord(params)) return null
+  if (!withinMessageCap(data)) return null
   return { v: 1, id, method, params }
 }
