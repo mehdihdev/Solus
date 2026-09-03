@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import {
   getDesktopOAuthBridge,
   getDesktopCompanionBridge,
+  getDesktopExtensionsBridge,
   getDesktopPlatform
 } from './desktopBridge'
 
@@ -45,5 +46,17 @@ describe('getDesktopPlatform', () => {
     w.solus = { platform: 'darwin' }
     expect(getDesktopPlatform()).toBe('darwin')
     delete w.solus
+  })
+})
+
+describe('getDesktopExtensionsBridge', () => {
+  it('returns null when not running under Electron', () => {
+    expect(getDesktopExtensionsBridge()).toBeNull()
+  })
+
+  it('returns the extensions bridge when present', () => {
+    const extensions = { index: async () => ({ schema_version: 1, installed: {} }) }
+    ;(window as unknown as SolusWindow).solus = { extensions }
+    expect(getDesktopExtensionsBridge()).toBe(extensions)
   })
 })
