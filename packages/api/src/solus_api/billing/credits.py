@@ -91,9 +91,11 @@ async def _apply(
     attrs: dict[str, Any] | None,
     *,
     guard: bool,
+    extension_id: uuid.UUID | None = None,
 ) -> CreditResult:
     """Lock the balance row, dedupe by key, apply the signed delta, append a
-    ledger row, and commit. `delta` > 0 credits, < 0 debits."""
+    ledger row, and commit. `delta` > 0 credits, < 0 debits. `extension_id`
+    (ADR-035 §2) is attribution only — the row still debits `user_id`."""
     await _ensure_balance_row(session, user_id)
     bal_row = await session.scalar(
         select(CreditBalance).where(CreditBalance.user_id == user_id).with_for_update()
@@ -124,6 +126,7 @@ async def _apply(
             balance_after=new_balance,
             idempotency_key=idempotency_key,
             attrs=attrs or {},
+            extension_id=extension_id,
         )
     )
     bal_row.balance = new_balance
@@ -176,9 +179,11 @@ async def debit_credits(
     idempotency_key: str,
     attrs: dict[str, Any] | None = None,
     guard: bool = False,
+    extension_id: uuid.UUID | None = None,
 ) -> CreditResult:
     """Debit credits for one operation. Idempotent by key. `guard=True` refuses to
-    go negative (reserve); default records the actual paid cost regardless."""
+    go negative (reserve); default records the actual paid cost regardless.
+    `extension_id` records which extension caused the debit (SOLUSDEV-235)."""
     return await _apply(
         session,
         user_id,
@@ -187,4 +192,5 @@ async def debit_credits(
         idempotency_key,
         attrs,
         guard=guard,
+        extension_id=extension_id,
     )

@@ -113,12 +113,17 @@ async def track_cost(
     cost: CostConfig,
     entry: ModelCatalogEntry | None = None,
     enqueue: EnqueueFn | None = None,
+    extension_id: uuid.UUID | None = None,
 ) -> None:
     """POST-call hook (phase 3): runs AFTER the model responds (`tokens_out` is only
     known then). Computes credits via `compute_call_credits` (with MO-02b breakpoint
     pricing when `entry` is supplied) and applies the atomic idempotent debit via
     `billing.credits.debit_credits` (idempotency_key = call_id: a retried or
     concurrent hook for the same call debits exactly once).
+
+    `extension_id` (SOLUSDEV-235 / ADR-035 §2) attributes the debit to the
+    extension whose `sol.ask` caused it — on the ledger row AND on the dead-letter
+    record, so a reconciled debit keeps it. The debit itself stays on `user_id`.
 
     Debit-failure behavior (LOCKED, contract §6): the model call already ran and was
     paid for — NEVER fail the user's request on the accounting write. On any debit
@@ -138,7 +143,14 @@ async def track_cost(
         "tokens_out": tokens_out,
     }
     try:
-        await credits.debit_credits(session, user_id, amount, idempotency_key=call_id, attrs=attrs)
+        await credits.debit_credits(
+            session,
+            user_id,
+            amount,
+            idempotency_key=call_id,
+            attrs=attrs,
+            extension_id=extension_id,
+        )
         return
     except Exception:
         logger.exception(
@@ -153,7 +165,12 @@ async def track_cost(
             pass
     try:
         await reconciliation.record_failed_debit(
-            session, user_id, amount, idempotency_key=call_id, attrs=attrs
+            session,
+            user_id,
+            amount,
+            idempotency_key=call_id,
+            attrs=attrs,
+            extension_id=extension_id,
         )
     except Exception:  # noqa: BLE001 — even the dead-letter write is best-effort
         logger.exception(

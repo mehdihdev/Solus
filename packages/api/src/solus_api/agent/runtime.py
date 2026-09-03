@@ -276,6 +276,10 @@ class AgentRunContext:
     secret_store: "SecretStore | None" = None
     redis: Any = None
     enqueue: Any = None
+    #: SOLUSDEV-235 / ADR-035 §2: the extension whose `sol.ask` started this
+    #: turn, verified by the route against the project's installs (never from
+    #: prompt content). Attribution only — the debit stays on `user_id`.
+    extension_id: uuid.UUID | None = None
 
 
 #: A proposed call → its result. The gate is inside; see `build_dispatch`.
@@ -568,6 +572,7 @@ class LlmRunner:
                     enqueue=ctx.enqueue,
                     adapters=self._adapters,
                     max_tokens=SOL_MAX_TOKENS,
+                    extension_id=ctx.extension_id,
                 )
                 try:
                     async for chunk in stream:

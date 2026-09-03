@@ -153,11 +153,13 @@ async def _fire_cost_hook(
     user_id: uuid.UUID | None,
     session: AsyncSession | None,
     enqueue: EnqueueFn | None,
+    extension_id: uuid.UUID | None = None,
 ) -> None:
     """The post-call debit. Gated on caller identity; `track_cost` itself never
     raises (contract §6 — failures defer to reconciliation via `enqueue`). The
     routed catalog entry rides along so the debit bills breakpoint
-    (long-context) pricing — `route()` stays pure and `ModelChoice` unchanged."""
+    (long-context) pricing — `route()` stays pure and `ModelChoice` unchanged.
+    `extension_id` is the SOLUSDEV-235 attribution, passed through untouched."""
     if user_id is None or session is None:
         return
     await track_cost(
@@ -170,6 +172,7 @@ async def _fire_cost_hook(
         cost=config.cost,
         entry=config.entry_for_role(model.role),
         enqueue=enqueue,
+        extension_id=extension_id,
     )
 
 
@@ -203,6 +206,7 @@ class CompletionStream:
         session: AsyncSession | None,
         redis: RedisLike | None,
         enqueue: EnqueueFn | None,
+        extension_id: uuid.UUID | None = None,
     ) -> None:
         self._inner_factory = inner_factory
         self._inner: AsyncIterator[str | ToolUse | Usage] | None = None
@@ -213,6 +217,7 @@ class CompletionStream:
         self._session = session
         self._redis = redis
         self._enqueue = enqueue
+        self._extension_id = extension_id
         self._parts: list[str] = []
         self._tool_uses: list[ToolUse] = []
         self._started = time.monotonic()
@@ -345,6 +350,7 @@ class CompletionStream:
             user_id=self._user_id,
             session=self._session,
             enqueue=self._enqueue,
+            extension_id=self._extension_id,
         )
 
 
@@ -370,9 +376,14 @@ def stream(
     redis: RedisLike | None = None,
     enqueue: EnqueueFn | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    extension_id: uuid.UUID | None = None,
 ) -> CompletionStream:
     """Streaming variant of the gateway. Routing and adapter selection happen
     here (synchronously); gates and the provider call start on first iteration.
+
+    `extension_id` (SOLUSDEV-235 / ADR-035 §2): the extension whose `sol.ask`
+    caused this call, already verified by the route. Attribution only — it
+    reaches `credit_ledger.extension_id` and changes no gate or budget.
 
     Routing (MO-04): both chains + window policy live in ONE shared function —
     `resolution.resolve_routing` — which the classify preview also calls, so
@@ -449,6 +460,7 @@ def stream(
         session=session,
         redis=redis,
         enqueue=enqueue,
+        extension_id=extension_id,
     )
 
 
@@ -469,6 +481,7 @@ async def complete(
     redis: RedisLike | None = None,
     enqueue: EnqueueFn | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    extension_id: uuid.UUID | None = None,
 ) -> Completion:
     """Request-response gateway call: drains the streaming path (one code path,
     identical usage numbers) and returns the full `Completion`. Routing, window
@@ -489,6 +502,7 @@ async def complete(
         redis=redis,
         enqueue=enqueue,
         max_tokens=max_tokens,
+        extension_id=extension_id,
     )
     async for _ in completion_stream:
         pass
