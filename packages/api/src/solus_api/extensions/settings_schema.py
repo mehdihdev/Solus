@@ -40,9 +40,9 @@ def _field_problem(field: SettingField, value: Any) -> str | None:
         return f"settings.{field.key}: must be one of {', '.join(field.options or [])}"
     if field.type == "number":
         if field.min is not None and value < field.min:
-            return f"settings.{field.key}: must be >= {field.min}"
+            return f"settings.{field.key}: must be >= {field.min:g}"
         if field.max is not None and value > field.max:
-            return f"settings.{field.key}: must be <= {field.max}"
+            return f"settings.{field.key}: must be <= {field.max:g}"
     return None
 
 
