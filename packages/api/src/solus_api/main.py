@@ -42,6 +42,7 @@ from solus_api.routers import (
     billing,
     bridge,
     entities,
+    extensions,
     integrations,
     invites,
     jobs,
@@ -318,4 +319,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(toolkb.router)
     app.include_router(webhooks.router)
     app.include_router(live.router)
+    # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,
+    # storage, layout, policy sub-routers mount onto it as the EXT tasks land).
+    app.include_router(extensions.router)
     return app

@@ -1,8 +1,15 @@
 """Application settings. All secrets come from the environment (CLAUDE.md §7)."""
 
+import uuid
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _split_csv(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
 
 #: `<root>/packages/api/src/solus_api/core/config.py` -> `<root>`. The install is
 #: editable in both the dev venv and the image (`uv sync --package solus-api`
@@ -251,7 +258,33 @@ class Settings(BaseSettings):
     artifact_uploads_per_minute_per_user: int = 30
     artifact_upload_bytes_per_hour_per_team: int = 67_108_864
 
+    # --- Extensions (SOLUSDEV-235 / ADR-035, docs/api/extensions.md §3, §12) ---
+    # Solus staff — the ONLY identity allowed to set `extensions.verified`.
+    # Comma-separated user UUIDs from env / Secrets Manager (no schema column;
+    # docs/schemas/extensions.md §8.4). Evaluated by `deps.require_staff`; never
+    # returned by any route. Malformed entries fail at startup, not at first use.
+    staff_user_ids: str = ""
+    # §12 write-group budgets. PROVISIONAL pending the Phase 4 security pass —
+    # the setting NAMES are the contract, not these values.
+    extension_publishes_per_hour_per_user: int = 10
+    extension_bundle_downloads_per_minute_per_user: int = 30
+    extension_install_writes_per_minute_per_user: int = 60
+    extension_storage_writes_per_minute_per_install: int = 120
+    extension_policy_writes_per_minute_per_team: int = 30
+
+    @field_validator("staff_user_ids")
+    @classmethod
+    def _staff_user_ids_are_uuids(cls, raw: str) -> str:
+        for item in _split_csv(raw):
+            uuid.UUID(item)  # raises ValueError → pydantic ValidationError
+        return raw
+
+    @property
+    def staff_user_id_set(self) -> set[uuid.UUID]:
+        """Parsed staff ids (validated at construction)."""
+        return {uuid.UUID(item) for item in _split_csv(self.staff_user_ids)}
+
     @property
     def cors_origin_list(self) -> list[str]:
         """Parsed, non-empty CORS origins."""
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return _split_csv(self.cors_origins)
