@@ -8,6 +8,7 @@ import { ResetPasswordPage } from '../features/auth/ResetPasswordPage'
 import { Onboarding } from '../features/onboarding/Onboarding'
 import { OverlayWindow } from '../features/overlay/OverlayWindow'
 import { OrbWindow } from '../features/sol/OrbWindow'
+import { ExtensionWindowRoot } from '../features/extensions/pageview/ExtensionWindowRoot'
 import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
 import { Spinner } from '../components/ui/Spinner'
 import { useAuthStore } from '../store/authStore'
@@ -96,6 +97,9 @@ export function AppRoutes(): React.JSX.Element {
       {/* SOLX-03/TU-10: the click-through guide overlay window. No auth guard —
           it renders only what the orb hands it over CTR-06, never fetched data. */}
       <Route path="/overlay" element={<OverlayWindow />} />
+      {/* SOLUSDEV-235 / EXT-13: an extension's window view — the second
+          BrowserWindow main opens (guards its own auth, like the orb). */}
+      <Route path="/ext-window/:extensionId" element={<ExtensionWindowRoot />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
