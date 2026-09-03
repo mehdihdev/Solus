@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "extension": {
+    "id": "hello-widget",
+    "name": "Hello Widget",
+    "version": "0.1.0",
+    "publisher": "Ada Lovelace",
+    "summary": "The smallest valid extension: one widget, no permissions.",
+    "requires": []
+  },
+  "views": { "widget": { "entry": "index.html", "preferred": "compact" } },
+  "store": { "overview": "OVERVIEW.md" }
+}

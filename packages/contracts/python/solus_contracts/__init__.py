@@ -5,6 +5,9 @@ implementations import from one place: `from solus_contracts import Connector, E
 
 SOLUSDEV-166 (ADR-034) adds the machine-local ~/.solus state shapes
 (`local_state`), ratified in-session at the SOLUSDEV-166 MR.
+
+SOLUSDEV-235 (ADR-035) adds the ``extension.toml`` manifest shape
+(`extension_manifest`), ratified in-session at the Store backend design review.
 """
 
 from solus_contracts.connector import (
@@ -20,6 +23,18 @@ from solus_contracts.connector import (
     SyncError,
     SyncResult,
 )
+from solus_contracts.extension_manifest import (
+    EXTENSION_ID_PATTERN,
+    EXTENSION_MANIFEST_FILENAME,
+    EXTENSION_MANIFEST_SCHEMA_VERSION,
+    LIMITS,
+    PERMISSION_SCOPES,
+    ExtensionManifest,
+    is_safe_bundle_path,
+    is_safe_extension_id,
+    manifest_problems,
+    parse_extension_manifest,
+)
 from solus_contracts.local_state import (
     PROJECT_ID_PATTERN,
     PROJECT_REGISTRY_SCHEMA_VERSION,
@@ -31,6 +46,16 @@ from solus_contracts.local_state import (
 )
 
 __all__ = [
+    "EXTENSION_ID_PATTERN",
+    "EXTENSION_MANIFEST_FILENAME",
+    "EXTENSION_MANIFEST_SCHEMA_VERSION",
+    "LIMITS",
+    "PERMISSION_SCOPES",
+    "ExtensionManifest",
+    "is_safe_bundle_path",
+    "is_safe_extension_id",
+    "manifest_problems",
+    "parse_extension_manifest",
     "PROJECT_ID_PATTERN",
     "PROJECT_REGISTRY_SCHEMA_VERSION",
     "PROJECTS_FILENAME",

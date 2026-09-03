@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "extension": {
+    "id": "climber",
+    "name": "Climber",
+    "version": "0.1.0",
+    "publisher": "Ada Lovelace",
+    "summary": "Points an entry outside its own bundle.",
+    "requires": []
+  },
+  "views": { "page": { "entry": "../../index.html", "icon": "icon.svg", "label": "Climb" } },
+  "store": { "overview": "OVERVIEW.md" }
+}

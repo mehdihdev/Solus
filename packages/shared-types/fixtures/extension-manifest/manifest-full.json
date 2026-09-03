@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "extension": {
+    "id": "bom",
+    "name": "BOM",
+    "version": "1.2.0",
+    "publisher": "Solus",
+    "summary": "Bill of materials from your EDA project — sourcing status, findings flag affected lines.",
+    "requires": [["eda"]],
+    "min_solus": "1.0.0"
+  },
+  "views": {
+    "widget": { "entry": "widget.html", "preferred": "wide", "minimum": "standard" },
+    "page": { "entry": "page.html", "icon": "icon.svg", "label": "BOM" },
+    "window": { "entry": "window.html", "title": "BOM — full table", "width": 960, "height": 640 }
+  },
+  "permissions": {
+    "scopes": ["graph.read", "sources.read"],
+    "network": ["https://api.octopart.com"]
+  },
+  "settings": {
+    "fields": [
+      {
+        "key": "refresh",
+        "type": "select",
+        "label": "Run frequency",
+        "options": ["every_sync", "hourly", "daily", "manual"],
+        "default": "every_sync"
+      },
+      { "key": "flag_eol", "type": "boolean", "label": "Flag end-of-life parts", "default": true },
+      { "key": "max_rows", "type": "number", "label": "Rows per page", "min": 10, "max": 500, "default": 100 },
+      { "key": "vendor", "type": "string", "label": "Preferred vendor" }
+    ]
+  },
+  "store": {
+    "overview": "OVERVIEW.md",
+    "privacy_policy": "PRIVACY.md",
+    "links": {
+      "documentation": "https://docs.solusforge.com/extensions/bom",
+      "issues": "https://gitlab.com/solusforge/solus/-/issues",
+      "terms": "https://solusforge.com/terms"
+    },
+    "screenshots": ["shots/table.png", "shots/finding.webp"],
+    "sections": [{ "title": "How it works", "body": "docs/HOW.md" }]
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "ExtensionManifest": [
+    "extension",
+    "permissions",
+    "schema_version",
+    "settings",
+    "store",
+    "views"
+  ],
+  "ExtensionMeta": [
+    "id",
+    "min_solus",
+    "name",
+    "publisher",
+    "requires",
+    "summary",
+    "version"
+  ],
+  "PageView": [
+    "entry",
+    "icon",
+    "label"
+  ],
+  "Permissions": [
+    "network",
+    "scopes"
+  ],
+  "SettingField": [
+    "default",
+    "key",
+    "label",
+    "max",
+    "min",
+    "options",
+    "type"
+  ],
+  "Settings": [
+    "fields"
+  ],
+  "Store": [
+    "links",
+    "overview",
+    "privacy_policy",
+    "screenshots",
+    "sections"
+  ],
+  "StoreLinks": [
+    "documentation",
+    "issues",
+    "terms"
+  ],
+  "StoreSection": [
+    "body",
+    "title"
+  ],
+  "Views": [
+    "page",
+    "widget",
+    "window"
+  ],
+  "WidgetView": [
+    "entry",
+    "minimum",
+    "preferred"
+  ],
+  "WindowView": [
+    "entry",
+    "height",
+    "title",
+    "width"
+  ]
+}
