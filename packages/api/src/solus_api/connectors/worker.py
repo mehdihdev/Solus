@@ -416,6 +416,7 @@ def build_worker_settings(settings: Settings) -> type:
     from arq.connections import RedisSettings
 
     from solus_api.billing.reconciliation import reconcile_credit_debits
+    from solus_api.extensions.review import extension_review
 
     redis_url = settings.redis_url or "redis://localhost:6379"
 
@@ -423,7 +424,9 @@ def build_worker_settings(settings: Settings) -> type:
         # reconcile_credit_debits (SOLUSDEV-83) sweeps the credit dead-letter every
         # minute and is also enqueueable on-demand after an inline debit fails
         # (cost.track_cost enqueues it by name after recording the dead-letter row).
-        functions = [sync_source, reconcile_credit_debits]
+        # extension_review (SOLUSDEV-235 / ADR-035 §5) is enqueued by name from the
+        # publish route; it reviews one published bundle and never raises.
+        functions = [sync_source, reconcile_credit_debits, extension_review]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —
             # with the default `second=0` that fired once a MINUTE, sweeping
