@@ -53,6 +53,7 @@ from solus_api.deps import (
     SolSystemsDep,
     require_role,
 )
+from solus_api.extensions.attribution import ExtensionAttribution
 from solus_api.models import (
     Conversation,
     ConversationTurn,
@@ -472,6 +473,9 @@ async def post_message(
     settings: SettingsDep,
     secret_store: SecretStoreDep,
     connector_registry: RegistryDep,
+    # SOLUSDEV-235 (extensions.md §9): `X-Solus-Extension` resolved as a
+    # dependency, so an unauthorized header is 403 `scope_denied` BEFORE admission.
+    extension_id: ExtensionAttribution,
 ) -> StreamingResponse:
     """Append the user's message and stream SOL's reply as Server-Sent Events. The user
     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
@@ -593,6 +597,8 @@ async def post_message(
         # as a pre-GA infrastructure blocker, not silently accepted.
         redis=getattr(request.app.state, "redis", None),
         enqueue=getattr(request.app.state, "enqueue", None),
+        # Attribution only: the debit stays on `user_id` (ADR-018/024).
+        extension_id=extension_id,
     )
     stream = _run_and_persist(
         runner=runner,
