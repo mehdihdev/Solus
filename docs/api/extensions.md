@@ -358,7 +358,7 @@ visibility rule as §4.4 (approved for everyone, own pending for the publisher).
 ### 5.1 POST /api/v1/extensions/publish — publish a version (`202`)
 
 Dependencies: `CurrentUser` + `RequireVerified`. `Idempotency-Key` header **required**
-(`422 validation_error` without it) — replaying the same key with the same body returns the
+(`400 idempotency_key_required` without it) — replaying the same key with the same body returns the
 original `202` response; the same key with different bytes → `409 idempotency_conflict`.
 
 `multipart/form-data`:
@@ -395,13 +395,13 @@ Request-path processing, in order — nothing here fully unzips or executes the 
    manifest, `published_at = null`; `extension.publish` event emitted; the `extension_review`
    ARQ job is enqueued.
 
-`202 Accepted`, `Location: /api/v1/jobs/{job_id}`:
+`202 Accepted` — no `jobs` row and no `Location` header: the `jobs` table is project-scoped and
+the registry has no project, so review progress is polled through §5.2 instead (integration
+decision, 2026-09-03):
 
 ```json
 {
   "data": {
-    "job_id": "019f9c11-6a7e-7cc0-8f01-2d4a9e0b7a55",
-    "status": "queued",
     "version": {
       "slug": "bom",
       "version": "1.3.0",
@@ -411,7 +411,8 @@ Request-path processing, in order — nothing here fully unzips or executes the 
       "bundle_url": "/api/v1/extensions/bom/versions/1.3.0/bundle",
       "review_url": "/api/v1/extensions/bom/versions/1.3.0/review",
       "created_at": "2026-09-02T18:40:00.000Z"
-    }
+    },
+    "review": { "status": "pending", "problems": [] }
   }
 }
 ```
@@ -663,7 +664,8 @@ ordinary SOL turn request (`POST /api/v1/projects/{project_id}/sol/conversations
 API-implementation.md §11; and the §2.9 `agent/conversations` turn routes when they land) with
 the header **`X-Solus-Extension: <slug>`**. Server-side, in the SOL router BEFORE admission:
 
-1. The header value must match the slug regex → `422 validation_error` otherwise.
+1. The header value must match the slug regex → `403 scope_denied` otherwise (a malformed
+   attribution header is a refused attribution, never a validation hint to the caller).
 2. The project (from `ProjectCtx`) must have an `extension_installs` row for that slug that is
    `enabled`, not team-blocked, and whose `granted_scopes` contains `sol.ask`. **Otherwise →
    `403 scope_denied`** and an `extension.bridge_refused` event (`{ slug, method: "sol.ask",
@@ -747,6 +749,9 @@ resolved context. Payloads carry ids and slugs, never settings VALUES, never sto
 | `extension.publish`          | §5.1                                   | `slug, version, bundle_size_bytes, content_hash`                                                               |
 | `extension.review_completed` | review job                             | `slug, version, review_status, problem_count, duration_ms`                                                     |
 | `extension.bridge_refused`   | §7 `403`, §9 `403`                     | `slug, method, reason: "not_installed" \| "disabled" \| "blocked" \| "scope_not_granted"`                      |
+| `extension.unpublish`        | §5.3                                   | `slug, version`                                                                                                |
+| `extension.verified_changed` | §5.4                                   | `slug, verified`                                                                                               |
+| `extension.rate_limited`     | every §12 `429`                        | `route, budget?, limit?`                                                                                       |
 
 The desktop's own refusals (unknown method, undeclared network host) reach `data_events` through
 the existing `POST /api/v1/events` client path (API.md §2.13) with the same `event_type`.
@@ -775,24 +780,26 @@ Catalog reads (§4.1–§4.3, §4.5) ride the global limiter only. Exceeded → 
 
 ## 13. Error code catalogue (this surface)
 
-| HTTP | `error.code`             | Where                                                                                                                                                                                                  |
-| ---- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 401  | `unauthorized`           | missing/invalid/expired JWT                                                                                                                                                                            |
-| 402  | `insufficient_credits`   | §9 — the EXISTING SOL admission, unchanged; the invoking user is out of credits                                                                                                                        |
-| 403  | `forbidden`              | viewer / share-only on a §6–§8 write; `admin`+below on §10; non-staff on §5.4                                                                                                                          |
-| 403  | `email_not_verified`     | §5.1, §5.3, §5.4 without a verified email                                                                                                                                                              |
-| 403  | `extension_blocked`      | §6.2 install / §6.3 `enabled: true` of a team-blocked extension                                                                                                                                        |
-| 403  | `scope_denied`           | §7 without an enabled install granting `storage.own`; §9 header without an enabled install granting `sol.ask`                                                                                          |
-| 404  | `not_found`              | non-member project/team; unknown slug; unapproved/deleted version to a non-publisher; unrecorded asset path; unknown storage key; no install / no policy row                                           |
-| 409  | `slug_taken`             | §5.1 — slug owned by another publisher                                                                                                                                                                 |
-| 409  | `version_exists`         | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                                                                        |
-| 409  | `idempotency_conflict`   | §5.1 — same `Idempotency-Key`, different bytes                                                                                                                                                         |
-| 409  | `grants_required`        | §6.2 — version change widens permissions beyond current grants; `details` lists the additions                                                                                                          |
-| 411  | `length_required`        | §5.1 without (or with a malformed) `Content-Length`                                                                                                                                                    |
-| 413  | `payload_too_large`      | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                                                                |
-| 413  | `storage_quota_exceeded` | §7 — `(project, extension)` total would exceed 256 KiB                                                                                                                                                 |
-| 422  | `validation_error`       | bad slug/version/key/path syntax; unknown form or body fields; manifest contract problems; zip guard violations; undeclared grants; settings/layout/policy shape violations; missing `Idempotency-Key` |
-| 429  | `rate_limited`           | §12 budgets or the global limiter                                                                                                                                                                      |
+| HTTP | `error.code`               | Where                                                                                                                                                        |
+| ---- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 401  | `unauthorized`             | missing/invalid/expired JWT                                                                                                                                  |
+| 402  | `insufficient_credits`     | §9 — the EXISTING SOL admission, unchanged; the invoking user is out of credits                                                                              |
+| 403  | `forbidden`                | viewer / share-only on a §6–§8 write; `admin`+below on §10; non-staff on §5.4                                                                                |
+| 403  | `email_not_verified`       | §5.1, §5.3, §5.4 without a verified email                                                                                                                    |
+| 403  | `extension_blocked`        | §6.2 install / §6.3 `enabled: true` of a team-blocked extension                                                                                              |
+| 403  | `scope_denied`             | §7 without an enabled install granting `storage.own`; §9 header without an enabled install granting `sol.ask`                                                |
+| 404  | `not_found`                | non-member project/team; unknown slug; unapproved/deleted version to a non-publisher; unrecorded asset path; unknown storage key; no install / no policy row |
+| 400  | `idempotency_key_required` | §5.1 without an `Idempotency-Key` header                                                                                                                     |
+| 409  | `slug_taken`               | §5.1 — slug owned by another publisher                                                                                                                       |
+| 409  | `version_exists`           | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                              |
+| 409  | `idempotency_conflict`     | §5.1 — same `Idempotency-Key`, different bytes                                                                                                               |
+| 409  | `grants_required`          | §6.2 — version change widens permissions beyond current grants; `details` lists the additions                                                                |
+| 411  | `length_required`          | §5.1 without (or with a malformed) `Content-Length`                                                                                                          |
+| 413  | `payload_too_large`        | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                      |
+| 413  | `storage_quota_exceeded`   | §7 — `(project, extension)` total would exceed 256 KiB                                                                                                       |
+| 422  | `validation_error`         | bad slug/version/key/path syntax; unknown form or body fields; undeclared grants; settings/layout/policy shape violations                                    |
+| 422  | `bundle_invalid`           | §5.1 — manifest contract problems or zip guard violations; `details` = the dotted-path problem strings                                                       |
+| 429  | `rate_limited`             | §12 budgets or the global limiter                                                                                                                            |
 
 ---
 

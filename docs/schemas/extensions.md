@@ -301,7 +301,7 @@ constraint name is the lower-cased enum class name. Live-row uniqueness uses `_p
 | `id`           | uuid        | PK                                                                                         |
 | `project_id`   | uuid        | NOT NULL; FK → `projects.id` `ON DELETE CASCADE`                                           |
 | `extension_id` | uuid        | NOT NULL; FK → `extensions.id` `ON DELETE CASCADE`                                         |
-| `key`          | varchar(64) | NOT NULL; `^[A-Za-z0-9_.:-]{1,64}$` (validated at the bridge)                              |
+| `key`          | varchar(64) | NOT NULL; `^[A-Za-z0-9_.-]{1,64}$` (validated at the route, §7 of the route plan)          |
 | `value`        | jsonb       | NOT NULL                                                                                   |
 | `size_bytes`   | integer     | NOT NULL; byte length of the canonical JSON encoding of `value`; `CHECK (size_bytes >= 0)` |
 | `updated_at`   | timestamptz | NOT NULL                                                                                   |

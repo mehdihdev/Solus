@@ -553,7 +553,7 @@ async def test_policy_writes_are_rate_limited_per_team(
         )
         assert other.status_code == 201, other.text
 
-    limited_events = await events(db, "rate_limit.exceeded")
+    limited_events = await events(db, "extension.rate_limited")
     assert len(limited_events) == 1
     assert limited_events[0].team_id == uuid.UUID(seed.team_id)
     assert limited_events[0].payload["budget"] == "extension_policy_writes_per_minute_per_team"

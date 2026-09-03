@@ -88,7 +88,7 @@ async def _write_budget_exceeded(
     emit_event(
         session,
         user=ctx.user,
-        event_type="rate_limit.exceeded",
+        event_type="extension.rate_limited",
         team_id=ctx.team.id,
         payload={"budget": WRITE_BUDGET_SETTING, "limit": limit},
     )
