@@ -68,7 +68,10 @@ describe('railEntriesFrom', () => {
 
   it('caps the rail — the rest stay reachable from the Store', () => {
     const many = Array.from({ length: RAIL_EXTENSION_CAP + 3 }, (_, i) =>
-      install(`ext-${String(i).padStart(2, '0')}`, `2026-09-01T00:00:${String(i).padStart(2, '0')}Z`)
+      install(
+        `ext-${String(i).padStart(2, '0')}`,
+        `2026-09-01T00:00:${String(i).padStart(2, '0')}Z`
+      )
     )
     const entries = railEntriesFrom(many)
     expect(entries).toHaveLength(RAIL_EXTENSION_CAP)
