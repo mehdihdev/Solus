@@ -50,7 +50,10 @@ function fakeDeps(overrides: Partial<WidgetLayoutDeps> = {}): WidgetLayoutDeps &
 }
 
 const flush = (): Promise<void> => act(async () => {})
-const tick = (ms: number): Promise<void> => act(async () => vi.advanceTimersByTime(ms))
+const tick = (ms: number): Promise<void> =>
+  act(async () => {
+    vi.advanceTimersByTime(ms)
+  })
 
 beforeEach(() => {
   vi.useFakeTimers()
