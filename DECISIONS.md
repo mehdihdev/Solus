@@ -577,6 +577,82 @@ the user's own machine (fork-readable per Layer-1 rules; assistant/tool content 
 secret-redacted server-side); mitigations: purge on account identity change, delete-with-chat.
 Format changes to this file require amending this ADR.
 
+**Amended 2026-09-03 (SOLUSDEV-235 / ADR-035):** Layer 1 gains `extensions/<id>/<version>/` —
+a machine-local CACHE of installed extension bundles (manifest, assets, entry HTML/JS), plus
+`extensions/index.json` (schema_version 1) recording installed versions and their content
+hashes. The registry server remains the source of truth for what is installed; the cache is
+verified by hash before use and may be deleted at any time. Bundles are static assets and are
+never executed by the main process. Ids are validated main-process-side with the contract's
+slug rule; files are 0600 under the 0700 home; per-bundle size cap 25 MiB. No secrets, per
+Layer-1 rules.
+
+---
+
+## ADR-035: Extensions — sandboxed views, a permission-checked host bridge, and an open registry
+
+**Status:** Accepted (2026-09-03 — ratified by Mehdi in-session at the SOLUSDEV-235 backend design review; second-founder check at the MR)
+**Context:** The Store (SOLUSDEV-235 frontend, `docs/wireflows/store.md`) installs _extensions_:
+versioned bundles that add widgets, full pages, and windows to a project. Extensions may be
+authored by anyone (open publishing), so their code is untrusted in exactly the way ADR-031
+treats third-party MCP servers — but it renders inside the desktop app, next to the user's
+session and the team's proprietary designs. CLAUDE.md §7 forbids letting such code hold
+credentials, elevate its scope, or reach arbitrary hosts.
+
+**Decision.**
+
+1. **Runtime: every extension view executes in a sandboxed `<iframe>`.** The bundle is served
+   read-only from a custom Electron protocol (`solus-ext://<id>/<version>/...`) that resolves
+   only inside the installed bundle directory. The frame runs under `sandbox="allow-scripts"`
+   with a strict CSP (no `connect-src`, no remote `script-src`, no `frame-src`), no Node, no
+   preload. Window views host the same frame in a second `BrowserWindow`. Extension code never
+   receives a Supabase token, an API base URL, or any credential.
+2. **Bridge: extensions talk to Solus only through a host-mediated `postMessage` API.** The
+   host (renderer) validates every request against a closed method allowlist, the manifest's
+   declared `permissions.scopes` and `permissions.network`, and the open project's scope, then
+   performs the real call with the user's session. Unknown methods, undeclared scopes, and hosts
+   outside the allowlist are refused with a typed error; every refusal is a data-collection
+   event. Model-invoking bridge methods carry the extension id as the credit attribution and are
+   metered under the user's budget (ADR-018/019); the same loop guards and rate limits apply.
+3. **Manifest: `extension.toml` at the bundle root is the whole declaration**, validated by the
+   `extension-manifest` contract (`packages/contracts` + `packages/shared-types`): strict
+   schema, unknown fields rejected except inside a bounded `[store]` block, size caps on every
+   free-text field and asset, no executable or command fields. `id` is a mandatory slug
+   (`^[a-z][a-z0-9-]{1,63}$`, case-insensitively unique) and doubles as the folder name;
+   display name is free text. Icons are monochrome SVG reduced to a path-only subset by the
+   host. Permissions are a closed scope set plus a network host allowlist; declaring either
+   requires a privacy policy. Settings are declared as typed fields and rendered by Solus.
+4. **Layout (amends ADR-034 Layer 1):** installed bundles are cached at
+   `~/.solus/extensions/<id>/<version>/` (0700/0600, written atomically by the desktop MAIN
+   process, content-hash verified against the registry before first use, removable at any
+   time). A developer-mode entry may point at an unpacked folder anywhere on disk and is never
+   published. Nothing extension-related lives in the repo-committed `.solus/` layer; the git
+   connector ignores an `extensions/` folder there if one appears.
+5. **Registry and publishing: open publish, manual verification.** Any signed-in developer may
+   publish a version; an ARQ job validates the manifest, enforces bundle size and content-type
+   caps, and rejects bundles with disallowed asset types before the version becomes visible.
+   Bundle bytes ride the existing `ArtifactStore` path. The "Solus verified" badge is a manual
+   flag set by Solus staff on the extension row, never derived from publisher name. Installs
+   pin a version; updates are an explicit user action. Team owners may set project defaults and
+   block an extension team-wide; project members may install unblocked extensions.
+
+**Why.** The sandbox + bridge is the only combination that lets community code ship without
+extending the ADR-031 fork-and-review economics to every extension, while keeping §7's
+invariants mechanical rather than reviewed: the host decides what runs, what it may call, and
+where it may connect. Pinning the manifest as a contract keeps the store, the validator, the
+bridge, and the developer docs reading one shape.
+
+**Consequences.** New contract `extension-manifest` (both languages, shared fixtures). New API
+surface (`docs/api/API.md` §2.17 Extensions). New tables (`docs/schemas/extensions.md`). The
+desktop main process gains a bundle installer, a custom protocol, and the extension window
+host; the renderer gains the bridge host, the Live Bench widget canvas, and rail page slots.
+Developer docs live in `docs/extensions/`. Format or layout changes to
+`~/.solus/extensions/` amend this ADR and ADR-034 together.
+
+**Revisit when:** Electron `webview`/utility-process isolation offers stronger boundaries than
+the iframe sandbox; an extension needs a capability the closed scope set cannot express
+(add the scope here, never as a bridge special case); or publish volume needs automated
+review beyond static checks.
+
 ---
 
 ## How to add or change a decision
