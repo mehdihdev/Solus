@@ -7,6 +7,7 @@
 // the CTR-06 orb↔overlay wire attached at creation, so the detached orb owns
 // the handoff seam; the wire tears itself down on 'closed'.
 import { BrowserWindow, shell, type IpcMainInvokeEvent } from 'electron'
+import { externalOpenHandler } from '../externalUrl'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { attachOrbOverlayWire, type WireIpc } from './orbOverlayWire'
@@ -117,10 +118,7 @@ export function createSolBrowserWindow(ipc: WireIpc): BrowserWindow {
   // SEC-H1: the app's most exposed surface gets the main window's guards —
   // window.open goes to the system browser, and in-app navigation may not
   // leave the renderer bundle.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  win.webContents.setWindowOpenHandler(externalOpenHandler((url) => shell.openExternal(url)))
   win.webContents.on('will-navigate', (event, url) => {
     const current = win.webContents.getURL().split('#')[0]
     if (current && !url.startsWith(current)) event.preventDefault()

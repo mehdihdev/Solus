@@ -79,10 +79,13 @@ Two columns: content (flex) and a 260px card stack.
 - **REQUIRES** card: each requirement group with a met (ok) / unmet (warn) dot
   and its long name ("A CAD source (Onshape) or An EDA source (KiCad,
   Altium)"); "No connected source required." when empty.
-- **CREDITS** card: `This cycle N` · `Per run, typical ~N` (or `none` for
-  extensions that never call a model). Credit-denominated (ADR-018).
-- **LINKS** card: Documentation ↗ · Source ↗ · Report an issue ↗ — https
-  anchors that main's window-open handler routes to the OS browser.
+- **CREDITS** card: `This cycle —` until spend is metered (then `N`) ·
+  `Per run, typical ~N` (or `none` for extensions that never call a model).
+  Credit-denominated (ADR-018).
+- **LINKS** card: Documentation ↗ · Source ↗ · Report an issue ↗. Only https
+  URLs render as anchors (`isSafeExternalUrl`); main's shared window-open
+  handler (`main/externalUrl.ts`) opens https in the OS browser and drops
+  everything else.
 
 ### Settings
 
@@ -100,6 +103,9 @@ Two columns: content (flex) and a 260px card stack.
   requested") · `GRANTED` (ok) / `NOT ASKED` (muted). Scopes are a closed set
   (`graph.read`, `telemetry.read`, `sources.read`, `findings.write`); Solus code
   decides what each permits (CLAUDE.md §7).
+- Muted footnote: "These are the scopes the extension declares. Solus
+  enforces scopes server-side; per-project grant controls arrive with the
+  Store backend." — the statuses are declared, not a live grant record.
 - Warn-tinted note: "Extensions never write to hardware directly — anything
   that would move a motor goes through the approval queue, per your team
   instructions." (CTR-03.)
@@ -112,7 +118,9 @@ Two columns: content (flex) and a 260px card stack.
 - Install state: `extensionsStore` (Zustand, localStorage), keyed
   `projectId → extensionId → {installed, enabled, runFrequency}`. Bundled
   extensions start installed. The selected extension is navigation state and is
-  not persisted.
+  not persisted. Rehydration is sanitized (known extension ids, well-formed
+  state only) and the whole store is reset on sign-out (WS-01 precedent) and the
+  selection cleared on project switch.
 - `useExtensions(projectId)` is the backend seam: catalog × install state ×
   connected sources → `ExtensionView[]`. The Store API replaces its inputs, not
   its consumers.

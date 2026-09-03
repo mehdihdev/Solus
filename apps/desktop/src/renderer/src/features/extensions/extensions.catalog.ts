@@ -42,7 +42,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, READ_TELEMETRY],
-    credits: { thisCycle: 0, perRun: null },
+    credits: { thisCycle: null, perRun: null },
     links: { documentation: `${SOLUS_DOCS}/live-signals`, issues: SOLUS_ISSUES },
     defaultInstalled: true
   },
@@ -64,7 +64,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, READ_TELEMETRY],
-    credits: { thisCycle: 0, perRun: null },
+    credits: { thisCycle: null, perRun: null },
     links: { documentation: `${SOLUS_DOCS}/scene`, issues: SOLUS_ISSUES },
     defaultInstalled: true
   },
@@ -91,7 +91,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, TELEMETRY_NOT_ASKED],
-    credits: { thisCycle: 0, perRun: 1 },
+    credits: { thisCycle: null, perRun: 1 },
     links: {
       documentation: `${SOLUS_DOCS}/experiments`,
       source: 'https://gitlab.com/solusforge/solus',
@@ -123,7 +123,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, { scope: 'findings.write', status: 'granted' }],
-    credits: { thisCycle: 0, perRun: 2 },
+    credits: { thisCycle: null, perRun: 2 },
     links: { documentation: `${SOLUS_DOCS}/findings`, issues: SOLUS_ISSUES },
     defaultInstalled: true
   },
@@ -145,7 +145,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH],
-    credits: { thisCycle: 0, perRun: null },
+    credits: { thisCycle: null, perRun: null },
     links: { documentation: `${SOLUS_DOCS}/impact`, issues: SOLUS_ISSUES },
     defaultInstalled: true
   },
@@ -167,7 +167,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, READ_TELEMETRY],
-    credits: { thisCycle: 0, perRun: 3 },
+    credits: { thisCycle: null, perRun: 3 },
     links: { documentation: `${SOLUS_DOCS}/recognition`, issues: SOLUS_ISSUES },
     defaultInstalled: true
   },
@@ -189,7 +189,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH],
-    credits: { thisCycle: 0, perRun: null },
+    credits: { thisCycle: null, perRun: null },
     links: { documentation: `${SOLUS_DOCS}/approvals`, issues: SOLUS_ISSUES },
     defaultInstalled: true
   },
@@ -217,7 +217,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, { scope: 'sources.read', status: 'granted' }],
-    credits: { thisCycle: 0, perRun: null },
+    credits: { thisCycle: null, perRun: null },
     links: { documentation: `${SOLUS_DOCS}/bom`, issues: SOLUS_ISSUES },
     defaultInstalled: false
   },
@@ -239,7 +239,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, READ_TELEMETRY],
-    credits: { thisCycle: 0, perRun: null },
+    credits: { thisCycle: null, perRun: null },
     links: { documentation: `${SOLUS_DOCS}/can`, issues: SOLUS_ISSUES },
     defaultInstalled: false
   },
@@ -261,7 +261,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, { scope: 'sources.read', status: 'not_asked' }],
-    credits: { thisCycle: 0, perRun: 1 },
+    credits: { thisCycle: null, perRun: 1 },
     links: {
       documentation: 'https://github.com/solus-community/datasheet-finder#readme',
       source: 'https://github.com/solus-community/datasheet-finder',
@@ -287,7 +287,7 @@ export const EXTENSION_CATALOG: readonly ExtensionManifest[] = [
       }
     ],
     permissions: [READ_GRAPH, { scope: 'findings.write', status: 'not_asked' }],
-    credits: { thisCycle: 0, perRun: 2 },
+    credits: { thisCycle: null, perRun: 2 },
     links: {
       documentation: 'https://github.com/solus-community/fsae-rules#readme',
       source: 'https://github.com/solus-community/fsae-rules',

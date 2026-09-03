@@ -4,6 +4,7 @@ import { renderHook, act } from '@testing-library/react'
 import { useExtensions } from './useExtensions'
 import { useExtensionsStore } from './extensionsStore'
 import * as sourcesHook from '../project/useProjectSources'
+import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { Source } from '../../lib/api/resources'
 
 vi.mock('../project/useProjectSources', () => ({ useProjectSources: vi.fn() }))
@@ -34,6 +35,8 @@ function mockSources(status: sourcesHook.ProjectSourcesStatus, sources: Source[]
 
 beforeEach(() => {
   useExtensionsStore.getState().reset()
+  useWorkspaceStore.getState().reset()
+  useWorkspaceStore.setState({ project: { id: 'p1', name: 'P1' } })
   mockSources('ready', [])
 })
 
@@ -77,5 +80,15 @@ describe('useExtensions', () => {
     expect(byId.get('experiments')?.state.enabled).toBe(false)
     expect(byId.get('scene')?.state.installed).toBe(false)
     expect(useExtensionsStore.getState().byProject.p1['not-a-real-extension']).toBeUndefined()
+  })
+
+  it("never judges requirements against another project's sources", () => {
+    mockSources('ready', [source('kicad')])
+    useWorkspaceStore.setState({ project: { id: 'p2', name: 'P2' } })
+    const { result } = renderHook(() => useExtensions('p1'))
+    expect(result.current.sourcesStatus).toBe('offline')
+    expect(result.current.views.find((v) => v.manifest.id === 'bom')?.availability).toBe(
+      'needs_source'
+    )
   })
 })

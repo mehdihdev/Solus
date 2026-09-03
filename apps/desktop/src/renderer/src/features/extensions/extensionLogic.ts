@@ -151,6 +151,8 @@ export function validateCatalog(catalog: readonly ExtensionManifest[]): string[]
     if (!m.summary.trim()) problems.push(`${m.id}: summary is empty`)
     if (m.requires.some((group) => group.length === 0))
       problems.push(`${m.id}: empty requirement group`)
+    for (const [field, url] of Object.entries(m.links))
+      if (!isSafeExternalUrl(url)) problems.push(`${m.id}: links.${field} must be https`)
   }
   return problems
 }

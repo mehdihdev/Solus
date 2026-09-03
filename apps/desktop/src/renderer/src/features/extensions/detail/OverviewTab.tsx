@@ -134,7 +134,7 @@ function CreditsCard({ view }: { view: ExtensionView }): React.JSX.Element {
     <Card pad={14}>
       <Mono size={9.5}>CREDITS</Mono>
       <div style={{ marginTop: 4 }}>
-        <KV k="This cycle" v={String(credits.thisCycle)} />
+        <KV k="This cycle" v={credits.thisCycle === null ? '—' : String(credits.thisCycle)} />
         <KV k="Per run, typical" v={credits.perRun === null ? 'none' : `~${credits.perRun}`} />
       </div>
     </Card>

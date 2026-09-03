@@ -25,10 +25,11 @@ describe('EXTENSION_CATALOG', () => {
       expect(byId.get(id)?.defaultInstalled).toBe(false)
   })
 
-  it('every entry links documentation and an issue tracker', () => {
+  it('every entry links documentation and an issue tracker, and every link is https', () => {
     for (const m of EXTENSION_CATALOG) {
-      expect(m.links.documentation).toMatch(/^https:\/\//)
-      expect(m.links.issues).toMatch(/^https:\/\//)
+      expect(m.links.documentation).toBeDefined()
+      expect(m.links.issues).toBeDefined()
+      for (const url of Object.values(m.links)) expect(url).toMatch(/^https:\/\//)
     }
   })
 })

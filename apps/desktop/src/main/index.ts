@@ -30,6 +30,7 @@ import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
+import { externalOpenHandler } from './externalUrl'
 import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
 
 /** Open a Stripe Checkout / billing-portal URL in the system browser, refusing
@@ -125,10 +126,8 @@ function createWindow(): void {
     if (mainWindow === win) mainWindow = null
   })
 
-  win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
+  // Renderer anchors reach the OS browser only over https (SOLUSDEV-235 / H2).
+  win.webContents.setWindowOpenHandler(externalOpenHandler((url) => shell.openExternal(url)))
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.

@@ -1,6 +1,11 @@
 // SOLUSDEV-235 — per-project install state.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { EXTENSIONS_STORAGE_KEY, selectInstallState, useExtensionsStore } from './extensionsStore'
+import {
+  EXTENSIONS_STORAGE_KEY,
+  selectInstallState,
+  useExtensionsStore,
+  sanitizeByProject
+} from './extensionsStore'
 import { EXTENSION_CATALOG } from './extensions.catalog'
 
 const bundled = EXTENSION_CATALOG.find((m) => m.id === 'experiments')!
@@ -78,5 +83,38 @@ describe('extensionsStore', () => {
     useExtensionsStore.getState().select('bom')
     useExtensionsStore.getState().reset()
     expect(useExtensionsStore.getState()).toMatchObject({ byProject: {}, selectedId: null })
+  })
+
+  it('rehydrates only well-formed state for known extensions (localStorage is untrusted)', async () => {
+    localStorage.setItem(
+      EXTENSIONS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          byProject: {
+            p1: {
+              bom: { installed: true, enabled: false, runFrequency: 'daily', extra: '<b>x</b>' },
+              'not-a-real-extension': { installed: true, enabled: true, runFrequency: 'daily' },
+              scene: { installed: 'yes', enabled: true, runFrequency: 'daily' },
+              experiments: { installed: true, enabled: true, runFrequency: 'whenever' }
+            },
+            p2: 'garbage',
+            p3: null
+          },
+          selectedId: 'bom'
+        }
+      })
+    )
+    await useExtensionsStore.persist.rehydrate()
+    expect(useExtensionsStore.getState().byProject).toEqual({
+      p1: { bom: { installed: true, enabled: false, runFrequency: 'daily' } }
+    })
+    expect(useExtensionsStore.getState().selectedId).toBeNull()
+  })
+
+  it('sanitizeByProject drops non-object roots', () => {
+    expect(sanitizeByProject(null)).toEqual({})
+    expect(sanitizeByProject('x')).toEqual({})
+    expect(sanitizeByProject([1, 2])).toEqual({})
   })
 })

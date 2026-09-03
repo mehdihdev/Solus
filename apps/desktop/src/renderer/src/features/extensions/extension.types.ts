@@ -41,8 +41,8 @@ export interface Permission {
 }
 
 export interface CreditEstimate {
-  /** Credits spent this billing cycle in the open project (ADR-018). */
-  readonly thisCycle: number
+  /** Credits spent this billing cycle in the open project (ADR-018); null until metered. */
+  readonly thisCycle: number | null
   /** Typical per-run cost; null when the extension never calls a model. */
   readonly perRun: number | null
 }

@@ -130,13 +130,18 @@ describe('validateCatalog', () => {
       manifest({ id: 'Bad Id' }),
       manifest({ id: 'a' }),
       manifest({ id: 'a', summary: ' ' }),
-      manifest({ id: 'c', requires: [[]] })
+      manifest({ id: 'c', requires: [[]] }),
+      manifest({
+        id: 'd',
+        links: { documentation: 'https://ok.example', source: 'file:///etc/passwd' }
+      })
     ])
     expect(problems).toEqual([
       'Bad Id: id must be a lowercase slug',
       'a: duplicate id',
       'a: summary is empty',
-      'c: empty requirement group'
+      'c: empty requirement group',
+      'd: links.source must be https'
     ])
   })
 })

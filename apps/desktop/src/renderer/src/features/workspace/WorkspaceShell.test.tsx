@@ -111,6 +111,21 @@ describe('WorkspaceShell — chrome', () => {
     renderShell()
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(useExtensionsStore.getState()).toMatchObject({ byProject: {}, selectedId: null })
+    // The durable copy is gone too — nothing for the next user of this workstation to read.
+    const raw = JSON.parse(localStorage.getItem('solus_extensions_v1') ?? '{}')
+    expect(raw.state?.byProject ?? {}).toEqual({})
+  })
+
+  it('switching project from the topbar leaves an open extension detail page (SOLUSDEV-235)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
+    renderShell()
+    await userEvent.click(screen.getByText('Store'))
+    await userEvent.click(screen.getByRole('button', { name: 'Open Experiments' }))
+    expect(screen.getByText('Store / Experiments')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
+    await userEvent.click(await screen.findByText('Rover MK3'))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
   })
 
   it('offers a project switcher in the topbar (SOLUSDEV-164)', () => {

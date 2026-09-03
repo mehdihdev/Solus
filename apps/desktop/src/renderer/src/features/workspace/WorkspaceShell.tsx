@@ -96,6 +96,8 @@ export function WorkspaceShell(): React.JSX.Element {
     // project — it must not navigate away and interrupt the user's flow.
     useWorkspaceStore.getState().setProject(p)
     useFocusStore.getState().clearProject()
+    // A detail page belongs to the project it was opened in (SOLUSDEV-235).
+    useExtensionsStore.getState().select(null)
     setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {

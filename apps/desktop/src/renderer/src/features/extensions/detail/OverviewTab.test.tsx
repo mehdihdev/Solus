@@ -46,6 +46,8 @@ describe('OverviewTab', () => {
   it('shows credits and external links that open outside the app', () => {
     render(<OverviewTab view={viewOf('experiments', { installed: true })} />)
     expect(screen.getByText('This cycle')).toBeInTheDocument()
+    // Unmetered until the backend reports spend — never a fabricated zero.
+    expect(screen.getByText('—')).toBeInTheDocument()
     expect(screen.getByText('~1')).toBeInTheDocument()
     const docs = screen.getByRole('link', { name: /Documentation/ })
     expect(docs).toHaveAttribute('target', '_blank')

@@ -6,7 +6,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ExtensionInstallState, ExtensionManifest, RunFrequency } from './extension.types'
-import { initialInstallState } from './extensionLogic'
+import { initialInstallState, RUN_FREQUENCY_OPTIONS } from './extensionLogic'
+import { findExtension } from './extensions.catalog'
 
 export const EXTENSIONS_STORAGE_KEY = 'solus_extensions_v1'
 
@@ -24,6 +25,39 @@ export interface ExtensionsState {
   setEnabled: (projectId: string, manifest: ExtensionManifest, enabled: boolean) => void
   setRunFrequency: (projectId: string, manifest: ExtensionManifest, freq: RunFrequency) => void
   reset: () => void
+}
+
+const RUN_FREQUENCIES: readonly string[] = RUN_FREQUENCY_OPTIONS.map((o) => o.value)
+
+function isInstallState(value: unknown): value is ExtensionInstallState {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.installed === 'boolean' &&
+    typeof v.enabled === 'boolean' &&
+    typeof v.runFrequency === 'string' &&
+    RUN_FREQUENCIES.includes(v.runFrequency)
+  )
+}
+
+/**
+ * localStorage is a boundary (CLAUDE.md §8): admit only
+ * `projectId → knownExtensionId → well-formed state`, drop everything else.
+ * Pure and exported so a tampered or stale blob is testable without a DOM.
+ */
+export function sanitizeByProject(raw: unknown): Readonly<Record<string, ProjectStates>> {
+  if (typeof raw !== 'object' || raw === null) return {}
+  const out: Record<string, ProjectStates> = {}
+  for (const [projectId, exts] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof exts !== 'object' || exts === null) continue
+    const clean: Record<string, ExtensionInstallState> = {}
+    for (const [extId, st] of Object.entries(exts as Record<string, unknown>)) {
+      if (!findExtension(extId) || !isInstallState(st)) continue
+      clean[extId] = { installed: st.installed, enabled: st.enabled, runFrequency: st.runFrequency }
+    }
+    if (Object.keys(clean).length > 0) out[projectId] = clean
+  }
+  return out
 }
 
 const INITIAL = {
@@ -73,8 +107,14 @@ export const useExtensionsStore = create<ExtensionsState>()(
     }),
     {
       name: EXTENSIONS_STORAGE_KEY,
+      version: 1,
       // The selected extension is navigation, not preference — never persisted.
-      partialize: (s) => ({ byProject: s.byProject })
+      partialize: (s) => ({ byProject: s.byProject }),
+      // Never trust the blob: every rehydrate (any version) passes through the sanitizer.
+      merge: (persisted, current) => ({
+        ...current,
+        byProject: sanitizeByProject((persisted as { byProject?: unknown } | undefined)?.byProject)
+      })
     }
   )
 )

@@ -11,6 +11,7 @@ import { EXTENSION_CATALOG, findExtension } from './extensions.catalog'
 import { buildView, connectedKinds } from './extensionLogic'
 import { selectInstallState, useExtensionsStore } from './extensionsStore'
 import { useProjectSources, type ProjectSourcesStatus } from '../project/useProjectSources'
+import { useWorkspaceStore } from '../../store/workspaceStore'
 
 export interface ExtensionActions {
   install: (extensionId: string) => void
@@ -29,14 +30,20 @@ export interface ExtensionsData {
 
 export function useExtensions(projectId: string): ExtensionsData {
   const sources = useProjectSources()
+  // `useProjectSources` reads the OPEN project; if a caller scopes this hook to
+  // another project, its requirements must not be judged against foreign sources.
+  const openProjectId = useWorkspaceStore((s) => s.project?.id ?? null)
+  const scoped = openProjectId === projectId
+  const sourcesStatus: ProjectSourcesStatus = scoped ? sources.status : 'offline'
   const byProject = useExtensionsStore((s) => s.byProject)
+  const sourceList = sources.sources
 
   const views = useMemo(() => {
-    const connected = connectedKinds(sources.sources.map((s) => s.type))
+    const connected = connectedKinds(scoped ? sourceList.map((s) => s.type) : [])
     return EXTENSION_CATALOG.map((m) =>
       buildView(m, selectInstallState(byProject, projectId, m), connected)
     )
-  }, [byProject, projectId, sources.sources])
+  }, [byProject, projectId, scoped, sourceList])
 
   const actions = useMemo<ExtensionActions>(() => {
     const store = useExtensionsStore.getState
@@ -60,5 +67,5 @@ export function useExtensions(projectId: string): ExtensionsData {
     }
   }, [projectId])
 
-  return { projectId, views, sourcesStatus: sources.status, actions }
+  return { projectId, views, sourcesStatus, actions }
 }

@@ -23,6 +23,12 @@ describe('PermissionsTab', () => {
     expect(screen.getByText('NOT ASKED')).toBeInTheDocument()
   })
 
+  it('says scopes are declared by the extension and enforced server-side, not granted here', () => {
+    render(<PermissionsTab view={viewOf(experiments)} />)
+    expect(screen.getByText(/scopes the extension declares/)).toBeInTheDocument()
+    expect(screen.getByText(/enforces scopes server-side/)).toBeInTheDocument()
+  })
+
   it('states the hardware-write guarantee', () => {
     render(<PermissionsTab view={viewOf(experiments)} />)
     expect(screen.getByText(/never write to hardware directly/)).toBeInTheDocument()

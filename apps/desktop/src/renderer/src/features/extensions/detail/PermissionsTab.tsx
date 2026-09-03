@@ -68,10 +68,14 @@ export function PermissionsTab({ view }: { view: ExtensionView }): React.JSX.Ele
           </div>
         )
       })}
+      <div style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 12, lineHeight: 1.5 }}>
+        These are the scopes the extension declares. Solus enforces scopes server-side; per-project
+        grant controls arrive with the Store backend.
+      </div>
       <Card
         pad={14}
         style={{
-          marginTop: 18,
+          marginTop: 14,
           borderColor: 'color-mix(in srgb, var(--warn) 45%, var(--bd))',
           background: 'color-mix(in srgb, var(--warn) 8%, var(--sur))'
         }}
