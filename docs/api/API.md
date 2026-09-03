@@ -56,7 +56,7 @@ User ──member of──▶ Team ──owns──▶ Project ──contains─
 - **Pagination:** cursor-based by default (`?cursor=&limit=`, `meta.has_next`, `meta.next_cursor`). Offset allowed only on small admin-ish lists.
 - **Filtering/sorting:** `?field=value`, bracket comparators (`created_at[after]=`), `?sort=-created_at`, `?q=` for search.
 - **Long-running work never runs in the request path** (ADR-005). Any heavy operation returns `202 Accepted` with a Job resource (`{ "data": { "job_id": …, "status": "queued" } }`) and a `Location: /api/v1/jobs/{job_id}` header. Progress is polled via Jobs or pushed over the project WebSocket.
-- **Idempotency:** mutating POSTs accept an optional `Idempotency-Key` header; required on billing and deployment endpoints.
+- **Idempotency:** mutating POSTs accept an optional `Idempotency-Key` header; required on billing and deployment endpoints, and on extension publishing (`POST /extensions/publish`, §2.17 — SOLUSDEV-235).
 - **Rate limiting** (CLAUDE.md §7, ADR-019): all endpoints return `X-RateLimit-Limit/Remaining/Reset`; 429 includes `Retry-After`. Model-backed endpoints additionally enforce credit budgets and return `X-Solus-Credits-Charged` and `X-Solus-Credits-Remaining` headers (ADR-018).
 - **SOL mode** (ADR-016): every endpoint that produces natural-language output reads the per-user mode from settings. An optional `X-Sol-Mode: guide|expert` header overrides per-request (e.g., "explain this one to me").
 - **Data events** (ADR-011): meaningful interactions emit structured events server-side automatically; the explicit ingestion endpoint (§2.13) exists for client-originated events only.
@@ -67,6 +67,16 @@ User ──member of──▶ Team ──owns──▶ Project ──contains─
 | --------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | **Unmetered**         | CRUD, graph reads, pure-logic checker runs, ambient autocomplete warnings, sync                     | Included in subscription                                                  |
 | **Metered (credits)** | Agent conversations, deep diagnoses, LLM warning explanations, fingerprint LLM passes, proving runs | Per-user / pooled team allowance; graceful "lite mode" degradation at cap |
+
+**Extensions (§2.17, SOLUSDEV-235 / ADR-035):** every route on the Extensions & Store surface —
+catalog, publishing, installs, storage, widget layout, team policy — is **Unmetered**; none of it
+calls a model. The only metered consequence of an extension is a SOL turn the desktop host makes
+on its behalf, and that is charged on the EXISTING SOL routes: the host sends
+`X-Solus-Extension: <slug>`, the server accepts it only when the project has an enabled install
+granting `sol.ask` (else `403 scope_denied` — refused, never ignored), records `extension_id` on
+the `credit_ledger` row for attribution, and still meters the **invoking user** (ADR-018/019/024
+— per-user credits, no pooling, no separate extension budget). See
+[extensions.md](extensions.md) §9.
 
 ---
 
@@ -332,6 +342,45 @@ Every `202 Accepted` from any feature area resolves here. Job completion/progres
 | GET    | `/api/v1/projects/{project_id}/jobs` | Project job list: `?kind=sync\|check_run\|proving\|fingerprint_scan\|sim_rebuild&status=`      |
 | POST   | `/api/v1/jobs/{job_id}/cancel`       | Cancel queued/running job                                                                      |
 
+The `extension_review` job kind (§2.17) is registry-scoped, not project-scoped: it resolves via
+`GET /api/v1/jobs/{job_id}` only and never appears in a project's job list.
+
+### 2.17 Extensions & Store (SOLUSDEV-235, ADR-035) — full plan in [extensions.md](extensions.md)
+
+Versioned, community-published extension bundles installed per project (ADR-035: sandboxed
+views, permission-checked host bridge, open registry with manual verification). All routes are
+**Unmetered** (§1.5 note). The catalog is a **tenant-free** read surface (ADR-033 precedent);
+installs, storage and widget layouts hang off the project (`ProjectCtx`, `member` floor — viewer
+→ 403, non-member → 404); policies hang off the team (`TeamCtx`, `owner` only). Tables:
+`docs/schemas/extensions.md`. Request/response shapes, error codes, data events, rate limits and
+the security checklist live in [extensions.md](extensions.md) — this table is the index.
+
+| Method         | Path                                                               | Description                                                                                                                                                                                                                                                                                                                          |
+| -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET            | `/api/v1/extensions`                                               | Catalog: `?q=&cursor=&limit=` — only extensions with an approved version; slug, name, summary, publisher, verified, install_count, latest version, `requires`, view kinds                                                                                                                                                            |
+| GET            | `/api/v1/extensions/{slug}`                                        | Detail: latest approved version's full manifest, store asset URLs, publisher, verified, install_count                                                                                                                                                                                                                                |
+| GET            | `/api/v1/extensions/{slug}/versions`                               | Approved versions; the publisher additionally sees pending/checking/rejected with `review_problems`                                                                                                                                                                                                                                  |
+| GET            | `/api/v1/extensions/{slug}/versions/{version}/bundle`              | The zip bytes (`X-Solus-Content-Hash` sha256, `Content-Length`); approved only — publisher may fetch own pending; 404 otherwise, no existence leak                                                                                                                                                                                   |
+| GET            | `/api/v1/extensions/{slug}/versions/{version}/assets/{path}`       | Store-facing files ONLY as recorded in `extension_version_assets` (markdown, screenshots, sanitized icon svg); 404 for anything else                                                                                                                                                                                                 |
+| POST           | `/api/v1/extensions/publish`                                       | Multipart `{ bundle: zip ≤ 25 MiB }`; verified email; `Idempotency-Key` required; `Content-Length` required (411); bounded `extension.toml` read in the request path (never a full unzip); claims slug / 409 `slug_taken` / 409 `version_exists`; bundle via `ArtifactStore`; version `pending` → **202 + Job** (`extension_review`) |
+| GET            | `/api/v1/extensions/{slug}/versions/{version}/review`              | `review_status` + `review_problems` — publisher only (404 otherwise)                                                                                                                                                                                                                                                                 |
+| DELETE         | `/api/v1/extensions/{slug}/versions/{version}`                     | Publisher unpublishes a version (soft delete; installs keep their pinned copy; Store hides it)                                                                                                                                                                                                                                       |
+| PATCH          | `/api/v1/extensions/{slug}`                                        | `{ verified: bool }` — Solus staff only (`SOLUS_STAFF_USER_IDS`, checked server-side; everyone else 403). Summary/name are manifest-derived — not patchable by anyone                                                                                                                                                                |
+| GET            | `/api/v1/projects/{project_id}/extensions`                         | Installed extensions: pinned version + its manifest, enabled, settings, granted scopes/network, `update_available`, team policy state                                                                                                                                                                                                |
+| PUT            | `/api/v1/projects/{project_id}/extensions/{slug}`                  | Install (201) or update (200): `{ version?, grants: { scopes, network } }` — grants ⊆ manifest (422); team-blocked → 403 `extension_blocked`; widening update → 409 `grants_required`                                                                                                                                                |
+| PATCH          | `/api/v1/projects/{project_id}/extensions/{slug}`                  | `{ enabled?, settings? }` — settings validated against the pinned manifest `[settings]` (422; ≤ 16 KiB); blocked cannot be enabled (403)                                                                                                                                                                                             |
+| DELETE         | `/api/v1/projects/{project_id}/extensions/{slug}`                  | Uninstall: install row + this extension's storage rows; graph data stays                                                                                                                                                                                                                                                             |
+| GET/PUT/DELETE | `/api/v1/projects/{project_id}/extensions/{slug}/storage/{key}`    | `storage.own` backing store: key ≤ 64 chars, value any JSON ≤ 64 KiB, ≤ 256 KiB per (project, extension) → 413; requires an enabled install granting `storage.own` (403 `scope_denied`)                                                                                                                                              |
+| GET/PUT        | `/api/v1/projects/{project_id}/widget-layout`                      | The caller's Live Bench widget layout for this project, per (project, user): ordered `[{ ref: "builtin:<id>" \| "ext:<slug>", size: compact\|standard\|wide\|full }]`, ≤ 24 slots                                                                                                                                                    |
+| GET            | `/api/v1/teams/{team_id}/extensions/policies`                      | Team policies (owner only; admin → 403)                                                                                                                                                                                                                                                                                              |
+| PUT            | `/api/v1/teams/{team_id}/extensions/policies/{slug}`               | `{ blocked?, default_installed?, default_settings? }` — blocking disables the extension in every project of the team                                                                                                                                                                                                                 |
+| DELETE         | `/api/v1/teams/{team_id}/extensions/policies/{slug}`               | Reset policy                                                                                                                                                                                                                                                                                                                         |
+| _header_       | `X-Solus-Extension: <slug>` on the existing SOL turn routes (§2.9) | Bridge attribution — accepted only with an enabled install granting `sol.ask` (else 403 `scope_denied`); `extension_id` recorded on `credit_ledger`; the invoking user is still metered (§1.5 note)                                                                                                                                  |
+
+Data events (ADR-011): `extension.install`, `extension.uninstall`, `extension.enable`,
+`extension.disable`, `extension.settings_changed`, `extension.grants_changed`,
+`extension.publish`, `extension.review_completed`, `extension.bridge_refused`.
+
 ---
 
 ## 3. Realtime — WebSocket & SSE
@@ -408,6 +457,8 @@ React Router (memory/hash history in Electron). The persistent SOL "ball of ener
 /projects/:projectId/settings           Project settings
 /projects/:projectId/store              Store (SOLUSDEV-235): installed extensions + suggestions gated on connected sources — never on popularity
 /projects/:projectId/store/:extensionId Extension detail: Overview / Settings / Permissions; install, disable, uninstall (confirmed)
+/projects/:projectId/ext/:extensionId   Extension page view (SOLUSDEV-235): the installed extension's `views.page` in a sandboxed iframe, rail slot per ADR-035
+/ext-window/:extensionId                Extension window host (SOLUSDEV-235): `views.window` in its own BrowserWindow, same sandbox + bridge
 
 /teams/:teamId                          Team home: activity feed, members
 /teams/:teamId/members                  Members, roles, invites (admin)
@@ -417,6 +468,7 @@ React Router (memory/hash history in Electron). The persistent SOL "ball of ener
 
 /settings                               Profile, SOL mode toggle, notifications, consent, API keys
 /settings/usage                         Personal usage meter detail
+/settings/developer                     Developer mode (SOLUSDEV-235): load an unpacked extension folder, manifest problems, publish entry point
 /tutorials                              Guided-flow library
 /tutorials/:tutorialId                  In-app tutorial runner
 ```

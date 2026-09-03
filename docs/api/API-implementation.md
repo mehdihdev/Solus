@@ -1054,3 +1054,47 @@ the next bridge-hosted tool is a backend catalog entry, zero frontend edits.
 Isaac Sim stays a read-target (ADR-014): MCAP replay is the recorded path, and
 `livebench/sim/isaac_direct.py` (run under Isaac's own python, stdlib-only, token via env) is the
 ROS-free live path POSTing straight into §15's ingest route — zero new API surface.
+
+---
+
+## 16. Extensions & Store (SOLUSDEV-235) — PLANNED, route plan in [extensions.md](extensions.md)
+
+Tier-1 route-plan amendment (ADR-032) written at the SOLUSDEV-235 Phase 2 plan (task EXT-00)
+from the fixed decisions of that ticket's Phase 1 design review (ratified 2026-09-03, ADR-035 +
+the ADR-034 amendment). It is the HTTP surface behind the Store (`docs/wireflows/store.md`): a
+tenant-free catalog of approved extension versions, an open publish path (bundle via
+`ArtifactStore`, manifest validated with the `extension-manifest` contract, review as an ARQ
+job), per-project installs with pinned versions / validated settings / granted permissions, the
+`storage.own` key-value store, per-user widget layouts, team policies, and `X-Solus-Extension`
+attribution on the EXISTING §11 SOL turn route. Documented before implementation per the
+authority hierarchy (#3); the implementing tasks are the EXT-xx tasks on the same ticket.
+
+Catalog routes need only a signed-in user; project routes resolve through `ProjectCtx` with the
+`member` floor (viewer → `403`, non-member → `404`); policy routes resolve through `TeamCtx`,
+`owner` only. Everything is **Unmetered** (API.md §1.5 note).
+
+| Method         | Path                                                            | Purpose                                                    | Success           |
+| -------------- | --------------------------------------------------------------- | ---------------------------------------------------------- | ----------------- |
+| GET            | `/api/v1/extensions`                                            | Catalog list (`?q=&cursor=&limit=`), approved only         | `200`             |
+| GET            | `/api/v1/extensions/{slug}`                                     | Detail: manifest, asset URLs, publisher, verified          | `200`             |
+| GET            | `/api/v1/extensions/{slug}/versions`                            | Versions (publisher sees unapproved + problems)            | `200`             |
+| GET            | `/api/v1/extensions/{slug}/versions/{version}/bundle`           | Zip bytes + `X-Solus-Content-Hash`                         | `200`             |
+| GET            | `/api/v1/extensions/{slug}/versions/{version}/assets/{path}`    | Recorded store assets only                                 | `200`             |
+| POST           | `/api/v1/extensions/publish`                                    | Multipart bundle ≤ 25 MiB → version `pending` + review job | `202`             |
+| GET            | `/api/v1/extensions/{slug}/versions/{version}/review`           | Review status (publisher only)                             | `200`             |
+| DELETE         | `/api/v1/extensions/{slug}/versions/{version}`                  | Unpublish (soft delete)                                    | `204`             |
+| PATCH          | `/api/v1/extensions/{slug}`                                     | `{ verified }` — staff only                                | `200`             |
+| GET            | `/api/v1/projects/{project_id}/extensions`                      | Installed extensions                                       | `200`             |
+| PUT            | `/api/v1/projects/{project_id}/extensions/{slug}`               | Install / update (`{ version?, grants }`)                  | `201` / `200`     |
+| PATCH          | `/api/v1/projects/{project_id}/extensions/{slug}`               | `{ enabled?, settings? }`                                  | `200`             |
+| DELETE         | `/api/v1/projects/{project_id}/extensions/{slug}`               | Uninstall                                                  | `204`             |
+| GET/PUT/DELETE | `/api/v1/projects/{project_id}/extensions/{slug}/storage/{key}` | `storage.own` value                                        | `200`/`201`/`204` |
+| GET/PUT        | `/api/v1/projects/{project_id}/widget-layout`                   | Caller's widget layout                                     | `200`             |
+| GET            | `/api/v1/teams/{team_id}/extensions/policies`                   | Team policies                                              | `200`             |
+| PUT            | `/api/v1/teams/{team_id}/extensions/policies/{slug}`            | Upsert policy                                              | `201` / `200`     |
+| DELETE         | `/api/v1/teams/{team_id}/extensions/policies/{slug}`            | Reset policy                                               | `204`             |
+
+Full plan — request/response shapes, the bounded-reader publish flow and review job, grants /
+`409 grants_required`, settings validation, storage caps (64 KiB / 256 KiB), widget-layout
+shape, the `X-Solus-Extension` attribution rule, data events, rate budgets, error catalogue and
+the security checklist — lives in [extensions.md](extensions.md).
