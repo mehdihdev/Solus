@@ -72,7 +72,7 @@ erDiagram
         varchar bundle_storage
         char(64) content_hash "sha256 hex"
         bigint bundle_size_bytes
-        varchar(32) review_status "extension_review_status"
+        varchar(32) review_status "extensionreviewstatus"
         jsonb review_problems "dotted paths"
         timestamptz published_at "nullable"
         timestamptz created_at
@@ -218,20 +218,20 @@ constraint name is the lower-cased enum class name. Live-row uniqueness uses `_p
 
 ### 4.3 `extension_versions` — one row per published semver
 
-| column              | type             | constraints                                                                                                                                                                                           |
-| ------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                | uuid             | PK                                                                                                                                                                                                    |
-| `extension_id`      | uuid             | NOT NULL; FK → `extensions.id` `ON DELETE CASCADE`                                                                                                                                                    |
-| `version`           | text             | NOT NULL; strict semver (`MAJOR.MINOR.PATCH[-pre][+build]`), validated by the contract                                                                                                                |
-| `manifest`          | jsonb            | NOT NULL; the decoded `extension.toml`, **already validated** by `parse_extension_manifest`                                                                                                           |
-| `bundle_storage`    | varchar(32)      | NOT NULL; CHECK ∈ `ArtifactStorage` values (`s3`, `local`); bytes live in the `ArtifactStore` under key = this row's `id` (no `artifacts` row — the catalog is global, `artifacts` is project-scoped) |
-| `content_hash`      | char(64)         | NOT NULL; lower-case sha256 hex of the bundle bytes; `CHECK (content_hash ~ '^[0-9a-f]{64}$')`                                                                                                        |
-| `bundle_size_bytes` | bigint           | NOT NULL; `CHECK (bundle_size_bytes > 0 AND bundle_size_bytes <= 26214400)` (25 MiB, `MANIFEST_LIMITS.bundle`)                                                                                        |
-| `review_status`     | varchar(32)      | NOT NULL DEFAULT `'pending'`; CHECK `extension_review_status` ∈ {pending, checking, approved, rejected}                                                                                               |
-| `review_problems`   | jsonb            | NOT NULL DEFAULT `'[]'`; list of dotted-path problem strings (same strings as `manifest_problems`)                                                                                                    |
-| `published_at`      | timestamptz NULL | set when `review_status` becomes `approved`                                                                                                                                                           |
-| `created_at`        | timestamptz      | NOT NULL                                                                                                                                                                                              |
-| `deleted_at`        | timestamptz NULL | soft delete = version withdrawn                                                                                                                                                                       |
+| column              | type             | constraints                                                                                                                                                                                                                                                                 |
+| ------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                | uuid             | PK                                                                                                                                                                                                                                                                          |
+| `extension_id`      | uuid             | NOT NULL; FK → `extensions.id` `ON DELETE CASCADE`                                                                                                                                                                                                                          |
+| `version`           | text             | NOT NULL; strict semver (`MAJOR.MINOR.PATCH[-pre][+build]`), validated by the contract                                                                                                                                                                                      |
+| `manifest`          | jsonb            | NOT NULL; the decoded `extension.toml`, **already validated** by `parse_extension_manifest`                                                                                                                                                                                 |
+| `bundle_storage`    | varchar(32)      | NOT NULL; CHECK ∈ `ArtifactStorage` values; writers only ever store `s3`/`local` (never `client`), enforced in the service layer; bytes live in the `ArtifactStore` under key = this row's `id` (no `artifacts` row — the catalog is global, `artifacts` is project-scoped) |
+| `content_hash`      | char(64)         | NOT NULL; lower-case sha256 hex of the bundle bytes; `CHECK (content_hash ~ '^[0-9a-f]{64}$')`                                                                                                                                                                              |
+| `bundle_size_bytes` | bigint           | NOT NULL; `CHECK (bundle_size_bytes > 0 AND bundle_size_bytes <= 26214400)` (25 MiB, `MANIFEST_LIMITS.bundle`)                                                                                                                                                              |
+| `review_status`     | varchar(32)      | NOT NULL DEFAULT `'pending'`; CHECK `extensionreviewstatus` ∈ {pending, checking, approved, rejected} (repo `_enum_column` naming)                                                                                                                                          |
+| `review_problems`   | jsonb            | NOT NULL DEFAULT `'[]'`; list of dotted-path problem strings (same strings as `manifest_problems`)                                                                                                                                                                          |
+| `published_at`      | timestamptz NULL | set when `review_status` becomes `approved`                                                                                                                                                                                                                                 |
+| `created_at`        | timestamptz      | NOT NULL                                                                                                                                                                                                                                                                    |
+| `deleted_at`        | timestamptz NULL | soft delete = version withdrawn                                                                                                                                                                                                                                             |
 
 - Constraints/indexes: `uq_extension_versions_extension_version` — unique `(extension_id, version)`
   (all rows, not partial: a withdrawn version number is never reused);
@@ -241,7 +241,7 @@ constraint name is the lower-cased enum class name. Live-row uniqueness uses `_p
   stored bundle and hash), review job (`checking` → `approved`/`rejected`, `review_problems`,
   `published_at`), publisher/staff (`deleted_at`).
 - The Python `ExtensionReviewStatus(enum.StrEnum)` lives in `models.py` beside `JobKind`; the
-  CHECK constraint is named `extension_review_status` (the state machine is §5).
+  CHECK constraint is named `extensionreviewstatus` — the lower-cased enum class name `_enum_column` produces (the state machine is §5).
 - Retention: soft delete. Withdrawing a version that installs pin does **not** break those
   installs (`extension_installs.version_id` is `RESTRICT`); the desktop shows "version withdrawn"
   and offers the latest approved one.
@@ -439,7 +439,7 @@ stateDiagram-v2
 - **Upgrade order** (dependencies first):
   1. `extension_publishers`
   2. `extensions` (without `latest_approved_version_id` FK)
-  3. `extension_versions` (+ CHECK `extension_review_status`, hash/size CHECKs)
+  3. `extension_versions` (+ CHECK `extensionreviewstatus`, hash/size CHECKs)
   4. `extensions.latest_approved_version_id` FK → `extension_versions` (`use_alter`)
   5. `extension_version_assets`
   6. `extension_installs`
@@ -474,7 +474,7 @@ stateDiagram-v2
 2. **RESOLVED:** `extension_storage` and `widget_layouts` use `TimestampMixin` and therefore
    carry `created_at` as well as `updated_at` (harmless, consistent with every other table).
 3. `review_status` is called an "enum" here but, like every other enum in `models.py`, is stored
-   as `VARCHAR(32)` + CHECK — not a Postgres `ENUM` type. The name `extension_review_status` is
+   as `VARCHAR(32)` + CHECK — not a Postgres `ENUM` type. The name `extensionreviewstatus` is
    the CHECK constraint's name.
 4. **No staff identity exists in the schema today** (`users` has no `is_staff`/role column and
    `deps.py` has no staff dependency). Setting `verified` needs one; EXT-01/EXT-03 pick between a

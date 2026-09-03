@@ -448,7 +448,6 @@ not exist for you). `200`:
       "store.screenshots[0]: shots/big.png is 1.4 MiB, cap is 1 MiB",
       "bundle: vendor/helper.wasm has a disallowed asset type"
     ],
-    "checked_at": "2026-09-02T18:40:19.000Z",
     "published_at": null
   }
 }
