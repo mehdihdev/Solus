@@ -99,7 +99,9 @@ describe('resolveInstalledBundle', () => {
       step: 'install_lookup'
     })
   })
+})
 
+describe('resolveInstalledBundle cache + developer mode', () => {
   it('downloads and installs once when the bundle is not cached, reporting caching', async () => {
     const bridge = fakeBridge()
     const deps = fakeBundleDeps({ bridge })
@@ -188,7 +190,9 @@ describe('resolveInstalledBundle', () => {
   })
 
   it('reports a missing view for a developer registration too', async () => {
-    const manifest = fakeManifest({ views: { page: { entry: 'p.html', icon: 'i.svg', label: 'B' } } })
+    const manifest = fakeManifest({
+      views: { page: { entry: 'p.html', icon: 'i.svg', label: 'B' } }
+    })
     const deps = fakeBundleDeps({
       devRegistration: () => ({ manifest, grantedScopes: [], grantedNetwork: [] })
     })

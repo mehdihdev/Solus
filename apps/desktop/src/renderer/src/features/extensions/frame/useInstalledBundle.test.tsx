@@ -6,7 +6,13 @@ import type { InstalledBundleDeps } from './installedBundle'
 import { useInstalledBundle } from './useInstalledBundle'
 import { fakeBridge, fakeBundleDeps } from './testing/fixtures'
 
-function Probe({ deps, slug = 'bom' }: { deps: InstalledBundleDeps; slug?: string }): React.JSX.Element {
+function Probe({
+  deps,
+  slug = 'bom'
+}: {
+  deps: InstalledBundleDeps
+  slug?: string
+}): React.JSX.Element {
   const { state, retry } = useInstalledBundle('p1', slug, 'page', deps)
   return (
     <>

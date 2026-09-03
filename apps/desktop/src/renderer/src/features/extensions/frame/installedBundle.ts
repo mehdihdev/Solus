@@ -149,11 +149,7 @@ export function installFailureState(
   }
 }
 
-async function isCached(
-  bridge: ExtensionsBridge,
-  slug: string,
-  version: string
-): Promise<boolean> {
+async function isCached(bridge: ExtensionsBridge, slug: string, version: string): Promise<boolean> {
   const index = await bridge.index()
   const entry = index.installed[slug]
   return entry !== undefined && entry.source === 'registry' && entry.version === version

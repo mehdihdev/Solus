@@ -60,7 +60,10 @@ export function fakeInstall(overrides: Partial<ExtensionInstallApi> = {}): Exten
   }
 }
 
-type IndexEntries = Record<string, { version: string; source: 'registry' | 'dev'; devPath?: string }>
+type IndexEntries = Record<
+  string,
+  { version: string; source: 'registry' | 'dev'; devPath?: string }
+>
 
 export interface FakeBridge extends ExtensionsBridge {
   readonly entries: IndexEntries
