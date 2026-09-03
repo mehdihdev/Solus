@@ -73,6 +73,25 @@ function decodeSegment(segment: string): string | null {
   }
 }
 
+/** The URL's authority is the extension id and nothing else: no userinfo, no port. */
+function parseExtHost(parsed: URL): string | null {
+  const bare = !parsed.username && !parsed.password && !parsed.port
+  return bare && isSafeExtensionId(parsed.hostname) ? parsed.hostname : null
+}
+
+/** `/<version>/<path…>` → the two validated parts, or null. Segments are
+ *  decoded and then the JOINED path is re-validated: an encoded `/` or `..`
+ *  must fail the shape check, not slip past it. */
+function parseExtPathname(pathname: string): { version: string; path: string } | null {
+  const [, rawVersion, ...rawPath] = pathname.split('/')
+  const version = rawVersion === undefined ? null : decodeSegment(rawVersion)
+  if (version === null || !(version === DEV_VERSION || isSafeExtensionVersion(version))) return null
+  const segments = rawPath.map(decodeSegment)
+  if (segments.some((s) => s === null || s.includes('/'))) return null
+  const path = segments.join('/')
+  return isSafeBundlePath(path, SERVED_SUFFIXES) ? { version, path } : null
+}
+
 /** `solus-ext://<id>/<version>/<path>` → parts, or null for anything else. */
 export function parseExtUrl(url: string): ExtUrlParts | null {
   let parsed: URL
@@ -81,20 +100,10 @@ export function parseExtUrl(url: string): ExtUrlParts | null {
   } catch {
     return null
   }
-  if (parsed.protocol !== `${EXT_SCHEME}:` || parsed.username || parsed.password || parsed.port)
-    return null
-  const id = parsed.hostname
-  if (!isSafeExtensionId(id)) return null
-  const [, rawVersion, ...rawPath] = parsed.pathname.split('/')
-  const version = rawVersion === undefined ? null : decodeSegment(rawVersion)
-  if (version === null || !(version === DEV_VERSION || isSafeExtensionVersion(version))) return null
-  // Decode each segment, then re-validate the JOINED path: an encoded `/` or
-  // `..` must fail the shape check, not slip past it.
-  const segments = rawPath.map(decodeSegment)
-  if (segments.some((s) => s === null || s.includes('/'))) return null
-  const path = segments.join('/')
-  if (!isSafeBundlePath(path, SERVED_SUFFIXES)) return null
-  return { id, version, path }
+  if (parsed.protocol !== `${EXT_SCHEME}:`) return null
+  const id = parseExtHost(parsed)
+  const rest = parseExtPathname(parsed.pathname)
+  return id === null || rest === null ? null : { id, ...rest }
 }
 
 export interface ExtResponse {

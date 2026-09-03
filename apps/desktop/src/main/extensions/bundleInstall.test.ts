@@ -7,7 +7,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { BUNDLE_LIMITS, installBundle, uninstallExtension } from './bundleInstall'
+import {
+  BUNDLE_LIMITS,
+  installBundle,
+  uninstallExtension,
+  type InstallRequest
+} from './bundleInstall'
 import { realExtensionFs } from './extensionFs'
 import { readExtensionIndex } from './extensionIndex'
 import { fakeExtensionFs, seedDir, type FakeExtensionFs } from './testing/fakeExtensionFs'
@@ -22,10 +27,9 @@ import {
 const ROOT = '/home/tester/.solus/extensions'
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
 
-function request(
-  bytes: Uint8Array,
-  over: Partial<{ id: string; version: string; contentHash: string }> = {}
-) {
+type RequestOverrides = Partial<{ id: string; version: string; contentHash: string }>
+
+function request(bytes: Uint8Array, over: RequestOverrides = {}): InstallRequest {
   return { id: 'bom', version: '1.2.0', contentHash: sha256(bytes), bytes, ...over }
 }
 
@@ -118,7 +122,9 @@ describe('installBundle — refusals write nothing', () => {
 
   test('declared sizes that sum past the cap are refused before extraction', async () => {
     const fs = fakeExtensionFs()
-    const bytes = bundleWith([{ name: 'big.bin', data: 'x', deflate: true, declaredSize: BUNDLE_LIMITS.bytes }])
+    const bytes = bundleWith([
+      { name: 'big.bin', data: 'x', deflate: true, declaredSize: BUNDLE_LIMITS.bytes }
+    ])
     expect(await installBundle(request(bytes), fs)).toEqual({ ok: false, error: 'too_large' })
     expectNothingWritten(fs)
   })
@@ -133,7 +139,9 @@ describe('installBundle — refusals write nothing', () => {
     if (!result.ok) expect(['too_large', 'zip_invalid']).toContain(result.error)
     expectNothingWritten(fs)
   })
+})
 
+describe('installBundle — refusals write nothing (entries)', () => {
   test('too many files', async () => {
     const fs = fakeExtensionFs()
     const many = Array.from({ length: BUNDLE_LIMITS.files }, (_, i) => ({
@@ -180,7 +188,9 @@ describe('installBundle — refusals write nothing', () => {
     expect(await installBundle(request(bytes), fs)).toEqual({ ok: false, error: 'unsafe_entry' })
     expectNothingWritten(fs)
   })
+})
 
+describe('installBundle — refusals write nothing (manifest, index, fs)', () => {
   test('missing manifest', async () => {
     const fs = fakeExtensionFs()
     const bytes = buildZip([{ name: 'widget.html', data: 'x' }])

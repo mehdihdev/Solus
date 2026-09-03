@@ -58,19 +58,30 @@ function hasValidDevPath(v: Record<string, unknown>): boolean {
   return v.devPath === undefined
 }
 
+function isInstallSource(v: unknown): v is InstallSource {
+  return typeof v === 'string' && (SOURCES as readonly string[]).includes(v)
+}
+
+function hasEntryShape(v: Record<string, unknown>): boolean {
+  const { version, contentHash, installedAt } = v
+  return (
+    Object.keys(v).every((k) => ENTRY_FIELDS.includes(k)) &&
+    typeof version === 'string' &&
+    isSafeExtensionVersion(version) &&
+    isSha256Hex(contentHash) &&
+    typeof installedAt === 'string' &&
+    installedAt.length <= MAX_TIMESTAMP_LENGTH
+  )
+}
+
 function parseEntry(v: unknown): InstalledExtension | null {
-  if (!isPlainObject(v) || Object.keys(v).some((k) => !ENTRY_FIELDS.includes(k))) return null
-  const { version, contentHash, installedAt, source } = v
-  if (typeof version !== 'string' || !isSafeExtensionVersion(version)) return null
-  if (!isSha256Hex(contentHash)) return null
-  if (typeof installedAt !== 'string' || installedAt.length > MAX_TIMESTAMP_LENGTH) return null
-  if (typeof source !== 'string' || !(SOURCES as readonly string[]).includes(source)) return null
+  if (!isPlainObject(v) || !hasEntryShape(v) || !isInstallSource(v.source)) return null
   if (!hasValidDevPath(v)) return null
   return {
-    version,
-    contentHash,
-    installedAt,
-    source: source as InstallSource,
+    version: v.version as string,
+    contentHash: v.contentHash as string,
+    installedAt: v.installedAt as string,
+    source: v.source,
     ...(typeof v.devPath === 'string' ? { devPath: v.devPath } : {})
   }
 }

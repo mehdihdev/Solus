@@ -138,7 +138,9 @@ describe('fetchForExtension — refusals', () => {
     )
     expect(result.ok).toBe(true)
   })
+})
 
+describe('fetchForExtension — addresses, redirects, caps, failures', () => {
   test.each(['10.0.0.1', '127.0.0.1', '169.254.169.254', '::1', 'fd00::1'])(
     'refuses a host that resolves to %s without fetching',
     async (ip) => {
@@ -180,7 +182,9 @@ describe('fetchForExtension — refusals', () => {
       error: 'dns_failed'
     })
   })
+})
 
+describe('fetchForExtension — redirects', () => {
   test('a cross-origin redirect is refused and never followed', async () => {
     const fetch = vi.fn(
       async () =>
@@ -218,7 +222,9 @@ describe('fetchForExtension — refusals', () => {
       error: 'redirect_refused'
     })
   })
+})
 
+describe('fetchForExtension — caps and failures', () => {
   test('a response over the cap is refused — by content-length, or while streaming', async () => {
     const declared = okFetch('x', {
       headers: { 'content-length': String(NET_LIMITS.responseBytes + 1) }

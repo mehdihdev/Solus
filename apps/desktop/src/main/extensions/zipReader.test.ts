@@ -32,7 +32,9 @@ describe('openZip', () => {
   })
 
   test('refuses an entry whose declared size exceeds the cap without inflating it', async () => {
-    const archive = await openZip(buildZip([{ name: 'big.bin', data: 'x'.repeat(4000), deflate: true }]))
+    const archive = await openZip(
+      buildZip([{ name: 'big.bin', data: 'x'.repeat(4000), deflate: true }])
+    )
     await expect(archive.read('big.bin', 100)).rejects.toBeInstanceOf(ZipEntryTooLargeError)
   })
 

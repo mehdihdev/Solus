@@ -120,7 +120,9 @@ describe('serveExtAsset', () => {
     fs.links.set(`${ROOT}/bom/1.2.0/alias.js`, `${ROOT}/bom/1.2.0/assets/app.js`)
     expect(serveExtAsset('solus-ext://bom/1.2.0/alias.js', fs).status).toBe(200)
   })
+})
 
+describe('serveExtAsset — dev registrations and failures', () => {
   test('serves a dev registration from its devPath under the dev version', () => {
     const fs = fakeExtensionFs()
     seedFile(fs, '/ws/my-ext/widget.html', '<p>dev</p>')

@@ -50,7 +50,10 @@ describe('parseExtensionIndex', () => {
     ['unknown top-level field', { schema_version: 1, installed: {}, extra: 1 }],
     ['unsafe id', { schema_version: 1, installed: { 'Bad Id': ENTRY } }],
     // An object LITERAL `{ __proto__: … }` sets the prototype; JSON.parse makes an own key.
-    ['reserved id', JSON.parse(`{"schema_version":1,"installed":{"__proto__":${JSON.stringify(ENTRY)}}}`)],
+    [
+      'reserved id',
+      JSON.parse(`{"schema_version":1,"installed":{"__proto__":${JSON.stringify(ENTRY)}}}`)
+    ],
     ['reserved id (constructor)', { schema_version: 1, installed: { constructor: ENTRY } }],
     ['bad version', { schema_version: 1, installed: { bom: { ...ENTRY, version: '1.0' } } }],
     ['bad hash', { schema_version: 1, installed: { bom: { ...ENTRY, contentHash: 'zz' } } }],

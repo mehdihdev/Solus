@@ -100,18 +100,22 @@ export interface NetProxyDeps {
 // Address classification
 // ---------------------------------------------------------------------------
 
+/** Refused IPv4 ranges as (first octet, second-octet range) rows. */
+const PRIVATE_V4_RANGES: ReadonlyArray<readonly [number, number, number]> = [
+  [0, 0, 255], // "this" network
+  [10, 0, 255],
+  [127, 0, 255],
+  [169, 254, 254], // link-local incl. cloud metadata
+  [172, 16, 31],
+  [192, 168, 168],
+  [100, 64, 127] // CGNAT
+]
+const MULTICAST_FIRST_OCTET = 224 // 224/4 multicast, 240/4 reserved, broadcast
+
 function isPrivateV4(octets: number[]): boolean {
   const [a, b] = octets
-  return (
-    a === 0 || // "this" network
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) || // link-local incl. cloud metadata
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) || // CGNAT
-    a >= 224 // multicast + reserved + broadcast
-  )
+  if (a >= MULTICAST_FIRST_OCTET) return true
+  return PRIVATE_V4_RANGES.some(([first, lo, hi]) => a === first && b >= lo && b <= hi)
 }
 
 function v4ToHextets(quad: string): string {
@@ -165,14 +169,11 @@ export function sanitizeOutgoingHeaders(headers: unknown): Record<string, string
   if (typeof headers !== 'object' || headers === null || Array.isArray(headers)) return null
   const entries = Object.entries(headers as Record<string, unknown>)
   if (entries.length > NET_LIMITS.headers) return null
-  const out: Record<string, string> = {}
-  for (const [name, value] of entries) {
-    if (!HEADER_NAME_RE.test(name) || typeof value !== 'string' || HEADER_VALUE_BAD_RE.test(value))
-      return null
-    const lowered = name.toLowerCase()
-    if (!STRIPPED_HEADERS.has(lowered)) out[lowered] = value
-  }
-  return out
+  const wellFormed = (name: string, value: unknown): value is string =>
+    HEADER_NAME_RE.test(name) && typeof value === 'string' && !HEADER_VALUE_BAD_RE.test(value)
+  if (entries.some(([name, value]) => !wellFormed(name, value))) return null
+  const kept = entries.filter(([name]) => !STRIPPED_HEADERS.has(name.toLowerCase()))
+  return Object.fromEntries(kept.map(([name, value]) => [name.toLowerCase(), value as string]))
 }
 
 type Refusal = { ok: false; error: NetFetchError }
@@ -354,7 +355,7 @@ export async function fetchForExtension(
 }
 
 export const realNetProxyDeps: NetProxyDeps = {
-  fetch: (url, init) => globalThis.fetch(url, init) as Promise<ProxyResponse>,
+  fetch: (url, init) => globalThis.fetch(url, init as RequestInit) as Promise<ProxyResponse>,
   resolve: async (hostname) =>
     (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address),
   timeoutMs: NET_LIMITS.timeoutMs

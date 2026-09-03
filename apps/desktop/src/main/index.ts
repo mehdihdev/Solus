@@ -1,4 +1,4 @@
-import { app, shell, dialog, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, dialog, BrowserWindow, ipcMain, protocol } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -32,6 +32,23 @@ import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { externalOpenHandler } from './externalUrl'
 import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
+import { realExtensionFs } from './extensions/extensionFs'
+import {
+  createExtProtocolHandler,
+  EXT_SCHEME,
+  EXT_SCHEME_PRIVILEGES
+} from './extensions/extProtocol'
+import {
+  createExtensionBrowserWindow,
+  createExtensionWindowManager
+} from './extensions/extensionWindow'
+import { createExtensionsIpc, registerExtensionsIpc } from './extensions/extensionsIpc'
+import { realNetProxyDeps } from './extensions/netProxy'
+
+// Extensions (SOLUSDEV-235 / ADR-035 §1): the read-only solus-ext:// origin the
+// sandboxed frames load their bundles from. A privileged scheme MUST be declared
+// before app ready; the handler is installed after (see whenReady below).
+protocol.registerSchemesAsPrivileged([{ scheme: EXT_SCHEME, privileges: EXT_SCHEME_PRIVILEGES }])
 
 /** Open a Stripe Checkout / billing-portal URL in the system browser, refusing
  *  anything that isn't one of the Stripe-hosted surfaces our API returns
@@ -94,6 +111,25 @@ function registerSolChatCacheHandlers(): void {
   )
   ipcMain.handle('solchat:clear', (event) =>
     solChatCacheIpc.clear(isMainRendererSender(event), deps)
+  )
+}
+
+/** Extensions (SOLUSDEV-235 / EXT-05, ADR-035): serve installed bundles + dev
+ *  folders read-only over solus-ext://, and wire the install / dev-mode /
+ *  window / network-proxy invokes. Every channel is sender-gated; every
+ *  decision (ids, hashes, sizes, origins, addresses) lives in main/extensions
+ *  where it is unit-tested against injected fs/net surfaces. Called after app
+ *  ready — the scheme itself is declared privileged at module load above. */
+function registerExtensionHandlers(): void {
+  protocol.handle(EXT_SCHEME, createExtProtocolHandler(realExtensionFs))
+  registerExtensionsIpc(
+    ipcMain,
+    isMainRendererSender,
+    createExtensionsIpc({
+      fs: realExtensionFs,
+      net: realNetProxyDeps,
+      windows: createExtensionWindowManager(createExtensionBrowserWindow)
+    })
   )
 }
 
@@ -209,6 +245,8 @@ if (!app.requestSingleInstanceLock()) {
 
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
+
+    registerExtensionHandlers()
 
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
     // portal URL (returned by our API) in the system browser. Only the app's
