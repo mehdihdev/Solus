@@ -15,9 +15,21 @@ import {
   joinUrl,
   unwrapEnvelope,
   type ApiClient,
-  type Page
+  type Page,
+  type RequestOptions
 } from './client'
 import { ApiError } from './envelope.types'
+
+// `RequestOptions.method` predates this plan — the extensions surface is the
+// first PUT the desktop makes, and client.ts is outside EXT-12's ownership.
+// The transport forwards the verb verbatim (`req.method ?? 'GET'`), so the
+// cast is type-only; widening the union is a one-line client.ts follow-up
+// (flagged in the completion report).
+const PUT = 'PUT' as unknown as RequestOptions['method']
+
+function putJson<T>(client: ApiClient, path: string, body: unknown): Promise<T> {
+  return client.request<T>(path, { method: PUT, body })
+}
 
 /* ---------------- shapes ---------------- */
 
@@ -268,7 +280,10 @@ export function listExtensions(
   query: ExtensionListQuery = {},
   client: ApiClient = api
 ): Promise<Page<ExtensionCatalogItemApi[]>> {
-  return client.requestPage<ExtensionCatalogItemApi[]>(withQuery('/extensions', query))
+  const { q, cursor, limit } = query
+  return client.requestPage<ExtensionCatalogItemApi[]>(
+    withQuery('/extensions', { q, cursor, limit })
+  )
 }
 
 export function getExtension(slug: string, client: ApiClient = api): Promise<ExtensionDetailApi> {
@@ -392,12 +407,10 @@ export function installExtension(
   input: ExtensionInstallInput,
   client: ApiClient = api
 ): Promise<ExtensionInstallApi> {
-  return client.request<ExtensionInstallApi>(
+  return putJson<ExtensionInstallApi>(
+    client,
     `/projects/${seg(projectId)}/extensions/${seg(slug)}`,
-    {
-      method: 'PUT',
-      body: input
-    }
+    input
   )
 }
 
@@ -450,10 +463,7 @@ export function putExtensionStorage(
   value: unknown,
   client: ApiClient = api
 ): Promise<ExtensionStorageValueApi> {
-  return client.request<ExtensionStorageValueApi>(storagePath(projectId, slug, key), {
-    method: 'PUT',
-    body: value
-  })
+  return putJson<ExtensionStorageValueApi>(client, storagePath(projectId, slug, key), value)
 }
 
 export function deleteExtensionStorage(
@@ -479,10 +489,7 @@ export function putWidgetLayout(
   layout: readonly WidgetLayoutSlotApi[],
   client: ApiClient = api
 ): Promise<WidgetLayoutApi> {
-  return client.request<WidgetLayoutApi>(`/projects/${seg(projectId)}/widget-layout`, {
-    method: 'PUT',
-    body: { layout }
-  })
+  return putJson<WidgetLayoutApi>(client, `/projects/${seg(projectId)}/widget-layout`, { layout })
 }
 
 /* ---------------- §10 team policy ---------------- */
@@ -503,9 +510,10 @@ export function putTeamExtensionPolicy(
   input: TeamExtensionPolicyInput,
   client: ApiClient = api
 ): Promise<TeamExtensionPolicyApi> {
-  return client.request<TeamExtensionPolicyApi>(
+  return putJson<TeamExtensionPolicyApi>(
+    client,
     `/teams/${seg(teamId)}/extensions/policies/${seg(slug)}`,
-    { method: 'PUT', body: input }
+    input
   )
 }
 

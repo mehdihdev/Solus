@@ -82,6 +82,23 @@ export interface BridgeEvent {
 
 export type BridgeOutbound = BridgeResponse | BridgeEvent
 
+/** §6.7 — the events the host may send. */
+export type BridgeEventName =
+  | 'init'
+  | 'focus.changed'
+  | 'settings.changed'
+  | 'theme.changed'
+  | 'project.changed'
+  | 'telemetry.sample'
+
+/** Events delivered only to frames holding ANY of the listed scopes (§6.7:
+ *  `focus.changed` goes "only to frames with focus.read or graph.read"). */
+export const EVENT_SCOPES: Readonly<Partial<Record<BridgeEventName, readonly PermissionScope[]>>> =
+  {
+    'focus.changed': ['focus.read', 'graph.read'],
+    'telemetry.sample': ['telemetry.read']
+  }
+
 /**
  * §6.3, verbatim. `null` = no scope required. `net.fetch` is null here because
  * its authorization is not a scope: the target origin must be in the granted
