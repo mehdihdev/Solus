@@ -66,6 +66,12 @@ describe('StoreScreen', () => {
     expect(screen.getByText(/can't see this project's sources/i)).toBeInTheDocument()
   })
 
+  it('says when it is still checking sources rather than flashing unmet requirements as final', () => {
+    mockSources('loading')
+    render(<StoreScreen />)
+    expect(screen.getByText(/Checking this project’s connected sources/)).toBeInTheDocument()
+  })
+
   it('switches between grid and list layouts', async () => {
     render(<StoreScreen />)
     expect(screen.getByTestId('store-installed')).toHaveAttribute('data-layout', 'grid')

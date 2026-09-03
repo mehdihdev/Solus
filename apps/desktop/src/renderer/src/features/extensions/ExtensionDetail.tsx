@@ -97,9 +97,11 @@ export function ExtensionDetail({
           return (
             <button
               key={t.id}
+              id={`extension-tab-${t.id}`}
               type="button"
               role="tab"
               aria-selected={active}
+              aria-controls="extension-tabpanel"
               onClick={() => setTab(t.id)}
               className="interactive"
               style={{
@@ -122,7 +124,12 @@ export function ExtensionDetail({
         })}
       </div>
 
-      <div role="tabpanel" style={{ marginTop: 6 }}>
+      <div
+        role="tabpanel"
+        id="extension-tabpanel"
+        aria-labelledby={`extension-tab-${tab}`}
+        style={{ marginTop: 6 }}
+      >
         {tab === 'overview' && <OverviewTab view={view} />}
         {tab === 'settings' && <SettingsTab view={view} actions={actions} />}
         {tab === 'permissions' && <PermissionsTab view={view} />}

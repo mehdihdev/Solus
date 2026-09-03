@@ -84,11 +84,12 @@ function Catalog({
         </Button>
       </div>
 
-      {data.sourcesStatus === 'offline' && (
+      {data.sourcesStatus !== 'ready' && (
         <Card pad={12} style={{ marginTop: 18 }}>
           <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-            Solus can&apos;t see this project&apos;s sources right now, so source requirements below
-            are shown as unmet.
+            {data.sourcesStatus === 'loading'
+              ? 'Checking this project’s connected sources…'
+              : "Solus can't see this project's sources right now, so source requirements below are shown as unmet."}
           </div>
         </Card>
       )}
