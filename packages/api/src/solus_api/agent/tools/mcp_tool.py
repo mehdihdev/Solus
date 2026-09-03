@@ -24,14 +24,15 @@ leave the store).
 import asyncio
 import enum
 import logging
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Final, Self
+from typing import Any, Final, Protocol, Self
 
+import httpx
 from mcp import ClientSession, McpError, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as RemoteTool
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -56,8 +57,56 @@ from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 logger = logging.getLogger("solus.tools.mcp")
 
 _FALLBACK_RETURNS: dict[str, Any] = {"type": "object"}
+
+#: Resolves the Authorization header for ONE customer, per call. A hosted
+#: server's token is short-lived (fs-mcp issues 3599s), so it cannot be captured
+#: at wiring time. Raising `ToolException` from here is the sanctioned way to
+#: report "not connected / grant expired" — it passes through `invoke` untouched
+#: and reaches the model as a typed failure, never as an exception.
+HeadersProvider = Callable[[], Awaitable[Mapping[str, str]]]
+
+#: Runs BEFORE any connection is opened, and raises `ToolException` to refuse.
+#: The same shape `BridgeTool` already takes for the MCP-05 licence check —
+#: registration itself meters nothing (`exec.run_tool` only logs), so a tool
+#: that spends a real allowance has to bring its own admission.
+Preflight = Callable[[], Awaitable[None]]
+
+#: `[{label, before, after}]` — the diff a human approves. Duck-typed by
+#: `confirmations._build_preview` via `getattr(tool, "preview", None)`.
+PreviewBuilder = Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]]
+
+
+class ToolPolicy(Protocol):
+    """Solus's own answer to "may SOL call this, and what does a human approve?"
+
+    Structural on purpose: `remote_mcp.RemoteMCPSpec` satisfies it without this
+    module importing it, so `mcp_tool` stays vendor-agnostic and the reasoning
+    import graph does not grow a registry dependency.
+    """
+
+    def exposes(self, remote_name: str) -> bool: ...
+    def requires_confirmation(self, remote_name: str) -> bool: ...
+    def consent_summary(self, remote_name: str) -> str: ...
+
+
+#: Schema keys whose values are free PROSE written by the server.
+#: `prompt.py` fences a descriptor's `description` in a nonce data-block when it
+#: is untrusted, but `params` passes through VERBATIM — its own docstring says
+#: so — which makes every prose leaf inside a server-authored JSON Schema
+#: unfenced, instruction-position text the model reads. For a server running on
+#: a vendor's cloud that is a direct prompt-injection channel, so the prose is
+#: dropped for hosted specs. Structure (types, required, enums) is kept: it is
+#: what the model actually needs to build a valid call.
+_SCHEMA_PROSE_KEYS: Final = frozenset({"description", "title", "$comment", "examples"})
+#: Untrusted input is not walked without a floor.
+_MAX_SCHEMA_DEPTH: Final = 12
 # Discovery runs OUTSIDE the registry (wiring time), so it carries its own bound.
 DISCOVERY_TIMEOUT_SECONDS = 30.0
+# Bounds for the streamable-http transport. The SDK's own defaults (30s connect,
+# 300s read) outlive the registry's 30s call budget, which would make a hung
+# hosted server look like a Solus hang rather than a TIMEOUT result.
+_HTTP_TIMEOUT_SECONDS: Final = 15.0
+_HTTP_READ_TIMEOUT_SECONDS: Final = 25.0
 # Phase 4 H4: the SAME repo-relative convention `Settings.bridge_allowlist_root`
 # uses (one `allowlist.yaml` per vendored fork under `integrations/mcp/<server>/`).
 DEFAULT_ALLOWLIST_ROOT: Final = "integrations/mcp"
@@ -114,7 +163,9 @@ class MCPServerSpec(BaseModel):
 
 
 @asynccontextmanager
-async def _open_session(spec: MCPServerSpec) -> AsyncIterator[ClientSession]:
+async def _open_session(
+    spec: MCPServerSpec, *, headers: Mapping[str, str] | None = None
+) -> AsyncIterator[ClientSession]:
     """Fresh connect → initialize. `async with` throughout so a registry-level
     cancellation (its timeout) still runs transport cleanup. Note the bound is
     soft for stdio: the SDK's shutdown path may add ~2s of SIGTERM grace before
@@ -132,10 +183,25 @@ async def _open_session(spec: MCPServerSpec) -> AsyncIterator[ClientSession]:
         return
     if spec.url is None:  # pragma: no cover — the spec validator forbids this
         raise ToolException(f"MCP server {spec.name!r} has no transport configured")
-    async with streamablehttp_client(spec.url) as (read, write, _get_session_id):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    # The deprecated one-shot client silently DISCARDS headers/auth:
+    # `StreamableHTTPTransport.__init__` accepts them and assigns only
+    # url/session_id/protocol_version (`streamable_http.py:125-146`). So a
+    # caller-owned client is the only way to authenticate. We create it, so we
+    # close it: `streamable_http_client` enters the client as a context manager
+    # ONLY when it made the client itself (:638-654), so handing it one without
+    # an `async with` here would leak a connection on every call.
+    async with httpx.AsyncClient(
+        headers=dict(headers) if headers else None,
+        timeout=httpx.Timeout(_HTTP_TIMEOUT_SECONDS, read=_HTTP_READ_TIMEOUT_SECONDS),
+    ) as client:
+        async with streamable_http_client(spec.url, http_client=client) as (
+            read,
+            write,
+            _get_session_id,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                yield session
 
 
 async def _missing_secrets(spec: MCPServerSpec, store: SecretStore) -> list[str]:
@@ -157,6 +223,64 @@ def _credentials_error(spec: MCPServerSpec, missing: list[str]) -> ToolException
         code=ToolErrorCode.UNAUTHORIZED,
         retryable=False,
     )
+
+
+def _unavailable(spec: MCPServerSpec, exc: BaseException) -> ToolException:
+    """The generic transport failure. The model only ever sees the server NAME;
+    the traceback goes to the operator's log."""
+    logger.warning("MCP server %r unreachable (%s)", spec.name, type(exc).__name__, exc_info=exc)
+    return ToolException(
+        f"MCP server {spec.name!r} is unavailable",
+        code=ToolErrorCode.TOOL_ERROR,
+        retryable=True,
+    )
+
+
+def _from_group(group: BaseExceptionGroup, spec: MCPServerSpec) -> ToolException:
+    """Flatten an anyio task-group failure into ONE typed `ToolException`.
+
+    Three cases, in order of what matters:
+    * it carries a cancellation → re-raise the group untouched, so an external
+      cancel keeps propagating instead of being reported as a tool failure;
+    * it carries a `ToolException` we raised ourselves (an auth provider's
+      "reconnect", a server-reported error) → surface THAT, not "unavailable",
+      or a permanently dead grant would come back marked retryable;
+    * anything else → the generic transport failure.
+    """
+    if group.subgroup(asyncio.CancelledError) is not None:
+        raise group
+    ours, _rest = group.split(ToolException)
+    if ours is not None:
+        leaves = [e for e in _leaves(ours) if isinstance(e, ToolException)]
+        if leaves:
+            return leaves[0]
+    return _unavailable(spec, group)
+
+
+def _leaves(exc: BaseException) -> list[BaseException]:
+    if isinstance(exc, BaseExceptionGroup):
+        return [leaf for member in exc.exceptions for leaf in _leaves(member)]
+    return [exc]
+
+
+def _strip_schema_prose(node: Any, *, depth: int = 0) -> Any:
+    """Drop server-authored PROSE from a JSON Schema, keeping its structure.
+
+    See `_SCHEMA_PROSE_KEYS`. Bounded depth because the input is untrusted and a
+    deeply nested schema must not recurse without limit; `unsafe_schema_reason`
+    has already rejected `$ref`, so there are no cycles to chase.
+    """
+    if depth > _MAX_SCHEMA_DEPTH:
+        return {}
+    if isinstance(node, dict):
+        return {
+            key: _strip_schema_prose(value, depth=depth + 1)
+            for key, value in node.items()
+            if key not in _SCHEMA_PROSE_KEYS
+        }
+    if isinstance(node, list):
+        return [_strip_schema_prose(item, depth=depth + 1) for item in node]
+    return node
 
 
 def _map_result(result: CallToolResult) -> dict[str, Any]:
@@ -206,22 +330,50 @@ class MCPTool:
         remote_name: str,
         descriptor: ToolDescriptor,
         secret_store: SecretStore,
+        headers_provider: HeadersProvider | None = None,
+        preflight: Preflight | None = None,
+        preview: PreviewBuilder | None = None,
     ) -> None:
         self._spec = spec
         self._remote_name = remote_name
         self._descriptor = descriptor
         self._secret_store = secret_store
+        self._headers_provider = headers_provider
+        self._preflight = preflight
+        if preview is not None:
+            # Set on the INSTANCE, never declared on the class: the gate asks
+            # `getattr(tool, "preview", None)` and treats a present attribute as
+            # "this tool can describe its own change". A class-level stub would
+            # make every MCP tool claim it could, and a preview that returns
+            # nothing degrades the approval card to argument rows silently.
+            self.preview = preview
 
     @property
     def descriptor(self) -> ToolDescriptor:
         return self._descriptor
 
+    @property
+    def remote_name(self) -> str:
+        """The tool's name ON THE SERVER, unqualified.
+
+        The registry name is `{server}.{remote}`; the connect step persists this
+        alongside it so a later registry build does not have to re-derive it by
+        string-splitting a name that may itself contain a dot.
+        """
+        return self._remote_name
+
     async def invoke(self, args: dict[str, Any]) -> dict[str, Any]:
         missing = await _missing_secrets(self._spec, self._secret_store)
         if missing:  # checked BEFORE any connection attempt
             raise _credentials_error(self._spec, missing)
+        # Resolved per call, OUTSIDE the try: a `ToolException` raised by the
+        # provider ("reconnect FeatureScript") must reach the model as itself,
+        # not be reshaped into "the server is unavailable, retry".
+        if self._preflight is not None:
+            await self._preflight()
+        headers = await self._headers_provider() if self._headers_provider is not None else None
         try:
-            async with _open_session(self._spec) as session:
+            async with _open_session(self._spec, headers=headers) as session:
                 result = await session.call_tool(self._remote_name, args)
         except ToolException:
             raise
@@ -230,23 +382,61 @@ class MCPTool:
                 f"MCP server {self._spec.name!r} protocol error: {str(exc)[:_UNTRUSTED_TEXT_CAP]}",
                 code=ToolErrorCode.TOOL_ERROR,
             ) from exc
+        except BaseExceptionGroup as group:
+            # THE NEVER-RAISES HOLE. The transports run inside anyio task groups,
+            # and `except Exception` does NOT catch a `BaseExceptionGroup`:
+            # verified on CPython 3.12.3, `BaseExceptionGroup("g", [ValueError,
+            # CancelledError])` stays a BaseExceptionGroup (only an all-Exception
+            # group is downgraded to `ExceptionGroup`, which IS an Exception). So
+            # a cancel racing a transport failure escaped both this handler and
+            # `registry.invoke`'s.
+            #
+            # Cancellation must still propagate — `wait_for` converts its OWN
+            # timeout upstream, so a CancelledError arriving here is an EXTERNAL
+            # cancel (client gone, shutdown) and swallowing it would hang the turn.
+            raise _from_group(group, self._spec) from group
         except Exception as exc:
             # Spawn/connect/transport failure — anyio surfaces these in several
             # shapes, so the catch stays broad and retryable=True is the transport
             # assumption. An internal bug lands here too: the traceback below is
             # the operator's signal; the model sees only the server NAME.
-            logger.warning(
-                "MCP server %r unreachable (%s)",
-                self._spec.name,
-                type(exc).__name__,
-                exc_info=exc,
-            )
-            raise ToolException(
-                f"MCP server {self._spec.name!r} is unavailable",
-                code=ToolErrorCode.TOOL_ERROR,
-                retryable=True,
-            ) from exc
+            raise _unavailable(self._spec, exc) from exc
         return _map_result(result)
+
+
+async def call_remote(
+    spec: MCPServerSpec,
+    remote_name: str,
+    args: dict[str, Any],
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """One authenticated tool call, outside the registry.
+
+    For Solus code that needs a remote READ in order to build something the
+    registry path depends on — chiefly the confirmation gate's `preview`, which
+    must fetch the current FeatureScript before it can show what an overwrite
+    replaces. Deliberately NOT named `invoke`: `test_sol_runtime`'s ratchet fails
+    any dispatch-shaped call site under `agent/` outside the three files
+    that own the gated path, and a preview is not a dispatch.
+
+    Same failure vocabulary as the tool path, so a caller handles one shape.
+    """
+    try:
+        async with _open_session(spec, headers=headers) as session:
+            result = await session.call_tool(remote_name, args)
+    except ToolException:
+        raise
+    except McpError as exc:
+        raise ToolException(
+            f"MCP server {spec.name!r} protocol error: {str(exc)[:_UNTRUSTED_TEXT_CAP]}",
+            code=ToolErrorCode.TOOL_ERROR,
+        ) from exc
+    except BaseExceptionGroup as group:
+        raise _from_group(group, spec) from group
+    except Exception as exc:
+        raise _unavailable(spec, exc) from exc
+    return _map_result(result)
 
 
 def _skip(spec: MCPServerSpec, remote_name: str, reason: str) -> None:
@@ -291,12 +481,54 @@ def _stdio_server_allowlist(
     return load_allowlist(root).servers.get(spec.name)
 
 
+def _classify(
+    spec: MCPServerSpec,
+    remote_name: str,
+    policy: "ToolPolicy | None",
+    server_allowlist: dict[str, AllowedTool] | None,
+) -> tuple[bool, str | None] | None:
+    """`(requires_confirmation, consent_summary)`, or None to SKIP the tool.
+
+    Three enforcement sources, never blended: a hosted spec's cloud-side
+    `policy`, a vendored fork's `allowlist.yaml`, or the spec's own blanket
+    flag. Each answers "may SOL call this at all?" before it answers "does a
+    human approve it?", because ADR-031 fixes the NAMESPACE first.
+    """
+    if policy is not None:
+        # SOLUSDEV-168, hosted: exposure IS the Solus-owned allowlist. A tool the
+        # vendor adds between releases is not registered at all — gating it as
+        # mutating would still put a Solus-authored consent sentence behind a
+        # tool Solus has never seen.
+        if not policy.exposes(remote_name):
+            _skip(spec, remote_name, "is not classified by Solus")
+            return None
+        return policy.requires_confirmation(remote_name), policy.consent_summary(remote_name)
+    if server_allowlist is not None:
+        allowed = server_allowlist.get(remote_name)
+        if allowed is None:
+            _skip(spec, remote_name, "is not allowlisted")
+            return None
+        return allowed.requires_confirmation, None
+    if spec.requires_confirmation:
+        # SEC-C1: a destructive tool with no allowlist entry has no
+        # Solus-authored consent text — it must not be dispatchable at all, or
+        # the approval sentence would be phrased by the fork.
+        _skip(spec, remote_name, "declares a destructive default with no consent text")
+        return None
+    return False, None
+
+
 async def discover_mcp_tools(
     spec: MCPServerSpec,
     secret_store: SecretStore,
     *,
     timeout_seconds: float = DISCOVERY_TIMEOUT_SECONDS,
     allowlist_root: str | Path = DEFAULT_ALLOWLIST_ROOT,
+    policy: ToolPolicy | None = None,
+    headers_provider: HeadersProvider | None = None,
+    strip_schema_prose: bool = False,
+    preflight: Preflight | None = None,
+    previews: Mapping[str, PreviewBuilder] | None = None,
 ) -> list[MCPTool]:
     """Connect once, `list_tools()`, and build one `MCPTool` per remote tool.
 
@@ -315,13 +547,23 @@ async def discover_mcp_tools(
     spec's own blanket flag. Without an allowlist.yaml for the server (no
     fork vendored yet, or a `url`-transport spec), the spec's blanket flag is
     the fallback, unchanged from before this fix.
+
+    SOLUSDEV-168: a HOSTED spec passes a `policy` instead — the same ADR-031
+    rule enforced from the cloud-side registry rather than a vendored
+    `allowlist.yaml`. A tool the policy does not expose is SKIPPED, so a server
+    that grows a tool between releases cannot enter SOL's namespace at all; the
+    ones that survive carry the policy's Solus-authored `consent_summary`,
+    without which the approval card degrades to a bare tool name
+    (`confirmations.py:101-108` fails closed when `description_trusted` is
+    False and no consent text was supplied).
     """
     missing = await _missing_secrets(spec, secret_store)
     if missing:  # fail fast — no connection without credentials
         raise _credentials_error(spec, missing)
+    headers = await headers_provider() if headers_provider is not None else None
     try:
         async with asyncio.timeout(timeout_seconds):
-            async with _open_session(spec) as session:
+            async with _open_session(spec, headers=headers) as session:
                 listing = await session.list_tools()
     except TimeoutError as exc:
         raise ToolException(
@@ -334,44 +576,45 @@ async def discover_mcp_tools(
             f"MCP server {spec.name!r} protocol error: {str(exc)[:_UNTRUSTED_TEXT_CAP]}",
             code=ToolErrorCode.TOOL_ERROR,
         ) from exc
+    except BaseExceptionGroup as group:
+        raise _from_group(group, spec) from group
     except Exception as exc:
-        logger.warning(
-            "MCP server %r unreachable (%s)", spec.name, type(exc).__name__, exc_info=exc
-        )
-        raise ToolException(
-            f"MCP server {spec.name!r} is unavailable",
-            code=ToolErrorCode.TOOL_ERROR,
-            retryable=True,
-        ) from exc
+        raise _unavailable(spec, exc) from exc
     server_allowlist = _stdio_server_allowlist(spec, allowlist_root)
     tools: list[MCPTool] = []
+    seen: set[str] = set()
     for remote in listing.tools:
         if not _descriptor_safe(spec, remote):
             continue
-        if server_allowlist is not None:
-            allowed = server_allowlist.get(remote.name)
-            if allowed is None:
-                _skip(spec, remote.name, "is not allowlisted")
-                continue
-            requires_confirmation = allowed.requires_confirmation
-        elif spec.requires_confirmation:
-            # SEC-C1: a destructive tool with no allowlist entry has no
-            # Solus-authored consent text — it must not be dispatchable at all,
-            # or the approval sentence would be phrased by the fork.
-            _skip(spec, remote.name, "declares a destructive default with no consent text")
+        if remote.name in seen:
+            # A duplicate advertised name would raise out of
+            # `ToolRegistry.register` (`registry.py:51-52`) at WIRING time,
+            # 500ing every SOL request for the project — including the one that
+            # would REJECT an already-parked destructive action. That is a
+            # kill switch held by the server, so it is dropped here, exactly as
+            # the bridge path does (`bridge/allowlist.py:163-167`).
+            _skip(spec, remote.name, "is advertised more than once")
             continue
-        else:
-            requires_confirmation = False
+        verdict = _classify(spec, remote.name, policy, server_allowlist)
+        if verdict is None:
+            continue
+        requires_confirmation, consent = verdict
+        seen.add(remote.name)
         descriptor = ToolDescriptor(
             name=f"{spec.name}.{remote.name}",
             description=(remote.description or "")[:_UNTRUSTED_TEXT_CAP],
             # SEC-C1/H1: introspected from the fork — never Solus-authored. The
             # prompt layer fences it and the consent card refuses to render it.
             description_trusted=False,
-            params=remote.inputSchema,
+            params=_strip_schema_prose(remote.inputSchema)
+            if strip_schema_prose
+            else remote.inputSchema,
             returns=remote.outputSchema if remote.outputSchema is not None else _FALLBACK_RETURNS,
             timeout_seconds=None,  # the registry default owns the bound
             requires_confirmation=requires_confirmation,
+            # Without this a gated tool's approval sentence degrades to the bare
+            # tool NAME (`confirmations.py:101-108`), which is consent to nothing.
+            consent_summary=consent,
         )
         tools.append(
             MCPTool(
@@ -379,6 +622,9 @@ async def discover_mcp_tools(
                 remote_name=remote.name,
                 descriptor=descriptor,
                 secret_store=secret_store,
+                headers_provider=headers_provider,
+                preflight=preflight,
+                preview=(previews or {}).get(remote.name),
             )
         )
     return tools

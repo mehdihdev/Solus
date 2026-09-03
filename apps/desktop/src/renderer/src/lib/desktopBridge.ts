@@ -31,8 +31,20 @@ export interface FolderBridge {
   links: () => Promise<Record<string, { path: string; repoUrl?: string; lastOpenedAt?: string }>>
 }
 
+/** Hosted MCP add-ons (SOLUSDEV-168): open a vendor's App Store page in the
+ *  system browser. The main process re-validates the URL against its own host
+ *  allowlist, so a compromised renderer cannot use this to open anything. */
+export interface HostedBridge {
+  openStore: (url: string) => Promise<{ ok: boolean }>
+}
+
 interface SolusWindow {
-  solus?: { oauth?: OAuthBridge; bridge?: CompanionBridge; folder?: FolderBridge }
+  solus?: {
+    oauth?: OAuthBridge
+    bridge?: CompanionBridge
+    folder?: FolderBridge
+    hosted?: HostedBridge
+  }
 }
 
 export function getDesktopOAuthBridge(): OAuthBridge | null {
@@ -48,4 +60,9 @@ export function getDesktopCompanionBridge(): CompanionBridge | null {
 export function getDesktopFolderBridge(): FolderBridge | null {
   const w = window as unknown as SolusWindow
   return w.solus?.folder ?? null
+}
+
+export function getDesktopHostedBridge(): HostedBridge | null {
+  const w = window as unknown as SolusWindow
+  return w.solus?.hosted ?? null
 }

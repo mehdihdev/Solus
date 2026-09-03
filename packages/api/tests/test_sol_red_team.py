@@ -260,12 +260,19 @@ async def test_a_destructive_tool_is_parked_never_dispatched(engine: AsyncEngine
         LlmRunner(adapters={"anthropic": model}), await _funded_ctx(engine, registry)
     )
 
+    # THE invariant, and it is round-independent: the handler is never reached,
+    # however many rounds the loop runs.
     assert executed == []
     result = next(e for e in events if e.type is AgentEventType.TOOL_RESULT)
     assert result.data["ok"] is False
-    # And the turn STOPS — it does not loop the model round again on a refusal.
-    assert model.calls == 1
     assert events[-1].type is AgentEventType.MESSAGE
+
+    # SOLUSDEV-168 deliberately dropped `model.calls == 1`. Ending the turn at
+    # the first parked call was implementation, not the invariant — it discarded
+    # results that had already executed and capped a design task at one change
+    # per turn. What protects the customer is that the handler stays untouched
+    # above, and `MAX_MODEL_ROUNDS` still bounds the loop below.
+    assert model.calls <= MAX_MODEL_ROUNDS
 
 
 async def test_an_injected_arg_shape_is_rejected(engine: AsyncEngine) -> None:
@@ -475,3 +482,55 @@ async def test_checker_warnings_reach_the_model_only_as_fenced_data(
     assert results, "the checker warnings must be fed back"
     assert any("SYSTEM OVERRIDE" in r.content for r in results)  # the warning fired
     assert all("\n" not in r.content for r in results)
+
+
+# ------------------------------------------- the loop continues past a park (SOLUSDEV-168)
+
+
+async def test_a_parked_call_does_not_discard_the_rounds_other_results(
+    engine: AsyncEngine,
+) -> None:
+    """The old `return` rolled `gated` up across the whole round, so if a model
+    made three calls and one was parked, the two that had ALREADY EXECUTED were
+    thrown away. Work the customer paid for, discarded."""
+    executed: list[dict[str, Any]] = []
+    registry = _registry(executed)
+    model = _CompliantModel(
+        (
+            ToolUse(id="t1", name="onshape.get_variables", args={"d": "doc"}),
+            ToolUse(id="t2", name="onshape.set_variable", args={"name": "w"}),
+            ToolUse(id="t3", name="onshape.get_variables", args={"d": "doc"}),
+        )
+    )
+
+    events = await _collect(
+        LlmRunner(adapters={"anthropic": model}), await _funded_ctx(engine, registry)
+    )
+
+    results = [e for e in events if e.type is AgentEventType.TOOL_RESULT]
+    assert len(results) == 3, "a parked sibling must not swallow the other results"
+    assert sum(1 for r in results if r.data["ok"]) == 2
+    # The destructive one still never ran — the spy records the args of every
+    # handler call, and only the two reads are there. That is the invariant.
+    assert executed == [{"d": "doc"}, {"d": "doc"}]
+
+
+async def test_the_model_keeps_working_after_an_action_is_parked(engine: AsyncEngine) -> None:
+    """A design task is several changes. Ending the turn at the first one made
+    that five messages and five approvals; the loop now carries on."""
+    executed: list[dict[str, Any]] = []
+    registry = _registry(executed)
+    model = _CompliantModel(
+        (ToolUse(id="t1", name="onshape.set_variable", args={"name": "w"}),),
+        (ToolUse(id="t2", name="onshape.get_variables", args={"d": "doc"}),),
+    )
+
+    events = await _collect(
+        LlmRunner(adapters={"anthropic": model}), await _funded_ctx(engine, registry)
+    )
+
+    assert model.calls >= 2, "the turn ended at the parked call instead of continuing"
+    # Round 2's read ran; the parked write never did.
+    assert executed == [{"d": "doc"}]
+    # And the model gets the last word, rather than a canned constant.
+    assert events[-1].type is AgentEventType.MESSAGE

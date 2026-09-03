@@ -1865,7 +1865,7 @@
     "/api/v1/integrations": {
       "get": {
         "summary": "List Integrations",
-        "description": "Catalog of available connector types + their config/auth shape.",
+        "description": "Catalog of available connector types + their config/auth shape.\n\nSOLUSDEV-168: each entry also declares the vendor-hosted MCP add-on its\nconnector carries, if any. Catalog DATA, exactly like `selection` and\n`access_modes` \u2014 so the app renders the disclosure and the enable affordance\nwithout knowing which connector it is, and the next hosted server is one\nentry in `HOSTED_SERVERS` with no frontend change at all.",
         "operationId": "list_integrations_api_v1_integrations_get",
         "responses": {
           "200": {
@@ -1876,6 +1876,32 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response List Integrations Api V1 Integrations Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/integrations/local-tools": {
+      "get": {
+        "summary": "List Local Tools",
+        "description": "Bridge-hosted desktop tools (SOLUSDEV-72): vendor-run loopback MCP servers\nfrom the ADR-031 catalog (Fusion today). These are not connectors \u2014 they run\non the customer's machine, reached through the companion \u2014 so they surface as\nthe generic `local-bridge` tile: the next tool is a catalog entry here, never\na frontend edit.",
+        "operationId": "list_local_tools_api_v1_integrations_local_tools_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Local Tools Api V1 Integrations Local Tools Get"
                 }
               }
             }
@@ -2780,6 +2806,284 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response List Selectable Api V1 Projects  Project Id  Sources  Source Id  Selectable Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}": {
+      "get": {
+        "summary": "Hosted Status",
+        "description": "The stored state. Cheap: no network, so a source list can render it.",
+        "operationId": "hosted_status_api_v1_projects__project_id__sources__source_id__hosted__server__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Hosted Status Api V1 Projects  Project Id  Sources  Source Id  Hosted  Server  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}/probe": {
+      "post": {
+        "summary": "Hosted Probe",
+        "description": "Re-check after the customer says they have subscribed.\n\nOnshape warns explicitly that a redirect back with `success=true` does NOT\nmean a purchase happened, so this is the only trustworthy completion signal\n\u2014 and it is user-triggered rather than a poll, because the purchase can wait\non a company administrator and no timer we own would outlive that.",
+        "operationId": "hosted_probe_api_v1_projects__project_id__sources__source_id__hosted__server__probe_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Hosted Probe Api V1 Projects  Project Id  Sources  Source Id  Hosted  Server  Probe Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}/oauth/start": {
+      "post": {
+        "summary": "Hosted Oauth Start",
+        "description": "Begin the customer's own grant to the hosted server.\n\nA SECOND handshake, not a widening of the Onshape one: the hosted server is\nits own authorization server with its own token, which is also why enabling\nthis costs an existing Onshape user no re-consent on their original grant.",
+        "operationId": "hosted_oauth_start_api_v1_projects__project_id__sources__source_id__hosted__server__oauth_start_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Hosted Oauth Start Api V1 Projects  Project Id  Sources  Source Id  Hosted  Server  Oauth Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}/oauth/exchange": {
+      "post": {
+        "summary": "Hosted Oauth Exchange",
+        "description": "Complete the grant, then immediately probe what it can actually do.",
+        "operationId": "hosted_oauth_exchange_api_v1_projects__project_id__sources__source_id__hosted__server__oauth_exchange_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostedExchange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Hosted Oauth Exchange Api V1 Projects  Project Id  Sources  Source Id  Hosted  Server  Oauth Exchange Post"
                 }
               }
             }
@@ -4274,6 +4578,389 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/bench/sources": {
+      "get": {
+        "summary": "Bench Sources",
+        "operationId": "bench_sources_api_v1_projects__project_id__bench_sources_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Bench Sources Api V1 Projects  Project Id  Bench Sources Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/sessions": {
+      "post": {
+        "summary": "Start Session",
+        "operationId": "start_session_api_v1_projects__project_id__bench_sessions_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchSessionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Start Session Api V1 Projects  Project Id  Bench Sessions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Sessions",
+        "operationId": "list_sessions_api_v1_projects__project_id__bench_sessions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "ended"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "sim",
+                    "real"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Sessions Api V1 Projects  Project Id  Bench Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/sessions/{session_id}": {
+      "get": {
+        "summary": "Session Detail",
+        "operationId": "session_detail_api_v1_projects__project_id__bench_sessions__session_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Session Detail Api V1 Projects  Project Id  Bench Sessions  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop": {
+      "post": {
+        "summary": "Stop Session",
+        "operationId": "stop_session_api_v1_projects__project_id__bench_sessions__session_id__stop_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Stop Session Api V1 Projects  Project Id  Bench Sessions  Session Id  Stop Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/device-recent": {
+      "get": {
+        "summary": "Device Recent",
+        "description": "Batched by design: the desktop polls every visible device panel in ONE\nrequest per cycle, so N streaming devices never multiply the request rate\ninto the shared per-user budget.",
+        "operationId": "device_recent_api_v1_projects__project_id__bench_device_recent_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 16,
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 512,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Device Recent Api V1 Projects  Project Id  Bench Device Recent Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/bridge": {
       "get": {
         "summary": "Bridge Status",
@@ -4590,6 +5277,475 @@
           }
         }
       }
+    },
+    "/api/v1/toolkb/entries": {
+      "post": {
+        "tags": [
+          "toolkb"
+        ],
+        "summary": "Submit Entry",
+        "operationId": "submit_entry_api_v1_toolkb_entries_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Submit Entry Api V1 Toolkb Entries Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "toolkb"
+        ],
+        "summary": "List Entries",
+        "operationId": "list_entries_api_v1_toolkb_entries_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tool",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ToolFamily"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "name": "surface",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/UiSurface"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Surface"
+            }
+          },
+          {
+            "name": "effect",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ControlEffect"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Effect"
+            }
+          },
+          {
+            "name": "control_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Control Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Entries Api V1 Toolkb Entries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/toolkb/entries/{entry_id}/feedback": {
+      "post": {
+        "tags": [
+          "toolkb"
+        ],
+        "summary": "Submit Feedback",
+        "description": "TU-08: a user confirms or rejects a guidance step. Recomputes confidence\ndeterministically (a reject pulls down hard \u2014 precision over recall).",
+        "operationId": "submit_feedback_api_v1_toolkb_entries__entry_id__feedback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entry Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Submit Feedback Api V1 Toolkb Entries  Entry Id  Feedback Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/toolkb/guides": {
+      "get": {
+        "tags": [
+          "toolkb"
+        ],
+        "summary": "List Guides Route",
+        "description": "Authored walkthroughs available for a tool+version (unresolved summary).",
+        "operationId": "list_guides_route_api_v1_toolkb_guides_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tool",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ToolFamily"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Guides Route Api V1 Toolkb Guides Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/toolkb/guides/{guide_id}": {
+      "get": {
+        "tags": [
+          "toolkb"
+        ],
+        "summary": "Get Guide Route",
+        "description": "One walkthrough, each step resolved against the live KB.\n\nBoth narrations (guide/expert) are returned so the panel switches SOL mode\n(ADR-016) with no round-trip. Unavailable/tentative steps are marked, never\nfaked \u2014 the renderer degrades gracefully and never shows a confident wrong\npointer.",
+        "operationId": "get_guide_route_api_v1_toolkb_guides__guide_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "guide_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Guide Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Guide Route Api V1 Toolkb Guides  Guide Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/{provider}/{source_id}/{token}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Provider Webhook",
+        "operationId": "provider_webhook_api_v1_webhooks__provider___source_id___token__post",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/events": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Project Events",
+        "description": "Subscribe to this project's change stream.\n\nYields `graph.changed` frames \u2014 an invalidation hint the client answers by\nrefetching the one thing it is already showing.",
+        "operationId": "project_events_api_v1_projects__project_id__events_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4626,6 +5782,51 @@
         ],
         "title": "AttachmentIn",
         "description": "A measurable attachment fact for classify/completion requests (MO-04):\nwhat kind of artifact and how many tokens it contributes."
+      },
+      "BenchSessionIn": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ],
+            "title": "Mode"
+          },
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MujocoSimConfig"
+              },
+              {
+                "$ref": "#/components/schemas/GazeboSimConfig"
+              },
+              {
+                "$ref": "#/components/schemas/McapSimConfig"
+              },
+              {
+                "$ref": "#/components/schemas/SerialRealConfig"
+              }
+            ],
+            "title": "Config",
+            "discriminator": {
+              "propertyName": "provider",
+              "mapping": {
+                "gazebo": "#/components/schemas/GazeboSimConfig",
+                "mcap-replay": "#/components/schemas/McapSimConfig",
+                "mujoco": "#/components/schemas/MujocoSimConfig",
+                "serial": "#/components/schemas/SerialRealConfig"
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mode",
+          "config"
+        ],
+        "title": "BenchSessionIn"
       },
       "CheckoutSessionCreate": {
         "properties": {
@@ -4765,6 +5966,24 @@
         "title": "ConfirmationDecision",
         "description": "Approve or reject one parked destructive action (SOLUS-ONS-A5).\n\nA decision and NOTHING ELSE. `StrictModel` forbids extra fields, so a body\ncarrying its own `args` is a 422 rather than a merge \u2014 the arguments that\nexecute are the stored ones the user was shown. That is the whole security\nproperty of the round-trip."
       },
+      "ControlEffect": {
+        "type": "string",
+        "enum": [
+          "create_feature",
+          "modify_feature",
+          "delete_feature",
+          "select",
+          "navigate",
+          "measure",
+          "toggle_visibility",
+          "import",
+          "export",
+          "undo",
+          "settings"
+        ],
+        "title": "ControlEffect",
+        "description": "What the control DOES, from a closed set.\n\nCategorising the effect rather than describing it freely lets the Guide\nreason about a control without reading prose \u2014 and removes one more place a\nsentence about a customer's design could live."
+      },
       "ConversationCreate": {
         "properties": {
           "title": {
@@ -4784,6 +6003,51 @@
         "type": "object",
         "title": "ConversationCreate"
       },
+      "FeedbackBody": {
+        "properties": {
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "FeedbackBody"
+      },
+      "GazeboSimConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "gazebo",
+            "title": "Provider"
+          },
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Topics"
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "topics"
+        ],
+        "title": "GazeboSimConfig"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4796,6 +6060,30 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HostedExchange": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "State"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "code"
+        ],
+        "title": "HostedExchange",
+        "description": "The desktop posts back what its loopback captured."
       },
       "InteractionContext": {
         "type": "string",
@@ -4855,6 +6143,50 @@
         ],
         "title": "JobStatus"
       },
+      "McapSimConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "mcap-replay",
+            "title": "Provider"
+          },
+          "mcap_path": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Mcap Path"
+          },
+          "topics": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topics"
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "mcap_path"
+        ],
+        "title": "McapSimConfig"
+      },
       "MemberRoleUpdate": {
         "properties": {
           "role": {
@@ -4894,6 +6226,63 @@
           "content"
         ],
         "title": "MessageCreate"
+      },
+      "MujocoSimConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "mujoco",
+            "title": "Provider"
+          },
+          "scene_name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[\\w.-]+$",
+            "title": "Scene Name",
+            "default": "demo"
+          },
+          "mjcf_xml": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mjcf Xml"
+          },
+          "sample_hz": {
+            "type": "number",
+            "maximum": 200.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Sample Hz",
+            "default": 50.0
+          },
+          "duration_seconds": {
+            "type": "number",
+            "maximum": 3600.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Duration Seconds",
+            "default": 300.0
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "MujocoSimConfig"
       },
       "OAuthExchange": {
         "properties": {
@@ -5135,6 +6524,61 @@
         "title": "RouteType",
         "description": "Query kind, routed to the frontier model whose strength matches it. A REAL\nv1 input (not a no-op): e.g. Gemini-class models are strong for VISUAL_LOG /\nLONG_CONTEXT, Claude-class for CODE. `GENERAL` is the fallback when `type` is\nNone. Truly-specialist future models (e.g. spatial reasoning) get new members\nhere without touching routing code."
       },
+      "SerialRealConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "serial",
+            "title": "Provider"
+          },
+          "serial_number": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Number"
+          },
+          "confirmed_device_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Device Path"
+          },
+          "baud": {
+            "type": "integer",
+            "maximum": 3000000.0,
+            "minimum": 300.0,
+            "title": "Baud",
+            "default": 115200
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "SerialRealConfig"
+      },
       "SettingsUpdate": {
         "properties": {
           "sol_mode": {
@@ -5364,6 +6808,34 @@
         ],
         "title": "TelemetryBatchIn"
       },
+      "ToolFamily": {
+        "type": "string",
+        "enum": [
+          "fusion",
+          "onshape",
+          "solidworks",
+          "autocad",
+          "kicad",
+          "altium",
+          "spice"
+        ],
+        "title": "ToolFamily",
+        "description": "Tools Solus models the UI of. Closed: a new tool is a decision, not a value."
+      },
+      "UiSurface": {
+        "type": "string",
+        "enum": [
+          "toolbar",
+          "menu",
+          "context_menu",
+          "panel",
+          "dialog",
+          "keyboard",
+          "status_bar"
+        ],
+        "title": "UiSurface",
+        "description": "Where in the tool's UI the control lives."
+      },
       "UserUpdate": {
         "properties": {
           "name": {
@@ -5434,6 +6906,15 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "Verdict": {
+        "type": "string",
+        "enum": [
+          "confirm",
+          "reject"
+        ],
+        "title": "Verdict",
+        "description": "A human's judgement on a guidance entry (TU-08 feedback / TU-05 sharing).\n\nLives here, not in `feedback`, so the observation model can reference it\nwithout a circular import; `feedback` re-exports it for existing callers."
       }
     },
     "securitySchemes": {

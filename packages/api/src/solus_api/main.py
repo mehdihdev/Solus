@@ -42,6 +42,7 @@ from solus_api.routers import (
     billing,
     bridge,
     entities,
+    hosted,
     integrations,
     invites,
     jobs,
@@ -73,6 +74,47 @@ async def create_all_tables(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_warn_on_missing_columns)
+
+
+def _warn_on_missing_columns(conn: Any) -> None:
+    """Say so when the dev database is behind the models.
+
+    `create_all` creates missing TABLES and silently does nothing about missing
+    COLUMNS on tables that already exist. So a dev database that predates a new
+    column boots perfectly and then fails deep inside whichever request first
+    touches it — SOLUSDEV-168 lost an evening to exactly that: the app came up
+    clean, the FeatureScript enable flow registered its OAuth client, and only
+    then died on `oauth_states.code_verifier does not exist`.
+
+    Dev-only and advisory: production runs migrations, and a warning must never
+    stop a server booting. Anything unexpected here is swallowed for the same
+    reason — a broken drift CHECK must not be worse than the drift.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    try:
+        inspector = sa_inspect(conn)
+        missing: list[str] = []
+        for name, table in Base.metadata.tables.items():
+            if not inspector.has_table(name):
+                continue
+            live = {column["name"] for column in inspector.get_columns(name)}
+            missing.extend(f"{name}.{c.name}" for c in table.columns if c.name not in live)
+    except Exception:  # noqa: BLE001 — advisory only
+        logging.getLogger("solus.main").debug(
+            "could not check the dev schema against the models", exc_info=True
+        )
+        return
+    if missing:
+        logging.getLogger("solus.main").warning(
+            "DEV DATABASE IS BEHIND THE MODELS — %d column(s) missing: %s. "
+            "`create_all` cannot add a column to an existing table. "
+            "Run `cd packages/api && uv run alembic upgrade head`, or requests "
+            "touching these will fail at runtime, not at startup.",
+            len(missing),
+            ", ".join(sorted(missing)[:12]),
+        )
 
 
 def _build_bridge_acquirer_factory(app: FastAPI, settings: Settings) -> AcquirerFactory:
@@ -308,6 +350,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(billing.router)
     app.include_router(billing.actions_router)
     app.include_router(sources.router)
+    app.include_router(hosted.router)
     app.include_router(artifacts.router)
     app.include_router(entities.router)
     app.include_router(sol.router)

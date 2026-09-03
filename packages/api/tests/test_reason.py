@@ -30,6 +30,50 @@ def test_plan_requests_telemetry_only_for_runtime_shaped_queries() -> None:
     assert static.window is None
 
 
+def test_explicit_mentions_become_anchors() -> None:
+    """An `@`-mention is the user pointing at one node. It reaches the plan as an
+    explicit id rather than being inferred from the prose, so SOL is grounded on
+    the thing the user meant instead of whatever RAG's similarity search
+    surfaced."""
+    mentioned = uuid.uuid4()
+
+    plan = plan_query("will this clear the belt?", mentions=[mentioned])
+
+    assert plan.scope.anchor_entity_ids == [mentioned]
+
+
+def test_mentions_outrank_ids_pasted_in_the_prose_when_the_cap_bites() -> None:
+    """Both are anchors, but a mention is deliberate and a pasted UUID may just
+    be quoted log output — so mentions are kept first and the cap trims the
+    inferred ones."""
+    mentions = [uuid.uuid4() for _ in range(8)]
+    pasted = uuid.uuid4()
+
+    plan = plan_query(f"compare against {pasted}", mentions=mentions)
+
+    assert plan.scope.anchor_entity_ids == mentions
+    assert pasted not in plan.scope.anchor_entity_ids
+
+
+def test_mentions_are_deduped_against_the_prose_and_themselves() -> None:
+    """The same node mentioned twice, or mentioned AND pasted, must not consume
+    two of the eight anchor slots."""
+    shared = uuid.uuid4()
+    other = uuid.uuid4()
+
+    plan = plan_query(f"why is {shared} hot?", mentions=[shared, shared, other])
+
+    assert plan.scope.anchor_entity_ids == [shared, other]
+
+
+def test_mentions_stay_bounded() -> None:
+    """SEC-H3: the anchor cap bounds DB work, so it must bind the new input too —
+    a client is not trusted to respect the request-schema limit."""
+    plan = plan_query("look at these", mentions=[uuid.uuid4() for _ in range(50)])
+
+    assert len(plan.scope.anchor_entity_ids) == 8
+
+
 def test_plan_is_deterministic_and_bounded() -> None:
     query = f"telemetry glitch near {ANCHOR} during the last run"
     first, second = plan_query(query), plan_query(query)

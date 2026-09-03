@@ -76,13 +76,12 @@ const IPV6_AVAILABLE = await hasIpv6Loopback()
 beforeEach(async () => {
   openExternal.mockClear()
   // A FRESH module per test. `oauthLoopback` keeps its in-flight flow in a
-  // module-global `active`, guarded by an early return
-  // ("A sign-in is already in progress.") and held for TIMEOUT_MS — five
-  // minutes. There is no cancel seam, so a test that times out before its
-  // callback lands leaves the flow in flight and every later test in this file
-  // gets that error string instead of a listening server. That turned one
-  // environmental hiccup into three CI failures. Resetting the registry gives
-  // each test its own `active`.
+  // module-global `active`. That used to be guarded by a flat refusal held for
+  // TIMEOUT_MS — five minutes — so a test that timed out before its callback
+  // landed left the flow armed and every later test got that error instead of a
+  // listening server, turning one environmental hiccup into three CI failures.
+  // A new flow now supersedes an abandoned one, which cures the cascade; the
+  // reset stays because per-test isolation is worth having on its own.
   vi.resetModules()
   oauth = await import('./oauthLoopback')
   // Step the port per test so a socket lingering in TIME_WAIT cannot bleed into
@@ -139,19 +138,26 @@ describe('awaitGithubCallback', () => {
   })
 
   it(
-    'refuses an overlapping sign-in while one is in flight',
+    'supersedes an in-flight sign-in instead of refusing the new one',
     async () => {
-      const redirect = oauth.getRedirectUrl()
-      const state = new URL(redirect).searchParams.get('solus_cb')
-      const first = oauth.awaitGithubCallback(AUTHORIZE, PORT)
-      // give the first server a moment to claim the port
+      // Nothing tells us the user closed the browser tab, so an abandoned flow
+      // used to hold the port for five minutes and answer "A sign-in is already
+      // in progress." to every retry. Refusing is only right if the earlier flow
+      // might still complete; a person clicking sign-in again is saying it will
+      // not. The old flow settles as cancelled — never left dangling.
+      oauth.getRedirectUrl()
+      const abandoned = oauth.awaitGithubCallback(AUTHORIZE, PORT)
       await hitCallback(`${base()}?solus_cb=ping`).catch(() => undefined)
 
-      const second = await oauth.awaitGithubCallback(AUTHORIZE, PORT)
-      expect(second).toEqual({ error: 'A sign-in is already in progress.' })
+      const redirect = oauth.getRedirectUrl()
+      const state = new URL(redirect).searchParams.get('solus_cb')
+      const second = oauth.awaitGithubCallback(AUTHORIZE, PORT)
 
+      expect(await abandoned).toEqual({ error: 'Sign-in was cancelled.' })
+
+      // And the port really did change hands: the new flow is listening.
       await hitCallback(`${base()}?solus_cb=${state}&code=done`)
-      await first
+      expect(await second).toEqual({ code: 'done' })
     },
     SOCKET_TEST_TIMEOUT_MS
   )
@@ -259,26 +265,28 @@ describe('cancelActiveOAuth', () => {
 
 // The defect that turned ONE environmental hiccup into THREE CI failures.
 //
-// `oauthLoopback` refuses a second flow while one is in flight, and holds that
-// state for five minutes with no way to cancel it. A test that times out before
-// its callback arrives therefore leaves the flow armed, and every later test in
-// the file receives `A sign-in is already in progress.` instead of a listening
-// server — then spins in `hitCallback` until its own timeout. Three tests died
-// that way on the runner while the first one's real cause scrolled past.
+// `oauthLoopback` used to REFUSE a second flow while one was in flight and hold
+// that for five minutes, so a test that timed out before its callback arrived
+// left the flow armed and every later test in the file got "A sign-in is already
+// in progress." instead of a listening server. Three tests died that way while
+// the first one's real cause scrolled past.
 //
-// These two pin the guarantee that stops it recurring: the poisoning is real,
-// and a per-test module reset clears it.
+// Supersede kills that cascade at the source — an abandoned flow can no longer
+// poison the next caller, in tests or in the app. The per-test module reset
+// stays as belt and braces, and these two pin both halves.
 describe('test isolation', () => {
   it(
-    'an abandoned flow really does refuse the next one (the cascade)',
+    'an abandoned flow no longer poisons the next one (the cascade, cured)',
     async () => {
-      void oauth.awaitOAuthCallback(AUTHORIZE, 'abandoned', PORT)
+      const abandoned = oauth.awaitOAuthCallback(AUTHORIZE, 'abandoned', PORT)
       // Let the first flow claim `active` without ever satisfying it.
       await hitCallback(`${base()}?state=nope`).catch(() => undefined)
 
-      const second = await oauth.awaitOAuthCallback(AUTHORIZE, 'next', PORT + 1)
+      const second = oauth.awaitOAuthCallback(AUTHORIZE, 'next', PORT)
 
-      expect(second).toEqual({ error: 'A sign-in is already in progress.' })
+      expect(await abandoned).toEqual({ error: 'Sign-in was cancelled.' })
+      await hitCallback(`${base()}?state=next&code=ok`)
+      expect(await second).toEqual({ code: 'ok' })
     },
     SOCKET_TEST_TIMEOUT_MS
   )

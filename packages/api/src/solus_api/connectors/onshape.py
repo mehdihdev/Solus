@@ -35,6 +35,7 @@ import asyncio
 import dataclasses
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, ClassVar
 from urllib.parse import urlencode
 
@@ -73,6 +74,16 @@ _ID_RE = re.compile(r"^[A-Za-z0-9]{1,40}$")
 #: with the SAME pattern the connector uses, so there is one definition of what
 #: an Onshape id may look like and no second, weaker gate.
 ONSHAPE_ID_RE = _ID_RE
+
+def element_base_path(kind: str, document_id: str, workspace_id: str, element_id: str) -> str:
+    """The `/{kind}/d/{did}/w/{wid}/e/{eid}` prefix every element call hangs off.
+
+    `kind` is the Onshape collection for the element's family — "assemblies" or
+    "partstudios". Lives here, not in `onshape_ops`, because that module already
+    imports from this one; the dependency runs one way.
+    """
+    return f"/api/v6/{kind}/d/{document_id}/w/{workspace_id}/e/{element_id}"
+
 
 _REQUEST_TIMEOUT = 30.0
 #: Onshape rate-caps private OAuth apps, and one sync fires a translation job
@@ -121,6 +132,12 @@ _GONE = "__gone__"
 
 #: Legacy per-source config from CAD-01, when a source named ONE element.
 _LEGACY_KEYS = ("document_id", "workspace_id", "element_id")
+
+#: The element families the mechanical parser can read, mapped to the Onshape
+#: collection their translation hangs off. A document also holds drawings, BOMs
+#: and blobs; exporting those would spend a translation job to fail.
+_ASSEMBLIES = "assemblies"
+EXPORTABLE_COLLECTIONS: dict[str, str] = {"ASSEMBLY": _ASSEMBLIES, "PARTSTUDIO": "partstudios"}
 
 #: Bounds on an account-level sync. Onshape rate-caps a private OAuth app, and
 #: each element costs a translation job — so both the selection and the expanded
@@ -177,6 +194,10 @@ class _Target:
     document_id: str
     workspace_id: str
     element_id: str
+    #: Which Onshape collection this element exports through — "assemblies" or
+    #: "partstudios". The ONLY element-type-specific thing in the ingest path;
+    #: everything downstream (poll, download, part metadata) is type-agnostic.
+    collection: str = _ASSEMBLIES
 
     @property
     def scope(self) -> str:
@@ -219,6 +240,48 @@ def _safe_upstream_id(value: str) -> str:
     if not _UPSTREAM_ID_RE.fullmatch(value):
         raise ConnectorError("export_unavailable", "Onshape returned an unusable resource id")
     return value
+
+
+def tracked_document_ids(
+    config: Mapping[str, Any], *, max_documents: int = _MAX_DOCUMENTS
+) -> list[str]:
+    """The Onshape documents a source tracks. Empty is VALID — a connected, idle source.
+
+    THE one definition of that predicate, because it is now a security boundary
+    and not only a sync input: `agent/tools/onshape_tools.py` refuses any tool
+    call naming a document outside this list, so a second, weaker copy of the
+    rule would be a way around the refusal.
+
+    Ingested config is untrusted (CLAUDE.md §7): every id is validated before it
+    can reach a request path, and the list is bounded. Anything malformed raises
+    rather than being skipped — a source whose selection cannot be read must not
+    silently read as "tracks nothing", which would look identical to a source
+    that legitimately tracks nothing.
+    """
+    legacy = _legacy_document_id(config)
+    if legacy is not None:
+        return [legacy]
+    raw = config.get(SELECTION_KEY, [])
+    if not isinstance(raw, list):
+        raise ConnectorError("config_invalid", f"{SELECTION_KEY} must be a list of Onshape ids")
+    if len(raw) > max_documents:
+        raise ConnectorError("config_invalid", f"at most {max_documents} documents can be tracked")
+    for value in raw:
+        if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+            raise ConnectorError(
+                "config_invalid",
+                f"{SELECTION_KEY} entries must be Onshape ids (letters and digits only)",
+            )
+    return list(raw)
+
+
+def _legacy_document_id(config: Mapping[str, Any]) -> str | None:
+    """CAD-01 config named ONE element by its three ids. A new-style selection
+    always wins; such a source keeps working until it is re-picked."""
+    if config.get(SELECTION_KEY) is not None:
+        return None
+    value = config.get("document_id")
+    return value if isinstance(value, str) and _ID_RE.fullmatch(value) else None
 
 
 class OnshapeConnector(OAuthConnector):
@@ -470,7 +533,11 @@ class OnshapeConnector(OAuthConnector):
     ) -> tuple[list[Any], list[Any]]:
         """One element → graph records, namespaced to its document."""
         export = await self._fetch_step(
-            client, target.document_id, target.workspace_id, target.element_id
+            client,
+            target.document_id,
+            target.workspace_id,
+            target.element_id,
+            target.collection,
         )
         metadata = await self._fetch_part_metadata(
             client, target.document_id, target.workspace_id, target.element_id, recorder
@@ -492,24 +559,7 @@ class OnshapeConnector(OAuthConnector):
         Ingested config is untrusted (CLAUDE.md §7): every id is validated before
         it can reach a request path, and the list is bounded.
         """
-        legacy = self._legacy_target(ctx)
-        if legacy is not None:
-            return [legacy.document_id]
-
-        raw = ctx.config.get(SELECTION_KEY, [])
-        if not isinstance(raw, list):
-            raise ConnectorError("config_invalid", f"{SELECTION_KEY} must be a list of Onshape ids")
-        if len(raw) > self._max_documents:
-            raise ConnectorError(
-                "config_invalid", f"at most {self._max_documents} documents can be tracked"
-            )
-        for value in raw:
-            if not isinstance(value, str) or not _ID_RE.fullmatch(value):
-                raise ConnectorError(
-                    "config_invalid",
-                    f"{SELECTION_KEY} entries must be Onshape ids (letters and digits only)",
-                )
-        return list(raw)
+        return tracked_document_ids(ctx.config, max_documents=self._max_documents)
 
     def _legacy_target(self, ctx: SyncContext) -> _Target | None:
         """CAD-01 config named ONE element by its three ids. Read-time shim: such
@@ -560,7 +610,7 @@ class OnshapeConnector(OAuthConnector):
         for document_id in self._selected_document_ids(ctx):
             try:
                 workspace_id = await self.default_workspace(client, document_id)
-                element_ids = await self._assembly_elements(client, document_id, workspace_id)
+                elements = await self._exportable_elements(client, document_id, workspace_id)
             except ConnectorError as exc:
                 if exc.code != "not_found":
                     raise
@@ -569,18 +619,29 @@ class OnshapeConnector(OAuthConnector):
                 recorder.record(label(document_id), "document is no longer available; skipped")
                 continue
             workspaces[document_id] = workspace_id
-            for element_id in element_ids:
+            for element_id, collection in elements:
                 if len(targets) >= self._max_elements:
-                    recorder.record(
-                        "selection",
-                        f"more than {self._max_elements} assemblies selected; rest skipped",
+                    # NOT a truncation. `sync` treats its result as a COMPLETE
+                    # snapshot, so returning a partial target list left every
+                    # document past the cap absent from `workspaces` — which
+                    # `sync` reads as GONE. Its live entities were soft-deleted,
+                    # and the `_GONE` it cursored never matched the real
+                    # microversion again, so `detect_changes` said "changed"
+                    # forever: silent data loss plus a re-sync loop against an
+                    # annual call allowance. A snapshot that cannot be complete
+                    # must fail instead.
+                    raise ConnectorError(
+                        "selection_too_large",
+                        f"This selection expands to more than {self._max_elements} "
+                        "exportable elements, which is more than one sync can cover. "
+                        "Track fewer documents.",
                     )
-                    return targets, workspaces
                 targets.append(
                     _Target(
                         document_id=document_id,
                         workspace_id=workspace_id,
                         element_id=element_id,
+                        collection=collection,
                     )
                 )
         return targets, workspaces
@@ -640,23 +701,30 @@ class OnshapeConnector(OAuthConnector):
             raise ConnectorError("api_error", "Onshape returned no usable default workspace")
         return raw
 
-    async def _assembly_elements(
+    async def _exportable_elements(
         self, client: httpx.AsyncClient, document_id: str, workspace_id: str
-    ) -> list[str]:
+    ) -> list[tuple[str, str]]:
+        """Every exportable element as `(element_id, collection)`.
+
+        Onshape's `elementType` filter is SINGLE-VALUED, so asking for both
+        families would cost a second request per document against an annual
+        allowance. The filter is dropped and applied here instead — same one
+        call, both families, and unexportable tabs never reach a translation.
+        """
         body = await self.get_json(
             client,
             f"/api/v6/documents/d/{document_id}/w/{workspace_id}/elements",
             what="document elements",
-            params={"elementType": "ASSEMBLY"},
         )
-        element_ids: list[str] = []
+        elements: list[tuple[str, str]] = []
         for element in body if isinstance(body, list) else []:
             if not isinstance(element, dict):
                 continue
+            collection = EXPORTABLE_COLLECTIONS.get(str(element.get("elementType", "")))
             raw = element.get("id", "")
-            if isinstance(raw, str) and _ID_RE.fullmatch(raw):
-                element_ids.append(raw)
-        return element_ids
+            if collection and isinstance(raw, str) and _ID_RE.fullmatch(raw):
+                elements.append((raw, collection))
+        return elements
 
     async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
         """Documents the authorized account can reach, for the app's picker.
@@ -712,11 +780,16 @@ class OnshapeConnector(OAuthConnector):
         document_id: str,
         workspace_id: str,
         element_id: str,
+        collection: str = _ASSEMBLIES,
     ) -> str:
-        """Onshape's async translation dance: request → poll → download."""
+        """Onshape's async translation dance: request → poll → download.
+
+        `collection` is the only element-type-specific part: a Part Studio
+        translates through `/partstudios/`, an assembly through `/assemblies/`.
+        """
         started = await self.post_json(
             client,
-            f"/api/v6/assemblies/d/{document_id}/w/{workspace_id}/e/{element_id}/translations",
+            f"{element_base_path(collection, document_id, workspace_id, element_id)}/translations",
             {"formatName": _EXPORT_FORMAT, "storeInDocument": False},
             what="STEP translation request",
         )

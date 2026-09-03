@@ -85,9 +85,28 @@ describe('streamSolMessage', () => {
     })
     expect(JSON.parse(init.body as string)).toEqual({
       content: 'why is the IMU noisy?',
-      action_mode: 'do'
+      action_mode: 'do',
+      // Always present, so the server sees one body shape (SOLUSDEV-168).
+      mentions: []
     })
     expect(events.map((e) => e.type)).toEqual(['token', 'message', 'done'])
+  })
+
+  it('sends @-mentioned entity ids beside the text, never encoded into it', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    await streamSolMessage({
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'will @Camera Bracket clear the belt?',
+      actionMode: 'do',
+      mentions: ['e-1', 'e-2'],
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    })
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string).mentions).toEqual(['e-1', 'e-2'])
   })
 
   it('omits the Authorization header when unauthenticated', async () => {

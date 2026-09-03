@@ -15,6 +15,13 @@ vi.mock('./solApi', () => ({
   listSolTurns: vi.fn(),
   streamSolMessage: vi.fn()
 }))
+// `decide` reaches the real HTTP client otherwise. Spread the real module so
+// shared values (the ConfirmationRefused error class) are not silently
+// undefined — an `instanceof` against undefined throws inside the catch.
+vi.mock('../../lib/api/resources', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api/resources')>()),
+  decideSolConfirmation: vi.fn()
+}))
 const createSolConversation = vi.mocked(solApi.createSolConversation)
 const listSolTurns = vi.mocked(solApi.listSolTurns)
 const streamSolMessage = vi.mocked(solApi.streamSolMessage)
@@ -384,5 +391,65 @@ describe('mid-stream credit exhaustion (security review L2)', () => {
     })
     expect(result.current.creditsExhausted).toBe(true)
     expect(result.current.items.at(-1)?.error).toBe('Not enough credits.')
+  })
+})
+
+describe('several parked actions in one turn (SOLUSDEV-168)', () => {
+  const parked = (id: string, tool: string): SolStreamEvent => ({
+    type: 'tool_confirmation',
+    pending: { confirmationId: id, tool, summary: `do ${tool}`, preview: [] }
+  })
+
+  it('keeps every card, because a dropped one is an action nobody can decide', async () => {
+    // The turn no longer ends at the first parked call, so one message can park
+    // several. The old single slot was overwritten, silently leaving only the
+    // last — and a dropped card is a destructive action the user can neither
+    // approve nor reject.
+    createSolConversation.mockResolvedValue({ id: 'c1' } as solApi.SolConversation)
+    streamWith([
+      parked('cf1', 'onshape.set_variable'),
+      parked('cf2', 'onshape.add_feature'),
+      { type: 'done', conversationId: 'c1', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('make two changes', 'do')
+    })
+
+    const item = result.current.items.at(-1)
+    expect(item?.confirmations.map((c) => c.confirmationId)).toEqual(['cf1', 'cf2'])
+  })
+
+  it('ignores a repeat of the same confirmation', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c1' } as solApi.SolConversation)
+    streamWith([
+      parked('cf1', 'onshape.set_variable'),
+      parked('cf1', 'onshape.set_variable'),
+      { type: 'done', conversationId: 'c1', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('again', 'do')
+    })
+
+    expect(result.current.items.at(-1)?.confirmations).toHaveLength(1)
+  })
+
+  it('deciding one leaves the others standing', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c1' } as solApi.SolConversation)
+    streamWith([
+      parked('cf1', 'onshape.set_variable'),
+      parked('cf2', 'onshape.add_feature'),
+      { type: 'done', conversationId: 'c1', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('two', 'do')
+    })
+    await act(async () => {
+      await result.current.decide('cf1', 'approve')
+    })
+
+    expect(result.current.items.at(-1)?.confirmations.map((c) => c.confirmationId)).toEqual(['cf2'])
   })
 })

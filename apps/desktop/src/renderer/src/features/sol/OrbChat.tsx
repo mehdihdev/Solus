@@ -16,7 +16,9 @@ import { Segmented } from '../../components/ui/Segmented'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ConfirmationCard } from './ConfirmationCard'
 import { SolMarkdown } from './Markdown'
+import type { Entity } from '../../lib/api/resources'
 import { useClassifyPreview } from './useClassifyPreview'
+import { useMentionPicker, type MentionPicker } from './useMentionPicker'
 import type { SolActionMode } from './solApi'
 import { useSolChat, type ChatItem, type SolChat, type TraceEntry } from './useSolChat'
 
@@ -116,7 +118,7 @@ function MessageRow({
       </div>
     )
   }
-  const confirmation = item.confirmation
+  const confirmations = item.confirmations
   return (
     <div className="sol-msg-in" style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
       <TraceView trace={item.trace} />
@@ -128,12 +130,16 @@ function MessageRow({
       {item.error && <div style={{ ...MUTED, color: 'var(--err)' }}>{item.error}</div>}
       {/* CTR-03: a destructive action is parked, not executed, until this user
           approves the concrete diff shown here (CLAUDE.md §7). */}
-      {confirmation && (
+      {/* One card per parked action. A turn can park several since SOLUSDEV-168,
+          and each is approved on its own — approving a batch would suspend the
+          staleness re-check that makes "what you saw is what runs" true. */}
+      {confirmations.map((confirmation) => (
         <ConfirmationCard
+          key={confirmation.confirmationId}
           pending={confirmation}
           onDecide={(decision) => onDecide(confirmation.confirmationId, decision)}
         />
-      )}
+      ))}
       <CitationsView citations={item.citations} />
     </div>
   )
@@ -196,27 +202,165 @@ function MessageList({ chat, page }: { chat: SolChat; page: boolean }): React.JS
   )
 }
 
+/** The `@`-mention picker. A plain listbox — the design system has no combobox,
+ *  and one short list does not justify a dependency. */
+function MentionList({
+  results,
+  activeId,
+  onChoose,
+  page
+}: {
+  results: readonly Entity[]
+  activeId: string | null
+  onChoose: (entity: Entity) => void
+  page: boolean
+}): React.JSX.Element {
+  return (
+    <ul
+      id="sol-mention-list"
+      role="listbox"
+      aria-label="Graph entities"
+      style={{
+        position: 'absolute',
+        bottom: 'calc(100% + 6px)',
+        left: 0,
+        right: page ? 'auto' : 0,
+        minWidth: 240,
+        maxHeight: 210,
+        overflowY: 'auto',
+        margin: 0,
+        padding: 4,
+        listStyle: 'none',
+        background: 'var(--sur)',
+        border: '1px solid var(--bd)',
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+        zIndex: 20
+      }}
+    >
+      {results.map((entity) => (
+        <li
+          key={entity.id}
+          id={`sol-mention-${entity.id}`}
+          role="option"
+          aria-selected={entity.id === activeId}
+          // A list item is not focusable, so the input keeps focus and the
+          // caret stays where the user was typing.
+          onMouseDown={(e) => {
+            e.preventDefault()
+            onChoose(entity)
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 8,
+            padding: '5px 8px',
+            borderRadius: 4,
+            cursor: 'pointer',
+            background: entity.id === activeId ? 'var(--sur2)' : 'transparent'
+          }}
+        >
+          <span style={{ fontSize: 12.5, color: 'var(--tx)' }}>{entity.name}</span>
+          <Mono size={9.5}>{entity.type}</Mono>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** The message box plus its `@` picker. Split from Composer so each stays
+ *  readable — the composer owns text/mode/send, this owns the input element. */
+function MessageInput({
+  mention,
+  value,
+  onChange,
+  page
+}: {
+  mention: MentionPicker
+  value: string
+  onChange: (text: string) => void
+  page: boolean
+}): React.JSX.Element {
+  return (
+    <>
+      {mention.listOpen && (
+        <MentionList
+          results={mention.results}
+          activeId={mention.active?.id ?? null}
+          onChoose={mention.choose}
+          page={page}
+        />
+      )}
+      <input
+        ref={mention.inputRef}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value)
+          mention.onInput(e.target)
+        }}
+        onKeyDown={(e) => void mention.onKeyDown(e)}
+        onKeyUp={(e) => mention.onCaretMove(e.currentTarget)}
+        onClick={(e) => mention.onCaretMove(e.currentTarget)}
+        role="combobox"
+        aria-expanded={mention.listOpen}
+        aria-controls="sol-mention-list"
+        aria-autocomplete="list"
+        aria-activedescendant={mention.active ? `sol-mention-${mention.active.id}` : undefined}
+        placeholder="Ask about a signal, a change, a part…"
+        aria-label="Message SOL"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          background: 'var(--sur)',
+          border: '1px solid var(--bd)',
+          borderRadius: 4,
+          color: 'var(--tx)',
+          fontFamily: 'var(--font-ui)',
+          fontSize: 12.5,
+          padding: '8px 10px',
+          outline: 'none'
+        }}
+      />
+    </>
+  )
+}
+
 type ActionModeLabel = 'Guide' | 'Do'
+
+// The composer opens in Do, not Guide. Guide refuses exactly the tools whose
+// descriptor sets `requires_confirmation` (agent/modes.py) — precisely the set
+// the CTR-03 confirmation gate already parks. So a Guide default bought no
+// safety: it replaced an approval card carrying the concrete before/after with
+// "switch to Do mode to operate the tool". The gate is untouched and still
+// parks every mutation for explicit approval; only this client default moves.
+// `MessageCreate.action_mode` stays GUIDE, so non-UI callers are unaffected.
+const DEFAULT_ACTION_MODE: ActionModeLabel = 'Do'
 
 function Composer({
   streaming,
   page,
+  projectId,
   onSend
 }: {
   streaming: boolean
   page: boolean
-  onSend: (text: string, mode: SolActionMode) => void
+  projectId: string | null
+  onSend: (text: string, mode: SolActionMode, mentions: readonly string[]) => void
 }): React.JSX.Element {
   const [input, setInput] = useState('')
-  const [mode, setMode] = useState<ActionModeLabel>('Guide')
+  const [mode, setMode] = useState<ActionModeLabel>(DEFAULT_ACTION_MODE)
   const classify = useClassifyPreview(input)
   const empty = input.trim() === ''
+
+  // All the `@`-picker state lives in its own hook — see useMentionPicker.
+  const mention = useMentionPicker(projectId, input, setInput)
 
   const submit = (): void => {
     const text = input.trim()
     if (!text || streaming) return
-    onSend(text, mode === 'Do' ? 'do' : 'guide')
+    onSend(text, mode === 'Do' ? 'do' : 'guide', mention.mentionIds)
     setInput('')
+    mention.reset()
     classify.resetOverride()
   }
 
@@ -234,25 +378,8 @@ function Composer({
         gap: 6
       }}
     >
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about a signal, a change, a part…"
-          aria-label="Message SOL"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            background: 'var(--sur)',
-            border: '1px solid var(--bd)',
-            borderRadius: 4,
-            color: 'var(--tx)',
-            fontFamily: 'var(--font-ui)',
-            fontSize: 12.5,
-            padding: '8px 10px',
-            outline: 'none'
-          }}
-        />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative' }}>
+        <MessageInput mention={mention} value={input} onChange={setInput} page={page} />
         <Segmented
           options={['Guide', 'Do'] as const}
           value={mode}
@@ -329,7 +456,8 @@ export function OrbChat({
       <Composer
         streaming={chat.streaming}
         page={page}
-        onSend={(text, mode) => void chat.send(text, mode)}
+        projectId={projectId}
+        onSend={(text, mode, mentions) => void chat.send(text, mode, mentions)}
       />
     </div>
   )

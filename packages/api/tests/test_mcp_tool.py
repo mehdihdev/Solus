@@ -359,7 +359,7 @@ async def test_adversarial_listings_are_skipped(monkeypatch: pytest.MonkeyPatch)
     )
 
     @asynccontextmanager
-    async def _fake_session(_spec: MCPServerSpec) -> AsyncIterator[Any]:
+    async def _fake_session(_spec: MCPServerSpec, **_: Any) -> AsyncIterator[Any]:
         class _Session:
             async def list_tools(self) -> ListToolsResult:
                 return listing
@@ -414,7 +414,7 @@ async def test_discovery_maps_dead_server_to_structured_failure() -> None:
 
 async def test_discovery_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     @asynccontextmanager
-    async def _hang(_spec: MCPServerSpec) -> AsyncIterator[Any]:
+    async def _hang(_spec: MCPServerSpec, **_: Any) -> AsyncIterator[Any]:
         await asyncio.sleep(3600)
         yield None  # pragma: no cover — cancelled before the yield
 
@@ -518,7 +518,7 @@ async def test_non_allowlisted_upstream_tool_names_are_skipped(
     listing = ListToolsResult(tools=[_remote("list_projects"), _remote("not_allowlisted_tool")])
 
     @asynccontextmanager
-    async def _fake_session(_spec: MCPServerSpec) -> AsyncIterator[Any]:
+    async def _fake_session(_spec: MCPServerSpec, **_: Any) -> AsyncIterator[Any]:
         class _Session:
             async def list_tools(self) -> ListToolsResult:
                 return listing
@@ -554,7 +554,7 @@ async def test_set_symbol_property_can_never_be_confirmation_false_through_disco
     listing = ListToolsResult(tools=[_remote("list_projects"), _remote("set_symbol_property")])
 
     @asynccontextmanager
-    async def _fake_session(_spec: MCPServerSpec) -> AsyncIterator[Any]:
+    async def _fake_session(_spec: MCPServerSpec, **_: Any) -> AsyncIterator[Any]:
         class _Session:
             async def list_tools(self) -> ListToolsResult:
                 return listing

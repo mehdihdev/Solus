@@ -1,7 +1,7 @@
 // The approval surface. What matters here is that a user can see WHAT they are
 // approving — a bare tool name is not meaningful consent — and that a failed
 // decision never looks like a successful one.
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { PendingConfirmation } from '../../lib/api/solStream'
@@ -137,5 +137,59 @@ describe('ConfirmationCard', () => {
 
     expect(await screen.findByText(/has changed since it was shown/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+  })
+})
+
+describe('a decision the server REFUSED', () => {
+  // The bug this guards: the decide route answers HTTP 200 with `ok:false` for
+  // STALE / EXPIRED / already-decided / tool-failed, so nothing throws on its
+  // own and the card was cleared exactly as if the action had run. For
+  // `put_featurescript`, which replaces a whole Feature Studio, a false "it
+  // worked" is the worst outcome this flow can produce.
+  const refusal = (): Error => {
+    const error = new Error(
+      'What this action would do has changed since it was shown to you. Nothing was applied.'
+    )
+    error.name = 'ConfirmationRefused'
+    return error
+  }
+
+  it('keeps the card and says the approval cannot be retried', async () => {
+    const onDecide = vi.fn().mockRejectedValue(refusal())
+    render(<ConfirmationCard pending={PENDING} onDecide={onDecide} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    })
+
+    expect(screen.getByText(/Nothing was applied/)).toBeInTheDocument()
+    expect(screen.getByText(/can’t be retried/)).toBeInTheDocument()
+    // It must NOT claim the action is still waiting: every refusal status is
+    // terminal, so re-approving can only ever earn "already decided".
+    expect(screen.queryByText(/still waiting for you/)).not.toBeInTheDocument()
+  })
+
+  it('disables both buttons, because the confirmation is spent', async () => {
+    const onDecide = vi.fn().mockRejectedValue(refusal())
+    render(<ConfirmationCard pending={PENDING} onDecide={onDecide} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    })
+
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled()
+  })
+
+  it('leaves a TRANSPORT failure retryable, because the action is still parked', async () => {
+    const onDecide = vi.fn().mockRejectedValue(new Error('Network request failed'))
+    render(<ConfirmationCard pending={PENDING} onDecide={onDecide} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    })
+
+    expect(screen.getByText(/still waiting for you/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve' })).not.toBeDisabled()
   })
 })

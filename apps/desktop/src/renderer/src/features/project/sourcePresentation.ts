@@ -2,7 +2,7 @@
 // side with the project screens and free of React so both the overview and the
 // Sources page render source status/type identically (DRY). Colors resolve to
 // theme tokens (apps/desktop CLAUDE.md — no hardcoded colors).
-import type { SourceError, SourceStatus } from '../../lib/api/resources'
+import type { HostedState, Source, SourceError, SourceStatus } from '../../lib/api/resources'
 
 const STATUS_COLOR: Readonly<Record<SourceStatus, string>> = {
   connected: 'var(--ok)',
@@ -33,7 +33,7 @@ export function sourceTypeLabel(type: string): string {
 
 /** Belt-and-braces render cap — the API bounds messages at write, but a stale
  * or hostile payload must still never dump unbounded text into a row. */
-const ERROR_TEXT_MAX = 500
+export const ERROR_TEXT_MAX = 500
 
 /**
  * Renderable text for a source's last error, or null when there is none.
@@ -51,4 +51,41 @@ export function sourceErrorText(error: SourceError | string | null): string | nu
   const code = typeof error.code === 'string' ? error.code : ''
   const text = message || code
   return text ? text.slice(0, ERROR_TEXT_MAX) : null
+}
+
+
+/** The hosted add-on entry the API echoes back for one source, or undefined.
+ *
+ *  `serialize_source` strips underscore-prefixed config keys, so `hosted` — the
+ *  customer-visible state — is present while `_hosted`, the vetted descriptor
+ *  set the registry replays, is not. That split is deliberate: server-authored
+ *  schemas are not something any API response should hand back out.
+ */
+function hostedEntry(source: Source, server: string): Record<string, unknown> | undefined {
+  const hosted = (source.config as Record<string, unknown> | undefined)?.hosted
+  if (!hosted || typeof hosted !== 'object') return undefined
+  const entry = (hosted as Record<string, unknown>)[server]
+  return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : undefined
+}
+
+/**
+ * A hosted add-on's state for one source.
+ *
+ * SERVER-BACKED by design: the connect wizard cancels its attempt on close and
+ * the Sources screen resets the onboarding store on mount, so a
+ * renderer-resident flag would be lost on every navigation and would be wrong
+ * for every teammate who did not run the connect themselves. Absent or
+ * malformed means the backend has never recorded a grant, which IS
+ * `not_connected` — never an optimistic default.
+ */
+export function hostedState(source: Source, server: string): HostedState {
+  const state = hostedEntry(source, server)?.state
+  return state === 'ready' || state === 'subscription_required' ? state : 'not_connected'
+}
+
+/** The probe's own reason, in the vendor's words — capped like every other
+ *  server-authored string this file renders. Null when there is nothing to say. */
+export function hostedDetail(source: Source, server: string): string | null {
+  const detail = hostedEntry(source, server)?.detail
+  return typeof detail === 'string' && detail ? detail.slice(0, ERROR_TEXT_MAX) : null
 }

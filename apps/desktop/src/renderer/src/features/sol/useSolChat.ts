@@ -31,7 +31,13 @@ export interface SolChat {
   /** True after a 402 turn rejection — drives the top-up card. */
   creditsExhausted: boolean
   activeConversationId: string | null
-  send: (content: string, actionMode: SolActionMode) => Promise<void>
+  /** `mentions` are graph entity ids the user picked with `@` — carried beside
+   *  the text, never encoded into it. */
+  send: (
+    content: string,
+    actionMode: SolActionMode,
+    mentions?: readonly string[]
+  ) => Promise<void>
   /** Switch to another owned conversation (cancels any live turn first). */
   selectConversation: (conversationId: string) => void
   /** Forget the active conversation so the next send starts a fresh chat. */
@@ -60,8 +66,8 @@ export function useSolChat(projectId: string | null): SolChat {
     contextUsed: session.contextUsed,
     creditsExhausted: session.creditsExhausted,
     activeConversationId: conversationId,
-    send: (content, actionMode) =>
-      projectId ? sendMessage(projectId, content, actionMode) : Promise.resolve(),
+    send: (content, actionMode, mentions) =>
+      projectId ? sendMessage(projectId, content, actionMode, mentions) : Promise.resolve(),
     selectConversation: (id) => projectId && selectConversationInStore(projectId, id),
     startNewChat: () => projectId && startNewChatInStore(projectId),
     decide: (confirmationId, decision) =>

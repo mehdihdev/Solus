@@ -9,14 +9,17 @@ resolvable project. The streaming turn (SSE) runs the reasoning loop behind the
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from solus_api.agent.confirmations import ParkedCall, decide_confirmation, request_confirmation
@@ -26,30 +29,29 @@ from solus_api.agent.conversation import (
     serialize_turn,
 )
 from solus_api.agent.modes import ActionMode, build_mode_dispatch
+from solus_api.agent.reason import MAX_ANCHORS
 from solus_api.agent.runtime import (
     MAX_TOOL_CALLS,
     AgentRunContext,
     TurnView,
     build_dispatch,
-    build_sol_registry,
 )
 from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
 from solus_api.agent.tools import ToolRegistry
-from solus_api.agent.tools.shapes import ToolCall
+from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import redact_value
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     AgentRunnerDep,
-    BridgeSessionsDep,
     ProjectCtx,
-    RegistryDep,
     RequireVerified,
     SecretStoreDep,
     SessionDep,
     SessionMakerDep,
     SettingsDep,
+    SolRegistryDep,
     SolSystemsDep,
     require_role,
 )
@@ -150,6 +152,22 @@ class MessageCreate(StrictModel):
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
     #: request-level choice.
     action_mode: ActionMode = ActionMode.GUIDE
+    #: SOLUSDEV-168: graph entities the user pointed at explicitly (the
+    #: composer's `@`). Integration-agnostic on purpose — an entity id addresses
+    #: any node in the graph at any depth, so one field serves Onshape, KiCad,
+    #: ROS and whatever connector lands next, where a per-tool "selection" field
+    #: would need widening for each.
+    #:
+    #: Bounded by the anchor cap ITSELF, not a copy of its value — two
+    #: constants would drift. The cap is also re-applied in `plan_query` rather
+    #: than trusted from here: it is what bounds the neighbourhood query's DB
+    #: work, so it must hold for every caller, not just this route.
+    #:
+    #: Not checked for existence. `load_neighborhood` is project-scoped, so an id
+    #: from another team yields nothing — answering differently for "exists
+    #: elsewhere" than for "does not exist" would be a cross-tenant existence
+    #: oracle (the posture `agent/tools/get_entity.py` documents).
+    mentions: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_ANCHORS)
 
 
 def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
@@ -157,28 +175,9 @@ def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
 
 
 @router.get("/tools")
-async def list_tools(
-    ctx: ProjectCtx,
-    sessionmaker: SessionMakerDep,
-    bridge_sessions: BridgeSessionsDep,
-    settings: SettingsDep,
-    secret_store: SecretStoreDep,
-    connector_registry: RegistryDep,
-    systems: SolSystemsDep,
-) -> dict[str, Any]:
+async def list_tools(_ctx: ProjectCtx, registry: SolRegistryDep) -> dict[str, Any]:
     """The tool set SOL may invoke for this project — the W0-04 descriptors the model
     reads. The set is fixed by Solus code, identical for every caller in the project."""
-    registry = build_sol_registry(
-        sessionmaker,
-        ctx.project.id,
-        bridge=bridge_sessions,
-        user_id=ctx.user.id,
-        team_id=ctx.team.id,
-        bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
-        secret_store=secret_store,
-        connectors=connector_registry,
-        systems=systems,
-    )
     return envelope(_tool_descriptors(registry))
 
 
@@ -295,9 +294,58 @@ async def delete_conversation(
     return Response(status_code=204)
 
 
-def _tool_turn_summary(call: dict[str, Any], result: dict[str, Any]) -> str:
-    outcome = "ok" if result.get("ok") else (result.get("error") or {}).get("code", "error")
-    return f"{call.get('tool', 'tool')} → {outcome}"
+def _tool_turn_summary(
+    call: dict[str, Any], result: dict[str, Any], parked_tools: frozenset[str] = frozenset()
+) -> str:
+    """What the NEXT turn's model is told this call did.
+
+    A parked call is not a failed one. It comes back UNAUTHORIZED because the
+    gate refused to run it *yet* — but recording that verbatim told the model
+    `"onshape.add_feature → unauthorized"`, and `ConversationService.history`
+    replays every role, so on the next message SOL was shown its own write as
+    FAILED even when the person had approved it seconds earlier. A model that
+    believes its change did not land will propose it again.
+    """
+    tool = str(call.get("tool", "tool"))
+    if result.get("ok"):
+        return f"{tool} → ok"
+    # Keyed on what the gate ACTUALLY parked this turn, never on the error code:
+    # UNAUTHORIZED is also what a revoked grant returns, and the two must not
+    # read the same in the transcript.
+    if tool in parked_tools:
+        return f"{tool} → parked, awaiting your approval"
+    return f"{tool} → {(result.get('error') or {}).get('code', 'error')}"
+
+
+def _action_key(call: ToolCall) -> str:
+    """The identity of a proposed ACTION, for per-turn deduplication.
+
+    Tool plus arguments, canonically ordered — two calls that would do the same
+    thing are the same action however the model happened to order the keys.
+    """
+    return f"{call.tool}:{json.dumps(call.args, sort_keys=True, default=str)}"
+
+
+def _refusal_result(call_id: str, message: str) -> ToolResult:
+    return ToolResult.failure(
+        call_id, ToolError(code=ToolErrorCode.UNAUTHORIZED, message=message, retryable=False)
+    )
+
+
+def _decision_summary(decision: str, result: ToolResult) -> str:
+    """What the decision did, in the words the next turn's model reads.
+
+    Deliberately distinguishes the three outcomes a person can produce from the
+    one the gate produces: a rejection is not a failure, and a STALE refusal is
+    not a rejection — it means the world moved and NOTHING was applied, which is
+    the one the model most needs to understand before it tries again.
+    """
+    if result.ok:
+        return "approved by you and applied ok"
+    if decision != "approve":
+        return "rejected by you; nothing was applied"
+    code = result.error.code.value if result.error is not None else "error"
+    return f"not applied ({code}) — ask again to see the current change"
 
 
 async def _persist_turn(
@@ -312,6 +360,7 @@ async def _persist_turn(
     tool_turns: list[tuple[dict[str, Any], dict[str, Any]]],
     final_text: str,
     aborted: str | None,
+    parked_tools: frozenset[str] = frozenset(),
 ) -> uuid.UUID:
     """Persist the completed turn (tool turns + the assistant turn) in a FRESH session and
     log the interaction. Returns the assistant turn id for the `done` marker."""
@@ -322,7 +371,7 @@ async def _persist_turn(
                 conversation_id=conversation_id,
                 project_id=project_id,
                 role=TurnRole.TOOL,
-                content=_tool_turn_summary(call, result),
+                content=_tool_turn_summary(call, result, parked_tools),
                 # Redacted before persistence, not just before model context:
                 # this row is served back out of /turns to the browser, so a
                 # secret-shaped tool value would otherwise sit in Postgres in the
@@ -448,6 +497,7 @@ async def _run_and_persist(
             tool_turns=tool_turns,
             final_text=final_text,
             aborted=aborted,
+            parked_tools=frozenset(p.tool for p in parked if p.confirmation_id is not None),
         )
         if aborted is not None:
             yield format_sse(AgentEvent.error(aborted, _ABORT_MESSAGES[aborted]))
@@ -468,10 +518,9 @@ async def post_message(
     sessionmaker: SessionMakerDep,
     systems: SolSystemsDep,
     runner: AgentRunnerDep,
-    bridge_sessions: BridgeSessionsDep,
     settings: SettingsDep,
     secret_store: SecretStoreDep,
-    connector_registry: RegistryDep,
+    registry: SolRegistryDep,
 ) -> StreamingResponse:
     """Append the user's message and stream SOL's reply as Server-Sent Events. The user
     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
@@ -527,19 +576,14 @@ async def post_message(
     )
     await session.commit()
 
-    # Scope is bound HERE, by Solus code, before the runner sees any user content (§7).
-    registry = build_sol_registry(
-        sessionmaker,
-        ctx.project.id,
-        bridge=bridge_sessions,
-        user_id=ctx.user.id,
-        team_id=ctx.team.id,
-        bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
-        secret_store=secret_store,
-        connectors=connector_registry,
-        systems=systems,
-    )
+    # Scope is bound by Solus code, before the runner sees any user content (§7) —
+    # in `deps.get_sol_registry`, which is the ONE place a registry is built.
     parked_calls: list[ParkedCall] = []
+    #: What this turn has already parked, keyed by the concrete action. The loop
+    #: keeps running after a park, so a model that re-proposes would otherwise
+    #: mint a second identical row, a second card, and a second LIVE preview read
+    #: against the customer's CAD. One action, one card.
+    parked_by_action: dict[str, ParkedCall] = {}
 
     async def park(call: ToolCall) -> ParkedCall | None:
         """SOLUS-ONS-A5: park a destructive call instead of running it.
@@ -548,6 +592,18 @@ async def post_message(
         session is done with; committed immediately so the confirmation is
         approvable the moment the client sees the event.
         """
+        already = parked_by_action.get(_action_key(call))
+        if already is not None:
+            # Deliberately NOT a fresh park: same confirmation, and a message
+            # that tells the model this exact action is already waiting.
+            return replace(
+                already,
+                result=_refusal_result(
+                    call.call_id,
+                    f"{call.tool} was already proposed earlier in this turn and is "
+                    f"waiting for the person to approve it. Do not propose it again.",
+                ),
+            )
         async with sessionmaker() as parking:
             parked = await request_confirmation(
                 parking,
@@ -563,6 +619,7 @@ async def post_message(
         # parked, so nothing streams a confirmation frame (SEC-H3).
         if parked is not None and parked.confirmation_id is not None:
             parked_calls.append(parked)
+            parked_by_action[_action_key(call)] = parked
         return parked
 
     descriptors = tuple(registry.list())
@@ -579,6 +636,10 @@ async def post_message(
         # SOLUSDEV-233: reaches the prompt only as a fenced data block.
         custom_instruction=ctx.user.sol_custom_instruction,
         action_mode=body.action_mode,
+        # Entities the user pointed at with `@`. They lead the neighbourhood's
+        # anchors, so SOL grounds on the node meant rather than the one
+        # similarity search happened to rank first.
+        mentions=tuple(body.mentions),
         history=history,
         # Model-call identity (ADR-018). Without these the gateway silently
         # skips every rate limit and every debit, so LlmRunner refuses outright.
@@ -616,12 +677,7 @@ async def decide_tool_confirmation(
     body: ConfirmationDecision,
     ctx: ProjectCtx,
     session: SessionDep,
-    sessionmaker: SessionMakerDep,
-    bridge_sessions: BridgeSessionsDep,
-    settings: SettingsDep,
-    secret_store: SecretStoreDep,
-    connector_registry: RegistryDep,
-    systems: SolSystemsDep,
+    registry: SolRegistryDep,
     _verified: RequireVerified,
 ) -> dict[str, Any]:
     """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
@@ -646,17 +702,6 @@ async def decide_tool_confirmation(
         )
     except FrequencyCapExceededError as exc:
         raise APIError(429, "frequency_cap", "Too many decisions right now; slow down.") from exc
-    registry = build_sol_registry(
-        sessionmaker,
-        ctx.project.id,
-        bridge=bridge_sessions,
-        user_id=ctx.user.id,
-        team_id=ctx.team.id,
-        bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
-        secret_store=secret_store,
-        connectors=connector_registry,
-        systems=systems,
-    )
     result = await decide_confirmation(
         session,
         registry,
@@ -665,8 +710,37 @@ async def decide_tool_confirmation(
         project_id=ctx.project.id,
         user_id=ctx.user.id,
     )
-    row = await session.get(ToolConfirmation, confirmation_id)
-    tool_name = row.tool if row is not None else None
+    # SCOPED, like `decide_confirmation`'s own read. `session.get` by id alone
+    # would let another project's confirmation name a tool in this project's
+    # event stream — the same no-existence-oracle rule, applied to the audit path.
+    decided = (
+        await session.execute(
+            select(ToolConfirmation.tool, ToolConfirmation.conversation_id).where(
+                ToolConfirmation.id == confirmation_id,
+                ToolConfirmation.project_id == ctx.project.id,
+                ToolConfirmation.user_id == ctx.user.id,
+            )
+        )
+    ).first()
+    tool_name = decided.tool if decided is not None else None
+
+    # THE OTHER HALF OF THE HISTORY FIX. The turn that proposed this recorded it
+    # as "parked, awaiting your approval" and then ended. Without a second turn
+    # recording what the decision actually did, the transcript stops at "parked"
+    # forever — so the next message shows SOL a change it proposed, never learned
+    # the fate of, and will helpfully propose again.
+    if decided is not None and decided.conversation_id is not None and tool_name is not None:
+        await SERVICE.append_turn(
+            session,
+            conversation_id=decided.conversation_id,
+            project_id=ctx.project.id,
+            role=TurnRole.TOOL,
+            content=f"{tool_name} → {_decision_summary(body.decision, result)}",
+            attrs=redact_value(
+                {"confirmation_id": str(confirmation_id), "result": result.model_dump(mode="json")}
+            ),
+        )
+
     emit_event(
         session,
         user=ctx.user,

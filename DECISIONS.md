@@ -438,7 +438,8 @@ holes (advertised-descriptor allowlisting; tool→server mapping) with one file 
 re-vendor clock for CVEs on shipped paths, quarterly upstream diff reviews, and scoped re-reviews
 on rebase. Review cost gates how fast new tool servers ship (deliberate). The license boundary
 excludes some upstream servers; the answer is a clean-room or alternative upstream, not a policy
-exception.
+exception. A third pattern — vendor-hosted servers Solus cannot fork —
+is added by ADR-035; Patterns 1 and 2 above are unchanged by it.
 
 **Revisit when:** the companion gains OS-level sandboxing (posture declarations in the checklist
 tighten into mechanism requirements); an MCP-server SDK of our own makes forks thin shims; or the
@@ -576,6 +577,144 @@ files are read-only. Accepted residual risk: user-TYPED message text is cached i
 the user's own machine (fork-readable per Layer-1 rules; assistant/tool content is already
 secret-redacted server-side); mitigations: purge on account identity change, delete-with-chat.
 Format changes to this file require amending this ADR.
+
+---
+
+## ADR-035: MCP hosting model, third pattern — vendor-hosted servers we cannot fork
+
+**Status:** Accepted (2026-08-31 — ratified by Pratham in-session per ADR-032 tier 2; Mehdi review at the SOLUSDEV-168 MR)
+**Context:** SOLUSDEV-168 (hosted FeatureScript MCP), ADR-031 (MCP hosting model), ADR-019 as
+amended 2026-08-30 (third-party integration quotas)
+
+**Context.** ADR-031 fixed ONE hosting model — fork, harden, own, run on the customer's machine
+— with two patterns: Pattern 1 tools (a vendored stdio fork the companion launches) and Pattern
+2 telemetry (never MCP; the `LiveConnection` seam). Onshape Labs' FeatureScript MCP server
+(`https://fs-mcp.labs.onshape.app/mcp`) is neither. It runs on **Onshape's own cloud
+infrastructure**, closed-source: there is nothing to fork, no launch entrypoint to pin, no
+vendored tree to hash. It authenticates per CUSTOMER over OAuth and spends that customer's own
+Onshape API allocation. ADR-031's enforcement machinery — provenance record, license boundary,
+pinned `bin/launch`, a security review voided by a vendored-tree hash change — has no subject
+here, and applying it literally would either block the integration or be theatre. Its SECURITY
+posture, however — *everything a server advertises or returns is untrusted; the tool namespace
+available to any SOL invocation is fixed cloud-side against the Solus-owned allowlist, never by
+what a machine advertises* — is exactly what a vendor-hosted server needs, and more.
+
+**Decision.** Solus adds a THIRD pattern to the ADR-031 hosting model. ADR-031 stands unchanged
+for Patterns 1 and 2.
+
+**Pattern 3 — vendor-hosted servers.** An MCP server running on a third party's infrastructure,
+which Solus neither owns nor can fork, may be integrated under these conditions — all mechanism,
+not posture:
+
+1. **No forking obligation, because no Solus-shipped code runs on the customer's machine.**
+   ADR-031's fork-harden-own requirements (PROVENANCE record, MIT/Apache-only boundary, pinned
+   `bin/launch`, vendored-tree hash) are *inapplicable* to Pattern 3 and are formally waived for
+   it. They exist to control code Solus ships onto a customer's machine; Pattern 3 ships none.
+   The supply-chain question is replaced by a vendor-admission question, answered by the review
+   below.
+2. **Hosted servers live in their own cloud-side registry, never in the loopback catalog.** The
+   local catalog's `url` field means *loopback, on this machine* as a security invariant — a
+   non-loopback entry there would hand the companion an SSRF primitive inside the customer's
+   network. Hosted servers get a separate registry (`agent/tools/remote_mcp.py`), and adding one
+   is a DATA entry there and nothing else. If adding a server ever requires editing that
+   module's logic rather than its data, the abstraction is wrong.
+3. **Exposure is allowlist-driven, never what the server advertises.** Discovery stays LIVE —
+   tool names are never hardcoded — but a discovered tool is registered only if it appears in
+   the Solus-authored allowlist on the spec; anything else is SKIPPED with a warning, not merely
+   gated. A tool the vendor adds between releases therefore does not exist in SOL's namespace at
+   all. `requires_confirmation` and the consent sentence a human reads are Solus-authored per
+   TOOL — never the server's own `destructiveHint`, `description`, or any other advertised text,
+   which a vendor could use to describe a destructive tool as read-only. Tools that act on the
+   customer's account or billing relationship rather than on their work are omitted by default
+   and thereby unreachable (on fs-mcp: `logout`, which ends the customer's session, and
+   `set_api_allocation`, which re-points who is billed).
+4. **OAuth endpoints are PINNED as Solus data; discovery is forbidden.** The authorize, token
+   and registration URLs are literal fields on the spec, captured from a live spike and
+   reviewed. Solus does not use the MCP SDK's OAuth client provider, whose discovery fetches the
+   URL read verbatim out of the server's own `WWW-Authenticate: resource_metadata="…"` header
+   and then trusts that document's `authorization_servers[0]` — a blind SSRF out of the Solus
+   cloud plus an authorization-server substitution primitive — and which additionally REWRITES
+   the requested scope from the resource's advertised `scopes_supported` (fs-mcp advertises
+   `OAuth2Delete` and `OAuth2ReadPII`, both forbidden on the record: Delete would let a confused
+   agent wipe a customer's document). Scopes requested are the spec's own, minimised and
+   recorded; a grant returned WIDER than requested is refused and never stored.
+5. **Tokens are per customer, held on the Source, and never Solus's.** The grant identifies the
+   CUSTOMER: the server acts as them, under their own vendor sign-in, spending their own API
+   allocation. The token is stored in the SecretStore under a ref derived from the connected
+   `Source`, resolved per call (hosted tokens are short-lived), refreshed in place, and swept on
+   every source- and user-deletion path alongside the connector's own refs. A hosted server is
+   never its own tile or `SourceType` — it is an add-on to a connection the customer already
+   made, so tenant scope is the Source's scope and no new scoping concept is invented.
+6. **The authorization code completes through an AUTHENTICATED exchange.** The code lands on the
+   desktop loopback and is posted to an authenticated route that binds the OAuth state to the
+   requesting user. The connector-era unauthenticated `GET /{provider}/oauth/callback` is NOT
+   used for hosted servers: it never checks the state's `user_id`, and under a write scope that
+   is an account-linking CSRF which would write into a victim's documents.
+7. **Enabling a vendor app is DISCLOSED at connect time.** Turning a third-party app on someone
+   else's vendor account is a trust cost even when free, and it OUTLIVES the Solus connection.
+   The spec carries a plain notice naming the app, stating that it runs as the user, that it
+   spends the user's own allowance, and that disconnecting Solus does not remove it. The notice
+   informs; it never blocks the connection, and enabling a hosted add-on is never a step of the
+   underlying connector's connect flow.
+8. **Calls are metered under ADR-019's second budget.** Outbound calls spend the customer's own
+   provider allowance, so they are admitted through the provider-quota meter under a DISTINCT
+   provider key per hosted server — never sharing the connector's ledger, since the two are
+   separate pools at the vendor — with SOL turns classified as deferrable `agent` traffic so
+   they yield the degraded band to a human's own explicit action. No new budget mechanism, and
+   nothing here reaches the credit ledger.
+
+**What a NEW hosted server needs before it is added.** A signed, evidence-based review by both
+devs, recorded like ADR-031's, covering:
+
+- **Vendor and endpoint provenance** — who operates the server, on what domain, and a captured
+  live spike as evidence for every pinned URL. Endpoints copied from documentation without a
+  live capture are not evidence.
+- **A live `tools/list` capture with EVERY advertised tool classified** — expose or omit, and
+  for each exposed one whether it mutates plus its Solus-authored consent sentence. A tool that
+  cannot be given an honest one-line consent sentence is not exposed.
+- **Scope minimisation on the record** — the exact scopes requested, why each is needed, and
+  which advertised scopes are deliberately refused.
+- **Data-flow review** — what customer data leaves Solus in a call, and confirmation that no
+  Solus credential, no other tenant's content, and no system-prompt text can reach the server.
+- **Prompt-injection posture** — confirmation that advertised descriptions and schemas are
+  treated as untrusted (descriptions fenced and capped, schema prose stripped, non-text results
+  never inlined) and that results are validated before they render, write to the graph, or feed
+  a downstream tool.
+- **Failure and cost posture** — the vendor's rate/quota model, which quota key it meters
+  against, and exactly what a human sees when the grant expires or the allowance is exhausted.
+- **A written re-review trigger** — the review is voided by any change to the exposed tool set,
+  the pinned endpoints, or the requested scopes. That is Pattern 3's equivalent of ADR-031's
+  vendored-tree hash.
+
+**Rationale.** Not all the interesting robotics tooling is local, and some of it will never be
+forkable: FeatureScript authoring runs inside Onshape's own service and can run nowhere else.
+Refusing Pattern 3 would exclude those capabilities outright; pretending it is Pattern 1 would
+apply controls with no subject while leaving the controls that DO matter — namespace, scopes,
+endpoints, token custody — unstated. ADR-031's real insight was that the tool namespace is fixed
+cloud-side against a Solus-owned allowlist, never by what the far end advertises; that insight
+is transport-independent and Pattern 3 carries it over verbatim, replacing supply-chain
+ownership with a vendor-admission gate. Pinning the OAuth endpoints rather than discovering them
+is the single highest-value control here: discovery is where an SSRF, an authorization-server
+substitution and a scope escalation all enter through one attacker-controlled header.
+
+**Consequences.** Solus depends on a vendor's uptime, versioning and pricing for a Pattern-3
+capability with no fork to fall back on — a hosted server going away is a feature outage, and
+that is accepted knowingly. A vendor that adds a tool gets NO reach into SOL until Solus
+classifies it, so shipping a vendor's new tool costs a review and a release; the failure mode is
+a missing capability, never an unreviewed one, which is the trade we want. The CUSTOMER, not
+Solus, bears the vendor's API cost, so any allowance position surfaced in the UI must be
+labelled an estimate (ADR-019's honest limit). Enabling a Pattern-3 app leaves a lasting change
+on the customer's vendor account that Solus cannot undo, which is why the disclosure is
+mandatory rather than advisory. Adding a second hosted server must remain a data entry plus a
+review.
+
+**Revisit when:** a vendor offers a self-hostable or forkable build of a server we use under
+Pattern 3 (it then moves to Pattern 1 and the stricter controls apply); OAuth protected-resource
+metadata discovery becomes safely constrainable — a pinned issuer allowlist would let endpoint
+pinning relax without reopening the SSRF; the hosted-server count makes per-server admission
+review untenable (then invest in a shared review template and automated capture-diffing, not a
+weaker gate); or a hosted server needs to act on more than one tenant's data in a single call,
+which this design forbids and which would need a new decision.
 
 ---
 

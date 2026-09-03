@@ -98,15 +98,42 @@ def test_operations_never_take_a_document_scope_the_caller_did_not_ask_for() -> 
 
 
 @respx.mock
-async def test_list_documents_returns_the_accounts_documents() -> None:
+async def test_list_documents_returns_only_what_the_project_tracks() -> None:
+    """SOLUSDEV-168: this is the model's MENU, and it used to be every document
+    the account could open — strictly wider than the project's scope, which is
+    why "change this" resolved by guessing."""
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
         return_value=httpx.Response(200, json=DOCUMENT_LIST)
     )
 
-    result = await _run("onshape.list_documents", {})
+    result = await _run("onshape.list_documents", {"_documents": ["dA"]})
 
-    assert [d["id"] for d in result["documents"]] == ["dA", "dB"]
+    assert [d["id"] for d in result["documents"]] == ["dA"]
     assert result["documents"][0]["name"] == "Rover chassis"
+
+
+@respx.mock
+async def test_list_documents_refuses_rather_than_falling_back_to_the_account() -> None:
+    """An absent tracked set is a WIRING error. Falling back to the account
+    listing would silently restore the hole this closes."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        return_value=httpx.Response(200, json=DOCUMENT_LIST)
+    )
+
+    with pytest.raises(ConnectorError) as excinfo:
+        await _run("onshape.list_documents", {})
+
+    assert excinfo.value.code == "config_invalid"
+
+
+@respx.mock
+async def test_a_project_tracking_nothing_lists_nothing_without_calling_onshape() -> None:
+    route = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        return_value=httpx.Response(200, json=DOCUMENT_LIST)
+    )
+
+    assert await _run("onshape.list_documents", {"_documents": []}) == {"documents": []}
+    assert route.call_count == 0
 
 
 @respx.mock
@@ -230,7 +257,7 @@ async def test_an_expired_token_surfaces_as_invalid_credentials() -> None:
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(return_value=httpx.Response(401))
 
     with pytest.raises(ConnectorError) as excinfo:
-        await _run("onshape.list_documents", {})
+        await _run("onshape.list_documents", {"_documents": ["dA"]})
 
     assert excinfo.value.code == "invalid_credentials"
 
@@ -266,7 +293,7 @@ async def test_list_documents_is_bounded_by_onshapes_own_page_ceiling() -> None:
         return_value=httpx.Response(200, json=DOCUMENT_LIST)
     )
 
-    await _run("onshape.list_documents", {})
+    await _run("onshape.list_documents", {"_documents": ["dA"]})
 
     assert int(route.calls[0].request.url.params["limit"]) <= 20
 

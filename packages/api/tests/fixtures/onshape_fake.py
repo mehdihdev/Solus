@@ -58,8 +58,10 @@ _ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("elements", re.compile(r"^/api/v6/documents/d/[^/]+/w/[^/]+/elements$")),
     ("externaldata", re.compile(r"^/api/v6/documents/d/[^/]+/externaldata/[^/]+$")),
     (
+        # Both element families translate through the same shape; only the
+        # collection segment differs (SOLUSDEV-168 — Part Studio ingestion).
         "translations_start",
-        re.compile(r"^/api/v6/assemblies/d/[^/]+/w/[^/]+/e/[^/]+/translations$"),
+        re.compile(r"^/api/v6/(?:assemblies|partstudios)/d/[^/]+/w/[^/]+/e/[^/]+/translations$"),
     ),
     ("translations_poll", re.compile(r"^/api/v8/translations/[^/]+$")),
     ("parts", re.compile(r"^/api/v6/parts/d/[^/]+/w/[^/]+/e/[^/]+$")),

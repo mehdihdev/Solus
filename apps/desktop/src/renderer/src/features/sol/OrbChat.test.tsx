@@ -15,15 +15,20 @@ vi.mock('./solApi', () => ({
   listSolTurns: vi.fn(),
   streamSolMessage: vi.fn()
 }))
-vi.mock('../../lib/api/resources', () => ({
+vi.mock('../../lib/api/resources', async (importOriginal) => ({
+  // Spread the real module so genuinely-shared values (the
+  // `ConfirmationRefused` error class) are not silently undefined here.
+  ...(await importOriginal<typeof resources>()),
   classifyQuery: vi.fn(),
-  decideSolConfirmation: vi.fn()
+  decideSolConfirmation: vi.fn(),
+  listEntities: vi.fn()
 }))
 const createSolConversation = vi.mocked(solApi.createSolConversation)
 const listSolTurns = vi.mocked(solApi.listSolTurns)
 const streamSolMessage = vi.mocked(solApi.streamSolMessage)
 const classifyQuery = vi.mocked(resources.classifyQuery)
 const decideSolConfirmation = vi.mocked(resources.decideSolConfirmation)
+const listEntities = vi.mocked(resources.listEntities)
 
 const LONG_CITATION = `entity:${'x'.repeat(90)}`
 
@@ -318,8 +323,126 @@ describe('OrbChat composer', () => {
       )
     )
     expect(screen.getByPlaceholderText('Ask about a signal, a change, a part…')).toHaveValue('')
-    // Guide stays the safe default until the user opts in per panel instance.
+    // The toggle sticks for the panel instance rather than resetting per send.
     expect(screen.getByRole('radio', { name: 'Do' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('defaults to Do, so a mutating ask parks for approval instead of being refused', async () => {
+    // Guide refuses exactly the tools whose descriptor sets
+    // `requires_confirmation` (agent/modes.py) — precisely the set the CTR-03
+    // gate already parks. So defaulting to Guide added no safety: it replaced an
+    // approval card the user could act on with "switch to Do mode to operate the
+    // tool". The gate is unchanged and still parks every mutation; only the
+    // client default moves. `MessageCreate.action_mode` stays GUIDE for every
+    // non-UI caller.
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<OrbChat projectId="p1" />)
+
+    expect(screen.getByRole('radio', { name: 'Do' })).toHaveAttribute('aria-checked', 'true')
+
+    sendMessage('rename the mounting sketch')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
+    )
+  })
+
+  it('sends the ids of @-mentioned entities alongside the text', async () => {
+    // SOLUSDEV-168. The point of the `@` is that the user can name ONE node at
+    // any depth, from any integration, instead of hoping similarity search
+    // guesses which "bracket" they meant. The id travels beside the prose, so
+    // the composer's trim() and any later edit cannot invalidate an offset.
+    streamSolMessage.mockResolvedValue(undefined)
+    listEntities.mockResolvedValue([
+      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
+    ])
+    vi.useFakeTimers()
+    try {
+      render(<OrbChat projectId="p1" />)
+      const box = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
+
+      fireEvent.change(box, { target: { value: 'will @cam' } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(listEntities).toHaveBeenCalledWith('p1', { q: 'cam', limit: 8 })
+
+      fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
+      expect(box).toHaveValue('will @Camera Bracket ')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(streamSolMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'will @Camera Bracket', mentions: ['e-1'] })
+    )
+  })
+
+  it('drops a mention the user deleted before sending', async () => {
+    // The id list is not the source of truth — the surviving `@Name` in the text
+    // is. Otherwise deleting a mention would still ground SOL on it.
+    streamSolMessage.mockResolvedValue(undefined)
+    listEntities.mockResolvedValue([
+      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
+    ])
+    vi.useFakeTimers()
+    try {
+      render(<OrbChat projectId="p1" />)
+      const box = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
+      fireEvent.change(box, { target: { value: 'will @cam' } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
+
+      // The user changes their mind and rewrites the question.
+      fireEvent.change(box, { target: { value: 'never mind, why is the IMU noisy' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ mentions: [] }))
+  })
+
+  it('does not open the picker for an email address', async () => {
+    listEntities.mockResolvedValue([])
+    vi.useFakeTimers()
+    try {
+      render(<OrbChat projectId="p1" />)
+      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
+        target: { value: 'ask maya@example.com' }
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(listEntities).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox', { name: 'Graph entities' })).not.toBeInTheDocument()
+  })
+
+  it('still lets the user drop back to Guide for an explain-only turn', async () => {
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<OrbChat projectId="p1" />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Guide' }))
+
+    sendMessage('what would changing this break')
+
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ actionMode: 'guide' })
+      )
+    )
   })
 
   it('wires the classify preview onto the input (debounced, never per keystroke)', async () => {

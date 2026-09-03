@@ -24,6 +24,7 @@ from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.models import Project, Source, SourceStatus, SourceType, Team
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 
@@ -43,6 +44,7 @@ async def _seed(
     *,
     connected: bool = True,
     status: SourceStatus = SourceStatus.CONNECTED,
+    documents: list[str] | None = None,
 ) -> tuple[uuid.UUID, str]:
     async with maker() as db:
         team = Team(name="T")
@@ -59,7 +61,9 @@ async def _seed(
                 type=SourceType.ONSHAPE,
                 name="onshape",
                 status=status,
-                config={},
+                # SOLUSDEV-168: tools refuse a document the project does not
+                # track, so a fixture has to say what it tracks.
+                config={"documents": ["d1"] if documents is None else documents},
                 secret_ref=secret_ref if connected else None,
             )
         )
@@ -127,7 +131,9 @@ async def test_read_tools_are_not_confirmation_gated(
 async def test_a_read_reaches_onshape_with_the_stored_credentials(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    project_id, ref = await _seed(maker)
+    # Tracks what the fixture's document list actually returns, since the tool
+    # now filters to the project's own documents.
+    project_id, ref = await _seed(maker, documents=["dA", "dB"])
     store = InMemorySecretStore()
     await store.put(ref, "the-access-token")
     route = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
@@ -386,7 +392,9 @@ async def _seed_access(
                 type=SourceType.ONSHAPE,
                 name="onshape",
                 status=SourceStatus.CONNECTED,
-                config={"access": access} if access else {},
+                config=(
+                    {"documents": ["d1"], "access": access} if access else {"documents": ["d1"]}
+                ),
                 secret_ref=secret_ref,
             )
         )
@@ -490,7 +498,12 @@ async def test_write_tools_expose_a_preview_for_the_confirmation_card(
             {"document_id": "d1", "element_id": "e1", "name": "width", "expression": "150 mm"}
         )
 
-    assert rows == [{"label": "width", "before": "120 mm", "after": "150 mm"}]
+    # SOLUSDEV-168: WHICH document, by name, first — approving an edit to a
+    # 24-hex id is approving an edit to a document you cannot identify.
+    assert rows == [
+        {"label": "document", "before": None, "after": "Rover chassis"},
+        {"label": "width", "before": "120 mm", "after": "150 mm"},
+    ]
 
 
 async def test_read_tools_have_no_preview(maker: async_sessionmaker[AsyncSession]) -> None:
@@ -503,3 +516,148 @@ async def test_read_tools_have_no_preview(maker: async_sessionmaker[AsyncSession
     }
 
     assert getattr(tools["onshape.list_documents"], "preview", None) is None
+
+
+# ------------------------------------------- addressing: the project's own documents
+
+
+@respx.mock
+async def test_a_document_the_project_does_not_track_is_refused(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """THE addressing hole. `list_documents` used to list the customer's WHOLE
+    Onshape account, so the model's menu was wider than the project — and the
+    only thing between a mis-addressed write and their CAD was a confirmation
+    card showing a 24-hex id no human can recognise."""
+    project_id, ref = await _seed(maker)  # tracks d1
+    store = InMemorySecretStore()
+    await store.put(ref, "at")
+
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(tool="onshape.list_elements", args={"document_id": "someoneelsesdoc"})
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    # NOT_FOUND, never UNAUTHORIZED: a permission error would confirm it exists.
+    assert result.error.code is ToolErrorCode.NOT_FOUND
+    assert result.error.retryable is False
+
+
+@respx.mock
+async def test_the_guard_covers_reads_not_only_writes(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Guarding only the write path would still let SOL read any document in the
+    customer's account. Every operation routes through the same `_call`."""
+    project_id, ref = await _seed(maker)
+    store = InMemorySecretStore()
+    await store.put(ref, "at")
+    registry = _registry(maker, project_id, store)
+
+    for tool, args in (
+        ("onshape.get_body_details", {"document_id": "untracked", "element_id": "e1"}),
+        ("onshape.get_variables", {"document_id": "untracked", "element_id": "e1"}),
+        ("onshape.get_feature_tree", {"document_id": "untracked", "element_id": "e1"}),
+    ):
+        result = await registry.invoke(ToolCall(tool=tool, args=args))
+        assert result.error is not None, tool
+        assert result.error.code is ToolErrorCode.NOT_FOUND, tool
+
+
+@respx.mock
+async def test_a_source_tracking_nothing_fails_closed(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A connected but idle source tracks nothing, and "nothing tracked" must
+    never read as "everything allowed"."""
+    project_id, ref = await _seed(maker)
+    store = InMemorySecretStore()
+    await store.put(ref, "at")
+    async with maker() as db:
+        source = await db.scalar(select(Source).where(Source.project_id == project_id))
+        assert source is not None
+        source.config = {}
+        await db.commit()
+
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(tool="onshape.list_elements", args={"document_id": "d1"})
+    )
+
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.NOT_FOUND
+    assert "tracked" in result.error.message
+
+
+@respx.mock
+async def test_the_models_menu_is_the_project_not_the_account(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """`list_documents` is what the model picks from. Listing the whole Onshape
+    account made its menu strictly wider than the project's scope."""
+    project_id, ref = await _seed(maker, documents=["dA"])
+    store = InMemorySecretStore()
+    await store.put(ref, "at")
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        return_value=httpx.Response(200, json=DOCUMENT_LIST)
+    )
+
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(tool="onshape.list_documents", args={})
+    )
+
+    assert result.ok is True
+    assert result.value is not None
+    # dB is in the account and NOT tracked, so the model never learns it exists.
+    assert [d["id"] for d in result.value["documents"]] == ["dA"]
+
+
+async def test_a_model_cannot_supply_its_own_document_menu(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The scope is bound by Solus code, the `get_entity` idiom. Every operation
+    schema forbids extra properties, so `_documents` is unforgeable — a model
+    that tries to widen its own menu is rejected at registry validation, before
+    any handler runs."""
+    project_id, ref = await _seed(maker, documents=["dA"])
+    store = InMemorySecretStore()
+    await store.put(ref, "at")
+
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(tool="onshape.list_documents", args={"_documents": ["dA", "dB", "anything"]})
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.INVALID_ARGS
+
+
+async def test_a_failed_document_lookup_degrades_to_the_id_not_a_lost_card(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A weaker card beats an unreachable action. If Onshape does not name the
+    document, the row falls back to the id rather than the whole park failing."""
+    project_id, ref = await _seed_access(maker, "write")
+    store = InMemorySecretStore()
+    await store.put(ref, "at")
+    tools = {
+        tool.descriptor.name: tool
+        for tool in build_onshape_tools(
+            maker, project_id, secret_store=store, connectors=_connectors()
+        )
+    }
+
+    with respx.mock:
+        # Same endpoint the workspace lookup uses, answering WITHOUT a name.
+        respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d1").mock(
+            httpx.Response(200, json={"id": "d1", "defaultWorkspace": {"id": "w1"}})
+        )
+        respx.get(f"{ONSHAPE_API_BASE}/api/v6/variables/d/d1/w/w1/e/e1/variables").mock(
+            httpx.Response(200, json=VARIABLES)
+        )
+        rows = await tools["onshape.set_variable"].preview(  # type: ignore[attr-defined]
+            {"document_id": "d1", "element_id": "e1", "name": "width", "expression": "150 mm"}
+        )
+
+    assert rows[0] == {"label": "document", "before": None, "after": "d1"}
+    assert len(rows) == 2, "the operation's own diff must survive a naming failure"

@@ -844,10 +844,17 @@ require the `member` role; reads need only a resolvable project.
 
 SOLX-04: `GET /sol/tools` additionally lists `solus.list_integrations`, `solus.connect_integration` (destructive — parks through the CTR-03 gate), and `solus.verify_integration` when the connector registry is wired. Connecting from chat is discovery → confirm → verify; OAuth providers are pointed at the in-app flow (credentials never pass through tool arguments).
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?}` where `action_mode` is
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, mentions?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
+SOLUSDEV-168: `mentions` is a list of graph entity ids the user pointed at with the composer's
+`@` — integration-agnostic, because an entity id addresses any node in the graph at any depth.
+They lead the neighbourhood's anchors (`reason.plan_query`), capped at `MAX_ANCHORS` (8) both
+here and again in the planner, since that cap is what bounds the traversal's DB work. Ids are
+NOT existence-checked: `load_neighborhood` is project-scoped, so one from another team yields
+an empty neighbourhood rather than a distinguishable error — answering differently for "exists
+elsewhere" than for "does not exist" would be a cross-tenant existence oracle.
 Returns `text/event-stream`. The user turn is persisted
 (and `sol.message` logged) before streaming; assistant/tool turns are persisted as the stream
 completes. SSE `event:` names and their `data` payloads:

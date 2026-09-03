@@ -17,7 +17,8 @@ const OAUTH_PICK: CatalogEntry = {
   mode: 'oauth',
   configFields: ['repo', 'branch'],
   selection: { mode: 'single', config_key: 'repo', label: 'repository' },
-  accessModes: null
+  accessModes: null,
+  hosted: null
 }
 
 const OAUTH_FIELDS: CatalogEntry = {
@@ -28,7 +29,8 @@ const OAUTH_FIELDS: CatalogEntry = {
   mode: 'oauth',
   configFields: ['document_id', 'license_key'],
   selection: null,
-  accessModes: null
+  accessModes: null,
+  hosted: null
 }
 
 const OAUTH_ACCESS: CatalogEntry = {
@@ -50,7 +52,8 @@ const EXPORT_FILE: CatalogEntry = {
   mode: 'export-file',
   configFields: ['export'],
   selection: null,
-  accessModes: null
+  accessModes: null,
+  hosted: null
 }
 
 interface Handlers {
@@ -160,7 +163,7 @@ describe('ConnectWizardModal', () => {
     renderWizard(OAUTH_ACCESS, {
       phase: 'busy',
       stage: 'access',
-      accessModes: OAUTH_ACCESS.accessModes!
+      accessModes: OAUTH_ACCESS.accessModes!,
     })
     expect((screen.getByLabelText('Read-only') as HTMLInputElement).checked).toBe(true)
   })
@@ -169,7 +172,7 @@ describe('ConnectWizardModal', () => {
     const handlers = renderWizard(OAUTH_ACCESS, {
       phase: 'busy',
       stage: 'access',
-      accessModes: OAUTH_ACCESS.accessModes!
+      accessModes: OAUTH_ACCESS.accessModes!,
     })
     expect(screen.getByText('Read and change models')).toBeTruthy()
     fireEvent.click(screen.getByLabelText('Read and edit'))

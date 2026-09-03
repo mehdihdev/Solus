@@ -285,6 +285,104 @@ async def test_runner_failure_surfaces_generic_error_not_a_traceback(
     assert "boom" not in error["message"]  # the raw exception text is never leaked
 
 
+class _RecordingRunner:
+    """Captures the assembled run context so a test can assert what Solus code
+    handed the runner, without depending on any model behaviour."""
+
+    def __init__(self) -> None:
+        self.ctx: Any = None
+
+    async def run(self, ctx: Any) -> Any:
+        self.ctx = ctx
+        for _ in ():  # an async generator that yields nothing
+            yield
+
+
+async def test_mentions_reach_the_runner_as_graph_anchors(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-168: `@`-mentioning a node is the user saying "this one". It has
+    to arrive as a concrete id, not be re-inferred from the prose."""
+    _, project = await _project(client, alice_headers)
+    entity_id = await _seed_entity(db, project["id"])
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "will this clear the belt?", "mentions": [str(entity_id)]},
+        headers=alice_headers,
+    )
+
+    assert resp.status_code == 200
+    assert runner.ctx.mentions == (entity_id,)
+
+
+async def test_a_mention_from_another_team_is_inert_not_an_error(
+    app: Any,
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Deliberately NOT a 403/404. `load_neighborhood` is project-scoped, so a
+    foreign id yields an empty neighbourhood — the same posture `get_entity`
+    takes. Answering differently for "exists elsewhere" than for "does not
+    exist" would hand any member a cross-tenant existence oracle."""
+    _, alice_project = await _project(client, alice_headers)
+    _, bob_project = await _project(client, bob_headers)
+    bob_entity = await _seed_entity(db, bob_project["id"], name="Bob Secret Part")
+    convo = await _create_conversation(client, alice_headers, alice_project["id"])
+    app.state.agent_runner = _RecordingRunner()
+
+    foreign = await client.post(
+        f"/api/v1/projects/{alice_project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "what is this?", "mentions": [str(bob_entity)]},
+        headers=alice_headers,
+    )
+    absent = await client.post(
+        f"/api/v1/projects/{alice_project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "what is this?", "mentions": [str(uuid.uuid4())]},
+        headers=alice_headers,
+    )
+
+    assert foreign.status_code == absent.status_code == 200
+    assert "Bob Secret Part" not in foreign.text
+
+
+async def test_more_mentions_than_the_anchor_cap_is_rejected(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """Bounded at the boundary as well as in `plan_query` — an unbounded list is
+    unbounded DB work in the neighbourhood query (SEC-H3)."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "these", "mentions": [str(uuid.uuid4()) for _ in range(9)]},
+        headers=alice_headers,
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_a_malformed_mention_is_rejected(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "this", "mentions": ["not-a-uuid"]},
+        headers=alice_headers,
+    )
+
+    assert resp.status_code == 422
+
+
 async def test_turns_pagination_advances_past_first_page(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:

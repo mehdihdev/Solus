@@ -43,6 +43,20 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   endpoint hiccup) it shows the honest idle line "auto routing · sizes each
   message to the cheapest capable model" in the same spot — no layout shift,
   never a fabricated tier.
+  Typing `@` in the input opens a **graph-entity picker** (SOLUSDEV-168): a
+  listbox above the composer, debounced ~400ms against
+  `GET /projects/{id}/entities?q=&limit=8`, arrow keys + Enter to pick, Escape to
+  dismiss. Picking splices `@Name` into the text and carries the entity **id**
+  alongside the message, so SOL grounds on the node the user meant instead of
+  whatever similarity search ranked first. A mention deleted from the text is not
+  sent. Mentions arrive back as `graph` sections in `context_used`, so they render
+  in "From the graph" with no extra UI. A failed search shows no list and never
+  blocks Send.
+  The action-mode toggle **defaults to Do** (SOLUSDEV-168) and sticks for the
+  panel instance. Guide refuses exactly the tools the CTR-03 gate already parks,
+  so a Guide default only replaced an approval card with a "switch to Do mode"
+  refusal; every mutation still parks for explicit approval. The API default
+  (`MessageCreate.action_mode`) stays `guide` for non-UI callers.
 - Turn rejections are named, not generic: 402 → "You're out of SOL credits —
   top up to keep going." (and the top-up card lights); 429 → "Too many SOL
   turns right now — give it a few seconds."

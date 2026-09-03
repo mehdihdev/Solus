@@ -34,7 +34,7 @@ write is recoverable; a corrupted model is not.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -45,6 +45,7 @@ from solus_api.connectors.onshape import (
     ONSHAPE_ID_RE,
     ONSHAPE_MAX_PAGE_LIMIT,
     OnshapeConnector,
+    element_base_path,
 )
 
 #: Feature names travel to a UI; a model-supplied one is bounded.
@@ -144,11 +145,6 @@ def schema(
     }
 
 
-def element_base_path(kind: str, document_id: str, workspace_id: str, element_id: str) -> str:
-    """The `/{kind}/d/{did}/w/{wid}/e/{eid}` prefix every element call hangs off."""
-    return f"/api/v6/{kind}/d/{document_id}/w/{workspace_id}/e/{element_id}"
-
-
 def _messages(items: Any) -> list[dict[str, Any]]:
     """Flatten Onshape's `{btType, message}` envelopes.
 
@@ -166,26 +162,72 @@ def _messages(items: Any) -> list[dict[str, Any]]:
 # --------------------------------------------------------------- operations
 
 
+#: Same bound the connector's own sweep uses — an account listing is not a
+#: place to loop without a floor.
+_MAX_DOCUMENT_PAGES = 10
+
+
 async def _list_documents(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> dict[str, Any]:
-    body = await connector.get_json(
-        client,
-        "/api/v6/documents",
-        what="document list",
-        params={"limit": ONSHAPE_MAX_PAGE_LIMIT},
-    )
-    items = body.get("items") if isinstance(body, dict) else None
-    documents = [
-        {
-            "id": item.get("id", ""),
-            "name": item.get("name", ""),
-            "owner": (item.get("owner") or {}).get("name", ""),
-        }
-        for item in (items if isinstance(items, list) else [])
-        if isinstance(item, dict)
-    ]
+    """The documents THIS PROJECT tracks, never the whole Onshape account.
+
+    This is the model's menu, and it used to be every document the customer's
+    account could open — strictly wider than the project's scope, and the reason
+    "change this" resolved by guessing. The tracked set is injected by Solus code
+    as `_documents` (`agent/tools/onshape_tools.py`), never supplied by the
+    model: every operation schema is `additionalProperties: False`, so a model
+    that tried to send it is rejected at validation before this runs.
+
+    An ABSENT `_documents` is a wiring error, and it refuses rather than falling
+    back to the account listing — a fallback here would silently restore exactly
+    the hole this closes.
+    """
+    tracked = args.get("_documents")
+    if not isinstance(tracked, list):
+        raise ConnectorError(
+            "config_invalid", "the tracked document set was not supplied to this call"
+        )
+    allowed = {value for value in tracked if isinstance(value, str)}
+    if not allowed:
+        return {"documents": []}
+
+    documents: list[dict[str, str]] = []
+    # Onshape caps `limit` at 20, so a project tracking more than a page's worth
+    # would silently lose the rest of its own documents on a single-page read.
+    async for item in _document_pages(connector, client):
+        if item.get("id") in allowed:
+            documents.append(
+                {
+                    "id": item.get("id", ""),
+                    "name": item.get("name", ""),
+                    "owner": (item.get("owner") or {}).get("name", ""),
+                }
+            )
+        if len(documents) == len(allowed):
+            break
     return {"documents": documents}
+
+
+async def _document_pages(
+    connector: OnshapeConnector, client: httpx.AsyncClient
+) -> AsyncIterator[dict[str, Any]]:
+    """Every document the account can open, page by page and bounded."""
+    for page in range(_MAX_DOCUMENT_PAGES):
+        body = await connector.get_json(
+            client,
+            "/api/v6/documents",
+            what="document list",
+            params={"limit": ONSHAPE_MAX_PAGE_LIMIT, "offset": page * ONSHAPE_MAX_PAGE_LIMIT},
+        )
+        items = body.get("items") if isinstance(body, dict) else None
+        rows = [
+            item for item in (items if isinstance(items, list) else []) if isinstance(item, dict)
+        ]
+        for item in rows:
+            yield item
+        if len(rows) < ONSHAPE_MAX_PAGE_LIMIT:
+            return
 
 
 async def _list_elements(
@@ -597,9 +639,7 @@ def _parameter(spec: dict[str, Any], parameter_id: str, value: Any) -> dict[str,
             f"parameter '{parameter_id}' has an ambiguous payload shape; refusing to guess",
         )
     if not isinstance(value, _SCALAR):
-        raise ConnectorError(
-            "config_invalid", f"parameter '{parameter_id}' must be a single value"
-        )
+        raise ConnectorError("config_invalid", f"parameter '{parameter_id}' must be a single value")
     return {**template, "parameterId": parameter_id, field_name: value}
 
 

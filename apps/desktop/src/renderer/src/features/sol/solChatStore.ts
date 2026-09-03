@@ -46,8 +46,12 @@ export interface ChatItem {
   pending: boolean
   /** Author-safe failure text (backend error frame or a local transport note). */
   error: string | null
-  /** CTR-03: a parked destructive action awaiting this user's approval. */
-  confirmation: PendingConfirmation | null
+  /** CTR-03: every action this turn parked, in the order they were proposed.
+   *  A LIST since SOLUSDEV-168: the turn no longer ends at the first parked
+   *  call, so one message can park several. Overwriting a single slot would
+   *  silently drop every card but the last — and a dropped card is a
+   *  destructive action the user can neither approve nor reject. */
+  confirmations: readonly PendingConfirmation[]
 }
 
 export type ChatStatus = 'loading' | 'ready' | 'offline'
@@ -139,12 +143,12 @@ function turnToItem(turn: SolTurn): ChatItem {
     trace: [],
     pending: false,
     error: null,
-    confirmation: null
+    confirmations: []
   }
 }
 
 function blankItem(id: string, role: ChatItem['role'], content: string, pending = false): ChatItem {
-  return { id, role, content, citations: [], trace: [], pending, error: null, confirmation: null }
+  return { id, role, content, citations: [], trace: [], pending, error: null, confirmations: [] }
 }
 
 /** Author-safe failure text for a rejected/failed turn — never the raw error. */
@@ -186,7 +190,14 @@ function applyEvent(
       }))
       return
     case 'tool_confirmation':
-      patch((m) => ({ ...m, confirmation: event.pending }))
+      // Append, never replace. The backend dedupes by concrete action, so a
+      // re-proposal arrives as the SAME confirmationId rather than a duplicate
+      // card — matching on the id here keeps that true in the UI.
+      patch((m) =>
+        m.confirmations.some((c) => c.confirmationId === event.pending.confirmationId)
+          ? m
+          : { ...m, confirmations: [...m.confirmations, event.pending] }
+      )
       return
     case 'message':
       patch((m) => ({ ...m, content: event.content, citations: event.citations, pending: false }))
@@ -308,7 +319,8 @@ export function startNewChat(projectId: string): void {
 export async function sendMessage(
   projectId: string,
   content: string,
-  actionMode: SolActionMode
+  actionMode: SolActionMode,
+  mentions: readonly string[] = []
 ): Promise<void> {
   const text = content.trim()
   if (!text || controllers.has(projectId)) return
@@ -366,6 +378,7 @@ export async function sendMessage(
       conversationId: activeId,
       content: text,
       actionMode,
+      mentions,
       signal: controller.signal,
       onEvent: (event) => {
         if (event.type === 'context_used') {
@@ -428,7 +441,9 @@ export async function decideConfirmation(
   patchSession(projectId, (s) => ({
     ...s,
     items: s.items.map((m) =>
-      m.confirmation?.confirmationId === confirmationId ? { ...m, confirmation: null } : m
+      m.confirmations.some((c) => c.confirmationId === confirmationId)
+        ? { ...m, confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId) }
+        : m
     )
   }))
 }

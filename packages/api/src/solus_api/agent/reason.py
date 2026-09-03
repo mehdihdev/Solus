@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
@@ -63,7 +64,7 @@ _CONTEXT_MAX_TOKENS: Final = 4000
 #: SEC-H3: an 8000-char message can carry hundreds of UUIDs; anchors and the
 #: entity count are capped so a hostile query bounds DB work, not just the
 #: rendered prompt (the SYS-05 sub-sampling lever, actually pulled).
-_MAX_ANCHORS: Final = 8
+MAX_ANCHORS: Final = 8
 _MAX_ENTITIES: Final = 200
 
 
@@ -79,9 +80,23 @@ class QueryPlan(BaseModel):
     k: int
 
 
-def plan_query(query: str) -> QueryPlan:
-    """Deterministic pull-plan for a query. No model call, no I/O."""
-    anchors = [uuid.UUID(match) for match in _UUID_RE.findall(query)][:_MAX_ANCHORS]
+def plan_query(query: str, *, mentions: Sequence[uuid.UUID] = ()) -> QueryPlan:
+    """Deterministic pull-plan for a query. No model call, no I/O.
+
+    `mentions` are entities the user pointed at explicitly (the composer's `@`).
+    They lead the anchor list because they are deliberate, where a UUID found in
+    the prose may just be quoted log output — so when `MAX_ANCHORS` bites, the
+    inferred ids are the ones dropped. The cap binds them too: the request
+    schema also limits the list, but a client is not trusted to respect it, and
+    this cap is what bounds the neighbourhood query's DB work (SEC-H3).
+
+    Mentioned ids are NOT checked for existence here. `load_neighborhood` is
+    project-scoped, so an id from another team simply yields nothing — the same
+    posture `get_entity` takes, and the reason there is no cross-tenant
+    existence oracle to probe.
+    """
+    found = (uuid.UUID(match) for match in _UUID_RE.findall(query))
+    anchors = list(dict.fromkeys([*mentions, *found]))[:MAX_ANCHORS]
     words = frozenset(re.findall(r"[a-z]+", query.lower()))
     runtime_shaped = bool(words & _RUNTIME_WORDS)
     return QueryPlan(

@@ -45,7 +45,8 @@ const GITHUB: CatalogEntry = {
   mode: 'oauth',
   configFields: ['repo', 'branch'],
   selection: { mode: 'single', config_key: 'repo', label: 'repository' },
-  accessModes: null
+  accessModes: null,
+  hosted: null
 }
 
 const KICAD: CatalogEntry = {
@@ -56,7 +57,8 @@ const KICAD: CatalogEntry = {
   mode: 'export-file',
   configFields: ['export'],
   selection: null,
-  accessModes: null
+  accessModes: null,
+  hosted: null
 }
 
 const cancelOAuth = vi.fn(async () => true)

@@ -176,9 +176,19 @@ STL is geometry-only, DWG is a 2D drawing — see §5–§6; the shared parser d
 | Domain            | v1-real (parsed in v1)                                                                                                      | Deferred                                                              |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | **Electrical**    | KiCad XML netlist (**primary** — components + connectivity) + SPICE deck (sim params + topology) + Altium export equivalent | —                                                                     |
-| **Mechanical**    | STEP + STL → geometry + **assembly structure + inter-part connections** (NOT a flat part list), one SHARED CAD parser       | **DWG** (deprioritized — §5.7/§6.4)                                   |
+| **Mechanical**    | STEP + STL → geometry + **assembly structure + inter-part connections** where the source has them; a **flat part list** for part-container elements (Onshape Part Studios — SOLUSDEV-168), one SHARED CAD parser | **DWG** (deprioritized — §5.7/§6.4)                                   |
 | **Code**          | repo tree via GitHub/GitLab APIs                                                                                            | —                                                                     |
 | **Manufacturing** | —                                                                                                                           | **Gerber** (copper/manufacturing data — low cross-domain-graph value) |
+
+> **Amended 2026-09-03 (SOLUSDEV-168).** The original "NOT a flat part list" ruled out
+> treating an assembly as a bag of parts — the cross-domain value is in the STRUCTURE, and
+> that still holds for anything with a hierarchy. It did not anticipate elements that ARE
+> definitionally flat: an Onshape Part Studio is a set of bodies with no assembly tree, so it
+> yields entities and zero `part_of` relations. Excluding those meant Part Studios never
+> entered the graph at all — which is where people actually model, and where FeatureScript
+> operates. Structure is still extracted wherever it exists; a flat element is not a licence
+> to flatten a structured one.
+
 | **Any**           | export parsing only                                                                                                         | any proprietary-tool DEEP/live integration beyond export parsing      |
 
 > **URDF / robot-description note.** URDF (and SDF/xacro) are committed, parseable exports too, but they

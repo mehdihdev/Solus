@@ -22,6 +22,7 @@ import { ConnectCatalog } from '../onboarding/ConnectCatalog'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
 import { plural } from '../onboarding/selectionConfigureStep'
 import { EditSelectionModal } from './EditSelectionModal'
+import { HostedAddOnRow } from './HostedAddOnRow'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { sourceErrorText, sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectSources } from './useProjectSources'
@@ -193,13 +194,15 @@ function SourceRow({
   const errorText = sourceErrorText(source.last_error)
 
   return (
+    <div style={{ borderBottom: last ? 'none' : '1px solid var(--bd)' }}>
     <div
       style={{
         display: 'flex',
         gap: 12,
         alignItems: 'center',
-        padding: '13px 16px',
-        borderBottom: last ? 'none' : '1px solid var(--bd)'
+        padding: '13px 16px'
+        // The separator moved to the wrapper above, so an add-on block renders
+        // INSIDE this source's boundary rather than looking like the next row.
       }}
     >
       <span
@@ -246,6 +249,35 @@ function SourceRow({
         />
       )}
     </div>
+    <SourceAddOn source={source} projectId={projectId} onChanged={onSelectionSaved} />
+    </div>
+  )
+}
+
+/** The vendor-hosted add-on this connector carries (FeatureScript on Onshape),
+ *  or nothing. Read GENERICALLY from the live registry — no provider id appears
+ *  on this screen, so the next hosted server is a backend entry and no change
+ *  here. Rendered only for a CONNECTED source: an add-on rides an existing
+ *  grant, so offering it on a pending or errored source would be a dead end. */
+function SourceAddOn({
+  source,
+  projectId,
+  onChanged
+}: {
+  source: Source
+  projectId: string
+  onChanged: () => void
+}): React.JSX.Element | null {
+  const hosted = useIntegrationCatalog().find((e) => e.id === source.type)?.hosted ?? null
+  if (!hosted || source.status !== 'connected') return null
+  return (
+    <HostedAddOnRow
+      source={source}
+      projectId={projectId}
+      hosted={hosted}
+      providerName={sourceTypeLabel(source.type)}
+      onChanged={onChanged}
+    />
   )
 }
 

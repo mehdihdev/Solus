@@ -53,9 +53,35 @@ function DiffRow({ row }: { row: ConfirmationRow }): React.JSX.Element {
   )
 }
 
+/** Why a decision did not go through, and whether it can be tried again.
+ *
+ *  TWO kinds, and conflating them is its own bug: a TRANSPORT failure leaves the
+ *  action genuinely parked, while a server REFUSAL is terminal — the row can
+ *  never be approved again, so "still waiting" would be false. */
+function DecisionFailure({
+  failed
+}: {
+  failed: { message: string; terminal: boolean }
+}): React.JSX.Element {
+  return (
+    <Mono
+      style={{ ...VERBATIM, color: failed.terminal ? 'var(--err)' : 'var(--acc)' }}
+      data-terminal={failed.terminal ? 'true' : 'false'}
+    >
+      {failed.message}{' '}
+      {failed.terminal
+        ? // Deliberately claims nothing about what RAN: a tool that failed after
+          // approval may have partly executed, so "nothing was applied" would be
+          // its own lie. This sentence is true in every terminal case.
+          'This approval can’t be retried — ask SOL again if you still want it.'
+        : 'The action is still waiting for you.'}
+    </Mono>
+  )
+}
+
 export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): React.JSX.Element {
   const [busy, setBusy] = useState<ConfirmationDecision | null>(null)
-  const [failed, setFailed] = useState<string | null>(null)
+  const [failed, setFailed] = useState<{ message: string; terminal: boolean } | null>(null)
 
   // useCallback so react-hooks can see this is an event handler rather than
   // effect-adjacent state writing.
@@ -71,7 +97,21 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
         // A failed decision must never look like a successful one. Show the
         // server's own reason — "expired", "already decided", "what this would
         // do has changed" are all different, and a generic apology hides which.
-        setFailed(error instanceof Error ? error.message : 'That didn’t go through.')
+        //
+        // TWO kinds, and conflating them is its own bug: a TRANSPORT failure
+        // leaves the action genuinely parked and retryable, while a
+        // ConfirmationRefused means the server decided and refused. Those rows
+        // are TERMINAL — the confirmation can never be approved again — so
+        // saying "still waiting" and leaving Approve live only earns "This
+        // action was already …" on the next click.
+        setFailed({
+          message: error instanceof Error ? error.message : 'That didn’t go through.',
+          // Checked by NAME, not `instanceof`: this error crosses a module
+          // boundary, and a bundled or mocked second copy of the class would
+          // make an identity check silently false — the failure mode being
+          // fixed here, reintroduced one level down.
+          terminal: error instanceof Error && error.name === 'ConfirmationRefused'
+        })
       } finally {
         setBusy(null)
       }
@@ -111,19 +151,23 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
       )}
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button type="button" onClick={() => void decide('approve')} disabled={busy !== null}>
+        <button
+          type="button"
+          onClick={() => void decide('approve')}
+          disabled={busy !== null || failed?.terminal === true}
+        >
           {busy === 'approve' ? 'Applying…' : 'Approve'}
         </button>
-        <button type="button" onClick={() => void decide('reject')} disabled={busy !== null}>
+        <button
+          type="button"
+          onClick={() => void decide('reject')}
+          disabled={busy !== null || failed?.terminal === true}
+        >
           Reject
         </button>
       </div>
 
-      {failed !== null && (
-        <Mono style={{ ...VERBATIM, color: 'var(--acc)' }}>
-          {failed} The action is still waiting for you.
-        </Mono>
-      )}
+      {failed !== null && <DecisionFailure failed={failed} />}
     </section>
   )
 }

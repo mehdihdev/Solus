@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits, usage
 from solus_api.bridge.service import ConnectRateLimiter
+from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
@@ -150,6 +151,11 @@ async def delete_projects_cascade(
                 # this, deleting an account would leave a live grant against the
                 # user's GitLab/Onshape data. `delete` no-ops when absent.
                 await secret_store.delete(refresh_secret_ref(ref))
+                # SOLUSDEV-168: hosted add-on grants hang off the same ref.
+                # Deleting an account must not leave a live FeatureScript
+                # OAuth2Write token against the user's Onshape documents.
+                for hosted_ref in hosted_refs(ref):
+                    await secret_store.delete(hosted_ref)
     source_ids = [sid for sid, _ref in sources]
     if source_ids:
         await session.execute(delete(OAuthState).where(OAuthState.source_id.in_(source_ids)))

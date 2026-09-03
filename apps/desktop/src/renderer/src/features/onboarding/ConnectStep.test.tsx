@@ -234,6 +234,7 @@ describe('ConnectStep — local-bridge routing (SOLUSDEV-72)', () => {
         configFields: [],
         selection: null,
         accessModes: null,
+        hosted: null,
         localTool: {
           type: 'fusion',
           display_name: 'Fusion',

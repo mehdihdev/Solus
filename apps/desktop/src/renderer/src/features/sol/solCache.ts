@@ -65,7 +65,7 @@ export async function readCachedChat(
       trace: [],
       pending: false,
       error: null,
-      confirmation: null
+      confirmations: []
     }))
   } catch {
     return null

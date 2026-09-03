@@ -11,6 +11,7 @@
 import type { OAuthStartResponse, Source, Sync } from '../../lib/api/resources'
 import type { OAuthBridge } from '../auth/githubOAuth'
 import type { AccessChoiceStep } from './accessChoiceStep'
+import type { AddOnStep } from './addOnStep'
 import type { ConnectionState, ConnectStage } from './onboardingStore'
 import { pollSync, syncErrorMessage } from './sourceSync'
 
@@ -61,6 +62,10 @@ export interface OAuthConnectDeps {
   /** How much power the user grants, chosen BEFORE authorization. Optional so
    *  callers with nothing to ask keep working unchanged. */
   chooseAccess?: AccessChoiceStep
+  /** A vendor-hosted add-on enabled as part of this connect (SOLUSDEV-168:
+   *  "one connect, FeatureScript comes with it"). Optional, and it can never
+   *  fail the connection. */
+  addOn?: AddOnStep
   /** Optional sleep override so tests don't actually wait between poll ticks. */
   sleep?: (ms: number) => Promise<void>
 }
@@ -120,13 +125,19 @@ export async function runOAuthConnect(
       code: authorized.code
     })
 
+    // HERE, and not on a button afterwards. The account exists as of the line
+    // above, the browser still holds the vendor session from the handshake that
+    // just finished, and the loopback has settled — so the add-on's own sign-in
+    // is usually a redirect the user barely sees. It cannot fail this connect.
+    const addOnNote = deps.addOn ? await deps.addOn({ projectId, sourceId: source.id }) : null
+
     const outcome = await deps.configure({ projectId, sourceId: source.id, provider })
     if ('error' in outcome) {
       deps.onProgress({ phase: 'error', error: outcome.error, sourceId: source.id })
       return { ok: false, error: outcome.error, sourceId: source.id }
     }
 
-    return await indexSource(deps, projectId, source.id, outcome, label)
+    return await indexSource(deps, projectId, source.id, outcome, label, addOnNote)
   } catch (error) {
     const message = error instanceof Error ? error.message : `${label} connect failed.`
     deps.onProgress({ phase: 'error', error: message })
@@ -179,7 +190,8 @@ async function indexSource(
   projectId: string,
   sourceId: string,
   outcome: { config: Record<string, unknown>; label?: string },
-  displayName: string
+  displayName: string,
+  addOnNote: string | null = null
 ): Promise<OAuthConnectResult> {
   deps.onProgress(busy('index', `Indexing ${outcome.label ?? displayName}…`, sourceId))
   await deps.api.updateSource(projectId, sourceId, { config: outcome.config })
@@ -199,7 +211,10 @@ async function indexSource(
 
   const source = await deps.api.getSource(projectId, sourceId)
   const count = source.entity_count ?? sync.entities_created
-  const result = `Connected — ${count} entities indexed`
+  // The add-on note rides the REAL result string rather than replacing it: a
+  // connect that indexed nothing has not become a success because an extra
+  // turned on, and the entity count is what the person came for.
+  const result = `Connected — ${count} entities indexed${addOnNote ? ` · ${addOnNote}` : ''}`
   deps.onProgress({ phase: 'done', sourceId, result })
   return { ok: true, sourceId, result }
 }
