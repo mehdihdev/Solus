@@ -58,4 +58,22 @@ describe('OverviewTab', () => {
     render(<OverviewTab view={viewOf('scene', { installed: true })} />)
     expect(screen.getByText('none')).toBeInTheDocument()
   })
+
+  it('drops a link that is not https instead of rendering it', () => {
+    const manifest = EXTENSION_CATALOG.find((m) => m.id === 'scene')!
+    const view = buildView(
+      {
+        ...manifest,
+        links: { documentation: 'javascript:alert(1)', issues: 'https://ok.example' }
+      },
+      { ...DEFAULT_INSTALL_STATE, installed: true },
+      new Set()
+    )
+    render(<OverviewTab view={view} />)
+    expect(screen.queryByRole('link', { name: /Documentation/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Report an issue/ })).toHaveAttribute(
+      'href',
+      'https://ok.example'
+    )
+  })
 })

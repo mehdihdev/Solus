@@ -22,4 +22,22 @@ describe('Card', () => {
     rerender(<Card onClick={vi.fn()}>clickable</Card>)
     expect(screen.getByText('clickable').closest('div')).toHaveClass('interactive')
   })
+
+  it('forwards accessibility attributes but never an HTML sink (SOLUSDEV-235)', () => {
+    render(
+      <Card
+        role="button"
+        tabIndex={0}
+        aria-label="Open thing"
+        // Deliberately bypass the type guard to prove the runtime never forwards it.
+        {...({ dangerouslySetInnerHTML: { __html: '<b id="injected">x</b>' } } as object)}
+      >
+        safe
+      </Card>
+    )
+    const card = screen.getByRole('button', { name: 'Open thing' })
+    expect(card).toHaveAttribute('tabindex', '0')
+    expect(card).toHaveTextContent('safe')
+    expect(document.getElementById('injected')).toBeNull()
+  })
 })

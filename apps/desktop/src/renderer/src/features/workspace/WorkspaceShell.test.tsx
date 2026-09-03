@@ -10,6 +10,7 @@ import { useShellStore } from './shellStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as switcherHook from './useProjectSwitcher'
+import { useExtensionsStore } from '../extensions/extensionsStore'
 
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
@@ -99,6 +100,17 @@ describe('WorkspaceShell — chrome', () => {
     // Re-clicking the rail returns to the catalog rather than the stale detail page.
     await userEvent.click(screen.getByLabelText('Store'))
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
+  })
+
+  it('clears extension install state on sign-out (SOLUSDEV-235)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
+    useExtensionsStore.setState({
+      byProject: { p1: { bom: { installed: true, enabled: true, runFrequency: 'daily' } } },
+      selectedId: 'bom'
+    })
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(useExtensionsStore.getState()).toMatchObject({ byProject: {}, selectedId: null })
   })
 
   it('offers a project switcher in the topbar (SOLUSDEV-164)', () => {

@@ -7,6 +7,7 @@ import {
   DEFAULT_INSTALL_STATE,
   initialInstallState,
   installsLabel,
+  isSafeExternalUrl,
   missingRequirements,
   partitionViews,
   requirementLabel,
@@ -137,5 +138,16 @@ describe('validateCatalog', () => {
       'a: summary is empty',
       'c: empty requirement group'
     ])
+  })
+})
+
+describe('isSafeExternalUrl', () => {
+  it('accepts only well-formed https URLs', () => {
+    expect(isSafeExternalUrl('https://docs.solusforge.com/x')).toBe(true)
+    expect(isSafeExternalUrl('http://docs.solusforge.com/x')).toBe(false)
+    expect(isSafeExternalUrl('javascript:alert(1)')).toBe(false)
+    expect(isSafeExternalUrl('file:///etc/passwd')).toBe(false)
+    expect(isSafeExternalUrl('not a url')).toBe(false)
+    expect(isSafeExternalUrl(undefined)).toBe(false)
   })
 })

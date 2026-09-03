@@ -5,7 +5,7 @@ import { Icons, type IconName } from '../../../components/ui/icons.constants'
 import { KV } from '../../../components/ui/KV'
 import { Mono } from '../../../components/ui/Mono'
 import { SectionLabel } from '../ExtensionCard'
-import { SOURCE_KIND_DESCRIPTION } from '../extensionLogic'
+import { isSafeExternalUrl, SOURCE_KIND_DESCRIPTION } from '../extensionLogic'
 import type { ContributionKind, ExtensionView, SourceKind } from '../extension.types'
 
 const CONTRIBUTION_ICON: Readonly<Record<ContributionKind, IconName>> = {
@@ -153,7 +153,7 @@ function LinksCard({ view }: { view: ExtensionView }): React.JSX.Element {
       <Mono size={9.5}>LINKS</Mono>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
         {rows
-          .filter((r): r is { label: string; href: string } => Boolean(r.href))
+          .filter((r): r is { label: string; href: string } => isSafeExternalUrl(r.href))
           .map((r) => (
             // Catalog URLs are Solus-authored https constants (enforced by the
             // catalog test); main's window-open handler routes them to the OS browser.

@@ -110,7 +110,9 @@ export function WorkspaceShell(): React.JSX.Element {
     // shared workstation, leaving it would let the NEXT user read them with no request and no
     // authorization check (WS-01).
     useFocusStore.getState().reset()
-    useExtensionsStore.getState().select(null)
+    // Per-project install state is this user's workspace configuration; on a shared
+    // workstation it must not outlive the session (same reasoning as WS-01).
+    useExtensionsStore.getState().reset()
     navigate('/')
   }
 

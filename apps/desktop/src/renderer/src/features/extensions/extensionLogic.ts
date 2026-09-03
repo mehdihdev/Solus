@@ -154,3 +154,14 @@ export function validateCatalog(catalog: readonly ExtensionManifest[]): string[]
   }
   return problems
 }
+
+/** External links become anchors only when they are https — the catalog is
+ *  Solus-authored today, but this is the boundary a server catalog will cross. */
+export function isSafeExternalUrl(url: string | undefined): url is string {
+  if (!url) return false
+  try {
+    return new URL(url).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
