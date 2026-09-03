@@ -49,6 +49,11 @@ export interface InstalledBundle {
 
 const LOADING: InstalledBundleState = { status: 'loading' }
 
+interface Resolution {
+  readonly key: string
+  readonly state: InstalledBundleState
+}
+
 export function useInstalledBundle(
   projectId: string,
   slug: string,
@@ -57,20 +62,24 @@ export function useInstalledBundle(
 ): InstalledBundle {
   const resolved = useMemo(() => deps ?? defaultInstalledBundleDeps(), [deps])
   const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState<InstalledBundleState>(LOADING)
+  // Results are keyed by their inputs, so a change of project/slug/view/attempt
+  // reads as `loading` at once without a reset write, and a late answer for an
+  // old key is simply never shown.
+  const key = `${projectId}\u0000${slug}\u0000${view}\u0000${attempt}`
+  const [resolution, setResolution] = useState<Resolution | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    const apply = (next: InstalledBundleState): void => {
-      if (!cancelled) setState(next)
+    const apply = (state: InstalledBundleState): void => {
+      if (!cancelled) setResolution({ key, state })
     }
-    apply(LOADING)
     void resolveInstalledBundle({ projectId, slug, view }, resolved, apply).then(apply)
     return () => {
       cancelled = true
     }
-  }, [projectId, slug, view, resolved, attempt])
+  }, [key, projectId, slug, view, resolved])
 
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
+  const state = resolution !== null && resolution.key === key ? resolution.state : LOADING
   return { state, retry }
 }

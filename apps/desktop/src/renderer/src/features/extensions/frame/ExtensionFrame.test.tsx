@@ -58,7 +58,6 @@ beforeEach(() => {
   useWorkspaceStore.setState({ project: { id: 'p1', name: 'P1' } })
 })
 afterEach(() => {
-  useWorkspaceStore.setState({ project: null })
   vi.useRealTimers()
 })
 

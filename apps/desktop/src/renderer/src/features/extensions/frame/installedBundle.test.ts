@@ -68,7 +68,9 @@ describe('resolveInstalledBundle', () => {
     const deps = fakeBundleDeps({ listInstalls: async () => [] })
     expect(await resolveInstalledBundle(input, deps)).toEqual({ status: 'not_installed' })
   })
+})
 
+describe('resolveInstalledBundle install row', () => {
   it('reports blocked before disabled, and disabled before the cache', async () => {
     const blocked = fakeBundleDeps({
       bridge: fakeBridge(),
@@ -101,7 +103,7 @@ describe('resolveInstalledBundle', () => {
   })
 })
 
-describe('resolveInstalledBundle cache + developer mode', () => {
+describe('resolveInstalledBundle cache', () => {
   it('downloads and installs once when the bundle is not cached, reporting caching', async () => {
     const bridge = fakeBridge()
     const deps = fakeBundleDeps({ bridge })
@@ -171,7 +173,9 @@ describe('resolveInstalledBundle cache + developer mode', () => {
       step: 'rejected'
     })
   })
+})
 
+describe('resolveInstalledBundle developer mode', () => {
   it('lets a developer registration take precedence with mode dev and version dev', async () => {
     const manifest = fakeManifest()
     const deps = fakeBundleDeps({
