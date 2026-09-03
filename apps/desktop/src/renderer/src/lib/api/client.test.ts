@@ -93,6 +93,27 @@ describe('createApiClient', () => {
   })
 })
 
+describe('PUT (SOLUSDEV-235 — the extensions surface is the first PUT the desktop makes)', () => {
+  it('forwards the PUT verb and a JSON body', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(new Response(JSON.stringify({ data: { enabled: true } }), { status: 201 }))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const result = await client.request<{ enabled: boolean }>('/projects/p1/extensions/bom', {
+      method: 'PUT',
+      body: { grants: { scopes: [], network: [] } }
+    })
+    expect(result).toEqual({ enabled: true })
+    const call = fetchImpl.mock.calls[0]
+    expect(call[1]?.method).toBe('PUT')
+    expect(call[1]?.body).toBe(JSON.stringify({ grants: { scopes: [], network: [] } }))
+    expect(call[1]?.headers).toMatchObject({ 'Content-Type': 'application/json' })
+  })
+})
+
 describe('204 No Content (SOLUSDEV-233 regression)', () => {
   it('resolves a bodiless 2xx instead of throwing after the server acted', async () => {
     // Every DELETE route returns 204 with an empty body. Reading `.data` off
