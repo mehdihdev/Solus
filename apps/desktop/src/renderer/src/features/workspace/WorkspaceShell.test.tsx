@@ -96,7 +96,7 @@ describe('WorkspaceShell — chrome', () => {
     expect(useShellStore.getState().lastMain).toBe('store')
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Open Experiments' }))
-    expect(screen.getByText('Store / Experiments')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Experiments' })).toBeInTheDocument()
     // Re-clicking the rail returns to the catalog rather than the stale detail page.
     await userEvent.click(screen.getByLabelText('Store'))
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
@@ -121,7 +121,7 @@ describe('WorkspaceShell — chrome', () => {
     renderShell()
     await userEvent.click(screen.getByText('Store'))
     await userEvent.click(screen.getByRole('button', { name: 'Open Experiments' }))
-    expect(screen.getByText('Store / Experiments')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Experiments' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
     await userEvent.click(await screen.findByText('Rover MK3'))
     expect(useShellStore.getState().lastMain).toBe('store')
@@ -131,6 +131,22 @@ describe('WorkspaceShell — chrome', () => {
   it('offers a project switcher in the topbar (SOLUSDEV-164)', () => {
     renderShell()
     expect(screen.getByRole('button', { name: /switch project/i })).toBeInTheDocument()
+  })
+
+  it('draws the title row and menu row above the rail (SOLUSDEV-235)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
+    renderShell()
+    // The project pill lives in the title row; the menus in the row below.
+    expect(screen.getByTestId('title-bar')).toContainElement(
+      screen.getByRole('button', { name: /switch project/i })
+    )
+    for (const label of ['Solus', 'View', 'Robot', 'Help'])
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
+    // View → Store navigates like the rail does.
+    await userEvent.click(screen.getByRole('button', { name: 'View' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Store' }))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
   })
 
   it('switching project from the topbar re-scopes the current screen without navigating', async () => {

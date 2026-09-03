@@ -2,7 +2,7 @@
 
 The Store is where a project's capabilities are installed. It is `MainScreen
 'store'` in the workspace shell — a rail item (the `+` glyph, after Team) and
-the topbar breadcrumb `Home / <project> / Store`. Everything on it is scoped to
+the `View → Store` menu (see `project-topbar.md`). Everything on it is scoped to
 the OPEN PROJECT: installs, enablement, and run frequency are per project, and
 suggestions are gated on the sources connected to that project — never on what
 sells. Without an open project the screen asks the user to pick one (same
@@ -12,8 +12,9 @@ Source of record for the visuals: the four design screenshots attached to the
 ticket (catalog; detail › Overview / Settings / Permissions).
 
 ```
-| rail | topbar: Home / <project> / Store [/ <extension>]                         |
-|      | ---------------------------------------------------------------------- |
+| ● ● ●  [ ▣ <project> ▾ ]                                                        |
+| Solus  View  Robot  Help                    (bridge) [search] 🔔 Sign out       |
+| rail | ---------------------------------------------------------------------- |
 |      |   Store                                    [▦ ≡]  [+ Create extension] |
 |      |   Capabilities are installed, not built in. Suggestions come from       |
 |      |   what's connected — never from what sells.                            |
@@ -51,8 +52,8 @@ ticket (catalog; detail › Overview / Settings / Permissions).
 
 ## Extension detail (click a card)
 
-Replaces the catalog in place; the breadcrumb becomes `Store / <name>`. The
-`← Store` link (and the rail's Store button) return to the catalog.
+Replaces the catalog in place. The `← Store` link (and the rail's Store button
+or `View → Store`) return to the catalog.
 
 - **Header**: 56px icon tile · name (h1) · publisher badge · meta line
   `<Publisher> · v<version> · <N installs | — installs> · updated <relative>`.

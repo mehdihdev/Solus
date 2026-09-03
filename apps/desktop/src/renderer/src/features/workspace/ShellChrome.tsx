@@ -1,6 +1,7 @@
-// Shell chrome pieces: the topbar (project / screen / search / bell / sign
-// out), the live notifications popover, the honest offline popover, and the
-// toast. SOLUSDEV-152 removed the demo-alert popover.
+// Shell chrome pieces: the search box and bell (hosted by MenuBar since
+// SOLUSDEV-235 moved the topbar into a title row + menu row), the live
+// notifications popover, the honest offline popover, and the toast.
+// SOLUSDEV-152 removed the demo-alert popover.
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
@@ -9,76 +10,8 @@ import { relativeTime } from '../../lib/relativeTime'
 import type { NotificationApi } from '../../lib/api/resources'
 import { useShellStore } from './shellStore'
 import { useOfflineReason } from './workspaceOnline'
-import { BridgePill } from './BridgePill'
 
-export function TopBar({
-  projectSlot,
-  screenTitle,
-  openCount,
-  projectId,
-  onHome,
-  onBell,
-  onSignOut
-}: {
-  /** The project identity control (the SOLUSDEV-164 project switcher). */
-  projectSlot: React.ReactNode
-  screenTitle: string
-  openCount: number
-  /** Linked project id for the bridge pill; null/absent ⇒ pill shows offline. */
-  projectId?: string | null
-  /** Return to the workspace home from any screen (SOLUSDEV-164 breadcrumb). */
-  onHome: () => void
-  onBell: () => void
-  onSignOut: () => void
-}): React.JSX.Element {
-  return (
-    <div
-      style={{
-        height: 48,
-        borderBottom: '1px solid var(--bd)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 14,
-        padding: '0 16px',
-        flexShrink: 0,
-        position: 'relative',
-        zIndex: 40,
-        background: 'var(--bg)'
-      }}
-    >
-      <button
-        type="button"
-        onClick={onHome}
-        className="interactive"
-        style={{
-          background: 'transparent',
-          border: 'none',
-          color: 'var(--mut)',
-          cursor: 'pointer',
-          fontFamily: 'var(--font-ui)',
-          fontSize: 13,
-          padding: '2px 6px',
-          borderRadius: 3
-        }}
-      >
-        Home
-      </button>
-      <span style={{ color: 'var(--mut)', fontSize: 12 }}>/</span>
-      {projectSlot}
-      <span style={{ color: 'var(--mut)', fontSize: 12 }}>/</span>
-      <span style={{ fontSize: 13, color: 'var(--mut)' }}>{screenTitle}</span>
-      <div style={{ flex: 1 }} />
-      <BridgePill projectId={projectId ?? null} />
-      <SearchBox />
-      <BellButton openCount={openCount} onBell={onBell} />
-      <Button kind="bare" size="sm" onClick={onSignOut}>
-        Sign out
-      </Button>
-    </div>
-  )
-}
-
-function SearchBox(): React.JSX.Element {
+export function SearchBox(): React.JSX.Element {
   return (
     <div
       style={{
@@ -103,7 +36,7 @@ function SearchBox(): React.JSX.Element {
   )
 }
 
-function BellButton({
+export function BellButton({
   openCount,
   onBell
 }: {

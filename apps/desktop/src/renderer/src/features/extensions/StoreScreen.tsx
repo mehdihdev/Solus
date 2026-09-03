@@ -68,7 +68,7 @@ function Catalog({
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
             Store
@@ -144,8 +144,7 @@ function LayoutToggle({
         background: 'var(--sur)',
         border: '1px solid var(--bd)',
         borderRadius: 3,
-        overflow: 'hidden',
-        alignSelf: 'center'
+        overflow: 'hidden'
       }}
     >
       {options.map((o, i) => {

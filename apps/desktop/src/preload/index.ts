@@ -100,6 +100,8 @@ const api = {
 // it (SOLX-02); channel names come from the shared constants module only.
 const solus = {
   ...api,
+  // SOLUSDEV-235: the renderer draws the title row; on macOS it must inset for the traffic lights.
+  platform: process.platform,
   orbOverlay: createOrbOverlayBridge(ipcRenderer),
   solWindow: {
     detach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.detach),

@@ -1,10 +1,10 @@
-// Workspace shell: icon rail, topbar (project / screen / search / bell),
-// notifications popover, toast, mini orb, and the workspace screens plus the
-// alert detail view. SOLUSDEV-152 removed the prototype demo data — the shell
+// Workspace shell: title row (project pill), menu row (Solus · View · Robot ·
+// Help + bridge / search / bell / sign out), icon rail, notifications popover,
+// toast, mini orb, and the workspace screens plus the alert detail view.
+// SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
 // shows live API data or honest empty states, never fabricated robot data.
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
 import { useAuthStore } from '../../store/authStore'
@@ -22,18 +22,19 @@ import { ProjectOverview } from '../project/ProjectOverview'
 import { SourcesScreen } from '../project/SourcesScreen'
 import { StoreScreen } from '../extensions/StoreScreen'
 import { useExtensionsStore } from '../extensions/extensionsStore'
-import { findExtension } from '../extensions/extensions.catalog'
 import { HomeScreen } from './HomeScreen'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
 import { useNotifications } from './useNotifications'
-import { TopBar, OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
+import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
+import { TitleBar } from './TitleBar'
+import { MenuBar } from './MenuBar'
 import { useShellStore, type MainScreen } from './shellStore'
 import { useFocusStore } from './focusStore'
 
 type Route = { name: MainScreen } | { name: 'alert'; alertId: string }
 
-/** Topbar title per screen (also the data-screen-label hook for tests). */
+/** Screen labels (the data-screen-label hook for tests; the topbar breadcrumb is gone — SOLUSDEV-235). */
 const SCREEN_TITLES: Readonly<Record<string, string>> = {
   home: 'Home',
   overview: 'Overview',
@@ -48,14 +49,6 @@ const SCREEN_TITLES: Readonly<Record<string, string>> = {
   alert: 'Alert'
 }
 
-/** Topbar breadcrumb: the Store reads "Store / <extension>" while one is open (SOLUSDEV-235). */
-function topbarTitle(name: string, selectedExtensionId: string | null): string {
-  const base = SCREEN_TITLES[name] ?? ''
-  if (name !== 'store' || !selectedExtensionId) return base
-  const ext = findExtension(selectedExtensionId)
-  return ext ? `${base} / ${ext.name}` : base
-}
-
 export function WorkspaceShell(): React.JSX.Element {
   const navigate = useNavigate()
   const [route, setRoute] = useState<Route>({ name: 'home' })
@@ -66,8 +59,6 @@ export function WorkspaceShell(): React.JSX.Element {
   const online = notifs.status === 'ready'
 
   const name = route.name
-
-  const selectedExtensionId = useExtensionsStore((s) => s.selectedId)
 
   const go = (screen: MainScreen): void => {
     useShellStore.getState().setLastMain(screen)
@@ -123,6 +114,7 @@ export function WorkspaceShell(): React.JSX.Element {
       style={{
         height: '100vh',
         display: 'flex',
+        flexDirection: 'column',
         background: 'var(--bg)',
         color: 'var(--tx)',
         fontFamily: 'var(--font-ui)',
@@ -130,26 +122,19 @@ export function WorkspaceShell(): React.JSX.Element {
       }}
       onClick={() => notifOpen && setNotifOpen(false)}
     >
-      <Rail name={name} go={go} userName={displayName(me.name, me.email)} />
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          minWidth: 0,
-          position: 'relative'
-        }}
-      >
-        <TopBar
-          projectSlot={<ProjectSwitcher onSwitch={switchProject} onHome={() => go('home')} />}
-          onHome={() => go('home')}
-          screenTitle={topbarTitle(name, selectedExtensionId)}
+      <TitleBar>
+        <ProjectSwitcher onSwitch={switchProject} onHome={() => go('home')} />
+      </TitleBar>
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <MenuBar
+          activeScreen={name}
+          hasProject={project !== null}
           openCount={online ? notifs.unreadCount : 0}
           projectId={project?.id ?? null}
-          onBell={() => setNotifOpen((o) => !o)}
+          onNavigate={go}
           onSignOut={() => void onSignOut()}
+          onBell={() => setNotifOpen((o) => !o)}
         />
-        <VerifyEmailBanner />
         {notifOpen &&
           (online ? (
             <NotificationsPopover
@@ -161,9 +146,13 @@ export function WorkspaceShell(): React.JSX.Element {
           ) : (
             <OfflineNotifPopover onClose={() => setNotifOpen(false)} />
           ))}
+      </div>
+      <VerifyEmailBanner />
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <Rail name={name} go={go} userName={displayName(me.name, me.email)} />
         <div
           data-screen-label={SCREEN_TITLES[name]}
-          style={{ flex: 1, display: 'flex', minHeight: 0, position: 'relative' }}
+          style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0, position: 'relative' }}
         >
           <ScreenView
             route={route}
@@ -358,21 +347,12 @@ function Rail({
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        padding: '14px 0',
+        padding: '12px 0 14px',
         gap: 8,
         flexShrink: 0,
         background: 'var(--sur)'
       }}
     >
-      {/* Brand home button: the Solus logo (SOLUSDEV-233). The orb stays
-          SOL's presence — SOL page header + the floating mini-orb. */}
-      <div
-        onClick={() => go('home')}
-        className="interactive"
-        style={{ marginBottom: 12, cursor: 'pointer', borderRadius: 6 }}
-      >
-        <SolusLogo size={24} />
-      </div>
       {RAIL_TOP.map(renderItem)}
       <div style={{ flex: 1 }} />
       {RAIL_BOTTOM.map(renderItem)}

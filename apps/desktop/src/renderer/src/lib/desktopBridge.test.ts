@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { getDesktopOAuthBridge, getDesktopCompanionBridge } from './desktopBridge'
+import {
+  getDesktopOAuthBridge,
+  getDesktopCompanionBridge,
+  getDesktopPlatform
+} from './desktopBridge'
 
 interface SolusWindow {
   solus?: unknown
@@ -30,5 +34,16 @@ describe('getDesktopCompanionBridge', () => {
     const bridge = { setToken: async () => undefined }
     ;(window as unknown as SolusWindow).solus = { bridge }
     expect(getDesktopCompanionBridge()).toBe(bridge)
+  })
+})
+
+describe('getDesktopPlatform', () => {
+  it('returns null outside Electron and the platform string under it', () => {
+    const w = window as unknown as { solus?: { platform?: string } }
+    delete w.solus
+    expect(getDesktopPlatform()).toBeNull()
+    w.solus = { platform: 'darwin' }
+    expect(getDesktopPlatform()).toBe('darwin')
+    delete w.solus
   })
 })

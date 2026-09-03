@@ -30,22 +30,25 @@ export function ProjectSwitcher({ onSwitch, onHome }: ProjectSwitcherProps): Rea
           e.stopPropagation()
           setOpen((o) => !o)
         }}
-        className="interactive"
+        className="interactive app-no-drag"
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 6,
-          background: 'transparent',
-          border: 'none',
+          gap: 8,
+          background: 'var(--sur)',
+          border: '1px solid var(--bd)',
           color: 'var(--tx)',
           cursor: 'pointer',
           fontFamily: 'var(--font-ui)',
           fontSize: 13,
           fontWeight: 600,
-          padding: '2px 6px',
-          borderRadius: 3
+          padding: '5px 12px',
+          borderRadius: 6
         }}
       >
+        <span style={{ color: 'var(--acc)', display: 'inline-flex' }} aria-hidden>
+          <Icons.box size={12} />
+        </span>
         {current?.name ?? NO_PROJECT_LABEL}
         <span style={{ color: 'var(--mut)', display: 'inline-flex' }}>
           <Chevron />
@@ -168,22 +171,34 @@ function SwitcherDropdown({
   )
 }
 
-function MenuRow({
+/** One row of a shell dropdown menu (shared with MenuBar, SOLUSDEV-235). */
+export function MenuRow({
   children,
   active = false,
+  current = false,
+  disabled = false,
+  title,
   onClick
 }: {
   children: React.ReactNode
   active?: boolean
+  /** The row names where the user already is (aria-current). */
+  current?: boolean
+  disabled?: boolean
+  title?: string
   onClick: () => void
 }): React.JSX.Element {
   return (
     <button
       type="button"
       role="menuitem"
+      aria-current={current || undefined}
+      disabled={disabled}
+      title={title}
       onClick={onClick}
-      className="interactive"
+      className={disabled ? undefined : 'interactive'}
       style={{
+        opacity: disabled ? 0.45 : 1,
         display: 'flex',
         alignItems: 'center',
         gap: 8,
@@ -192,7 +207,7 @@ function MenuRow({
         background: active ? 'color-mix(in srgb, var(--acc) 10%, transparent)' : 'transparent',
         border: 'none',
         color: active ? 'var(--acc)' : 'var(--tx)',
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
         fontFamily: 'var(--font-ui)',
         fontSize: 12.5,
         padding: '8px 12px'

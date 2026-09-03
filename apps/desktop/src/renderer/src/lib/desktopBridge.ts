@@ -32,7 +32,13 @@ export interface FolderBridge {
 }
 
 interface SolusWindow {
-  solus?: { oauth?: OAuthBridge; bridge?: CompanionBridge; folder?: FolderBridge }
+  solus?: {
+    oauth?: OAuthBridge
+    bridge?: CompanionBridge
+    folder?: FolderBridge
+    /** `process.platform` of the host, so the renderer can inset for native window controls. */
+    platform?: string
+  }
 }
 
 export function getDesktopOAuthBridge(): OAuthBridge | null {
@@ -48,4 +54,9 @@ export function getDesktopCompanionBridge(): CompanionBridge | null {
 export function getDesktopFolderBridge(): FolderBridge | null {
   const w = window as unknown as SolusWindow
   return w.solus?.folder ?? null
+}
+
+/** Host platform under Electron ('darwin', 'win32', 'linux'); null in a plain browser. */
+export function getDesktopPlatform(): string | null {
+  return (window as SolusWindow).solus?.platform ?? null
 }
