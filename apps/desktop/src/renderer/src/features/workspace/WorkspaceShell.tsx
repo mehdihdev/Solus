@@ -20,6 +20,9 @@ import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
 import { ProjectOverview } from '../project/ProjectOverview'
 import { SourcesScreen } from '../project/SourcesScreen'
+import { StoreScreen } from '../extensions/StoreScreen'
+import { useExtensionsStore } from '../extensions/extensionsStore'
+import { findExtension } from '../extensions/extensions.catalog'
 import { HomeScreen } from './HomeScreen'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
@@ -39,9 +42,18 @@ const SCREEN_TITLES: Readonly<Record<string, string>> = {
   bench: 'Live Bench',
   sol: 'SOL',
   team: 'Team',
+  store: 'Store',
   billing: 'Billing',
   settings: 'Settings',
   alert: 'Alert'
+}
+
+/** Topbar breadcrumb: the Store reads "Store / <extension>" while one is open (SOLUSDEV-235). */
+function topbarTitle(name: string, selectedExtensionId: string | null): string {
+  const base = SCREEN_TITLES[name] ?? ''
+  if (name !== 'store' || !selectedExtensionId) return base
+  const ext = findExtension(selectedExtensionId)
+  return ext ? `${base} / ${ext.name}` : base
 }
 
 export function WorkspaceShell(): React.JSX.Element {
@@ -55,8 +67,12 @@ export function WorkspaceShell(): React.JSX.Element {
 
   const name = route.name
 
+  const selectedExtensionId = useExtensionsStore((s) => s.selectedId)
+
   const go = (screen: MainScreen): void => {
     useShellStore.getState().setLastMain(screen)
+    // The rail's Store button always lands on the catalog, not a stale detail page.
+    if (screen === 'store') useExtensionsStore.getState().select(null)
     setRoute({ name: screen })
     setNotifOpen(false)
   }
@@ -94,6 +110,7 @@ export function WorkspaceShell(): React.JSX.Element {
     // shared workstation, leaving it would let the NEXT user read them with no request and no
     // authorization check (WS-01).
     useFocusStore.getState().reset()
+    useExtensionsStore.getState().select(null)
     navigate('/')
   }
 
@@ -122,7 +139,7 @@ export function WorkspaceShell(): React.JSX.Element {
         <TopBar
           projectSlot={<ProjectSwitcher onSwitch={switchProject} onHome={() => go('home')} />}
           onHome={() => go('home')}
-          screenTitle={SCREEN_TITLES[name] ?? ''}
+          screenTitle={topbarTitle(name, selectedExtensionId)}
           openCount={online ? notifs.unreadCount : 0}
           projectId={project?.id ?? null}
           onBell={() => setNotifOpen((o) => !o)}
@@ -229,6 +246,7 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
   graph: GraphScreen,
   sources: SourcesScreen,
+  store: StoreScreen,
   sol: SolScreen,
   billing: BillingScreen,
   settings: SettingsScreen
@@ -293,7 +311,9 @@ const RAIL_TOP: readonly RailItem[] = [
   { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
   { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
   { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
-  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' }
+  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' },
+  // SOLUSDEV-235: the Store — capabilities are installed, not built in.
+  { screen: 'store', icon: <Icons.plus size={17} />, label: 'Store' }
 ]
 
 /** Bottom rail: account-level screens pinned below the spacer. */

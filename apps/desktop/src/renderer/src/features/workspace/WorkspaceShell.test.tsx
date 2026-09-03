@@ -88,6 +88,19 @@ describe('WorkspaceShell — chrome', () => {
     expect(useShellStore.getState().lastMain).toBe('sources')
   })
 
+  it('exposes the Store in the rail and breadcrumbs the open extension (SOLUSDEV-235)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
+    renderShell()
+    await userEvent.click(screen.getByText('Store'))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open Experiments' }))
+    expect(screen.getByText('Store / Experiments')).toBeInTheDocument()
+    // Re-clicking the rail returns to the catalog rather than the stale detail page.
+    await userEvent.click(screen.getByLabelText('Store'))
+    expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
+  })
+
   it('offers a project switcher in the topbar (SOLUSDEV-164)', () => {
     renderShell()
     expect(screen.getByRole('button', { name: /switch project/i })).toBeInTheDocument()

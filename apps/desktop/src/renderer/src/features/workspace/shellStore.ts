@@ -23,6 +23,7 @@ export type MainScreen =
   | 'bench'
   | 'sol'
   | 'team'
+  | 'store'
   | 'billing'
   | 'settings'
 

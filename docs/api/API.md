@@ -406,6 +406,8 @@ React Router (memory/hash history in Electron). The persistent SOL "ball of ener
 /projects/:projectId/errors             Error log + predictions
 /projects/:projectId/deploy             Targets, deploy action (confirm dialog), deployment history
 /projects/:projectId/settings           Project settings
+/projects/:projectId/store              Store (SOLUSDEV-235): installed extensions + suggestions gated on connected sources — never on popularity
+/projects/:projectId/store/:extensionId Extension detail: Overview / Settings / Permissions; install, disable, uninstall (confirmed)
 
 /teams/:teamId                          Team home: activity feed, members
 /teams/:teamId/members                  Members, roles, invites (admin)

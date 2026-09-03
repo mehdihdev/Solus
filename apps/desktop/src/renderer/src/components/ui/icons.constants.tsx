@@ -121,6 +121,39 @@ export const Icons = {
   card: makeIcon(
     '0 0 17 17',
     '<rect x="1.8" y="3.5" width="13.4" height="10" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.8 6.8h13.4" stroke="currentColor" stroke-width="1.3"/><path d="M4 11h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+  ),
+  // SOLUSDEV-235 — Store glyphs: extension tiles, view toggle, external links, permissions.
+  wave: makeIcon(
+    '0 0 17 17',
+    '<path d="M1.5 8.5c1.8-4 3.5-4 5.3 0s3.5 4 5.3 0 2.2-3 3.4 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+  ),
+  diamond: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.5 2l6.5 6.5-6.5 6.5L2 8.5 8.5 2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'
+  ),
+  triangle: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.5 2.5l6.5 11.5H2L8.5 2.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'
+  ),
+  lines: makeIcon(
+    '0 0 17 17',
+    '<path d="M3 5h11M3 8.5h11M3 12h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+  ),
+  grid: makeIcon(
+    '0 0 17 17',
+    '<rect x="2.5" y="2.5" width="5" height="5" fill="currentColor"/><rect x="9.5" y="2.5" width="5" height="5" fill="currentColor"/><rect x="2.5" y="9.5" width="5" height="5" fill="currentColor"/><rect x="9.5" y="9.5" width="5" height="5" fill="currentColor"/>'
+  ),
+  list: makeIcon(
+    '0 0 17 17',
+    '<path d="M3 4.5h11M3 8.5h11M3 12.5h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'
+  ),
+  external: makeIcon(
+    '0 0 17 17',
+    '<path d="M6 3.5H3.5v10h10V11M9.5 3.5h4v4M13.5 3.5L8 9" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
+  ),
+  hex: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.5 2l5.6 3.25v6.5L8.5 15l-5.6-3.25v-6.5L8.5 2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'
   )
 } as const
 
