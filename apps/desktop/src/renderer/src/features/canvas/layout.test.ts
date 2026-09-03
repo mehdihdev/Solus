@@ -144,9 +144,7 @@ describe('addSlot', () => {
     }))
     expect(full).toHaveLength(24)
     expect(addSlot(full, 'ext:one-more', 'compact')).toBe(full)
-    expect(addSlot(full.slice(0, MAX_SLOTS - 1), 'ext:one-more', 'compact')).toHaveLength(
-      MAX_SLOTS
-    )
+    expect(addSlot(full.slice(0, MAX_SLOTS - 1), 'ext:one-more', 'compact')).toHaveLength(MAX_SLOTS)
   })
 })
 
