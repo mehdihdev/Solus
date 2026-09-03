@@ -151,6 +151,11 @@ export const Icons = {
     '0 0 17 17',
     '<path d="M6 3.5H3.5v10h10V11M9.5 3.5h4v4M13.5 3.5L8 9" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
   ),
+  /** Verified-publisher seal: scalloped disc in currentColor, check punched in the surface colour. */
+  verified: makeIcon(
+    '0 0 17 17',
+    '<path d="M8.50 0.50 L10.29 1.84 L12.50 1.57 L13.38 3.62 L15.43 4.50 L15.16 6.71 L16.50 8.50 L15.16 10.29 L15.43 12.50 L13.38 13.38 L12.50 15.43 L10.29 15.16 L8.50 16.50 L6.71 15.16 L4.50 15.43 L3.62 13.38 L1.57 12.50 L1.84 10.29 L0.50 8.50 L1.84 6.71 L1.57 4.50 L3.62 3.62 L4.50 1.57 L6.71 1.84Z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M5.3 8.7l2.1 2.1 4.3-4.6" fill="none" stroke="var(--sur)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
+  ),
   hex: makeIcon(
     '0 0 17 17',
     '<path d="M8.5 2l5.6 3.25v6.5L8.5 15l-5.6-3.25v-6.5L8.5 2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'

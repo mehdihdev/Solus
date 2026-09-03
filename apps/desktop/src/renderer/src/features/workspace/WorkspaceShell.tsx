@@ -294,6 +294,8 @@ interface RailItem {
   screen: MainScreen
   icon: React.ReactNode
   label: string
+  /** Drawn with an accent border + tint so it reads as the "add capability" action (SOLUSDEV-235). */
+  emphasis?: boolean
 }
 
 /** Top rail: Home + the project-scoped screens (Overview → Sources) in flow order. */
@@ -306,7 +308,7 @@ const RAIL_TOP: readonly RailItem[] = [
   { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
   { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' },
   // SOLUSDEV-235: the Store — capabilities are installed, not built in.
-  { screen: 'store', icon: <Icons.plus size={17} />, label: 'Store' }
+  { screen: 'store', icon: <Icons.plus size={17} />, label: 'Store', emphasis: true }
 ]
 
 /** Bottom rail: account-level screens pinned below the spacer. */
@@ -336,6 +338,7 @@ function Rail({
       icon={item.icon}
       label={item.label}
       active={isRailActive(item, name)}
+      emphasis={item.emphasis}
       onClick={() => go(item.screen)}
     />
   )
@@ -363,13 +366,36 @@ function Rail({
   )
 }
 
+/** Accent tint scales with state; emphasised items also carry an accent border. */
+function railButtonStyle(active: boolean, emphasis: boolean): React.CSSProperties {
+  const tint = active ? 24 : emphasis ? 12 : 0
+  const borderAlpha = active ? 70 : 45
+  return {
+    position: 'relative',
+    width: 36,
+    height: 36,
+    borderRadius: emphasis ? 6 : 3,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    boxSizing: 'border-box',
+    border: emphasis
+      ? `1px solid color-mix(in srgb, var(--acc) ${borderAlpha}%, transparent)`
+      : '1px solid transparent',
+    background: tint ? `color-mix(in srgb, var(--acc) ${tint}%, transparent)` : 'transparent',
+    color: active || emphasis ? 'var(--acc)' : 'var(--mut)'
+  }
+}
+
 function RailButton({
   id,
   icon,
   label,
   active,
   onClick,
-  badge
+  badge,
+  emphasis = false
 }: {
   id: string
   icon: React.ReactNode
@@ -377,6 +403,7 @@ function RailButton({
   active: boolean
   onClick: () => void
   badge?: boolean
+  emphasis?: boolean
 }): React.JSX.Element {
   return (
     <div
@@ -384,19 +411,9 @@ function RailButton({
       onClick={onClick}
       title={label}
       aria-label={label}
+      data-emphasis={emphasis || undefined}
       className="interactive"
-      style={{
-        position: 'relative',
-        width: 36,
-        height: 36,
-        borderRadius: 3,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-        background: active ? 'color-mix(in srgb, var(--acc) 12%, transparent)' : 'transparent',
-        color: active ? 'var(--acc)' : 'var(--mut)'
-      }}
+      style={railButtonStyle(active, emphasis)}
     >
       {icon}
       {badge && (

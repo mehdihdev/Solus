@@ -57,10 +57,12 @@ export function PublisherBadge({ publisher }: { publisher: Publisher }): React.J
         display: 'inline-flex',
         alignItems: 'center',
         gap: 4,
-        padding: '2px 6px',
-        borderRadius: 3,
-        border: '1px solid var(--bd)',
-        background: 'var(--sur2)',
+        padding: '2px 6px 2px 7px',
+        borderRadius: 4,
+        border: verified
+          ? '1px solid color-mix(in srgb, var(--ok) 45%, var(--bd))'
+          : '1px solid var(--bd)',
+        background: verified ? 'color-mix(in srgb, var(--ok) 9%, var(--sur2))' : 'var(--sur2)',
         lineHeight: 1
       }}
     >
@@ -69,7 +71,7 @@ export function PublisherBadge({ publisher }: { publisher: Publisher }): React.J
       </Mono>
       {verified && (
         <span style={{ color: 'var(--ok)', display: 'inline-flex' }}>
-          <Icons.check size={9} title="Verified by Solus" />
+          <Icons.verified size={11} title="Verified by Solus" />
         </span>
       )}
     </span>

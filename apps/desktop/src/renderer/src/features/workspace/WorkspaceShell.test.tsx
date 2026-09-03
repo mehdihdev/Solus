@@ -92,6 +92,8 @@ describe('WorkspaceShell — chrome', () => {
   it('exposes the Store in the rail and breadcrumbs the open extension (SOLUSDEV-235)', async () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
     renderShell()
+    // The Store button is the one emphasised rail item (accent border + tint).
+    expect(screen.getByLabelText('Store')).toHaveAttribute('data-emphasis', 'true')
     await userEvent.click(screen.getByText('Store'))
     expect(useShellStore.getState().lastMain).toBe('store')
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
