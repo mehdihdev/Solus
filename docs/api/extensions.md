@@ -767,8 +767,13 @@ resolved context. Payloads carry ids and slugs, never settings VALUES, never sto
 | `extension.verified_changed` | §5.4                                   | `slug, verified`                                                                                               |
 | `extension.rate_limited`     | every §12 `429`                        | `route, budget?, limit?`                                                                                       |
 
-The desktop's own refusals (unknown method, undeclared network host) reach `data_events` through
-the existing `POST /api/v1/events` client path (API.md §2.13) with the same `event_type`.
+The desktop's own refusals (unknown method, undeclared scope or network host, blocked, rate
+limited) reach `data_events` through `POST /api/v1/events` (API.md §2.13, implemented with
+SOLUSDEV-235): body `{ "events": [{ "event_type": "extension.bridge_refused", "project_id"?,
+"payload": { slug, version, method, code } }] }`, ≤ 50 per batch, payload ≤ 4 KiB, a closed
+`event_type` set, `project_id` kept only when the caller can resolve the project, per-user batch
+limit (`client_event_batches_per_minute_per_user`). The host batches every 2 s and caps itself at
+20 refusal events per extension per minute.
 
 ---
 
@@ -811,7 +816,7 @@ L3). Exceeded → `429 rate_limited` + `Retry-After`; every 429 is a data event 
 | 409  | `slug_taken`               | §5.1 — slug owned by another publisher                                                                                                                       |
 | 409  | `version_exists`           | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                              |
 | 409  | `idempotency_conflict`     | §5.1 — same `Idempotency-Key`, different bytes                                                                                                               |
-| 409  | `publisher_name_reserved`  | §5.1 — a FIRST publish whose `extension.publisher` normalizes to a reserved vendor name (`solus`, `solus forge`, …); existing publishers unaffected              |
+| 409  | `publisher_name_reserved`  | §5.1 — a FIRST publish whose `extension.publisher` normalizes to a reserved vendor name (`solus`, `solus forge`, …); existing publishers unaffected          |
 | 409  | `grants_required`          | §6.2 — version change widens permissions beyond current grants; `details` lists the additions                                                                |
 | 411  | `length_required`          | §5.1 without (or with a malformed) `Content-Length`                                                                                                          |
 | 413  | `payload_too_large`        | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                      |

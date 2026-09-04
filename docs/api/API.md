@@ -295,11 +295,11 @@ Flashing/SSH execution happens **on the user's machine via the desktop app**; th
 
 ### 2.13 Data collection events (feature area 9, ADR-011)
 
-| Method | Path                       | Description                                                                                                                                                                                        |
-| ------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/v1/events`           | Batch ingest of client-originated structured events, validated against the event schema contract in `packages/contracts/`. Server-originated events are emitted internally, not through this route |
-| GET    | `/api/v1/users/me/consent` | Current data-collection consent state                                                                                                                                                              |
-| PUT    | `/api/v1/users/me/consent` | Update consent (consent-gated collection is the ADR-011 invariant)                                                                                                                                 |
+| Method | Path                       | Description                                                                                                                                                                                                                                                                                                     |
+| ------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/v1/events`           | Batch ingest of client-originated structured events (implemented SOLUSDEV-235 for `extension.bridge_refused`; the closed `event_type` set lives in `routers/events.py` until the event schema contract lands in `packages/contracts/`). Server-originated events are emitted internally, not through this route |
+| GET    | `/api/v1/users/me/consent` | Current data-collection consent state                                                                                                                                                                                                                                                                           |
+| PUT    | `/api/v1/users/me/consent` | Update consent (consent-gated collection is the ADR-011 invariant)                                                                                                                                                                                                                                              |
 
 No query/export API this cycle — storage is internal (ADR-011). Revisit when analysis tooling is needed; not a blocker.
 
