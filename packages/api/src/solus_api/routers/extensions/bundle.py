@@ -12,8 +12,8 @@ import uuid
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.core.errors import error_response
 from solus_api.deps import CurrentUser, SessionDep, SettingsDep
 from solus_api.extensions.publishing import (
     not_found,
@@ -21,7 +21,8 @@ from solus_api.extensions.publishing import (
     validate_semver,
     validate_slug,
 )
-from solus_api.models import ExtensionVersionAsset
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
+from solus_api.models import ExtensionVersionAsset, User
 from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.events import emit_event
 from solus_api.storage import ArtifactNotFoundError
@@ -30,6 +31,7 @@ from solus_api.storage.extension_bundle_store import ExtensionBundleStore
 router = APIRouter(prefix="/api/v1/extensions")
 
 _DOWNLOAD_WINDOW_SECONDS = 60
+_DOWNLOAD_LIMITER = "extension_download_limiter"
 #: §4.5: a version's assets never change once approved.
 _ASSET_CACHE_CONTROL = "private, max-age=86400, immutable"
 #: Belt and braces over the review-time SVG reduction: even if an inline
@@ -37,26 +39,20 @@ _ASSET_CACHE_CONTROL = "private, max-age=86400, immutable"
 _SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'"
 
 
-def _download_limiter(request: Request) -> FixedWindowLimiter:
-    """Per-user per-minute window (§12). Lazily created on `app.state` (main.py
-    is outside this task's ownership); per-process like its siblings."""
-    limiter: FixedWindowLimiter | None = getattr(
-        request.app.state, "extension_download_limiter", None
-    )
-    if limiter is None:
-        limiter = FixedWindowLimiter(window_seconds=_DOWNLOAD_WINDOW_SECONDS)
-        request.app.state.extension_download_limiter = limiter
-    return limiter
-
-
 def _bundle_store(request: Request) -> ExtensionBundleStore:
     return ExtensionBundleStore(request.app.state.artifact_store)
 
 
-def _rate_limited(message: str, retry_after_seconds: int) -> Response:
-    resp = error_response(429, "rate_limited", message)
-    resp.headers["Retry-After"] = str(retry_after_seconds)
-    return resp
+def _limiter(request: Request, attr: str) -> FixedWindowLimiter:
+    """Per-user per-minute windows (§12) on the shared `app.state` factory."""
+    return get_or_create_limiter(request.app.state, attr, _DOWNLOAD_WINDOW_SECONDS)
+
+
+async def _refused(session: AsyncSession, user: User, route: str, message: str) -> Response:
+    """§12: the 429 is a data event for abuse detection (CLAUDE.md §7)."""
+    emit_event(session, user=user, event_type="extension.rate_limited", payload={"route": route})
+    await session.commit()
+    return rate_limited_response(message, _DOWNLOAD_WINDOW_SECONDS)
 
 
 @router.get("/{slug}/versions/{version}/bundle", response_class=Response)
@@ -70,12 +66,8 @@ async def download_bundle(
 ) -> Response:
     slug, version = validate_slug(slug), validate_semver(version)
     limit = settings.extension_bundle_downloads_per_minute_per_user
-    if _download_limiter(request).bump(str(user.id)) > limit:
-        emit_event(
-            session, user=user, event_type="extension.rate_limited", payload={"route": "bundle"}
-        )
-        await session.commit()
-        return _rate_limited("Too many bundle downloads; slow down", _DOWNLOAD_WINDOW_SECONDS)
+    if _limiter(request, _DOWNLOAD_LIMITER).bump(str(user.id)) > limit:
+        return await _refused(session, user, "bundle", "Too many bundle downloads; slow down")
 
     resolved = await resolve_visible_version(session, slug, version, user_id=user.id)
     data = await _stored_bytes(_bundle_store(request), resolved.version.id, asset=False)

@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import func, select
 
-from solus_api.core.errors import APIError, error_response
+from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import SessionDep, SettingsDep, TeamContext, TeamCtx, require_role
@@ -29,9 +29,9 @@ from solus_api.extensions.policy import (
     upsert_policy,
     validate_default_settings,
 )
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.extensions.schemas import serialize_policy
 from solus_api.models import Extension, Role, TeamExtensionPolicy
-from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.events import emit_event
 
 router = APIRouter(prefix="/api/v1/teams/{team_id}/extensions/policies")
@@ -70,20 +70,13 @@ class PolicyWrite(BaseModel):
 
 
 # ------------------------------------------------------------------ helpers
-def _limiter(request: Request) -> FixedWindowLimiter:
-    limiter: FixedWindowLimiter | None = getattr(request.app.state, LIMITER_STATE_ATTR, None)
-    if limiter is None:
-        limiter = FixedWindowLimiter(window_seconds=WRITE_WINDOW_SECONDS)
-        setattr(request.app.state, LIMITER_STATE_ATTR, limiter)
-    return limiter
-
-
 async def _write_budget_exceeded(
     request: Request, ctx: TeamContext, session: SessionDep, settings: SettingsDep
 ) -> Response | None:
     """§12: over budget → 429 + Retry-After, recorded as a data event (CLAUDE.md §7)."""
     limit: int = getattr(settings, WRITE_BUDGET_SETTING)
-    if _limiter(request).bump(str(ctx.team.id)) <= limit:
+    limiter = get_or_create_limiter(request.app.state, LIMITER_STATE_ATTR, WRITE_WINDOW_SECONDS)
+    if limiter.bump(str(ctx.team.id)) <= limit:
         return None
     emit_event(
         session,
@@ -93,9 +86,7 @@ async def _write_budget_exceeded(
         payload={"budget": WRITE_BUDGET_SETTING, "limit": limit},
     )
     await session.commit()
-    response = error_response(429, "rate_limited", "Too many policy writes; slow down")
-    response.headers["Retry-After"] = str(WRITE_WINDOW_SECONDS)
-    return response
+    return rate_limited_response("Too many policy writes; slow down", WRITE_WINDOW_SECONDS)
 
 
 def _emit_policy_changed(session: SessionDep, ctx: TeamContext, slug: str, keys: list[str]) -> None:
