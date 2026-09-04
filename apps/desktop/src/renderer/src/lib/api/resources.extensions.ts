@@ -533,3 +533,21 @@ export function withExtensionAttribution(
     ...(version === undefined ? {} : { 'X-Solus-Extension-Version': version })
   }
 }
+
+/* ---------------- API.md §2.13 data events ---------------- */
+
+/** One client-originated data-collection event (ADR-011). */
+export interface DataEventInput {
+  event_type: string
+  project_id?: string
+  payload: Record<string, unknown>
+}
+
+/** POST /events — batch ingest of client-originated events (API.md §2.13).
+ *  Consent-gated server-side; the client never buffers past one batch. */
+export function postDataEvents(
+  events: readonly DataEventInput[],
+  client: ApiClient = api
+): Promise<void> {
+  return client.request<void>('/events', { method: 'POST', body: { events } })
+}

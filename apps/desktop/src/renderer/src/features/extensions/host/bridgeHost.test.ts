@@ -298,6 +298,46 @@ describe('net.fetch (§6.5)', () => {
   })
 })
 
+describe('refusal events (SEC-H4) — every refusal code reaches emitRefusal', () => {
+  it.each([
+    ['unknown_method', {}, 'graph.delete', {}],
+    ['scope_denied', {}, 'sol.ask', { prompt: 'x' }],
+    ['blocked', { blocked: true }, 'graph.getFocus', {}],
+    ['network_denied', {}, 'net.fetch', { url: 'https://evil.example/' }],
+    ['invalid_params', {}, 'graph.getEntity', { entityId: 42 }]
+  ] as const)('%s', async (code, policy, method, params) => {
+    const h = harness(policy)
+    expect(errorOf(await h.call(method, params))).toBe(code)
+    expect(h.deps.emitRefusal).toHaveBeenCalledTimes(1)
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith({
+      extensionId: 'bom',
+      version: '1.2.0',
+      method,
+      code
+    })
+  })
+
+  it('rate_limited is emitted too, and the limiter runs BEFORE authorize', async () => {
+    const h = harness({}, { rateLimiter: createRateLimiter({ now: () => 0, maxRequests: 1 }) })
+    expect(errorOf(await h.call('graph.delete'))).toBe('unknown_method')
+    // A second unknown-method spam is answered by the limiter, not by authorize.
+    expect(errorOf(await h.call('graph.delete'))).toBe('rate_limited')
+    expect(errorOf(await h.call('sol.ask', { prompt: 'x' }))).toBe('rate_limited')
+    expect(h.deps.emitRefusal).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: 'sol.ask', code: 'rate_limited' })
+    )
+  })
+
+  it('a blocked extension spamming is rate-limited first as well', async () => {
+    const h = harness(
+      { blocked: true },
+      { rateLimiter: createRateLimiter({ now: () => 0, maxRequests: 1 }) }
+    )
+    expect(errorOf(await h.call('graph.getFocus'))).toBe('blocked')
+    expect(errorOf(await h.call('graph.getFocus'))).toBe('rate_limited')
+  })
+})
+
 describe('ui.openExternal (SEC-C1) — no unscoped exfiltration channel', () => {
   const links = { storeLinks: ['https://docs.example.com/bom'] }
 

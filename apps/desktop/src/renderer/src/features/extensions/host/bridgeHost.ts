@@ -2,8 +2,12 @@
 // extension frame (docs/architecture/extensions-runtime.md §6). Pipeline per
 // inbound message:
 //
-//   source check → parse (drop) → snapshot/scope (authorize) → duplicate id →
-//   rate limit → param schema → handler → exactly one response
+//   source+origin check → parse (drop) → rate limit → snapshot/scope
+//   (authorize) → duplicate id → param schema → handler → exactly one response
+//
+// The limiter runs FIRST (SEC-H4): a frame spamming unknown methods or
+// ungranted scopes is rate-limited like any other flood, and every refusal it
+// still earns is metered by the refusal reporter, not sent unbounded.
 //
 // Outbound messages never carry a token, a base URL, a header, or a server
 // body (§3 — the frame's origin is opaque, so `postMessage` targets '*').
@@ -174,11 +178,11 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   }
 
   async function dispatch(request: BridgeRequest): Promise<void> {
-    const denied = authorize(policy, request.method)
-    if (denied !== null) return refuse(request, denied)
-    if (inFlightIds.has(request.id)) return refuse(request, 'invalid_params')
     if (limiter.tryAcquire() === 'rate_limited') return refuse(request, 'rate_limited')
     try {
+      const denied = authorize(policy, request.method)
+      if (denied !== null) return refuse(request, denied)
+      if (inFlightIds.has(request.id)) return refuse(request, 'invalid_params')
       await execute(request, request.method as BridgeMethod)
     } finally {
       limiter.release()

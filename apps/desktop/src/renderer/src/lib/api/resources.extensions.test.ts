@@ -20,6 +20,7 @@ import {
   listProjectExtensions,
   listTeamExtensionPolicies,
   patchExtensionInstall,
+  postDataEvents,
   publishExtension,
   putExtensionStorage,
   putTeamExtensionPolicy,
@@ -284,5 +285,14 @@ describe('path hygiene', () => {
     await getExtension('../teams', client)
     expect(calls[0].path).toBe('/projects/p1/extensions/bom/storage/a%2Fb%3Fc')
     expect(calls[1].path).toBe('/extensions/..%2Fteams')
+  })
+})
+
+describe('data events (API.md §2.13)', () => {
+  it('POSTs the batch to /events', async () => {
+    const { client, calls } = stubClient()
+    const events = [{ event_type: 'extension.bridge_refused', payload: { slug: 'bom' } }]
+    await postDataEvents(events, client)
+    expect(calls).toEqual([{ path: '/events', options: { method: 'POST', body: { events } } }])
   })
 })
