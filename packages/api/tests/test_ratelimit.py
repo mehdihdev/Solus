@@ -48,6 +48,23 @@ async def test_429_after_limit_exceeded(limited_client: AsyncClient) -> None:
     assert "retry-after" in blocked.headers
 
 
+# SOLUSDEV-234: a single desktop session's steady-state polling (bench widget
+# 2 req/s + ~1 req/s of bridge/sources/extensions/widget pollers, several
+# mounted twice) plus a workspace load's graph pagination. Below this the app
+# 429s ITSELF within ~30s of normal clicking. Kept as a floor so a future
+# "tighten the limiter" change cannot silently reintroduce that.
+DESKTOP_STEADY_STATE_PER_MINUTE = 600
+
+
+def test_default_budget_covers_a_desktop_session() -> None:
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
+        supabase_jwt_secret=TEST_JWT_SECRET,
+        database_url="sqlite+aiosqlite://",
+    )
+    assert settings.rate_limit_per_minute >= DESKTOP_STEADY_STATE_PER_MINUTE
+
+
 async def test_health_probes_exempt_from_rate_limit(limited_client: AsyncClient) -> None:
     for _ in range(10):
         resp = await limited_client.get("/healthz")

@@ -655,9 +655,12 @@ Cancelling a finished job → `409 job_not_cancellable` (`"Job is already cancel
 
 ## 7. Rate limiting (§1.4 interim)
 
-Default 120 req/min per token (per client IP when unauthenticated), set via
-`SOLUS_RATE_LIMIT_PER_MINUTE`. To see a `429` in Postman, restart the server with
-`SOLUS_RATE_LIMIT_PER_MINUTE=3` and send 4 requests:
+Default 1200 req/min per token (per client IP when unauthenticated), set via
+`SOLUS_RATE_LIMIT_PER_MINUTE`. The number is sized for one desktop session's steady-state
+polling (SOLUSDEV-234: the Live Bench widget is 2 req/s, the bridge/sources/extensions/widget
+pollers ~1 req/s, and a workspace load pages the graph in 500-row bursts) with a 10x margin,
+so it bounds a runaway loop without a healthy client 429ing itself. To see a `429` in Postman,
+restart the server with `SOLUS_RATE_LIMIT_PER_MINUTE=3` and send 4 requests:
 
 ```json
 {
@@ -671,6 +674,12 @@ Default 120 req/min per token (per client IP when unauthenticated), set via
 
 with `Retry-After: <seconds>`. `/healthz` and `/readyz` are exempt. This is a per-process
 limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the same headers.
+
+Client contract (desktop `lib/api/client.ts`, SOLUSDEV-234): concurrent identical GETs share one
+in-flight request, and a `429` on a GET pauses further GETs client-side until `Retry-After`
+elapses (5 s when the header is missing or malformed) — they fail fast with the same
+`rate_limited` error instead of hammering the window. Mutations are never coalesced or held back,
+and a `429` from a separately-bucketed POST (e.g. classify) does not pause reads.
 
 ---
 

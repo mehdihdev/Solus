@@ -75,7 +75,13 @@ class Settings(BaseSettings):
     supabase_service_role_key: str | None = None
 
     # Interim in-process limiter until the ADR-019 budget system lands (Phase 5).
-    rate_limit_per_minute: int = 120
+    # SOLUSDEV-234: this is a per-TOKEN abuse guard, and one desktop session
+    # is a polling-heavy client — the Live Bench widget alone is 2 req/s, the
+    # bridge/sources/extensions/widgets pollers add ~1/s, and a workspace load
+    # pages the whole graph in 500-row bursts. The former 120/min was below
+    # that steady state, so a healthy client 429'd itself after ~30s. 1200/min
+    # (20 req/s) still bounds a runaway loop at 10x normal load.
+    rate_limit_per_minute: int = 1200
     # MO-04 classify preview: fired on typing pauses, so it gets its own
     # generous separate bucket (never counts against the global budget above).
     classify_rate_limit_per_minute: int = 600

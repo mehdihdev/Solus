@@ -135,3 +135,150 @@ describe('204 No Content (SOLUSDEV-233 regression)', () => {
     expect(unwrapEnvelope<void>(204, null)).toBeUndefined()
   })
 })
+
+// SOLUSDEV-234: the desktop's background pollers (bench, bridge, sources,
+// extensions, widgets) plus navigation bursts blew through the API's
+// per-token budget, and every poller kept hammering a 429ing server until the
+// app was unusable. Two client-side guards, both keyed on GET only:
+// concurrent identical reads share ONE network request, and a 429 pauses
+// reads until the server's own Retry-After — mutations are never held back.
+describe('GET coalescing (SOLUSDEV-234)', () => {
+  function okResponse(payload: unknown): Response {
+    return new Response(JSON.stringify({ data: payload }), { status: 200 })
+  }
+
+  it('shares one network request between concurrent identical GETs', async () => {
+    let release: (r: Response) => void = () => {}
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      () => new Promise<Response>((resolve) => (release = resolve))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const a = client.request<{ n: number }>('/projects/p1/sources')
+    const b = client.request<{ n: number }>('/projects/p1/sources')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    release(okResponse({ n: 1 }))
+    await expect(a).resolves.toEqual({ n: 1 })
+    await expect(b).resolves.toEqual({ n: 1 })
+
+    // Once settled, the next read is a fresh request (no stale caching).
+    fetchImpl.mockResolvedValueOnce(okResponse({ n: 2 }))
+    await expect(client.request<{ n: number }>('/projects/p1/sources')).resolves.toEqual({ n: 2 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not share between different paths, non-GETs, or aborted requests', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(okResponse(null))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    await Promise.all([
+      client.request('/a'),
+      client.request('/b'),
+      client.request('/a', { method: 'POST', body: {} }),
+      client.request('/a', { method: 'POST', body: {} }),
+      client.request('/a', { signal: new AbortController().signal })
+    ])
+    expect(fetchImpl).toHaveBeenCalledTimes(5)
+  })
+
+  it('a rejected shared request rejects every waiter and is not retained', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.reject(new TypeError('network down'))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const a = client.request('/a')
+    const b = client.request('/a')
+    await expect(a).rejects.toThrow('network down')
+    await expect(b).rejects.toThrow('network down')
+    fetchImpl.mockResolvedValueOnce(okResponse(null))
+    await expect(client.request('/a')).resolves.toBeNull()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('429 cooldown (SOLUSDEV-234)', () => {
+  const rateLimited = (retryAfter: string): Response =>
+    new Response(
+      JSON.stringify({ error: { code: 'rate_limited', message: 'Rate limit exceeded' } }),
+      {
+        status: 429,
+        headers: { 'Retry-After': retryAfter }
+      }
+    )
+
+  it('holds GETs back until Retry-After elapses, then resumes', async () => {
+    let nowMs = 1_000_000
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited('30'))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => nowMs
+    })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429, code: 'rate_limited' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+
+    // Still inside the window: every read fails fast without touching the network.
+    nowMs += 10_000
+    await expect(client.request('/b')).rejects.toMatchObject({ status: 429, code: 'rate_limited' })
+    await expect(client.requestPage('/c')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+
+    // Window over: reads go to the network again.
+    nowMs += 20_001
+    fetchImpl.mockResolvedValueOnce(new Response(JSON.stringify({ data: 'ok' }), { status: 200 }))
+    await expect(client.request('/a')).resolves.toBe('ok')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('never holds back mutations, and a 429 on a mutation does not pause reads', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited('60'))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => 0
+    })
+    // Separate server buckets (e.g. classify) 429 independently of the global
+    // read budget, so a POST 429 says nothing about whether reads would pass.
+    await expect(
+      client.request('/orchestration/classify', { method: 'POST', body: {} })
+    ).rejects.toMatchObject({ status: 429 })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    // Now reads are paused (the GET 429 above) — a mutation still goes through.
+    await expect(client.request('/x', { method: 'DELETE' })).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+  })
+
+  it('falls back to a short pause when Retry-After is missing or malformed', async () => {
+    let nowMs = 0
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited('soon'))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => nowMs
+    })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    nowMs += 5_001
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+})

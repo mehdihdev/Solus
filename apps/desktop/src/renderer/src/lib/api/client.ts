@@ -12,6 +12,8 @@ export interface ApiClientOptions {
   /** Returns the current Supabase JWT, or null when unauthenticated. */
   getToken?: () => Promise<string | null> | string | null
   fetchImpl?: typeof fetch
+  /** Clock for the 429 cooldown (injectable for tests). Defaults to Date.now. */
+  now?: () => number
 }
 
 export interface RequestOptions {
@@ -81,13 +83,43 @@ export interface ApiClient {
   requestPage<T>(path: string, options?: RequestOptions): Promise<Page<T>>
 }
 
+/** How long reads pause after a 429 whose `Retry-After` is missing or unparsable. */
+export const DEFAULT_RETRY_AFTER_MS = 5_000
+
+interface Sent {
+  status: number
+  body: unknown
+}
+
+/** `Retry-After` in delta-seconds → ms; `null` when absent/malformed. */
+function parseRetryAfterMs(header: string | null): number | null {
+  if (header === null) return null
+  const seconds = Number(header)
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : null
+}
+
+function rateLimitedLocally(): Sent {
+  return {
+    status: 429,
+    body: { error: { code: 'rate_limited', message: 'Rate limit exceeded' } }
+  }
+}
+
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
+  const now = options.now ?? Date.now
+  // SOLUSDEV-234. The desktop is polling-heavy (bench, bridge, sources,
+  // extensions, widgets — several hooks mounted more than once), and a burst
+  // over the API's per-token budget used to snowball: every poller kept
+  // firing into a 429ing server until the window reset, taking user-initiated
+  // reads down with it. Two guards, both GET-only so a mutation is never
+  // silently swallowed:
+  //   - concurrent identical reads share ONE in-flight request;
+  //   - a 429 pauses reads until the server's own Retry-After.
+  const inFlight = new Map<string, Promise<Sent>>()
+  let readsPausedUntilMs = 0
 
-  async function send(
-    path: string,
-    req: RequestOptions
-  ): Promise<{ status: number; body: unknown }> {
+  async function transmit(path: string, req: RequestOptions): Promise<Sent> {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (req.body !== undefined) headers['Content-Type'] = 'application/json'
     const token = typeof options.getToken === 'function' ? await options.getToken() : null
@@ -100,7 +132,22 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       signal: req.signal
     })
     const text = await res.text()
+    if (res.status === 429 && (req.method ?? 'GET') === 'GET') {
+      const retryMs = parseRetryAfterMs(res.headers.get('Retry-After')) ?? DEFAULT_RETRY_AFTER_MS
+      readsPausedUntilMs = Math.max(readsPausedUntilMs, now() + retryMs)
+    }
     return { status: res.status, body: text ? JSON.parse(text) : null }
+  }
+
+  function send(path: string, req: RequestOptions): Promise<Sent> {
+    const isPlainRead = (req.method ?? 'GET') === 'GET' && req.signal === undefined
+    if (!isPlainRead) return transmit(path, req)
+    if (now() < readsPausedUntilMs) return Promise.resolve(rateLimitedLocally())
+    const pending = inFlight.get(path)
+    if (pending) return pending
+    const started = transmit(path, req).finally(() => inFlight.delete(path))
+    inFlight.set(path, started)
+    return started
   }
 
   return {
