@@ -16,20 +16,16 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, model_validator
-from solus_contracts.extension_manifest import (
-    EXTENSION_ID_PATTERN,
-    SEMVER_PATTERN,
-    SlotSize,
-    parse_extension_manifest,
-)
+from solus_contracts.extension_manifest import SEMVER_PATTERN, SlotSize, parse_extension_manifest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.config import Settings
-from solus_api.core.errors import APIError, error_response
+from solus_api.core.errors import APIError
 from solus_api.core.pagination import encode_cursor
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectContext, ProjectCtx, SessionDep, SettingsDep, require_role
 from solus_api.extensions import installs as svc
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.extensions.schemas import serialize_install, serialize_storage_value
 from solus_api.extensions.schemas import serialize_widget_layout as _layout_out
 from solus_api.extensions.settings_schema import (
@@ -39,6 +35,7 @@ from solus_api.extensions.settings_schema import (
     settings_with_defaults,
     validate_settings_values,
 )
+from solus_api.extensions.slugs import SlugPath
 from solus_api.models import (
     WIDGET_LAYOUT_MAX_SLOTS,
     Extension,
@@ -48,7 +45,6 @@ from solus_api.models import (
     Role,
     WidgetLayout,
 )
-from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.events import emit_event
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}")
@@ -59,9 +55,10 @@ LAYOUT_REF_PATTERN = r"^(builtin:[a-z][a-z0-9-]{0,63}|ext:[a-z][a-z0-9-]{1,63})$
 _STORAGE_RAW_CEILING = 4 * svc.STORAGE_VALUE_MAX_BYTES
 _INSTALL_LIMITER = "extension_install_write_limiter"
 _STORAGE_LIMITER = "extension_storage_write_limiter"
+_STORAGE_READ_LIMITER = "extension_storage_read_limiter"
+_WINDOW_SECONDS = 60
 _SENTINEL = object()
 
-SlugPath = Annotated[str, Path(pattern=EXTENSION_ID_PATTERN)]
 KeyPath = Annotated[str, Path(pattern=svc.STORAGE_KEY_PATTERN)]
 
 
@@ -108,22 +105,11 @@ class LayoutBody(_Body):
 
 
 # ------------------------------------------------------------------ helpers
-def _limiter(request: Request, attr: str) -> FixedWindowLimiter:
-    """§12 budgets — the same per-process machinery as artifacts.md §4.5. Created
-    lazily on `app.state` so `main.create_app` wiring is optional."""
-    limiter = getattr(request.app.state, attr, None)
-    if not isinstance(limiter, FixedWindowLimiter):
-        limiter = FixedWindowLimiter(window_seconds=60)
-        setattr(request.app.state, attr, limiter)
-    return limiter
-
-
 def _rate_limited(request: Request, attr: str, key: str, limit: int) -> Response | None:
-    if _limiter(request, attr).bump(key) <= limit:
+    """§12 budgets — the shared per-process `FixedWindowLimiter` on `app.state`."""
+    if get_or_create_limiter(request.app.state, attr, _WINDOW_SECONDS).bump(key) <= limit:
         return None
-    resp = error_response(429, "rate_limited", "Too many extension writes; slow down")
-    resp.headers["Retry-After"] = "60"
-    return resp
+    return rate_limited_response("Too many extension writes; slow down", _WINDOW_SECONDS)
 
 
 def _install_budget(request: Request, ctx: ProjectContext, settings: Settings) -> Response | None:
@@ -469,10 +455,23 @@ async def _storage_row(
     return row
 
 
-@router.get("/extensions/{slug}/storage/{key}")
+@router.get("/extensions/{slug}/storage/{key}", response_model=None)
 async def get_storage(
-    slug: SlugPath, key: KeyPath, ctx: ProjectCtx, session: SessionDep
-) -> dict[str, Any]:
+    slug: SlugPath,
+    key: KeyPath,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> dict[str, Any] | Response:
+    # Phase 4 L3: reads ride a per-USER window (writes stay per-install, §12).
+    if limited := _rate_limited(
+        request,
+        _STORAGE_READ_LIMITER,
+        str(ctx.user.id),
+        settings.extension_storage_reads_per_minute_per_user,
+    ):
+        return limited
     extension, _ = await _storage_install(session, ctx, slug, "storage.get")
     row = await _storage_row(session, ctx.project.id, extension.id, key)
     return envelope(serialize_storage_value(row).payload())

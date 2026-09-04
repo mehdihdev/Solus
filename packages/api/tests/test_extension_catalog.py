@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from solus_api.core.errors import APIError
 from solus_api.extensions import catalog_service as svc
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import (
     ArtifactStorage,
     Extension,
@@ -454,9 +455,23 @@ def test_cursor_codec_round_trips_and_rejects_garbage() -> None:
         assert excinfo.value.code == "invalid_cursor"
 
 
-def test_validate_slug_is_case_insensitive_and_rejects_bad_syntax() -> None:
-    assert svc.validate_slug("BOM") == "BOM"
-    for bad in ("1abc", "a", "-x", "a_b", "x" * 65):
+def test_validate_slug_normalizes_case_and_rejects_bad_syntax() -> None:
+    """One validator for every `{slug}` (Phase 4 REV-MEDIUM): `BOM` normalizes to
+    `bom`; garbage and the contract's reserved ids are 422 before any lookup."""
+    assert validate_extension_slug("BOM") == "bom"
+    assert validate_extension_slug("bom") == "bom"
+    for bad in ("1abc", "a", "-x", "a_b", "x" * 65, "constructor", "__proto__", "Prototype"):
         with pytest.raises(APIError) as excinfo:
-            svc.validate_slug(bad)
+            validate_extension_slug(bad)
         assert excinfo.value.status_code == 422
+        assert excinfo.value.code == "validation_error"
+
+
+@pytest.mark.parametrize("slug", ["constructor", "__proto__", "prototype"])
+async def test_reserved_slugs_are_422_on_the_catalog_routes(
+    client: AsyncClient, bob_headers: dict[str, str], slug: str
+) -> None:
+    for url in (f"/api/v1/extensions/{slug}", f"/api/v1/extensions/{slug}/versions"):
+        resp = await client.get(url, headers=bob_headers)
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["error"]["code"] == "validation_error"

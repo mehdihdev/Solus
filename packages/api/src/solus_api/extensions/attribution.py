@@ -17,24 +17,32 @@ the refusal with identifiers only.
 """
 
 import logging
-import re
 import uuid
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Header
-from solus_contracts.extension_manifest import EXTENSION_ID_PATTERN
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
 from solus_api.deps import ProjectCtx, SessionDep
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import Extension, ExtensionInstall, Project, TeamExtensionPolicy
 
 logger = logging.getLogger("solus.extensions.attribution")
 
 EXTENSION_HEADER = "X-Solus-Extension"
 SOL_ASK_SCOPE = "sol.ask"
-_SLUG_RE = re.compile(EXTENSION_ID_PATTERN)
+
+
+@dataclass(frozen=True)
+class ResolvedAttribution:
+    """A VERIFIED attribution: the extension id for the ledger and the validated
+    slug the prompt framing names (Phase 4 H2). Never carries catalog text."""
+
+    extension_id: uuid.UUID
+    slug: str
 
 
 def _denied(project_id: uuid.UUID, reason: str, slug: str | None = None) -> APIError:
@@ -49,14 +57,25 @@ async def resolve_extension_attribution(
     session: AsyncSession, *, project: Project, header_value: str | None
 ) -> uuid.UUID | None:
     """The extension id to attribute a SOL turn to, or None when no header was
+    sent (see :func:`resolve_attribution` for the failure modes)."""
+    resolved = await resolve_attribution(session, project=project, header_value=header_value)
+    return resolved.extension_id if resolved is not None else None
+
+
+async def resolve_attribution(
+    session: AsyncSession, *, project: Project, header_value: str | None
+) -> ResolvedAttribution | None:
+    """The verified attribution for a SOL turn, or None when no header was
     sent. Every failure — malformed slug, unknown extension, no install in THIS
     project, disabled, `sol.ask` not granted, team-blocked — raises
     `APIError(403, "scope_denied")`."""
     if header_value is None:
         return None
-    if _SLUG_RE.fullmatch(header_value) is None:
-        raise _denied(project.id, "malformed_slug")
-    slug = header_value
+    try:
+        slug = validate_extension_slug(header_value)
+    except APIError:
+        # A validation hint would tell the caller what shape to try; refuse instead.
+        raise _denied(project.id, "malformed_slug") from None
     row = (
         await session.execute(
             select(
@@ -83,27 +102,27 @@ async def resolve_extension_attribution(
         raise _denied(project.id, "disabled", slug)
     if SOL_ASK_SCOPE not in (granted_scopes or []):
         raise _denied(project.id, "scope_not_granted", slug)
-    return uuid.UUID(str(extension_id))
+    return ResolvedAttribution(extension_id=uuid.UUID(str(extension_id)), slug=slug)
 
 
 async def extension_attribution(
     ctx: ProjectCtx,
     session: SessionDep,
     header_value: Annotated[str | None, Header(alias=EXTENSION_HEADER)] = None,
-) -> uuid.UUID | None:
+) -> ResolvedAttribution | None:
     """FastAPI dependency: resolves `X-Solus-Extension` against the request's
     project BEFORE the route body runs (so a refusal precedes admission)."""
-    return await resolve_extension_attribution(
-        session, project=ctx.project, header_value=header_value
-    )
+    return await resolve_attribution(session, project=ctx.project, header_value=header_value)
 
 
-ExtensionAttribution = Annotated[uuid.UUID | None, Depends(extension_attribution)]
+ExtensionAttribution = Annotated[ResolvedAttribution | None, Depends(extension_attribution)]
 
 __all__ = [
     "EXTENSION_HEADER",
     "SOL_ASK_SCOPE",
     "ExtensionAttribution",
+    "ResolvedAttribution",
     "extension_attribution",
+    "resolve_attribution",
     "resolve_extension_attribution",
 ]

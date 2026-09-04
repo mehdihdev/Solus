@@ -9,20 +9,26 @@ publish creates, and the §5.3 `latest_approved_version_id` recompute.
 
 import hashlib
 import io
+import os
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from conftest import me
 from fastapi import FastAPI
 from fixtures.extensions import (
+    FULL_MANIFEST_TOML,
     MINIMAL_MANIFEST_TOML,
+    PNG_MAGIC,
     build_zip,
+    full_files,
     minimal_files,
     with_manifest,
     without,
 )
 from httpx import AsyncClient, Response
+from solus_api.extensions import bundle as bundle_module
 from solus_api.models import (
     DataEvent,
     Extension,
@@ -49,9 +55,11 @@ def app(app: FastAPI) -> FastAPI:
 
 
 # ------------------------------------------------------------------ helpers
-def _bundle(version: str = "1.0.0", slug: str = "bom") -> bytes:
-    toml = MINIMAL_MANIFEST_TOML.replace('version = "1.0.0"', f'version = "{version}"').replace(
-        'id = "bom"', f'id = "{slug}"'
+def _bundle(version: str = "1.0.0", slug: str = "bom", *, publisher: str = "Ada Lovelace") -> bytes:
+    toml = (
+        MINIMAL_MANIFEST_TOML.replace('version = "1.0.0"', f'version = "{version}"')
+        .replace('id = "bom"', f'id = "{slug}"')
+        .replace('publisher = "Ada Lovelace"', f'publisher = "{publisher}"')
     )
     return build_zip(with_manifest(minimal_files(), toml))
 
@@ -136,7 +144,7 @@ async def test_publish_creates_rows_bytes_and_event(
     publisher = await db.scalar(select(ExtensionPublisher))
     assert publisher is not None
     assert publisher.user_id == uuid.UUID(user_id)
-    assert publisher.display_name == "Solus"  # seeded from extension.publisher
+    assert publisher.display_name == "Ada Lovelace"  # seeded from extension.publisher
     extension = await db.scalar(select(Extension))
     assert extension is not None
     assert (extension.slug, extension.name, extension.publisher_id) == (
@@ -339,6 +347,95 @@ async def test_invalid_bundle_is_422_bundle_invalid_with_problems(
     assert list(app.state.artifact_store.root.iterdir()) == []
 
 
+async def test_publish_route_never_runs_the_full_inspector(
+    client: AsyncClient, alice_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 4 H1(4): the request path runs `inspect_bundle_structure` (manifest
+    + header checks) only; the full, member-inflating `inspect_bundle` belongs
+    to the review job. If the route ever called it, this publish would 500."""
+
+    def boom(*args: Any) -> Any:
+        raise AssertionError("inspect_bundle must not run in the request path")
+
+    # Both the public name and the stage it dispatches to (the route could only
+    # reach the latter through the former).
+    monkeypatch.setattr(bundle_module, "inspect_bundle", boom)
+    monkeypatch.setattr(bundle_module, "_full_stage", boom)
+    assert not hasattr(publish, "inspect_bundle")
+    resp = await _publish(client, alice_headers, _bundle())
+    assert resp.status_code == 202, resp.text
+
+
+async def test_publish_route_rejects_header_level_problems_without_inflating_members(
+    client: AsyncClient, alice_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A screenshot whose header says 2 MiB is refused from the central directory
+    alone — the route inflates exactly one member, the manifest."""
+    names: list[str] = []
+    original = bundle_module._read_bounded
+
+    def spy(zf: Any, name: str, max_bytes: int, budget: Any) -> bytes:
+        names.append(name)
+        return original(zf, name, max_bytes, budget)
+
+    monkeypatch.setattr(bundle_module, "_read_bounded", spy)
+    toml = FULL_MANIFEST_TOML.replace('publisher = "Ada Lovelace"', 'publisher = "Ada"')
+    files = {**full_files(), "shots/table.png": PNG_MAGIC + os.urandom(2 * 1024 * 1024)}
+    resp = await _publish(client, alice_headers, build_zip(with_manifest(files, toml)))
+    assert resp.status_code == 422, resp.text
+    assert any("shots/table.png" in p and "exceeds" in p for p in resp.json()["error"]["details"])
+    assert names == ["extension.toml"]
+
+
+# ------------------------------------------------- M4 publisher impersonation
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Solus",
+        "S0lus",
+        "Solus  Forge",
+        "solus-forge",
+        "SOLUS Robotics",
+        "Solus Team",
+        "Solus_Staff",
+        "Ѕоlus",  # Cyrillic Ѕ + о
+        "Ｓolus",  # fullwidth S (NFKC)
+    ],
+)
+async def test_reserved_publisher_name_is_409_at_first_publish(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, name: str
+) -> None:
+    """Phase 4 M4: a first publish cannot seed a publisher row whose display name
+    impersonates the vendor — case, spacing, punctuation and digit lookalikes
+    are all normalized away first. Nothing is created."""
+    resp = await _publish(client, alice_headers, _bundle(publisher=name))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "publisher_name_reserved"
+    assert await db.scalar(select(ExtensionPublisher)) is None
+    assert await db.scalar(select(Extension)) is None
+
+
+async def test_legitimate_publisher_name_passes(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    resp = await _publish(client, alice_headers, _bundle(publisher="Ada Lovelace"))
+    assert resp.status_code == 202, resp.text
+    publisher = await db.scalar(select(ExtensionPublisher))
+    assert publisher is not None and publisher.display_name == "Ada Lovelace"
+
+
+async def test_existing_publisher_is_unaffected_by_the_reserved_name_rule(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """The denylist gates ROW CREATION only: a publisher row that already exists
+    (vendor-seeded, or pre-dating the rule) keeps publishing."""
+    alice = await me(client, alice_headers)
+    db.add(ExtensionPublisher(user_id=uuid.UUID(alice["id"]), display_name="Solus"))
+    await db.commit()
+    resp = await _publish(client, alice_headers, _bundle(publisher="Solus"))
+    assert resp.status_code == 202, resp.text
+
+
 async def test_slug_owned_by_another_publisher_is_409_slug_taken(
     client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
 ) -> None:
@@ -464,7 +561,15 @@ async def test_unpublish_requires_verified_email(
     assert resp.json()["error"]["code"] == "email_not_verified"
 
 
-@pytest.mark.parametrize("path", ["/Bom/versions/1.0.0", "/bom/versions/latest", "/bom/versions/1"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/-bom/versions/1.0.0",
+        "/constructor/versions/1.0.0",
+        "/bom/versions/latest",
+        "/bom/versions/1",
+    ],
+)
 async def test_bad_slug_or_version_syntax_is_422_before_lookup(
     client: AsyncClient, alice_headers: dict[str, str], path: str
 ) -> None:

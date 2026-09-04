@@ -271,6 +271,10 @@ class Settings(BaseSettings):
     extension_install_writes_per_minute_per_user: int = 60
     extension_storage_writes_per_minute_per_install: int = 120
     extension_policy_writes_per_minute_per_team: int = 30
+    # Phase 4 L3: per-user read windows on the two routes that serve stored
+    # bytes/values on demand (store assets; extension storage values).
+    extension_asset_downloads_per_minute_per_user: int = 240
+    extension_storage_reads_per_minute_per_user: int = 240
 
     @field_validator("staff_user_ids")
     @classmethod

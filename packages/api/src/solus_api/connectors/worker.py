@@ -443,5 +443,10 @@ def build_worker_settings(settings: Settings) -> type:
         on_startup = _on_startup
         on_shutdown = _on_shutdown
         redis_settings = RedisSettings.from_dsn(redis_url)
+        # Phase 4 H1(5): bound the pool (arq's default is 10). Reviews inflate
+        # zip members — CPU-bound work that would otherwise let one flood of
+        # publishes crowd out syncs; `extension_review` additionally holds at
+        # most 2 slots per publisher (extensions/review.py).
+        max_jobs = 4
 
     return WorkerSettings

@@ -8,6 +8,14 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI
+from fixtures.extensions.routes import (
+    MANIFEST,
+    ext_url,
+    install,
+    installs_app,
+    project_for,
+    seed_extension,
+)
 from httpx import AsyncClient
 from solus_api.core.config import Settings
 from solus_api.extensions.settings_schema import (
@@ -19,14 +27,6 @@ from solus_api.extensions.settings_schema import (
 )
 from solus_contracts.extension_manifest import parse_extension_manifest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from test_extension_installs import (
-    MANIFEST,
-    ext_url,
-    install,
-    installs_app,
-    project_for,
-    seed_extension,
-)
 
 FULL = parse_extension_manifest(MANIFEST)
 

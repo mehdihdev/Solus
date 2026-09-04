@@ -23,6 +23,7 @@ from solus_api.extensions.schemas import (
     serialize_extension_detail,
     serialize_version_summary,
 )
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import Extension, ExtensionPublisher
 
 router = APIRouter(prefix="/api/v1/extensions")
@@ -37,7 +38,7 @@ async def _resolve(
 ) -> tuple[Extension, ExtensionPublisher, bool]:
     """Validate the slug, load the live extension, and decide whether the
     caller is its publisher. Unknown slug → 404 for everyone."""
-    found = await svc.get_extension_by_slug(session, svc.validate_slug(slug))
+    found = await svc.get_extension_by_slug(session, validate_extension_slug(slug))
     if found is None:
         raise APIError(404, "not_found", "Extension not found")
     extension, publisher = found

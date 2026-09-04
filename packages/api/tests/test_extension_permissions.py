@@ -9,12 +9,7 @@ from typing import Any
 import pytest
 from conftest import me
 from fastapi import FastAPI
-from httpx import AsyncClient
-from solus_api.core.config import Settings
-from solus_api.models import ExtensionInstall
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from test_extension_installs import (
+from fixtures.extensions.routes import (
     consent,
     events_of,
     ext_url,
@@ -25,6 +20,11 @@ from test_extension_installs import (
     seed_extension,
     seed_policy,
 )
+from httpx import AsyncClient
+from solus_api.core.config import Settings
+from solus_api.models import ExtensionInstall
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 WIDE_SCOPES = ["graph.read", "sources.read", "storage.own"]
 WIDE_NETWORK = ["https://api.octopart.com", "https://api.mouser.com"]
@@ -344,6 +344,25 @@ async def test_storage_round_trip_with_the_scope_granted(
     assert gone.status_code == 204
     assert missing.status_code == 404
     assert (await client.delete(url, headers=alice_headers)).status_code == 404
+
+
+async def test_storage_read_rate_limit_is_429_per_user_with_retry_after(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, app: FastAPI
+) -> None:
+    """Phase 4 L3: `GET …/storage/{key}` rides a per-USER window (writes stay
+    per-install); over budget → 429 + Retry-After, never a silent read."""
+    project_id, _ = await _installed_project(client, alice_headers, db, scopes=["storage.own"])
+    url = ext_url(project_id, "bom") + "/storage/cache.v1"
+    assert (await client.put(url, json=1, headers=alice_headers)).status_code == 201
+    app.state.settings.extension_storage_reads_per_minute_per_user = 1
+
+    first = await client.get(url, headers=alice_headers)
+    second = await client.get(url, headers=alice_headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "rate_limited"
+    assert second.headers["Retry-After"] == "60"
 
 
 @pytest.mark.parametrize("key", ["", "a b", "k/x", "k" * 65, "ü", "a:b"])

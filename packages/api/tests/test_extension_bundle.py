@@ -3,27 +3,40 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import secrets
 import zipfile
+import zlib
 
 import pytest
 from fixtures.extensions import (
     FULL_MANIFEST_TOML,
     PNG_MAGIC,
+    RawEntry,
     build_zip,
+    deflate_raw,
     full_files,
     minimal_files,
     png_bytes,
+    raw_entry,
+    raw_zip,
     symlink_entry,
     with_manifest,
     without,
 )
+from solus_api.extensions import bundle as bundle_module
 from solus_api.extensions.bundle import (
+    INFLATE_BUDGET_BYTES,
     MAX_COMPRESSION_RATIO,
     MAX_ENTRIES,
+    MAX_MANIFEST_BYTES,
+    MAX_TEXT_MEMBER_BYTES,
+    RATIO_FLOOR_BYTES,
     BundleAsset,
     BundleError,
     BundleReport,
     inspect_bundle,
+    inspect_bundle_structure,
     read_member,
 )
 from solus_contracts.extension_manifest import LIMITS
@@ -126,6 +139,33 @@ def test_total_uncompressed_over_the_cap_is_rejected() -> None:
     assert not any("compression ratio" in p for p in problems), problems
 
 
+def test_ratio_guard_has_no_16_kib_exemption_a_5000_to_1_small_entry_is_rejected() -> None:
+    """Phase 4 H1(3): the guard used to skip entries under 16 KiB uncompressed.
+    Header sizes are what the guard sees, so the archive is hand-rolled with a
+    15 KiB entry whose declared compress_size is 3 bytes — 5000:1."""
+    zeros = b"\0" * (15 * 1024)
+    bomb = RawEntry(
+        "pad.js",
+        deflate_raw(zeros),
+        file_size=len(zeros),
+        crc=zlib.crc32(zeros) & 0xFFFFFFFF,
+        compress_size=3,
+    )
+    entries = [raw_entry(k, v) for k, v in minimal_files().items()] + [bomb]
+    report = inspect_bundle(raw_zip(entries))
+    assert not report.ok
+    assert any("pad.js" in p and "compression ratio" in p for p in report.problems), report.problems
+
+
+def test_entries_at_or_under_the_ratio_floor_are_exempt() -> None:
+    """Deflate overhead dominates tiny members: a 1 KiB run of zeros deflates
+    past 100:1 and must still be accepted (the total cap bounds it anyway)."""
+    files = {**minimal_files(), "tiny.json": b"0" * RATIO_FLOOR_BYTES}
+    report = inspect_bundle(build_zip(files))
+    assert report.ok, report.problems
+    assert RATIO_FLOOR_BYTES == 1024
+
+
 def test_too_many_entries_is_rejected() -> None:
     files = {**minimal_files(), **{f"a/{i}.json": b"{}" for i in range(MAX_ENTRIES)}}
     problems = _problems(files, compression=zipfile.ZIP_STORED)
@@ -169,6 +209,147 @@ def test_entries_outside_the_suffix_allowlist_are_rejected(name: str) -> None:
 def test_upper_case_allowed_suffixes_are_fine() -> None:
     report = inspect_bundle(build_zip({**minimal_files(), "README.MD": b"# hi\n"}))
     assert report.ok, report.problems
+
+
+# --- inflation bounds (Phase 4 H1) ------------------------------------------------
+
+
+class _Inflation:
+    """Wraps `_read_bounded` to record what the inspection actually inflated:
+    the budget object is threaded through every call, so its depletion is the
+    ground truth even when a read aborts mid-member."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.names: list[str] = []
+        self.budgets: set[int] = set()
+        self._budget_objects: list[object] = []
+        original = bundle_module._read_bounded
+
+        def spy(zf: object, name: str, max_bytes: int, budget: object) -> bytes:
+            self.names.append(name)
+            if id(budget) not in self.budgets:
+                self.budgets.add(id(budget))
+                self._budget_objects.append(budget)
+            return original(zf, name, max_bytes, budget)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(bundle_module, "_read_bounded", spy)
+
+    def inflated_bytes(self, limit: int) -> int:
+        return sum(limit - b.remaining for b in self._budget_objects)  # type: ignore[attr-defined]
+
+
+def test_text_members_are_capped_at_512_kib() -> None:
+    files = {**minimal_files(), "app.js": os.urandom(MAX_TEXT_MEMBER_BYTES + 1)}
+    problems = inspect_bundle(build_zip(files)).problems
+    assert any("app.js" in p and "exceeds" in p for p in problems), problems
+    assert MAX_TEXT_MEMBER_BYTES == 512 * 1024
+
+
+def test_manifest_is_capped_at_64_kib() -> None:
+    comment = b"# " + secrets.token_hex(MAX_MANIFEST_BYTES // 2).encode()
+    padded = minimal_files()["extension.toml"] + b"\n" + comment
+    problems = inspect_bundle(build_zip({**minimal_files(), "extension.toml": padded})).problems
+    assert any("extension.toml" in p and "exceeds" in p for p in problems), problems
+    assert MAX_MANIFEST_BYTES == 64 * 1024
+
+
+def test_cumulative_inflation_budget_aborts_the_whole_inspection_with_one_problem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every `_read_bounded` call draws on ONE budget for the whole inspection;
+    exhausting it ends the inspection with a single problem, not one per member."""
+    budget = 8 * 1024
+    monkeypatch.setattr(bundle_module, "INFLATE_BUDGET_BYTES", budget)
+    spy = _Inflation(monkeypatch)
+    files = {**minimal_files(), **{f"m/{i}.js": os.urandom(3000) for i in range(20)}}
+
+    report = inspect_bundle(build_zip(files))
+
+    assert not report.ok
+    assert len(report.problems) == 1, report.problems
+    assert "inspection aborted" in report.problems[0] and str(budget) in report.problems[0]
+    assert spy.inflated_bytes(budget) <= budget + 3000
+    assert len(spy.names) < 20  # it stopped reading
+
+
+def test_thousand_entry_bomb_with_understated_headers_never_inflates_past_the_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 4 H1(1): 1,000 members whose headers claim 24 KiB each (24 MiB in
+    total — under every header-level guard) but whose DEFLATE streams inflate to
+    8 MiB each. The inspection must reject it having inflated at most the
+    budget, never the 8 GiB the streams hold."""
+    spy = _Inflation(monkeypatch)
+    real = b"\0" * (8 * 1024 * 1024)
+    stream = deflate_raw(real)
+    crc = zlib.crc32(real) & 0xFFFFFFFF
+    claimed = 24 * 1024
+    entries = [raw_entry(k, v) for k, v in minimal_files().items()] + [
+        RawEntry(f"b/{i}.js", stream, file_size=claimed, crc=crc) for i in range(1_000)
+    ]
+    data = raw_zip(entries)
+    assert len(data) < LIMITS.bundle_bytes
+
+    report = inspect_bundle(data)
+
+    assert not report.ok
+    assert len(report.problems) == 1, report.problems[:3]
+    assert spy.inflated_bytes(INFLATE_BUDGET_BYTES) <= INFLATE_BUDGET_BYTES
+    assert INFLATE_BUDGET_BYTES == LIMITS.bundle_bytes
+
+
+# --- inspect_bundle_structure (the request-path inspector) -----------------------
+
+
+def test_structure_inspector_reads_only_the_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 4 H1(4): the publish route may inflate exactly one member — the
+    root `extension.toml` — and still learns manifest, presence and header-size
+    problems from the central directory alone."""
+    spy = _Inflation(monkeypatch)
+    files = {
+        **full_files(),
+        "widget.html": b"<html></html>" + os.urandom(MAX_TEXT_MEMBER_BYTES + 1),
+        "shots/table.png": PNG_MAGIC + os.urandom(LIMITS.screenshot_bytes + 1),
+    }
+    files.pop("docs/HOW.md")
+
+    report = inspect_bundle_structure(build_zip(files))
+
+    assert spy.names == ["extension.toml"]
+    assert not report.ok and report.manifest is not None
+    assert report.manifest.extension.id == "bom"
+    assert any(
+        p.startswith("store.sections.0.body:") and "docs/HOW.md" in p for p in report.problems
+    )
+    assert any("shots/table.png" in p and "exceeds" in p for p in report.problems)
+    assert any("widget.html" in p and "exceeds" in p for p in report.problems)
+    assert report.assets == []
+
+
+def test_structure_inspector_accepts_what_only_content_checks_would_reject() -> None:
+    """Content sniffing (icon reduction, PNG magic, static checks) is the review
+    job's work: the structure pass is a superset-accepting, header-only gate."""
+    bad_icon = {
+        **full_files(),
+        "icon.svg": b'<svg xmlns="http://www.w3.org/2000/svg" onload="x()"/>',
+    }
+    remote_script = {**minimal_files(), "app.js": b"fetch('https://x.example')\n"}
+    for files in (bad_icon, remote_script):
+        structure = inspect_bundle_structure(build_zip(files))
+        assert structure.ok, structure.problems
+        assert not inspect_bundle(build_zip(files)).ok
+    good = inspect_bundle_structure(build_zip(full_files()))
+    assert good.ok and good.content_hash == hashlib.sha256(build_zip(full_files())).hexdigest()
+
+
+def test_structure_inspector_shares_the_zip_guards() -> None:
+    for data, needle in (
+        (b"not a zip", "zip"),
+        (build_zip(without(minimal_files(), "extension.toml")), "missing"),
+        (build_zip(minimal_files(), extra=[symlink_entry("l.js", "/etc/passwd")]), "symlink"),
+    ):
+        report = inspect_bundle_structure(data)
+        assert not report.ok and any(needle in p for p in report.problems), report.problems
 
 
 # --- manifest presence ----------------------------------------------------------

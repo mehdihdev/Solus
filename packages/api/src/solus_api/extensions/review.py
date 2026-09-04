@@ -13,12 +13,14 @@ Nothing here executes bundle content; every member read is bounded.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 import re
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +45,12 @@ from solus_api.storage import ArtifactStore
 logger = logging.getLogger("solus.extensions.review")
 
 MAX_PROBLEMS = 200
+#: Phase 4 H1(5): reviews one publisher may have in flight at once in this
+#: worker process (docs/api/extensions.md §5.1 — "one publisher cannot
+#: monopolize the worker pool"). Per-process, like the API's
+#: `FixedWindowLimiter`s: a multi-worker deployment gets `limit × workers`,
+#: and a Redis-backed semaphore is the named follow-up for that day.
+MAX_CONCURRENT_REVIEWS_PER_PUBLISHER = 2
 MAX_PROBLEM_CHARS = 500
 INTERNAL_ERROR_PROBLEM = "review: internal error"
 REVIEW_COMPLETED_EVENT = "extension.review_completed"
@@ -270,6 +278,52 @@ async def _emit_completed(
     await session.commit()
 
 
+# ------------------------------------------------------ per-publisher slots
+class _PublisherSlots:
+    """In-process guard: at most `limit` reviews per publisher at once. Entries
+    exist only while a review holds or waits for a slot, so the map is bounded
+    by the publishers with work in flight, never by every publisher ever seen."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._semaphores: dict[uuid.UUID, asyncio.Semaphore] = {}
+        self._interested: dict[uuid.UUID, int] = {}
+
+    @asynccontextmanager
+    async def slot(self, publisher_id: uuid.UUID) -> AsyncIterator[None]:
+        semaphore = self._semaphores.setdefault(publisher_id, asyncio.Semaphore(self._limit))
+        self._interested[publisher_id] = self._interested.get(publisher_id, 0) + 1
+        try:
+            async with semaphore:
+                yield
+        finally:
+            self._interested[publisher_id] -= 1
+            if self._interested[publisher_id] == 0:
+                del self._interested[publisher_id]
+                del self._semaphores[publisher_id]
+
+    def in_use(self) -> int:
+        return len(self._semaphores)
+
+
+_SLOTS = _PublisherSlots(MAX_CONCURRENT_REVIEWS_PER_PUBLISHER)
+
+
+def publisher_slots_in_use() -> int:
+    """Publishers with a review holding or awaiting a slot right now (tests)."""
+    return _SLOTS.in_use()
+
+
+async def _publisher_of_version(session: AsyncSession, version_id: uuid.UUID) -> uuid.UUID | None:
+    row = await session.execute(
+        select(Extension.publisher_id)
+        .join(ExtensionVersion, ExtensionVersion.extension_id == Extension.id)
+        .where(ExtensionVersion.id == version_id)
+    )
+    publisher_id = row.scalar_one_or_none()
+    return uuid.UUID(str(publisher_id)) if publisher_id is not None else None
+
+
 # ------------------------------------------------------------------- ARQ
 async def extension_review(ctx: dict[str, Any], version_id: str) -> str:
     """ARQ task (`JobKind.EXTENSION_REVIEW`): review one published version.
@@ -277,7 +331,8 @@ async def extension_review(ctx: dict[str, Any], version_id: str) -> str:
     Returns the final status value, `""` when there is nothing to review (unknown
     or malformed id), or `"error"` when even settling the row failed. Never
     raises — mirrors `connectors/worker.py`: a bad bundle or a flaky backend must
-    not poison the queue.
+    not poison the queue. Holds one of the publisher's
+    `MAX_CONCURRENT_REVIEWS_PER_PUBLISHER` slots for the whole run.
     """
     try:
         target_id = uuid.UUID(version_id)
@@ -286,7 +341,11 @@ async def extension_review(ctx: dict[str, Any], version_id: str) -> str:
         return ""
     try:
         async with ctx["sessionmaker"]() as session:
-            status = await run_review(session, ctx["artifact_store"], target_id)
+            publisher_id = await _publisher_of_version(session, target_id)
+            if publisher_id is None:
+                raise LookupError(target_id)
+            async with _SLOTS.slot(publisher_id):
+                status = await run_review(session, ctx["artifact_store"], target_id)
     except LookupError:
         logger.warning("extension review: version %s not found", target_id)
         return ""

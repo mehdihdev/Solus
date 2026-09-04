@@ -1,8 +1,10 @@
 """§5.1 publish + §5.3 unpublish (SOLUSDEV-235 / ADR-035, EXT-07;
 docs/api/extensions.md). Multipart upload hygiene mirrors `routers/artifacts.py`
 (411/413 pre-check + streamed cap, unknown fields 422, per-user fixed window);
-the bundle is inspected in the request path by the pure, bounded
-`inspect_bundle` and then stored VERBATIM — never unzipped to disk, never run.
+the bundle is gated in the request path by the header-only
+`inspect_bundle_structure` (Phase 4 H1: the manifest is the ONLY member it
+inflates; the full, member-reading `inspect_bundle` is the review job's) and
+then stored VERBATIM — never unzipped to disk, never run.
 
 Exports `router`; the aggregator (`routers/extensions/__init__.py`) mounts it.
 """
@@ -18,10 +20,10 @@ from fastapi import APIRouter, FastAPI, Request, Response
 from solus_contracts.extension_manifest import LIMITS
 from starlette.datastructures import UploadFile
 
-from solus_api.core.errors import APIError, error_response
+from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import CurrentUser, RequireVerified, SessionDep, SettingsDep
-from solus_api.extensions.bundle import inspect_bundle
+from solus_api.extensions.bundle import inspect_bundle_structure
 from solus_api.extensions.publishing import (
     IdempotencyRecord,
     IdempotencyStore,
@@ -34,11 +36,12 @@ from solus_api.extensions.publishing import (
     resolve_version,
     validate_idempotency_key,
     validate_semver,
-    validate_slug,
 )
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.extensions.schemas import serialize_published_version
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import utcnow
-from solus_api.services.artifacts import FixedWindowLimiter, read_bounded
+from solus_api.services.artifacts import read_bounded
 from solus_api.services.events import emit_event
 from solus_api.storage.extension_bundle_store import ExtensionBundleStore
 
@@ -51,24 +54,12 @@ _ALLOWED_FIELDS = frozenset({"bundle"})
 # on a right-sized bundle (same constant as the artifact upload route).
 _MULTIPART_OVERHEAD_BYTES = 8_192
 _PUBLISH_WINDOW_SECONDS = 3_600
+_PUBLISH_LIMITER = "extension_publish_limiter"
 #: ARQ function registered by `connectors/worker.py` (another EXT task).
 REVIEW_JOB = "extension_review"
 
 
 # ------------------------------------------------------------- app.state
-def _publish_limiter(request: Request) -> FixedWindowLimiter:
-    """Per-user hourly window (§12). Created lazily on `app.state` because
-    `main.py` is outside this task's ownership; per-process like every other
-    `FixedWindowLimiter` (artifacts.md §4.5 caveats apply)."""
-    limiter: FixedWindowLimiter | None = getattr(
-        request.app.state, "extension_publish_limiter", None
-    )
-    if limiter is None:
-        limiter = FixedWindowLimiter(window_seconds=_PUBLISH_WINDOW_SECONDS)
-        request.app.state.extension_publish_limiter = limiter
-    return limiter
-
-
 def _idempotency_store(request: Request) -> IdempotencyStore:
     store: IdempotencyStore | None = getattr(
         request.app.state, "extension_publish_idempotency", None
@@ -96,12 +87,6 @@ def _require_content_length_within_cap(request: Request, max_bytes: int) -> None
         raise APIError(411, "length_required", "Content-Length header is invalid") from None
     if declared_bytes > max_bytes + _MULTIPART_OVERHEAD_BYTES:
         raise APIError(413, "payload_too_large", "Bundle exceeds the 25 MiB limit")
-
-
-def _rate_limited(message: str, retry_after_seconds: int) -> Response:
-    resp = error_response(429, "rate_limited", message)
-    resp.headers["Retry-After"] = str(retry_after_seconds)
-    return resp
 
 
 async def _bundle_part(request: Request) -> UploadFile:
@@ -156,15 +141,13 @@ async def publish_extension(
 ) -> dict[str, Any] | Response:
     _require_content_length_within_cap(request, LIMITS.bundle_bytes)
     idempotency_key = validate_idempotency_key(request.headers.get("idempotency-key"))
-    if (
-        _publish_limiter(request).bump(str(user.id))
-        > settings.extension_publishes_per_hour_per_user
-    ):
+    limiter = get_or_create_limiter(request.app.state, _PUBLISH_LIMITER, _PUBLISH_WINDOW_SECONDS)
+    if limiter.bump(str(user.id)) > settings.extension_publishes_per_hour_per_user:
         emit_event(
             session, user=user, event_type="extension.rate_limited", payload={"route": "publish"}
         )
         await session.commit()
-        return _rate_limited("Too many publishes; slow down", _PUBLISH_WINDOW_SECONDS)
+        return rate_limited_response("Too many publishes; slow down", _PUBLISH_WINDOW_SECONDS)
 
     upload = await _bundle_part(request)
     data = await read_bounded(upload, LIMITS.bundle_bytes)
@@ -174,7 +157,7 @@ async def publish_extension(
     if (record := idempotency.get(user.id, idempotency_key)) is not None:
         return _replay_or_conflict(record, content_hash)
 
-    report = inspect_bundle(data)
+    report = inspect_bundle_structure(data)
     if not report.ok or report.manifest is None:
         raise APIError(422, "bundle_invalid", "Bundle failed validation", details=report.problems)
     manifest = report.manifest
@@ -226,7 +209,9 @@ async def unpublish_version(
     burned; `latest_approved_version_id` falls back to the highest remaining
     approved semver or null. Stored bytes are kept — pinned installs still
     resolve the row and the desktop's ADR-034 cache stays valid."""
-    resolved = await resolve_version(session, validate_slug(slug), validate_semver(version))
+    resolved = await resolve_version(
+        session, validate_extension_slug(slug), validate_semver(version)
+    )
     if resolved is None or not resolved.is_owned_by(user.id):
         raise not_found()
     resolved.version.deleted_at = utcnow()
