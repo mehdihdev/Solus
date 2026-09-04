@@ -1,6 +1,7 @@
 // Workspace shell: title row (project pill), menu row (Solus · View · Robot ·
 // Help + bridge / search / bell / sign out), icon rail, notifications popover,
-// toast, mini orb, and the workspace screens plus the alert detail view.
+// toast, mini orb, and the workspace screens plus the alert detail view and
+// the installed extensions' page views (rail entries above the Store — EXT-14).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
 // shows live API data or honest empty states, never fabricated robot data.
 import { useState } from 'react'
@@ -22,6 +23,8 @@ import { ProjectOverview } from '../project/ProjectOverview'
 import { SourcesScreen } from '../project/SourcesScreen'
 import { StoreScreen } from '../extensions/StoreScreen'
 import { useExtensionsStore } from '../extensions/extensionsStore'
+import { ExtensionPageScreen } from '../extensions/pageview/ExtensionPageScreen'
+import { ExtensionIcon } from '../extensions/host/ExtensionIcon'
 import { HomeScreen } from './HomeScreen'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
@@ -29,10 +32,10 @@ import { useNotifications } from './useNotifications'
 import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { TitleBar } from './TitleBar'
 import { MenuBar } from './MenuBar'
-import { useShellStore, type MainScreen } from './shellStore'
+import { useShellStore, routeKey, type MainScreen, type ShellRoute } from './shellStore'
 import { useFocusStore } from './focusStore'
-
-type Route = { name: MainScreen } | { name: 'alert'; alertId: string }
+import { useExtensionRail, type ExtensionRailData } from './useExtensionRail'
+import type { RailExtensionEntry } from './extensionRail'
 
 /** Screen labels (the data-screen-label hook for tests; the topbar breadcrumb is gone — SOLUSDEV-235). */
 const SCREEN_TITLES: Readonly<Record<string, string>> = {
@@ -46,19 +49,31 @@ const SCREEN_TITLES: Readonly<Record<string, string>> = {
   store: 'Store',
   billing: 'Billing',
   settings: 'Settings',
-  alert: 'Alert'
+  alert: 'Alert',
+  'ext-page': 'Extension'
 }
 
-export function WorkspaceShell(): React.JSX.Element {
+interface ShellNavigation {
+  route: ShellRoute
+  notifOpen: boolean
+  setNotifOpen: React.Dispatch<React.SetStateAction<boolean>>
+  go: (screen: MainScreen) => void
+  openProject: (p: { id: string; name: string }) => void
+  switchProject: (p: { id: string; name: string }) => void
+  openAlert: (alertId: string) => void
+  openExtensionPage: (slug: string) => void
+  /** The toast's action button: an alert id opens that alert, else the toast's screen. */
+  viewToast: (alertId?: string) => void
+  onSignOut: () => Promise<void>
+}
+
+/** The shell's route state and every transition out of it. Detail routes
+ *  (`alert`, `ext-page`) leave `lastMain` untouched so Back has a target. */
+function useShellNavigation(): ShellNavigation {
   const navigate = useNavigate()
-  const [route, setRoute] = useState<Route>({ name: 'home' })
+  const [route, setRoute] = useState<ShellRoute>({ name: 'home' })
   const [notifOpen, setNotifOpen] = useState(false)
   const signOut = useAuthStore((s) => s.signOut)
-  const me = useMe()
-  const notifs = useNotifications()
-  const online = notifs.status === 'ready'
-
-  const name = route.name
 
   const go = (screen: MainScreen): void => {
     useShellStore.getState().setLastMain(screen)
@@ -67,13 +82,6 @@ export function WorkspaceShell(): React.JSX.Element {
     setRoute({ name: screen })
     setNotifOpen(false)
   }
-  // Reactive: the bridge pill re-scopes when the topbar switcher changes the
-  // project (merge fix — SOLUSDEV-164 moved the current project into the store).
-  const project = useWorkspaceStore((s) => s.project)
-  // The persisted project id names a server row that can disappear under us.
-  // Confirm it once, so a dead id drops us to Home instead of 404ing every
-  // project-scoped screen with no way back.
-  useValidateProject()
   const openProject = (p: { id: string; name: string }): void => {
     useWorkspaceStore.getState().setProject(p)
     // Entity ids are project-scoped, so the focus cache must not survive the switch (WS-01).
@@ -89,11 +97,24 @@ export function WorkspaceShell(): React.JSX.Element {
     useFocusStore.getState().clearProject()
     // A detail page belongs to the project it was opened in (SOLUSDEV-235).
     useExtensionsStore.getState().select(null)
+    // So does an extension's page view: the new project may not have it
+    // installed, so the rail entry may be gone — fall back to Overview (EXT-14).
+    if (route.name === 'ext-page') go('overview')
     setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {
     setRoute({ name: 'alert', alertId })
     setNotifOpen(false)
+  }
+  const openExtensionPage = (slug: string): void => {
+    setRoute({ name: 'ext-page', slug })
+    setNotifOpen(false)
+  }
+  const viewToast = (alertId?: string): void => {
+    const screen = useShellStore.getState().toast?.screen
+    if (alertId) openAlert(alertId)
+    else if (screen) go(screen)
+    useShellStore.getState().clearToast()
   }
   const onSignOut = async (): Promise<void> => {
     await signOut()
@@ -108,22 +129,50 @@ export function WorkspaceShell(): React.JSX.Element {
     useExtensionsStore.getState().reset()
     navigate('/')
   }
+  return {
+    route,
+    notifOpen,
+    setNotifOpen,
+    go,
+    openProject,
+    switchProject,
+    openAlert,
+    openExtensionPage,
+    viewToast,
+    onSignOut
+  }
+}
+
+const SHELL_STYLE: React.CSSProperties = {
+  height: '100vh',
+  display: 'flex',
+  flexDirection: 'column',
+  background: 'var(--bg)',
+  color: 'var(--tx)',
+  fontFamily: 'var(--font-ui)',
+  overflow: 'hidden'
+}
+
+export function WorkspaceShell(): React.JSX.Element {
+  const nav = useShellNavigation()
+  const { route, notifOpen, setNotifOpen, go } = nav
+  const me = useMe()
+  const notifs = useNotifications()
+  const online = notifs.status === 'ready'
+  const rail = useExtensionRail()
+  const name = route.name
+  // Reactive: the bridge pill re-scopes when the topbar switcher changes the
+  // project (merge fix — SOLUSDEV-164 moved the current project into the store).
+  const project = useWorkspaceStore((s) => s.project)
+  // The persisted project id names a server row that can disappear under us.
+  // Confirm it once, so a dead id drops us to Home instead of 404ing every
+  // project-scoped screen with no way back.
+  useValidateProject()
 
   return (
-    <div
-      style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'var(--bg)',
-        color: 'var(--tx)',
-        fontFamily: 'var(--font-ui)',
-        overflow: 'hidden'
-      }}
-      onClick={() => notifOpen && setNotifOpen(false)}
-    >
+    <div style={SHELL_STYLE} onClick={() => notifOpen && setNotifOpen(false)}>
       <TitleBar>
-        <ProjectSwitcher onSwitch={switchProject} onHome={() => go('home')} />
+        <ProjectSwitcher onSwitch={nav.switchProject} onHome={() => go('home')} />
       </TitleBar>
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <MenuBar
@@ -132,7 +181,7 @@ export function WorkspaceShell(): React.JSX.Element {
           openCount={online ? notifs.unreadCount : 0}
           projectId={project?.id ?? null}
           onNavigate={go}
-          onSignOut={() => void onSignOut()}
+          onSignOut={() => void nav.onSignOut()}
           onBell={() => setNotifOpen((o) => !o)}
         />
         {notifOpen &&
@@ -149,27 +198,27 @@ export function WorkspaceShell(): React.JSX.Element {
       </div>
       <VerifyEmailBanner />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <Rail name={name} go={go} userName={displayName(me.name, me.email)} />
+        <Rail
+          name={name}
+          go={go}
+          userName={displayName(me.name, me.email)}
+          extensions={rail}
+          activeSlug={route.name === 'ext-page' ? route.slug : null}
+          onOpenExtension={nav.openExtensionPage}
+        />
         <div
           data-screen-label={SCREEN_TITLES[name]}
           style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0, position: 'relative' }}
         >
           <ScreenView
             route={route}
-            openProject={openProject}
+            openProject={nav.openProject}
             navigate={go}
             goBack={() => go(useShellStore.getState().lastMain)}
           />
         </div>
       </div>
-      <ToastView
-        onView={(alertId) => {
-          const screen = useShellStore.getState().toast?.screen
-          if (alertId) openAlert(alertId)
-          else if (screen) go(screen)
-          useShellStore.getState().clearToast()
-        }}
-      />
+      <ToastView onView={nav.viewToast} />
       <MiniOrb hidden={name === 'sol'} onClick={() => go('sol')} />
     </div>
   )
@@ -251,7 +300,7 @@ function ScreenView({
   navigate,
   goBack
 }: {
-  route: Route
+  route: ShellRoute
   openProject: (project: { id: string; name: string }) => void
   navigate: (screen: MainScreen) => void
   goBack: () => void
@@ -269,6 +318,14 @@ function ScreenView({
         return <TeamScreen onOpenProject={openProject} />
       case 'alert':
         return <AlertScreen onBack={goBack} />
+      case 'ext-page':
+        return (
+          <ExtensionPageScreen
+            slug={route.slug}
+            onBack={goBack}
+            onOpenStore={() => navigate('store')}
+          />
+        )
       default: {
         const Screen = SIMPLE_SCREENS[route.name]
         return Screen ? <Screen /> : null
@@ -281,7 +338,7 @@ function ScreenView({
   // guarded in main.css).
   return (
     <div
-      key={route.name === 'alert' ? `alert-${route.alertId}` : route.name}
+      key={routeKey(route)}
       className="screen-in"
       style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}
     >
@@ -306,10 +363,17 @@ const RAIL_TOP: readonly RailItem[] = [
   { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
   { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
   { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
-  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' },
-  // SOLUSDEV-235: the Store — capabilities are installed, not built in.
-  { screen: 'store', icon: <Icons.plus size={17} />, label: 'Store', emphasis: true }
+  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' }
 ]
+
+/** SOLUSDEV-235: the Store — capabilities are installed, not built in. Sits
+ *  right below the installed extensions' page entries (EXT-14). */
+const RAIL_STORE: RailItem = {
+  screen: 'store',
+  icon: <Icons.plus size={17} />,
+  label: 'Store',
+  emphasis: true
+}
 
 /** Bottom rail: account-level screens pinned below the spacer. */
 const RAIL_BOTTOM: readonly RailItem[] = [
@@ -322,14 +386,51 @@ function isRailActive(item: RailItem, name: string): boolean {
   return name === item.screen || (item.screen === 'graph' && name === 'alert')
 }
 
+/** One installed page-view extension in the rail: its reduced manifest icon,
+ *  or the neutral glyph when the icon is missing or was refused by the reducer. */
+function ExtensionRailButton({
+  entry,
+  iconSvg,
+  active,
+  onOpen
+}: {
+  entry: RailExtensionEntry
+  iconSvg: string | null
+  active: boolean
+  onOpen: (slug: string) => void
+}): React.JSX.Element {
+  const icon = iconSvg ? (
+    <ExtensionIcon svg={iconSvg} size={17} />
+  ) : (
+    <span data-testid="rail-ext-fallback" style={{ display: 'inline-flex' }}>
+      <Icons.hex size={17} />
+    </span>
+  )
+  return (
+    <RailButton
+      id={`rail-ext-${entry.slug}`}
+      icon={icon}
+      label={entry.label}
+      active={active}
+      onClick={() => onOpen(entry.slug)}
+    />
+  )
+}
+
 function Rail({
   name,
   go,
-  userName
+  userName,
+  extensions,
+  activeSlug,
+  onOpenExtension
 }: {
   name: string
   go: (screen: MainScreen) => void
   userName: string
+  extensions: ExtensionRailData
+  activeSlug: string | null
+  onOpenExtension: (slug: string) => void
 }): React.JSX.Element {
   const renderItem = (item: RailItem): React.JSX.Element => (
     <RailButton
@@ -357,6 +458,16 @@ function Rail({
       }}
     >
       {RAIL_TOP.map(renderItem)}
+      {extensions.entries.map((entry) => (
+        <ExtensionRailButton
+          key={entry.slug}
+          entry={entry}
+          iconSvg={extensions.icons[entry.slug] ?? null}
+          active={activeSlug === entry.slug}
+          onOpen={onOpenExtension}
+        />
+      ))}
+      {renderItem(RAIL_STORE)}
       <div style={{ flex: 1 }} />
       {RAIL_BOTTOM.map(renderItem)}
       <div style={{ marginTop: 4 }}>
@@ -411,6 +522,7 @@ function RailButton({
       onClick={onClick}
       title={label}
       aria-label={label}
+      data-active={active || undefined}
       data-emphasis={emphasis || undefined}
       className="interactive"
       style={railButtonStyle(active, emphasis)}
