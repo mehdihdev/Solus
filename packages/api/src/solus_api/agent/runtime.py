@@ -82,6 +82,8 @@ def build_sol_registry(
     secret_store: "SecretStore | None" = None,
     connectors: "ConnectorRegistry | None" = None,
     systems: SolSystems | None = None,
+    hosted_inventory: "Mapping[str, Any] | None" = None,
+    redis: Any | None = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -135,6 +137,15 @@ def build_sol_registry(
         )
         for tool in build_integration_tools(deps):
             registry.register(tool)
+    if hosted_inventory:
+        _register_hosted_tools(
+            registry,
+            session_factory,
+            project_id,
+            secret_store=secret_store,
+            hosted_inventory=hosted_inventory,
+            redis=redis,
+        )
     if bridge is not None and user_id is not None and team_id is not None:
         _register_bridge_tools(
             registry,
@@ -147,6 +158,45 @@ def build_sol_registry(
             secret_store=secret_store,
         )
     return registry
+
+
+def _register_hosted_tools(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    secret_store: "SecretStore | None",
+    hosted_inventory: "Mapping[str, Any]",
+    redis: Any | None,
+) -> None:
+    """SOLUSDEV-168: vendor-hosted MCP servers (Onshape Labs' FeatureScript),
+    authenticated as the CUSTOMER.
+
+    Built from the inventory the CONNECT step discovered and persisted. This
+    function is synchronous and does zero I/O by design: live discovery here
+    would put a 30s-bounded network round-trip on every message, every
+    confirmation decision, and every `GET /sol/tools` — the one route in that
+    file with no role floor. Same shape as the bridge inventory below.
+
+    Wrapped, because a hosted server must never be able to take the agent
+    offline: a stored inventory that somehow yielded a duplicate NAME would
+    raise out of `register` at wiring time and 500 every SOL request for this
+    project — including the one that would REJECT an already-parked destructive
+    action.
+    """
+    from solus_api.agent.tools.hosted_tools import build_hosted_tools
+
+    try:
+        for tool in build_hosted_tools(
+            session_factory,
+            project_id,
+            secret_store=secret_store,
+            inventory=hosted_inventory,
+            redis=redis,
+        ):
+            registry.register(tool)
+    except Exception:
+        logger.exception("hosted MCP tools unavailable for project %s", project_id)
 
 
 def _register_bridge_tools(
@@ -262,6 +312,12 @@ class AgentRunContext:
     #: through prompt.system_prompt's fenced data block, never as raw text.
     custom_instruction: str | None = None
     history: tuple[TurnView, ...] = ()
+    #: SOLUSDEV-168: graph entities the user pointed at explicitly (the
+    #: composer's `@`). They become the neighbourhood's anchors, so SOL is
+    #: grounded on the node the user meant rather than on whatever similarity
+    #: search surfaced. Untrusted ids: `load_neighborhood` is project-scoped, so
+    #: one from another team yields nothing rather than leaking.
+    mentions: tuple[uuid.UUID, ...] = ()
     interaction_context: InteractionContext = InteractionContext.SOL_OPEN_QUESTION
     #: Model-call identity (ADR-018). A runner that makes a PAID call MUST refuse
     #: without these: `gateway.complete` defaults them to None and then silently
@@ -484,29 +540,6 @@ MAX_MODEL_ROUNDS: Final = 5
 #: A tool loop needs more headroom than the gateway's 4096 text default.
 SOL_MAX_TOKENS: Final = 8192
 
-_GATED_TURN = (
-    "That change needs your approval before it can run. I've shown you exactly what "
-    "it would do — approve it and I'll apply it."
-)
-_GUIDE_TURN = (
-    "I'm in guide mode, so I explain and point instead of changing anything. "
-    "Switch to Do mode and ask again, and I'll prepare the change for your approval."
-)
-
-
-def _confirmation_gated(ctx: AgentRunContext, call: ToolCall, result: ToolResult) -> bool:
-    """Whether a result is the CONFIRMATION GATE speaking, not an ordinary
-    failure: UNAUTHORIZED on a tool whose descriptor declares
-    `requires_confirmation`. In guide mode that is the mode refusal (the gate
-    is never reached); in do mode it is the park/flat refusal."""
-    if result.ok or result.error is None:
-        return False
-    if result.error.code is not ToolErrorCode.UNAUTHORIZED:
-        return False
-    descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
-    return descriptor is not None and descriptor.requires_confirmation
-
-
 _ROUND_LIMIT = (
     "I stopped after several rounds of tool calls without reaching an answer. "
     "Try narrowing the question."
@@ -540,7 +573,7 @@ class LlmRunner:
         nonce = prompt.new_nonce()
         # SOL-02: plan what to pull (deterministic, no model call), assemble
         # the W0-07 context, and hand it to the model as fenced data blocks.
-        plan = reason.plan_query(ctx.prompt)
+        plan = reason.plan_query(ctx.prompt, mentions=ctx.mentions)
         context = await build_context(
             ctx.systems,
             ctx.prompt,
@@ -605,7 +638,6 @@ class LlmRunner:
                 Turn(role="assistant", text=completion.text, tool_uses=completion.tool_calls),
             )
             outcomes: list[ToolOutcome] = []
-            gated = False
             for use in completion.tool_calls:
                 # The provider's own tool_use id becomes the call id, so results
                 # correlate exactly with no mapping table anywhere.
@@ -618,25 +650,40 @@ class LlmRunner:
                 )
                 yield AgentEvent.tool_call(call)
                 result = await ctx.dispatch(call)  # gates, then invokes
-                # Only a CONFIRMATION-GATED refusal ends the turn: UNAUTHORIZED
-                # on a tool that declares requires_confirmation. Any other
-                # failure (NOT_FOUND for a hallucinated tool, INVALID_ARGS,
-                # TIMEOUT) goes back to the model as an outcome so it can
-                # correct itself instead of being told an approval is pending.
-                gated = gated or _confirmation_gated(ctx, call, result)
+                # EVERY outcome goes back to the model, including a parked one.
+                # A failure it can correct (NOT_FOUND for a hallucinated tool,
+                # INVALID_ARGS, TIMEOUT) it corrects; a park it is told to leave
+                # alone and work around. See the note below the loop.
                 yield AgentEvent.tool_result(result)
-                outcomes.append(prompt.contain_result(call, result))
-
-            if gated:
-                # A parked action does not run inside this turn — approval happens
-                # on a separate endpoint long after this stream closed. Feeding
-                # "pending approval" back would just have the model propose it
-                # again. In guide mode nothing was parked or shown — the honest
-                # message is the mode itself.
-                yield AgentEvent.message(
-                    _GUIDE_TURN if ctx.action_mode is ActionMode.GUIDE else _GATED_TURN
+                descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
+                outcomes.append(
+                    prompt.contain_result(
+                        call, result, cap=descriptor.result_cap if descriptor else None
+                    )
                 )
-                return
+
+            # A parked call USED to end the turn here. It no longer does.
+            #
+            # The old `return` was defensible — feeding "pending approval" back
+            # naively would just have the model propose the same action again —
+            # but it cost more than it bought. It discarded the round's other
+            # results even though they had already executed, it capped a design
+            # task at one change per turn, and it replaced the model's own
+            # closing words with a canned string.
+            #
+            # Three things replace it, and none of them is the loop:
+            #   * the parked result says, in words, that a PERSON now has it,
+            #     that it is not a failure, and not to propose it again
+            #     (`confirmations.request_confirmation`);
+            #   * the turn's `park` hook dedupes by concrete action, so a model
+            #     that re-proposes anyway gets the same confirmation back rather
+            #     than a second card and a second live preview (`routers/sol.py`);
+            #   * `MAX_MODEL_ROUNDS` still bounds the turn, exactly as it always
+            #     bounded every ungated one.
+            #
+            # What the gate itself does is untouched: the call is still parked,
+            # still never dispatched, still approved on a separate endpoint.
+            #
             # ALL of a round's results go back in ONE user turn: splitting them
             # teaches the model to stop making parallel calls.
             turns = (*turns, Turn(role="user", tool_results=tuple(outcomes)))

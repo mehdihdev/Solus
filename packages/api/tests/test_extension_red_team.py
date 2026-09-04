@@ -25,7 +25,7 @@ from fixtures.fake_systems import FakeSolSystems
 from httpx import AsyncClient
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.prompt import EXTENSION_PROMPT_CAP, extension_request, tool_specs
-from solus_api.agent.runtime import LlmRunner
+from solus_api.agent.runtime import MAX_MODEL_ROUNDS, LlmRunner
 from solus_api.agent.stream import AgentEventType
 from solus_api.extensions.attribution import EXTENSION_HEADER, SOL_ASK_SCOPE
 from solus_api.models import (
@@ -96,7 +96,11 @@ async def test_a_hostile_extension_prompt_cannot_dispatch_or_skip_confirmation(
     assert executed == []
     result = next(e for e in events if e.type is AgentEventType.TOOL_RESULT)
     assert result.data["ok"] is False
-    assert model.calls == 1  # the refusal ends the turn; no retry round
+    # SOLUSDEV-168 (merged from main) dropped `model.calls == 1`: ending the turn
+    # at the first parked call was implementation, not the invariant. What the
+    # extension surface must guarantee is the handler above staying untouched,
+    # with `MAX_MODEL_ROUNDS` bounding the loop.
+    assert model.calls <= MAX_MODEL_ROUNDS
     assert tool_specs(tuple(registry.list())) == baseline
     assert ctx.action_mode is ActionMode.GUIDE
     # The text reached the model ONLY inside a fence, under Solus framing.

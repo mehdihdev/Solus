@@ -21,7 +21,7 @@ function item(overrides: Partial<ChatItem>): ChatItem {
     trace: [],
     pending: false,
     error: null,
-    confirmation: null,
+    confirmations: [],
     ...overrides
   }
 }
@@ -50,7 +50,7 @@ describe('solCache', () => {
     expect(items?.map((m) => m.content)).toEqual(['q', 'a'])
     // File-supplied ids never enter the live `local-` namespace (SEC H2).
     expect(items?.every((m) => m.id.startsWith('cache-'))).toBe(true)
-    expect(items?.every((m) => !m.pending && m.confirmation === null)).toBe(true)
+    expect(items?.every((m) => !m.pending && m.confirmations.length === 0)).toBe(true)
   })
 
   it('discards malformed cache files instead of rendering them', async () => {

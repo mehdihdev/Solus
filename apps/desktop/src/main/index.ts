@@ -26,6 +26,7 @@ import {
   realLocalStateDeps,
   unlinkProjectFolder
 } from './localState'
+import { isAllowedAppStoreUrl } from './appStoreUrl'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
@@ -57,6 +58,15 @@ protocol.registerSchemesAsPrivileged([{ scheme: EXT_SCHEME, privileges: EXT_SCHE
  *  (see billingUrl.ts — buy.stripe.com Payment Links are attacker-creatable). */
 async function openBillingUrl(url: string): Promise<{ ok: boolean }> {
   if (!isAllowedCheckoutEntryUrl(url)) return { ok: false }
+  await shell.openExternal(url)
+  return { ok: true }
+}
+
+/** SOLUSDEV-168: a hosted MCP add-on's vendor App Store page. Its own narrow
+ *  host allowlist rather than a reuse of the billing one — different vendor,
+ *  different trust decision, and neither should widen the other. */
+async function openAppStoreUrl(url: string): Promise<{ ok: boolean }> {
+  if (!isAllowedAppStoreUrl(url)) return { ok: false }
   await shell.openExternal(url)
   return { ok: true }
 }
@@ -262,6 +272,11 @@ if (!app.requestSingleInstanceLock()) {
     // own renderer may invoke either billing channel.
     ipcMain.handle('billing:open-external', (event, url: string) =>
       isMainRendererSender(event) ? openBillingUrl(url) : { ok: false }
+    )
+    // Hosted MCP add-ons (SOLUSDEV-168): send the user to the vendor's App
+    // Store to subscribe. Sender-gated like every other privileged channel.
+    ipcMain.handle('hosted:open-store', (event, url: string) =>
+      isMainRendererSender(event) ? openAppStoreUrl(url) : { ok: false }
     )
     // Billing (SOLUSDEV-114): self-contained checkout — same Stripe URL, but in
     // a sandboxed in-app window that closes itself on the return redirect.

@@ -16,7 +16,8 @@ const GITHUB: CatalogEntry = {
   mode: 'oauth',
   configFields: ['repo', 'branch'],
   selection: { mode: 'single', config_key: 'repo', label: 'repository' },
-  accessModes: null
+  accessModes: null,
+  hosted: null
 }
 
 beforeEach(() => {
@@ -56,6 +57,7 @@ describe('ConnectCatalog — local-bridge tiles (SOLUSDEV-72)', () => {
     configFields: [],
     selection: null,
     accessModes: null,
+    hosted: null,
     localTool: {
       type: 'fusion',
       display_name: 'Fusion',

@@ -163,6 +163,12 @@ class Settings(BaseSettings):
     #: before the provider does — our count is a floor on our own spend, never
     #: a remaining balance, so leaving headroom is the honest posture.
     onshape_annual_call_allowance: int = 1800
+    #: SOLUSDEV-168. The hosted FeatureScript server bills a SEPARATE Onshape
+    #: allocation from the private-app one above: the spike read 0 used /2500
+    #: limit on an account that had already spent ~2,000 of the private-app
+    #: allowance in the same cycle. Strong, but inferred from ONE data point,
+    #: so it is configuration rather than a constant, and the meter fails open.
+    onshape_fs_annual_call_allowance: int = 2500
     #: Fraction of the allowance above which DEFERRABLE work (the sweep, agent
     #: turns) pauses. A user's explicit action still reaches the provider.
     integration_degrade_ratio: float = 0.7

@@ -1,8 +1,10 @@
 # Agent-Tool Interface — Design Contract (SOLUS-W0-04)
 
 **Status:** Design contract + **working implementation**. Ships the interface, the four
-envelope shapes, `ArtifactRef`, the `ToolRegistry`, and the reference `get_entity` tool —
-all functional end to end. Future tool KINDS (MCP/Desktop/Environment) and the artifact
+envelope shapes, `ArtifactRef`, the `ToolRegistry`, the reference `get_entity` tool, the
+**`MCPTool` kind** (stdio and streamable-HTTP, including vendor-hosted servers
+authenticated as the customer — ADR-031, ADR-035), and **confirmation enforcement** — all
+functional end to end. The remaining tool KINDS (Desktop/Environment) and the artifact
 byte-fetch flow are documented here, not built.
 **Authority:** ADR-010 (the SOL Agent is an orchestrator of tools, not a monolith),
 ADR-028 (Week-0 human-owned contract), ADR-027 (graph/soft-delete conventions), CLAUDE.md
@@ -48,18 +50,59 @@ class Tool(Protocol):
   to signal a typed failure. A tool **never** returns a `ToolResult` and **never** enforces its
   own timeout — the registry wraps every call into a structured result (§5).
 
-**v1 ships one kind — `InProcessTool`** (wraps an async Python callable). Future kinds are further
+**Two kinds ship today** — `InProcessTool` (wraps an async Python callable) and `MCPTool`
+(forwards over the wire to an external MCP server). The remaining kinds are further
 implementations of the SAME protocol; the registry and SOL are untouched when they arrive:
 
-| Kind                     | What it is                                                              | Status         |
-| ------------------------ | ----------------------------------------------------------------------- | -------------- |
-| **InProcessTool**        | An async Python callable in this process                                | **Built (v1)** |
-| **RemoteTool / MCPTool** | Forwards to an external MCP server over the wire                        | Future         |
-| **DesktopTool**          | UI / desktop interaction — the "being the cursor" capability lives HERE | Future         |
-| **EnvironmentTool**      | Operates a connected tool or device                                     | Future         |
+| Kind                | What it is                                                                                                                                                                        | Status         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| **InProcessTool**   | An async Python callable in this process                                                                                                                                          | **Built (v1)** |
+| **MCPTool**         | Forwards to an external MCP server: **stdio** (a vendored, Solus-owned fork the companion launches on the customer's machine — ADR-031) or **streamable-HTTP** (a vendor-hosted server reached from the cloud with the CUSTOMER's own token — ADR-035) | **Built**      |
+| **DesktopTool**     | UI / desktop interaction — the "being the cursor" capability lives HERE                                                                                                            | Future         |
+| **EnvironmentTool** | Operates a connected tool or device                                                                                                                                               | Future         |
 
 That MCP/remote tools carry a **raw JSON Schema** (not a Python type) is exactly why the registry
 validates against the descriptor's `params` dict generically (§5) rather than a per-tool model.
+
+### 2.1 `MCPTool` — exposure is Solus's, and three optional hooks
+
+A remote server is UNTRUSTED INPUT end to end (CLAUDE.md §7): its tool names, descriptions,
+schemas and results are text an upstream fork or a vendor's cloud wrote.
+
+**Exposure is allowlist-driven, never "what the server advertises."** `discover_mcp_tools`
+connects, calls `tools/list`, and classifies each advertised tool through exactly ONE
+source — never blended:
+
+| Source                    | Where it comes from                            | A tool it does not name          |
+| ------------------------- | ---------------------------------------------- | -------------------------------- |
+| A hosted server's `policy` | `remote_mcp.HOSTED_SERVERS`, cloud-side        | **skipped** (ADR-035)            |
+| A vendored fork's allowlist | `integrations/mcp/<server>/allowlist.yaml`     | **skipped** (ADR-031)            |
+| The spec's blanket flag   | `MCPServerSpec.requires_confirmation`          | skipped when the flag is set     |
+
+A tool the vendor adds between releases therefore cannot enter SOL's namespace at all.
+Admitting it and merely gating it would be the same lie from the other direction: a
+Solus-authored consent sentence in front of a tool Solus has never seen.
+
+**A gated tool MUST carry `consent_summary`.** Its `description` is not Solus's
+(`description_trusted=false`), and `_summarize` fails closed — with neither, the sentence a
+human approves degrades to the bare tool NAME.
+
+**Server-authored PROSE inside a schema is stripped for hosted specs.** Prompt assembly
+fences an untrusted `description`, but passes `params` through verbatim, which makes every
+`description`/`title`/`enum` leaf inside a server's JSON Schema unfenced,
+instruction-position text. Structure (types, `required`) is kept; prose is dropped.
+
+**Duplicate advertised names are dropped at discovery.** `ToolRegistry.register` raises on a
+duplicate, at WIRING time — so without this a server could 500 every SOL request for a
+project, including the one that would REJECT an already-parked destructive action.
+
+Three optional constructor hooks, all defaulting to absent:
+
+| Hook               | What it is                                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `headers_provider` | Resolves auth headers **per call** — a hosted token lives ~1h, so it cannot be captured at wiring time. Raising `ToolException` here is the sanctioned way to report "not connected / reconnect". |
+| `preflight`        | Runs before any connection opens; raises to refuse. Registration meters nothing, so a tool that spends a real allowance brings its own admission (ADR-019 as amended). |
+| `preview`          | The gate's duck-typed diff builder (§6). Set on the INSTANCE, so a tool without one truthfully has no `preview` attribute.                  |
 
 ---
 
@@ -78,6 +121,8 @@ interface: the MODEL reads them to decide when and how to call the tool.
 | `returns`               | JSON Schema for the result `value`                                                                                                  |
 | `timeout_seconds`       | `float \| None` — per-tool override of the registry default                                                                         |
 | `requires_confirmation` | `bool` (default `false`) — destructive/irreversible tool; the orchestrator must get explicit user confirmation before dispatch (§6) |
+| `result_cap` | `int \| None` (default `None`) — per-tool override of the prompt layer's `TOOL_RESULT_CAP`, for a tool whose whole point is a payload bigger than the default. A Feature Studio read back at 4 000 characters is not a Feature Studio: the model would reason about a prefix and propose an overwrite built on the part it could see. Reads only — a mutating tool returns a status, not a payload, and keeps the default. Redaction and encoding are identical either way; only the bound moves. |
+| `description_trusted` | `bool` (default `true`) — whether `description` is **Solus-authored**. `false` for a bridge or MCP tool, whose description is written by an upstream fork or a vendor's cloud. It still reaches the MODEL (it is how the model picks the right tool) but prompt assembly fences it as data so it cannot pose as a Solus instruction, and the consent surface refuses to build a sentence from it: with `description_trusted=false` and no `consent_summary`, the summary FAILS CLOSED to the tool name alone. Deliberately NOT inferred from `consent_summary is not None` — the two meanings will diverge. |
 | `consent_summary` | `str \| None` (default `None`) — **Solus-authored** text for the consent surface, used INSTEAD of `description` when the latter cannot be trusted to phrase it. A bridge/MCP tool's `description` is advertised by an upstream fork: acceptable as model context (length-capped, treated as data), but it must never compose the sentence a human reads before approving a destructive action — a fork could describe a destructive tool as "read-only". Bridge tools set this from their allowlist `reason`, which is mandatory on every destructive entry and is reviewed with the fork. |
 
 **`ToolCall`** — one invocation SOL proposes.
@@ -174,6 +219,22 @@ TOOL_ERROR)` with a **generic** message; the traceback is logged server-side and
 args, tool exception, timeout, or a misbehaving tool — returns as a `ToolResult(ok=false)`. SOL's
 reasoning can ALWAYS branch on `ok` and reason about `error`; it never try/catches and never sees a
 traceback.
+
+**The `BaseExceptionGroup` hole, closed centrally (SOLUSDEV-168).** `except Exception` does
+**not** catch a `BaseExceptionGroup`. Verified on CPython 3.12.3: the constructor downgrades
+an all-`Exception` group to `ExceptionGroup` (which IS an `Exception`, and was already
+caught), but a group carrying a `CancelledError` stays a `BaseExceptionGroup` and escaped
+the invariant entirely. Any tool whose transport runs an anyio task group — MCP over stdio
+or streamable-HTTP, the bridge — produces one when a cancel races a real failure, and a
+sequential dispatcher has nothing underneath it (`exec.run_tool_calls` papers over it at
+BATCH level only). `invoke` now handles the group explicitly:
+
+- a group carrying a `CancelledError` is **re-raised** — `wait_for` has already converted its
+  own timeout, so a cancel arriving here is EXTERNAL (client gone, worker shutting down) and
+  swallowing it would strand the turn;
+- a `ToolException` at any depth surfaces **as itself**, so a deliberate typed failure
+  ("reconnect FeatureScript") does not become the generic internal error;
+- anything else is the generic `TOOL_ERROR`.
 
 **Fail-fast on registration:** `register` validates the `params` schema (raises on a malformed
 schema) and rejects a duplicate name, so dispatch stays deterministic and a bad tool is caught at
@@ -299,8 +360,9 @@ tickets. This contract adds the TABLE + Pydantic schema (`ArtifactRead`) + the `
 | Reference `get_entity` tool (end to end)                  | **Functional**                     |
 | `artifacts` table + `ArtifactRead` schema + access check  | **Functional**                     |
 | `requires_confirmation` marker on `ToolDescriptor`        | **Functional (declared)**          |
-| Confirmation _enforcement_ (gate before dispatch)         | **SOL-loop ticket**                |
-| MCP / Desktop / Environment tool kinds                    | **Documented, not built**          |
+| Confirmation _enforcement_ (gate before dispatch)         | **Functional** — `runtime.build_dispatch` fuses gate-then-invoke so a runner cannot skip it; `agent/confirmations.py` parks, renders the Solus-authored summary + preview, and decides under `FOR UPDATE` |
+| `MCPTool` kind — stdio forks (ADR-031) + vendor-hosted servers (ADR-035) | **Functional**    |
+| Desktop / Environment tool kinds                          | **Documented, not built**          |
 | S3 bucket / presigned-URL endpoint / artifact-upload flow | **Later ticket**                   |
 | SOL's reasoning about _how_ to use tools                  | **Out of scope (reasoning layer)** |
 

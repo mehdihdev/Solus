@@ -92,6 +92,13 @@ const api = {
     links: (): Promise<Record<string, { path: string; repoUrl?: string; lastOpenedAt?: string }>> =>
       ipcRenderer.invoke('folder:links')
   },
+  hosted: {
+    // Open a hosted MCP add-on's vendor App Store page in the system browser
+    // (SOLUSDEV-168). Subscribing cannot be done programmatically, so this is
+    // the only way to get the user there.
+    openStore: (url: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('hosted:open-store', url)
+  },
   billing: {
     // Open a Stripe Checkout / billing-portal URL (from our API) in the browser.
     openExternal: (url: string): Promise<{ ok: boolean }> =>

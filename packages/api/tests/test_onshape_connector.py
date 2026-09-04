@@ -803,17 +803,30 @@ def _mock_account_document(
     *,
     workspace_id: str = "wsA",
     microversion: str = "mv-1",
+    part_studio_id: str | None = None,
+    extra_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     """Wire one document end to end for the account-level path: resolve default
-    workspace → list assemblies → microversion → translate → poll → download."""
+    workspace → list elements → microversion → translate → poll → download.
+
+    `part_studio_id` adds a PARTSTUDIO tab exported through the `/partstudios/`
+    collection; `extra_elements` adds tabs that are NOT exportable, so a test can
+    prove they are skipped rather than spending a translation job to fail.
+    """
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/{document_id}").mock(
         return_value=httpx.Response(
             200, json={"id": document_id, "defaultWorkspace": {"id": workspace_id}}
         )
     )
+    # `elementType`, not `type` — the connector reads the real Onshape key now
+    # that the element family decides which collection the export posts to.
+    elements: list[dict[str, Any]] = [{"id": element_id, "elementType": "ASSEMBLY"}]
+    if part_studio_id:
+        elements.append({"id": part_studio_id, "elementType": "PARTSTUDIO"})
+    elements.extend(extra_elements or [])
     respx.get(
         f"{ONSHAPE_API_BASE}/api/v6/documents/d/{document_id}/w/{workspace_id}/elements"
-    ).mock(return_value=httpx.Response(200, json=[{"id": element_id, "type": "ASSEMBLY"}]))
+    ).mock(return_value=httpx.Response(200, json=elements))
     respx.get(
         f"{ONSHAPE_API_BASE}/api/v6/documents/d/{document_id}/w/{workspace_id}/currentmicroversion"
     ).mock(return_value=httpx.Response(200, json={"microversion": microversion}))
@@ -821,6 +834,14 @@ def _mock_account_document(
         f"{ONSHAPE_API_BASE}/api/v6/assemblies/d/{document_id}"
         f"/w/{workspace_id}/e/{element_id}/translations"
     ).mock(return_value=httpx.Response(200, json=TRANSLATION_STARTED))
+    if part_studio_id:
+        respx.post(
+            f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/{document_id}"
+            f"/w/{workspace_id}/e/{part_studio_id}/translations"
+        ).mock(return_value=httpx.Response(200, json=TRANSLATION_STARTED))
+        respx.get(
+            f"{ONSHAPE_API_BASE}/api/v6/parts/d/{document_id}/w/{workspace_id}/e/{part_studio_id}"
+        ).mock(return_value=httpx.Response(200, json=PARTS_METADATA))
     respx.get(f"{ONSHAPE_API_BASE}/api/v8/translations/translation-req-1").mock(
         return_value=httpx.Response(200, json=TRANSLATION_DONE)
     )
@@ -950,6 +971,109 @@ async def test_two_documents_sharing_a_part_name_never_collide_on_one_key() -> N
     assert len(keys) == len(set(keys)), "source_keys must be unique within a sync"
     assert "docA:elemA:Bracket" in keys
     assert "docB:elemB:Bracket" in keys
+
+
+@requires_occt
+@respx.mock
+async def test_part_studios_are_ingested_alongside_assemblies() -> None:
+    """SOLUSDEV-168. Part Studios are where people model and where FeatureScript
+    lives, but element discovery asked Onshape for `elementType=ASSEMBLY`, so
+    they never entered the graph at all — which is why the Onshape panel shows
+    zero rows when it is open on one, and why there is nothing to @-mention."""
+    _mock_account_document("docA", "elemA", part_studio_id="psA")
+
+    result = await _connector().sync(_selection_ctx(["docA"]))
+
+    scopes = {e.source_key.rsplit(":", 1)[0] for e in result.entities}
+    assert scopes == {"docA:elemA", "docA:psA"}
+
+
+@respx.mock
+async def test_a_part_studio_translates_through_the_partstudios_collection() -> None:
+    """The ONLY element-type-specific URL in the ingest path. Posting a Part
+    Studio to `/assemblies/.../translations` 404s, so the collection segment has
+    to follow the element's type rather than being hardcoded."""
+    _mock_account_document("docA", "elemA", part_studio_id="psA")
+
+    await _connector().sync(_selection_ctx(["docA"]))
+
+    posted = {
+        str(call.request.url.path)
+        for call in respx.calls
+        if call.request.method == "POST" and "translations" in str(call.request.url.path)
+    }
+    assert any("/api/v6/partstudios/d/docA/w/wsA/e/psA/translations" == p for p in posted), posted
+    assert any("/api/v6/assemblies/d/docA/w/wsA/e/elemA/translations" == p for p in posted), posted
+
+
+@respx.mock
+async def test_element_discovery_costs_one_call_for_both_types() -> None:
+    """`elementType` is single-valued, so asking for two types would mean two
+    requests per document against an ANNUAL allowance. The filter is dropped and
+    applied client-side instead — same one call, both families."""
+    _mock_account_document("docA", "elemA", part_studio_id="psA")
+
+    await _connector().sync(_selection_ctx(["docA"]))
+
+    element_calls = [
+        call for call in respx.calls if str(call.request.url.path).endswith("/elements")
+    ]
+    assert len(element_calls) == 1
+    assert "elementType" not in str(element_calls[0].request.url)
+
+
+@respx.mock
+async def test_element_types_we_cannot_export_are_skipped() -> None:
+    """A document holds drawings, BOMs and blobs too. Only the two families the
+    mechanical parser can read are exported — anything else would spend a
+    translation job to fail."""
+    _mock_account_document(
+        "docA", "elemA", extra_elements=[{"id": "bom1", "elementType": "BILLOFMATERIALS"}]
+    )
+
+    await _connector().sync(_selection_ctx(["docA"]))
+
+    posted = " ".join(str(c.request.url.path) for c in respx.calls if c.request.method == "POST")
+    assert "bom1" not in posted
+
+
+@respx.mock
+async def test_a_selection_too_large_to_snapshot_fails_instead_of_tombstoning() -> None:
+    """Overflowing the element cap used to `return` a PARTIAL target list.
+
+    Every document past the cap was then absent from `workspaces`, which `sync`
+    reads as GONE — so it cursored `_GONE` and its entities were soft-deleted by
+    the complete-snapshot rule, while the document was alive and untouched. The
+    next `detect_changes` then compared that stored `_GONE` against a real
+    microversion, found them different, and reported "changed" — forever. Silent
+    data loss plus an endless re-sync loop, on an ANNUAL call allowance.
+
+    `sync`'s own partial-failure rule already says a document that could not be
+    fetched must never be silently omitted. A snapshot that cannot be complete
+    must therefore fail rather than truncate.
+    """
+    _mock_account_document("docA", "elemA")
+    _mock_account_document("docB", "elemB")
+    connector = OnshapeConnector(client_id="cid", client_secret="csecret", max_elements=1)
+
+    with pytest.raises(ConnectorError) as excinfo:
+        await connector.sync(_selection_ctx(["docA", "docB"]))
+
+    assert excinfo.value.code == "selection_too_large"
+    # Names the cap and the remedy — this reaches the user on the source card.
+    assert "1" in excinfo.value.message
+
+
+@requires_occt
+@respx.mock
+async def test_a_selection_exactly_at_the_cap_still_syncs() -> None:
+    """The cap is a bound, not an off-by-one refusal."""
+    _mock_account_document("docA", "elemA")
+    connector = OnshapeConnector(client_id="cid", client_secret="csecret", max_elements=1)
+
+    result = await connector.sync(_selection_ctx(["docA"]))
+
+    assert [e.source_key for e in result.entities]
 
 
 @requires_occt

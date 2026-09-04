@@ -56,6 +56,13 @@ class ToolDescriptor(BaseModel):
     #: before approving a destructive action. Bridge tools set this from their
     #: allowlist `reason`, which Solus writes and review sees.
     consent_summary: str | None = None
+    #: Per-tool override of the prompt layer's result cap, for a tool whose whole
+    #: point is a payload bigger than the default. A Feature Studio read back at
+    #: 4 000 characters is not a Feature Studio — SOL cannot reason about source
+    #: it has only seen a truncated prefix of, let alone rewrite it. `None` means
+    #: the shared `TOOL_RESULT_CAP`, which stays the default for everything else:
+    #: an unbounded result is both an injection surface and a token bill.
+    result_cap: int | None = None
     #: Whether `description` is Solus-authored. False for a bridge/MCP tool,
     #: whose description is advertised by an UPSTREAM FORK. Such a description
     #: still has to reach the model — it is how the model picks the right tool —

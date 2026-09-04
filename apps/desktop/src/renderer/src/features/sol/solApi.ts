@@ -110,12 +110,39 @@ export interface StreamSolMessageInput {
   conversationId: string
   content: string
   actionMode: SolActionMode
+  /**
+   * Graph entity ids the user pointed at with `@`. Sent alongside the text
+   * rather than encoded in it, so the composer's `trim()` and any later edit to
+   * the prose cannot invalidate an offset.
+   */
+  mentions?: readonly string[]
   /** Receives each validated stream event in arrival order. */
   onEvent: (event: SolStreamEvent) => void
   signal?: AbortSignal
   fetchImpl?: typeof fetch
   getToken?: () => Promise<string | null>
   baseUrl?: string
+}
+
+/** The request the turn POSTs. `mentions` is always present, so the server sees
+ *  one body shape whether or not the user picked anything. */
+async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
+  const token = await (input.getToken ?? defaultToken)()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream'
+  }
+  if (token) headers.Authorization = `Bearer ${token}`
+  return {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      content: input.content,
+      action_mode: input.actionMode,
+      mentions: input.mentions ?? []
+    }),
+    signal: input.signal
+  }
 }
 
 /**
@@ -125,20 +152,11 @@ export interface StreamSolMessageInput {
  */
 export async function streamSolMessage(input: StreamSolMessageInput): Promise<void> {
   const fetchImpl = input.fetchImpl ?? globalThis.fetch
-  const token = await (input.getToken ?? defaultToken)()
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: 'text/event-stream'
-  }
-  if (token) headers.Authorization = `Bearer ${token}`
-
   const path = `/projects/${encodeURIComponent(input.projectId)}/sol/conversations/${encodeURIComponent(input.conversationId)}/messages`
-  const res = await fetchImpl(joinUrl(input.baseUrl ?? DEFAULT_BASE_URL, path), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ content: input.content, action_mode: input.actionMode }),
-    signal: input.signal
-  })
+  const res = await fetchImpl(
+    joinUrl(input.baseUrl ?? DEFAULT_BASE_URL, path),
+    await turnRequest(input)
+  )
   if (!res.ok || res.body === null) {
     throw new ApiError(res.status, 'sol_stream_failed', `SOL stream failed (${res.status})`)
   }

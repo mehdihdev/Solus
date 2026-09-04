@@ -9,6 +9,9 @@ implemented**. One implementation serves both surfaces:
 `useConnectWizard` (glue) → the unchanged flow engines
 (`runOAuthConnect` / `runEdaConnect`).
 
+Amended SOLUSDEV-168: the **Add-ons ride the connect** section below. The rail
+table and the action-area table are unchanged by that work.
+
 ## Layout (modal, 520 px, over the current page)
 
 ```
@@ -104,6 +107,54 @@ the attempt** (`useConnectWizard.close`, per-attempt latches):
   finished work is never silently discarded.
 - Closing on an **error** keeps the error state so the tile stays retryable.
 - Closing on **done** just closes.
+
+## Add-ons ride the connect, without becoming a step (SOLUSDEV-168)
+
+A vendor-hosted MCP add-on — the Onshape Labs FeatureScript server, and every hosted
+server after it (ADR-035) — is enabled **as part of this connect**, not on a button
+afterwards: the brief is *"one connect, FeatureScript comes with it"*. It runs inside the
+`link` stage, immediately after the account is linked, while the browser still holds the
+vendor session from the handshake that just finished — so its own sign-in is usually a
+redirect the user barely sees.
+
+It adds **no** rail step, **no** new `ConnectStage` and **no** action-area state. The rail
+still runs `access → authorize → link → configure → index` and still lands on `done`
+whether or not the add-on turned on: **failing to enable an add-on is never a failed
+connection**, and inventing a rail step for something that may legitimately not happen
+would make the flow look like it went wrong when it did not. On success the `done` copy
+gains a suffix (`Connected — 12 entities indexed · FeatureScript enabled`); on failure it
+is simply absent.
+
+**The RECOVERY path, not the primary one:** an add-on block under the connected source on
+the Sources page (`HostedAddOnRow`, rendered by `SourceRow`), driven entirely by
+`source.config.hosted.<server>.state` — server-backed, so it is correct for every teammate
+and survives every navigation. Three states: `not_connected` (the disclosure + *Enable*),
+`subscription_required` (the vendor's own reason + *Open … App Store* + *I've subscribed —
+check again*), and `ready`.
+
+It exists because the in-connect attempt can legitimately not succeed — most often because
+the customer has not bought the vendor's app yet, which is a browser purchase Solus cannot
+drive and cannot detect the completion of except by re-probing. Three reasons that recovery
+surface must be durable rather than wizard-resident, each load-bearing:
+
+- **The cancel contract.** Closing the wizard cancels the attempt. Subscribing is an
+  external browser purchase that can wait on a company administrator — no state parked in
+  the wizard would survive it.
+- **The Sources page resets the onboarding store on mount**, so wizard-resident state is
+  lost the moment the user navigates.
+- **A teammate never opens this wizard.** For a `multi`-selection connector the backend
+  REUSES the project's existing source, so someone joining a project where Onshape is
+  already connected would never reach a wizard-only affordance.
+
+## Disclosure (SOLUSDEV-168)
+
+A connector that carries a hosted add-on declares it in the live registry
+(`GET /integrations` → `hosted: {server, display_name, notice, subscribe_url}`), exactly
+the way `selection` and `access_modes` are declared. Enabling a third-party app on
+someone's account is a trust cost even when it is free, so the notice is **stated, never
+implied**, and it renders **verbatim** — backend-authored consent copy is never paraphrased
+by the renderer. Per ADR-016 only the mode-aware LEAD-IN changes (`noticeLead`): Expert mode
+gets to be terse, it does not get to hide what a connection turns on.
 
 ## Guards (honest, never faked)
 

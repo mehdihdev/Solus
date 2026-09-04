@@ -19,8 +19,9 @@ import pytest
 import respx
 from conftest import requires_occt
 from fixtures.onshape_fake import FakeOnshape, Meter
+from fixtures.onshape_sample import ELEMENT_LIST
 from solus_api.connectors.httpcache import CacheStore, InMemoryCacheStore
-from solus_api.connectors.onshape import OnshapeConnector
+from solus_api.connectors.onshape import EXPORTABLE_COLLECTIONS, OnshapeConnector
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import InMemorySecretStore
@@ -34,6 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 pytestmark = requires_occt
 
 DID = "dA"
+
+#: Derived from the fixture AND the connector's own family map, so adding a tab
+#: to the fixture, or a family to the connector, updates this rather than rotting
+#: into a stale literal.
+_EXPORTABLE_COUNT = sum(1 for e in ELEMENT_LIST if e.get("elementType") in EXPORTABLE_COLLECTIONS)
 
 
 @pytest.fixture
@@ -163,6 +169,15 @@ async def test_session_cost_before_and_after(onshape: Any, maker: Any, capsys: A
     # Only the AFTER column is asserted; the before column is reported, never
     # pinned, so it cannot rot into a stale constant.
     assert after < before, "the session must cost less than it used to"
-    assert after_routes.get("translations_start", 0) == 1, (
-        "one document, one change: exactly one export should ever be requested"
+    # One export per EXPORTABLE ELEMENT, and no more. The fixture document holds
+    # an assembly and a Part Studio, both of which the graph now needs
+    # (SOLUSDEV-168) — before that, Part Studios were invisible to Solus and this
+    # read `== 1`.
+    #
+    # This is the honest cost of the feature: a document's exports scale with its
+    # exportable tabs. What must never regress is re-exporting an element whose
+    # microversion did not move — the export cache is what removes that, and it
+    # is asserted separately.
+    assert after_routes.get("translations_start", 0) == _EXPORTABLE_COUNT, (
+        "one export per exportable element, and never more than one each"
     )

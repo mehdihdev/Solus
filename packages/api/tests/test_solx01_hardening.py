@@ -2,6 +2,7 @@
 # pinned. Each test names the finding it closes.
 from __future__ import annotations
 
+import inspect
 import re
 import uuid
 from typing import Any
@@ -12,12 +13,7 @@ from httpx import AsyncClient
 from solus_api.agent import prompt
 from solus_api.agent.confirmations import _build_preview, _summarize
 from solus_api.agent.modes import ActionMode
-from solus_api.agent.runtime import (
-    _GATED_TURN,
-    _GUIDE_TURN,
-    AgentRunContext,
-    _confirmation_gated,
-)
+from solus_api.agent.runtime import AgentRunContext
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools.shapes import (
     ToolCall,
@@ -132,26 +128,40 @@ def _run_context() -> AgentRunContext:
     )
 
 
-def test_only_the_confirmation_gate_ends_the_turn() -> None:
-    ctx = _run_context()
-    gate_call = ToolCall(tool="onshape.set_variable", args={})
-    hallucinated = ToolCall(tool="no.such_tool", args={})
-    read_call = ToolCall(tool="onshape.get_variables", args={})
+def test_a_parked_call_no_longer_ends_the_turn() -> None:
+    """SOLUSDEV-168 replaces `_confirmation_gated` and the canned turn-enders.
 
-    unauthorized = _failure_result(ToolErrorCode.UNAUTHORIZED)
-    assert _confirmation_gated(ctx, gate_call, unauthorized) is True
-    # Ordinary failures flow back to the model instead of faking "approval pending".
-    assert _confirmation_gated(ctx, hallucinated, _failure_result(ToolErrorCode.NOT_FOUND)) is False
-    assert _confirmation_gated(ctx, gate_call, _failure_result(ToolErrorCode.TIMEOUT)) is False
-    assert _confirmation_gated(ctx, read_call, unauthorized) is False
-    assert _confirmation_gated(ctx, gate_call, _failure_result(None)) is False
+    Both existed to stop the turn at the first parked call. That cost more than
+    it bought — it discarded results that had already executed, capped a design
+    task at one change per turn, and replaced the model's own closing words with
+    a constant. What replaces it is not a loop change but three narrower ones,
+    asserted below and in `test_confirmations.py`:
+
+    * the parked RESULT tells the model a person now has it, that it is not a
+      failure, and not to re-propose it;
+    * the turn's `park` hook dedupes by concrete action, so re-proposing yields
+      the same confirmation rather than a second card;
+    * `MAX_MODEL_ROUNDS` still bounds the turn.
+
+    What the gate does is untouched — `test_sol_red_team` still proves a
+    destructive tool is never dispatched.
+    """
+    import solus_api.agent.runtime as runtime_module
+
+    for gone in ("_GATED_TURN", "_GUIDE_TURN", "_confirmation_gated"):
+        assert not hasattr(runtime_module, gone), (
+            f"{gone} is back — the turn ends at the first parked call again"
+        )
 
 
-def test_guide_and_do_end_the_gated_turn_with_different_truths() -> None:
-    # Guide never showed a diff, so it must not claim it did.
-    assert "guide mode" in _GUIDE_TURN.lower()
-    assert "approve" in _GATED_TURN.lower()
-    assert _GUIDE_TURN != _GATED_TURN
+def test_the_parked_message_tells_the_model_not_to_re_propose() -> None:
+    """The load-bearing replacement for the old `return`. Without this sentence a
+    model reads UNAUTHORIZED as "try harder" and burns the round budget."""
+    from solus_api.agent import confirmations as conf
+
+    source = inspect.getsource(conf.request_confirmation)
+    assert "do not propose it again in this turn" in source
+    assert "not a failure" in source
 
 
 # ------------------------------------------------------------------ SEC-M3 / SEC-M4

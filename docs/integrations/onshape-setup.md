@@ -127,11 +127,15 @@ by `max_elements`.
 ## 5. What a sync does
 
 Per **selected document**: resolve `defaultWorkspace` (`GET /api/v6/documents/{did}`), list its
-assemblies (`GET /api/v6/documents/d/{did}/w/{wid}/elements?elementType=ASSEMBLY`), then per
-element:
+its exportable elements (`GET /api/v6/documents/d/{did}/w/{wid}/elements`, filtered
+client-side to `ASSEMBLY` and `PARTSTUDIO` — `elementType` is single-valued, so asking the
+server for both families would cost a second call per document), then per element:
 
 1. `GET /api/v6/documents/d/{did}/w/{wid}/currentmicroversion` — the change token.
-2. `POST /api/v6/assemblies/d/{did}/w/{wid}/e/{eid}/translations` with `formatName: STEP`.
+2. `POST /api/v6/{assemblies|partstudios}/d/{did}/w/{wid}/e/{eid}/translations` with
+   `formatName: STEP`. The collection follows the element's family — this is the ONLY
+   element-type-specific URL in the ingest path; poll, download and part metadata are all
+   type-agnostic.
 3. Poll `GET /api/v8/translations/{requestId}` until `DONE` (bounded — 30 attempts by default,
    then `export_timeout`; never an unbounded loop against a third party).
 4. `GET /api/v6/documents/d/{did}/externaldata/{id}` — the STEP bytes, size-bounded before parsing.
@@ -221,5 +225,23 @@ returns rows, and Solus deliberately does not use it — see the API-terms note 
 - **Onshape's `limit` cap.** `/documents` answers **400** for `limit > 20`, found on the first
   live run — the connector now asks for 20 per page and pages for the rest. Treat any other
   documented "max" in the fixtures as similarly unverified.
-- **Sub-assembly granularity.** A selected document ingests every assembly in its default
-  workspace. Picking individual elements, or a non-default branch, is not offered.
+- **Element granularity.** A selected document ingests every exportable element in its default
+  workspace — assemblies AND Part Studios (SOLUSDEV-168). Picking individual elements, or a
+  non-default branch, is not offered. Cost scales with a document's exportable tabs.
+- **Part Studios are flat.** A Part Studio STEP export has no assembly tree, so it yields
+  entities and **zero `part_of` relations**, and every node's `is_assembly` is false. This is
+  what `docs/contracts/metadata-extraction.md` was amended for; anything reading
+  `properties["is_assembly"]` or expecting a tree must tolerate it.
+- **The same part can be ingested twice.** Part metadata is joined to STEP products by NAME
+  (there is no shared id), and an assembly and a Part Studio in one document routinely hold the
+  same named parts. They land under two `external_ref`s carrying the same `part_number`, which
+  the fingerprint matcher seeds merges on. That is intended — recognising one physical part
+  across representations is what the multimodal fingerprint is for — but it means Part Studio
+  ingestion deliberately feeds the matcher duplicates.
+- **Per-element microversions are real, cross-tab staleness is not proven.** `GET …/elements`
+  returns a distinct `microversionId` per element (verified against a live tenant 2026-09-03:
+  two elements in one document reported different values, so it is not the document's
+  microversion echoed). What is NOT established is whether an element's microversion advances
+  when its geometry changes because ANOTHER tab changed — a variable, a derived part, an
+  in-context feature. Any future export cache keyed on element microversion must either prove
+  that case or invalidate on the document microversion instead.

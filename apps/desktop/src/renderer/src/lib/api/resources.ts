@@ -165,6 +165,31 @@ export interface IntegrationAccessModes {
   modes: readonly IntegrationAccessMode[]
 }
 
+/** A vendor-hosted MCP add-on this connector carries, from the backend's own
+ *  HOSTED_SERVERS registry. Null when the connector has none.
+ *
+ *  Read GENERICALLY — no provider id appears anywhere in the UI, so the next
+ *  hosted server is one backend registry entry and no frontend change at all,
+ *  the same treatment `selection` and `access_modes` already get. */
+export interface IntegrationHosted {
+  /** Registry key, e.g. "onshape_fs". Used in the hosted route paths. */
+  server: string
+  /** Human label authored by the backend ("FeatureScript"). */
+  display_name: string
+  /** Backend-authored connect-time disclosure, rendered VERBATIM. Enabling a
+   *  third-party app on someone's account is a trust cost even when it is free,
+   *  so it is stated, never implied. */
+  notice?: string | null
+  /** Where the customer subscribes. Null when there is nothing to buy. */
+  subscribe_url?: string | null
+}
+
+/** What a hosted add-on's grant is doing on one source. Server-backed: the
+ *  wizard cancels on close and the Sources screen resets the onboarding store
+ *  on mount, so a renderer-resident flag would be wrong for every teammate and
+ *  lost on every navigation. */
+export type HostedState = 'ready' | 'subscription_required' | 'not_connected'
+
 /** The integration catalog entry (auth + config requirements). */
 export interface Integration {
   type: string
@@ -174,6 +199,75 @@ export interface Integration {
   /** Null when the connector has nothing to pick after connecting. */
   selection?: IntegrationSelection | null
   access_modes?: IntegrationAccessModes | null
+  /** Null when the connector carries no vendor-hosted add-on. */
+  hosted?: IntegrationHosted | null
+}
+
+/** What the hosted add-on routes answer with. */
+export interface HostedStatus {
+  server: string
+  state: HostedState
+  tool_count: number
+  checked_at?: string | null
+  notice?: string | null
+  subscribe_url?: string | null
+  /** The probe's own reason, in the vendor's words. Shown because a vendor's
+   *  refusal is more actionable than our paraphrase of it. */
+  detail?: string | null
+}
+
+export interface HostedOAuthStart {
+  authorize_url: string
+  state: string
+  redirect_uri: string
+  notice?: string | null
+}
+
+function hostedPath(projectId: string, sourceId: string, server: string): string {
+  return `/projects/${projectId}/sources/${sourceId}/hosted/${encodeURIComponent(server)}`
+}
+
+/** Begin the add-on's OWN handshake. A second browser trip, not a widening of
+ *  the connector's grant: the hosted server is its own authorization server. */
+export function startHostedOAuth(
+  projectId: string,
+  sourceId: string,
+  server: string,
+  client: ApiClient = api
+): Promise<HostedOAuthStart> {
+  return client.request<HostedOAuthStart>(`${hostedPath(projectId, sourceId, server)}/oauth/start`, {
+    method: 'POST'
+  })
+}
+
+/** Complete it. Authenticated on purpose — the unauthenticated connector
+ *  callback never compares the requesting user, which with a write scope is an
+ *  account-linking CSRF. */
+export function exchangeHostedOAuth(
+  projectId: string,
+  sourceId: string,
+  server: string,
+  body: { state: string; code: string },
+  client: ApiClient = api
+): Promise<HostedStatus> {
+  return client.request<HostedStatus>(
+    `${hostedPath(projectId, sourceId, server)}/oauth/exchange`,
+    { method: 'POST', body }
+  )
+}
+
+/** Re-check after the user says they have subscribed. The ONLY trustworthy
+ *  completion signal: the vendor documents that a redirect back with
+ *  `success=true` does NOT mean a purchase happened, and there is no webhook. */
+export function probeHostedStatus(
+  projectId: string,
+  sourceId: string,
+  server: string,
+  client: ApiClient = api
+): Promise<HostedStatus> {
+  return client.request<HostedStatus>(`${hostedPath(projectId, sourceId, server)}/probe`, {
+    method: 'POST'
+  })
 }
 
 /** Response from kicking off the GitHub loopback OAuth flow. */
@@ -551,15 +645,23 @@ export function getSyncs(
   return client.request<Sync[]>(`/projects/${projectId}/sources/${sourceId}/syncs`)
 }
 
-/** Graph entities, optionally filtered by type and/or source. */
+/**
+ * Graph entities, optionally filtered by type, source and/or name.
+ *
+ * `q` is a server-side name search (escaped there, so a `%` a user types is
+ * literal). With `limit` it is the `@`-mention typeahead's query — use that,
+ * not `listAllEntities`, which walks every page of the project.
+ */
 export function listEntities(
   projectId: string,
-  filters: { type?: string; source_id?: string } = {},
+  filters: { type?: string; source_id?: string; q?: string; limit?: number } = {},
   client: ApiClient = api
 ): Promise<Entity[]> {
   const params = new URLSearchParams()
   if (filters.type) params.set('type', filters.type)
   if (filters.source_id) params.set('source_id', filters.source_id)
+  if (filters.q) params.set('q', filters.q)
+  if (filters.limit !== undefined) params.set('limit', String(filters.limit))
   const query = params.toString()
   return client.request<Entity[]>(`/projects/${projectId}/entities${query ? `?${query}` : ''}`)
 }
@@ -892,16 +994,49 @@ export interface ConfirmationOutcome {
   readonly error?: { readonly code?: string; readonly message?: string }
 }
 
-export function decideSolConfirmation(
+/**
+ * The server DECIDED, and refused. The decide route answers HTTP **200** with
+ * `ok:false` for expired / already-decided / STALE / tool-gone / tool-failed,
+ * and `unwrapEnvelope` only throws on a non-2xx — so without this nothing threw
+ * and a refused destructive approval resolved exactly like a successful one.
+ * For an action that overwrites a whole Feature Studio, a false "it worked" is
+ * the worst outcome this flow can produce.
+ *
+ * Every one of those rows is TERMINAL — the confirmation can never be approved
+ * again — which is what distinguishes this from a transport failure, where the
+ * action really is still parked and retryable.
+ */
+export class ConfirmationRefused extends Error {
+  readonly code: string | undefined
+  constructor(message: string, code?: string) {
+    super(message)
+    this.name = 'ConfirmationRefused'
+    this.code = code
+  }
+}
+
+export async function decideSolConfirmation(
   projectId: string,
   confirmationId: string,
   decision: 'approve' | 'reject',
   client: ApiClient = api
 ): Promise<ConfirmationOutcome> {
-  return client.request<ConfirmationOutcome>(
+  const outcome = await client.request<ConfirmationOutcome>(
     `/projects/${projectId}/sol/confirmations/${confirmationId}`,
     { method: 'POST', body: { decision } }
   )
+  // Thrown HERE, at the one seam every caller passes through, rather than in
+  // the hook: a caller that reads this promise resolving as "it ran" is exactly
+  // the failure mode. The `approve` guard is load-bearing — a successful
+  // REJECTION is also ok:false ("You rejected this action.") and must still
+  // settle normally.
+  if (decision === 'approve' && outcome.ok === false) {
+    throw new ConfirmationRefused(
+      outcome.error?.message ?? 'That action did not run.',
+      outcome.error?.code
+    )
+  }
+  return outcome
 }
 
 // --- Onshape panel links (SOLUS-A7-01) ------------------------------------

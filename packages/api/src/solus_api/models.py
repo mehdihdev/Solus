@@ -1001,6 +1001,13 @@ class OAuthState(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid)
     redirect_uri: Mapped[str] = mapped_column(String(1024))
+    #: PKCE (RFC 7636) verifier for providers that require it — SOLUSDEV-168.
+    #: It has to survive authorize→callback, which are two separate requests
+    #: possibly on different workers, so it cannot live on a coroutine (which is
+    #: exactly why the MCP SDK's own OAuth client is unusable here). NULL for
+    #: every connector that predates PKCE. Deleted with the row on every
+    #: consumption path, so its lifetime is the handshake's.
+    code_verifier: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )

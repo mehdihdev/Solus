@@ -32,6 +32,11 @@ let currentState = ''
 /** The in-flight flow's `finish`, so a wizard close can settle it NOW instead
  *  of leaving the loopback armed for TIMEOUT_MS (SOLUSDEV-165 cancel seam). */
 let activeFinish: ((result: OAuthCallbackResult) => void) | null = null
+/** Resolves once the in-flight flow's sockets are fully released. A supersede
+ *  must await this before binding: `finish` empties `active` synchronously but
+ *  the listeners close asynchronously, so rebinding the fixed port immediately
+ *  would race into EADDRINUSE. */
+let activeReleased: Promise<void> | null = null
 
 /** Cancel the in-flight OAuth capture, if any: the parked promise resolves with
  *  a cancelled error and every loopback socket is released. Returns whether a
@@ -86,19 +91,37 @@ export function awaitOAuthCallback(
  *  the providers' redirect URLs are registered against, but binding it makes the
  *  suite collide with a running dev app mid-sign-in. Tests pass an ephemeral
  *  port; nothing in production ever overrides the default. */
-function captureCallback(
+async function captureCallback(
   authorizeUrl: string,
   expectedState: string,
   stateParam: StateParam,
   port: number
 ): Promise<OAuthCallbackResult> {
-  if (active.length > 0) return Promise.resolve({ error: 'A sign-in is already in progress.' })
   if (!isValidAuthorizeUrl(authorizeUrl)) {
-    return Promise.resolve({ error: 'Invalid sign-in URL.' })
+    return { error: 'Invalid sign-in URL.' }
+  }
+
+  // A NEW sign-in SUPERSEDES an in-flight one rather than being refused.
+  //
+  // We cannot tell that the user closed the browser tab — nothing reports that
+  // — so the previous capture stayed armed for the full TIMEOUT_MS and every
+  // retry answered "A sign-in is already in progress." for five minutes after
+  // the user had visibly given up. Refusing was only ever right if the earlier
+  // flow might still complete; a person clicking sign-in again is saying it will
+  // not. The superseded flow settles as cancelled, which its caller already
+  // handles, so nothing is left dangling and the port has exactly one owner.
+  if (active.length > 0) {
+    const released = activeReleased
+    cancelActiveOAuth()
+    if (released) await released
   }
 
   return new Promise<OAuthCallbackResult>((resolve) => {
     let settled = false
+    let releaseDone = (): void => {}
+    activeReleased = new Promise<void>((r) => {
+      releaseDone = r
+    })
     const finish = (result: OAuthCallbackResult): void => {
       if (settled) return
       settled = true
@@ -110,13 +133,17 @@ function captureCallback(
       // port is free for the next attempt.
       let pending = servers.length
       if (pending === 0) {
+        releaseDone()
         resolve(result)
         return
       }
       for (const srv of servers) {
         srv.close(() => {
           pending -= 1
-          if (pending === 0) resolve(result)
+          if (pending === 0) {
+            releaseDone()
+            resolve(result)
+          }
         })
       }
     }

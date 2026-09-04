@@ -102,10 +102,57 @@ class ToolRegistry:
             )
         except ToolException as exc:
             return _failure(call, exc.code, exc.message, retryable=exc.retryable)
+        except BaseExceptionGroup as group:
+            return _group_failure(call, group)
         except Exception:
             # Full traceback to the server log; the model only ever sees the generic message.
             logger.exception("tool %s (call %s) raised", call.tool, call.call_id)
             return _failure(call, ToolErrorCode.TOOL_ERROR, _INTERNAL_ERROR_MESSAGE)
+
+
+def _group_failure(call: ToolCall, group: BaseExceptionGroup) -> ToolResult:
+    """THE HOLE IN "NEVER RAISES", closed once here for every tool kind.
+
+    `except Exception` does not catch a `BaseExceptionGroup`. Verified on CPython
+    3.12.3: the constructor downgrades an all-`Exception` group to
+    `ExceptionGroup` (which IS an `Exception`, so it was already caught), but a
+    group carrying a `CancelledError` stays a `BaseExceptionGroup` and escaped.
+    Any tool whose transport runs an anyio task group — MCP over stdio or
+    streamable-http, the bridge — can produce one when a cancel races a real
+    failure. `exec.run_tool_calls` papers over it at BATCH level by filling
+    unfinished slots, but `LlmRunner` dispatches sequentially and a bare
+    `await registry.invoke(call)` had nothing underneath it.
+
+    Cancellation still propagates: `wait_for` has already converted its OWN
+    timeout, so a `CancelledError` arriving here is an EXTERNAL cancel (client
+    gone, worker shutting down) and swallowing it would strand the turn.
+    """
+    if group.subgroup(asyncio.CancelledError) is not None:
+        raise group
+    first = _first_tool_exception(group)
+    if first is not None:
+        # A deliberate typed failure must survive being wrapped by a task group,
+        # or "reconnect FeatureScript" becomes "the tool failed unexpectedly".
+        return _failure(call, first.code, first.message, retryable=first.retryable)
+    logger.exception("tool %s (call %s) raised a group", call.tool, call.call_id)
+    return _failure(call, ToolErrorCode.TOOL_ERROR, _INTERNAL_ERROR_MESSAGE)
+
+
+def _first_tool_exception(exc: BaseException) -> ToolException | None:
+    """The first `ToolException` at any depth of a (possibly nested) group.
+
+    A typed failure a tool raised deliberately must survive being wrapped by a
+    task group: reporting it as the generic internal error would, for example,
+    turn "reconnect FeatureScript" into "the tool failed unexpectedly".
+    """
+    if isinstance(exc, ToolException):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for member in exc.exceptions:
+            found = _first_tool_exception(member)
+            if found is not None:
+                return found
+    return None
 
 
 def _failure(

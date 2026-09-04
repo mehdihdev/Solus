@@ -9,6 +9,7 @@ import {
   listLocalTools,
   type Integration as ApiIntegration,
   type IntegrationAccessModes,
+  type IntegrationHosted,
   type IntegrationSelection,
   type LocalTool
 } from '../../lib/api/resources'
@@ -32,6 +33,11 @@ export interface CatalogEntry extends Integration {
   /** The grants the connector offers at connect time, or null when there is no
    * choice. Drives the generic access picker (SOLUS-ONS-A2). */
   readonly accessModes: IntegrationAccessModes | null
+  /** A vendor-hosted MCP add-on this connector carries (FeatureScript on
+   * Onshape), or null. Drives the wizard's connect-time disclosure and the
+   * add-on block on the connected source — both generic, so the next hosted
+   * server is a backend registry entry and no change here. */
+  readonly hosted: IntegrationHosted | null
   /** Present ONLY on local-bridge tiles: the live registry row the tile
    * derives from, so the connect action shows its guidance directly. */
   readonly localTool?: LocalTool
@@ -85,6 +91,7 @@ type CuratedEntry = {
   configFields: readonly string[]
   selection: IntegrationSelection | null
   accessModes: IntegrationAccessModes | null
+  hosted: IntegrationHosted | null
 }
 
 const CURATED: Readonly<Record<string, CuratedEntry>> = {
@@ -92,9 +99,16 @@ const CURATED: Readonly<Record<string, CuratedEntry>> = {
     mode: 'oauth',
     configFields: ['repo', 'branch'],
     selection: { mode: 'single', config_key: 'repo', label: 'repository' },
-    accessModes: null
+    accessModes: null,
+    hosted: null
   },
-  kicad: { mode: 'export-file', configFields: ['export'], selection: null, accessModes: null }
+  kicad: {
+    mode: 'export-file',
+    configFields: ['export'],
+    selection: null,
+    accessModes: null,
+    hosted: null
+  }
 }
 
 /** Offline/dev-bypass catalog: the curated drivable pair, optimistically
@@ -117,6 +131,7 @@ function localBridgeEntry(tool: LocalTool): CatalogEntry {
     configFields: [],
     selection: null,
     accessModes: null,
+    hosted: null,
     localTool: tool
   }
 }
@@ -149,7 +164,8 @@ export async function loadIntegrationCatalog(
         mode,
         configFields: integration.config_fields,
         selection: integration.selection ?? null,
-        accessModes: integration.access_modes ?? null
+        accessModes: integration.access_modes ?? null,
+        hosted: integration.hosted ?? null
       }
     ]
   }

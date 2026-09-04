@@ -16,12 +16,16 @@ import {
   triggerSync,
   getSyncs,
   getSource,
+  startHostedOAuth,
+  exchangeHostedOAuth,
   type IntegrationAccessModes,
+  type IntegrationHosted,
   type IntegrationSelection,
   type SelectableItem
 } from '../../lib/api/resources'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { accessChoiceStep } from './accessChoiceStep'
+import { addOnStep } from './addOnStep'
 import { fieldsConfigureStep } from './fieldsConfigureStep'
 import { selectionConfigureStep } from './selectionConfigureStep'
 import {
@@ -51,6 +55,9 @@ export interface OAuthConnectStartOptions {
   selection?: IntegrationSelection | null
   /** How much power the user grants at connect time, if there is a choice. */
   accessModes?: IntegrationAccessModes | null
+  /** A vendor-hosted add-on this connector carries, enabled as part of the
+   *  connect rather than on a button afterwards (SOLUSDEV-168). */
+  hosted?: IntegrationHosted | null
 }
 
 export interface UseOAuthConnect {
@@ -81,12 +88,14 @@ export function connectOptions(integ: {
   configFields: readonly string[]
   selection?: IntegrationSelection | null
   accessModes?: IntegrationAccessModes | null
+  hosted?: IntegrationHosted | null
 }): OAuthConnectStartOptions {
   return {
     displayName: integ.name,
     configFields: integ.configFields,
     selection: integ.selection,
-    accessModes: integ.accessModes
+    accessModes: integ.accessModes,
+    hosted: integ.hosted ?? null
   }
 }
 
@@ -159,8 +168,16 @@ export function useOAuthConnect(): UseOAuthConnect {
       onChoose: () => awaitChoice(accessChoice, attempt, currentAttempt)
     })
 
+    const addOn = addOnStep({
+      hosted: options.hosted ?? null,
+      bridge,
+      api: { startHostedOAuth, exchangeHostedOAuth },
+      onProgress,
+      isCancelled: () => attempt.cancelled
+    })
+
     return runOAuthConnect(
-      { api: oauthApi, bridge, onProgress, configure, chooseAccess },
+      { api: oauthApi, bridge, onProgress, configure, chooseAccess, addOn },
       projectId,
       provider,
       { redirectUri, displayName: options.displayName }

@@ -539,8 +539,38 @@ export interface paths {
         /**
          * List Integrations
          * @description Catalog of available connector types + their config/auth shape.
+         *
+         *     SOLUSDEV-168: each entry also declares the vendor-hosted MCP add-on its
+         *     connector carries, if any. Catalog DATA, exactly like `selection` and
+         *     `access_modes` — so the app renders the disclosure and the enable affordance
+         *     without knowing which connector it is, and the next hosted server is one
+         *     entry in `HOSTED_SERVERS` with no frontend change at all.
          */
         get: operations["list_integrations_api_v1_integrations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/local-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Local Tools
+         * @description Bridge-hosted desktop tools (SOLUSDEV-72): vendor-run loopback MCP servers
+         *     from the ADR-031 catalog (Fusion today). These are not connectors — they run
+         *     on the customer's machine, reached through the companion — so they surface as
+         *     the generic `local-bridge` tile: the next tool is a catalog entry here, never
+         *     a frontend edit.
+         */
+        get: operations["list_local_tools_api_v1_integrations_local_tools_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -795,6 +825,95 @@ export interface paths {
         get: operations["list_selectable_api_v1_projects__project_id__sources__source_id__selectable_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hosted Status
+         * @description The stored state. Cheap: no network, so a source list can render it.
+         */
+        get: operations["hosted_status_api_v1_projects__project_id__sources__source_id__hosted__server__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hosted Probe
+         * @description Re-check after the customer says they have subscribed.
+         *
+         *     Onshape warns explicitly that a redirect back with `success=true` does NOT
+         *     mean a purchase happened, so this is the only trustworthy completion signal
+         *     — and it is user-triggered rather than a poll, because the purchase can wait
+         *     on a company administrator and no timer we own would outlive that.
+         */
+        post: operations["hosted_probe_api_v1_projects__project_id__sources__source_id__hosted__server__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}/oauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hosted Oauth Start
+         * @description Begin the customer's own grant to the hosted server.
+         *
+         *     A SECOND handshake, not a widening of the Onshape one: the hosted server is
+         *     its own authorization server with its own token, which is also why enabling
+         *     this costs an existing Onshape user no re-consent on their original grant.
+         */
+        post: operations["hosted_oauth_start_api_v1_projects__project_id__sources__source_id__hosted__server__oauth_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}/oauth/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hosted Oauth Exchange
+         * @description Complete the grant, then immediately probe what it can actually do.
+         */
+        post: operations["hosted_oauth_exchange_api_v1_projects__project_id__sources__source_id__hosted__server__oauth_exchange_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1134,6 +1253,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/bench/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bench Sources */
+        get: operations["bench_sources_api_v1_projects__project_id__bench_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sessions */
+        get: operations["list_sessions_api_v1_projects__project_id__bench_sessions_get"];
+        put?: never;
+        /** Start Session */
+        post: operations["start_session_api_v1_projects__project_id__bench_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Detail */
+        get: operations["session_detail_api_v1_projects__project_id__bench_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/sessions/{session_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Session */
+        post: operations["stop_session_api_v1_projects__project_id__bench_sessions__session_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/bench/device-recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Device Recent
+         * @description Batched by design: the desktop polls every visible device panel in ONE
+         *     request per cycle, so N streaming devices never multiply the request rate
+         *     into the shared per-user budget.
+         */
+        get: operations["device_recent_api_v1_projects__project_id__bench_device_recent_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/bridge": {
         parameters: {
             query?: never;
@@ -1271,6 +1481,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/toolkb/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Entries */
+        get: operations["list_entries_api_v1_toolkb_entries_get"];
+        put?: never;
+        /** Submit Entry */
+        post: operations["submit_entry_api_v1_toolkb_entries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/toolkb/entries/{entry_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Feedback
+         * @description TU-08: a user confirms or rejects a guidance step. Recomputes confidence
+         *     deterministically (a reject pulls down hard — precision over recall).
+         */
+        post: operations["submit_feedback_api_v1_toolkb_entries__entry_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/toolkb/guides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Guides Route
+         * @description Authored walkthroughs available for a tool+version (unresolved summary).
+         */
+        get: operations["list_guides_route_api_v1_toolkb_guides_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/toolkb/guides/{guide_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Guide Route
+         * @description One walkthrough, each step resolved against the live KB.
+         *
+         *     Both narrations (guide/expert) are returned so the panel switches SOL mode
+         *     (ADR-016) with no round-trip. Unavailable/tentative steps are marked, never
+         *     faked — the renderer degrades gracefully and never shows a confident wrong
+         *     pointer.
+         */
+        get: operations["get_guide_route_api_v1_toolkb_guides__guide_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{provider}/{source_id}/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Provider Webhook */
+        post: operations["provider_webhook_api_v1_webhooks__provider___source_id___token__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Project Events
+         * @description Subscribe to this project's change stream.
+         *
+         *     Yields `graph.changed` frames — an invalidation hint the client answers by
+         *     refetching the one thing it is already showing.
+         */
+        get: operations["project_events_api_v1_projects__project_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1294,6 +1628,16 @@ export interface components {
              * @default 0
              */
             tokens: number;
+        };
+        /** BenchSessionIn */
+        BenchSessionIn: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "sim" | "real";
+            /** Config */
+            config: components["schemas"]["MujocoSimConfig"] | components["schemas"]["GazeboSimConfig"] | components["schemas"]["McapSimConfig"] | components["schemas"]["SerialRealConfig"];
         };
         /**
          * CheckoutSessionCreate
@@ -1349,15 +1693,54 @@ export interface components {
              */
             decision: "approve" | "reject";
         };
+        /**
+         * ControlEffect
+         * @description What the control DOES, from a closed set.
+         *
+         *     Categorising the effect rather than describing it freely lets the Guide
+         *     reason about a control without reading prose — and removes one more place a
+         *     sentence about a customer's design could live.
+         * @enum {string}
+         */
+        ControlEffect: "create_feature" | "modify_feature" | "delete_feature" | "select" | "navigate" | "measure" | "toggle_visibility" | "import" | "export" | "undo" | "settings";
         /** ConversationCreate */
         ConversationCreate: {
             /** Title */
             title?: string | null;
         };
+        /** FeedbackBody */
+        FeedbackBody: {
+            verdict: components["schemas"]["Verdict"];
+        };
+        /** GazeboSimConfig */
+        GazeboSimConfig: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "gazebo";
+            /** Topics */
+            topics: string[];
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HostedExchange
+         * @description The desktop posts back what its loopback captured.
+         */
+        HostedExchange: {
+            /** State */
+            state: string;
+            /** Code */
+            code: string;
         };
         /**
          * InteractionContext
@@ -1390,6 +1773,23 @@ export interface components {
          * @enum {string}
          */
         JobStatus: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+        /** McapSimConfig */
+        McapSimConfig: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "mcap-replay";
+            /** Mcap Path */
+            mcap_path: string;
+            /** Topics */
+            topics?: string[] | null;
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
+        };
         /** MemberRoleUpdate */
         MemberRoleUpdate: {
             /**
@@ -1404,6 +1804,36 @@ export interface components {
             content: string;
             /** @default guide */
             action_mode: components["schemas"]["ActionMode"];
+        };
+        /** MujocoSimConfig */
+        MujocoSimConfig: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "mujoco";
+            /**
+             * Scene Name
+             * @default demo
+             */
+            scene_name: string;
+            /** Mjcf Xml */
+            mjcf_xml?: string | null;
+            /**
+             * Sample Hz
+             * @default 50
+             */
+            sample_hz: number;
+            /**
+             * Duration Seconds
+             * @default 300
+             */
+            duration_seconds: number;
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
         };
         /**
          * OAuthExchange
@@ -1492,6 +1922,28 @@ export interface components {
          * @enum {string}
          */
         RouteType: "code" | "visual_log" | "long_context" | "general";
+        /** SerialRealConfig */
+        SerialRealConfig: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "serial";
+            /** Serial Number */
+            serial_number?: string | null;
+            /** Confirmed Device Path */
+            confirmed_device_path?: string | null;
+            /**
+             * Baud
+             * @default 115200
+             */
+            baud: number;
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
+        };
         /** SettingsUpdate */
         SettingsUpdate: {
             /** Sol Mode */
@@ -1566,6 +2018,18 @@ export interface components {
             /** Events */
             events?: components["schemas"]["ObserverEventIn"][];
         };
+        /**
+         * ToolFamily
+         * @description Tools Solus models the UI of. Closed: a new tool is a decision, not a value.
+         * @enum {string}
+         */
+        ToolFamily: "fusion" | "onshape" | "solidworks" | "autocad" | "kicad" | "altium" | "spice";
+        /**
+         * UiSurface
+         * @description Where in the tool's UI the control lives.
+         * @enum {string}
+         */
+        UiSurface: "toolbar" | "menu" | "context_menu" | "panel" | "dialog" | "keyboard" | "status_bar";
         /** UserUpdate */
         UserUpdate: {
             /** Name */
@@ -1586,6 +2050,15 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /**
+         * Verdict
+         * @description A human's judgement on a guidance entry (TU-08 feedback / TU-05 sharing).
+         *
+         *     Lives here, not in `feedback`, so the observation model can reference it
+         *     without a circular import; `feedback` re-exports it for existing callers.
+         * @enum {string}
+         */
+        Verdict: "confirm" | "reject";
     };
     responses: never;
     parameters: never;
@@ -2846,6 +3319,28 @@ export interface operations {
             };
         };
     };
+    list_local_tools_api_v1_integrations_local_tools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     oauth_start_api_v1_integrations__provider__oauth_start_post: {
         parameters: {
             query?: never;
@@ -3354,6 +3849,150 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hosted_status_api_v1_projects__project_id__sources__source_id__hosted__server__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server: string;
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hosted_probe_api_v1_projects__project_id__sources__source_id__hosted__server__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server: string;
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hosted_oauth_start_api_v1_projects__project_id__sources__source_id__hosted__server__oauth_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server: string;
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hosted_oauth_exchange_api_v1_projects__project_id__sources__source_id__hosted__server__oauth_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server: string;
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostedExchange"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -4090,6 +4729,216 @@ export interface operations {
             };
         };
     };
+    bench_sources_api_v1_projects__project_id__bench_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_api_v1_projects__project_id__bench_sessions_get: {
+        parameters: {
+            query?: {
+                status?: ("active" | "ended") | null;
+                mode?: ("sim" | "real") | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_session_api_v1_projects__project_id__bench_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchSessionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_detail_api_v1_projects__project_id__bench_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_session_api_v1_projects__project_id__bench_sessions__session_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_recent_api_v1_projects__project_id__bench_device_recent_get: {
+        parameters: {
+            query: {
+                device_id: string[];
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bridge_status_api_v1_projects__project_id__bridge_get: {
         parameters: {
             query?: never;
@@ -4274,6 +5123,248 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_entries_api_v1_toolkb_entries_get: {
+        parameters: {
+            query: {
+                tool: components["schemas"]["ToolFamily"];
+                version?: string | null;
+                surface?: components["schemas"]["UiSurface"] | null;
+                effect?: components["schemas"]["ControlEffect"] | null;
+                control_id?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_entry_api_v1_toolkb_entries_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_feedback_api_v1_toolkb_entries__entry_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_guides_route_api_v1_toolkb_guides_get: {
+        parameters: {
+            query: {
+                tool: components["schemas"]["ToolFamily"];
+                version: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_guide_route_api_v1_toolkb_guides__guide_id__get: {
+        parameters: {
+            query: {
+                version: string;
+            };
+            header?: never;
+            path: {
+                guide_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    provider_webhook_api_v1_webhooks__provider___source_id___token__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: string;
+                source_id: string;
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_events_api_v1_projects__project_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

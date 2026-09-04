@@ -58,8 +58,34 @@ OAUTH_STATE_TTL_MINUTES = 10
 
 @router.get("")
 async def list_integrations(registry: RegistryDep, _user: CurrentUser) -> dict[str, Any]:
-    """Catalog of available connector types + their config/auth shape."""
-    return envelope(registry.catalog())
+    """Catalog of available connector types + their config/auth shape.
+
+    SOLUSDEV-168: each entry also declares the vendor-hosted MCP add-on its
+    connector carries, if any. Catalog DATA, exactly like `selection` and
+    `access_modes` — so the app renders the disclosure and the enable affordance
+    without knowing which connector it is, and the next hosted server is one
+    entry in `HOSTED_SERVERS` with no frontend change at all.
+    """
+    # Function-local, the same idiom `list_local_tools` uses below: the router
+    # should not grow an agent-package import at module scope.
+    from solus_api.agent.tools.remote_mcp import HOSTED_SERVERS
+
+    by_source_type = {spec.source_type.value: spec for spec in HOSTED_SERVERS.values()}
+    items = registry.catalog()
+    for item in items:
+        spec = by_source_type.get(str(item.get("type")))
+        item["hosted"] = (
+            None
+            if spec is None
+            else {
+                "server": spec.name,
+                "display_name": spec.display_name,
+                # Solus-authored consent copy, rendered VERBATIM by the app.
+                "notice": spec.connect_notice,
+                "subscribe_url": spec.subscribe_url,
+            }
+        )
+    return envelope(items)
 
 
 @router.get("/local-tools")

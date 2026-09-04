@@ -41,6 +41,17 @@ def _domain(value: str) -> Domain:
         raise APIError(422, "validation_error", f"Unknown domain '{value}'") from exc
 
 
+def _like_literal(value: str) -> str:
+    """Neutralise LIKE's wildcards so a caller's text matches itself and nothing
+    else. Backslash FIRST, or it would re-escape the escapes we just added.
+
+    Both LIKE filters below take user-influenced text, and an unescaped `%`
+    turns either into "everything in this project" — a filter that silently
+    stops filtering. Match with `escape="\\"` wherever this is used.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.get("/entities")
 async def list_entities(
     ctx: ProjectCtx,
@@ -63,7 +74,11 @@ async def list_entities(
     if domain is not None:
         stmt = stmt.where(GraphEntity.domain == _domain(domain))
     if q:
-        stmt = stmt.where(GraphEntity.name.ilike(f"%{q}%"))
+        # Escaped for the same reason the prefix below is: this is the SOL
+        # composer's `@`-mention typeahead, so `q` is text a person is typing,
+        # and a bare `%` would match every entity in the project — a search box
+        # that silently stops filtering.
+        stmt = stmt.where(GraphEntity.name.ilike(f"%{_like_literal(q)}%", escape="\\"))
     if external_ref_prefix and external_ref_prefix.strip():
         # SOLUS-A7-01. Entities are keyed `{document_id}:{element_id}:{occurrence}`
         # (connectors/mechanical.py), so this prefix is the only join an Onshape
@@ -74,9 +89,7 @@ async def list_entities(
         # connector-derived, so a `%` inside a prefix would otherwise widen the
         # query to the whole project — over-disclosure to a caller that asked
         # about one document.
-        literal = (
-            external_ref_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        )
+        literal = _like_literal(external_ref_prefix)
         stmt = stmt.where(GraphEntity.external_ref.like(f"{literal}%", escape="\\"))
     if cursor:
         stmt = stmt.where(cursor_filter(GraphEntity.created_at, GraphEntity.id, cursor))

@@ -1068,3 +1068,167 @@ async def test_the_summary_cannot_carry_newlines_either(
 
     assert parked is not None
     assert "\n" not in parked.summary
+
+
+# ------------------------------------------------- the transcript tells the truth
+
+
+async def _conversation(client: AsyncClient, headers: dict[str, str], project_id: str) -> str:
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/sol/conversations", headers=headers, json={}
+    )
+    assert resp.status_code == 201, resp.text
+    return str(resp.json()["data"]["id"])
+
+
+async def _turn_contents(
+    client: AsyncClient, headers: dict[str, str], project_id: str, conversation_id: str
+) -> list[str]:
+    resp = await client.get(
+        f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/turns",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    return [str(turn["content"]) for turn in resp.json()["data"]]
+
+
+async def test_an_approved_action_is_recorded_as_applied_not_as_unauthorized(
+    client: AsyncClient, alice_headers: dict[str, str], maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """THE HISTORY LIE.
+
+    The turn that proposed a destructive call recorded it as
+    `"onshape.add_feature → unauthorized"` and ended. `ConversationService.history`
+    replays every role, so the NEXT message showed SOL its own write as FAILED —
+    even when the person had approved it seconds earlier. A model that believes
+    its change did not land proposes it again.
+    """
+    project_id, confirmation_id = await _seeded_confirmation(client, alice_headers, maker)
+    conversation_id = await _conversation(client, alice_headers, project_id)
+    async with maker() as db:
+        row = await db.get(ToolConfirmation, confirmation_id)
+        assert row is not None
+        row.conversation_id = uuid.UUID(conversation_id)
+        await db.commit()
+
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}",
+        headers=alice_headers,
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 200, response.text
+
+    contents = await _turn_contents(client, alice_headers, project_id, conversation_id)
+    decision = [c for c in contents if c.startswith("onshape.get_variables →")]
+    assert decision, f"the decision was never recorded at all: {contents}"
+    # The transcript must not stop at "parked". Whatever the outcome, the next
+    # turn's model has to be able to read what the decision DID.
+    assert "awaiting your approval" not in decision[-1]
+    assert (
+        "approved by you and applied ok" in decision[-1]
+        # This fixture's tool is not dispatchable in a project with no Onshape
+        # source, so a truthful "not applied" is the correct outcome here — the
+        # point is that it is a DECISION line, not a stale "parked" one.
+        or "not applied" in decision[-1]
+    )
+
+
+async def test_a_rejection_reads_as_a_rejection_not_a_failure(
+    client: AsyncClient, alice_headers: dict[str, str], maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Refusing to run IS the success of a rejection. Recording it as an error
+    would teach the model to retry something the person declined."""
+    project_id, confirmation_id = await _seeded_confirmation(client, alice_headers, maker)
+    conversation_id = await _conversation(client, alice_headers, project_id)
+    async with maker() as db:
+        row = await db.get(ToolConfirmation, confirmation_id)
+        assert row is not None
+        row.conversation_id = uuid.UUID(conversation_id)
+        await db.commit()
+
+    await client.post(
+        f"/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}",
+        headers=alice_headers,
+        json={"decision": "reject"},
+    )
+
+    contents = await _turn_contents(client, alice_headers, project_id, conversation_id)
+    assert any("rejected by you" in c for c in contents), contents
+
+
+async def test_a_decision_on_a_conversationless_row_records_nothing(
+    client: AsyncClient, alice_headers: dict[str, str], maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A confirmation parked outside a conversation has no transcript to append
+    to. It must decide normally rather than erroring."""
+    project_id, confirmation_id = await _seeded_confirmation(client, alice_headers, maker)
+    response = await client.post(
+        f"/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}",
+        headers=alice_headers,
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_a_parked_call_is_not_transcribed_as_a_failure() -> None:
+    """The proposing turn's half of the same fix. UNAUTHORIZED is also what a
+    revoked grant returns, so the two must not read the same — which is why this
+    keys on what the gate actually parked, not on the error code."""
+    from solus_api.routers.sol import _tool_turn_summary
+
+    call = {"tool": "onshape.add_feature"}
+    refusal = {"ok": False, "error": {"code": "unauthorized"}}
+
+    parked = _tool_turn_summary(call, refusal, frozenset({"onshape.add_feature"}))
+    assert "parked" in parked and "unauthorized" not in parked
+
+    # Same code, NOT parked this turn — a real credential failure. Stays honest.
+    denied = _tool_turn_summary(call, refusal, frozenset())
+    assert "unauthorized" in denied and "parked" not in denied
+
+    assert _tool_turn_summary(call, {"ok": True}, frozenset()) == "onshape.add_feature → ok"
+
+
+def test_the_decision_summary_distinguishes_the_three_outcomes() -> None:
+    """A rejection is not a failure, and a stale refusal is not a rejection —
+    it means the world moved and NOTHING was applied, which is the one the model
+    most needs to understand before it tries again."""
+    from solus_api.agent.tools.shapes import ToolError, ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    ok = ToolResult.success("c", {"done": True})
+    assert _decision_summary("approve", ok) == "approved by you and applied ok"
+
+    refused = ToolResult.failure(
+        "c", ToolError(code=ToolErrorCode.UNAUTHORIZED, message="You rejected this action.")
+    )
+    assert "rejected by you" in _decision_summary("reject", refused)
+
+    stale = ToolResult.failure(
+        "c", ToolError(code=ToolErrorCode.UNAUTHORIZED, message="What this would do has changed.")
+    )
+    summary = _decision_summary("approve", stale)
+    assert "not applied" in summary and "ask again" in summary
+
+
+def test_the_action_key_identifies_a_proposal_regardless_of_key_order() -> None:
+    """The per-turn dedupe that replaces the old turn-ending `return`.
+
+    The loop now keeps running after a park, so a model that re-proposes the same
+    action would otherwise mint a second row, a second card, and a second LIVE
+    preview read against the customer's CAD. Two calls that would do the same
+    thing must be the same action however the model ordered the keys.
+    """
+    from solus_api.routers.sol import _action_key
+
+    one = ToolCall(tool="onshape.set_variable", args={"name": "w", "expression": "5 mm"})
+    other_order = ToolCall(tool="onshape.set_variable", args={"expression": "5 mm", "name": "w"})
+    assert _action_key(one) == _action_key(other_order)
+
+    # A different VALUE is a different action and gets its own card.
+    changed = ToolCall(tool="onshape.set_variable", args={"name": "w", "expression": "9 mm"})
+    assert _action_key(one) != _action_key(changed)
+
+    # So is the same arguments on a different tool.
+    elsewhere = ToolCall(tool="onshape.add_feature", args={"name": "w", "expression": "5 mm"})
+    assert _action_key(one) != _action_key(elsewhere)

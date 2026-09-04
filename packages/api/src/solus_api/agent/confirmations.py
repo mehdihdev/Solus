@@ -269,7 +269,15 @@ async def request_confirmation(
         preview=preview,
         result=_refusal(
             call.call_id,
-            f"{call.tool} needs your approval before it runs. {summary}",
+            # This sentence is the ONLY thing the model learns about the park, and
+            # after SOLUSDEV-168's loop change it keeps reasoning afterwards — so
+            # it has to say three things: the action is waiting for a PERSON, it
+            # is not a failure, and proposing it again this turn achieves nothing.
+            # Without the last clause a model reads UNAUTHORIZED as "try harder".
+            f"{call.tool} is now waiting for the person to approve it — they have "
+            f"been shown exactly what it would do. This is not a failure and it "
+            f"does not need retrying: do not propose it again in this turn. "
+            f"Carry on with anything else the task needs. {summary}",
             ToolErrorCode.UNAUTHORIZED,
         ),
     )

@@ -5,12 +5,11 @@
 **Python:** `packages/api/src/solus_api/contracts/action_gate.py`
 **Fixtures:** `packages/shared-types/fixtures/action-gate/`
 
-> ⚠️ **This documents a gate that is not yet on `main`.**
-> The implementation lives on branch `SOLUSDEV-60/ons-ui01-confirmation-surface`
-> (commit `8c9b812`, SOLUS-ONS-A5 + ONS-UI-01) and lands with **SOLUSDEV-96**.
-> On `main` today the gate is a flat fail-closed refusal
-> (`solus_api/agent/runtime.py:162`): a tool declaring `requires_confirmation` is
-> structurally un-dispatchable. Every shape below is read from that branch, verbatim.
+> **This gate ships.** It landed on `main` with SOLUSDEV-96 (SOLUS-ONS-A5 +
+> ONS-UI-01) and was amended by SOLUSDEV-168, which let a turn continue past a
+> parked action rather than ending at the first one. Every shape below is read
+> from the code, verbatim; where a shape here disagrees with the code cited
+> beside it, the code is right and this file is a bug.
 
 ---
 
@@ -48,11 +47,24 @@ this file is a bug.
 1. SOL proposes a call to a tool whose descriptor sets `requires_confirmation`.
 2. The gate **parks** it instead of running it: a `tool_confirmation` row is written with the
    exact `args`, a Solus-authored `summary`, and a `preview` diff. The turn streams a
-   `tool_confirmation` event and **ends** — a one-shot SSE stream cannot block for a click.
-3. The user decides via `POST /api/v1/projects/{p}/sol/confirmations/{id}` with a body
-   carrying a decision **and nothing else**.
-4. On approval the tool runs **at decision time**, with the registry rebuilt under the
-   deciding user's own scope and the arguments taken from the stored row.
+   `tool_confirmation` event. A one-shot SSE stream cannot block for a click, so the action
+   does not run inside this turn.
+3. **The turn CONTINUES** (amended SOLUSDEV-168). It used to end here, which discarded the
+   round's other results even though they had already executed and capped a task at one
+   change per turn. The parked result goes back to the model saying a person now has it,
+   that it is not a failure, and not to propose it again — and the turn's park hook dedupes
+   by concrete action, so a model that re-proposes gets the same confirmation rather than a
+   second card. `MAX_MODEL_ROUNDS` still bounds the turn. **One turn may therefore park
+   SEVERAL actions, and a UI must render one card per parked action, not one per turn.**
+4. The user decides each via `POST /api/v1/projects/{p}/sol/confirmations/{id}` with a body
+   carrying a decision **and nothing else**. Actions are approved **individually**: a batch
+   would have to suspend the staleness re-check in step 5 for every step after the first,
+   because a dependent write's preview legitimately diverges once its predecessor lands.
+5. On approval the tool runs **at decision time**, with the registry rebuilt under the
+   deciding user's own scope and the arguments taken from the stored row. The decision is
+   recorded back into the conversation, so a later turn knows whether the change landed —
+   before SOLUSDEV-168 the transcript said `unauthorized` forever, and SOL believed its own
+   approved write had failed.
 
 ### The parked event
 

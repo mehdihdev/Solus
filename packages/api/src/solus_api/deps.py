@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.interfaces import SolSystems
 from solus_api.agent.runtime import AgentRunner
+from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.billing.credits import grant_trial_credits
 from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.bridge.registry import BridgeSessionRegistry
@@ -386,3 +387,51 @@ async def get_project_context(
 
 
 ProjectCtx = Annotated[ProjectContext, Depends(get_project_context)]
+
+
+async def get_sol_registry(
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    sessionmaker: SessionMakerDep,
+    bridge_sessions: BridgeSessionsDep,
+    settings: SettingsDep,
+    secret_store: SecretStoreDep,
+    connectors: RegistryDep,
+    systems: SolSystemsDep,
+) -> ToolRegistry:
+    """THE one place a SOL tool registry is built (SOLUSDEV-168 follow-up).
+
+    `build_sol_registry` is synchronous and does zero I/O on purpose — live MCP
+    discovery inside it would put a 30s network call on every message and on
+    `GET /sol/tools`, which has no role floor. So the async work lives here, in
+    the request scope that already has a session, and the pure assembly stays
+    where it was.
+
+    It exists as ONE dependency because the alternative already failed: the
+    hosted-server inventory was an optional keyword on a function with three
+    call sites, every one of them omitted it, and the FeatureScript tools were
+    built, tested and unreachable. A fourth caller would have got it wrong too.
+    """
+    # Function-local like every other agent import in this file's siblings: the
+    # dependency graph must not grow httpx/mcp just to resolve a route.
+    from solus_api.agent.runtime import build_sol_registry
+    from solus_api.agent.tools.hosted_tools import load_hosted_inventory
+
+    return build_sol_registry(
+        sessionmaker,
+        ctx.project.id,
+        bridge=bridge_sessions,
+        user_id=ctx.user.id,
+        team_id=ctx.team.id,
+        bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
+        secret_store=secret_store,
+        connectors=connectors,
+        systems=systems,
+        hosted_inventory=await load_hosted_inventory(session, ctx.project.id),
+        # The provider-quota meter fails open without it (ADR-019 as amended).
+        redis=getattr(request.app.state, "redis", None),
+    )
+
+
+SolRegistryDep = Annotated[ToolRegistry, Depends(get_sol_registry)]

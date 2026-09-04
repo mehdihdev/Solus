@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.connectors.contracts import ConnectorError, Credentials
+from solus_api.connectors.onshape import ONSHAPE_ID_RE, tracked_document_ids
 from solus_api.connectors.onshape_ops import OnshapeOperation, every_operation
 from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
 from solus_api.connectors.runtime import call_with_refresh, resolve_credentials
@@ -161,6 +162,53 @@ async def _prepare(
     return onshape, credentials, source
 
 
+def _refuse_untracked_document(source: Source, args: dict[str, Any]) -> list[str]:
+    """Refuse any call naming a document this project does not track; return the
+    tracked set so the caller can bind it as the model's menu.
+
+    THE addressing guard, and it is on the READ path too, deliberately: without
+    it `get_body_details` could read any document in the customer's whole Onshape
+    account. `list_documents` is the model's menu and is scoped separately; this
+    is the floor under every operation, because they all route through `_call`.
+
+    Answers NOT_FOUND, never UNAUTHORIZED — a permission error would confirm the
+    document exists, the same no-existence-oracle rule `get_entity` follows.
+
+    Runs on the APPROVAL path too, for free: `_prepare` re-reads the source per
+    call, so a document deselected between park and approve refuses at approve.
+    """
+    try:
+        tracked = tracked_document_ids(source.config if isinstance(source.config, dict) else {})
+    except ConnectorError as exc:  # a selection we cannot read is not a licence
+        raise _tool_error(exc) from exc
+    document_id = args.get("document_id")
+    if not isinstance(document_id, str):
+        return tracked
+    if ONSHAPE_ID_RE.fullmatch(document_id) is None:
+        # A MALFORMED id is a mistake the model can fix, and the connector's own
+        # validation says so with INVALID_ARGS. Answering NOT_FOUND here instead
+        # would teach it the document merely does not exist and send it hunting.
+        # Untracked and unparseable are different answers.
+        return tracked
+    if not tracked:
+        # FAIL CLOSED. A connected but idle source tracks nothing, and "nothing
+        # tracked" must never read as "everything allowed".
+        raise ToolException(
+            "No Onshape documents are being tracked for this project yet. "
+            "Pick the documents to track in Sources first.",
+            code=ToolErrorCode.NOT_FOUND,
+            retryable=False,
+        )
+    if document_id not in tracked:
+        raise ToolException(
+            "That Onshape document is not one this project tracks. "
+            "Add it in Sources if you meant to work on it.",
+            code=ToolErrorCode.NOT_FOUND,
+            retryable=False,
+        )
+    return tracked
+
+
 def _build_tool(
     operation: OnshapeOperation,
     session_factory: async_sessionmaker[AsyncSession],
@@ -174,6 +222,12 @@ def _build_tool(
         connector, credentials, source = await _prepare(
             session_factory, project_id, secret_store, connectors, is_write=is_write
         )
+        tracked = _refuse_untracked_document(source, args)
+        # The model's MENU, bound by Solus code exactly like `project_id` — never
+        # an argument it could supply. Every operation schema forbids extra
+        # properties, so a model that tried to send `_documents` is rejected at
+        # registry validation before this runs.
+        args = {**args, "_documents": tracked}
 
         async def run(creds: Credentials) -> T:
             async with connector.http(creds) as client:
@@ -196,7 +250,55 @@ def _build_tool(
 
     async def preview(args: dict[str, Any]) -> list[dict[str, Any]]:
         assert operation.preview is not None
-        return await _call(args, operation.preview)
+        rows = await _call(args, operation.preview)
+        return [*await _document_row(args), *rows]
+
+    async def _document_row(args: dict[str, Any]) -> list[dict[str, Any]]:
+        """WHICH document this change lands in, by NAME, as the card's first row.
+
+        Without it the summary named the document by a 24-hex id, which no human
+        can recognise — so "approve" meant approving an edit to a document the
+        person could not actually identify. Added here rather than in
+        `confirmations._summarize`, which is deliberately domain-free: a CAD
+        edit, a firmware flash and a robot command all render the same rows, and
+        an Onshape lookup in that function would be a domain leak.
+
+        A failed lookup degrades to the id rather than blocking the park — a
+        weaker card beats an unreachable action. The name is Onshape-supplied, so
+        it rides the same `_single_line` + `redact_text` gate as every other row.
+
+        Stable by construction, so it cannot manufacture a false STALE: a
+        document's name does not change under a model edit.
+
+        ponytail: this is a SECOND GET of `/documents/{did}` — `workspace_for`
+        already fetches it, and that same response carries the name. Previews run
+        twice (park and decide), so a gated write costs two extra calls against
+        the customer's 2,500/year allowance. Memoise `/documents/{did}` per
+        request on the connector if the meter starts complaining; it is metered
+        like every other call, so it will show up honestly if it matters.
+        """
+        document_id = args.get("document_id")
+        if not isinstance(document_id, str) or not is_write:
+            return []
+        try:
+            connector, credentials, _ = await _prepare(
+                session_factory, project_id, secret_store, connectors, is_write=is_write
+            )
+            async with connector.http(credentials) as client:
+                body = await connector.get_json(
+                    client, f"/api/v6/documents/{document_id}", what="document"
+                )
+            name = body.get("name") if isinstance(body, dict) else None
+        except Exception:
+            logger.info("could not name Onshape document for the consent card")
+            name = None
+        return [
+            {
+                "label": "document",
+                "before": None,
+                "after": name if isinstance(name, str) and name else document_id,
+            }
+        ]
 
     return InProcessTool(
         ToolDescriptor(

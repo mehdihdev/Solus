@@ -75,7 +75,8 @@ beforeEach(() => {
       mode: 'oauth',
       configFields: ['repo', 'branch'],
       selection: { mode: 'single', config_key: 'repo', label: 'repository' },
-      accessModes: null
+      accessModes: null,
+      hosted: null
     },
     {
       id: 'kicad',
@@ -85,7 +86,8 @@ beforeEach(() => {
       mode: 'export-file',
       configFields: ['export'],
       selection: null,
-      accessModes: null
+      accessModes: null,
+      hosted: null
     }
   ])
   vi.mocked(oauthHook.useOAuthConnect).mockReturnValue({
@@ -198,6 +200,7 @@ describe('SourcesScreen', () => {
         configFields: [],
         selection: null,
         accessModes: null,
+        hosted: null,
         localTool: {
           type: 'fusion',
           display_name: 'Fusion',

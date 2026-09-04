@@ -123,3 +123,17 @@ export function stepInstruction(
 ): string {
   return (mode === 'Guide' ? GUIDE : EXPERT)[step.id](ctx)
 }
+
+/** The mode-aware lead-in above a backend-authored connect disclosure
+ *  (ADR-016). The NOTICE ITSELF is never rewritten by mode: it is a consent
+ *  statement the backend authored, so it renders verbatim in both modes and is
+ *  never collapsed or hidden — only its framing changes. Expert mode gets to be
+ *  terse; it does not get to hide what a connection turns on. */
+const NOTICE_LEAD: Readonly<Record<SolMode, string>> = {
+  Guide: 'This connection also turns something on:',
+  Expert: 'Also enabled:'
+}
+
+export function noticeLead(mode: SolMode): string {
+  return NOTICE_LEAD[mode]
+}

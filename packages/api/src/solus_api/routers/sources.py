@@ -16,6 +16,7 @@ from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from sqlalchemy import delete, select, update
 
 from solus_api.connectors.contracts import AuthKind, ConnectorError, Credentials
+from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.runtime import (
     call_with_refresh,
     refresh_secret_ref,
@@ -288,6 +289,13 @@ async def disconnect_source(
         # let Solus keep minting access tokens against the user's documents
         # after they believe they revoked us. `delete` no-ops when absent.
         await secret_store.delete(refresh_secret_ref(source.secret_ref))
+        # SOLUSDEV-168: a hosted add-on (FeatureScript) holds its OWN customer
+        # token under a ref derived from this one. "Disconnecting Solus must not
+        # unsubscribe them" is not the same as "Solus keeps a live OAuth2Write
+        # grant on their documents after they revoked us" — the app stays
+        # enabled on their account; our ability to act as them does not.
+        for hosted_ref in hosted_refs(source.secret_ref):
+            await secret_store.delete(hosted_ref)
     if retain_entities:
         # Orphan the graph data into manual, user-owned entities rather than
         # removing it with the source.
