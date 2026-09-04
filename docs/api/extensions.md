@@ -375,11 +375,14 @@ Request-path processing, in order — nothing here fully unzips or executes the 
 1. `Content-Length` required (`411 length_required` when absent or non-integer — artifacts.md
    §4.4 M1); over the cap → `413 payload_too_large` BEFORE the body is read, and again while
    streaming (`read_bounded`) so a lying header cannot overshoot.
-2. The zip's central directory is read with a **bounded reader**: entry count ≤ 2,048, every
-   declared uncompressed size summed ≤ 100 MiB (zip-bomb guard), no absolute or `..` names, no
-   symlinks; violations → `422 validation_error` with the offending entry named. Only ONE entry
-   is extracted in the request path — `extension.toml` at the root, ≤ 64 KiB — and it is
-   decoded with stdlib `tomllib` and validated with `parse_extension_manifest` (the contract).
+2. The zip's central directory is read with a **bounded reader**
+   (`extensions.bundle.inspect_bundle_structure`): entry count ≤ 2,000, every declared
+   uncompressed size summed ≤ 25 MiB plus a per-entry compression-ratio guard (zip-bomb guards),
+   no absolute or `..` names, no symlinks, allowed suffixes only; violations → `422 bundle_invalid`
+   with the offending entry named. Only ONE entry is inflated in the request path —
+   `extension.toml` at the root, ≤ 64 KiB — decoded with stdlib `tomllib` and validated with
+   `parse_extension_manifest` (the contract). Every other member is inflated only by the review
+   job, under a cumulative 25 MiB decompressed budget.
    Contract problems → `422 validation_error` with `details` = the dotted-path problem strings
    (identical text to the desktop developer mode).
 3. Slug claim: if `extensions.slug` (case-insensitive) does not exist, the slug is claimed for

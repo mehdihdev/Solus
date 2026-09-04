@@ -280,10 +280,12 @@ Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'
   object-src 'none'; base-uri 'none'; form-action 'none'
 ```
 
-`'self'` resolves to `solus-ext://<id>` — the bundle's own files and nothing remote. No
-`'unsafe-inline'`, so a bundle must ship `<script src>` / `<link rel=stylesheet>` (the
-`panel_assets.py` precedent: split assets so the policy needs no hashes). Main never executes,
-evaluates, transforms or templates a bundle file; it streams bytes.
+`'self'` resolves to `solus-ext://<id>` — the bundle's own files and nothing remote. Scripts are
+never inline (`script-src 'self'` only), so a bundle must ship `<script src>`. Styles MAY be
+inline (`style-src 'self' 'unsafe-inline'`, as shipped — a deliberate ergonomics loosening for
+widget authors; CSS cannot reach the network under `connect-src 'none'` / `img-src 'self' data:`,
+so the residual is styling-only). Main never executes, evaluates, transforms or templates a
+bundle file; it streams bytes.
 
 ## 6. Bridge protocol (renderer host ↔ frame)
 
