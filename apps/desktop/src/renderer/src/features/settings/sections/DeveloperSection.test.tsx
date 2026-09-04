@@ -8,8 +8,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DeveloperSection } from './DeveloperSection'
-import { useDevExtensionsStore } from '../../devExtensions/devExtensionsStore'
+import { ACK_BUTTON, ACK_COPY, DeveloperSection } from './DeveloperSection'
+import {
+  selectDevRegistration,
+  useDevExtensionsStore
+} from '../../devExtensions/devExtensionsStore'
 import { fakeBridge, fakeManifest } from '../../extensions/frame/testing/fixtures'
 import * as bridge from '../../../lib/desktopBridge'
 
@@ -91,7 +94,9 @@ describe('DeveloperSection', () => {
     expect(within(row).getByTestId('dev-badge')).toBeInTheDocument()
     expect(within(row).getByText('bom')).toBeInTheDocument()
     expect(within(row).getByTitle(BOM_PATH)).toHaveTextContent(BOM_PATH)
-    expect(within(row).getByRole('button', { name: 'Reload' })).toBeInTheDocument()
+    // SEC-H3: a fresh registration is gated behind its permissions, so the
+    // row offers the acknowledgement button (not Reload) plus Remove.
+    expect(within(row).getByRole('button', { name: ACK_BUTTON })).toBeInTheDocument()
     expect(within(row).getByRole('button', { name: 'Remove' })).toBeInTheDocument()
     expect(screen.queryByText('No unpacked extensions loaded.')).not.toBeInTheDocument()
   })
@@ -169,9 +174,10 @@ describe('DeveloperSection — row actions', () => {
     answers[BOM_PATH] = LOADED_BOM
     render(<DeveloperSection />)
     await screen.findByTestId('dev-ext-bom')
+    await userEvent.click(screen.getByRole('button', { name: ACK_BUTTON }))
     answers[BOM_PATH] = { ok: false, problems: PROBLEMS }
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Reload' }))
 
     const row = screen.getByTestId('dev-ext-bom')
     await waitFor(() => expect(within(row).getByText(PROBLEMS[0])).toBeInTheDocument())
@@ -205,5 +211,67 @@ describe('DeveloperSection — row actions', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not remove/)
     expect(screen.getByTestId('dev-ext-bom')).toBeInTheDocument()
+  })
+})
+
+describe('DeveloperSection — permissions acknowledgement (SEC-H3)', () => {
+  const declared = fakeManifest({
+    permissions: { scopes: ['graph.read', 'sol.ask'], network: ['https://api.example.com'] }
+  })
+
+  it('gates a freshly loaded registration behind its declared scopes and origins', async () => {
+    registered('bom', BOM_PATH)
+    answers[BOM_PATH] = { ok: true, manifest: declared, devPath: BOM_PATH }
+    render(<DeveloperSection />)
+
+    const row = await screen.findByTestId('dev-ext-bom')
+    const gate = within(row).getByTestId('dev-ext-ack')
+
+    expect(gate).toHaveTextContent(ACK_COPY)
+    expect(within(gate).getByText('graph.read')).toBeInTheDocument()
+    expect(within(gate).getByText('sol.ask')).toBeInTheDocument()
+    expect(within(gate).getByText('https://api.example.com')).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: ACK_BUTTON })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: 'Remove' })).toBeInTheDocument()
+    expect(within(row).queryByRole('button', { name: 'Reload' })).not.toBeInTheDocument()
+    expect(selectDevRegistration(useDevExtensionsStore.getState(), 'bom')).toBeNull()
+  })
+
+  it('says so when a manifest declares no scopes and no origins', async () => {
+    registered('bom', BOM_PATH)
+    answers[BOM_PATH] = {
+      ok: true,
+      manifest: fakeManifest({ permissions: { scopes: [], network: [] } }),
+      devPath: BOM_PATH
+    }
+    render(<DeveloperSection />)
+    const gate = within(await screen.findByTestId('dev-ext-bom')).getByTestId('dev-ext-ack')
+    expect(gate).toHaveTextContent('No scopes')
+    expect(gate).toHaveTextContent('No network origins')
+  })
+
+  it('"Run with these permissions" acknowledges once; the row then offers Reload', async () => {
+    registered('bom', BOM_PATH)
+    answers[BOM_PATH] = { ok: true, manifest: declared, devPath: BOM_PATH }
+    render(<DeveloperSection />)
+    const row = await screen.findByTestId('dev-ext-bom')
+
+    await userEvent.click(within(row).getByRole('button', { name: ACK_BUTTON }))
+
+    await waitFor(() => expect(within(row).queryByTestId('dev-ext-ack')).not.toBeInTheDocument())
+    expect(within(row).getByRole('button', { name: 'Reload' })).toBeInTheDocument()
+    expect(selectDevRegistration(useDevExtensionsStore.getState(), 'bom')).not.toBeNull()
+
+    await userEvent.click(within(row).getByRole('button', { name: 'Reload' }))
+    await waitFor(() => expect(extensions.devLoad).toHaveBeenCalledTimes(2))
+    expect(within(row).queryByTestId('dev-ext-ack')).not.toBeInTheDocument()
+  })
+
+  it('a never-loaded row has no gate: there is nothing to run', async () => {
+    registered('broken', BROKEN_PATH)
+    answers[BROKEN_PATH] = { ok: false, problems: PROBLEMS }
+    render(<DeveloperSection />)
+    const row = await screen.findByTestId('dev-ext-broken')
+    expect(within(row).queryByTestId('dev-ext-ack')).not.toBeInTheDocument()
   })
 })

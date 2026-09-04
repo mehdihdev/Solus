@@ -59,7 +59,8 @@ describe('devExtensionsStore.hydrate', () => {
       manifest: fakeManifest(),
       devPath: BOM_PATH,
       loadedAt: NOW,
-      problems: []
+      problems: [],
+      acknowledged: false
     })
   })
 
@@ -76,7 +77,8 @@ describe('devExtensionsStore.hydrate', () => {
       manifest: null,
       devPath: BROKEN_PATH,
       loadedAt: NOW,
-      problems: PROBLEMS
+      problems: PROBLEMS,
+      acknowledged: false
     })
   })
 
@@ -99,7 +101,8 @@ describe('devExtensionsStore.load', () => {
       manifest: fakeManifest(),
       devPath: BOM_PATH,
       loadedAt: NOW,
-      problems: []
+      problems: [],
+      acknowledged: false
     })
   })
 
@@ -239,7 +242,9 @@ describe('selectDevRegistration', () => {
       permissions: { scopes: ['graph.read', 'sol.ask'], network: ['https://api.example.com'] }
     })
     const state = {
-      entries: { bom: { manifest, devPath: BOM_PATH, loadedAt: NOW, problems: [] } }
+      entries: {
+        bom: { manifest, devPath: BOM_PATH, loadedAt: NOW, problems: [], acknowledged: true }
+      }
     }
 
     expect(selectDevRegistration(state, 'bom')).toEqual({
@@ -252,11 +257,93 @@ describe('selectDevRegistration', () => {
   it('returns null for an unknown slug and for a registration that never validated', () => {
     const state = {
       entries: {
-        broken: { manifest: null, devPath: BROKEN_PATH, loadedAt: NOW, problems: PROBLEMS }
+        broken: {
+          manifest: null,
+          devPath: BROKEN_PATH,
+          loadedAt: NOW,
+          problems: PROBLEMS,
+          acknowledged: true
+        }
       }
     }
     expect(selectDevRegistration(state, 'bom')).toBeNull()
     expect(selectDevRegistration(state, 'broken')).toBeNull()
+  })
+
+  it('returns null until the developer acknowledged the declared permissions (SEC-H3)', () => {
+    const state = {
+      entries: {
+        bom: {
+          manifest: fakeManifest(),
+          devPath: BOM_PATH,
+          loadedAt: NOW,
+          problems: [],
+          acknowledged: false
+        }
+      }
+    }
+    expect(selectDevRegistration(state, 'bom')).toBeNull()
+  })
+})
+
+describe('devExtensionsStore.acknowledge (SEC-H3)', () => {
+  it('flips the entry, and the selector then yields the registration', async () => {
+    const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest() })
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    expect(selectDevRegistration(store.getState(), 'bom')).toBeNull()
+
+    store.getState().acknowledge('bom')
+
+    expect(store.getState().entries.bom.acknowledged).toBe(true)
+    expect(selectDevRegistration(store.getState(), 'bom')).not.toBeNull()
+  })
+
+  it('is a no-op for an unknown slug', () => {
+    const store = storeWith(fakeBridge())
+    store.getState().acknowledge('ghost')
+    expect(store.getState().entries).toEqual({})
+  })
+
+  it('survives a reload of the SAME folder but not a different folder under the same id', async () => {
+    const other = '/Users/maya/code/bom-fork'
+    const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest(), [other]: fakeManifest() })
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    store.getState().acknowledge('bom')
+
+    await store.getState().reload('bom')
+    expect(store.getState().entries.bom.acknowledged).toBe(true)
+
+    await store.getState().load(other)
+    expect(store.getState().entries.bom).toMatchObject({ devPath: other, acknowledged: false })
+    expect(selectDevRegistration(store.getState(), 'bom')).toBeNull()
+  })
+
+  it('a broken reload keeps the acknowledgement with the last good manifest', async () => {
+    const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest() })
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    store.getState().acknowledge('bom')
+    bridge.devLoad = vi.fn(async () => ({ ok: false as const, problems: PROBLEMS }))
+
+    await store.getState().reload('bom')
+
+    expect(store.getState().entries.bom.acknowledged).toBe(true)
+  })
+
+  it('hydrate never restores an acknowledgement: a restart asks again', async () => {
+    const bridge = bridgeAnswering(
+      { [BOM_PATH]: fakeManifest() },
+      { bom: { version: '1.2.0', source: 'dev', devPath: BOM_PATH } }
+    )
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    store.getState().acknowledge('bom')
+
+    await store.getState().hydrate()
+
+    expect(store.getState().entries.bom.acknowledged).toBe(false)
   })
 })
 

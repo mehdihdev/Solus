@@ -21,6 +21,11 @@ const SUB =
   'Load an unpacked extension folder to test it in this project. Dev extensions never publish and show a DEV badge everywhere.'
 const EMPTY = 'No unpacked extensions loaded.'
 const REMOVE_FAILED = 'Could not remove that extension. Please try again.'
+/** SEC-H3: the one-time acknowledgement copy for a dev registration. */
+export const ACK_COPY = 'This is your own code. It will run with every permission it declares.'
+export const ACK_BUTTON = 'Run with these permissions'
+const NO_SCOPES = 'No scopes'
+const NO_NETWORK = 'No network origins'
 
 /** A load that main attributed to no registration: shown under the button. */
 interface Notice {
@@ -58,6 +63,56 @@ function LoadNotice({ notice }: { notice: Notice | null }): React.JSX.Element | 
   )
 }
 
+function PermissionList({
+  label,
+  items,
+  empty
+}: {
+  label: string
+  items: readonly string[]
+  empty: string
+}): React.JSX.Element {
+  return (
+    <div style={{ marginTop: 4 }}>
+      <span style={{ color: 'var(--mut)' }}>{label}: </span>
+      {items.length === 0 ? (
+        <span style={{ color: 'var(--mut)' }}>{empty}</span>
+      ) : (
+        items.map((item) => (
+          <Mono key={item} size={10} style={{ marginRight: 8 }}>
+            {item}
+          </Mono>
+        ))
+      )}
+    </div>
+  )
+}
+
+/** SEC-H3: what an unacknowledged registration declares, and the one button
+ *  that lets it run. Shown instead of Reload until the developer accepts. */
+function PermissionsGate({
+  manifest,
+  busy,
+  onAcknowledge
+}: {
+  manifest: NonNullable<DevExtensionEntry['manifest']>
+  busy: boolean
+  onAcknowledge: () => void
+}): React.JSX.Element {
+  return (
+    <div data-testid="dev-ext-ack" style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5 }}>
+      <div>{ACK_COPY}</div>
+      <PermissionList label="Scopes" items={manifest.permissions.scopes} empty={NO_SCOPES} />
+      <PermissionList label="Network" items={manifest.permissions.network} empty={NO_NETWORK} />
+      <div style={{ marginTop: 8 }}>
+        <Button size="sm" onClick={onAcknowledge} disabled={busy}>
+          {ACK_BUTTON}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 interface RowProps {
   readonly slug: string
   readonly entry: DevExtensionEntry
@@ -65,6 +120,28 @@ interface RowProps {
   readonly onReload: () => void
   readonly onPick: () => void
   readonly onRemove: () => void
+  readonly onAcknowledge: () => void
+}
+
+function RowAction({
+  entry,
+  busy,
+  onReload,
+  onPick
+}: Pick<RowProps, 'entry' | 'busy' | 'onReload' | 'onPick'>): React.JSX.Element | null {
+  if (entry.manifest === null) {
+    return (
+      <Button size="sm" onClick={onPick} disabled={busy}>
+        Pick again
+      </Button>
+    )
+  }
+  if (!entry.acknowledged) return null
+  return (
+    <Button size="sm" onClick={onReload} disabled={busy}>
+      Reload
+    </Button>
+  )
 }
 
 function DevExtensionRow({
@@ -73,9 +150,11 @@ function DevExtensionRow({
   busy,
   onReload,
   onPick,
-  onRemove
+  onRemove,
+  onAcknowledge
 }: RowProps): React.JSX.Element {
   const name = entry.manifest?.extension.name ?? null
+  const gated = entry.manifest !== null && !entry.acknowledged
   return (
     <div
       className="screen-in"
@@ -91,15 +170,7 @@ function DevExtensionRow({
         <DevBadge />
         <Mono size={9.5}>{slug}</Mono>
         <span style={{ flex: 1 }} />
-        {name === null ? (
-          <Button size="sm" onClick={onPick} disabled={busy}>
-            Pick again
-          </Button>
-        ) : (
-          <Button size="sm" onClick={onReload} disabled={busy}>
-            Reload
-          </Button>
-        )}
+        <RowAction entry={entry} busy={busy} onReload={onReload} onPick={onPick} />
         <Button size="sm" kind="danger" onClick={onRemove} disabled={busy}>
           Remove
         </Button>
@@ -118,6 +189,9 @@ function DevExtensionRow({
         {entry.devPath}
       </div>
       <ProblemList problems={entry.problems} />
+      {gated && entry.manifest !== null && (
+        <PermissionsGate manifest={entry.manifest} busy={busy} onAcknowledge={onAcknowledge} />
+      )}
     </div>
   )
 }
@@ -133,6 +207,7 @@ export function DeveloperSection(): React.JSX.Element | null {
   const load = useDevExtensionsStore((s) => s.load)
   const reload = useDevExtensionsStore((s) => s.reload)
   const remove = useDevExtensionsStore((s) => s.remove)
+  const acknowledge = useDevExtensionsStore((s) => s.acknowledge)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [busy, setBusy] = useState(false)
   const hasBridge = getDesktopExtensionsBridge() !== null
@@ -185,6 +260,7 @@ export function DeveloperSection(): React.JSX.Element | null {
             onReload={() => void onReload(slug)}
             onPick={() => void onPick()}
             onRemove={() => void onRemove(slug)}
+            onAcknowledge={() => acknowledge(slug)}
           />
         ))}
       </div>

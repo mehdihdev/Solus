@@ -3,10 +3,13 @@
 // async test. Truth comes from two places and is combined in a fixed order
 // (extensions-runtime.md §4 "the server is the source of truth", §7 dev mode):
 //
-//   dev registration (renderer-held manifest + session grants, index `dev`)
-//     → server install row (pinned version, manifest, grants, enabled, policy)
-//       → local cache (index.json via the desktop bridge); missing → download
-//         the zip and hand it to main's installer ONCE, then re-read the index.
+//   server install rows (pinned version, manifest, grants, enabled, policy)
+//     → a team BLOCK on the slug refuses everything, dev registration included
+//       (SEC-H3: local code cannot shadow a team decision)
+//     → dev registration (renderer-held manifest + acknowledged session grants)
+//       shadows a non-blocked install
+//     → local cache (index.json via the desktop bridge); missing → download
+//       the zip and hand it to main's installer ONCE, then re-read the index.
 import type { ExtensionManifest, PermissionScope } from '@solus/shared-types'
 import type { ExtensionsBridge } from '../../../lib/desktopBridge'
 import type {
@@ -198,9 +201,9 @@ export async function resolveInstalledBundle(
   const { projectId, slug, view } = input
   const { bridge } = deps
   if (bridge === null) return error('no_desktop', NO_DESKTOP_MESSAGE)
-  const dev = deps.devRegistration(slug)
-  if (dev !== null) return readyFromDev(slug, projectId, view, dev)
 
+  // The registry rows come FIRST: a team block must be seen before any dev
+  // registration is honoured, and if the check cannot run we fail closed.
   let installs: readonly ExtensionInstallApi[]
   try {
     installs = await deps.listInstalls(projectId)
@@ -208,9 +211,12 @@ export async function resolveInstalledBundle(
     return error('install_lookup', "Couldn't check what this project has installed.")
   }
   const install = installs.find((row) => row.extension.slug === slug)
+  if (install?.policy.blocked) return { status: 'blocked', name: install.extension.name }
+
+  const dev = deps.devRegistration(slug)
+  if (dev !== null) return readyFromDev(slug, projectId, view, dev)
   if (install === undefined) return { status: 'not_installed' }
   const name = install.extension.name
-  if (install.policy.blocked) return { status: 'blocked', name }
   if (!install.enabled) return { status: 'disabled', name }
 
   if (!(await isCached(bridge, slug, install.version.version))) {
