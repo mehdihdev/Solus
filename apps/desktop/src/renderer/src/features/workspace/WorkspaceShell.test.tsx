@@ -2,7 +2,7 @@
 // and the verify-email banner. SOLUSDEV-152: no demo alerts, no scripted
 // magic-moment toast, no fabricated project name.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, act, fireEvent } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { WorkspaceShell } from './WorkspaceShell'
@@ -11,10 +11,68 @@ import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as switcherHook from './useProjectSwitcher'
 import { useExtensionsStore } from '../extensions/extensionsStore'
+import * as ext from '../../lib/api/resources.extensions'
+import type { Page } from '../../lib/api/client'
+import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
 
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
 vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
+
+// The rail's install poll (EXT-14). Unmocked calls reject → the hook reports
+// offline and renders no entries, which is what every pre-existing test expects.
+vi.mock('../../lib/api/resources.extensions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources.extensions')>()
+  return { ...actual, listProjectExtensions: vi.fn() }
+})
+// Rail icons: `bom` has one, everything else misses → neutral glyph.
+vi.mock('../extensions/pageview/extensionIconAsset', () => ({
+  fetchExtensionIconSvg: vi.fn(async (slug: string) =>
+    slug === 'bom' ? '<svg viewBox="0 0 16 16"><path d="M0 0h16v16H0z"/></svg>' : null
+  )
+}))
+// The page screen resolves bundles through the desktop bridge; here it only
+// needs to prove the shell mounted it with the right slug and callbacks.
+vi.mock('../extensions/pageview/ExtensionPageScreen', () => ({
+  ExtensionPageScreen: ({
+    slug,
+    onBack,
+    onOpenStore
+  }: {
+    slug: string
+    onBack?: () => void
+    onOpenStore?: () => void
+  }) => (
+    <div data-testid="ext-page-screen">
+      page:{slug}
+      <button onClick={onBack}>Back to shell</button>
+      <button onClick={onOpenStore}>Open in Store</button>
+    </div>
+  )
+}))
+
+function pageInstall(slug: string, installedAt: string, enabled = true): ext.ExtensionInstallApi {
+  const base = fakeInstall({ installed_at: installedAt, enabled })
+  return {
+    ...base,
+    extension: { ...base.extension, slug },
+    version: {
+      ...base.version,
+      manifest: fakeManifest({
+        views: { page: { entry: 'page.html', icon: `${slug}.svg`, label: slug.toUpperCase() } }
+      })
+    }
+  }
+}
+
+function installsPage(rows: ext.ExtensionInstallApi[]): Page<ext.ExtensionInstallApi[]> {
+  return { data: rows, meta: { has_next: false, next_cursor: null } }
+}
+
+/** Rail buttons in DOM order (the rail's ids are `rail-<screen>` / `rail-ext-<slug>`). */
+function railIds(): string[] {
+  return Array.from(document.querySelectorAll('[id^="rail-"]')).map((el) => el.id)
+}
 
 function renderShell(): ReturnType<typeof render> {
   return render(
@@ -88,7 +146,9 @@ describe('WorkspaceShell — chrome', () => {
     await userEvent.click(screen.getByText('Sources'))
     expect(useShellStore.getState().lastMain).toBe('sources')
   })
+})
 
+describe('WorkspaceShell — Store and project switching (SOLUSDEV-235)', () => {
   it('exposes the Store in the rail and breadcrumbs the open extension (SOLUSDEV-235)', async () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
     renderShell()
@@ -165,7 +225,9 @@ describe('WorkspaceShell — chrome', () => {
     // The topbar now shows the switched-to project as the active context.
     expect(screen.getByText('Rover MK3')).toBeInTheDocument()
   })
+})
 
+describe('WorkspaceShell — notifications', () => {
   it('shows no unread badge when offline — alerts are never fabricated', () => {
     renderShell()
     expect(screen.queryByText('2')).not.toBeInTheDocument()
@@ -192,6 +254,127 @@ describe('WorkspaceShell — chrome', () => {
     const text = container.textContent ?? ''
     expect(text).not.toMatch(/strider/i)
     expect(text).not.toMatch(/Priya|DRV8316C|U4 swap/)
+  })
+})
+
+describe('WorkspaceShell — extension rail (SOLUSDEV-235 / EXT-14)', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
+    vi.mocked(ext.listProjectExtensions).mockReset()
+  })
+
+  it('renders enabled page-view installs directly above the Store, by install time', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([
+        pageInstall('cam', '2026-09-02T00:00:00Z'),
+        pageInstall('bom', '2026-09-01T00:00:00Z'),
+        pageInstall('off', '2026-09-01T00:00:00Z', false)
+      ])
+    )
+    renderShell()
+    await screen.findByLabelText('BOM')
+    const ids = railIds()
+    expect(ids.slice(ids.indexOf('rail-team'), ids.indexOf('rail-store') + 1)).toEqual([
+      'rail-team',
+      'rail-ext-bom',
+      'rail-ext-cam',
+      'rail-store'
+    ])
+    expect(screen.queryByLabelText('OFF')).toBeNull()
+    expect(screen.getByLabelText('CAM')).toHaveAttribute('title', 'CAM')
+    // The Store keeps its emphasis; entries are ordinary rail items.
+    expect(screen.getByLabelText('Store')).toHaveAttribute('data-emphasis', 'true')
+    expect(screen.getByLabelText('BOM')).not.toHaveAttribute('data-emphasis')
+  })
+
+  it('draws the reduced manifest icon, or the neutral glyph when the icon is missing', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([
+        pageInstall('bom', '2026-09-01T00:00:00Z'),
+        pageInstall('cam', '2026-09-02T00:00:00Z')
+      ])
+    )
+    renderShell()
+    const bom = await screen.findByLabelText('BOM')
+    await waitFor(() => expect(bom.querySelector('[data-testid="extension-icon"]')).not.toBeNull())
+    const cam = screen.getByLabelText('CAM')
+    expect(cam.querySelector('[data-testid="extension-icon"]')).toBeNull()
+    expect(cam.querySelector('[data-testid="rail-ext-fallback"]')).not.toBeNull()
+  })
+
+  it('opens the extension page from its rail entry and marks the entry active', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
+    )
+    renderShell()
+    await userEvent.click(screen.getByText('Overview'))
+    await userEvent.click(await screen.findByLabelText('BOM'))
+    expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:bom')
+    expect(screen.getByTestId('ext-page-screen').parentElement?.parentElement).toHaveAttribute(
+      'data-screen-label',
+      'Extension'
+    )
+    expect(screen.getByLabelText('BOM')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByLabelText('Overview')).not.toHaveAttribute('data-active')
+    // A detail route: the main-screen memory is untouched, so Back knows where to go.
+    expect(useShellStore.getState().lastMain).toBe('overview')
+    await userEvent.click(screen.getByRole('button', { name: 'Back to shell' }))
+    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+    expect(screen.getByLabelText('Overview')).toHaveAttribute('data-active', 'true')
+  })
+
+  it('hands the page screen a way into the Store', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
+    )
+    renderShell()
+    await userEvent.click(await screen.findByLabelText('BOM'))
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Store' }))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
+  })
+})
+
+describe('WorkspaceShell — extension rail limits and project scope (EXT-14)', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
+    vi.mocked(ext.listProjectExtensions).mockReset()
+  })
+
+  it('caps the rail at eight entries — the rest stay in the Store', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage(
+        Array.from({ length: 10 }, (_, i) =>
+          pageInstall(`ext${i}`, `2026-09-01T00:00:${String(i).padStart(2, '0')}Z`)
+        )
+      )
+    )
+    renderShell()
+    await screen.findByLabelText('EXT0')
+    expect(railIds().filter((id) => id.startsWith('rail-ext-'))).toHaveLength(8)
+    expect(screen.queryByLabelText('EXT9')).toBeNull()
+  })
+
+  it('renders no entries without an open project', () => {
+    useWorkspaceStore.setState({ project: null })
+    renderShell()
+    expect(railIds().some((id) => id.startsWith('rail-ext-'))).toBe(false)
+    expect(vi.mocked(ext.listProjectExtensions)).not.toHaveBeenCalled()
+  })
+
+  it('switching project from the topbar leaves an open extension page for Overview', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
+    )
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' } })
+    renderShell()
+    await userEvent.click(await screen.findByLabelText('BOM'))
+    expect(screen.getByTestId('ext-page-screen')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
+    await userEvent.click(await screen.findByText('Rover MK3'))
+    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+    expect(useShellStore.getState().lastMain).toBe('overview')
+    expect(useWorkspaceStore.getState().project).toEqual({ id: 'p2', name: 'Rover MK3' })
   })
 })
 

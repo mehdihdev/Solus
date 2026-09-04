@@ -27,6 +27,27 @@ export type MainScreen =
   | 'billing'
   | 'settings'
 
+/** Where the shell is: a main screen (a rail item), an alert detail, or an
+ *  installed extension's page view (SOLUSDEV-235 / EXT-14). Detail routes are
+ *  render state in WorkspaceShell, never persisted; `lastMain` is the way back. */
+export type ShellRoute =
+  | { name: MainScreen }
+  | { name: 'alert'; alertId: string }
+  | { name: 'ext-page'; slug: string }
+
+/** Stable per-destination key: the screen-in transition replays per navigation,
+ *  and two extension pages are two destinations. */
+export function routeKey(route: ShellRoute): string {
+  switch (route.name) {
+    case 'alert':
+      return `alert-${route.alertId}`
+    case 'ext-page':
+      return `ext-page-${route.slug}`
+    default:
+      return route.name
+  }
+}
+
 export interface ShellState {
   toast: ShellToast | null
   lastMain: MainScreen

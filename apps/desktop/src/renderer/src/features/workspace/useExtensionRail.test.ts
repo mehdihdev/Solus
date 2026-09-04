@@ -112,9 +112,9 @@ describe('useExtensionRail — icons', () => {
     listMock.mockResolvedValue(page([install('bom', '2026-09-01T00:00:00Z')]))
     const { result } = renderHook(() => useExtensionRail({ iconTransport }))
     await waitFor(() => expect(result.current.icons.bom).toContain('<path'))
-    const [tick] = vi.mocked(useInterval).mock.calls.at(-1) as [() => void]
+    const tick = vi.mocked(useInterval).mock.calls.at(-1)?.[0]
     await act(async () => {
-      tick()
+      tick?.()
     })
     expect(fetchIcon).toHaveBeenCalledTimes(1)
   })
