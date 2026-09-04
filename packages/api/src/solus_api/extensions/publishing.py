@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -33,8 +34,34 @@ from solus_api.storage.extension_bundle_store import ExtensionBundleStore
 _SEMVER_RE = re.compile(SEMVER_PATTERN)
 _MAX_IDEMPOTENCY_KEY_LEN = 255
 
+#: Phase 4 M4 — display names a FIRST publish may not seed a publisher row with.
+#: Compared after :func:`normalize_publisher_name`, so case, spacing,
+#: punctuation and the usual lookalike glyphs make no difference.
+RESERVED_PUBLISHER_NAMES: frozenset[str] = frozenset(
+    {"solus", "solusforge", "solusrobotics", "solusteam", "solusstaff"}
+)
+#: Lookalikes folded into the ASCII letter they impersonate. Digits/symbols
+#: first, then the Cyrillic and Greek glyphs that render identically to Latin.
+_HOMOGLYPHS: dict[str, str] = {
+    "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g",
+    "|": "l", "!": "i", "$": "s", "@": "a",
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y", "і": "i",
+    "ѕ": "s", "ԁ": "d", "ɡ": "g", "ı": "i", "α": "a", "ο": "o", "ν": "v", "τ": "t", "ε": "e",
+}  # fmt: skip
+
 
 # ------------------------------------------------------------ path segments
+def normalize_publisher_name(display_name: str) -> str:
+    """Lower-case, NFKC-fold, map lookalike glyphs, keep `[a-z0-9]` only."""
+    folded = unicodedata.normalize("NFKC", display_name).lower()
+    mapped = "".join(_HOMOGLYPHS.get(ch, ch) for ch in folded)
+    return "".join(ch for ch in mapped if ch.isascii() and ch.isalnum())
+
+
+def is_reserved_publisher_name(display_name: str) -> bool:
+    return normalize_publisher_name(display_name) in RESERVED_PUBLISHER_NAMES
+
+
 def validate_semver(version: str) -> str:
     """§3: `{version}` is a semver string exactly as stored; garbage is 422."""
     if not _SEMVER_RE.match(version):
@@ -116,13 +143,19 @@ async def get_or_create_publisher(
     session: AsyncSession, *, user_id: uuid.UUID, display_name: str
 ) -> ExtensionPublisher:
     """§5.1 step 3: the row is created on the user's first publish; `display_name`
-    is seeded from the manifest then and not rewritten by later publishes."""
+    is seeded from the manifest then and not rewritten by later publishes. A
+    reserved (vendor-impersonating) name is refused at that seeding moment only
+    — `409 publisher_name_reserved` — so existing publishers are unaffected."""
     publisher = await session.scalar(
         select(ExtensionPublisher).where(
             ExtensionPublisher.user_id == user_id, ExtensionPublisher.deleted_at.is_(None)
         )
     )
     if publisher is None:
+        if is_reserved_publisher_name(display_name):
+            raise APIError(
+                409, "publisher_name_reserved", "This publisher name is reserved for Solus"
+            )
         publisher = ExtensionPublisher(user_id=user_id, display_name=display_name)
         session.add(publisher)
         await session.flush()

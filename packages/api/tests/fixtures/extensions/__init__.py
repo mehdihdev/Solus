@@ -19,7 +19,7 @@ schema_version = 1
 id = "bom"
 name = "BOM"
 version = "1.0.0"
-publisher = "Solus"
+publisher = "Ada Lovelace"
 summary = "Bill of materials from your EDA project."
 
 [views]
@@ -36,7 +36,7 @@ schema_version = 1
 id = "bom"
 name = "BOM"
 version = "1.2.0"
-publisher = "Solus"
+publisher = "Ada Lovelace"
 summary = "Bill of materials from your EDA project."
 requires = [["eda"]]
 

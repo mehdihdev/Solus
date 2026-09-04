@@ -49,9 +49,11 @@ def app(app: FastAPI) -> FastAPI:
 
 
 # ------------------------------------------------------------------ helpers
-def _bundle(version: str = "1.0.0", slug: str = "bom") -> bytes:
-    toml = MINIMAL_MANIFEST_TOML.replace('version = "1.0.0"', f'version = "{version}"').replace(
-        'id = "bom"', f'id = "{slug}"'
+def _bundle(version: str = "1.0.0", slug: str = "bom", *, publisher: str = "Ada Lovelace") -> bytes:
+    toml = (
+        MINIMAL_MANIFEST_TOML.replace('version = "1.0.0"', f'version = "{version}"')
+        .replace('id = "bom"', f'id = "{slug}"')
+        .replace('publisher = "Ada Lovelace"', f'publisher = "{publisher}"')
     )
     return build_zip(with_manifest(minimal_files(), toml))
 
@@ -136,7 +138,7 @@ async def test_publish_creates_rows_bytes_and_event(
     publisher = await db.scalar(select(ExtensionPublisher))
     assert publisher is not None
     assert publisher.user_id == uuid.UUID(user_id)
-    assert publisher.display_name == "Solus"  # seeded from extension.publisher
+    assert publisher.display_name == "Ada Lovelace"  # seeded from extension.publisher
     extension = await db.scalar(select(Extension))
     assert extension is not None
     assert (extension.slug, extension.name, extension.publisher_id) == (
@@ -337,6 +339,53 @@ async def test_invalid_bundle_is_422_bundle_invalid_with_problems(
     assert await db.scalar(select(ExtensionVersion)) is None
     assert await db.scalar(select(ExtensionPublisher)) is None
     assert list(app.state.artifact_store.root.iterdir()) == []
+
+
+# ------------------------------------------------- M4 publisher impersonation
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Solus",
+        "S0lus",
+        "Solus  Forge",
+        "solus-forge",
+        "SOLUS Robotics",
+        "Solus Team",
+        "Solus_Staff",
+    ],
+)
+async def test_reserved_publisher_name_is_409_at_first_publish(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, name: str
+) -> None:
+    """Phase 4 M4: a first publish cannot seed a publisher row whose display name
+    impersonates the vendor — case, spacing, punctuation and digit lookalikes
+    are all normalized away first. Nothing is created."""
+    resp = await _publish(client, alice_headers, _bundle(publisher=name))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "publisher_name_reserved"
+    assert await db.scalar(select(ExtensionPublisher)) is None
+    assert await db.scalar(select(Extension)) is None
+
+
+async def test_legitimate_publisher_name_passes(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    resp = await _publish(client, alice_headers, _bundle(publisher="Ada Lovelace"))
+    assert resp.status_code == 202, resp.text
+    publisher = await db.scalar(select(ExtensionPublisher))
+    assert publisher is not None and publisher.display_name == "Ada Lovelace"
+
+
+async def test_existing_publisher_is_unaffected_by_the_reserved_name_rule(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """The denylist gates ROW CREATION only: a publisher row that already exists
+    (vendor-seeded, or pre-dating the rule) keeps publishing."""
+    alice = await me(client, alice_headers)
+    db.add(ExtensionPublisher(user_id=uuid.UUID(alice["id"]), display_name="Solus"))
+    await db.commit()
+    resp = await _publish(client, alice_headers, _bundle(publisher="Solus"))
+    assert resp.status_code == 202, resp.text
 
 
 async def test_slug_owned_by_another_publisher_is_409_slug_taken(

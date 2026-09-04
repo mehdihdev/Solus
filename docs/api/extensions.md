@@ -797,6 +797,7 @@ L3). Exceeded → `429 rate_limited` + `Retry-After`; every 429 is a data event 
 | 409  | `slug_taken`               | §5.1 — slug owned by another publisher                                                                                                                       |
 | 409  | `version_exists`           | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                              |
 | 409  | `idempotency_conflict`     | §5.1 — same `Idempotency-Key`, different bytes                                                                                                               |
+| 409  | `publisher_name_reserved`  | §5.1 — a FIRST publish whose `extension.publisher` normalizes to a reserved vendor name (`solus`, `solus forge`, …); existing publishers unaffected              |
 | 409  | `grants_required`          | §6.2 — version change widens permissions beyond current grants; `details` lists the additions                                                                |
 | 411  | `length_required`          | §5.1 without (or with a malformed) `Content-Length`                                                                                                          |
 | 413  | `payload_too_large`        | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                      |
