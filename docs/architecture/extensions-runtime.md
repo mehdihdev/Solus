@@ -169,9 +169,9 @@ sequenceDiagram
   U->>S: Grant and install
   S->>A: PUT /projects/{project_id}/extensions/{id} { version, granted_scopes, granted_network } → 201
   A-->>S: install row { version, enabled, granted_scopes, granted_network }
-  S->>M: IPC ext:install { id, version }
-  M->>A: GET /extensions/{id}/versions (content_hash), then GET /extensions/{id}/versions/{version}/bundle (zip ≤ 25 MiB; abort past cap)
-  M->>M: sha256(zip) == content_hash == X-Solus-Content-Hash (both fetched by MAIN, never trusted from renderer)
+  S->>A: GET /extensions/{id}/versions/{version}/bundle (zip ≤ 25 MiB; X-Solus-Content-Hash)
+  S->>M: IPC ext:install { id, version, contentHash: <from the install row>, bytes }
+  M->>M: sha256(bytes) == contentHash, else nothing is written (main has no API session of its own)
   M->>M: zip guards → extract into ~/.solus/extensions/.tmp/<id>-<version>-<nonce>/
   M->>M: rename tmp → ~/.solus/extensions/<id>/<version>/ (atomic, 0700 dirs / 0600 files)
   M->>M: index.json ← { id, version, sha256, files: { path: sha256 }, installed_at } (atomic temp+rename)
@@ -189,11 +189,15 @@ Rules the sequence encodes:
   is garbage (main sweeps it at launch); an install row without a cache entry is a download that
   has not happened yet (the frame shows `loading` and the installer runs). Deleting
   `~/.solus/extensions/` loses nothing but time.
-- **Hash verification is against the server's `content_hash`, fetched by main.** The renderer passes
-  only `{ id, version }`. Main reads `content_hash` from `GET /extensions/{id}/versions` and requires
-  it to equal both the `X-Solus-Content-Hash` header on the bundle response and the sha256 of the
-  bytes it received. Main does not accept a hash from the renderer, because a compromised renderer
-  must not be able to bless bytes.
+- **Hash verification happens in main against the server's `content_hash`.** As shipped
+  (SOLUSDEV-235 EXT-05/EXT-13): the renderer — which holds the user's session; main has no API
+  client — fetches the bundle and passes `{ id, version, contentHash, bytes }` over IPC, where
+  `contentHash` is the value from the server's install/version row. Main refuses to write anything
+  unless `sha256(bytes) === contentHash` and the bundle's own `extension.toml` names the same
+  id/version. A compromised renderer could therefore present a self-consistent hash+bytes pair; the
+  protective boundary against that is the sandboxed frame and the bridge (§3, §6), not the cache
+  write. Moving the fetch into main behind its own session is a follow-up if that residual is judged
+  unacceptable.
 - **The archive is treated like any upload (§7)**: entry count cap (2,000), per-entry expanded cap
   (bundle-level caps from `MANIFEST_LIMITS`), total expanded ≤ 25 MiB (zip-bomb guard), entry names
   must be relative, traversal-free, backslash-free, no symlinks, no absolute paths, suffix in the
