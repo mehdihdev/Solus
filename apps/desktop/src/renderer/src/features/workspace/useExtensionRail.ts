@@ -9,6 +9,9 @@
 // (extensionIconAsset) and reduced by the host's SVG reducer BEFORE it is
 // cached — the rail never holds extension bytes the reducer has not passed.
 // Any miss caches `null`, which the rail draws as the neutral glyph.
+//
+// Developer registrations (EXT-20) come from the dev store, not the API:
+// merged after the installs, marked `dev`, icon never fetched (neutral glyph).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useInterval } from '../../lib/useInterval'
 import { listProjectExtensions, type ExtensionInstallApi } from '../../lib/api/resources.extensions'
@@ -18,8 +21,14 @@ import {
   type IconAssetTransport
 } from '../extensions/pageview/extensionIconAsset'
 import { reduceSvg } from '../extensions/host/svgReduce'
+import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
-import { railEntriesFrom, type RailExtensionEntry } from './extensionRail'
+import {
+  devRailEntriesFrom,
+  mergeRailEntries,
+  railEntriesFrom,
+  type RailExtensionEntry
+} from './extensionRail'
 
 /** Same cadence as the Sources page and the bridge pill. */
 export const EXTENSION_RAIL_POLL_MS = 10_000
@@ -126,6 +135,7 @@ function useRailIcons(
 
   useEffect(() => {
     for (const entry of entries) {
+      if (entry.dev) continue
       const key = iconKey(entry)
       if (requested.current.has(key)) continue
       requested.current.add(key)
@@ -144,8 +154,16 @@ function useRailIcons(
   )
 }
 
+/** The session's page-view developer registrations, recomputed as the store changes. */
+function useDevRailEntries(): readonly RailExtensionEntry[] {
+  const devState = useDevExtensionsStore()
+  return useMemo(() => devRailEntriesFrom(devState), [devState])
+}
+
 export function useExtensionRail(deps: ExtensionRailDeps = {}): ExtensionRailData {
-  const { status, entries } = useRailEntries()
+  const { status, entries: installed } = useRailEntries()
+  const dev = useDevRailEntries()
+  const entries = useMemo(() => mergeRailEntries(installed, dev), [installed, dev])
   const icons = useRailIcons(entries, deps.iconTransport)
   return { status, entries, icons }
 }

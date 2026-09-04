@@ -15,6 +15,7 @@ import * as ext from '../../lib/api/resources.extensions'
 import type { Page } from '../../lib/api/client'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
 import { catalogItem, installRow, manifest } from '../extensions/testing/fixtures'
+import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
@@ -347,6 +348,47 @@ describe('WorkspaceShell — extension rail (SOLUSDEV-235 / EXT-14)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open in Store' }))
     expect(useShellStore.getState().lastMain).toBe('store')
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
+  })
+})
+
+describe('WorkspaceShell — developer registrations in the rail (EXT-20)', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
+    vi.mocked(ext.listProjectExtensions).mockReset()
+    useDevExtensionsStore.getState().reset()
+    useDevExtensionsStore.setState({
+      entries: {
+        lab: {
+          manifest: fakeManifest({
+            extension: { ...fakeManifest().extension, id: 'lab', name: 'Lab' },
+            views: { page: { entry: 'page.html', icon: 'lab.svg', label: 'Lab (dev)' } }
+          }),
+          devPath: '/code/lab',
+          loadedAt: '2026-09-05T00:00:00Z',
+          problems: []
+        }
+      }
+    })
+  })
+
+  it('draws a page-view dev registration after the installs with a DEV corner mark and the neutral glyph', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
+    )
+    renderShell()
+    const lab = await screen.findByLabelText('Lab (dev)')
+    await screen.findByLabelText('BOM')
+    const ids = railIds()
+    expect(ids.slice(ids.indexOf('rail-team'), ids.indexOf('rail-store') + 1)).toEqual([
+      'rail-team',
+      'rail-ext-bom',
+      'rail-ext-lab',
+      'rail-store'
+    ])
+    expect(lab.querySelector('[data-testid="rail-dev-mark"]')).toHaveTextContent('DEV')
+    expect(lab.querySelector('[data-testid="rail-ext-fallback"]')).not.toBeNull()
+    expect(screen.getByLabelText('BOM').querySelector('[data-testid="rail-dev-mark"]')).toBeNull()
+    useDevExtensionsStore.getState().reset()
   })
 })
 

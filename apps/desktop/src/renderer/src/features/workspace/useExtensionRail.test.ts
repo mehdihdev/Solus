@@ -10,6 +10,7 @@ import * as ext from '../../lib/api/resources.extensions'
 import type { Page } from '../../lib/api/client'
 import { useInterval } from '../../lib/useInterval'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
+import { useDevExtensionsStore, type DevExtensionEntry } from '../devExtensions/devExtensionsStore'
 import { useExtensionRail, EXTENSION_RAIL_POLL_MS } from './useExtensionRail'
 
 vi.mock('../../lib/useInterval', () => ({ useInterval: vi.fn() }))
@@ -50,8 +51,24 @@ const iconTransport = { getToken: async () => null, fetchImpl: fetchIcon }
 
 const listMock = vi.mocked(ext.listProjectExtensions)
 
+/** A validated dev-store row whose manifest declares the given views. */
+function devEntry(
+  slug: string,
+  views: ReturnType<typeof fakeManifest>['views'] = {
+    page: { entry: 'page.html', icon: `${slug}.svg`, label: `${slug.toUpperCase()} (dev)` }
+  }
+): DevExtensionEntry {
+  return {
+    manifest: fakeManifest({ extension: { ...fakeManifest().extension, id: slug }, views }),
+    devPath: `/code/${slug}`,
+    loadedAt: '2026-09-05T00:00:00Z',
+    problems: []
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  useDevExtensionsStore.getState().reset()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover' } })
   useAuthStore.setState({ status: 'authenticated' })
@@ -155,5 +172,49 @@ describe('useExtensionRail — refresh', () => {
     await act(async () => release(page([install('cam', '2026-09-02T00:00:00Z')])))
     await waitFor(() => expect(result.current.entries.map((e) => e.slug)).toEqual(['cam']))
     expect(listMock).toHaveBeenLastCalledWith('p2', undefined)
+  })
+})
+
+describe('useExtensionRail — developer registrations (EXT-20)', () => {
+  it('appends page-view dev registrations after the installs, marked dev, without fetching an icon', async () => {
+    listMock.mockResolvedValue(page([install('bom', '2026-09-01T00:00:00Z')]))
+    useDevExtensionsStore.setState({ entries: { lab: devEntry('lab') } })
+    const { result } = renderHook(() => useExtensionRail({ iconTransport }))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.entries.map((e) => [e.slug, e.dev, e.label])).toEqual([
+      ['bom', false, 'BOM'],
+      ['lab', true, 'LAB (dev)']
+    ])
+    await waitFor(() => expect(result.current.icons.bom).toContain('<path'))
+    expect(result.current.icons.lab).toBeNull()
+    expect(fetchIcon).toHaveBeenCalledTimes(1)
+    expect(String(fetchIcon.mock.calls[0]?.[0])).not.toContain('lab.svg')
+  })
+
+  it('lets a dev registration shadow the registry install of the same slug', async () => {
+    listMock.mockResolvedValue(
+      page([install('bom', '2026-09-01T00:00:00Z'), install('cam', '2026-09-02T00:00:00Z')])
+    )
+    useDevExtensionsStore.setState({ entries: { bom: devEntry('bom') } })
+    const { result } = renderHook(() => useExtensionRail({ iconTransport }))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.entries.map((e) => [e.slug, e.dev])).toEqual([
+      ['cam', false],
+      ['bom', true]
+    ])
+  })
+
+  it('ignores dev registrations without a page view, and reacts when one is removed', async () => {
+    listMock.mockResolvedValue(page([]))
+    useDevExtensionsStore.setState({
+      entries: {
+        widgety: devEntry('widgety', { widget: { entry: 'w.html', preferred: 'standard' } }),
+        lab: devEntry('lab')
+      }
+    })
+    const { result } = renderHook(() => useExtensionRail({ iconTransport }))
+    await waitFor(() => expect(result.current.entries.map((e) => e.slug)).toEqual(['lab']))
+    act(() => useDevExtensionsStore.setState({ entries: {} }))
+    expect(result.current.entries).toEqual([])
   })
 })

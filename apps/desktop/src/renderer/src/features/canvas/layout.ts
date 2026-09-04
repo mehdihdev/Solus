@@ -70,6 +70,14 @@ export function slotSpan(size: WidgetSlotSize): number {
   return SPAN[size]
 }
 
+/** Trust extra extension slugs (session-only developer registrations) on top
+ *  of the install snapshot. An unknown snapshot stays unknown — it already keeps
+ *  every `ext:` ref — and nothing to add returns the input itself. */
+export function withExtRefs(available: AvailableRefs, slugs: readonly string[]): AvailableRefs {
+  if (available.ext === null || slugs.length === 0) return available
+  return { builtin: available.builtin, ext: new Set([...available.ext, ...slugs]) }
+}
+
 function isAvailable(ref: WidgetRef, available: AvailableRefs): boolean {
   if (ref.kind === 'builtin') return available.builtin.has(ref.id)
   return available.ext === null || available.ext.has(ref.slug)

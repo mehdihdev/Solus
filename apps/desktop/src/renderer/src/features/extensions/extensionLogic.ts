@@ -370,7 +370,8 @@ export function settingValuesOf(
 
 /** Header meta line: "Solus · v1.0.0 · — installs · updated 2w ago". */
 export function installsLabel(installs: number | null): string {
-  return installs === null ? '— installs' : `${installs.toLocaleString()} installs`
+  if (installs === null) return '— installs'
+  return `${installs.toLocaleString()} ${installs === 1 ? 'install' : 'installs'}`
 }
 
 /** External links become anchors only when they are https — manifests are

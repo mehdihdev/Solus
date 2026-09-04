@@ -6,13 +6,16 @@
 // its own `+ Add widget` beside it — ONE button, never two), Store navigation
 // and the project's connected source kinds go in as props so the picker's
 // requirement hints are judged against real sources, never assumed met
-// (docs/wireflows/widget-canvas.md "Header", "Picker").
+// (docs/wireflows/widget-canvas.md "Header", "Picker"). Developer registrations
+// with a widget view (EXT-20) go in as the picker's Developer section.
 import { useMemo } from 'react'
 import type { Focus, SourceKind } from '@solus/shared-types'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
 import type { BenchSession } from '../../lib/api/resources'
-import { WidgetCanvas } from '../canvas'
+import { WidgetCanvas, type DevWidgetEntry } from '../canvas'
+import { extRef } from '../canvas/layout'
+import { selectDevRegistration, useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import { connectedKinds } from '../extensions/extensionLogic'
 import { useProjectSources } from '../project/useProjectSources'
 import type { MainScreen } from '../workspace/shellStore'
@@ -103,9 +106,35 @@ function useConnectedKinds(): ReadonlySet<SourceKind> | null {
   )
 }
 
+type DevStoreState = Parameters<typeof selectDevRegistration>[0]
+
+/** Live developer registrations with a widget view, as picker rows (`ext:<slug>`
+ *  refs — the frame resolver serves them from the dev path). */
+function devWidgetEntriesFrom(state: DevStoreState): readonly DevWidgetEntry[] {
+  return Object.keys(state.entries).flatMap((slug) => {
+    const manifest = selectDevRegistration(state, slug)?.manifest
+    const widget = manifest?.views.widget
+    if (manifest === undefined || widget === undefined) return []
+    return [
+      {
+        ref: extRef(slug),
+        name: manifest.extension.name,
+        path: state.entries[slug]?.devPath ?? '',
+        size: { preferred: widget.preferred, minimum: widget.minimum }
+      }
+    ]
+  })
+}
+
+function useDevWidgets(): readonly DevWidgetEntry[] {
+  const devState = useDevExtensionsStore()
+  return useMemo(() => devWidgetEntriesFrom(devState), [devState])
+}
+
 export function BenchCanvasHost(props: BenchCanvasHostProps): React.JSX.Element {
   const { projectId, focus, onFocusChange, sessions, onNavigate } = props
   const kinds = useConnectedKinds()
+  const dev = useDevWidgets()
   return (
     <WidgetCanvas
       projectId={projectId}
@@ -114,6 +143,7 @@ export function BenchCanvasHost(props: BenchCanvasHostProps): React.JSX.Element 
       header={<BenchHeader focus={focus} sessions={sessions} onNavigate={onNavigate} />}
       onOpenStore={onNavigate ? () => onNavigate('store') : undefined}
       connectedKinds={kinds}
+      dev={dev}
     />
   )
 }

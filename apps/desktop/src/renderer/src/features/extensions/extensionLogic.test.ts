@@ -314,6 +314,11 @@ describe('installsLabel', () => {
     expect(installsLabel(null)).toBe('— installs')
     expect(installsLabel(1200)).toBe('1,200 installs')
   })
+
+  it('uses the singular for exactly one install', () => {
+    expect(installsLabel(1)).toBe('1 install')
+    expect(installsLabel(0)).toBe('0 installs')
+  })
 })
 
 describe('isSafeExternalUrl', () => {
