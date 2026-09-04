@@ -352,6 +352,8 @@ async def test_invalid_bundle_is_422_bundle_invalid_with_problems(
         "SOLUS Robotics",
         "Solus Team",
         "Solus_Staff",
+        "Ѕоlus",  # Cyrillic Ѕ + о
+        "Ｓolus",  # fullwidth S (NFKC)
     ],
 )
 async def test_reserved_publisher_name_is_409_at_first_publish(
