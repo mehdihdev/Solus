@@ -475,7 +475,7 @@ async def post_message(
     connector_registry: RegistryDep,
     # SOLUSDEV-235 (extensions.md §9): `X-Solus-Extension` resolved as a
     # dependency, so an unauthorized header is 403 `scope_denied` BEFORE admission.
-    extension_id: ExtensionAttribution,
+    attribution: ExtensionAttribution,
 ) -> StreamingResponse:
     """Append the user's message and stream SOL's reply as Server-Sent Events. The user
     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
@@ -514,12 +514,15 @@ async def post_message(
         session, conversation_id=conversation_id, project_id=ctx.project.id
     )
     history = tuple(TurnView(role=t.role.value, content=t.content) for t in prior)
+    # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
+    # on `attrs`; the Solus-authored framing exists only in model input.
     await SERVICE.append_turn(
         session,
         conversation_id=conversation_id,
         project_id=ctx.project.id,
         role=TurnRole.USER,
         content=content,
+        attrs={"extension_slug": attribution.slug} if attribution else None,
     )
     emit_event(
         session,
@@ -597,8 +600,10 @@ async def post_message(
         # as a pre-GA infrastructure blocker, not silently accepted.
         redis=getattr(request.app.state, "redis", None),
         enqueue=getattr(request.app.state, "enqueue", None),
-        # Attribution only: the debit stays on `user_id` (ADR-018/024).
-        extension_id=extension_id,
+        # Attribution only: the debit stays on `user_id` (ADR-018/024). The slug
+        # frames the live message as an extension REQUEST (Phase 4 H2).
+        extension_id=attribution.extension_id if attribution else None,
+        extension_slug=attribution.slug if attribution else None,
     )
     stream = _run_and_persist(
         runner=runner,
