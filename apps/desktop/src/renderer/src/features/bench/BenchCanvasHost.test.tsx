@@ -2,12 +2,14 @@
 // status line (honest about unknown vs. nothing streaming), the connected
 // source kinds handed to the picker, and Store navigation. The canvas itself
 // is mocked here; features/canvas carries its own tests.
-import { describe, it, expect, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { Focus, SourceKind } from '@solus/shared-types'
 import type { WidgetCanvasProps } from '../canvas'
 import type { BenchSession, Source } from '../../lib/api/resources'
 import type { ProjectSourcesData } from '../project/useProjectSources'
+import { fakeManifest } from '../extensions/frame/testing/fixtures'
+import { useDevExtensionsStore, type DevExtensionEntry } from '../devExtensions/devExtensionsStore'
 import { BenchCanvasHost } from './BenchCanvasHost'
 
 vi.mock('../canvas', () => ({
@@ -24,6 +26,9 @@ vi.mock('../canvas', () => ({
           open store
         </button>
       )}
+      <span data-testid="dev">
+        {(props.dev ?? []).map((d) => `${d.ref}|${d.name}|${d.path}|${d.size.preferred}`).join(';')}
+      </span>
     </div>
   )
 }))
@@ -39,6 +44,23 @@ const FOCUS: Focus = {
 }
 
 const SESSION = { id: 's1', device_ids: [] } as unknown as BenchSession
+
+function devEntry(
+  slug: string,
+  views: ReturnType<typeof fakeManifest>['views'] = {
+    widget: { entry: 'w.html', preferred: 'wide', minimum: 'standard' }
+  }
+): DevExtensionEntry {
+  return {
+    manifest: fakeManifest({
+      extension: { ...fakeManifest().extension, id: slug, name: slug.toUpperCase() },
+      views
+    }),
+    devPath: `/code/${slug}`,
+    loadedAt: '2026-09-05T00:00:00Z',
+    problems: []
+  }
+}
 
 function sources(status: ProjectSourcesData['status'], types: string[] = []): void {
   sourcesMock.mockReturnValue({
@@ -117,5 +139,34 @@ describe('BenchCanvasHost', () => {
     const onNavigate = mount()
     fireEvent.click(screen.getByRole('button', { name: 'open store' }))
     expect(onNavigate).toHaveBeenCalledWith('store')
+  })
+})
+
+describe('BenchCanvasHost — developer registrations (EXT-20)', () => {
+  beforeEach(() => useDevExtensionsStore.getState().reset())
+
+  it('lists only validated registrations with a widget view, as picker rows', () => {
+    sources('ready')
+    useDevExtensionsStore.setState({
+      entries: {
+        lab: devEntry('lab'),
+        'page-only': devEntry('page-only', {
+          page: { entry: 'p.html', icon: 'i.svg', label: 'Page' }
+        }),
+        broken: { manifest: null, devPath: '/code/broken', loadedAt: 'x', problems: ['nope'] }
+      }
+    })
+    mount()
+    expect(screen.getByTestId('dev')).toHaveTextContent('ext:lab|LAB|/code/lab|wide')
+    expect(screen.getByTestId('dev').textContent?.split(';')).toHaveLength(1)
+  })
+
+  it('hands the canvas the session’s dev widgets and drops them when the registration goes', () => {
+    sources('ready')
+    useDevExtensionsStore.setState({ entries: { lab: devEntry('lab') } })
+    mount()
+    expect(screen.getByTestId('dev')).toHaveTextContent('ext:lab|LAB|/code/lab|wide')
+    act(() => useDevExtensionsStore.setState({ entries: {} }))
+    expect(screen.getByTestId('dev')).toHaveTextContent('')
   })
 })

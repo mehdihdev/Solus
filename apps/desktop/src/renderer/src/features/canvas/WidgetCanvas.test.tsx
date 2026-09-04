@@ -8,6 +8,7 @@ import { useEffect } from 'react'
 import type { Focus, WidgetManifest, WidgetProps } from '@solus/shared-types'
 import type { WidgetLayoutApi, WidgetLayoutSlotApi } from '../../lib/api/resources.extensions'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
+import type { DevWidgetEntry } from './AddWidgetPicker'
 import { OFFLINE_NOTE, prunedNote } from './canvasCopy'
 import { TOO_SMALL } from './SlotMenu'
 import type { AvailableWidgetsDeps } from './useAvailableWidgets'
@@ -104,7 +105,7 @@ function harness(
   }
 }
 
-function mount(h: Harness, focus: Focus | null = FOCUS): void {
+function mount(h: Harness, focus: Focus | null = FOCUS, dev?: readonly DevWidgetEntry[]): void {
   render(
     <WidgetCanvas
       projectId="p1"
@@ -113,8 +114,16 @@ function mount(h: Harness, focus: Focus | null = FOCUS): void {
       header={<h1>Live Bench</h1>}
       layoutDeps={h.layoutDeps}
       widgetsDeps={h.widgetsDeps}
+      dev={dev}
     />
   )
+}
+
+const DEV_LAB: DevWidgetEntry = {
+  ref: 'ext:lab',
+  name: 'Lab',
+  path: '/code/lab',
+  size: { preferred: 'compact' }
 }
 
 const flush = (): Promise<void> => act(async () => {})
@@ -325,5 +334,55 @@ describe('WidgetCanvas — picker', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add Reference' }))
     expect(slots().map((s) => s.dataset.ref)).toEqual(['builtin:reference'])
     expect(screen.getByText('reference body')).toBeInTheDocument()
+  })
+})
+
+describe('WidgetCanvas — developer registrations (EXT-20)', () => {
+  it('lists a dev widget under Developer; adding it places an ext slot and persists the ref', async () => {
+    const h = harness(null)
+    mount(h, FOCUS, [DEV_LAB])
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: /add widget/i }))
+    const dialog = screen.getByRole('dialog', { name: 'Add widget' })
+    const dev = within(within(dialog).getByRole('region', { name: 'Developer (this session)' }))
+    expect(dev.getByText('/code/lab')).toBeInTheDocument()
+    fireEvent.click(dev.getByRole('button', { name: 'Add Lab' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const added = slots()[1]
+    expect(added).toHaveAttribute('data-ref', 'ext:lab')
+    expect(added).toHaveAttribute('data-span', '1')
+    expect(within(added).getByTestId('extension-frame-mock')).toHaveAttribute('data-slug', 'lab')
+    await tick(SAVE_DEBOUNCE_MS)
+    expect(h.layoutDeps.save).toHaveBeenCalledWith('p1', [
+      { ref: 'builtin:livebench', size: 'wide' },
+      { ref: 'ext:lab', size: 'compact' }
+    ])
+  })
+
+  it('keeps a saved slot that exists only as a dev registration; without it the ref is pruned', async () => {
+    const stored: WidgetLayoutSlotApi[] = [
+      { ref: 'builtin:livebench', size: 'wide' },
+      { ref: 'ext:lab', size: 'compact' }
+    ]
+    const h = harness(stored)
+    const { unmount } = render(
+      <WidgetCanvas
+        projectId="p1"
+        focus={FOCUS}
+        onFocusChange={h.onFocusChange}
+        layoutDeps={h.layoutDeps}
+        widgetsDeps={h.widgetsDeps}
+        dev={[DEV_LAB]}
+      />
+    )
+    await flush()
+    expect(slots().map((s) => s.dataset.ref)).toEqual(['builtin:livebench', 'ext:lab'])
+    expect(screen.queryByText(prunedNote(1))).toBeNull()
+    unmount()
+
+    mount(harness(stored))
+    await flush()
+    expect(slots().map((s) => s.dataset.ref)).toEqual(['builtin:livebench'])
+    expect(screen.getByText(prunedNote(1))).toBeInTheDocument()
   })
 })

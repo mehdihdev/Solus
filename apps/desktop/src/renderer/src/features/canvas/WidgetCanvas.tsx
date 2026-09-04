@@ -3,12 +3,13 @@
 // consumer of CTR-01 `discoverWidgets()`: built-in widgets render directly,
 // extension widgets through ExtensionFrame in `widget` mode. Focus flows
 // through here — a widget reports, the canvas's owner decides (CTR-01).
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Focus, SourceKind, WidgetSlotSize } from '@solus/shared-types'
 import { Button } from '../../components/ui/Button'
 import { Icons } from '../../components/ui/icons.constants'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { AddWidgetPicker, type DevWidgetEntry } from './AddWidgetPicker'
+import { parseWidgetRef, withExtRefs, type AvailableRefs } from './layout'
 import { resolveSlotTarget } from './slotTarget'
 import { useAvailableWidgets, type AvailableWidgetsDeps } from './useAvailableWidgets'
 import { useWidgetLayout, type SaveState, type WidgetLayoutDeps } from './useWidgetLayout'
@@ -25,6 +26,8 @@ export interface WidgetCanvasProps {
   readonly onOpenStore?: () => void
   /** For the picker's requirement hints; unknown = unmet. */
   readonly connectedKinds?: ReadonlySet<SourceKind> | null
+  /** Session-only developer registrations with a widget view (EXT-20): listed
+   *  in the picker's Developer section and trusted by the pruner while loaded. */
   readonly dev?: readonly DevWidgetEntry[]
   readonly layoutDeps?: WidgetLayoutDeps
   readonly widgetsDeps?: AvailableWidgetsDeps
@@ -115,10 +118,24 @@ function useScrollToAdded(
   }, [])
 }
 
+const NO_DEV: readonly DevWidgetEntry[] = []
+
+/** The install snapshot plus the dev registrations' slugs — what the pruner may keep. */
+function useAvailableRefs(available: AvailableRefs, dev: readonly DevWidgetEntry[]): AvailableRefs {
+  return useMemo(() => {
+    const slugs = dev.flatMap((entry) => {
+      const parsed = parseWidgetRef(entry.ref)
+      return parsed?.kind === 'ext' ? [parsed.slug] : []
+    })
+    return withExtRefs(available, slugs)
+  }, [available, dev])
+}
+
 export function WidgetCanvas(props: WidgetCanvasProps): React.JSX.Element {
-  const { projectId, focus, onFocusChange, header, layoutDeps, widgetsDeps } = props
+  const { projectId, focus, onFocusChange, header, layoutDeps, widgetsDeps, dev = NO_DEV } = props
   const widgets = useAvailableWidgets(projectId, widgetsDeps)
-  const layout = useWidgetLayout(projectId, widgets.available, layoutDeps)
+  const available = useAvailableRefs(widgets.available, dev)
+  const layout = useWidgetLayout(projectId, available, layoutDeps)
   const [pickerOpen, setPickerOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const refs = layout.layout.map((s) => s.ref)
@@ -183,7 +200,7 @@ export function WidgetCanvas(props: WidgetCanvasProps): React.JSX.Element {
         <AddWidgetPicker
           builtins={widgets.builtins}
           extensions={widgets.extensions}
-          dev={props.dev}
+          dev={dev}
           onCanvas={new Set(refs)}
           connectedKinds={props.connectedKinds}
           onAdd={add}

@@ -18,6 +18,8 @@ import {
   removeSlot,
   resizeSlot,
   slotSpan,
+  withExtRefs,
+  type AvailableRefs,
   type WidgetLayout
 } from './layout'
 
@@ -124,6 +126,26 @@ describe('pruneLayout', () => {
     const result = pruneLayout(stored, { builtin: available.builtin, ext: null })
     expect(result.layout).toEqual([{ ref: 'ext:mystery', size: 'standard' }])
     expect(result.dropped).toEqual(['builtin:gone'])
+  })
+})
+
+describe('withExtRefs', () => {
+  const known: AvailableRefs = { builtin: new Set(['livebench']), ext: new Set(['bom']) }
+
+  it('adds session-only (developer) slugs to the trusted extension set', () => {
+    const merged = withExtRefs(known, ['lab'])
+    expect([...(merged.ext ?? [])].sort()).toEqual(['bom', 'lab'])
+    expect(merged.builtin).toBe(known.builtin)
+    expect(pruneLayout([{ ref: 'ext:lab', size: 'standard' }], merged).dropped).toEqual([])
+  })
+
+  it('keeps the unknown snapshot unknown (everything is already kept)', () => {
+    const unknown: AvailableRefs = { builtin: known.builtin, ext: null }
+    expect(withExtRefs(unknown, ['lab'])).toBe(unknown)
+  })
+
+  it('returns the input itself when there is nothing to add', () => {
+    expect(withExtRefs(known, [])).toBe(known)
   })
 })
 
