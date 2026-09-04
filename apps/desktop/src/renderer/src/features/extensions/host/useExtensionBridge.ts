@@ -70,7 +70,8 @@ function subscribeStores(host: BridgeHost, projectId: string): () => void {
       const next = s.project?.id
       if (next === undefined || next === sentProject) return
       sentProject = next
-      host.sendEvent('project.changed', { projectId: next })
+      // The project UUID never crosses to the frame (L2); the frame is remounted anyway.
+      host.sendEvent('project.changed', {})
     })
   ]
   return () => unsubs.forEach((u) => u())

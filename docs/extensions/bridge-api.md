@@ -52,7 +52,7 @@ Until `ui.ready` completes, the only event delivered is `init`. Requests are ans
   data: {
     extensionId: string,                                  // your manifest id
     version: string,                                      // your semver, or 'dev'
-    projectId: string,                                    // opaque display/cache key — never accepted back as scope
+    projectHandle: string,                                // per-mount random opaque handle — never accepted back as scope
     settings: Record<string, boolean | number | string>,  // your declared fields, defaults applied
     theme: Record<string, string>,                        // CSS variables, see Theme below
     focus: Focus | null,                                  // the shared focus (no scope needed for this snapshot)
@@ -110,11 +110,11 @@ marked `?`; defaults in parentheses.
 
 ### Unscoped
 
-| Method            | Params                       | Result                                 | Notes                                                                        |
-| ----------------- | ---------------------------- | -------------------------------------- | ---------------------------------------------------------------------------- |
-| `ui.ready`        | `{}`                         | `{}`                                   | Completes the handshake                                                      |
-| `settings.get`    | `{}`                         | `Record<key, boolean\|number\|string>` | Your own declared fields (a fresh copy)                                      |
-| `ui.openExternal` | `{ url }` — https URL ≤ 2048 | `{}`                                   | Opens the OS browser. Non-https → `invalid_params`. The only way to link out |
+| Method            | Params                       | Result                                 | Notes                                                                                                                                                                                                                  |
+| ----------------- | ---------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ui.ready`        | `{}`                         | `{}`                                   | Completes the handshake                                                                                                                                                                                                |
+| `settings.get`    | `{}`                         | `Record<key, boolean\|number\|string>` | Your own declared fields (a fresh copy)                                                                                                                                                                                |
+| `ui.openExternal` | `{ url }` — https URL ≤ 2048 | `{}`                                   | Opens the OS browser — only for an origin in your granted `permissions.network` or an exact URL from your `[store].links`; anything else → `network_denied`. 3 per 60 s → `rate_limited`. Non-https → `invalid_params` |
 
 ### `graph.read`
 
@@ -254,7 +254,7 @@ cached manifest, not from the message):
 | `focus.changed`    | `Focus \| null`                                         | The shared focus moved — only to frames granted `focus.read` **or** `graph.read`     |
 | `settings.changed` | `Record<key, value>`                                    | The user saved this extension's Settings tab (the full object, defaults applied)     |
 | `theme.changed`    | `Record<cssVar, value>`                                 | Theme or accent changed                                                              |
-| `project.changed`  | `{ projectId }`                                         | The host's project changed; frames are remounted right after — treat as a full reset |
+| `project.changed`  | `{}`                                                    | The host's project changed; frames are remounted right after — treat as a full reset |
 | `telemetry.sample` | `{ subscriptionId, samples: [{ signalId, t, value }] }` | While a subscription is live — only to frames granted `telemetry.read`               |
 
 Events are not acknowledged. Nothing but `init` is delivered before `ui.ready`.
@@ -296,7 +296,7 @@ Consequences:
   host. Workers and service workers are rejected at review.
 - The frame's origin is opaque (`sandbox="allow-scripts"` without `allow-same-origin`):
   `localStorage`, cookies and `document.cookie` are unavailable — use `storage.own`.
-- `window.open` / `<a target="_blank">` do nothing useful; use `ui.openExternal` (https only).
+- `window.open` / `<a target="_blank">` do nothing useful; use `ui.openExternal` (granted origins or your store links only, 3 per minute).
 
 The page's `<title>` is ignored for window views (the manifest's `title` wins).
 

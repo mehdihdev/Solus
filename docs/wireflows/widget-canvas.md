@@ -162,9 +162,11 @@ by your team` when policy blocks it; each of those disables `Add`. When the
   and a one-line muted note under the header says "1 widget from your saved
   layout isn't available and was removed." (count-aware). Nothing is fabricated
   in its place.
-- Dev registrations' slots are session-only: they render, but are excluded
-  from the PUT body (the server validates refs against installs and would
-  reject them). Quitting Solus drops them; the saved layout is untouched.
+- Dev registrations' slots (as shipped): the picker's Developer section lists
+  acknowledged dev registrations that declare a widget view; an added `ext:<id>`
+  ref IS persisted like any other (the server does not validate `ext:` refs
+  against installs at write time); if the registration is removed the slot is
+  pruned on the next load like any unknown ref.
 - Layout is per (project, user): switching project swaps the layout (skeleton
   → saved); signing out clears any in-memory copy.
 - Events: `widget_layout.changed { projectId, slots: N, refs: [...] }` on each

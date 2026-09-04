@@ -188,7 +188,7 @@ describe('useExtensionBridge', () => {
       expect(m.received.at(-1)).toEqual({
         v: 1,
         event: 'project.changed',
-        data: { projectId: 'p2' }
+        data: {}
       })
     )
   })
