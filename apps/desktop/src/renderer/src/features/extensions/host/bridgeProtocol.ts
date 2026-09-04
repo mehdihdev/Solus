@@ -32,7 +32,12 @@ export const BRIDGE_LIMITS = {
   readyTimeoutMs: 10_000,
   /** SEC-C1: `ui.openExternal` calls per extension per rolling window. */
   openExternalWindowMs: 60_000,
-  openExternalPerWindow: 3
+  openExternalPerWindow: 3,
+  /** SEC-M2: structural bounds on `params`, checked BEFORE serialization. */
+  paramsDepth: 8,
+  paramsKeys: 256,
+  paramsNodes: 2048,
+  paramsStringBytes: 64 * 1024
 } as const
 
 export type BridgeErrorCode =
@@ -184,10 +189,55 @@ function withinMessageCap(data: unknown): boolean {
   return bytes !== null && bytes <= BRIDGE_LIMITS.messageBytes
 }
 
+interface Frame {
+  readonly value: unknown
+  readonly depth: number
+}
+
+/** Children of a container plus the text its keys carry (arrays have none). */
+function expand(value: object): { children: unknown[]; keyChars: number } {
+  if (Array.isArray(value)) return { children: value, keyChars: 0 }
+  const entries = Object.entries(value)
+  return {
+    children: entries.map(([, child]) => child),
+    keyChars: entries.reduce((sum, [key]) => sum + key.length, 0)
+  }
+}
+
+/**
+ * SEC-M2: bound `params` structurally — depth, keys per object, total nodes,
+ * per-string length, and total text — BEFORE `JSON.stringify` ever sees it, so
+ * a hostile frame cannot make the host serialize a megabyte-scale (or cyclic)
+ * graph just to learn it is over the 64 KiB cap. Every string is ≥ one byte
+ * per UTF-16 unit, so total text over the message cap is over the cap.
+ */
+function withinStructuralBounds(params: Record<string, unknown>): boolean {
+  let nodes = 0
+  let chars = 0
+  const stack: Frame[] = [{ value: params, depth: 1 }]
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop() as Frame
+    nodes += 1
+    if (nodes > BRIDGE_LIMITS.paramsNodes || chars > BRIDGE_LIMITS.messageBytes) return false
+    if (typeof value === 'string') {
+      if (value.length > BRIDGE_LIMITS.paramsStringBytes) return false
+      chars += value.length
+      continue
+    }
+    if (typeof value !== 'object' || value === null) continue
+    if (depth > BRIDGE_LIMITS.paramsDepth) return false
+    const { children, keyChars } = expand(value)
+    if (children.length > BRIDGE_LIMITS.paramsKeys) return false
+    chars += keyChars
+    for (const child of children) stack.push({ value: child, depth: depth + 1 })
+  }
+  return chars <= BRIDGE_LIMITS.messageBytes
+}
+
 export function parseBridgeRequest(data: unknown): BridgeRequest | null {
   if (!isPlainRecord(data) || data.v !== BRIDGE_VERSION) return null
   const { id, method, params } = data
   if (!isValidRequestId(id) || !isValidMethodName(method) || !isPlainRecord(params)) return null
-  if (!withinMessageCap(data)) return null
+  if (!withinStructuralBounds(params) || !withinMessageCap(data)) return null
   return { v: 1, id, method, params }
 }

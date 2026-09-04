@@ -1,5 +1,5 @@
 // SOLUSDEV-235 / EXT-12 — wire-shape parsing (extensions-runtime.md §6.1, §6.5).
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { PERMISSION_SCOPES } from '@solus/shared-types'
 import {
   BRIDGE_LIMITS,
@@ -50,6 +50,50 @@ describe('parseBridgeRequest', () => {
     // 30k four-byte code points → 120 KB even though only 60k UTF-16 units.
     const big = { ...valid, params: { q: '😀'.repeat(30_000) } }
     expect(parseBridgeRequest(big)).toBeNull()
+  })
+
+  describe('structural bounds (SEC-M2) — decided before any JSON.stringify', () => {
+    const nest = (depth: number): Record<string, unknown> =>
+      depth === 0 ? { leaf: 1 } : { child: nest(depth - 1) }
+    const wide = (keys: number): Record<string, number> =>
+      Object.fromEntries(Array.from({ length: keys }, (_, i) => [`k${i}`, i]))
+
+    it.each([
+      ['a chain deeper than the depth cap', nest(BRIDGE_LIMITS.paramsDepth + 1)],
+      ['an object with more keys than the cap', wide(BRIDGE_LIMITS.paramsKeys + 1)],
+      [
+        'more nodes than the cap',
+        { rows: Array.from({ length: BRIDGE_LIMITS.paramsNodes + 1 }, () => 0) }
+      ],
+      ['a string past the per-string cap', { s: 'x'.repeat(BRIDGE_LIMITS.paramsStringBytes + 1) }],
+      [
+        'strings that in total exceed the message cap',
+        { a: 'x'.repeat(40_000), b: 'y'.repeat(40_000) }
+      ]
+    ])('rejects %s without serializing it', (_label, params) => {
+      const stringify = vi.spyOn(JSON, 'stringify')
+      expect(parseBridgeRequest({ ...valid, params })).toBeNull()
+      expect(stringify).not.toHaveBeenCalled()
+      stringify.mockRestore()
+    })
+
+    it('accepts a message at the depth and key caps', () => {
+      expect(
+        parseBridgeRequest({ ...valid, params: nest(BRIDGE_LIMITS.paramsDepth - 1) })
+      ).not.toBeNull()
+      expect(
+        parseBridgeRequest({ ...valid, params: wide(BRIDGE_LIMITS.paramsKeys) })
+      ).not.toBeNull()
+    })
+
+    it('a cyclic params object is rejected by the bounds, never by a throwing stringify', () => {
+      const stringify = vi.spyOn(JSON, 'stringify')
+      const cyclic: Record<string, unknown> = {}
+      cyclic.self = cyclic
+      expect(parseBridgeRequest({ ...valid, params: cyclic })).toBeNull()
+      expect(stringify).not.toHaveBeenCalled()
+      stringify.mockRestore()
+    })
   })
 
   it('drops an unserializable message instead of throwing', () => {
