@@ -1,20 +1,52 @@
-// SOLUSDEV-235 — detail › Settings: per-project enablement and run frequency.
-// Team-wide defaults are an owner setting that does not exist yet; the footnote
-// says so rather than offering a control that does nothing.
+// SOLUSDEV-235 — detail › Settings: per-project enablement, then the fields the
+// PINNED manifest declares, rendered by type and saved (debounced, as one
+// object) through the install PATCH. Team-wide defaults are an owner setting;
+// the footnote says so rather than offering a control that does nothing.
+import { useEffect, useRef, useState } from 'react'
 import { Switch } from '../../../components/ui/Switch'
-import { RUN_FREQUENCY_OPTIONS } from '../extensionLogic'
-import type { ExtensionView, RunFrequency } from '../extension.types'
-import type { ExtensionActions } from '../useExtensions'
+import { settingValuesOf } from '../extensionLogic'
+import type { ExtensionSettings, ExtensionView } from '../extension.types'
+import type { ExtensionActions } from '../extensionActions'
+import { SettingControl } from './SettingControl'
 
-const SELECT_STYLE: React.CSSProperties = {
-  background: 'var(--bg)',
-  color: 'var(--tx)',
-  border: '1px solid var(--bd)',
-  borderRadius: 3,
-  padding: '6px 10px',
-  fontSize: 12,
-  fontFamily: 'var(--font-ui)',
-  outline: 'none'
+/** Typing pauses this long before the settings object is PUT. */
+export const SETTINGS_SAVE_DEBOUNCE_MS = 400
+
+interface SettingsDraft {
+  readonly values: ExtensionSettings
+  readonly error: string | null
+  readonly change: (key: string, value: ExtensionSettings[string]) => void
+}
+
+/** Local edits over the server values, saved as ONE object once typing pauses. */
+function useSettingsDraft(view: ExtensionView, actions: ExtensionActions): SettingsDraft {
+  const { manifest, state, catalog } = view
+  const stored = manifest ? settingValuesOf(manifest, state.settings) : {}
+  const [draft, setDraft] = useState<ExtensionSettings | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [seen, setSeen] = useState(state.settings)
+  const timer = useRef<number | undefined>(undefined)
+
+  // A fresh server row supersedes the local draft (ours after a save, or a
+  // teammate's) — adjusted during render, the React-sanctioned way.
+  if (seen !== state.settings) {
+    setSeen(state.settings)
+    setDraft(null)
+  }
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  const values = draft ?? stored
+  const change = (key: string, value: ExtensionSettings[string]): void => {
+    const next = { ...values, [key]: value }
+    setDraft(next)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => {
+      void actions.setSettings(catalog.slug, next).then((result) => {
+        setError(result.ok ? null : result.message)
+      })
+    }, SETTINGS_SAVE_DEBOUNCE_MS)
+  }
+  return { values, error, change }
 }
 
 export function SettingsTab({
@@ -24,8 +56,11 @@ export function SettingsTab({
   view: ExtensionView
   actions: ExtensionActions
 }): React.JSX.Element {
-  const { manifest, state } = view
+  const { manifest, state, catalog } = view
   const locked = !state.installed
+  const fields = manifest?.settings.fields ?? []
+  const { values, error, change } = useSettingsDraft(view, actions)
+
   return (
     <div style={{ maxWidth: 640, paddingTop: 12 }}>
       <SettingRow
@@ -36,24 +71,29 @@ export function SettingsTab({
           checked={state.installed && state.enabled}
           disabled={locked}
           ariaLabel="Enable in this project"
-          onChange={(on) => actions.setEnabled(manifest.id, on)}
+          onChange={(on) => void actions.setEnabled(catalog.slug, on)}
         />
       </SettingRow>
-      <SettingRow title="Run frequency" sub="When this extension re-evaluates.">
-        <select
-          aria-label="Run frequency"
-          value={state.runFrequency}
-          disabled={locked}
-          onChange={(e) => actions.setRunFrequency(manifest.id, e.target.value as RunFrequency)}
-          style={{ ...SELECT_STYLE, opacity: locked ? 0.45 : 1 }}
-        >
-          {RUN_FREQUENCY_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </SettingRow>
+      {fields.map((field) => (
+        <SettingRow key={field.key} title={field.label} sub={field.key}>
+          <SettingControl
+            field={field}
+            value={values[field.key]}
+            disabled={locked}
+            onChange={(value) => change(field.key, value)}
+          />
+        </SettingRow>
+      ))}
+      {manifest && fields.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--mut)', padding: '14px 0' }}>
+          This extension has no settings of its own.
+        </div>
+      )}
+      {error && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 12 }}>
+          {error}
+        </div>
+      )}
       <div style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 14, lineHeight: 1.5 }}>
         {locked
           ? 'Install this extension to change its settings.'

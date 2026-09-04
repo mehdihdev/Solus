@@ -1,18 +1,18 @@
-// SOLUSDEV-235 — detail › Overview: what the extension adds, its activity in
-// this project, and the requires / credits / links cards.
+// SOLUSDEV-235 — detail › Overview: what the extension adds (from its manifest
+// views), its status in this project, and the requires / credits / links cards.
 import { Card } from '../../../components/ui/Card'
 import { Icons, type IconName } from '../../../components/ui/icons.constants'
 import { KV } from '../../../components/ui/KV'
 import { Mono } from '../../../components/ui/Mono'
 import { SectionLabel } from '../ExtensionCard'
-import { isSafeExternalUrl, SOURCE_KIND_DESCRIPTION } from '../extensionLogic'
-import type { ContributionKind, ExtensionView, SourceKind } from '../extension.types'
+import { contributionsOf, isSafeExternalUrl, SOURCE_KIND_DESCRIPTION } from '../extensionLogic'
+import type { Contribution, ExtensionView, SourceKind } from '../extension.types'
 
-const CONTRIBUTION_ICON: Readonly<Record<ContributionKind, IconName>> = {
+const CONTRIBUTION_ICON: Readonly<Record<Contribution['kind'], IconName>> = {
   widget: 'grid',
-  grounding: 'sol',
-  check: 'check',
-  panel: 'lines'
+  page: 'lines',
+  window: 'box',
+  permissions: 'check'
 }
 
 const RIGHT_COLUMN_WIDTH = 260
@@ -22,7 +22,7 @@ export function OverviewTab({ view }: { view: ExtensionView }): React.JSX.Elemen
     <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <SectionLabel>WHAT IT ADDS</SectionLabel>
-        {view.manifest.contributions.map((c) => {
+        {contributionsOf(view).map((c) => {
           const Icon = Icons[CONTRIBUTION_ICON[c.kind]]
           return (
             <div
@@ -46,6 +46,11 @@ export function OverviewTab({ view }: { view: ExtensionView }): React.JSX.Elemen
             </div>
           )
         })}
+        {view.manifest === null && (
+          <div style={{ fontSize: 12, color: 'var(--mut)', padding: '10px 0' }}>
+            Loading the extension’s manifest…
+          </div>
+        )}
 
         <SectionLabel>IN THIS PROJECT</SectionLabel>
         <ActivityCard view={view} />
@@ -62,22 +67,24 @@ export function OverviewTab({ view }: { view: ExtensionView }): React.JSX.Elemen
         }}
       >
         <RequiresCard view={view} />
-        <CreditsCard view={view} />
+        <CreditsCard />
         <LinksCard view={view} />
       </div>
     </div>
   )
 }
 
-/** No backend reports extension runs yet, so activity is derived from install
- *  state alone — an honest status, never a fabricated timeline. */
+/** No backend reports extension runs yet, so activity is derived from the
+ *  install row alone — an honest status, never a fabricated timeline. */
 function ActivityCard({ view }: { view: ExtensionView }): React.JSX.Element {
   const { state } = view
   const [status, text] = !state.installed
     ? ['NOT INSTALLED', 'Install to see its activity here.']
-    : !state.enabled
-      ? ['DISABLED', 'Turned off in this project.']
-      : ['IDLE', 'No activity in this project yet.']
+    : state.blocked
+      ? ['BLOCKED BY TEAM', 'An owner blocked this extension for your team.']
+      : !state.enabled
+        ? ['DISABLED', 'Turned off in this project.']
+        : ['IDLE', 'No activity in this project yet.']
   return (
     <Card pad={14}>
       <Mono size={9.5} color="var(--tx)">
@@ -89,7 +96,7 @@ function ActivityCard({ view }: { view: ExtensionView }): React.JSX.Element {
 }
 
 function RequiresCard({ view }: { view: ExtensionView }): React.JSX.Element {
-  const { requires } = view.manifest
+  const { requires } = view.catalog
   const isMissing = (group: readonly SourceKind[]): boolean => view.missing.includes(group)
   return (
     <Card pad={14} data-testid="detail-requires">
@@ -128,52 +135,53 @@ function RequiresCard({ view }: { view: ExtensionView }): React.JSX.Element {
   )
 }
 
-function CreditsCard({ view }: { view: ExtensionView }): React.JSX.Element {
-  const { credits } = view.manifest
+/** Credit-denominated (ADR-018). Spend is not metered per extension yet, so the
+ *  only honest value is a dash — never a fabricated number. */
+function CreditsCard(): React.JSX.Element {
   return (
     <Card pad={14}>
       <Mono size={9.5}>CREDITS</Mono>
       <div style={{ marginTop: 4 }}>
-        <KV k="This cycle" v={credits.thisCycle === null ? '—' : String(credits.thisCycle)} />
-        <KV k="Per run, typical" v={credits.perRun === null ? 'none' : `~${credits.perRun}`} />
+        <KV k="This cycle" v="—" />
       </div>
     </Card>
   )
 }
 
 function LinksCard({ view }: { view: ExtensionView }): React.JSX.Element {
-  const { links } = view.manifest
-  const rows: ReadonlyArray<{ label: string; href?: string }> = [
+  const links = view.manifest?.store.links ?? {}
+  const rows = [
     { label: 'Documentation', href: links.documentation },
-    { label: 'Source', href: links.source },
+    { label: 'Terms', href: links.terms },
     { label: 'Report an issue', href: links.issues }
-  ]
+  ].filter((r): r is { label: string; href: string } => isSafeExternalUrl(r.href))
   return (
     <Card pad={14}>
       <Mono size={9.5}>LINKS</Mono>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-        {rows
-          .filter((r): r is { label: string; href: string } => isSafeExternalUrl(r.href))
-          .map((r) => (
-            // Catalog URLs are Solus-authored https constants (enforced by the
-            // catalog test); main's window-open handler routes them to the OS browser.
-            <a
-              key={r.label}
-              href={r.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: 12.5,
-                color: 'var(--acc)',
-                textDecoration: 'none'
-              }}
-            >
-              {r.label} <Icons.external size={10} />
-            </a>
-          ))}
+        {rows.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--mut)' }}>No links published.</div>
+        )}
+        {rows.map((r) => (
+          // Manifest URLs are developer input: only https survives
+          // `isSafeExternalUrl`; main's window-open handler routes them to the OS browser.
+          <a
+            key={r.label}
+            href={r.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 12.5,
+              color: 'var(--acc)',
+              textDecoration: 'none'
+            }}
+          >
+            {r.label} <Icons.external size={10} />
+          </a>
+        ))}
       </div>
     </Card>
   )

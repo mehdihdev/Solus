@@ -1,14 +1,15 @@
 // SOLUSDEV-235 — server catalog × server install rows × connected sources → views,
 // and the install / update / uninstall flows over the typed client + desktop bridge.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { renderHook, act, waitFor } from '@testing-library/react'
-import { useExtensions, EXTENSIONS_POLL_MS } from './useExtensions'
+import { renderHook, act, waitFor, type RenderHookResult } from '@testing-library/react'
+import { useExtensions, EXTENSIONS_POLL_MS, type ExtensionsData } from './useExtensions'
 import * as ext from '../../lib/api/resources.extensions'
 import * as bridgeModule from '../../lib/desktopBridge'
 import * as sourcesHook from '../project/useProjectSources'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { Source } from '../../lib/api/resources'
+import type { Page } from '../../lib/api/client'
 import type { ExtensionsBridge } from '../../lib/desktopBridge'
 import { catalogItem, detail, installRow, manifest } from './testing/fixtures'
 import { BUNDLE_DEFERRED_NOTE } from './extensionErrors'
@@ -35,7 +36,7 @@ const scene = manifest({
 })
 const sceneRow = installRow({ version: { ...installRow().version, manifest: scene } })
 
-function page<T>(data: T[], next: string | null = null): ext.Page<T[]> {
+function page<T>(data: T[], next: string | null = null): Promise<Page<T[]>> {
   return Promise.resolve({ data, meta: { has_next: next !== null, next_cursor: next } }) as never
 }
 
@@ -59,7 +60,7 @@ function fakeBridge(installOk = true): ExtensionsBridge {
   } as unknown as ExtensionsBridge
 }
 
-async function ready(): ReturnType<typeof renderHook<ReturnType<typeof useExtensions>, string>> {
+async function ready(): Promise<RenderHookResult<ExtensionsData, string>> {
   const rendered = renderHook(() => useExtensions('p1'))
   await waitFor(() => expect(rendered.result.current.status).toBe('ready'))
   return rendered

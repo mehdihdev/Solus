@@ -1,42 +1,57 @@
-// SOLUSDEV-235 — detail › Permissions.
+// SOLUSDEV-235 — detail › Permissions, read from the install row's grants.
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { PermissionsTab } from './PermissionsTab'
-import { EXTENSION_CATALOG } from '../extensions.catalog'
-import { buildView, DEFAULT_INSTALL_STATE } from '../extensionLogic'
-import type { ExtensionManifest, ExtensionView } from '../extension.types'
-
-function viewOf(manifest: ExtensionManifest): ExtensionView {
-  return buildView(manifest, { ...DEFAULT_INSTALL_STATE, installed: true }, new Set())
-}
-
-const experiments = EXTENSION_CATALOG.find((m) => m.id === 'experiments')!
+import { manifest, viewOf } from '../testing/fixtures'
 
 describe('PermissionsTab', () => {
-  it('lists each scope with its grant status', () => {
-    render(<PermissionsTab view={viewOf(experiments)} />)
-    expect(screen.getByText('Read the context graph')).toBeInTheDocument()
-    expect(screen.getByText('Entity names, relations, units')).toBeInTheDocument()
-    expect(screen.getByText('GRANTED')).toBeInTheDocument()
-    expect(screen.getByText('Read telemetry streams')).toBeInTheDocument()
-    expect(screen.getByText('Not yet requested')).toBeInTheDocument()
-    expect(screen.getByText('NOT ASKED')).toBeInTheDocument()
+  it('lists each declared scope with GRANTED from the install row', () => {
+    render(<PermissionsTab view={viewOf({ install: {} })} />)
+    expect(screen.getByText('Read the context model')).toBeInTheDocument()
+    expect(screen.getByText('List connected sources')).toBeInTheDocument()
+    expect(screen.getAllByText('GRANTED')).toHaveLength(3)
+    expect(screen.getByText('https://api.octopart.com')).toBeInTheDocument()
+    expect(screen.queryByText('NOT ASKED')).not.toBeInTheDocument()
   })
 
-  it('says scopes are declared by the extension and enforced server-side, not granted here', () => {
-    render(<PermissionsTab view={viewOf(experiments)} />)
-    expect(screen.getByText(/scopes the extension declares/)).toBeInTheDocument()
-    expect(screen.getByText(/enforces scopes server-side/)).toBeInTheDocument()
+  it('marks a scope the user has not granted as NOT GRANTED', () => {
+    render(
+      <PermissionsTab
+        view={viewOf({ install: { granted_scopes: ['graph.read'], granted_network: [] } })}
+      />
+    )
+    expect(screen.getAllByText('GRANTED')).toHaveLength(1)
+    expect(screen.getAllByText('NOT GRANTED')).toHaveLength(2)
+  })
+
+  it('shows every scope as NOT GRANTED before an install', () => {
+    render(<PermissionsTab view={viewOf()} />)
+    expect(screen.getAllByText('NOT GRANTED')).toHaveLength(3)
+  })
+
+  it('says grants are per project and enforced by Solus', () => {
+    render(<PermissionsTab view={viewOf({ install: {} })} />)
+    expect(screen.getByText(/per project/)).toBeInTheDocument()
+    expect(screen.getByText(/enforces .* at every call/)).toBeInTheDocument()
   })
 
   it('states the hardware-write guarantee', () => {
-    render(<PermissionsTab view={viewOf(experiments)} />)
+    render(<PermissionsTab view={viewOf({ install: {} })} />)
     expect(screen.getByText(/never write to hardware directly/)).toBeInTheDocument()
     expect(screen.getByText(/approval queue/)).toBeInTheDocument()
   })
 
   it('handles an extension that asks for nothing', () => {
-    render(<PermissionsTab view={viewOf({ ...experiments, permissions: [] })} />)
+    render(
+      <PermissionsTab
+        view={viewOf({ manifest: manifest({ permissions: { scopes: [], network: [] } }) })}
+      />
+    )
     expect(screen.getByText('This extension asks for no permissions.')).toBeInTheDocument()
+  })
+
+  it('says it is loading before the manifest arrives', () => {
+    render(<PermissionsTab view={{ ...viewOf(), manifest: null }} />)
+    expect(screen.getByText(/Loading/)).toBeInTheDocument()
   })
 })

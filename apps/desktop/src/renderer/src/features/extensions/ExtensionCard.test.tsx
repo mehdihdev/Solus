@@ -1,43 +1,57 @@
-// SOLUSDEV-235 — the Store card and its badges.
+// SOLUSDEV-235 — the Store card and its badges, over server-sourced views.
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AvailabilityPill, ExtensionCard, PublisherBadge } from './ExtensionCard'
-import { EXTENSION_CATALOG } from './extensions.catalog'
-import { buildView, DEFAULT_INSTALL_STATE } from './extensionLogic'
-import type { ExtensionView } from './extension.types'
-
-function viewOf(id: string, installed: boolean, connected: string[] = []): ExtensionView {
-  const manifest = EXTENSION_CATALOG.find((m) => m.id === id)!
-  return buildView(manifest, { ...DEFAULT_INSTALL_STATE, installed }, new Set(connected as never[]))
-}
+import { manifest, viewOf } from './testing/fixtures'
 
 describe('PublisherBadge', () => {
-  it('marks Solus extensions verified and community ones plainly', () => {
-    const { rerender } = render(<PublisherBadge publisher="solus" />)
-    expect(screen.getByText('SOLUS')).toBeInTheDocument()
+  it('marks verified publishers by name with the check, others as COMMUNITY', () => {
+    const { rerender } = render(<PublisherBadge publisher="Solus" verified />)
+    expect(screen.getByText('Solus')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Verified by Solus' })).toBeInTheDocument()
-    rerender(<PublisherBadge publisher="community" />)
+    rerender(<PublisherBadge publisher="Jane" verified={false} />)
     expect(screen.getByText('COMMUNITY')).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'Verified by Solus' })).not.toBeInTheDocument()
   })
 })
 
 describe('AvailabilityPill', () => {
-  it('reads INSTALLED, NEEDS <source>, or AVAILABLE', () => {
-    const { rerender } = render(<AvailabilityPill view={viewOf('experiments', true)} />)
+  it('reads INSTALLED, NEEDS <source>, AVAILABLE or BLOCKED', () => {
+    const { rerender } = render(<AvailabilityPill view={viewOf({ install: {} })} />)
     expect(screen.getByText('INSTALLED')).toBeInTheDocument()
-    rerender(<AvailabilityPill view={viewOf('fsae-rules-checker', false)} />)
+    rerender(
+      <AvailabilityPill
+        view={viewOf({
+          manifest: manifest({
+            extension: { ...manifest().extension, requires: [['cad', 'eda']] }
+          })
+        })}
+      />
+    )
     expect(screen.getByText('NEEDS CAD|EDA')).toBeInTheDocument()
-    rerender(<AvailabilityPill view={viewOf('bom', false, ['eda'])} />)
+    rerender(<AvailabilityPill view={viewOf({ connected: ['eda'] })} />)
     expect(screen.getByText('AVAILABLE')).toBeInTheDocument()
+    rerender(<AvailabilityPill view={viewOf({ blocked: true })} />)
+    expect(screen.getByText('BLOCKED')).toBeInTheDocument()
+  })
+
+  it('flags an available update on an installed extension', () => {
+    render(
+      <AvailabilityPill
+        view={viewOf({
+          install: { update_available: { version: '1.3.0', widens_permissions: false } }
+        })}
+      />
+    )
+    expect(screen.getByTitle('Update available: 1.3.0')).toBeInTheDocument()
   })
 })
 
 describe('ExtensionCard', () => {
   it('renders name, publisher, summary and status, and opens on click', async () => {
     const onOpen = vi.fn()
-    render(<ExtensionCard view={viewOf('bom', false)} layout="grid" onOpen={onOpen} />)
+    render(<ExtensionCard view={viewOf()} layout="grid" onOpen={onOpen} />)
     expect(screen.getByText('BOM')).toBeInTheDocument()
     expect(screen.getByText(/Bill of materials/)).toBeInTheDocument()
     expect(screen.getByText('NEEDS EDA')).toBeInTheDocument()
@@ -47,9 +61,9 @@ describe('ExtensionCard', () => {
 
   it('is keyboard-operable', async () => {
     const onOpen = vi.fn()
-    render(<ExtensionCard view={viewOf('scene', true)} layout="list" onOpen={onOpen} />)
-    screen.getByRole('button', { name: 'Open Scene' }).focus()
+    render(<ExtensionCard view={viewOf({ install: {} })} layout="list" onOpen={onOpen} />)
+    screen.getByRole('button', { name: 'Open BOM' }).focus()
     await userEvent.keyboard('{Enter}')
-    expect(onOpen).toHaveBeenCalledWith('scene')
+    expect(onOpen).toHaveBeenCalledWith('bom')
   })
 })

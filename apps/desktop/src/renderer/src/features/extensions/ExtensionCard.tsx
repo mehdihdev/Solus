@@ -3,9 +3,9 @@
 import type { KeyboardEvent } from 'react'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
-import { Icons, type IconName } from '../../components/ui/icons.constants'
-import type { ExtensionView, Publisher } from './extension.types'
-import { PUBLISHER_LABEL, requirementLabel } from './extensionLogic'
+import { Icons } from '../../components/ui/icons.constants'
+import type { ExtensionView } from './extension.types'
+import { requirementLabel } from './extensionLogic'
 
 export type StoreLayout = 'grid' | 'list'
 
@@ -20,14 +20,9 @@ export function SectionLabel({ children }: { children: string }): React.JSX.Elem
   )
 }
 
-export function ExtensionIconTile({
-  icon,
-  size = 36
-}: {
-  icon: IconName
-  size?: number
-}): React.JSX.Element {
-  const Icon = Icons[icon]
+/** The icon tile. Bundle icons are served behind the API's bearer auth, so
+ *  the tile renders the shared glyph rather than an `<img>` that cannot load. */
+export function ExtensionIconTile({ size = 36 }: { size?: number }): React.JSX.Element {
   return (
     <div
       aria-hidden
@@ -44,13 +39,19 @@ export function ExtensionIconTile({
         justifyContent: 'center'
       }}
     >
-      <Icon size={Math.round(size * 0.42)} />
+      <Icons.box size={Math.round(size * 0.42)} />
     </div>
   )
 }
 
-export function PublisherBadge({ publisher }: { publisher: Publisher }): React.JSX.Element {
-  const verified = publisher === 'solus'
+/** `<PUBLISHER> ✓` in the ok color for a verified publisher, `COMMUNITY` muted otherwise. */
+export function PublisherBadge({
+  publisher,
+  verified
+}: {
+  publisher: string
+  verified: boolean
+}): React.JSX.Element {
   return (
     <span
       style={{
@@ -67,7 +68,7 @@ export function PublisherBadge({ publisher }: { publisher: Publisher }): React.J
       }}
     >
       <Mono size={8.5} ls="0.12em" color={verified ? 'var(--ok)' : 'var(--mut)'}>
-        {PUBLISHER_LABEL[publisher]}
+        {verified ? publisher : 'COMMUNITY'}
       </Mono>
       {verified && (
         <span style={{ color: 'var(--ok)', display: 'inline-flex' }}>
@@ -78,19 +79,35 @@ export function PublisherBadge({ publisher }: { publisher: Publisher }): React.J
   )
 }
 
+const PILL_TEXT: Readonly<Record<'blocked' | 'available', string>> = {
+  blocked: 'BLOCKED',
+  available: 'AVAILABLE'
+}
+
 export function AvailabilityPill({ view }: { view: ExtensionView }): React.JSX.Element {
   if (view.availability === 'installed') {
+    const update = view.state.updateAvailable
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--ok)' }} />
         <Mono size={9.5} color="var(--ok)">
           INSTALLED
         </Mono>
+        {update && (
+          <span
+            title={`Update available: ${update.version}`}
+            style={{ color: 'var(--acc)', fontSize: 11, lineHeight: 1 }}
+          >
+            ↑
+          </span>
+        )}
       </span>
     )
   }
   const text =
-    view.availability === 'needs_source' ? `NEEDS ${requirementLabel(view.missing)}` : 'AVAILABLE'
+    view.availability === 'needs_source'
+      ? `NEEDS ${requirementLabel(view.missing)}`
+      : PILL_TEXT[view.availability]
   return (
     <Mono size={9.5} color="var(--mut)" style={{ opacity: 0.8 }}>
       {text}
@@ -105,10 +122,10 @@ export function ExtensionCard({
 }: {
   view: ExtensionView
   layout: StoreLayout
-  onOpen: (extensionId: string) => void
+  onOpen: (slug: string) => void
 }): React.JSX.Element {
-  const { manifest } = view
-  const open = (): void => onOpen(manifest.id)
+  const { catalog } = view
+  const open = (): void => onOpen(catalog.slug)
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
@@ -120,17 +137,17 @@ export function ExtensionCard({
     <Card
       role="button"
       tabIndex={0}
-      aria-label={`Open ${manifest.name}`}
+      aria-label={`Open ${catalog.name}`}
       onClick={open}
       onKeyDown={onKeyDown}
       pad={compact ? 12 : 18}
       style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}
     >
-      <ExtensionIconTile icon={manifest.icon} size={compact ? 32 : 36} />
+      <ExtensionIconTile size={compact ? 32 : 36} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: compact ? 13 : 14, fontWeight: 600 }}>{manifest.name}</span>
-          <PublisherBadge publisher={manifest.publisher} />
+          <span style={{ fontSize: compact ? 13 : 14, fontWeight: 600 }}>{catalog.name}</span>
+          <PublisherBadge publisher={catalog.publisher} verified={catalog.verified} />
         </div>
         <div
           style={{
@@ -143,7 +160,7 @@ export function ExtensionCard({
               : {})
           }}
         >
-          {manifest.summary}
+          {catalog.summary}
         </div>
       </div>
       <div style={{ flexShrink: 0, alignSelf: 'center', paddingLeft: 8 }}>

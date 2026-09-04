@@ -1,9 +1,9 @@
 // SOLUSDEV-235 — the Store (`MainScreen 'store'`). Capabilities are installed,
 // not built in: this page lists what the open project has installed and what
-// the catalog suggests, gated on the sources actually connected — never on
-// what sells. Clicking a card opens ExtensionDetail in place; the selection
+// the server catalog suggests, gated on the sources actually connected — never
+// on what sells. Clicking a card opens ExtensionDetail in place; the selection
 // lives in extensionsStore so the shell breadcrumb can read it.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Icons } from '../../components/ui/icons.constants'
@@ -38,7 +38,17 @@ function StoreView({ projectId }: { projectId: string }): React.JSX.Element {
   const data = useExtensions(projectId)
   const selectedId = useExtensionsStore((s) => s.selectedId)
   const select = useExtensionsStore((s) => s.select)
-  const selected = selectedId ? data.views.find((v) => v.manifest.id === selectedId) : undefined
+  const selected = selectedId ? data.views.find((v) => v.catalog.slug === selectedId) : undefined
+
+  // An install carries its pinned manifest; anything else needs the catalog
+  // detail before the tabs and the permissions step can render it.
+  const slug = selected?.catalog.slug
+  const needsDetail =
+    selected !== undefined && selected.manifest === null && selected.catalog.inCatalog
+  const { loadDetail } = data.actions
+  useEffect(() => {
+    if (needsDetail && slug) void loadDetail(slug)
+  }, [needsDetail, slug, loadDetail])
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
@@ -53,44 +63,43 @@ function StoreView({ projectId }: { projectId: string }): React.JSX.Element {
   )
 }
 
+/** The one honest line about what the page could not learn, if anything. */
+function statusNote(data: ExtensionsData): string | null {
+  if (data.status === 'loading') return 'Loading the catalog…'
+  if (data.status === 'offline')
+    return "Solus can't reach the Store right now, so nothing can be installed and source requirements are shown as unmet."
+  if (data.sourcesStatus === 'loading') return 'Checking this project’s connected sources…'
+  if (data.sourcesStatus === 'offline')
+    return "Solus can't see this project's sources right now, so source requirements below are shown as unmet."
+  return null
+}
+
 function Catalog({
   data,
   onOpen
 }: {
   data: ExtensionsData
-  onOpen: (id: string) => void
+  onOpen: (slug: string) => void
 }): React.JSX.Element {
   const [layout, setLayout] = useState<StoreLayout>('grid')
   const [showAll, setShowAll] = useState(false)
   const [creating, setCreating] = useState(false)
   const { installed, popular } = partitionViews(data.views)
   const visibleInstalled = showAll ? installed : installed.slice(0, INSTALLED_PREVIEW_COUNT)
+  const note = statusNote(data)
+  const updates = data.updatesAvailable
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
-            Store
-          </h1>
-          <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>
-            Capabilities are installed, not built in. Suggestions come from what&apos;s connected —
-            never from what sells.
-          </div>
+      <CatalogHeader layout={layout} onLayout={setLayout} onCreate={() => setCreating(true)} />
+      {updates > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 12 }}>
+          {updates} {updates === 1 ? 'update' : 'updates'} available
         </div>
-        <LayoutToggle value={layout} onChange={setLayout} />
-        <Button kind="primary" size="md" onClick={() => setCreating(true)}>
-          <Icons.plus size={12} /> Create extension
-        </Button>
-      </div>
-
-      {data.sourcesStatus !== 'ready' && (
+      )}
+      {note && (
         <Card pad={12} style={{ marginTop: 18 }}>
-          <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-            {data.sourcesStatus === 'loading'
-              ? 'Checking this project’s connected sources…'
-              : "Solus can't see this project's sources right now, so source requirements below are shown as unmet."}
-          </div>
+          <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>{note}</div>
         </Card>
       )}
 
@@ -116,11 +125,43 @@ function Catalog({
         views={popular}
         layout={layout}
         onOpen={onOpen}
-        emptyText="Everything in the catalog is installed in this project."
+        emptyText={
+          data.status === 'offline'
+            ? 'The catalog is unavailable while Solus is offline.'
+            : 'Everything in the catalog is installed in this project.'
+        }
       />
 
       {creating && <CreateExtensionModal onClose={() => setCreating(false)} />}
     </>
+  )
+}
+
+function CatalogHeader({
+  layout,
+  onLayout,
+  onCreate
+}: {
+  layout: StoreLayout
+  onLayout: (layout: StoreLayout) => void
+  onCreate: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
+          Store
+        </h1>
+        <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>
+          Capabilities are installed, not built in. Suggestions come from what&apos;s connected —
+          never from what sells.
+        </div>
+      </div>
+      <LayoutToggle value={layout} onChange={onLayout} />
+      <Button kind="primary" size="md" onClick={onCreate}>
+        <Icons.plus size={12} /> Create extension
+      </Button>
+    </div>
   )
 }
 
@@ -190,7 +231,7 @@ function ExtensionGrid({
   testId: string
   views: readonly ExtensionView[]
   layout: StoreLayout
-  onOpen: (id: string) => void
+  onOpen: (slug: string) => void
   emptyText: string
 }): React.JSX.Element {
   if (views.length === 0) {
@@ -211,7 +252,7 @@ function ExtensionGrid({
       }}
     >
       {views.map((v) => (
-        <ExtensionCard key={v.manifest.id} view={v} layout={layout} onOpen={onOpen} />
+        <ExtensionCard key={v.catalog.slug} view={v} layout={layout} onOpen={onOpen} />
       ))}
     </div>
   )

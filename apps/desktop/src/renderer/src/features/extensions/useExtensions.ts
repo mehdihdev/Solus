@@ -8,7 +8,7 @@
 // session cannot fetch or the API is unreachable with nothing yet on screen —
 // the catalog is then empty and the Store says so, rather than rendering a
 // stale or invented one.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ExtensionManifest } from '@solus/shared-types'
 import { useInterval } from '../../lib/useInterval'
 import { getDesktopExtensionsBridge } from '../../lib/desktopBridge'
@@ -81,40 +81,36 @@ function upsertInstall(
 
 const NO_SLUGS: ReadonlySet<string> = new Set()
 
-export function useExtensions(projectId: string): ExtensionsData {
-  const fetchEnabled = useWorkspaceFetchEnabled()
-  const sources = useProjectSources()
-  // `useProjectSources` reads the OPEN project; if a caller scopes this hook to
-  // another project, its requirements must not be judged against foreign sources.
-  const openProjectId = useWorkspaceStore((s) => s.project?.id ?? null)
-  const scoped = openProjectId === projectId
-  const sourcesStatus: ProjectSourcesStatus = scoped ? sources.status : 'offline'
-  const sourceList = sources.sources
+interface StoreRows {
+  readonly status: ExtensionsStatus
+  readonly catalog: ExtensionCatalogItemApi[]
+  readonly installs: ExtensionInstallApi[]
+  readonly setInstalls: React.Dispatch<React.SetStateAction<ExtensionInstallApi[]>>
+  readonly load: () => Promise<void>
+}
 
-  const [status, setStatus] = useState<ExtensionsStatus>(fetchEnabled ? 'loading' : 'offline')
+/** The server rows: initial load, the install poll, and the offline rule.
+ *  Without a fetchable session nothing is read and nothing is shown. */
+function useStoreRows(projectId: string, fetchEnabled: boolean): StoreRows {
+  const [remote, setRemote] = useState<ExtensionsStatus>('loading')
   const [catalog, setCatalog] = useState<ExtensionCatalogItemApi[]>([])
   const [installs, setInstalls] = useState<ExtensionInstallApi[]>([])
-  const [details, setDetails] = useState<Readonly<Record<string, ExtensionManifest>>>({})
-  const [blocked, setBlocked] = useState<ReadonlySet<string>>(NO_SLUGS)
-  const latest = useRef({ catalog, installs })
-  latest.current = { catalog, installs }
+  const status: ExtensionsStatus = fetchEnabled ? remote : 'offline'
 
   const load = useCallback(async (): Promise<void> => {
-    if (!fetchEnabled) {
-      setStatus('offline')
-      setCatalog([])
-      setInstalls([])
-      return
-    }
+    if (!fetchEnabled) return
     try {
       const [items, rows] = await Promise.all([loadCatalog(), loadInstalls(projectId)])
       setCatalog(items)
       setInstalls(rows)
-      setStatus('ready')
+      setRemote('ready')
     } catch {
       // A failed refresh must not blank a catalog already on screen; only
       // report offline when there was nothing to show in the first place.
-      setStatus(latest.current.catalog.length > 0 ? 'ready' : 'offline')
+      setCatalog((previous) => {
+        setRemote(previous.length > 0 ? 'ready' : 'offline')
+        return previous
+      })
     }
   }, [fetchEnabled, projectId])
 
@@ -132,6 +128,29 @@ export function useExtensions(projectId: string): ExtensionsData {
 
   useInterval(() => void pollInstalls(), EXTENSIONS_POLL_MS, fetchEnabled && status === 'ready')
 
+  return {
+    status,
+    catalog: fetchEnabled ? catalog : [],
+    installs: fetchEnabled ? installs : [],
+    setInstalls,
+    load
+  }
+}
+
+export function useExtensions(projectId: string): ExtensionsData {
+  const fetchEnabled = useWorkspaceFetchEnabled()
+  const sources = useProjectSources()
+  // `useProjectSources` reads the OPEN project; if a caller scopes this hook to
+  // another project, its requirements must not be judged against foreign sources.
+  const openProjectId = useWorkspaceStore((s) => s.project?.id ?? null)
+  const scoped = openProjectId === projectId
+  const sourcesStatus: ProjectSourcesStatus = scoped ? sources.status : 'offline'
+  const sourceList = sources.sources
+
+  const { status, catalog, installs, setInstalls, load } = useStoreRows(projectId, fetchEnabled)
+  const [details, setDetails] = useState<Readonly<Record<string, ExtensionManifest>>>({})
+  const [blocked, setBlocked] = useState<ReadonlySet<string>>(NO_SLUGS)
+
   const views = useMemo(
     () =>
       buildViews({
@@ -144,14 +163,15 @@ export function useExtensions(projectId: string): ExtensionsData {
     [blocked, catalog, details, installs, scoped, sourceList]
   )
 
+  // Rebuilt whenever the rows change so every action reads the latest catalog
+  // and installs without a render-time ref (react-hooks/refs).
   const actions = useMemo<ExtensionActions>(
     () =>
       createExtensionActions({
         projectId,
         bridge: getDesktopExtensionsBridge,
-        latestVersionOf: (slug) =>
-          latest.current.catalog.find((i) => i.slug === slug)?.latest_version.version,
-        installOf: (slug) => latest.current.installs.find((r) => r.extension.slug === slug),
+        latestVersionOf: (slug) => catalog.find((i) => i.slug === slug)?.latest_version.version,
+        installOf: (slug) => installs.find((r) => r.extension.slug === slug),
         applyInstall: (row) => setInstalls((rows) => upsertInstall(rows, row)),
         removeInstall: (slug) =>
           setInstalls((rows) => rows.filter((r) => r.extension.slug !== slug)),
@@ -159,7 +179,7 @@ export function useExtensions(projectId: string): ExtensionsData {
         applyDetail: (slug, manifest) => setDetails((prev) => ({ ...prev, [slug]: manifest })),
         refresh: load
       }),
-    [projectId, load]
+    [projectId, load, catalog, installs, setInstalls]
   )
 
   const updatesAvailable = useMemo(

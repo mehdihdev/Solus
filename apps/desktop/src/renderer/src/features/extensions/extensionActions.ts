@@ -101,7 +101,10 @@ async function putInstall(
 ): Promise<ExtensionActionResult> {
   let row: ExtensionInstallApi
   try {
-    row = await installExtension(deps.projectId, slug, { version, grants })
+    row = await installExtension(deps.projectId, slug, {
+      version,
+      grants: { scopes: [...grants.scopes], network: [...grants.network] }
+    })
   } catch (error) {
     if (error instanceof ApiError && error.code === 'extension_blocked') deps.markBlocked(slug)
     if (error instanceof ApiError && error.code === 'grants_required') {

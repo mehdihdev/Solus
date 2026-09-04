@@ -1,6 +1,7 @@
 // SOLUSDEV-235 — test fixtures shaped like the Store API rows
 // (docs/api/extensions.md §4.1, §4.2, §6.1) and the manifest contract. Test
 // data only; never imported by production code.
+import { vi } from 'vitest'
 import type { ExtensionManifest } from '@solus/shared-types'
 import type {
   ExtensionCatalogItemApi,
@@ -9,6 +10,7 @@ import type {
 } from '../../../lib/api/resources.extensions'
 import { buildView, catalogSummaryOf, installStateOf, NOT_INSTALLED } from '../extensionLogic'
 import type { ExtensionView } from '../extension.types'
+import type { ExtensionActionResult, ExtensionActions } from '../extensionActions'
 
 export function manifest(over: Partial<ExtensionManifest> = {}): ExtensionManifest {
   return {
@@ -114,6 +116,7 @@ export function installRow(over: Partial<ExtensionInstallApi> = {}): ExtensionIn
     },
     version: {
       version: m.extension.version,
+      published_at: '2026-09-01T09:12:03.000Z',
       content_hash: 'a'.repeat(64),
       bundle_size_bytes: 1834112,
       bundle_url: `/api/v1/extensions/${m.extension.id}/versions/${m.extension.version}/bundle`,
@@ -164,4 +167,18 @@ export function viewOf(
     connected: new Set((options.connected ?? []) as never[]),
     blocked: options.blocked ?? false
   })
+}
+
+/** Every action succeeds unless overridden; tests assert on the calls. */
+export function fakeActions(over: Partial<ExtensionActions> = {}): ExtensionActions {
+  return {
+    install: vi.fn(async () => ({ ok: true }) as ExtensionActionResult),
+    update: vi.fn(async () => ({ ok: true }) as ExtensionActionResult),
+    uninstall: vi.fn(async () => ({ ok: true }) as ExtensionActionResult),
+    setEnabled: vi.fn(async () => ({ ok: true }) as ExtensionActionResult),
+    setSettings: vi.fn(async () => ({ ok: true }) as ExtensionActionResult),
+    loadDetail: vi.fn(async () => undefined),
+    refresh: vi.fn(async () => undefined),
+    ...over
+  }
 }
