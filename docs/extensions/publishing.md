@@ -58,9 +58,10 @@ curl -sS -X POST "https://api.solus.example/api/v1/extensions/publish" \
   -F "bundle=@hello-widget-0.1.0.zip;type=application/zip"
 ```
 
-The request path runs the **whole validator** synchronously (zip rules, manifest contract, every
-referenced file present and within its cap, icon reduction, static content checks). Any problem is
-`422 bundle_invalid` with every problem in `error.details[]` — nothing is stored:
+The request path checks the zip **structure** and your `extension.toml` only (entry count and
+declared sizes, names, suffixes, symlinks, the manifest contract, and that every referenced file
+is present by name). Any problem is `422 bundle_invalid` with every problem in `error.details[]`
+— nothing is stored:
 
 ```json
 {
@@ -130,6 +131,10 @@ and `rejected` ones (with their problems); other users see approved versions onl
 fetch your own unapproved bundle bytes from `bundle_url` to reproduce a finding locally.
 
 ## 4. What the review checks
+
+The review job is where members are actually inflated (under a cumulative 25 MiB budget, 512 KiB per
+text file, and a compression-ratio guard on every entry) and where content rules apply. A bundle
+that passed the upload can still end `rejected` here.
 
 The background job re-runs the same validator the request ran (so a rejection here is rare and
 usually means the bundle changed shape between checks, or an internal error — `review: internal
@@ -254,18 +259,19 @@ On top of the global per-token limiter. Exceeding one returns `429 rate_limited`
 
 ## Error codes on the publishing routes
 
-| HTTP | `error.code`               | When                                                                                                     |
-| ---- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| 400  | `idempotency_key_required` | Publish without an `Idempotency-Key` header                                                              |
-| 401  | `unauthorized`             | Missing/invalid/expired token                                                                            |
-| 403  | `email_not_verified`       | Publish or unpublish from an account without a verified email                                            |
-| 403  | `forbidden`                | Non-staff calling the verified-badge route                                                               |
-| 404  | `not_found`                | Unknown slug/version; someone else's unapproved version or review; a deleted version                     |
-| 409  | `slug_taken`               | `extension.id` belongs to another publisher                                                              |
-| 409  | `version_exists`           | This `(id, version)` was already published (even if rejected or unpublished)                             |
-| 409  | `idempotency_conflict`     | Same `Idempotency-Key`, different bytes                                                                  |
-| 411  | `length_required`          | No (or malformed) `Content-Length`                                                                       |
-| 413  | `payload_too_large`        | Bundle over 25 MiB                                                                                       |
-| 422  | `validation_error`         | Unknown form field, missing `bundle` part, malformed slug/version in the path, over-long idempotency key |
-| 422  | `bundle_invalid`           | Any validator problem; `details[]` lists them all                                                        |
-| 429  | `rate_limited`             | Publish budget exhausted                                                                                 |
+| HTTP | `error.code`               | When                                                                                                               |
+| ---- | -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 400  | `idempotency_key_required` | Publish without an `Idempotency-Key` header                                                                        |
+| 401  | `unauthorized`             | Missing/invalid/expired token                                                                                      |
+| 403  | `email_not_verified`       | Publish or unpublish from an account without a verified email                                                      |
+| 403  | `forbidden`                | Non-staff calling the verified-badge route                                                                         |
+| 404  | `not_found`                | Unknown slug/version; someone else's unapproved version or review; a deleted version                               |
+| 409  | `slug_taken`               | `extension.id` belongs to another publisher                                                                        |
+| 409  | `publisher_name_reserved`  | Your first publish used a display name reserved for Solus (`Solus`, `Solus Forge`, lookalikes); pick your own name |
+| 409  | `version_exists`           | This `(id, version)` was already published (even if rejected or unpublished)                                       |
+| 409  | `idempotency_conflict`     | Same `Idempotency-Key`, different bytes                                                                            |
+| 411  | `length_required`          | No (or malformed) `Content-Length`                                                                                 |
+| 413  | `payload_too_large`        | Bundle over 25 MiB                                                                                                 |
+| 422  | `validation_error`         | Unknown form field, missing `bundle` part, malformed slug/version in the path, over-long idempotency key           |
+| 422  | `bundle_invalid`           | Any validator problem; `details[]` lists them all                                                                  |
+| 429  | `rate_limited`             | Publish budget exhausted                                                                                           |
