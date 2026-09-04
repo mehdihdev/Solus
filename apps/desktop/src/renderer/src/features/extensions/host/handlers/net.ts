@@ -5,6 +5,7 @@
 import type { ExtNetFetchError } from '../bridgeDeps'
 import { BridgeFault } from '../bridgeErrors'
 import type { BridgeErrorCode } from '../bridgeProtocol'
+import { isGrantedOrigin } from '../originAllow'
 import type { HandlerTable } from './context'
 
 const TEXTUAL_RE =
@@ -62,9 +63,8 @@ function netFault(error: ExtNetFetchError): BridgeFault {
 
 export const netHandlers: HandlerTable<'net.fetch'> = {
   'net.fetch': async (p, ctx) => {
-    const url = new URL(p.url)
-    if (url.protocol !== 'https:' || !ctx.policy.grantedNetwork.includes(url.origin))
-      throw new BridgeFault('network_denied')
+    // SEC-C1: the ONE allowlist predicate (originAllow.ts) — https + exact origin.
+    if (!isGrantedOrigin(ctx.policy, p.url)) throw new BridgeFault('network_denied')
     if (!ctx.deps.net) throw new BridgeFault('unavailable')
     const result = await ctx.deps.net.fetch({
       id: ctx.policy.extensionId,

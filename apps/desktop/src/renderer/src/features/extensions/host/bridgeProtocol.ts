@@ -29,7 +29,10 @@ export const BRIDGE_LIMITS = {
   storageKey: 64,
   storageValueBytes: 64 * 1024,
   netBodyBytes: 1024 * 1024,
-  readyTimeoutMs: 10_000
+  readyTimeoutMs: 10_000,
+  /** SEC-C1: `ui.openExternal` calls per extension per rolling window. */
+  openExternalWindowMs: 60_000,
+  openExternalPerWindow: 3
 } as const
 
 export type BridgeErrorCode =
@@ -103,6 +106,8 @@ export const EVENT_SCOPES: Readonly<Partial<Record<BridgeEventName, readonly Per
  * §6.3, verbatim. `null` = no scope required. `net.fetch` is null here because
  * its authorization is not a scope: the target origin must be in the granted
  * `permissions.network`, checked by the handler (`network_denied`).
+ * `ui.openExternal` is gated the same way (SEC-C1): granted origin or an exact
+ * `store.links` URL, through the one predicate in originAllow.ts.
  */
 export const METHOD_SCOPES = {
   'ui.ready': null,

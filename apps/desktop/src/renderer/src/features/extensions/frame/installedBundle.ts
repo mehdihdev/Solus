@@ -14,7 +14,7 @@ import type {
   ExtensionInstallApi,
   ExtensionSettingsValuesApi
 } from '../../../lib/api/resources.extensions'
-import { policyFromInstall, type BridgePolicy } from '../host/policySnapshot'
+import { policyFromInstall, storeLinksOf, type BridgePolicy } from '../host/policySnapshot'
 import { DEV_VERSION } from './extUrl'
 
 export type BundleView = 'widget' | 'page' | 'window'
@@ -98,6 +98,7 @@ function readyFromDev(
       projectId,
       grantedScopes: [...dev.grantedScopes],
       grantedNetwork: [...dev.grantedNetwork],
+      storeLinks: storeLinksOf(dev.manifest),
       enabled: true,
       blocked: false,
       mode: 'dev'

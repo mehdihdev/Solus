@@ -2,7 +2,12 @@
 // extension across all of its frames (extensions-runtime.md §6.5).
 import { describe, it, expect } from 'vitest'
 import { BRIDGE_LIMITS } from './bridgeProtocol'
-import { createRateLimiter, sharedRateLimiterFor } from './rateLimiter'
+import {
+  createOpenExternalLimiter,
+  createRateLimiter,
+  sharedOpenExternalLimiterFor,
+  sharedRateLimiterFor
+} from './rateLimiter'
 
 function clock(start = 0): { now: () => number; advance: (ms: number) => void } {
   let t = start
@@ -58,5 +63,21 @@ describe('sharedRateLimiterFor', () => {
     const a = sharedRateLimiterFor('shared-a')
     expect(sharedRateLimiterFor('shared-a')).toBe(a)
     expect(sharedRateLimiterFor('shared-b')).not.toBe(a)
+  })
+})
+
+describe('openExternal limiter (SEC-C1)', () => {
+  it('admits 3 per 60 s, counts calls without holding them, and is shared per extension', () => {
+    const c = clock()
+    const limiter = createOpenExternalLimiter(c.now)
+    for (let i = 0; i < BRIDGE_LIMITS.openExternalPerWindow; i++) {
+      expect(limiter.tryAcquire()).toBe('ok')
+      limiter.release()
+    }
+    expect(limiter.tryAcquire()).toBe('rate_limited')
+    c.advance(BRIDGE_LIMITS.openExternalWindowMs + 1)
+    expect(limiter.tryAcquire()).toBe('ok')
+    expect(sharedOpenExternalLimiterFor('x')).toBe(sharedOpenExternalLimiterFor('x'))
+    expect(sharedOpenExternalLimiterFor('x')).not.toBe(sharedRateLimiterFor('x'))
   })
 })

@@ -30,7 +30,7 @@ import { telemetryHandlers } from './handlers/telemetry'
 import { createTelemetryRegistry, type RegistryTimers } from './handlers/telemetryRegistry'
 import { validateParams } from './paramsSchema'
 import { authorize, type BridgePolicy } from './policySnapshot'
-import { sharedRateLimiterFor, type RateLimiter } from './rateLimiter'
+import { sharedOpenExternalLimiterFor, sharedRateLimiterFor, type RateLimiter } from './rateLimiter'
 
 const HANDLERS: { readonly [M in BridgeMethod]: Handler<M> } = {
   ...appHandlers,
@@ -62,6 +62,8 @@ export interface BridgeHostOptions {
   readonly deps: BridgeDeps
   /** Defaults to the renderer-wide per-extension limiter. */
   readonly rateLimiter?: RateLimiter
+  /** SEC-C1: defaults to the renderer-wide per-extension `ui.openExternal` budget. */
+  readonly openExternalLimiter?: RateLimiter
   readonly onReady?: () => void
   readonly timers?: RegistryTimers
 }
@@ -93,6 +95,8 @@ function fail(id: string, code: BridgeErrorCode, message?: string): BridgeOutbou
 export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   const { frame, deps } = options
   const limiter = options.rateLimiter ?? sharedRateLimiterFor(options.policy.extensionId)
+  const openExternalLimiter =
+    options.openExternalLimiter ?? sharedOpenExternalLimiterFor(options.policy.extensionId)
   let policy = options.policy
   let settings: SettingsValues = options.settings ?? {}
   let ready = false
@@ -156,7 +160,7 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   async function execute<M extends BridgeMethod>(request: BridgeRequest, method: M): Promise<void> {
     const params = validateParams(method, request.params)
     if (params === null) return refuse(request, 'invalid_params')
-    const ctx: HandlerContext = { policy, settings, deps, session }
+    const ctx: HandlerContext = { policy, settings, deps, session, openExternalLimiter }
     inFlightIds.add(request.id)
     try {
       const result = await (HANDLERS[method] as Handler<M>)(params, ctx)
