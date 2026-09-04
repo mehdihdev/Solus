@@ -150,14 +150,17 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       signal: req.signal
     })
     const text = await res.text()
-    if (res.status === 429 && isRead(req) && isReadBudgetExhausted(res)) {
-      const retryMs = parseRetryAfterMs(res.headers.get('Retry-After')) ?? DEFAULT_RETRY_AFTER_MS
-      const untilMs = now() + retryMs
-      if (readsPaused.token !== token || untilMs > readsPaused.untilMs) {
-        readsPaused = { token, untilMs }
-      }
-    }
+    if (res.status === 429 && isRead(req) && isReadBudgetExhausted(res)) pauseReads(res, token)
     return { status: res.status, body: text ? JSON.parse(text) : null }
+  }
+
+  /** Extend (never shorten) the read pause for `token` to the server's Retry-After. */
+  function pauseReads(res: Response, token: string | null): void {
+    const retryMs = parseRetryAfterMs(res.headers.get('Retry-After')) ?? DEFAULT_RETRY_AFTER_MS
+    const untilMs = now() + retryMs
+    if (readsPaused.token !== token || untilMs > readsPaused.untilMs) {
+      readsPaused = { token, untilMs }
+    }
   }
 
   async function send(path: string, req: RequestOptions): Promise<Sent> {
