@@ -4,7 +4,7 @@
 // the installed extensions' page views (rail entries above the Store — EXT-14).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
 // shows live API data or honest empty states, never fabricated robot data.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
@@ -35,6 +35,7 @@ import { MenuBar } from './MenuBar'
 import { useShellStore, routeKey, type MainScreen, type ShellRoute } from './shellStore'
 import { useFocusStore } from './focusStore'
 import { useExtensionRail, type ExtensionRailData } from './useExtensionRail'
+import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import type { RailExtensionEntry } from './extensionRail'
 
 /** Screen labels (the data-screen-label hook for tests; the topbar breadcrumb is gone — SOLUSDEV-235). */
@@ -168,6 +169,11 @@ export function WorkspaceShell(): React.JSX.Element {
   // Confirm it once, so a dead id drops us to Home instead of 404ing every
   // project-scoped screen with no way back.
   useValidateProject()
+  // Developer registrations (EXT-20) live in main's index.json; hydrate once so a
+  // dev extension's frame resolves before the user ever opens Settings.
+  useEffect(() => {
+    void useDevExtensionsStore.getState().hydrate()
+  }, [])
 
   return (
     <div style={SHELL_STYLE} onClick={() => notifOpen && setNotifOpen(false)}>

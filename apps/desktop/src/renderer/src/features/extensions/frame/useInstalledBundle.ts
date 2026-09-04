@@ -7,6 +7,10 @@ import { listProjectExtensions, fetchExtensionBundle } from '../../../lib/api/re
 import type { ExtensionInstallApi } from '../../../lib/api/resources.extensions'
 import { getDesktopExtensionsBridge } from '../../../lib/desktopBridge'
 import {
+  selectDevRegistration,
+  useDevExtensionsStore
+} from '../../devExtensions/devExtensionsStore'
+import {
   resolveInstalledBundle,
   type BundleView,
   type InstalledBundleDeps,
@@ -29,15 +33,15 @@ async function listAllInstalls(projectId: string): Promise<readonly ExtensionIns
   return rows
 }
 
-/** Production deps. Developer registrations are held by the Settings →
- *  Developer surface (a sibling task); until that store exists nothing here
- *  reports one, so an installed extension is never shadowed by accident. */
+/** Production deps. Developer registrations come from the Settings → Developer
+ *  store (EXT-20); a dev entry shadows an install of the same slug on purpose —
+ *  that is what "load unpacked" is for — and is marked DEV everywhere. */
 export function defaultInstalledBundleDeps(): InstalledBundleDeps {
   return {
     bridge: getDesktopExtensionsBridge(),
     listInstalls: listAllInstalls,
     fetchBundle: (slug, version) => fetchExtensionBundle(slug, version),
-    devRegistration: () => null
+    devRegistration: (slug) => selectDevRegistration(useDevExtensionsStore.getState(), slug)
   }
 }
 
