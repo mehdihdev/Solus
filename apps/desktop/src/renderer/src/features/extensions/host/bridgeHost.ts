@@ -19,6 +19,7 @@ import {
   parseBridgeRequest,
   type BridgeErrorCode,
   type BridgeEventName,
+  type BridgeInitPayload,
   type BridgeMethod,
   type BridgeOutbound,
   type BridgeRequest
@@ -70,6 +71,8 @@ export interface BridgeHostOptions {
   readonly openExternalLimiter?: RateLimiter
   readonly onReady?: () => void
   readonly timers?: RegistryTimers
+  /** Injectable for tests; defaults to 16 random bytes as hex. */
+  readonly projectHandle?: string
 }
 
 export interface BridgeHost {
@@ -85,7 +88,17 @@ export interface BridgeHost {
   isReady(): boolean
   /** Malformed messages from this frame, for the DEV badge tooltip. */
   stats(): { dropped: number }
+  /** The opaque per-mount handle the frame was given in `init` (SEC-L2). */
+  projectHandle(): string
   dispose(): void
+}
+
+/** Sandboxed frames have an opaque origin (§3); anything else is not our frame. */
+const OPAQUE_ORIGIN = 'null'
+
+function randomHandle(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 function ok(id: string, result: unknown): BridgeOutbound {
@@ -101,6 +114,7 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   const limiter = options.rateLimiter ?? sharedRateLimiterFor(options.policy.extensionId)
   const openExternalLimiter =
     options.openExternalLimiter ?? sharedOpenExternalLimiterFor(options.policy.extensionId)
+  const projectHandle = options.projectHandle ?? randomHandle()
   let policy = options.policy
   let settings: SettingsValues = options.settings ?? {}
   let ready = false
@@ -122,15 +136,16 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
 
   function init(): void {
     initSent = true
-    sendEvent('init', {
+    const payload: BridgeInitPayload = {
       extensionId: policy.extensionId,
       version: policy.version,
-      projectId: policy.projectId,
+      projectHandle,
       settings: { ...settings },
       theme: deps.theme(),
       focus: deps.focus.get(),
       mode: policy.mode
-    })
+    }
+    sendEvent('init', payload)
   }
 
   const telemetry = createTelemetryRegistry(
@@ -191,7 +206,8 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
 
   return {
     async handleMessage(event) {
-      if (disposed || !frame.isSource(event.source)) return
+      // SEC-L1: the source AND the opaque origin must both match (§3).
+      if (disposed || event.origin !== OPAQUE_ORIGIN || !frame.isSource(event.source)) return
       const request = parseBridgeRequest(event.data)
       if (request === null) {
         dropped += 1
@@ -210,6 +226,7 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
     },
     isReady: () => ready,
     stats: () => ({ dropped }),
+    projectHandle: () => projectHandle,
     dispose() {
       disposed = true
       telemetry.dispose()

@@ -99,6 +99,19 @@ export type BridgeEventName =
   | 'project.changed'
   | 'telemetry.sample'
 
+/** The §6.2 `init` payload. `projectHandle` (SEC-L2) is a per-mount random
+ *  opaque id — a display/cache key for the frame — and never the project's
+ *  UUID, which stays host-side. It is not accepted back as scope either way. */
+export interface BridgeInitPayload {
+  readonly extensionId: string
+  readonly version: string
+  readonly projectHandle: string
+  readonly settings: Readonly<Record<string, boolean | number | string>>
+  readonly theme: Readonly<Record<string, string>>
+  readonly focus: unknown
+  readonly mode: 'widget' | 'page' | 'window' | 'dev'
+}
+
 /** Events delivered only to frames holding ANY of the listed scopes (§6.7:
  *  `focus.changed` goes "only to frames with focus.read or graph.read"). */
 export const EVENT_SCOPES: Readonly<Partial<Record<BridgeEventName, readonly PermissionScope[]>>> =

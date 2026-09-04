@@ -88,8 +88,14 @@ describe('useExtensionBridge', () => {
     await waitFor(() => expect(m.received.at(-1)).toMatchObject({ event: 'init' }))
     expect(m.received[0]).toMatchObject({
       event: 'init',
-      data: { extensionId: 'bom', projectId: 'p1', mode: 'page', settings: { refresh: 'hourly' } }
+      data: {
+        extensionId: 'bom',
+        projectHandle: expect.any(String),
+        mode: 'page',
+        settings: { refresh: 'hourly' }
+      }
     })
+    expect(JSON.stringify(m.received[0])).not.toContain('p1')
     expect(screen.getByTestId('ready').textContent).toBe('false')
     m.send(readyRequest)
     await waitFor(() => expect(screen.getByTestId('ready').textContent).toBe('true'))
@@ -101,6 +107,15 @@ describe('useExtensionBridge', () => {
     const m = mount()
     m.send(readyRequest, window)
     m.send(readyRequest, null)
+    // SEC-L1: the frame's own window, but a non-opaque origin — dropped too.
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: readyRequest,
+        source: m.frameWindow,
+        origin: 'https://app.solus.dev'
+      })
+    )
     await act(async () => undefined)
     // jsdom fires the iframe's own about:blank `load`, so an `init` EVENT may be
     // present; what must be absent is any RESPONSE — a foreign source gets none.

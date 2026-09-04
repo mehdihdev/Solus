@@ -95,6 +95,20 @@ describe('drops (§6.5) — no response, no oracle', () => {
     expect(h.host.stats().dropped).toBe(0)
   })
 
+  it('ignores a message from the mounted frame whose origin is not opaque (SEC-L1)', async () => {
+    const h = harness()
+    const request = { v: 1, id: 'x', method: 'ui.ready', params: {} }
+    await h.host.handleMessage({
+      origin: 'https://app.solus.dev',
+      source: FRAME_WINDOW,
+      data: request
+    })
+    await h.host.handleMessage({ origin: '', source: FRAME_WINDOW, data: request })
+    expect(h.posted).toEqual([])
+    expect(h.host.isReady()).toBe(false)
+    expect(h.host.stats().dropped).toBe(0)
+  })
+
   it.each([
     ['wrong version', { v: 2, id: 'x', method: 'ui.ready', params: {} }],
     ['array params', { v: 1, id: 'x', method: 'ui.ready', params: [] }],
@@ -516,7 +530,7 @@ describe('handshake and events (§6.2, §6.7)', () => {
         data: {
           extensionId: 'bom',
           version: '1.2.0',
-          projectId: 'p1',
+          projectHandle: expect.stringMatching(/^[0-9a-f]{32}$/),
           settings: { refresh: 'hourly' },
           theme: { '--bg': '#0b0b0c', '--acc': '#ffb000' },
           focus: null,
@@ -524,6 +538,19 @@ describe('handshake and events (§6.2, §6.7)', () => {
         }
       }
     ])
+  })
+
+  it('the project handle is opaque and per mount: never the UUID, different per host (SEC-L2)', () => {
+    const a = harness({ projectId: '4f1c0e2a-9b7d-4c3e-8a2b-1d5e6f7a8b9c' })
+    const b = harness({ projectId: '4f1c0e2a-9b7d-4c3e-8a2b-1d5e6f7a8b9c' })
+    a.host.init()
+    b.host.init()
+    const handle = (h: Harness): string =>
+      (h.posted[0] as { data: { projectHandle: string } }).data.projectHandle
+    expect(JSON.stringify(a.posted)).not.toContain('4f1c0e2a')
+    expect(JSON.stringify(a.posted)).not.toContain('projectId')
+    expect(handle(a)).not.toBe(handle(b))
+    expect(a.host.projectHandle()).toBe(handle(a))
   })
 
   it('ui.ready completes the handshake (sending init first if it was never sent)', async () => {
