@@ -772,9 +772,13 @@ security pass.
 | `extension_install_writes_per_minute_per_user`    | per user    | 60      | §6.2, §6.3, §6.4, §8 PUT |
 | `extension_storage_writes_per_minute_per_install` | per install | 120     | §7 PUT/DELETE            |
 | `extension_policy_writes_per_minute_per_team`     | per team    | 30      | §10 PUT/DELETE           |
+| `extension_asset_downloads_per_minute_per_user`   | per user    | 240     | §4.5                     |
+| `extension_storage_reads_per_minute_per_user`     | per user    | 240     | §7 GET                   |
 
-Catalog reads (§4.1–§4.3, §4.5) ride the global limiter only. Exceeded → `429 rate_limited` +
-`Retry-After`; every 429 is a data event for abuse detection (CLAUDE.md §7).
+Catalog reads (§4.1–§4.3) ride the global limiter only; the two routes that serve stored bytes /
+values on demand (§4.5 assets, §7 GET) additionally carry the per-user read windows above (Phase 4
+L3). Exceeded → `429 rate_limited` + `Retry-After`; every 429 is a data event for abuse detection
+(CLAUDE.md §7).
 
 ---
 

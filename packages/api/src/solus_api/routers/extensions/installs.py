@@ -55,6 +55,7 @@ LAYOUT_REF_PATTERN = r"^(builtin:[a-z][a-z0-9-]{0,63}|ext:[a-z][a-z0-9-]{1,63})$
 _STORAGE_RAW_CEILING = 4 * svc.STORAGE_VALUE_MAX_BYTES
 _INSTALL_LIMITER = "extension_install_write_limiter"
 _STORAGE_LIMITER = "extension_storage_write_limiter"
+_STORAGE_READ_LIMITER = "extension_storage_read_limiter"
 _WINDOW_SECONDS = 60
 _SENTINEL = object()
 
@@ -454,10 +455,23 @@ async def _storage_row(
     return row
 
 
-@router.get("/extensions/{slug}/storage/{key}")
+@router.get("/extensions/{slug}/storage/{key}", response_model=None)
 async def get_storage(
-    slug: SlugPath, key: KeyPath, ctx: ProjectCtx, session: SessionDep
-) -> dict[str, Any]:
+    slug: SlugPath,
+    key: KeyPath,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> dict[str, Any] | Response:
+    # Phase 4 L3: reads ride a per-USER window (writes stay per-install, §12).
+    if limited := _rate_limited(
+        request,
+        _STORAGE_READ_LIMITER,
+        str(ctx.user.id),
+        settings.extension_storage_reads_per_minute_per_user,
+    ):
+        return limited
     extension, _ = await _storage_install(session, ctx, slug, "storage.get")
     row = await _storage_row(session, ctx.project.id, extension.id, key)
     return envelope(serialize_storage_value(row).payload())

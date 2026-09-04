@@ -19,15 +19,17 @@ from fixtures.extensions import VALID_ICON_SVG, build_zip, minimal_files
 from httpx import AsyncClient, Response
 from solus_api.models import (
     ArtifactStorage,
+    DataEvent,
     Extension,
     ExtensionReviewStatus,
     ExtensionVersion,
     ExtensionVersionAsset,
+    User,
     utcnow,
 )
 from solus_api.routers.extensions import bundle, publish
 from solus_api.storage.extension_bundle_store import ExtensionBundleStore
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 BUNDLE_URL = "/api/v1/extensions/bom/versions/1.0.0/bundle"
@@ -108,6 +110,9 @@ async def test_publisher_downloads_own_pending_bundle_with_verifiable_headers(
     assert resp.headers["content-type"] == "application/zip"
     assert resp.headers["content-length"] == str(len(data))
     assert resp.headers["x-solus-content-hash"] == hashlib.sha256(data).hexdigest()
+    # Phase 4 M6: never sniffed, always a download named after the version.
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["content-disposition"] == 'attachment; filename="bom-1.0.0.zip"'
 
 
 @pytest.mark.parametrize(
@@ -205,6 +210,36 @@ async def test_bundle_whose_bytes_are_gone_is_404_without_storage_detail(
 
 
 # -------------------------------------------------------------------- assets
+async def test_asset_download_rate_limit_is_429_with_retry_after_and_event(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+    app: FastAPI,
+) -> None:
+    """Phase 4 L3: the asset route rides its own per-user window, not just the
+    global limiter; the refusal is a data event like every other §12 429."""
+    await _published(client, alice_headers, bob_headers)
+    await db.execute(
+        update(User).where(User.email == "alice@example.com").values(data_collection_consent=True)
+    )
+    await db.commit()
+    await _add_asset(db, app, "OVERVIEW.md", "text/markdown", b"# Overview\n")
+    app.state.settings.extension_asset_downloads_per_minute_per_user = 1
+    assert (await client.get(ASSET_URL + "OVERVIEW.md", headers=alice_headers)).status_code == 200
+    resp = await client.get(ASSET_URL + "OVERVIEW.md", headers=alice_headers)
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "rate_limited"
+    assert resp.headers["Retry-After"] == "60"
+    # Bob's window is his own.
+    await _set_status(db, ExtensionReviewStatus.APPROVED)
+    assert (await client.get(ASSET_URL + "OVERVIEW.md", headers=bob_headers)).status_code == 200
+    event = await db.scalar(
+        select(DataEvent).where(DataEvent.event_type == "extension.rate_limited")
+    )
+    assert event is not None and event.payload == {"route": "asset"}
+
+
 async def test_recorded_markdown_asset_is_served_with_hardening_headers(
     client: AsyncClient,
     alice_headers: dict[str, str],

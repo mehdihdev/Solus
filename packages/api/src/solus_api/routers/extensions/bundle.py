@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/v1/extensions")
 
 _DOWNLOAD_WINDOW_SECONDS = 60
 _DOWNLOAD_LIMITER = "extension_download_limiter"
+_ASSET_LIMITER = "extension_asset_limiter"
 #: §4.5: a version's assets never change once approved.
 _ASSET_CACHE_CONTROL = "private, max-age=86400, immutable"
 #: Belt and braces over the review-time SVG reduction: even if an inline
@@ -74,6 +75,11 @@ async def download_bundle(
     headers = {
         "X-Solus-Content-Hash": resolved.version.content_hash,
         "Content-Length": str(len(data)),
+        # Phase 4 M6: a zip is never sniffed into something else and always
+        # lands as a download named after the version (slug/version are
+        # validated path segments, so the filename is attacker-free).
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f'attachment; filename="{slug}-{version}.zip"',
     }
     return Response(content=data, media_type="application/zip", headers=headers)
 
@@ -86,11 +92,15 @@ async def get_asset(
     request: Request,
     user: CurrentUser,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> Response:
     """Only a `path` recorded in `extension_version_assets` for this version is
     served, compared as a whole string; the bytes come from the store under the
-    asset row's key. Rides the global limiter only (§12)."""
+    asset row's key. Per-user window on top of the global limiter (§12, L3)."""
     slug, version = validate_extension_slug(slug), validate_semver(version)
+    limit = settings.extension_asset_downloads_per_minute_per_user
+    if _limiter(request, _ASSET_LIMITER).bump(str(user.id)) > limit:
+        return await _refused(session, user, "asset", "Too many asset downloads; slow down")
     resolved = await resolve_visible_version(session, slug, version, user_id=user.id)
     asset = await session.scalar(
         select(ExtensionVersionAsset).where(
