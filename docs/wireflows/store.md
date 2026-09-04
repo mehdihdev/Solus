@@ -43,7 +43,7 @@ ticket (catalog; detail › Overview / Settings / Permissions).
   - `NEEDS <KIND>` (mono, muted) when a required source is missing — groups of
     alternatives join with `|` (`NEEDS CAD|EDA`), conjunctions with `+`;
   - `BLOCKED` when the team policy refused an install (server `403
-    extension_blocked`);
+extension_blocked`);
   - `AVAILABLE` when installable now.
     The whole card is a button (`Open <name>`), keyboard-operable.
 - **Updates line**: when any install has an update, a muted "N updates
@@ -93,7 +93,7 @@ or `View → Store`) return to the catalog.
 - **Permissions step**: lists every declared scope (Solus copy per scope, the
   raw scope in mono) and network origin, links the bundle's privacy policy,
   and grants exactly the declared set on `Grant and install` (`PUT
-  /projects/{id}/extensions/{slug}` with the latest version), then fetches the
+/projects/{id}/extensions/{slug}` with the latest version), then fetches the
   bundle and hands it to the desktop installer. `Cancel` / ✕ / Escape create
   nothing. A server refusal shows inline in the step.
 - **Update flow**: `Update to <latest>` PUTs the newer version with the
@@ -149,7 +149,7 @@ Two columns: content (flex) and a 260px card stack.
 - One row per declared scope: icon tile · title · detail · `GRANTED` (ok) when
   the install row's `granted_scopes` holds it, `NOT GRANTED` (warn on an
   install that lacks it — a newer version added it; muted before an install).
-  Scopes are the contract's closed set (`graph.read`, `telemetry.read`,
+  Scopes are the contract's closed set of eight (`graph.read`, `telemetry.read`,
   `sources.read`, `findings.write`, `sol.ask`, `storage.own`, `focus.read`,
   `focus.write`); Solus code decides what each permits (CLAUDE.md §7).
 - **MAY CONNECT TO**: one row per `permissions.network` origin with the same

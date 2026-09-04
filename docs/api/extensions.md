@@ -454,7 +454,7 @@ not exist for you). `200`:
 }
 ```
 
-`review_problems` is `[]` for `pending | checking | approved`.
+`review_problems` is `[]` for `pending | checking | approved` (the field is always present; `checked_at` is not returned — there is no backing column).
 
 ### 5.3 DELETE /api/v1/extensions/{slug}/versions/{version} — unpublish
 

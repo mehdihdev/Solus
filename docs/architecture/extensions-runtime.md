@@ -270,14 +270,14 @@ leaves main; the reason is logged with the requested URL):
 7. On the first serve of a file in this app session its sha256 is compared with `index.json`; a
    mismatch → 404, the cache entry is marked `corrupt`, and the installer re-downloads. Dev
    registrations skip this step (there is no recorded hash) and are served with
-   `Cache-Control: no-store`.
+   no `Cache-Control` header is set (the frame is remounted on Reload; as shipped).
 
 Every `.html` response carries the frame CSP header:
 
 ```
-Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self';
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
   img-src 'self' data:; font-src 'self'; connect-src 'none'; frame-src 'none';
-  object-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'
+  object-src 'none'; base-uri 'none'; form-action 'none'
 ```
 
 `'self'` resolves to `solus-ext://<id>` — the bundle's own files and nothing remote. No
@@ -395,7 +395,7 @@ emits a data-collection event `extension.bridge_refused { extensionId, version, 
   (169.254/16 including `169.254.169.254`), CGNAT (100.64/10), `0.0.0.0/8`, and IPv6 equivalents
   (`::1`, `fc00::/7`, `fe80::/10`) are refused; redirects are followed manually up to 3 hops and
   only while the origin is unchanged; request body ≤ 1 MiB; response body ≤ 5 MiB (aborted past
-  the cap → `network_denied` with message "response too large"); 30 s timeout; no cookie jar; the
+  the cap → `network_denied` with message "response too large"); 15 s timeout; no cookie jar; the
   host adds **no** headers of its own beyond `User-Agent: Solus-Extension/<id>`; the extension may
   set its own headers except `Cookie`, `Host`, `Origin`, `Referer`. Responses are returned as text
   when the content-type is textual, else base64.
@@ -441,7 +441,7 @@ only refuse, never over-permit.
 
 ## 7. Developer mode
 
-- Entry: Settings → Developer → "Load unpacked extension…" (renderer) → IPC `ext-dev:register`
+- Entry: Settings → Developer → "Load unpacked extension…" (renderer) → IPC `ext:dev:load` (and `ext:dev:remove`)
   → main opens the OS folder picker. Main refuses `~`, `~/.solus`, any filesystem root, and any
   path under `~/.solus/extensions/` (a dev registration must never alias the cache), with a fixed
   reason string.
@@ -462,7 +462,7 @@ only refuse, never over-permit.
 - **Reload** re-reads and re-validates the manifest, then remounts every frame of `dev:<id>` with a
   fresh cache-busting nonce (`?r=<n>`, ignored by the handler). **Remove** drops the registration
   and unmounts its frames.
-- Registrations are session-only in this build (§10, open question 1).
+- Registrations PERSIST across restarts (as shipped, EXT-05/EXT-20): `index.json` records `source: "dev"` + `devPath`, and the desktop re-validates each folder on launch; a folder that no longer validates shows as "not loaded" with its problems until removed.
 
 ## 8. Failure modes and what the user sees
 
@@ -515,11 +515,11 @@ and every error names the step that failed.
 
 ## 10. Open questions
 
-1. **Persistence of developer registrations across app restarts.** This design keeps them
-   session-only. Persisting them means a new block in `~/.solus/extensions/index.json` (or a
-   `config.json` key), which is an ADR-034/035 format amendment — a human call. Recommendation:
-   add `"dev": [{ id, path }]` to `index.json` in a follow-up, validated on read like everything
-   else there.
+1. **Persistence of developer registrations across app restarts — RESOLVED as shipped.**
+   Registrations persist in `~/.solus/extensions/index.json` as `source: "dev"` entries with
+   `devPath` (ADR-034 amendment 2026-09-03 covers the file; the desktop re-validates each folder
+   on launch). Server-attributed bridge methods (`sol.ask`, `findings.create`, `storage.*`) stay
+   refused for dev registrations (`blocked`) because they have no install row.
 2. **Server-attributed methods for dev registrations.** `sol.ask`, `findings.create` and `storage.*`
    require the server to verify an install row, which a dev registration does not have. This
    design refuses them with `blocked` for dev entries. If developers need to exercise them before

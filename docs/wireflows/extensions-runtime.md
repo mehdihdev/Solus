@@ -177,7 +177,7 @@ open).
 ```
 DEVELOPER
   Load an unpacked extension from a folder on this computer. It runs with a
-  DEV badge, is never published, and is forgotten when Solus quits.
+  DEV badge, is never published, and is remembered across restarts (re-validated on launch).
 
   [ Load unpacked extension… ]
 
