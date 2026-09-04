@@ -39,8 +39,10 @@ import {
   EXT_SCHEME_PRIVILEGES
 } from './extensions/extProtocol'
 import {
+  closeExtensionWindowsOnSignOut,
   createExtensionBrowserWindow,
-  createExtensionWindowManager
+  createExtensionWindowManager,
+  type ExtensionWindowManager
 } from './extensions/extensionWindow'
 import { createExtensionsIpc, registerExtensionsIpc } from './extensions/extensionsIpc'
 import { realNetProxyDeps } from './extensions/netProxy'
@@ -62,6 +64,8 @@ async function openBillingUrl(url: string): Promise<{ ok: boolean }> {
 // The app's own renderer window — the only legitimate sender for privileged
 // IPC (billing), and the parent for the checkout window.
 let mainWindow: BrowserWindow | null = null
+// Extension windows (SOLUSDEV-235): closed on sign-out and with the main window.
+let extensionWindows: ExtensionWindowManager | null = null
 
 /**
  * The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
@@ -122,14 +126,17 @@ function registerSolChatCacheHandlers(): void {
  *  ready — the scheme itself is declared privileged at module load above. */
 function registerExtensionHandlers(): void {
   protocol.handle(EXT_SCHEME, createExtProtocolHandler(realExtensionFs))
+  const windows = createExtensionWindowManager(createExtensionBrowserWindow)
+  extensionWindows = windows
   registerExtensionsIpc(
     ipcMain,
-    isMainRendererSender,
-    createExtensionsIpc({
-      fs: realExtensionFs,
-      net: realNetProxyDeps,
-      windows: createExtensionWindowManager(createExtensionBrowserWindow)
-    })
+    {
+      isMainRenderer: isMainRendererSender,
+      // SEC-M3: extension windows host the same trusted renderer and need the
+      // runtime channels; the manager admits only windows it created.
+      isExtensionWindow: (event) => windows.isSender(event.sender)
+    },
+    createExtensionsIpc({ fs: realExtensionFs, net: realNetProxyDeps, windows })
   )
 }
 
@@ -165,6 +172,8 @@ function createWindow(): void {
   })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
+    // No main window → no session to host an extension bridge under.
+    extensionWindows?.closeAll()
   })
 
   // Renderer anchors reach the OS browser only over https (SOLUSDEV-235 / H2).
@@ -300,9 +309,11 @@ if (!app.requestSingleInstanceLock()) {
     // Supabase access token over stdin. Renderer input is untrusted — accept
     // only a string token or null (signout); never log it. Only the app's own
     // renderer may relay a token (credential-bearing, like bridge:license — L2).
+    // A null token is sign-out: the extension windows go with the session.
     ipcMain.handle('bridge:token', (event, token: unknown) => {
       if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
         sendAccessToken(token)
+        if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
       }
     })
     // The project the companion serves. The bridge route is project-scoped, so

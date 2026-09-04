@@ -75,6 +75,8 @@ export function isWithinRendererOrigin(currentUrl: string, targetUrl: string): b
 
 /** Structural slice of BrowserWindow — what the registry needs. */
 export interface ExtensionWindowHandle {
+  /** The window's webContents identity, for the IPC sender gate (SEC-M3). */
+  readonly webContents: unknown
   isDestroyed(): boolean
   once(event: 'closed', listener: () => void): void
   focus(): void
@@ -87,6 +89,8 @@ export interface ExtensionWindowManager {
   /** Create the window for `spec.id`, or focus the live one. */
   open(spec: ExtensionWindowSpec): OpenWindowResult
   isOpen(id: string): boolean
+  /** SEC-M3: true only for the webContents of a LIVE window this manager created. */
+  isSender(sender: unknown): boolean
   closeAll(): void
 }
 
@@ -118,11 +122,29 @@ export function createExtensionWindowManager(
       return { ok: true, created: true }
     },
     isOpen: (id) => live(id) !== null,
+    isSender: (sender) =>
+      [...windows.keys()].some((id) => {
+        const win = live(id)
+        return win !== null && sender === win.webContents
+      }),
     closeAll() {
       for (const id of [...windows.keys()]) live(id)?.close()
       windows.clear()
     }
   }
+}
+
+/**
+ * The `bridge:token` relay is the one place main learns about sign-out: a
+ * null token means the session ended, and every extension window — which
+ * hosts a bridge running under that session — must go with it. A string
+ * token (sign-in / refresh) leaves the windows alone.
+ */
+export function closeExtensionWindowsOnSignOut(
+  windows: ExtensionWindowManager,
+  token: unknown
+): void {
+  if (token === null) windows.closeAll()
 }
 
 /** The real second BrowserWindow: same renderer, #/ext-window/<id> route. */

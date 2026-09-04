@@ -43,14 +43,30 @@ export function createRateLimiter(options: RateLimiterOptions = {}): RateLimiter
   }
 }
 
-const shared = new Map<string, RateLimiter>()
+function sharedPool(make: () => RateLimiter): (extensionId: string) => RateLimiter {
+  const pool = new Map<string, RateLimiter>()
+  return (extensionId) => {
+    const existing = pool.get(extensionId)
+    if (existing) return existing
+    const created = make()
+    pool.set(extensionId, created)
+    return created
+  }
+}
 
 /** The renderer-wide limiter for an extension — every BridgeHost for the same
  *  id draws on the same budget. */
-export function sharedRateLimiterFor(extensionId: string): RateLimiter {
-  const existing = shared.get(extensionId)
-  if (existing) return existing
-  const created = createRateLimiter()
-  shared.set(extensionId, created)
-  return created
+export const sharedRateLimiterFor = sharedPool(() => createRateLimiter())
+
+/** SEC-C1: `ui.openExternal` has its own, much smaller budget (3 per 60 s per
+ *  extension). Calls are counted, not held, so in-flight is unbounded here. */
+export function createOpenExternalLimiter(now?: () => number): RateLimiter {
+  return createRateLimiter({
+    ...(now === undefined ? {} : { now }),
+    windowMs: BRIDGE_LIMITS.openExternalWindowMs,
+    maxRequests: BRIDGE_LIMITS.openExternalPerWindow,
+    maxInFlight: Number.POSITIVE_INFINITY
+  })
 }
+
+export const sharedOpenExternalLimiterFor = sharedPool(() => createOpenExternalLimiter())

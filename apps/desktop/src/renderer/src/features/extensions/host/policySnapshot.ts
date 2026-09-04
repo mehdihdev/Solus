@@ -2,7 +2,7 @@
 // §6.8) as the host holds it for ONE mounted extension, and the check every
 // bridge call passes before anything else runs. Scope comes from here, never
 // from the message (§3): the policy names the project; a request cannot.
-import type { PermissionScope } from '@solus/shared-types'
+import type { ExtensionManifest, PermissionScope } from '@solus/shared-types'
 import type { ExtensionInstallApi } from '../../../lib/api/resources.extensions'
 import {
   METHOD_SCOPES,
@@ -23,6 +23,9 @@ export interface BridgePolicy {
   readonly grantedScopes: readonly PermissionScope[]
   /** https origins the user granted; `net.fetch` targets must match exactly. */
   readonly grantedNetwork: readonly string[]
+  /** The manifest's `store.links` values verbatim — the only URLs
+   *  `ui.openExternal` may open outside the granted origins (SEC-C1). */
+  readonly storeLinks?: readonly string[]
   readonly enabled: boolean
   readonly blocked: boolean
   readonly mode: BridgeMode
@@ -43,6 +46,11 @@ export function authorize(policy: BridgePolicy, method: string): BridgeErrorCode
   return null
 }
 
+/** The `store.links` values a manifest declares, as exact URLs. */
+export function storeLinksOf(manifest: ExtensionManifest): readonly string[] {
+  return Object.values(manifest.store.links).filter((v): v is string => typeof v === 'string')
+}
+
 /** A §6.1 install row → the policy for a frame mounted in `projectId`. A team
  *  block is reported with `enabled: false` server-side already; mirrored here
  *  so a stale row can only refuse, never over-permit. */
@@ -58,6 +66,7 @@ export function policyFromInstall(
     projectId,
     grantedScopes: [...install.granted_scopes],
     grantedNetwork: [...install.granted_network],
+    storeLinks: storeLinksOf(install.version.manifest),
     enabled: install.enabled && !blocked,
     blocked,
     mode

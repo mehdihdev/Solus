@@ -5,6 +5,7 @@ import type { BridgeDeps, SettingsValues } from '../bridgeDeps'
 import type { BridgeEventName, BridgeMethod } from '../bridgeProtocol'
 import type { ValidatedParams } from '../paramsSchema'
 import type { BridgePolicy } from '../policySnapshot'
+import type { RateLimiter } from '../rateLimiter'
 import type { TelemetryRegistry } from './telemetryRegistry'
 
 export interface BridgeSession {
@@ -18,6 +19,8 @@ export interface HandlerContext {
   readonly settings: SettingsValues
   readonly deps: BridgeDeps
   readonly session: BridgeSession
+  /** SEC-C1: the per-extension `ui.openExternal` budget. */
+  readonly openExternalLimiter: RateLimiter
 }
 
 export type Handler<M extends BridgeMethod> = (

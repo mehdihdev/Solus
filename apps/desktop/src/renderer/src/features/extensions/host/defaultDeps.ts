@@ -17,6 +17,7 @@ import { selectFocusedEntity, useFocusStore } from '../../workspace/focusStore'
 import { toSharedFocus } from '../../workspace/useSharedFocus'
 import type { BridgeDeps, BridgeGraphDeps } from './bridgeDeps'
 import { createAttributedSolAsk } from './handlers/sol'
+import { createRefusalReporter } from './refusalReporter'
 
 const seg = encodeURIComponent
 
@@ -48,6 +49,11 @@ export function currentThemeVars(): Record<string, string> {
   const { theme, accent } = useSettingsStore.getState()
   return buildThemeVars(theme, accent)
 }
+
+/** One renderer-wide reporter: the per-extension budget spans every frame. */
+const refusals = createRefusalReporter({
+  projectId: () => useWorkspaceStore.getState().project?.id
+})
 
 export function defaultBridgeDeps(): BridgeDeps {
   const extensions = getDesktopExtensionsBridge()
@@ -89,8 +95,8 @@ export function defaultBridgeDeps(): BridgeDeps {
       }
     },
     theme: currentThemeVars,
-    // Data-collection hook (§6.4 `extension.bridge_refused`): a no-op until the
-    // client event path (POST /events) is wired for the desktop.
-    emitRefusal: () => undefined
+    // Data-collection hook (§6.4 `extension.bridge_refused`), batched and
+    // budgeted (SEC-H4/M1) through POST /events (API.md §2.13).
+    emitRefusal: (refusal) => refusals.emit(refusal)
   }
 }

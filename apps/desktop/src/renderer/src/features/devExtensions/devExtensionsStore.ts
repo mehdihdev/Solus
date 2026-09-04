@@ -8,9 +8,13 @@
 // Solus was closed is never served from a stale renderer snapshot.
 //
 // Grants: a dev session is the developer's own local code, so every scope and
-// origin the manifest declares is granted for the session (§7). Nothing here is
-// ever sent to the server, and the host still refuses server-attributed
-// methods in dev mode.
+// origin the manifest declares is granted for the session (§7) — but only
+// once the developer has ACKNOWLEDGED that fact for this (slug, devPath)
+// (SEC-H3): until `acknowledge(slug)` the registration is listed in Settings
+// and mounts nowhere (`selectDevRegistration` is null). The acknowledgement
+// is session-held like the grants themselves; a different folder for the
+// same slug, or a restart, asks again. Nothing here is ever sent to the
+// server, and the host still refuses server-attributed methods in dev mode.
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import type { ExtensionManifest } from '@solus/shared-types'
 import { getDesktopExtensionsBridge, type ExtensionsBridge } from '../../lib/desktopBridge'
@@ -25,6 +29,8 @@ export interface DevExtensionEntry {
   readonly loadedAt: string
   /** The contract's dotted-path problems from the LAST validation, verbatim. */
   readonly problems: readonly string[]
+  /** SEC-H3: the developer accepted "runs with every permission it declares". */
+  readonly acknowledged: boolean
 }
 
 export type DevLoadOutcome =
@@ -43,6 +49,8 @@ export interface DevExtensionsState {
   load(path: string): Promise<DevLoadOutcome>
   reload(slug: string): Promise<DevLoadOutcome>
   remove(slug: string): Promise<boolean>
+  /** SEC-H3: accept the declared permissions for this (slug, devPath). */
+  acknowledge(slug: string): void
   reset(): void
 }
 
@@ -67,8 +75,22 @@ async function devLoad(bridge: ExtensionsBridge, path: string): Promise<DevLoadR
   }
 }
 
-function loadedEntry(result: Extract<DevLoadResult, { ok: true }>, now: string): DevExtensionEntry {
-  return { manifest: result.manifest, devPath: result.devPath, loadedAt: now, problems: [] }
+function loadedEntry(
+  result: Extract<DevLoadResult, { ok: true }>,
+  now: string,
+  previous: DevExtensionEntry | undefined
+): DevExtensionEntry {
+  // The acknowledgement is per (slug, devPath): a reload of the same folder
+  // keeps it, a different folder under the same id asks again.
+  const acknowledged =
+    previous !== undefined && previous.devPath === result.devPath && previous.acknowledged
+  return {
+    manifest: result.manifest,
+    devPath: result.devPath,
+    loadedAt: now,
+    problems: [],
+    acknowledged
+  }
 }
 
 /** The failure row: the last good manifest (if any) with the fresh problems. */
@@ -82,7 +104,8 @@ function failedEntry(
     manifest: previous?.manifest ?? null,
     devPath,
     loadedAt: previous?.loadedAt ?? now,
-    problems
+    problems,
+    acknowledged: previous?.acknowledged ?? false
   }
 }
 
@@ -100,7 +123,7 @@ async function hydrateEntries(bridge: ExtensionsBridge, now: string): Promise<En
     devRows.map(async ([slug, devPath]): Promise<readonly [string, DevExtensionEntry]> => {
       const result = await devLoad(bridge, devPath)
       return result.ok
-        ? [result.manifest.extension.id, loadedEntry(result, now)]
+        ? [result.manifest.extension.id, loadedEntry(result, now, undefined)]
         : [slug, failedEntry(undefined, devPath, result.problems, now)]
     })
   )
@@ -131,7 +154,9 @@ export function createDevExtensionsStore(
       const result = await devLoad(bridge, path)
       if (result.ok) {
         const slug = result.manifest.extension.id
-        set((s) => ({ entries: { ...s.entries, [slug]: loadedEntry(result, deps.now()) } }))
+        set((s) => ({
+          entries: { ...s.entries, [slug]: loadedEntry(result, deps.now(), s.entries[slug]) }
+        }))
         return { ok: true, slug }
       }
       const slug = slugOfPath(get().entries, path)
@@ -161,17 +186,27 @@ export function createDevExtensionsStore(
       return true
     },
 
+    acknowledge(slug) {
+      set((s) => {
+        const entry = s.entries[slug]
+        if (entry === undefined || entry.acknowledged) return s
+        return { entries: { ...s.entries, [slug]: { ...entry, acknowledged: true } } }
+      })
+    },
+
     reset: () => set({ entries: {} })
   }))
 }
 
 /** The session's developer registration for `slug` in the shape the frame
- *  resolver consumes (installedBundle.ts `DevRegistration`), or null. */
+ *  resolver consumes (installedBundle.ts `DevRegistration`), or null — also
+ *  null until the developer acknowledged the declared permissions (SEC-H3). */
 export function selectDevRegistration(
   state: Pick<DevExtensionsState, 'entries'>,
   slug: string
 ): DevRegistration | null {
-  const manifest = state.entries[slug]?.manifest ?? null
+  const entry = state.entries[slug]
+  const manifest = entry?.acknowledged ? entry.manifest : null
   if (manifest === null) return null
   return {
     manifest,

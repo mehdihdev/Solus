@@ -2,7 +2,8 @@
 // first (extensions-runtime.md §6.8; dev refusals §10).
 import { describe, it, expect } from 'vitest'
 import type { ExtensionInstallApi } from '../../../lib/api/resources.extensions'
-import { authorize, policyFromInstall, type BridgePolicy } from './policySnapshot'
+import { authorize, policyFromInstall, storeLinksOf, type BridgePolicy } from './policySnapshot'
+import { fakeManifest } from '../frame/testing/fixtures'
 
 const base: BridgePolicy = {
   extensionId: 'bom',
@@ -61,7 +62,17 @@ describe('authorize', () => {
 describe('policyFromInstall', () => {
   const install = {
     extension: { slug: 'bom', name: 'BOM', verified: true, publisher: { display_name: 'Solus' } },
-    version: { version: '1.2.0', manifest: {} },
+    version: {
+      version: '1.2.0',
+      manifest: fakeManifest({
+        store: {
+          overview: 'OVERVIEW.md',
+          links: { documentation: 'https://docs.example.com/bom' },
+          screenshots: [],
+          sections: []
+        }
+      })
+    },
     enabled: true,
     granted_scopes: ['graph.read'],
     granted_network: ['https://api.octopart.com'],
@@ -75,6 +86,7 @@ describe('policyFromInstall', () => {
       projectId: 'p1',
       grantedScopes: ['graph.read'],
       grantedNetwork: ['https://api.octopart.com'],
+      storeLinks: ['https://docs.example.com/bom'],
       enabled: true,
       blocked: false,
       mode: 'page'
@@ -87,5 +99,20 @@ describe('policyFromInstall', () => {
       blocked: true,
       enabled: false
     })
+  })
+})
+
+describe('storeLinksOf (SEC-C1)', () => {
+  it('lists the manifest store.links values verbatim and nothing for an empty table', () => {
+    const manifest = fakeManifest({
+      store: {
+        overview: 'OVERVIEW.md',
+        links: { documentation: 'https://docs.example.com/bom', issues: 'https://x.y/issues' },
+        screenshots: [],
+        sections: []
+      }
+    })
+    expect(storeLinksOf(manifest)).toEqual(['https://docs.example.com/bom', 'https://x.y/issues'])
+    expect(storeLinksOf(fakeManifest())).toEqual([])
   })
 })

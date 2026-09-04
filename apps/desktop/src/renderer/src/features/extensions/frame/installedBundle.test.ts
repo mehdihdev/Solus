@@ -176,10 +176,16 @@ describe('resolveInstalledBundle cache', () => {
 })
 
 describe('resolveInstalledBundle developer mode', () => {
-  it('lets a developer registration take precedence with mode dev and version dev', async () => {
-    const manifest = fakeManifest()
+  const dev = {
+    manifest: fakeManifest(),
+    grantedScopes: ['graph.read' as const],
+    grantedNetwork: []
+  }
+
+  it('lets a developer registration shadow a NON-blocked install, with mode dev and version dev', async () => {
     const deps = fakeBundleDeps({
-      devRegistration: () => ({ manifest, grantedScopes: ['graph.read'], grantedNetwork: [] })
+      listInstalls: async () => [fakeInstall({ enabled: false })],
+      devRegistration: () => dev
     })
     const state = await resolveInstalledBundle(input, deps)
     expect(state).toMatchObject({
@@ -190,7 +196,39 @@ describe('resolveInstalledBundle developer mode', () => {
       settings: {},
       policy: { mode: 'dev', version: 'dev', enabled: true, blocked: false, projectId: 'p1' }
     })
-    expect(deps.listInstalls).not.toHaveBeenCalled()
+    expect(deps.fetchBundle).not.toHaveBeenCalled()
+  })
+
+  it('mounts a developer registration when the project has no install row at all', async () => {
+    const deps = fakeBundleDeps({ listInstalls: async () => [], devRegistration: () => dev })
+    expect(await resolveInstalledBundle(input, deps)).toMatchObject({
+      status: 'ready',
+      policy: { mode: 'dev' }
+    })
+  })
+
+  it('a team block on the slug wins over a developer registration (SEC-H3)', async () => {
+    const deps = fakeBundleDeps({
+      listInstalls: vi.fn(async () => [
+        fakeInstall({ enabled: false, policy: { blocked: true, default_installed: false } })
+      ]),
+      devRegistration: () => dev
+    })
+    expect(await resolveInstalledBundle(input, deps)).toEqual({ status: 'blocked', name: 'BOM' })
+    expect(deps.listInstalls).toHaveBeenCalledWith('p1')
+  })
+
+  it('fails closed when the block check cannot run, even with a developer registration', async () => {
+    const deps = fakeBundleDeps({
+      listInstalls: async () => {
+        throw new ApiError(500, 'internal', 'boom')
+      },
+      devRegistration: () => dev
+    })
+    expect(await resolveInstalledBundle(input, deps)).toMatchObject({
+      status: 'error',
+      step: 'install_lookup'
+    })
   })
 
   it('reports a missing view for a developer registration too', async () => {

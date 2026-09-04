@@ -2,8 +2,12 @@
 // extension frame (docs/architecture/extensions-runtime.md §6). Pipeline per
 // inbound message:
 //
-//   source check → parse (drop) → snapshot/scope (authorize) → duplicate id →
-//   rate limit → param schema → handler → exactly one response
+//   source+origin check → parse (drop) → rate limit → snapshot/scope
+//   (authorize) → duplicate id → param schema → handler → exactly one response
+//
+// The limiter runs FIRST (SEC-H4): a frame spamming unknown methods or
+// ungranted scopes is rate-limited like any other flood, and every refusal it
+// still earns is metered by the refusal reporter, not sent unbounded.
 //
 // Outbound messages never carry a token, a base URL, a header, or a server
 // body (§3 — the frame's origin is opaque, so `postMessage` targets '*').
@@ -15,6 +19,7 @@ import {
   parseBridgeRequest,
   type BridgeErrorCode,
   type BridgeEventName,
+  type BridgeInitPayload,
   type BridgeMethod,
   type BridgeOutbound,
   type BridgeRequest
@@ -30,7 +35,7 @@ import { telemetryHandlers } from './handlers/telemetry'
 import { createTelemetryRegistry, type RegistryTimers } from './handlers/telemetryRegistry'
 import { validateParams } from './paramsSchema'
 import { authorize, type BridgePolicy } from './policySnapshot'
-import { sharedRateLimiterFor, type RateLimiter } from './rateLimiter'
+import { sharedOpenExternalLimiterFor, sharedRateLimiterFor, type RateLimiter } from './rateLimiter'
 
 const HANDLERS: { readonly [M in BridgeMethod]: Handler<M> } = {
   ...appHandlers,
@@ -62,8 +67,12 @@ export interface BridgeHostOptions {
   readonly deps: BridgeDeps
   /** Defaults to the renderer-wide per-extension limiter. */
   readonly rateLimiter?: RateLimiter
+  /** SEC-C1: defaults to the renderer-wide per-extension `ui.openExternal` budget. */
+  readonly openExternalLimiter?: RateLimiter
   readonly onReady?: () => void
   readonly timers?: RegistryTimers
+  /** Injectable for tests; defaults to 16 random bytes as hex. */
+  readonly projectHandle?: string
 }
 
 export interface BridgeHost {
@@ -79,7 +88,17 @@ export interface BridgeHost {
   isReady(): boolean
   /** Malformed messages from this frame, for the DEV badge tooltip. */
   stats(): { dropped: number }
+  /** The opaque per-mount handle the frame was given in `init` (SEC-L2). */
+  projectHandle(): string
   dispose(): void
+}
+
+/** Sandboxed frames have an opaque origin (§3); anything else is not our frame. */
+const OPAQUE_ORIGIN = 'null'
+
+function randomHandle(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 function ok(id: string, result: unknown): BridgeOutbound {
@@ -93,6 +112,9 @@ function fail(id: string, code: BridgeErrorCode, message?: string): BridgeOutbou
 export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   const { frame, deps } = options
   const limiter = options.rateLimiter ?? sharedRateLimiterFor(options.policy.extensionId)
+  const openExternalLimiter =
+    options.openExternalLimiter ?? sharedOpenExternalLimiterFor(options.policy.extensionId)
+  const projectHandle = options.projectHandle ?? randomHandle()
   let policy = options.policy
   let settings: SettingsValues = options.settings ?? {}
   let ready = false
@@ -114,15 +136,16 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
 
   function init(): void {
     initSent = true
-    sendEvent('init', {
+    const payload: BridgeInitPayload = {
       extensionId: policy.extensionId,
       version: policy.version,
-      projectId: policy.projectId,
+      projectHandle,
       settings: { ...settings },
       theme: deps.theme(),
       focus: deps.focus.get(),
       mode: policy.mode
-    })
+    }
+    sendEvent('init', payload)
   }
 
   const telemetry = createTelemetryRegistry(
@@ -156,7 +179,7 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   async function execute<M extends BridgeMethod>(request: BridgeRequest, method: M): Promise<void> {
     const params = validateParams(method, request.params)
     if (params === null) return refuse(request, 'invalid_params')
-    const ctx: HandlerContext = { policy, settings, deps, session }
+    const ctx: HandlerContext = { policy, settings, deps, session, openExternalLimiter }
     inFlightIds.add(request.id)
     try {
       const result = await (HANDLERS[method] as Handler<M>)(params, ctx)
@@ -170,11 +193,11 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   }
 
   async function dispatch(request: BridgeRequest): Promise<void> {
-    const denied = authorize(policy, request.method)
-    if (denied !== null) return refuse(request, denied)
-    if (inFlightIds.has(request.id)) return refuse(request, 'invalid_params')
     if (limiter.tryAcquire() === 'rate_limited') return refuse(request, 'rate_limited')
     try {
+      const denied = authorize(policy, request.method)
+      if (denied !== null) return refuse(request, denied)
+      if (inFlightIds.has(request.id)) return refuse(request, 'invalid_params')
       await execute(request, request.method as BridgeMethod)
     } finally {
       limiter.release()
@@ -183,7 +206,8 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
 
   return {
     async handleMessage(event) {
-      if (disposed || !frame.isSource(event.source)) return
+      // SEC-L1: the source AND the opaque origin must both match (§3).
+      if (disposed || event.origin !== OPAQUE_ORIGIN || !frame.isSource(event.source)) return
       const request = parseBridgeRequest(event.data)
       if (request === null) {
         dropped += 1
@@ -202,6 +226,7 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
     },
     isReady: () => ready,
     stats: () => ({ dropped }),
+    projectHandle: () => projectHandle,
     dispose() {
       disposed = true
       telemetry.dispose()

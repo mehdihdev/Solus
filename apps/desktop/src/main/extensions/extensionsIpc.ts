@@ -159,23 +159,30 @@ export interface ExtensionsIpcMain {
   ): void
 }
 
-/** Bind the seven channels; `isAllowedSender` is required, never defaulted. */
+/** Who may invoke which channel (SEC-M3). Both predicates are required, never
+ *  defaulted: the app's own renderer, and the extension windows the window
+ *  manager created (they host the same trusted renderer at #/ext-window/<id>
+ *  and need index / net.fetch / window.open to run a bridge at all). */
+export interface ExtensionSenders {
+  isMainRenderer(event: IpcMainInvokeEvent): boolean
+  isExtensionWindow(event: IpcMainInvokeEvent): boolean
+}
+
+/** Bind the seven channels. Install / uninstall / dev-mode stay main-window
+ *  only; the read + runtime channels admit extension windows too. */
 export function registerExtensionsIpc(
   ipc: ExtensionsIpcMain,
-  isAllowedSender: (event: IpcMainInvokeEvent) => boolean,
+  senders: ExtensionSenders,
   impl: ExtensionsIpc
 ): void {
-  ipc.handle(EXT_CHANNELS.index, (event) => impl.index(isAllowedSender(event)))
-  ipc.handle(EXT_CHANNELS.install, (event, payload) =>
-    impl.install(isAllowedSender(event), payload)
-  )
-  ipc.handle(EXT_CHANNELS.uninstall, (event, id) => impl.uninstall(isAllowedSender(event), id))
-  ipc.handle(EXT_CHANNELS.devLoad, (event, path) => impl.devLoad(isAllowedSender(event), path))
-  ipc.handle(EXT_CHANNELS.devRemove, (event, id) => impl.devRemove(isAllowedSender(event), id))
-  ipc.handle(EXT_CHANNELS.windowOpen, (event, payload) =>
-    impl.openWindow(isAllowedSender(event), payload)
-  )
-  ipc.handle(EXT_CHANNELS.netFetch, (event, payload) =>
-    impl.netFetch(isAllowedSender(event), payload)
-  )
+  const mainOnly = senders.isMainRenderer
+  const runtime = (event: IpcMainInvokeEvent): boolean =>
+    senders.isMainRenderer(event) || senders.isExtensionWindow(event)
+  ipc.handle(EXT_CHANNELS.index, (event) => impl.index(runtime(event)))
+  ipc.handle(EXT_CHANNELS.install, (event, payload) => impl.install(mainOnly(event), payload))
+  ipc.handle(EXT_CHANNELS.uninstall, (event, id) => impl.uninstall(mainOnly(event), id))
+  ipc.handle(EXT_CHANNELS.devLoad, (event, path) => impl.devLoad(mainOnly(event), path))
+  ipc.handle(EXT_CHANNELS.devRemove, (event, id) => impl.devRemove(mainOnly(event), id))
+  ipc.handle(EXT_CHANNELS.windowOpen, (event, payload) => impl.openWindow(runtime(event), payload))
+  ipc.handle(EXT_CHANNELS.netFetch, (event, payload) => impl.netFetch(runtime(event), payload))
 }
