@@ -224,6 +224,15 @@ function expand(value: object): { children: unknown[]; keyChars: number } {
  * graph just to learn it is over the 64 KiB cap. Every string is ≥ one byte
  * per UTF-16 unit, so total text over the message cap is over the cap.
  */
+function isContainer(value: unknown): value is object {
+  return typeof value === 'object' && value !== null
+}
+
+function withinBudget(nodes: number, chars: number, value: unknown): boolean {
+  if (nodes > BRIDGE_LIMITS.paramsNodes || chars > BRIDGE_LIMITS.messageBytes) return false
+  return typeof value !== 'string' || value.length <= BRIDGE_LIMITS.paramsStringBytes
+}
+
 function withinStructuralBounds(params: Record<string, unknown>): boolean {
   let nodes = 0
   let chars = 0
@@ -231,13 +240,9 @@ function withinStructuralBounds(params: Record<string, unknown>): boolean {
   while (stack.length > 0) {
     const { value, depth } = stack.pop() as Frame
     nodes += 1
-    if (nodes > BRIDGE_LIMITS.paramsNodes || chars > BRIDGE_LIMITS.messageBytes) return false
-    if (typeof value === 'string') {
-      if (value.length > BRIDGE_LIMITS.paramsStringBytes) return false
-      chars += value.length
-      continue
-    }
-    if (typeof value !== 'object' || value === null) continue
+    if (typeof value === 'string') chars += value.length
+    if (!withinBudget(nodes, chars, value)) return false
+    if (!isContainer(value)) continue
     if (depth > BRIDGE_LIMITS.paramsDepth) return false
     const { children, keyChars } = expand(value)
     if (children.length > BRIDGE_LIMITS.paramsKeys) return false

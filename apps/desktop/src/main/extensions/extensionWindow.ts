@@ -134,6 +134,19 @@ export function createExtensionWindowManager(
   }
 }
 
+/**
+ * The `bridge:token` relay is the one place main learns about sign-out: a
+ * null token means the session ended, and every extension window — which
+ * hosts a bridge running under that session — must go with it. A string
+ * token (sign-in / refresh) leaves the windows alone.
+ */
+export function closeExtensionWindowsOnSignOut(
+  windows: ExtensionWindowManager,
+  token: unknown
+): void {
+  if (token === null) windows.closeAll()
+}
+
 /** The real second BrowserWindow: same renderer, #/ext-window/<id> route. */
 export function createExtensionBrowserWindow(spec: ExtensionWindowSpec): BrowserWindow {
   const win = new BrowserWindow({

@@ -183,6 +183,42 @@ async function cacheBundle(
   return result.error === 'hash_mismatch' ? 'hash_mismatch' : 'rejected'
 }
 
+type InstallLookup =
+  | { readonly ok: true; readonly install: ExtensionInstallApi | undefined }
+  | { readonly ok: false; readonly state: InstalledBundleState }
+
+/** The registry rows come FIRST: a team block must be seen before any dev
+ *  registration is honoured, and if the check cannot run we fail closed. */
+async function lookupInstall(
+  deps: InstalledBundleDeps,
+  projectId: string,
+  slug: string
+): Promise<InstallLookup> {
+  try {
+    const installs = await deps.listInstalls(projectId)
+    return { ok: true, install: installs.find((row) => row.extension.slug === slug) }
+  } catch {
+    return {
+      ok: false,
+      state: error('install_lookup', "Couldn't check what this project has installed.")
+    }
+  }
+}
+
+/** Make sure the pinned version is in the local cache; null when it is. */
+async function ensureCached(
+  deps: InstalledBundleDeps,
+  bridge: ExtensionsBridge,
+  install: ExtensionInstallApi,
+  onProgress: (state: InstalledBundleState) => void
+): Promise<InstalledBundleState | null> {
+  const name = install.extension.name
+  if (await isCached(bridge, install.extension.slug, install.version.version)) return null
+  onProgress({ status: 'caching', name })
+  const failure = await cacheBundle(deps, bridge, install)
+  return failure === null ? null : installFailureState(name, failure)
+}
+
 export interface ResolveInput {
   readonly projectId: string
   readonly slug: string
@@ -202,27 +238,15 @@ export async function resolveInstalledBundle(
   const { bridge } = deps
   if (bridge === null) return error('no_desktop', NO_DESKTOP_MESSAGE)
 
-  // The registry rows come FIRST: a team block must be seen before any dev
-  // registration is honoured, and if the check cannot run we fail closed.
-  let installs: readonly ExtensionInstallApi[]
-  try {
-    installs = await deps.listInstalls(projectId)
-  } catch {
-    return error('install_lookup', "Couldn't check what this project has installed.")
-  }
-  const install = installs.find((row) => row.extension.slug === slug)
+  const lookup = await lookupInstall(deps, projectId, slug)
+  if (!lookup.ok) return lookup.state
+  const { install } = lookup
   if (install?.policy.blocked) return { status: 'blocked', name: install.extension.name }
 
   const dev = deps.devRegistration(slug)
   if (dev !== null) return readyFromDev(slug, projectId, view, dev)
   if (install === undefined) return { status: 'not_installed' }
-  const name = install.extension.name
-  if (!install.enabled) return { status: 'disabled', name }
-
-  if (!(await isCached(bridge, slug, install.version.version))) {
-    onProgress({ status: 'caching', name })
-    const failure = await cacheBundle(deps, bridge, install)
-    if (failure !== null) return installFailureState(name, failure)
-  }
-  return readyFromInstall(install, projectId, view)
+  if (!install.enabled) return { status: 'disabled', name: install.extension.name }
+  const failed = await ensureCached(deps, bridge, install, onProgress)
+  return failed ?? readyFromInstall(install, projectId, view)
 }
