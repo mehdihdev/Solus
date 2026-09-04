@@ -96,6 +96,18 @@ body {
   }
 }
 
+/*
+ * Window drag regions (SOLUSDEV-235). The renderer draws the title row; under
+ * Electron the row moves the window, while controls inside it opt out.
+ */
+.app-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
 /* Spinner used across auth + onboarding (ported from .sol-spin). */
 @keyframes sol-spin {
   to {

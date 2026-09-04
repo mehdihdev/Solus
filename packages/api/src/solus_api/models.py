@@ -16,8 +16,11 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    CHAR,
     JSON,
+    BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -30,7 +33,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from uuid6 import uuid7
 
@@ -165,6 +168,19 @@ class JobKind(enum.StrEnum):
     PROVING = "proving"
     FINGERPRINT_SCAN = "fingerprint_scan"
     SIM_REBUILD = "sim_rebuild"
+    # SOLUSDEV-235 / ADR-035 §5: validates a published extension bundle.
+    EXTENSION_REVIEW = "extension_review"
+
+
+class ExtensionReviewStatus(enum.StrEnum):
+    """Lifecycle of one published extension version (docs/schemas/extensions.md §5).
+    `pending → checking → approved | rejected` are the only transitions and the
+    review job is the only writer. Unpublish is `deleted_at`, never a status."""
+
+    PENDING = "pending"
+    CHECKING = "checking"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 class ArtifactScope(enum.StrEnum):
@@ -485,6 +501,12 @@ class CreditLedger(UuidPkMixin, Base):
     # that are not idempotent-guarded (e.g. one-off adjustments).
     idempotency_key: Mapped[str | None] = mapped_column(String(255), default=None)
     attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # SOLUSDEV-235 / ADR-035 §2: which extension caused a `sol.ask` debit.
+    # Attribution ONLY — the debit stays on `user_id`; never used for
+    # authorization or budget scoping (docs/schemas/extensions.md §4.9).
+    extension_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("extensions.id", ondelete="SET NULL"), index=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -1124,3 +1146,262 @@ class ConversationTurn(UuidPkMixin, TimestampMixin, Base):
     role: Mapped[TurnRole] = mapped_column(_enum_column(TurnRole))
     content: Mapped[str] = mapped_column(Text, default="")
     attrs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+# ------------------------------------------------------------------ extensions
+#
+# SOLUSDEV-235 / ADR-035 — docs/schemas/extensions.md is the authoritative
+# column-for-column description; the migration `solusdev_235_extensions` and
+# these classes must match it. The catalog (publishers, extensions, versions,
+# assets) is GLOBAL by construction (ADR-033 precedent): no team/project column
+# exists, and its absence is the tenancy boundary. Installs, storage and layouts
+# are project-scoped (reached only via ProjectCtx); policies are team-scoped
+# (TeamCtx). Bundle and asset bytes ride the ArtifactStore PROTOCOL keyed by the
+# owning row's uuid — no `artifacts` row (that table is project-scoped).
+
+#: 25 MiB — `MANIFEST_LIMITS.bundle` (docs/contracts/extension-manifest.md).
+EXTENSION_BUNDLE_MAX_BYTES = 26_214_400
+#: A widget canvas holds at most this many slots (docs/schemas/extensions.md §4.8).
+WIDGET_LAYOUT_MAX_SLOTS = 24
+
+
+class ExtensionPublisher(UuidPkMixin, SoftDeleteMixin, Base):
+    """One per publishing account (§4.1). `user_id` is SET NULL on account
+    deletion so published extensions survive their author (ADR-024 pattern);
+    a publisher with no user can no longer publish but keeps attribution."""
+
+    __tablename__ = "extension_publishers"
+    __table_args__ = (
+        Index(
+            "uq_extension_publishers_user_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
+    )
+
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    display_name: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class Extension(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """The catalog entry, one per manifest `id` (§4.2). Soft delete = unpublish:
+    pinned installs keep working, the entry leaves search. `slug` is unique
+    case-insensitively across ALL rows, live or not, so a slug is never
+    re-claimable by another publisher (functional index on lower(slug))."""
+
+    __tablename__ = "extensions"
+    __table_args__ = (Index("uq_extensions_slug_lower", text("lower(slug)"), unique=True),)
+
+    slug: Mapped[str] = mapped_column(String(64))
+    publisher_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extension_publishers.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(60))
+    summary: Mapped[str] = mapped_column(String(160))
+    # Set ONLY by Solus staff (RequireStaff) — never derived from the publisher.
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Cache of live installs — recomputed by the install handlers, never trusted.
+    install_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    latest_approved_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "extension_versions.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_extensions_latest_approved_version_id",
+        ),
+        index=True,
+        default=None,
+    )
+
+
+class ExtensionVersion(UuidPkMixin, SoftDeleteMixin, Base):
+    """One row per published semver (§4.3). `(extension_id, version)` is unique
+    over ALL rows — a withdrawn or rejected number is burned, never reused.
+    Bundle bytes live in the ArtifactStore under key = this row's `id`."""
+
+    __tablename__ = "extension_versions"
+    __table_args__ = (
+        UniqueConstraint("extension_id", "version", name="uq_extension_versions_extension_version"),
+        CheckConstraint(
+            "content_hash ~ '^[0-9a-f]{64}$'", name="ck_extension_versions_content_hash_hex"
+        ),
+        CheckConstraint(
+            f"bundle_size_bytes > 0 AND bundle_size_bytes <= {EXTENSION_BUNDLE_MAX_BYTES}",
+            name="ck_extension_versions_bundle_size_range",
+        ),
+    )
+
+    extension_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extensions.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[str] = mapped_column(Text)
+    # The decoded extension.toml, ALREADY validated by parse_extension_manifest.
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    bundle_storage: Mapped[ArtifactStorage] = mapped_column(_enum_column(ArtifactStorage))
+    content_hash: Mapped[str] = mapped_column(CHAR(64))
+    bundle_size_bytes: Mapped[int] = mapped_column(BigInteger)
+    review_status: Mapped[ExtensionReviewStatus] = mapped_column(
+        _enum_column(ExtensionReviewStatus),
+        default=ExtensionReviewStatus.PENDING,
+        server_default=ExtensionReviewStatus.PENDING.value,
+        index=True,
+    )
+    review_problems: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class ExtensionVersionAsset(UuidPkMixin, Base):
+    """A store-facing file the review job extracted from a version (§4.4) —
+    overview, privacy policy, section bodies, screenshots, the page icon. Entry
+    HTML/JS is never extracted server-side. Derived data: hard-deleted by
+    cascade from the version. `storage_key` names the bytes in the ArtifactStore
+    and defaults to this row's own id (the §4.4 convention) — resolved at
+    construction so the review job knows the key before it stores the bytes."""
+
+    __tablename__ = "extension_version_assets"
+    __table_args__ = (
+        UniqueConstraint("version_id", "path", name="uq_extension_version_assets_version_path"),
+        CheckConstraint("size_bytes >= 0", name="ck_extension_version_assets_size_nonneg"),
+    )
+
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extension_versions.id", ondelete="CASCADE")
+    )
+    path: Mapped[str] = mapped_column(String(200))
+    storage_key: Mapped[uuid.UUID] = mapped_column(Uuid)
+    storage: Mapped[ArtifactStorage] = mapped_column(_enum_column(ArtifactStorage))
+    media_type: Mapped[str] = mapped_column(String(255))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+
+    def __init__(self, **fields: Any) -> None:
+        row_id = fields.setdefault("id", uuid7())
+        fields.setdefault("storage_key", row_id)
+        super().__init__(**fields)
+
+
+class ExtensionInstall(UuidPkMixin, TimestampMixin, Base):
+    """A project's pinned install (§4.5). State, not history — hard-deleted on
+    uninstall, cascaded on project delete; the history is in `data_events`.
+    Both extension and version FKs are RESTRICT: a pin never dangles."""
+
+    __tablename__ = "extension_installs"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "extension_id", name="uq_extension_installs_project_extension"
+        ),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    extension_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extensions.id", ondelete="RESTRICT"), index=True
+    )
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extension_versions.id", ondelete="RESTRICT"), index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # Keys ⊆ the pinned manifest's settings.fields[].key (validated at the route).
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    # ⊆ the pinned manifest's permissions.scopes / permissions.network.
+    granted_scopes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default=text("'{}'")
+    )
+    granted_network: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default=text("'{}'")
+    )
+    installed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
+    )
+
+
+class ExtensionStorage(UuidPkMixin, TimestampMixin, Base):
+    """The extension's per-project key-value store behind `storage.own` (§4.6).
+    Values are opaque to Solus. The 256 KiB per-(project, extension) total and
+    the 64 KiB per-value cap are enforced by the write path under a row lock."""
+
+    __tablename__ = "extension_storage"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "extension_id",
+            "key",
+            name="uq_extension_storage_project_extension_key",
+        ),
+        CheckConstraint("size_bytes >= 0", name="ck_extension_storage_size_nonneg"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    extension_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extensions.id", ondelete="CASCADE"), index=True
+    )
+    key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[Any] = mapped_column(JSONB)
+    # Byte length of the canonical JSON encoding of `value`.
+    size_bytes: Mapped[int] = mapped_column(Integer)
+
+
+class TeamExtensionPolicy(UuidPkMixin, TimestampMixin, Base):
+    """Owner-set defaults and blocks, one per (team, extension) (§4.7). A
+    blocked extension cannot also be a default — the CHECK makes that structural."""
+
+    __tablename__ = "team_extension_policies"
+    __table_args__ = (
+        UniqueConstraint(
+            "team_id", "extension_id", name="uq_team_extension_policies_team_extension"
+        ),
+        CheckConstraint(
+            "NOT (blocked AND default_installed)",
+            name="ck_team_extension_policies_blocked_not_default",
+        ),
+    )
+
+    team_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"))
+    extension_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extensions.id", ondelete="RESTRICT"), index=True
+    )
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    default_installed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    default_settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    set_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
+    )
+
+
+class WidgetLayout(UuidPkMixin, TimestampMixin, Base):
+    """One user's arrangement of a project's widget canvas (§4.8): an ordered
+    list of `{ref, size}` entries, at most WIDGET_LAYOUT_MAX_SLOTS. Personal —
+    every read filters on both project_id and user_id = current_user.id."""
+
+    __tablename__ = "widget_layouts"
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_widget_layouts_project_user"),
+        CheckConstraint(
+            "jsonb_typeof(layout) = 'array' AND "
+            f"jsonb_array_length(layout) <= {WIDGET_LAYOUT_MAX_SLOTS}",
+            name="ck_widget_layouts_layout_bounded",
+        ),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    layout: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)

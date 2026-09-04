@@ -2,6 +2,31 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { createOrbOverlayBridge } from './orbOverlayBridge'
 import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
+import { EXT_CHANNELS } from '../main/extensions/extensions.constants'
+import type {
+  ExtDevLoadResult,
+  ExtInstallRequest,
+  ExtInstallResult,
+  ExtNetFetchRequest,
+  ExtNetFetchResult,
+  ExtOkResult,
+  ExtWindowOpenRequest,
+  ExtWindowOpenResult,
+  ExtensionsBridge
+} from '../main/extensions/extensions.types'
+import type { ExtensionIndex } from '../main/extensions/extensionIndex'
+
+export type {
+  ExtDevLoadResult,
+  ExtInstallRequest,
+  ExtInstallResult,
+  ExtNetFetchRequest,
+  ExtNetFetchResult,
+  ExtOkResult,
+  ExtWindowOpenRequest,
+  ExtWindowOpenResult,
+  ExtensionsBridge
+}
 
 interface OAuthCallbackResult {
   code?: string
@@ -107,11 +132,29 @@ const api = {
 // it (SOLX-02); channel names come from the shared constants module only.
 const solus = {
   ...api,
+  // SOLUSDEV-235: the renderer draws the title row; on macOS it must inset for the traffic lights.
+  platform: process.platform,
   orbOverlay: createOrbOverlayBridge(ipcRenderer),
   solWindow: {
     detach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.detach),
     attach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.attach)
-  }
+  },
+  // Extensions (SOLUSDEV-235 / ADR-035, EXT-05): the machine-local bundle cache,
+  // developer mode, the window host, and the network egress proxy. The main
+  // process re-validates every argument; nothing here holds a credential.
+  extensions: {
+    index: (): Promise<ExtensionIndex> => ipcRenderer.invoke(EXT_CHANNELS.index),
+    install: (req: ExtInstallRequest): Promise<ExtInstallResult> =>
+      ipcRenderer.invoke(EXT_CHANNELS.install, req),
+    uninstall: (id: string): Promise<ExtOkResult> => ipcRenderer.invoke(EXT_CHANNELS.uninstall, id),
+    devLoad: (path: string): Promise<ExtDevLoadResult> =>
+      ipcRenderer.invoke(EXT_CHANNELS.devLoad, path),
+    devRemove: (id: string): Promise<ExtOkResult> => ipcRenderer.invoke(EXT_CHANNELS.devRemove, id),
+    openWindow: (req: ExtWindowOpenRequest): Promise<ExtWindowOpenResult> =>
+      ipcRenderer.invoke(EXT_CHANNELS.windowOpen, req),
+    netFetch: (req: ExtNetFetchRequest): Promise<ExtNetFetchResult> =>
+      ipcRenderer.invoke(EXT_CHANNELS.netFetch, req)
+  } satisfies ExtensionsBridge
 }
 
 export type SolusBridge = typeof solus

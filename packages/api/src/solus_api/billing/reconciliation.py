@@ -21,6 +21,30 @@ logger = logging.getLogger("solus.billing.reconciliation")
 
 MAX_ATTEMPTS = 5
 SWEEP_LIMIT = 200
+#: `pending_credit_debits` has no attribution column; the extension id (ADR-035
+#: §2) rides in `attrs` under this key and is lifted back into
+#: `credit_ledger.extension_id` by the sweep, so a reconciled debit keeps it.
+ATTRIBUTION_ATTR = "extension_id"
+
+
+def _with_attribution(attrs: dict[str, Any], extension_id: uuid.UUID | None) -> dict[str, Any]:
+    if extension_id is None:
+        return dict(attrs)
+    return {**attrs, ATTRIBUTION_ATTR: str(extension_id)}
+
+
+def _split_attribution(attrs: dict[str, Any]) -> tuple[dict[str, Any], uuid.UUID | None]:
+    """The dead-letter attrs minus the attribution key, plus the parsed id (None
+    when absent or unparseable — the debit still reconciles, unattributed)."""
+    rest = {k: v for k, v in attrs.items() if k != ATTRIBUTION_ATTR}
+    raw = attrs.get(ATTRIBUTION_ATTR)
+    if raw is None:
+        return rest, None
+    try:
+        return rest, uuid.UUID(str(raw))
+    except ValueError:
+        logger.warning("unparseable attribution on pending debit; reconciling unattributed")
+        return rest, None
 
 
 async def record_failed_debit(
@@ -30,6 +54,7 @@ async def record_failed_debit(
     *,
     idempotency_key: str,
     attrs: dict[str, Any] | None = None,
+    extension_id: uuid.UUID | None = None,
 ) -> None:
     """Record a debit that could not be applied inline. Idempotent by the
     operation key — a repeat (or a retry that also failed) never duplicates."""
@@ -39,7 +64,7 @@ async def record_failed_debit(
             user_id=user_id,
             credits=abs(credits_amount),
             idempotency_key=idempotency_key,
-            attrs=attrs or {},
+            attrs=_with_attribution(attrs or {}, extension_id),
             status=DebitReconcileStatus.PENDING,
             attempts=0,
         )
@@ -70,12 +95,20 @@ async def reconcile_pending_debits(
         ]
 
     reconciled = 0
-    for pid, user_id, amount, key, attrs, attempts in work:
+    for pid, user_id, amount, key, raw_attrs, attempts in work:
+        attrs, extension_id = _split_attribution(raw_attrs)
         try:
             async with sessionmaker() as s:
                 # The ledger idempotency key dedupes against an inline debit that
                 # may have already applied — never double-debits.
-                await credits.debit_credits(s, user_id, amount, idempotency_key=key, attrs=attrs)
+                await credits.debit_credits(
+                    s,
+                    user_id,
+                    amount,
+                    idempotency_key=key,
+                    attrs=attrs,
+                    extension_id=extension_id,
+                )
             async with sessionmaker() as s:
                 row = await s.get(PendingCreditDebit, pid)
                 if row is not None:

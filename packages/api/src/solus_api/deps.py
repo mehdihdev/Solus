@@ -206,6 +206,18 @@ def require_verified(claims: ClaimsDep) -> None:
 RequireVerified = Annotated[None, Depends(require_verified)]
 
 
+def require_staff(user: CurrentUser, settings: SettingsDep) -> None:
+    """Gate for Solus-staff administration (SOLUSDEV-235 / ADR-035 §5 — the
+    `verified` badge). Staff = the ids in `SOLUS_STAFF_USER_IDS`; everyone else
+    is `403 forbidden` with a message that discloses nothing about the list.
+    Lives here so §7's "no per-endpoint ad-hoc auth" holds literally."""
+    if user.id not in settings.staff_user_id_set:
+        raise APIError(403, "forbidden", "You are not allowed to perform this action")
+
+
+RequireStaff = Annotated[None, Depends(require_staff)]
+
+
 @dataclass(frozen=True)
 class TeamContext:
     team: Team

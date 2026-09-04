@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "extension": {
+    "id": "future",
+    "name": "Future",
+    "version": "9.0.0",
+    "publisher": "Someone",
+    "summary": "Written by a newer Solus.",
+    "requires": []
+  },
+  "views": { "widget": { "entry": "index.html", "preferred": "compact" } },
+  "store": { "overview": "OVERVIEW.md" }
+}

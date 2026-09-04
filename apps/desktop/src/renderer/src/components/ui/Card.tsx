@@ -1,13 +1,12 @@
 // Surface card, ported from Card in TestDesign/app/util.jsx.
-import type { CSSProperties, ReactNode } from 'react'
+import type { HTMLAttributes } from 'react'
 
-interface CardProps {
-  children?: ReactNode
+/** Any div attribute passes through (role, tabIndex, aria-*, key handlers), so a
+ *  card can be a real button for assistive tech without a wrapper (SOLUSDEV-235).
+ *  `dangerouslySetInnerHTML` is excluded on purpose: a surface primitive must
+ *  never become an HTML sink for whatever a caller hands it (CLAUDE.md §7). */
+interface CardProps extends Omit<HTMLAttributes<HTMLDivElement>, 'dangerouslySetInnerHTML'> {
   pad?: number
-  style?: CSSProperties
-  className?: string
-  onClick?: () => void
-  id?: string
 }
 
 export function Card({
@@ -16,12 +15,19 @@ export function Card({
   style,
   className,
   onClick,
-  id
+  id,
+  ...rest
 }: CardProps): React.JSX.Element {
+  // Belt and braces for untyped call sites: drop the sink even if it slipped past the types.
+  const { dangerouslySetInnerHTML: _dropped, ...safeRest } = rest as CardProps & {
+    dangerouslySetInnerHTML?: unknown
+  }
+  void _dropped
   // A card with a click handler reads as clickable (hover tint + pointer).
   const classes = [className, onClick ? 'interactive' : null].filter(Boolean).join(' ')
   return (
     <div
+      {...safeRest}
       id={id}
       className={classes || undefined}
       onClick={onClick}

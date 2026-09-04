@@ -332,6 +332,15 @@ class AgentRunContext:
     secret_store: "SecretStore | None" = None
     redis: Any = None
     enqueue: Any = None
+    #: SOLUSDEV-235 / ADR-035 §2: the extension whose `sol.ask` started this
+    #: turn, verified by the route against the project's installs (never from
+    #: prompt content). Attribution only — the debit stays on `user_id`.
+    extension_id: uuid.UUID | None = None
+    #: Phase 4 H2: the attributed extension's validated slug. When set, the
+    #: live message is framed as an extension REQUEST (prompt.extension_request)
+    #: rather than as the user's own words — the extension's text is fenced
+    #: data under Solus-authored framing, never first-class user text.
+    extension_slug: str | None = None
 
 
 #: A proposed call → its result. The gate is inside; see `build_dispatch`.
@@ -601,6 +610,7 @@ class LlmRunner:
                     enqueue=ctx.enqueue,
                     adapters=self._adapters,
                     max_tokens=SOL_MAX_TOKENS,
+                    extension_id=ctx.extension_id,
                 )
                 try:
                     async for chunk in stream:
@@ -700,14 +710,10 @@ class LlmRunner:
                 )
             )
             turns.append(Turn(role="assistant", text="Understood — that is the prior context."))
-        turns.append(
-            Turn(
-                role="user",
-                text=(
-                    context.fenced(nonce)
-                    + "\n"
-                    + prompt.data_block(nonce, "user_message", ctx.prompt)
-                ),
-            )
+        live = (
+            prompt.extension_request(nonce, ctx.extension_slug, ctx.prompt)
+            if ctx.extension_slug
+            else prompt.data_block(nonce, "user_message", ctx.prompt)
         )
+        turns.append(Turn(role="user", text=context.fenced(nonce) + "\n" + live))
         return tuple(turns)

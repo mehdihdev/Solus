@@ -1,4 +1,4 @@
-import { app, shell, dialog, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, dialog, BrowserWindow, ipcMain, protocol } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -31,7 +31,27 @@ import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
+import { externalOpenHandler } from './externalUrl'
 import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
+import { realExtensionFs } from './extensions/extensionFs'
+import {
+  createExtProtocolHandler,
+  EXT_SCHEME,
+  EXT_SCHEME_PRIVILEGES
+} from './extensions/extProtocol'
+import {
+  closeExtensionWindowsOnSignOut,
+  createExtensionBrowserWindow,
+  createExtensionWindowManager,
+  type ExtensionWindowManager
+} from './extensions/extensionWindow'
+import { createExtensionsIpc, registerExtensionsIpc } from './extensions/extensionsIpc'
+import { realNetProxyDeps } from './extensions/netProxy'
+
+// Extensions (SOLUSDEV-235 / ADR-035 §1): the read-only solus-ext:// origin the
+// sandboxed frames load their bundles from. A privileged scheme MUST be declared
+// before app ready; the handler is installed after (see whenReady below).
+protocol.registerSchemesAsPrivileged([{ scheme: EXT_SCHEME, privileges: EXT_SCHEME_PRIVILEGES }])
 
 /** Open a Stripe Checkout / billing-portal URL in the system browser, refusing
  *  anything that isn't one of the Stripe-hosted surfaces our API returns
@@ -54,6 +74,8 @@ async function openAppStoreUrl(url: string): Promise<{ ok: boolean }> {
 // The app's own renderer window — the only legitimate sender for privileged
 // IPC (billing), and the parent for the checkout window.
 let mainWindow: BrowserWindow | null = null
+// Extension windows (SOLUSDEV-235): closed on sign-out and with the main window.
+let extensionWindows: ExtensionWindowManager | null = null
 
 /**
  * The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
@@ -106,6 +128,28 @@ function registerSolChatCacheHandlers(): void {
   )
 }
 
+/** Extensions (SOLUSDEV-235 / EXT-05, ADR-035): serve installed bundles + dev
+ *  folders read-only over solus-ext://, and wire the install / dev-mode /
+ *  window / network-proxy invokes. Every channel is sender-gated; every
+ *  decision (ids, hashes, sizes, origins, addresses) lives in main/extensions
+ *  where it is unit-tested against injected fs/net surfaces. Called after app
+ *  ready — the scheme itself is declared privileged at module load above. */
+function registerExtensionHandlers(): void {
+  protocol.handle(EXT_SCHEME, createExtProtocolHandler(realExtensionFs))
+  const windows = createExtensionWindowManager(createExtensionBrowserWindow)
+  extensionWindows = windows
+  registerExtensionsIpc(
+    ipcMain,
+    {
+      isMainRenderer: isMainRendererSender,
+      // SEC-M3: extension windows host the same trusted renderer and need the
+      // runtime channels; the manager admits only windows it created.
+      isExtensionWindow: (event) => windows.isSender(event.sender)
+    },
+    createExtensionsIpc({ fs: realExtensionFs, net: realNetProxyDeps, windows })
+  )
+}
+
 /** True when the invoke came from the app's own renderer, not some other
  *  webContents that gained IPC reach. The decision itself lives in
  *  `senderGate.ts`, where it can be tested. */
@@ -120,6 +164,11 @@ function createWindow(): void {
     height: 670,
     show: false,
     autoHideMenuBar: true,
+    // SOLUSDEV-235: the renderer owns the title row (project pill), so on macOS the
+    // native bar collapses to the traffic lights, vertically centred in that 44px row.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 16 } }
+      : {}),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -133,12 +182,12 @@ function createWindow(): void {
   })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
+    // No main window → no session to host an extension bridge under.
+    extensionWindows?.closeAll()
   })
 
-  win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
+  // Renderer anchors reach the OS browser only over https (SOLUSDEV-235 / H2).
+  win.webContents.setWindowOpenHandler(externalOpenHandler((url) => shell.openExternal(url)))
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -216,6 +265,8 @@ if (!app.requestSingleInstanceLock()) {
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
 
+    registerExtensionHandlers()
+
     // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
     // portal URL (returned by our API) in the system browser. Only the app's
     // own renderer may invoke either billing channel.
@@ -273,9 +324,11 @@ if (!app.requestSingleInstanceLock()) {
     // Supabase access token over stdin. Renderer input is untrusted — accept
     // only a string token or null (signout); never log it. Only the app's own
     // renderer may relay a token (credential-bearing, like bridge:license — L2).
+    // A null token is sign-out: the extension windows go with the session.
     ipcMain.handle('bridge:token', (event, token: unknown) => {
       if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
         sendAccessToken(token)
+        if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
       }
     })
     // The project the companion serves. The bridge route is project-scoped, so

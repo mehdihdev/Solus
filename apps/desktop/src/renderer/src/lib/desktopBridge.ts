@@ -2,6 +2,9 @@
 // the app isn't running under Electron (e.g. the static browser preview), so
 // callers can degrade gracefully instead of crashing.
 import type { OAuthBridge } from '../features/auth/githubOAuth'
+import type { ExtensionsBridge } from '../../../preload/index'
+
+export type { ExtensionsBridge }
 
 /** Preload's `solus.bridge` namespace: relays the Supabase access token to the
  *  local companion (SOLUSDEV-154 / BRG-04). Null token means signout. */
@@ -43,6 +46,9 @@ interface SolusWindow {
     oauth?: OAuthBridge
     bridge?: CompanionBridge
     folder?: FolderBridge
+    /** `process.platform` of the host, so the renderer can inset for native window controls. */
+    platform?: string
+    extensions?: ExtensionsBridge
     hosted?: HostedBridge
   }
 }
@@ -60,6 +66,19 @@ export function getDesktopCompanionBridge(): CompanionBridge | null {
 export function getDesktopFolderBridge(): FolderBridge | null {
   const w = window as unknown as SolusWindow
   return w.solus?.folder ?? null
+}
+
+/** Extensions runtime (SOLUSDEV-235 / ADR-035): bundle cache, developer mode,
+ *  window host, network proxy. Null outside Electron — the Store degrades to
+ *  browse-only. */
+export function getDesktopExtensionsBridge(): ExtensionsBridge | null {
+  const w = window as unknown as SolusWindow
+  return w.solus?.extensions ?? null
+}
+
+/** Host platform under Electron ('darwin', 'win32', 'linux'); null in a plain browser. */
+export function getDesktopPlatform(): string | null {
+  return (window as SolusWindow).solus?.platform ?? null
 }
 
 export function getDesktopHostedBridge(): HostedBridge | null {

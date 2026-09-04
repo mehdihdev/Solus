@@ -35,6 +35,8 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "7.18.0",
     "remark-gfm": "^4.0.1",
+    "smol-toml": "1.8.0",
+    "yauzl": "3.4.0",
     "zustand": "5.0.14"
   },
   "devDependencies": {
@@ -48,6 +50,7 @@
     "@types/node": "22.19.1",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "@types/yauzl": "3.4.0",
     "@vitejs/plugin-react": "5.1.1",
     "electron": "39.2.6",
     "electron-builder": "26.15.3",

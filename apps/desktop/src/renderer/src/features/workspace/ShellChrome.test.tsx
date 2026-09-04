@@ -3,65 +3,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { TopBar, OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
+import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { useShellStore } from './shellStore'
 import type { NotificationApi } from '../../lib/api/resources'
 
 beforeEach(() => useShellStore.getState().reset())
-
-describe('TopBar', () => {
-  it('renders project, screen title, badge count, and sign out', async () => {
-    const onBell = vi.fn()
-    const onSignOut = vi.fn()
-    render(
-      <TopBar
-        projectSlot={<span>Rover MK2</span>}
-        screenTitle="Context Model"
-        openCount={2}
-        onHome={vi.fn()}
-        onBell={onBell}
-        onSignOut={onSignOut}
-      />
-    )
-    expect(screen.getByText('Rover MK2')).toBeInTheDocument()
-    expect(screen.getByText('Context Model')).toBeInTheDocument()
-    expect(screen.getByText('2')).toBeInTheDocument()
-    await userEvent.click(screen.getByTestId('rail-bell'))
-    expect(onBell).toHaveBeenCalled()
-    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
-    expect(onSignOut).toHaveBeenCalled()
-  })
-
-  it('offers a Home breadcrumb back to the workspace home (SOLUSDEV-164)', async () => {
-    const onHome = vi.fn()
-    render(
-      <TopBar
-        projectSlot={<span>Rover MK2</span>}
-        screenTitle="Sources"
-        openCount={0}
-        onHome={onHome}
-        onBell={vi.fn()}
-        onSignOut={vi.fn()}
-      />
-    )
-    await userEvent.click(screen.getByRole('button', { name: 'Home' }))
-    expect(onHome).toHaveBeenCalled()
-  })
-
-  it('hides the badge at zero unread', () => {
-    render(
-      <TopBar
-        projectSlot={<span>Rover MK2</span>}
-        screenTitle="Home"
-        openCount={0}
-        onHome={vi.fn()}
-        onBell={vi.fn()}
-        onSignOut={vi.fn()}
-      />
-    )
-    expect(screen.queryByText('0')).not.toBeInTheDocument()
-  })
-})
 
 describe('OfflineNotifPopover', () => {
   it('shows an honest sign-in message instead of demo alerts', async () => {

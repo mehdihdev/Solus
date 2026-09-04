@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "extension": {
+    "id": "Hello Widget",
+    "name": "Hello Widget",
+    "version": "0.1.0",
+    "publisher": "Ada Lovelace",
+    "summary": "An id with a space and a capital is not a folder-safe slug.",
+    "requires": []
+  },
+  "views": { "widget": { "entry": "index.html", "preferred": "compact" } },
+  "store": { "overview": "OVERVIEW.md" }
+}

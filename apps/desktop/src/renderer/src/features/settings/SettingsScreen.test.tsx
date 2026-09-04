@@ -3,12 +3,18 @@ import { render, screen } from '@testing-library/react'
 import { SettingsScreen } from './SettingsScreen'
 import type { SettingsData } from './useSettingsData'
 import type { TeamData } from '../team/useTeamData'
+import { fakeBridge } from '../extensions/frame/testing/fixtures'
+import * as bridge from '../../lib/desktopBridge'
 
 const settingsData = vi.fn<() => SettingsData>()
 const teamData = vi.fn<() => TeamData>()
 
 vi.mock('./useSettingsData', () => ({ useSettingsData: () => settingsData() }))
 vi.mock('../team/useTeamData', () => ({ useTeamData: () => teamData() }))
+vi.mock('../../lib/desktopBridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/desktopBridge')>()
+  return { ...actual, getDesktopExtensionsBridge: vi.fn() }
+})
 
 function settings(overrides: Partial<SettingsData> = {}): SettingsData {
   return {
@@ -85,6 +91,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   settingsData.mockReturnValue(settings())
   teamData.mockReturnValue(team())
+  // Default: the browser preview (no Electron bridge).
+  vi.mocked(bridge.getDesktopExtensionsBridge).mockReturnValue(null)
 })
 
 describe('SettingsScreen', () => {
@@ -119,6 +127,26 @@ describe('SettingsScreen', () => {
     expect(screen.queryByText('Billing')).not.toBeInTheDocument()
     expect(screen.queryByText('Members')).not.toBeInTheDocument()
     expect(screen.getByText(/Sign in/)).toBeInTheDocument()
+  })
+
+  it('shows the Developer section only under the desktop extensions bridge', () => {
+    // Browser preview: no folder picker to offer, so no section at all.
+    const { unmount } = render(<SettingsScreen />)
+    expect(screen.queryByText('Developer')).not.toBeInTheDocument()
+    unmount()
+
+    vi.mocked(bridge.getDesktopExtensionsBridge).mockReturnValue(fakeBridge())
+    render(<SettingsScreen />)
+    expect(screen.getByText('Developer')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Load unpacked extension…' })).toBeInTheDocument()
+  })
+
+  it('keeps the Developer section when offline — it needs the desktop, not the API', () => {
+    settingsData.mockReturnValue(settings({ status: 'offline', profile: null, subscription: null }))
+    teamData.mockReturnValue(team('offline'))
+    vi.mocked(bridge.getDesktopExtensionsBridge).mockReturnValue(fakeBridge())
+    render(<SettingsScreen />)
+    expect(screen.getByText('Developer')).toBeInTheDocument()
   })
 
   it('omits members + team while the team is still loading', () => {

@@ -69,4 +69,12 @@ describe('AppRoutes guards', () => {
     renderAt('/login')
     expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
   })
+
+  it('serves the extension window root at /ext-window/:extensionId, which guards its own auth', () => {
+    renderAt('/ext-window/bom')
+    expect(screen.getByTestId('ext-window-root')).toBeInTheDocument()
+    expect(
+      screen.getByText('Sign in from the main Solus window to use extensions here.')
+    ).toBeInTheDocument()
+  })
 })

@@ -13,11 +13,13 @@ import { PreferencesSection } from './sections/PreferencesSection'
 import { PrivacySection } from './sections/PrivacySection'
 import { BillingSection } from './sections/BillingSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
+import { DeveloperSection } from './sections/DeveloperSection'
 import { PanelLinksSection } from './sections/PanelLinksSection'
 import { MembersSection } from './sections/MembersSection'
 import { TeamSection } from './sections/TeamSection'
 import { AccountSection } from './sections/AccountSection'
 import { useOfflineReason } from '../workspace/workspaceOnline'
+import { getDesktopExtensionsBridge } from '../../lib/desktopBridge'
 
 function OfflineNotice(): React.JSX.Element {
   const reason = useOfflineReason()
@@ -48,6 +50,9 @@ export function SettingsScreen(): React.JSX.Element {
   }
 
   const online = settings.status === 'ready'
+  // Developer mode (SOLUSDEV-235 §4) loads folders through main, so it exists
+  // only under the desktop app — the browser preview never sees the section.
+  const desktop = getDesktopExtensionsBridge() !== null
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
@@ -65,6 +70,7 @@ export function SettingsScreen(): React.JSX.Element {
         {online && <PrivacySection data={settings} />}
         {online && <BillingSection data={settings} />}
         <IntegrationsSection />
+        {desktop && <DeveloperSection />}
         {online && <PanelLinksSection />}
         {team.status === 'ready' && (
           <>
