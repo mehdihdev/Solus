@@ -13,12 +13,7 @@ from collections.abc import Awaitable, Callable
 import pytest
 from conftest import BOB, add_member, create_team, me
 from fastapi import FastAPI
-from httpx import AsyncClient, Response
-from solus_api.core.config import Settings
-from solus_api.models import ExtensionInstall, ExtensionStorage, ProjectMembership, WidgetLayout
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from test_extension_installs import (
+from fixtures.extensions.routes import (
     FULL_GRANTS,
     ext_url,
     install,
@@ -27,6 +22,11 @@ from test_extension_installs import (
     project_for,
     seed_extension,
 )
+from httpx import AsyncClient, Response
+from solus_api.core.config import Settings
+from solus_api.models import ExtensionInstall, ExtensionStorage, ProjectMembership, WidgetLayout
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 STORAGE_MANIFEST = {"1.2.0": manifest_with(scopes=["storage.own"])}
 STORAGE_GRANTS = {"scopes": ["storage.own"], "network": []}

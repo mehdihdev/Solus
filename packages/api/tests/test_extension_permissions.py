@@ -9,12 +9,7 @@ from typing import Any
 import pytest
 from conftest import me
 from fastapi import FastAPI
-from httpx import AsyncClient
-from solus_api.core.config import Settings
-from solus_api.models import ExtensionInstall
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from test_extension_installs import (
+from fixtures.extensions.routes import (
     consent,
     events_of,
     ext_url,
@@ -25,6 +20,11 @@ from test_extension_installs import (
     seed_extension,
     seed_policy,
 )
+from httpx import AsyncClient
+from solus_api.core.config import Settings
+from solus_api.models import ExtensionInstall
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 WIDE_SCOPES = ["graph.read", "sources.read", "storage.own"]
 WIDE_NETWORK = ["https://api.octopart.com", "https://api.mouser.com"]

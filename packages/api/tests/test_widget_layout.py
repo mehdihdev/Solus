@@ -9,12 +9,12 @@ from typing import Any
 import pytest
 from conftest import BOB, add_member
 from fastapi import FastAPI
+from fixtures.extensions.routes import installs_app, project_for
 from httpx import AsyncClient
 from solus_api.core.config import Settings
 from solus_api.models import WIDGET_LAYOUT_MAX_SLOTS, DataEvent, WidgetLayout
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from test_extension_installs import installs_app, project_for
 
 SLOTS = [{"ref": "builtin:signals", "size": "wide"}, {"ref": "ext:bom", "size": "standard"}]
 
