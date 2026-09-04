@@ -19,9 +19,9 @@ from solus_api.extensions.publishing import (
     not_found,
     resolve_visible_version,
     validate_semver,
-    validate_slug,
 )
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import ExtensionVersionAsset, User
 from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.events import emit_event
@@ -64,7 +64,7 @@ async def download_bundle(
     session: SessionDep,
     settings: SettingsDep,
 ) -> Response:
-    slug, version = validate_slug(slug), validate_semver(version)
+    slug, version = validate_extension_slug(slug), validate_semver(version)
     limit = settings.extension_bundle_downloads_per_minute_per_user
     if _limiter(request, _DOWNLOAD_LIMITER).bump(str(user.id)) > limit:
         return await _refused(session, user, "bundle", "Too many bundle downloads; slow down")
@@ -90,7 +90,7 @@ async def get_asset(
     """Only a `path` recorded in `extension_version_assets` for this version is
     served, compared as a whole string; the bytes come from the store under the
     asset row's key. Rides the global limiter only (§12)."""
-    slug, version = validate_slug(slug), validate_semver(version)
+    slug, version = validate_extension_slug(slug), validate_semver(version)
     resolved = await resolve_visible_version(session, slug, version, user_id=user.id)
     asset = await session.scalar(
         select(ExtensionVersionAsset).where(

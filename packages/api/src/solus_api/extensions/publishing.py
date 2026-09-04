@@ -16,11 +16,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from solus_contracts.extension_manifest import (
-    EXTENSION_ID_PATTERN,
-    SEMVER_PATTERN,
-    ExtensionManifest,
-)
+from solus_contracts.extension_manifest import SEMVER_PATTERN, ExtensionManifest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
@@ -34,19 +30,11 @@ from solus_api.models import (
 )
 from solus_api.storage.extension_bundle_store import ExtensionBundleStore
 
-_SLUG_RE = re.compile(EXTENSION_ID_PATTERN)
 _SEMVER_RE = re.compile(SEMVER_PATTERN)
 _MAX_IDEMPOTENCY_KEY_LEN = 255
 
 
 # ------------------------------------------------------------ path segments
-def validate_slug(slug: str) -> str:
-    """§3: a `{slug}` failing the manifest id rule is 422 BEFORE any lookup."""
-    if not _SLUG_RE.match(slug):
-        raise APIError(422, "validation_error", "slug must match ^[a-z][a-z0-9-]{1,63}$")
-    return slug
-
-
 def validate_semver(version: str) -> str:
     """§3: `{version}` is a semver string exactly as stored; garbage is 422."""
     if not _SEMVER_RE.match(version):

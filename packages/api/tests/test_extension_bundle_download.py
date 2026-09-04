@@ -167,7 +167,7 @@ async def test_unknown_slug_or_version_is_404(
 
 @pytest.mark.parametrize(
     "url",
-    ["/api/v1/extensions/Bom/versions/1.0.0/bundle", "/api/v1/extensions/bom/versions/v1/bundle"],
+    ["/api/v1/extensions/-bom/versions/1.0.0/bundle", "/api/v1/extensions/bom/versions/v1/bundle"],
 )
 async def test_bad_slug_or_version_syntax_is_422(
     client: AsyncClient, alice_headers: dict[str, str], url: str

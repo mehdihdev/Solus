@@ -464,7 +464,15 @@ async def test_unpublish_requires_verified_email(
     assert resp.json()["error"]["code"] == "email_not_verified"
 
 
-@pytest.mark.parametrize("path", ["/Bom/versions/1.0.0", "/bom/versions/latest", "/bom/versions/1"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/-bom/versions/1.0.0",
+        "/constructor/versions/1.0.0",
+        "/bom/versions/latest",
+        "/bom/versions/1",
+    ],
+)
 async def test_bad_slug_or_version_syntax_is_422_before_lookup(
     client: AsyncClient, alice_headers: dict[str, str], path: str
 ) -> None:

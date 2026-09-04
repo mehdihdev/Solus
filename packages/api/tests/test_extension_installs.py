@@ -419,7 +419,7 @@ async def test_extension_without_an_approved_version_is_404(
     assert resp.status_code == 404
 
 
-@pytest.mark.parametrize("slug", ["Bom", "1bom", "a", "bom_x", "b" * 65])
+@pytest.mark.parametrize("slug", ["-bom", "1bom", "a", "bom_x", "b" * 65, "constructor"])
 async def test_malformed_slug_is_422_before_any_lookup(
     client: AsyncClient, alice_headers: dict[str, str], slug: str
 ) -> None:

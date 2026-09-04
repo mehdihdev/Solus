@@ -9,13 +9,11 @@ exactly `{verified: bool}`, returns the §4.2 detail shape, emits
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
-from solus_contracts.extension_manifest import EXTENSION_ID_PATTERN, RESERVED_EXTENSION_IDS
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +25,7 @@ from solus_api.extensions.schemas import (
     serialize_extension_detail,
     serialize_review_status,
 )
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import (
     Extension,
     ExtensionPublisher,
@@ -39,7 +38,6 @@ from solus_api.services.events import emit_event
 router = APIRouter(prefix="/api/v1/extensions")
 
 VERIFIED_CHANGED_EVENT = "extension.verified_changed"
-_SLUG_RE = re.compile(EXTENSION_ID_PATTERN)
 
 
 class VerifiedPatch(BaseModel):
@@ -54,19 +52,11 @@ def _not_found() -> APIError:
     return APIError(404, "not_found", "Not found")
 
 
-def _normalize_slug(slug: str) -> str:
-    """§3: matched case-insensitively; anything outside the contract shape is a
-    `422` before any lookup (no database round-trip on garbage)."""
-    lowered = slug.lower()
-    if not _SLUG_RE.match(lowered) or lowered in RESERVED_EXTENSION_IDS:
-        raise APIError(422, "validation_error", "Invalid extension slug")
-    return lowered
-
-
 async def _live_extension(session: AsyncSession, slug: str) -> Extension:
     extension = await session.scalar(
         select(Extension).where(
-            func.lower(Extension.slug) == _normalize_slug(slug), Extension.deleted_at.is_(None)
+            func.lower(Extension.slug) == validate_extension_slug(slug),
+            Extension.deleted_at.is_(None),
         )
     )
     if extension is None:

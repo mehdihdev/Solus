@@ -16,12 +16,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, model_validator
-from solus_contracts.extension_manifest import (
-    EXTENSION_ID_PATTERN,
-    SEMVER_PATTERN,
-    SlotSize,
-    parse_extension_manifest,
-)
+from solus_contracts.extension_manifest import SEMVER_PATTERN, SlotSize, parse_extension_manifest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.config import Settings
@@ -40,6 +35,7 @@ from solus_api.extensions.settings_schema import (
     settings_with_defaults,
     validate_settings_values,
 )
+from solus_api.extensions.slugs import SlugPath
 from solus_api.models import (
     WIDGET_LAYOUT_MAX_SLOTS,
     Extension,
@@ -62,7 +58,6 @@ _STORAGE_LIMITER = "extension_storage_write_limiter"
 _WINDOW_SECONDS = 60
 _SENTINEL = object()
 
-SlugPath = Annotated[str, Path(pattern=EXTENSION_ID_PATTERN)]
 KeyPath = Annotated[str, Path(pattern=svc.STORAGE_KEY_PATTERN)]
 
 

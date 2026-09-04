@@ -317,7 +317,7 @@ async def test_blocking_a_current_default_requires_clearing_the_default(
     assert explicit.json()["data"]["blocked"] is True
 
 
-@pytest.mark.parametrize("slug", ["Bom", "1bom", "b", "a" * 65, "bom_x"])
+@pytest.mark.parametrize("slug", ["-bom", "1bom", "b", "a" * 65, "bom_x", "constructor"])
 async def test_bad_slug_syntax_is_422_before_any_lookup(
     client: AsyncClient, seed: Seed, alice_headers: dict[str, str], slug: str
 ) -> None:

@@ -9,7 +9,7 @@ Writes ride a per-team `FixedWindowLimiter` (§12) and emit the §11 events:
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Path, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import func, select
@@ -31,14 +31,11 @@ from solus_api.extensions.policy import (
 )
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.extensions.schemas import serialize_policy
+from solus_api.extensions.slugs import SlugPath
 from solus_api.models import Extension, Role, TeamExtensionPolicy
 from solus_api.services.events import emit_event
 
 router = APIRouter(prefix="/api/v1/teams/{team_id}/extensions/policies")
-
-#: §3 — `{slug}` is the manifest `extension.id`; garbage is 422 before any lookup.
-SLUG_PATTERN = r"^[a-z][a-z0-9-]{1,63}$"
-Slug = Annotated[str, Path(pattern=SLUG_PATTERN)]
 
 WRITE_BUDGET_SETTING = "extension_policy_writes_per_minute_per_team"
 WRITE_WINDOW_SECONDS = 60
@@ -150,7 +147,7 @@ async def list_policies(
 
 @router.put("/{slug}", response_model=None)
 async def put_policy(
-    slug: Slug,
+    slug: SlugPath,
     body: PolicyWrite,
     request: Request,
     ctx: TeamCtx,
@@ -189,7 +186,7 @@ async def put_policy(
 
 @router.delete("/{slug}", status_code=204, response_model=None)
 async def delete_policy(
-    slug: Slug,
+    slug: SlugPath,
     request: Request,
     ctx: TeamCtx,
     session: SessionDep,

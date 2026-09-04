@@ -17,24 +17,22 @@ the refusal with identifiers only.
 """
 
 import logging
-import re
 import uuid
 from typing import Annotated
 
 from fastapi import Depends, Header
-from solus_contracts.extension_manifest import EXTENSION_ID_PATTERN
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
 from solus_api.deps import ProjectCtx, SessionDep
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import Extension, ExtensionInstall, Project, TeamExtensionPolicy
 
 logger = logging.getLogger("solus.extensions.attribution")
 
 EXTENSION_HEADER = "X-Solus-Extension"
 SOL_ASK_SCOPE = "sol.ask"
-_SLUG_RE = re.compile(EXTENSION_ID_PATTERN)
 
 
 def _denied(project_id: uuid.UUID, reason: str, slug: str | None = None) -> APIError:
@@ -54,9 +52,11 @@ async def resolve_extension_attribution(
     `APIError(403, "scope_denied")`."""
     if header_value is None:
         return None
-    if _SLUG_RE.fullmatch(header_value) is None:
-        raise _denied(project.id, "malformed_slug")
-    slug = header_value
+    try:
+        slug = validate_extension_slug(header_value)
+    except APIError:
+        # A validation hint would tell the caller what shape to try; refuse instead.
+        raise _denied(project.id, "malformed_slug") from None
     row = (
         await session.execute(
             select(

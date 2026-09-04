@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from solus_contracts.extension_manifest import EXTENSION_ID_PATTERN, SEMVER_PATTERN
+from solus_contracts.extension_manifest import SEMVER_PATTERN
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,20 +41,10 @@ from solus_api.models import (
 CATALOG_QUERY_MAX_LENGTH = 80
 CATALOG_LIMIT_DEFAULT = 24
 CATALOG_LIMIT_MAX = 100
-#: `{slug}` is matched case-insensitively (§3), so the contract regex is applied the same way.
-_SLUG_RE = re.compile(EXTENSION_ID_PATTERN, re.IGNORECASE)
 _SEMVER_RE = re.compile(SEMVER_PATTERN)
 _LIKE_ESCAPE = "\\"
 
 SemverKey = tuple[int, int, int, int, tuple[tuple[int, int | str], ...]]
-
-
-# ----------------------------------------------------------------- validation
-def validate_slug(slug: str) -> str:
-    """§3: a path segment failing the id regex is `422` before any lookup."""
-    if not _SLUG_RE.match(slug):
-        raise APIError(422, "validation_error", "Malformed extension slug")
-    return slug
 
 
 # ------------------------------------------------------------------- cursors

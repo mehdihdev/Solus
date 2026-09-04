@@ -17,7 +17,7 @@ def test_get_or_create_limiter_creates_once_and_reuses_the_same_instance() -> No
 
     assert isinstance(first, FixedWindowLimiter)
     assert first is second, "the window of the FIRST creation wins; the attr is a singleton"
-    assert getattr(state, "ext_limiter") is first
+    assert state.ext_limiter is first
     assert first.bump("u") == 1 and second.bump("u") == 2
 
 

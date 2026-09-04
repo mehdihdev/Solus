@@ -34,10 +34,10 @@ from solus_api.extensions.publishing import (
     resolve_version,
     validate_idempotency_key,
     validate_semver,
-    validate_slug,
 )
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.extensions.schemas import serialize_published_version
+from solus_api.extensions.slugs import validate_extension_slug
 from solus_api.models import utcnow
 from solus_api.services.artifacts import read_bounded
 from solus_api.services.events import emit_event
@@ -207,7 +207,9 @@ async def unpublish_version(
     burned; `latest_approved_version_id` falls back to the highest remaining
     approved semver or null. Stored bytes are kept — pinned installs still
     resolve the row and the desktop's ADR-034 cache stays valid."""
-    resolved = await resolve_version(session, validate_slug(slug), validate_semver(version))
+    resolved = await resolve_version(
+        session, validate_extension_slug(slug), validate_semver(version)
+    )
     if resolved is None or not resolved.is_owned_by(user.id):
         raise not_found()
     resolved.version.deleted_at = utcnow()
