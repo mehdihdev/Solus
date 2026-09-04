@@ -53,6 +53,10 @@ typecheck:python:
 typecheck:node:
   extends: .node-base
   stage: typecheck
+  variables:
+    # The renderer's `tsc` needs ~500 MB of V8 heap; the ARM runner's default
+    # cap (~470 MB on a 2 GB box) OOM-kills it (pipeline #2819426716).
+    NODE_OPTIONS: "--max-old-space-size=1536"
   script: pnpm typecheck
 
 test:python:
