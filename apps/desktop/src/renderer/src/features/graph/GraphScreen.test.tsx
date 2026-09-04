@@ -10,6 +10,7 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useFocusStore } from '../workspace/focusStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
+import { graphCache } from './graphCache'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -49,6 +50,7 @@ function linkProject(): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  graphCache.clear()
   useWorkspaceStore.getState().reset()
   useFocusStore.getState().reset()
 })

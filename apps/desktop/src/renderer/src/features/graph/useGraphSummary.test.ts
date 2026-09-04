@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useGraphSummary } from './useGraphSummary'
+import { GRAPH_CACHE_TTL_MS, graphCache } from './graphCache'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
@@ -41,6 +42,8 @@ function linkProject(): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.useRealTimers()
+  graphCache.clear()
   useWorkspaceStore.getState().reset()
 })
 
@@ -97,5 +100,91 @@ describe('useGraphSummary', () => {
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.entityCount).toBe(12)
     expect(result.current.entities).toBeNull()
+  })
+
+  // SOLUSDEV-234: the Graph screen mounts on every visit, and each mount used
+  // to re-walk every entity page. The detail (one request) now validates a
+  // retained list; the walk repeats only when the graph changed or the entry
+  // is stale.
+  describe('entity list cache', () => {
+    it('serves the retained list on remount and skips the page walk when unchanged', async () => {
+      linkProject()
+      vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+      vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+      const first = renderHook(() => useGraphSummary())
+      await waitFor(() => expect(first.result.current.status).toBe('ready'))
+      first.unmount()
+
+      const second = renderHook(() => useGraphSummary())
+      // No loading flash: the retained list renders before the detail answers.
+      expect(second.result.current.status).toBe('ready')
+      expect(second.result.current.entities).toEqual([ENTITY])
+      await waitFor(() => expect(vi.mocked(resources.getProject)).toHaveBeenCalledTimes(2))
+      expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(1)
+    })
+
+    it('re-walks the pages when the detail says the graph changed', async () => {
+      linkProject()
+      vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+      vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+      const first = renderHook(() => useGraphSummary())
+      await waitFor(() => expect(first.result.current.status).toBe('ready'))
+      first.unmount()
+
+      const grown = { ...DETAIL, stats: { entities: 13, relations: 30 } }
+      const added = { ...ENTITY, id: 'e2' }
+      vi.mocked(resources.getProject).mockResolvedValue(grown)
+      vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY, added])
+      const second = renderHook(() => useGraphSummary())
+      await waitFor(() => expect(second.result.current.entityCount).toBe(13))
+      expect(second.result.current.entities).toEqual([ENTITY, added])
+      expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(2)
+    })
+
+    it('re-walks the pages once the entry is older than the TTL', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      linkProject()
+      vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+      vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+      const first = renderHook(() => useGraphSummary())
+      await vi.waitFor(() => expect(first.result.current.status).toBe('ready'))
+      first.unmount()
+
+      vi.setSystemTime(Date.now() + GRAPH_CACHE_TTL_MS + 1)
+      renderHook(() => useGraphSummary())
+      await vi.waitFor(() => expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(2))
+    })
+
+    it('never serves one project\'s list to another', async () => {
+      linkProject()
+      vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+      vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+      const first = renderHook(() => useGraphSummary())
+      await waitFor(() => expect(first.result.current.status).toBe('ready'))
+      first.unmount()
+
+      useWorkspaceStore.setState({ linked: true, project: { id: 'p2', name: 'Other' } })
+      vi.mocked(resources.getProject).mockResolvedValue({ ...DETAIL, id: 'p2' })
+      vi.mocked(resources.listAllEntities).mockResolvedValue([])
+      const second = renderHook(() => useGraphSummary())
+      expect(second.result.current.status).toBe('loading')
+      expect(second.result.current.entities).toBeNull()
+      await waitFor(() => expect(second.result.current.status).toBe('ready'))
+      expect(vi.mocked(resources.listAllEntities)).toHaveBeenLastCalledWith('p2')
+    })
+
+    it('does not retain a failed list', async () => {
+      linkProject()
+      vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+      vi.mocked(resources.listAllEntities).mockRejectedValue(new Error('boom'))
+      const first = renderHook(() => useGraphSummary())
+      await waitFor(() => expect(first.result.current.status).toBe('ready'))
+      first.unmount()
+
+      vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+      const second = renderHook(() => useGraphSummary())
+      await waitFor(() => expect(second.result.current.entities).toEqual([ENTITY]))
+      expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(2)
+    })
   })
 })
