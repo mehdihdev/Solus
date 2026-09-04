@@ -102,8 +102,9 @@ An extension with `[views.page]` gets a rail entry and a screen
   SVG subset (paths, fill, viewBox — no scripts, no external refs, no
   `<foreignObject>`, no filters), drawn with the rail's current color like a
   built-in icon. Label = `views.page.label`. Dev registrations get a small
-  `DEV` corner mark on the icon. More than 6 page entries collapse into a
-  `▾ More` rail item with a `.popover-in` list.
+  `DEV` corner mark on the icon. The rail shows at most 8 page entries (as
+  shipped, SOLUSDEV-235 EXT-14); the rest stay reachable from the Store. A
+  `▾ More` popover for the overflow is a follow-up.
 - **Header**: 24px icon tile · extension name · `DEV` badge (mono, warn
   tint) when a dev registration · publisher badge · `v<version>` (or `dev`).
   Right: `Open in window ↗` only when the manifest also declares
@@ -124,11 +125,10 @@ An extension with `[views.page]` gets a rail entry and a screen
     is open; the frame is unmounted, not just hidden.
   - **disabled** in this project → the rail entry is not rendered; a deep link
     to the screen shows "BOM is disabled in this project." + `Open in Store`.
-- Switching projects while on this screen: if the new project has the same
-  extension installed and enabled, the frame remounts against it; otherwise
-  the shell falls back to Overview (the rail entry no longer exists).
-- `View` menu (`project-topbar.md`) gains the same page entries below Store,
-  active one checked.
+- Switching projects while on this screen always leaves it for Overview (as
+  shipped — the same rule the Store detail page follows); remounting against
+  the new project when it has the extension too is a follow-up.
+- `View` menu (`project-topbar.md`) does not list page entries yet (follow-up).
 
 ## 3. Window view
 
