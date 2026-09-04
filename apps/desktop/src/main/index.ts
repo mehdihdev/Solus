@@ -122,14 +122,16 @@ function registerSolChatCacheHandlers(): void {
  *  ready — the scheme itself is declared privileged at module load above. */
 function registerExtensionHandlers(): void {
   protocol.handle(EXT_SCHEME, createExtProtocolHandler(realExtensionFs))
+  const windows = createExtensionWindowManager(createExtensionBrowserWindow)
   registerExtensionsIpc(
     ipcMain,
-    isMainRendererSender,
-    createExtensionsIpc({
-      fs: realExtensionFs,
-      net: realNetProxyDeps,
-      windows: createExtensionWindowManager(createExtensionBrowserWindow)
-    })
+    {
+      isMainRenderer: isMainRendererSender,
+      // SEC-M3: extension windows host the same trusted renderer and need the
+      // runtime channels; the manager admits only windows it created.
+      isExtensionWindow: (event) => windows.isSender(event.sender)
+    },
+    createExtensionsIpc({ fs: realExtensionFs, net: realNetProxyDeps, windows })
   )
 }
 
