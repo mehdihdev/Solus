@@ -1,18 +1,14 @@
 // SOLUSDEV-235 — the Store's view of an extension.
 //
 // An extension is the UNIT THE STORE INSTALLS: a named, versioned, permissioned
-// bundle that contributes widgets (CTR-01 manifests), SOL grounding, checks or
-// panels to a project. This is the renderer-side shape only; the backend model
-// (catalog, per-project install state, permission grants) is planned
-// separately and these types are the seam it will fill. Nothing here reaches
-// `packages/contracts/` — promoting it is an ADR-032 tier-2 decision.
-import type { IconName } from '../../components/ui/icons.constants'
+// bundle described by its `extension.toml` manifest (the ADR-035 contract in
+// @solus/shared-types). The catalog and the per-project install state come
+// from the server (docs/api/extensions.md §4 / §6); this module is the
+// renderer-side join every Store surface renders. Nothing here reaches
+// `packages/contracts/` — the manifest shape is imported, never redeclared.
+import type { ExtensionManifest, PermissionScope, SourceKind } from '@solus/shared-types'
 
-/** Who ships the extension. `solus` carries the verified badge. */
-export type Publisher = 'solus' | 'community'
-
-/** A kind of connected source an extension needs before it can do anything. */
-export type SourceKind = 'code' | 'eda' | 'cad' | 'canbus' | 'runtime'
+export type { ExtensionManifest, PermissionScope, SourceKind }
 
 /**
  * Requirements are an AND of ORs: every group must be satisfied by at least
@@ -21,76 +17,83 @@ export type SourceKind = 'code' | 'eda' | 'cad' | 'canbus' | 'runtime'
  */
 export type Requirements = ReadonlyArray<ReadonlyArray<SourceKind>>
 
-export type ContributionKind = 'widget' | 'grounding' | 'check' | 'panel'
+/** A setting value as the API stores it (`ExtensionSettingsValuesApi`). */
+export type ExtensionSettingValue = boolean | number | string
+export type ExtensionSettings = Readonly<Record<string, ExtensionSettingValue>>
 
-export interface Contribution {
-  readonly kind: ContributionKind
-  readonly title: string
-  readonly detail: string
+/** What the user granted, all-or-nothing per the wireflow's permissions step. */
+export interface ExtensionGrants {
+  readonly scopes: readonly PermissionScope[]
+  readonly network: readonly string[]
 }
 
-/** The closed set of scopes an extension can hold. Solus code decides what a
- *  scope permits — an extension only declares which it wants (CLAUDE.md §7). */
-export type PermissionScope = 'graph.read' | 'telemetry.read' | 'sources.read' | 'findings.write'
-
-export type PermissionStatus = 'granted' | 'not_asked'
-
-export interface Permission {
-  readonly scope: PermissionScope
-  readonly status: PermissionStatus
+/** Store-facing asset routes (relative API paths — never storage locators). */
+export interface ExtensionAssetUrls {
+  readonly icon: string | null
+  readonly privacyPolicy: string | null
 }
 
-export interface CreditEstimate {
-  /** Credits spent this billing cycle in the open project (ADR-018); null until metered. */
-  readonly thisCycle: number | null
-  /** Typical per-run cost; null when the extension never calls a model. */
-  readonly perRun: number | null
-}
-
-export interface ExtensionLinks {
-  readonly documentation?: string
-  readonly source?: string
-  readonly issues?: string
-}
-
-export interface ExtensionManifest {
-  /** Stable lowercase slug; appears in install state and telemetry. */
-  readonly id: string
+/** The catalog row (§4.1) — or, for an install whose version left the
+ *  catalog, the same fields recovered from the install row (§6.1). */
+export interface ExtensionCatalogSummary {
+  /** The manifest `extension.id`; every route addresses the extension by it. */
+  readonly slug: string
   readonly name: string
-  readonly publisher: Publisher
   readonly summary: string
-  readonly icon: IconName
-  readonly version: string
-  /** ISO timestamp of the current version's release. */
+  readonly publisher: string
+  readonly verified: boolean
+  /** Aggregate install count; null when the catalog did not report one. */
+  readonly installCount: number | null
+  readonly latestVersion: string
+  /** ISO timestamp of the latest approved version. */
   readonly updatedAt: string
-  /** Install count from the catalog service; null until the backend reports one. */
-  readonly installs: number | null
   readonly requires: Requirements
-  readonly contributions: readonly Contribution[]
-  readonly permissions: readonly Permission[]
-  readonly credits: CreditEstimate
-  readonly links: ExtensionLinks
-  /** Ships installed in every project (the capabilities Solus is not useful without). */
-  readonly defaultInstalled: boolean
+  /** The `[views]` keys the latest version declares (`widget | page | window`). */
+  readonly views: readonly string[]
+  readonly assetUrls: ExtensionAssetUrls
+  /** False when the extension is installed here but no longer listed. */
+  readonly inCatalog: boolean
 }
 
-export type RunFrequency = 'every_sync' | 'hourly' | 'daily' | 'manual'
+export interface ExtensionUpdate {
+  readonly version: string
+  /** The newer version declares scopes or origins beyond the current grants. */
+  readonly widensPermissions: boolean
+}
 
-/** What the Store stores per project per extension. */
+/** The per-project install row (§6.1), or `NOT_INSTALLED` when there is none. */
 export interface ExtensionInstallState {
   readonly installed: boolean
   readonly enabled: boolean
-  readonly runFrequency: RunFrequency
+  readonly settings: ExtensionSettings
+  readonly grantedScopes: readonly PermissionScope[]
+  readonly grantedNetwork: readonly string[]
+  readonly pinnedVersion: string | null
+  readonly updateAvailable: ExtensionUpdate | null
+  /** Team policy blocks this extension (server reports it disabled). */
+  readonly blocked: boolean
 }
 
-/** Where a card sits: installed, blocked on a missing source, or ready to install. */
-export type ExtensionAvailability = 'installed' | 'needs_source' | 'available'
+/** Where a card sits: installed, blocked by the team, blocked on a missing
+ *  source, or ready to install. */
+export type ExtensionAvailability = 'installed' | 'blocked' | 'needs_source' | 'available'
 
-/** A manifest joined with the open project's state — what every Store surface renders. */
+/** A catalog entry joined with the open project's state — what every Store
+ *  surface renders. `manifest` is the PINNED version's for an install and the
+ *  latest approved version's otherwise; it is null until the detail has been
+ *  fetched for an extension that is not installed here. */
 export interface ExtensionView {
-  readonly manifest: ExtensionManifest
+  readonly catalog: ExtensionCatalogSummary
+  readonly manifest: ExtensionManifest | null
   readonly state: ExtensionInstallState
   readonly availability: ExtensionAvailability
   /** The requirement groups the project does not yet satisfy. */
   readonly missing: Requirements
+}
+
+/** One row of the Overview's WHAT IT ADDS list, derived from `manifest.views`. */
+export interface Contribution {
+  readonly kind: 'widget' | 'page' | 'window' | 'permissions'
+  readonly title: string
+  readonly detail: string
 }

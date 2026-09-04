@@ -14,16 +14,24 @@ import { useExtensionsStore } from '../extensions/extensionsStore'
 import * as ext from '../../lib/api/resources.extensions'
 import type { Page } from '../../lib/api/client'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
+import { catalogItem, installRow, manifest } from '../extensions/testing/fixtures'
 
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
 vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
 
-// The rail's install poll (EXT-14). Unmocked calls reject → the hook reports
-// offline and renders no entries, which is what every pre-existing test expects.
-vi.mock('../../lib/api/resources.extensions', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../lib/api/resources.extensions')>()
-  return { ...actual, listProjectExtensions: vi.fn() }
+// The Store reads the server catalog and install rows (EXT-17) and the rail
+// polls the same install list (EXT-14): one mock serves both. beforeEach seeds
+// one installed "Experiments" row so the Store detail page is reachable; the
+// rail tests reset the install mock and seed page-view rows of their own.
+vi.mock('../../lib/api/resources.extensions', async (importOriginal) => ({
+  ...(await importOriginal<typeof ext>()),
+  listExtensions: vi.fn(),
+  listProjectExtensions: vi.fn(),
+  getExtension: vi.fn()
+}))
+const experiments = manifest({
+  extension: { ...manifest().extension, id: 'experiments', name: 'Experiments', requires: [] }
 })
 // Rail icons: `bom` has one, everything else misses → neutral glyph.
 vi.mock('../extensions/pageview/extensionIconAsset', () => ({
@@ -85,6 +93,17 @@ function renderShell(): ReturnType<typeof render> {
 beforeEach(() => {
   useShellStore.getState().reset()
   useWorkspaceStore.getState().reset()
+  useExtensionsStore.getState().reset()
+  vi.mocked(ext.listExtensions).mockResolvedValue({
+    data: [
+      catalogItem({ slug: 'experiments', name: 'Experiments', requires: [], views: ['widget'] })
+    ],
+    meta: { has_next: false, next_cursor: null }
+  })
+  vi.mocked(ext.listProjectExtensions).mockResolvedValue({
+    data: [installRow({ version: { ...installRow().version, manifest: experiments } })],
+    meta: { has_next: false, next_cursor: null }
+  })
   useAuthStore.setState({
     status: 'authenticated',
     user: { email: 'dev@example.dev' },
@@ -157,32 +176,28 @@ describe('WorkspaceShell — Store and project switching (SOLUSDEV-235)', () => 
     await userEvent.click(screen.getByText('Store'))
     expect(useShellStore.getState().lastMain).toBe('store')
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Open Experiments' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Open Experiments' }))
     expect(screen.getByRole('heading', { name: 'Experiments' })).toBeInTheDocument()
     // Re-clicking the rail returns to the catalog rather than the stale detail page.
     await userEvent.click(screen.getByLabelText('Store'))
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
   })
 
-  it('clears extension install state on sign-out (SOLUSDEV-235)', async () => {
+  it('clears the Store selection on sign-out (SOLUSDEV-235)', async () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
-    useExtensionsStore.setState({
-      byProject: { p1: { bom: { installed: true, enabled: true, runFrequency: 'daily' } } },
-      selectedId: 'bom'
-    })
+    useExtensionsStore.setState({ selectedId: 'bom' })
     renderShell()
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
-    expect(useExtensionsStore.getState()).toMatchObject({ byProject: {}, selectedId: null })
-    // The durable copy is gone too — nothing for the next user of this workstation to read.
-    const raw = JSON.parse(localStorage.getItem('solus_extensions_v1') ?? '{}')
-    expect(raw.state?.byProject ?? {}).toEqual({})
+    expect(useExtensionsStore.getState().selectedId).toBeNull()
+    // Install state is the server's now — nothing durable is left on this workstation.
+    expect(localStorage.getItem('solus_extensions_v1')).toBeNull()
   })
 
   it('switching project from the topbar leaves an open extension detail page (SOLUSDEV-235)', async () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
     renderShell()
     await userEvent.click(screen.getByText('Store'))
-    await userEvent.click(screen.getByRole('button', { name: 'Open Experiments' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Open Experiments' }))
     expect(screen.getByRole('heading', { name: 'Experiments' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
     await userEvent.click(await screen.findByText('Rover MK3'))

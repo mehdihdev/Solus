@@ -15,20 +15,12 @@ import {
   joinUrl,
   unwrapEnvelope,
   type ApiClient,
-  type Page,
-  type RequestOptions
+  type Page
 } from './client'
 import { ApiError } from './envelope.types'
 
-// `RequestOptions.method` predates this plan — the extensions surface is the
-// first PUT the desktop makes, and client.ts is outside EXT-12's ownership.
-// The transport forwards the verb verbatim (`req.method ?? 'GET'`), so the
-// cast is type-only; widening the union is a one-line client.ts follow-up
-// (flagged in the completion report).
-const PUT = 'PUT' as unknown as RequestOptions['method']
-
 function putJson<T>(client: ApiClient, path: string, body: unknown): Promise<T> {
-  return client.request<T>(path, { method: PUT, body })
+  return client.request<T>(path, { method: 'PUT', body })
 }
 
 /* ---------------- shapes ---------------- */
