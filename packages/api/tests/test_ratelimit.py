@@ -19,7 +19,10 @@ def limited_app(engine: AsyncEngine) -> FastAPI:
         supabase_jwt_audience=TEST_AUDIENCE,
         database_url="sqlite+aiosqlite://",
         rate_limit_per_minute=3,
+        write_rate_limit_per_minute=2,
         classify_rate_limit_per_minute=5,
+        panel_pair_rate_limit_per_minute=1,
+        cors_origins="http://localhost:5173",
     )
     return create_app(settings=settings, engine=engine)
 
@@ -54,15 +57,81 @@ async def test_429_after_limit_exceeded(limited_client: AsyncClient) -> None:
 # 429s ITSELF within ~30s of normal clicking. Kept as a floor so a future
 # "tighten the limiter" change cannot silently reintroduce that.
 DESKTOP_STEADY_STATE_PER_MINUTE = 600
+# ...and a ceiling, because the limiter is the interim burst bound on model
+# spend (config.py): the read budget must not drift upward unnoticed either,
+# and the write budget must stay where the security review sized it.
+MAX_SANE_READS_PER_MINUTE = 2_000
+MAX_SANE_WRITES_PER_MINUTE = 120
 
 
-def test_default_budget_covers_a_desktop_session() -> None:
+def test_default_budgets_cover_a_desktop_session_without_lifting_writes() -> None:
     settings = Settings(
         _env_file=None,  # type: ignore[call-arg]  # valid pydantic-settings runtime kwarg
         supabase_jwt_secret=TEST_JWT_SECRET,
         database_url="sqlite+aiosqlite://",
     )
-    assert settings.rate_limit_per_minute >= DESKTOP_STEADY_STATE_PER_MINUTE
+    assert DESKTOP_STEADY_STATE_PER_MINUTE <= settings.rate_limit_per_minute
+    assert settings.rate_limit_per_minute <= MAX_SANE_READS_PER_MINUTE
+    assert settings.write_rate_limit_per_minute <= MAX_SANE_WRITES_PER_MINUTE
+    assert settings.panel_pair_rate_limit_per_minute <= MAX_SANE_WRITES_PER_MINUTE
+
+
+async def test_writes_have_their_own_smaller_bucket(limited_client: AsyncClient) -> None:
+    """SOLUSDEV-234: the read raise must not lift the write budget. Writes
+    (anything but GET/HEAD/OPTIONS) draw on `write_rate_limit_per_minute`
+    and neither consume nor are blocked by the read budget. (401 = through
+    the limiter, stopped at auth — the middleware runs first.)"""
+    for _ in range(3):
+        assert (await limited_client.get("/api/v1/version")).status_code == 200
+    assert (await limited_client.get("/api/v1/version")).status_code == 429
+    # Read budget spent; the write bucket is untouched.
+    for _ in range(2):
+        resp = await limited_client.post("/api/v1/teams", json={"name": "x"})
+        assert resp.status_code == 401
+        assert resp.headers["x-ratelimit-limit"] == "2"
+    blocked = await limited_client.delete("/api/v1/teams/x")  # same write bucket
+    assert blocked.status_code == 429
+    assert blocked.json()["error"]["code"] == "rate_limited"
+
+
+async def test_preflight_is_answered_by_cors_and_never_counted(
+    limited_client: AsyncClient,
+) -> None:
+    """CORS must sit OUTSIDE the limiter: preflights are free, and a 429
+    still carries the CORS headers the renderer needs to read the error."""
+    for _ in range(10):
+        resp = await limited_client.options(
+            "/api/v1/version",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp.status_code == 200
+    for _ in range(3):
+        assert (await limited_client.get("/api/v1/version")).status_code == 200
+    blocked = await limited_client.get(
+        "/api/v1/version", headers={"Origin": "http://localhost:5173"}
+    )
+    assert blocked.status_code == 429
+    assert blocked.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+async def test_panel_pair_start_has_its_own_limit(limited_client: AsyncClient) -> None:
+    resp = await limited_client.post("/api/v1/panel/pair/start", json={})
+    assert resp.status_code != 429
+    assert resp.headers["x-ratelimit-limit"] == "1"
+    blocked = await limited_client.post("/api/v1/panel/pair/start", json={})
+    assert blocked.status_code == 429
+
+
+def test_counter_table_stays_bounded_under_a_flood_of_unique_keys() -> None:
+    from solus_api.core.ratelimit import MAX_TRACKED_KEYS, RateLimitMiddleware
+
+    mw = RateLimitMiddleware(app=lambda *_: None, limit_per_minute=1)  # type: ignore[arg-type]
+    for i in range(MAX_TRACKED_KEYS + 500):
+        mw._bump(f"ip:{i}", window=1)
+    assert len(mw._counters) <= MAX_TRACKED_KEYS
 
 
 async def test_health_probes_exempt_from_rate_limit(limited_client: AsyncClient) -> None:

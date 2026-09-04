@@ -655,12 +655,25 @@ Cancelling a finished job → `409 job_not_cancellable` (`"Job is already cancel
 
 ## 7. Rate limiting (§1.4 interim)
 
-Default 1200 req/min per token (per client IP when unauthenticated), set via
-`SOLUS_RATE_LIMIT_PER_MINUTE`. The number is sized for one desktop session's steady-state
-polling (SOLUSDEV-234: the Live Bench widget is 2 req/s, the bridge/sources/extensions/widget
-pollers ~1 req/s, and a workspace load pages the graph in 500-row bursts) with a 10x margin,
-so it bounds a runaway loop without a healthy client 429ing itself. To see a `429` in Postman,
-restart the server with `SOLUS_RATE_LIMIT_PER_MINUTE=3` and send 4 requests:
+Per token (per client IP when unauthenticated), fixed 60 s window, per process. Reads and writes
+are **separate buckets** (SOLUSDEV-234):
+
+| Budget                                   | Setting                                 | Default  |
+| ---------------------------------------- | --------------------------------------- | -------- |
+| Reads (`GET`/`HEAD`/`OPTIONS`)           | `SOLUS_RATE_LIMIT_PER_MINUTE`           | **1200** |
+| Writes (everything else)                 | `SOLUS_WRITE_RATE_LIMIT_PER_MINUTE`     | **120**  |
+| `POST /orchestration/classify` (own bucket) | `SOLUS_CLASSIFY_RATE_LIMIT_PER_MINUTE` | 600      |
+| `POST /panel/pair/start` (own bucket)    | `SOLUS_PANEL_PAIR_RATE_LIMIT_PER_MINUTE` | 120     |
+
+The read budget is sized for one desktop session's steady-state polling (the Live Bench widget
+is 2 req/s, the bridge/sources/extensions/widget pollers ~1 req/s, and a workspace load pages the
+graph in 500-row bursts) with a ~10x margin, so it bounds a runaway loop without a healthy client
+429ing itself. The write budget stays at 120 because it is the interim burst bound on
+model-calling POSTs until the ADR-019 Redis frequency cap is live; raising reads never raises it.
+This is a runaway-client guard, not an abuse control (keyed per bearer token per process).
+
+To see a `429` in Postman, restart the server with `SOLUS_RATE_LIMIT_PER_MINUTE=3` and send 4
+GETs:
 
 ```json
 {
@@ -672,14 +685,20 @@ restart the server with `SOLUS_RATE_LIMIT_PER_MINUTE=3` and send 4 requests:
 }
 ```
 
-with `Retry-After: <seconds>`. `/healthz` and `/readyz` are exempt. This is a per-process
-limiter; the Redis-backed ADR-019 budget system replaces it in Phase 5 with the same headers.
+with `Retry-After: <seconds>`. `/healthz` and `/readyz` are exempt; CORS preflights sit outside the
+limiter (never counted, and a `429` carries CORS headers). The Redis-backed ADR-019 budget system
+replaces this in Phase 5 with the same headers.
 
-Client contract (desktop `lib/api/client.ts`, SOLUSDEV-234): concurrent identical GETs share one
-in-flight request, and a `429` on a GET pauses further GETs client-side until `Retry-After`
-elapses (5 s when the header is missing or malformed) — they fail fast with the same
-`rate_limited` error instead of hammering the window. Mutations are never coalesced or held back,
-and a `429` from a separately-bucketed POST (e.g. classify) does not pause reads.
+Client contract (desktop `lib/api/client.ts`, SOLUSDEV-234), both guards scoped to the bearer
+token so a sign-out/sign-in shares nothing with the previous account:
+
+- Concurrent identical plain GETs share one in-flight request. In-flight reads are dropped when
+  any mutation completes, so a refetch after a write is always fresh.
+- A GET `429` whose `X-RateLimit-Remaining` is `0` (or absent) pauses further GETs client-side
+  until `Retry-After` elapses — 5 s when the header is missing or malformed, 60 s at most — and
+  they fail fast with the same `rate_limited` error instead of hammering the window. A `429` from
+  a route-level limiter (extension bundles, artifact content) arrives with headroom in that
+  header and pauses nothing. Mutations are never coalesced or held back.
 
 ---
 

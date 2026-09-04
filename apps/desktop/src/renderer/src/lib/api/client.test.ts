@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { joinUrl, unwrapEnvelope, unwrapEnvelopePage, createApiClient } from './client'
+import {
+  joinUrl,
+  unwrapEnvelope,
+  unwrapEnvelopePage,
+  createApiClient,
+  MAX_RETRY_AFTER_MS
+} from './client'
 import { ApiError } from './envelope.types'
 
 describe('joinUrl', () => {
@@ -280,5 +286,135 @@ describe('429 cooldown (SOLUSDEV-234)', () => {
     nowMs += 5_001
     await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('coalescing and cooldown are scoped to the signed-in token (SOLUSDEV-234 security review)', () => {
+  const ok = (payload: unknown): Response =>
+    new Response(JSON.stringify({ data: payload }), { status: 200 })
+  const rateLimited = (headers: Record<string, string>): Response =>
+    new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'x' } }), {
+      status: 429,
+      headers
+    })
+
+  it("never hands one account another account's in-flight response", async () => {
+    let token = 'jwt-A'
+    let release: (r: Response) => void = () => {}
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      () => new Promise<Response>((resolve) => (release = resolve))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      getToken: () => token,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const a = client.request<string>('/users/me/credits')
+    await Promise.resolve() // let A resolve its token and take the slot
+    const releaseA = release
+    token = 'jwt-B' // sign-out / sign-in on a shared machine
+    const b = client.request<string>('/users/me/credits')
+    await Promise.resolve()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    release(ok('for-B'))
+    releaseA(ok('for-A'))
+    await expect(a).resolves.toBe('for-A')
+    await expect(b).resolves.toBe('for-B')
+  })
+
+  it("a new sign-in does not inherit the previous token's read pause", async () => {
+    let token = 'jwt-A'
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited({ 'Retry-After': '60', 'X-RateLimit-Remaining': '0' }))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      getToken: () => token,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => 0
+    })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    token = 'jwt-B'
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('clamps an absurd Retry-After so reads can never be frozen for the process lifetime', async () => {
+    let nowMs = 0
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited({ 'Retry-After': '999999999' }))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => nowMs
+    })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    nowMs = MAX_RETRY_AFTER_MS - 1
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    nowMs = MAX_RETRY_AFTER_MS + 1
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('applies the pause to abortable GETs too (only coalescing is skipped for them)', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited({ 'Retry-After': '30' }))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => 0
+    })
+    await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
+    await expect(
+      client.request('/a', { signal: new AbortController().signal })
+    ).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 429 from a route-level limiter (read budget still has headroom) does not pause reads', async () => {
+    // The middleware stamps X-RateLimit-* on EVERY response, so a 429 minted
+    // by a route's own limiter (extension bundle, artifact content) arrives
+    // with Remaining > 0 — it says nothing about the shared read budget.
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
+      Promise.resolve(rateLimited({ 'Retry-After': '30', 'X-RateLimit-Remaining': '900' }))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      now: () => 0
+    })
+    await expect(client.request('/extensions/x/versions/1/bundle')).rejects.toMatchObject({
+      status: 429
+    })
+    await expect(client.request('/projects/p/sources')).rejects.toMatchObject({ status: 429 })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('a completed mutation drops in-flight reads so the next refetch is fresh', async () => {
+    const responses: Array<(r: Response) => void> = []
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      () => new Promise<Response>((resolve) => responses.push(resolve))
+    )
+    const client = createApiClient({
+      baseUrl: 'http://api/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const stale = client.request<string>('/projects/p/extensions') // poller, pre-mutation
+    const mutation = client.request('/projects/p/extensions/bom', { method: 'PUT', body: {} })
+    await Promise.resolve()
+    responses[1](ok(null))
+    await mutation
+    const fresh = client.request<string>('/projects/p/extensions') // refetch after mutation
+    await Promise.resolve()
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    responses[0](ok('before'))
+    responses[2](ok('after'))
+    await expect(stale).resolves.toBe('before')
+    await expect(fresh).resolves.toBe('after')
   })
 })

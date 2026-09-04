@@ -41,6 +41,7 @@ async def e2e_server(engine: AsyncEngine) -> Any:
         supabase_jwt_audience="authenticated",
         database_url=TEST_DATABASE_URL,
         rate_limit_per_minute=100_000,
+        write_rate_limit_per_minute=100_000,
         sync_inline=True,
         bridge_allowlist_root=str(MCP_ROOT),
     )

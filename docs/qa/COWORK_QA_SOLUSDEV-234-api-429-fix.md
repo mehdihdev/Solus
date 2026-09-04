@@ -6,11 +6,13 @@ The desktop app used to hit `429 Too Many Requests` from Solus's own API after r
 of normal clicking, after which every screen showed offline/error states until the minute rolled
 over. Two fixes:
 
-1. **API default budget** raised from 120 to 1200 requests/minute per signed-in token
-   (`SOLUS_RATE_LIMIT_PER_MINUTE`).
+1. **API budgets split by method**: reads (GET) now get 1200 requests/minute per signed-in
+   token (`SOLUS_RATE_LIMIT_PER_MINUTE`); writes keep their own 120/minute bucket
+   (`SOLUS_WRITE_RATE_LIMIT_PER_MINUTE`). CORS preflights are no longer counted, and a `429` now
+   carries CORS headers so the desktop can read it.
 2. **Desktop API client**: concurrent identical GETs share one network request, and a `429` on a
    GET pauses further GETs until the server's `Retry-After` elapses (mutations are never held
-   back).
+   back). Both are scoped to the signed-in token.
 
 ## Required setup
 
@@ -63,7 +65,27 @@ over. Two fixes:
 
 - [ ] Pass  - [ ] Fail — notes:
 
-### 4. Cross-feature: SOL classify preview is unaffected
+### 4. Write budget is independent of reads (edge case)
+
+1. With the API at `SOLUS_RATE_LIMIT_PER_MINUTE=20` (path 3) and reads paused, perform 3–4
+   mutations in a row (rename project, toggle extensions).
+   - Expected: each mutation reaches the server and succeeds (writes have their own budget).
+2. Restart with default read limit and `SOLUS_WRITE_RATE_LIMIT_PER_MINUTE=3`; perform 4 mutations
+   quickly.
+   - Expected: the 4th shows a "too many" style error; navigation and polling keep working
+     (reads are unaffected by the exhausted write budget).
+
+- [ ] Pass  - [ ] Fail — notes:
+
+### 5. Sign-out / sign-in on the same machine shares nothing (security)
+
+1. While the workspace is polling, sign out and immediately sign in as a different user.
+   - Expected: the new user's screens show only their own data (credits, settings, teams). No
+     flash of the previous account's values.
+
+- [ ] Pass  - [ ] Fail — notes:
+
+### 6. Cross-feature: SOL classify preview is unaffected
 
 1. Type in the SOL box and pause repeatedly (the classify preview fires on typing pauses).
    - Expected: preview keeps working; it has its own separate budget and is not paused by, nor

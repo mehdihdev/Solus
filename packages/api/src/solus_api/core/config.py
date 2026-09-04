@@ -75,13 +75,24 @@ class Settings(BaseSettings):
     supabase_service_role_key: str | None = None
 
     # Interim in-process limiter until the ADR-019 budget system lands (Phase 5).
-    # SOLUSDEV-234: this is a per-TOKEN abuse guard, and one desktop session
+    # It is a RUNAWAY-CLIENT guard, not an abuse control: keyed per bearer
+    # token per process, so a determined caller multiplies it by tokens x
+    # instances. ADR-019's Redis budgets are the abuse control.
+    #
+    # SOLUSDEV-234: reads and writes are separate budgets. One desktop session
     # is a polling-heavy client — the Live Bench widget alone is 2 req/s, the
-    # bridge/sources/extensions/widgets pollers add ~1/s, and a workspace load
-    # pages the whole graph in 500-row bursts. The former 120/min was below
-    # that steady state, so a healthy client 429'd itself after ~30s. 1200/min
-    # (20 req/s) still bounds a runaway loop at 10x normal load.
+    # bridge/sources/extensions/widget pollers add ~1/s, and a workspace load
+    # pages the whole graph in 500-row bursts. The former single 120/min was
+    # below that steady state, so a healthy client 429'd itself after ~30s.
+    # Reads get 1200/min (20 req/s, ~10x normal load); writes KEEP 120/min,
+    # because that budget is the interim burst bound on model-calling POSTs
+    # (orchestration/gates.py: the frequency cap fails open without Redis).
     rate_limit_per_minute: int = 1200
+    write_rate_limit_per_minute: int = 120
+    # A7-01 `/panel/pair/start`: unauthenticated, one shared bucket behind the
+    # ALB, and a DB insert per call — its own knob, so the read budget above
+    # can never drag it up by accident.
+    panel_pair_rate_limit_per_minute: int = 120
     # MO-04 classify preview: fired on typing pauses, so it gets its own
     # generous separate bucket (never counts against the global budget above).
     classify_rate_limit_per_minute: int = 600
