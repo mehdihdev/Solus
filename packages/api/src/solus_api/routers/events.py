@@ -28,9 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import error_response
 from solus_api.core.responses import envelope
-from solus_api.deps import CurrentUser, SessionDep, SettingsDep
+from solus_api.deps import CurrentUser, SessionDep, SettingsDep, visible_project_ids
 from solus_api.extensions.ratelimit import get_or_create_limiter
-from solus_api.models import Membership, MembershipStatus, Project, ProjectMembership
+from solus_api.models import Project
 from solus_api.services.events import emit_event
 
 logger = logging.getLogger("solus.events.ingest")
@@ -79,28 +79,20 @@ class EventBatch(BaseModel):
 async def _resolvable_projects(
     session: AsyncSession, user_id: uuid.UUID, ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, uuid.UUID]:
-    """project id → team id for the ids this user can resolve (active team
-    member or direct project member). Anything else is dropped by the caller."""
+    """project id → team id for the ids this user may read — exactly the set
+    `deps.visible_project_ids` (and so `get_project_context`) admits. Anything
+    else is dropped by the caller, never reported."""
     if not ids:
         return {}
-    live = (Project.id.in_(ids), Project.deleted_at.is_(None))
-    team_member = (
-        select(Project.id, Project.team_id)
-        .join(Membership, Membership.team_id == Project.team_id)
-        .where(
-            *live,
-            Membership.user_id == user_id,
-            Membership.status == MembershipStatus.ACTIVE,
-            Membership.deleted_at.is_(None),
+    visible = ids & await visible_project_ids(session, user_id)
+    if not visible:
+        return {}
+    rows = await session.execute(
+        select(Project.id, Project.team_id).where(
+            Project.id.in_(visible), Project.deleted_at.is_(None)
         )
     )
-    direct = (
-        select(Project.id, Project.team_id)
-        .join(ProjectMembership, ProjectMembership.project_id == Project.id)
-        .where(*live, ProjectMembership.user_id == user_id, ProjectMembership.deleted_at.is_(None))
-    )
-    rows = [*(await session.execute(team_member)).all(), *(await session.execute(direct)).all()]
-    return {project_id: team_id for project_id, team_id in rows}
+    return {project_id: team_id for project_id, team_id in rows.all()}
 
 
 @router.post("", status_code=202, response_model=None)

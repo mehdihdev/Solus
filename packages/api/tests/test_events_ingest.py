@@ -158,14 +158,21 @@ async def test_a_429_is_itself_a_data_event(
 async def test_a_removed_member_cannot_scope_events_to_the_old_project(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    from solus_api.models import Membership, utcnow
+    from solus_api.models import Membership, ProjectMembership, utcnow
 
     alice_id = await _consented_user(client, db, ALICE)
     headers = bearer(ALICE["sub"], ALICE["email"])
     project = await _project(client, headers)
+    # Removed from the team AND from any direct project share (ADR-025): the
+    # project is no longer visible, exactly as get_project_context would rule.
     await db.execute(
         update(Membership)
         .where(Membership.user_id == uuid.UUID(alice_id))
+        .values(deleted_at=utcnow())
+    )
+    await db.execute(
+        update(ProjectMembership)
+        .where(ProjectMembership.user_id == uuid.UUID(alice_id))
         .values(deleted_at=utcnow())
     )
     await db.commit()
