@@ -42,6 +42,7 @@ from solus_api.routers import (
     billing,
     bridge,
     entities,
+    events,
     extensions,
     integrations,
     invites,
@@ -297,6 +298,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(meta.router)
     app.include_router(users.router)
     app.include_router(notifications.router)
+    app.include_router(events.router)
     app.include_router(teams.router)
     app.include_router(members.router)
     app.include_router(invites.team_router)

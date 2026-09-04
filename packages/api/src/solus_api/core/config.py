@@ -256,6 +256,10 @@ class Settings(BaseSettings):
     # §4.5 upload-route budgets. PROVISIONAL pending the F13 security pass —
     # the setting NAMES are the contract, not these values.
     artifact_uploads_per_minute_per_user: int = 30
+    # --- Client-originated data events (API.md §2.13; ADR-011; SOLUSDEV-235) ---
+    # Batches per user per minute on POST /events; the desktop host batches bridge
+    # refusals every 2 s, so this is generous for honest clients and tight for abuse.
+    client_event_batches_per_minute_per_user: int = 30
     artifact_upload_bytes_per_hour_per_team: int = 67_108_864
 
     # --- Extensions (SOLUSDEV-235 / ADR-035, docs/api/extensions.md §3, §12) ---
