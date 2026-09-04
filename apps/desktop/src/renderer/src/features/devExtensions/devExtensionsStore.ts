@@ -75,15 +75,28 @@ async function devLoad(bridge: ExtensionsBridge, path: string): Promise<DevLoadR
   }
 }
 
+/** The permission set an acknowledgement covers, as a stable comparable key. */
+function permissionKey(manifest: DevExtensionEntry['manifest']): string {
+  if (!manifest) return ''
+  const scopes = [...manifest.permissions.scopes].sort()
+  const network = [...manifest.permissions.network].sort()
+  return JSON.stringify([scopes, network])
+}
+
 function loadedEntry(
   result: Extract<DevLoadResult, { ok: true }>,
   now: string,
   previous: DevExtensionEntry | undefined
 ): DevExtensionEntry {
-  // The acknowledgement is per (slug, devPath): a reload of the same folder
-  // keeps it, a different folder under the same id asks again.
+  // The acknowledgement is bound to (devPath, declared permissions): a reload of
+  // the same folder keeps it ONLY while the manifest declares the same scopes
+  // and origins — a folder that widens what it asks for is re-asked, because the
+  // whole point of the gate is that the developer saw the concrete grant.
   const acknowledged =
-    previous !== undefined && previous.devPath === result.devPath && previous.acknowledged
+    previous !== undefined &&
+    previous.devPath === result.devPath &&
+    previous.acknowledged &&
+    permissionKey(previous.manifest) === permissionKey(result.manifest)
   return {
     manifest: result.manifest,
     devPath: result.devPath,

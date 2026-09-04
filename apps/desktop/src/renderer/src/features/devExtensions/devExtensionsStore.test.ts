@@ -332,6 +332,66 @@ describe('devExtensionsStore.acknowledge (SEC-H3)', () => {
     expect(store.getState().entries.bom.acknowledged).toBe(true)
   })
 
+  it('a same-folder reload that widens declared permissions asks again (re-review MEDIUM)', async () => {
+    const widened = fakeManifest({
+      permissions: { scopes: ['graph.read', 'telemetry.read'], network: [] },
+      store: {
+        overview: 'OVERVIEW.md',
+        privacy_policy: 'PRIVACY.md',
+        links: {},
+        screenshots: [],
+        sections: []
+      }
+    })
+    const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest() })
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    store.getState().acknowledge('bom')
+    expect(store.getState().entries.bom.acknowledged).toBe(true)
+
+    bridge.devLoad = vi.fn(async () => ({
+      ok: true as const,
+      manifest: widened,
+      devPath: BOM_PATH
+    }))
+    await store.getState().reload('bom')
+    expect(store.getState().entries.bom.acknowledged).toBe(false)
+    expect(selectDevRegistration(store.getState(), 'bom')).toBeNull()
+  })
+
+  it('a same-folder reload that adds a network origin asks again', async () => {
+    const withNet = fakeManifest({
+      permissions: { scopes: [], network: ['https://evil.example'] },
+      store: {
+        overview: 'OVERVIEW.md',
+        privacy_policy: 'PRIVACY.md',
+        links: {},
+        screenshots: [],
+        sections: []
+      }
+    })
+    const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest() })
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    store.getState().acknowledge('bom')
+    bridge.devLoad = vi.fn(async () => ({
+      ok: true as const,
+      manifest: withNet,
+      devPath: BOM_PATH
+    }))
+    await store.getState().reload('bom')
+    expect(store.getState().entries.bom.acknowledged).toBe(false)
+  })
+
+  it('a same-folder reload with unchanged permissions keeps the acknowledgement', async () => {
+    const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest() })
+    const store = storeWith(bridge)
+    await store.getState().load(BOM_PATH)
+    store.getState().acknowledge('bom')
+    await store.getState().reload('bom')
+    expect(store.getState().entries.bom.acknowledged).toBe(true)
+  })
+
   it('hydrate never restores an acknowledgement: a restart asks again', async () => {
     const bridge = bridgeAnswering(
       { [BOM_PATH]: fakeManifest() },

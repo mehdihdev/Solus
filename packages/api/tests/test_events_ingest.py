@@ -141,3 +141,37 @@ async def test_per_user_rate_limit(client: AsyncClient, app: Any) -> None:
     assert resp.status_code == 429
     assert resp.json()["error"]["code"] == "rate_limited"
     assert resp.headers["Retry-After"]
+
+
+async def test_a_429_is_itself_a_data_event(
+    client: AsyncClient, db: AsyncSession, app: Any
+) -> None:
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    app.state.settings.client_event_batches_per_minute_per_user = 1
+    await client.post("/api/v1/events", json={"events": [_refusal()]}, headers=headers)
+    await client.post("/api/v1/events", json={"events": [_refusal()]}, headers=headers)
+    stmt = select(DataEvent).where(DataEvent.event_type == "client_events.rate_limited")
+    assert len(list((await db.scalars(stmt)).all())) == 1
+
+
+async def test_a_removed_member_cannot_scope_events_to_the_old_project(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    from solus_api.models import Membership, utcnow
+
+    alice_id = await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    await db.execute(
+        update(Membership)
+        .where(Membership.user_id == uuid.UUID(alice_id))
+        .values(deleted_at=utcnow())
+    )
+    await db.commit()
+    resp = await client.post(
+        "/api/v1/events", json={"events": [_refusal(project["id"])]}, headers=headers
+    )
+    assert resp.status_code == 202
+    rows = await _stored(db)
+    assert len(rows) == 1 and rows[0].project_id is None

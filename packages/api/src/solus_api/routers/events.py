@@ -17,6 +17,7 @@ call still succeeds and nothing is stored.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Annotated, Any
 
@@ -31,6 +32,8 @@ from solus_api.deps import CurrentUser, SessionDep, SettingsDep
 from solus_api.extensions.ratelimit import get_or_create_limiter
 from solus_api.models import Membership, MembershipStatus, Project, ProjectMembership
 from solus_api.services.events import emit_event
+
+logger = logging.getLogger("solus.events.ingest")
 
 router = APIRouter(prefix="/api/v1/events")
 
@@ -84,7 +87,12 @@ async def _resolvable_projects(
     team_member = (
         select(Project.id, Project.team_id)
         .join(Membership, Membership.team_id == Project.team_id)
-        .where(*live, Membership.user_id == user_id, Membership.status == MembershipStatus.ACTIVE)
+        .where(
+            *live,
+            Membership.user_id == user_id,
+            Membership.status == MembershipStatus.ACTIVE,
+            Membership.deleted_at.is_(None),
+        )
     )
     direct = (
         select(Project.id, Project.team_id)
@@ -105,6 +113,11 @@ async def ingest_events(
 ) -> dict[str, Any] | Response:
     limiter = get_or_create_limiter(request.app.state, LIMITER_ATTR, 60)
     if limiter.bump(str(user.id)) > settings.client_event_batches_per_minute_per_user:
+        # Server-originated abuse signal (CLAUDE.md §7): the closed client set
+        # cannot mint this name, so it is emitted here, not accepted from the body.
+        logger.warning("client event batches rate-limited user=%s", user.id)
+        emit_event(session, user=user, event_type="client_events.rate_limited", payload={})
+        await session.commit()
         resp = error_response(429, "rate_limited", "Too many event batches; try again shortly")
         resp.headers["Retry-After"] = "60"
         return resp
