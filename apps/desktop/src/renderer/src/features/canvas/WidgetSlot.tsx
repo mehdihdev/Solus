@@ -14,8 +14,9 @@ import { SlotMenu, type SlotMenuProps } from './SlotMenu'
 import { slotSizeHint, slotTitle, type SlotTarget } from './slotTarget'
 import type { ExtensionWidgetEntry } from './useAvailableWidgets'
 
-export interface WidgetSlotProps
-  extends Pick<SlotMenuProps, 'canMoveLeft' | 'canMoveRight' | 'onResize' | 'onMove'> {
+type MenuControls = Pick<SlotMenuProps, 'canMoveLeft' | 'canMoveRight' | 'onResize' | 'onMove'>
+
+export interface WidgetSlotProps extends MenuControls {
   readonly projectId: string
   readonly slot: LayoutSlot
   readonly target: SlotTarget
