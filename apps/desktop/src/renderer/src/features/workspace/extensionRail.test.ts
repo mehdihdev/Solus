@@ -111,6 +111,7 @@ function devEntry(
     manifest: fakeManifest({ extension: { ...fakeManifest().extension, id: slug }, views }),
     devPath: `/code/${slug}`,
     loadedAt,
+    acknowledged: true,
     problems: []
   }
 }
@@ -142,6 +143,7 @@ describe('devRailEntriesFrom', () => {
           manifest: null,
           devPath: '/code/broken',
           loadedAt: 'x',
+          acknowledged: true,
           problems: ['views: bad']
         },
         cam: devEntry('cam', '2026-09-06T00:00:00Z')

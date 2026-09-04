@@ -365,6 +365,7 @@ describe('WorkspaceShell — developer registrations in the rail (EXT-20)', () =
           }),
           devPath: '/code/lab',
           loadedAt: '2026-09-05T00:00:00Z',
+          acknowledged: true,
           problems: []
         }
       }

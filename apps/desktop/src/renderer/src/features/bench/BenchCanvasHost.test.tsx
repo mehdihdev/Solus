@@ -58,6 +58,7 @@ function devEntry(
     }),
     devPath: `/code/${slug}`,
     loadedAt: '2026-09-05T00:00:00Z',
+    acknowledged: true,
     problems: []
   }
 }
@@ -153,7 +154,13 @@ describe('BenchCanvasHost — developer registrations (EXT-20)', () => {
         'page-only': devEntry('page-only', {
           page: { entry: 'p.html', icon: 'i.svg', label: 'Page' }
         }),
-        broken: { manifest: null, devPath: '/code/broken', loadedAt: 'x', problems: ['nope'] }
+        broken: {
+          manifest: null,
+          devPath: '/code/broken',
+          loadedAt: 'x',
+          acknowledged: true,
+          problems: ['nope']
+        }
       }
     })
     mount()

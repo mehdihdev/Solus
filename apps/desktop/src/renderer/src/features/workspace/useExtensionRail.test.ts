@@ -62,6 +62,7 @@ function devEntry(
     manifest: fakeManifest({ extension: { ...fakeManifest().extension, id: slug }, views }),
     devPath: `/code/${slug}`,
     loadedAt: '2026-09-05T00:00:00Z',
+    acknowledged: true,
     problems: []
   }
 }
