@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
+import { Mono } from '../../components/ui/Mono'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { GraphScreen } from '../graph/GraphScreen'
@@ -392,8 +393,27 @@ function isRailActive(item: RailItem, name: string): boolean {
   return name === item.screen || (item.screen === 'graph' && name === 'alert')
 }
 
+/** The rail's `DEV` corner mark (wireflow extensions-runtime.md §2): mono,
+ *  warn tint, 8px, on the button's top-right — the page header's DevBadge in
+ *  miniature. Positioned against the RailButton, which is `relative`. */
+function RailDevMark(): React.JSX.Element {
+  return (
+    <span
+      data-testid="rail-dev-mark"
+      aria-hidden="true"
+      title="Developer registration — loaded from a folder on this computer"
+      style={{ position: 'absolute', top: 1, right: 3, lineHeight: 1, pointerEvents: 'none' }}
+    >
+      <Mono size={8} ls="0.08em" color="var(--warn)">
+        DEV
+      </Mono>
+    </span>
+  )
+}
+
 /** One installed page-view extension in the rail: its reduced manifest icon,
- *  or the neutral glyph when the icon is missing or was refused by the reducer. */
+ *  or the neutral glyph when the icon is missing or was refused by the reducer.
+ *  Developer registrations add the DEV corner mark. */
 function ExtensionRailButton({
   entry,
   iconSvg,
@@ -415,7 +435,12 @@ function ExtensionRailButton({
   return (
     <RailButton
       id={`rail-ext-${entry.slug}`}
-      icon={icon}
+      icon={
+        <>
+          {icon}
+          {entry.dev && <RailDevMark />}
+        </>
+      }
       label={entry.label}
       active={active}
       onClick={() => onOpen(entry.slug)}

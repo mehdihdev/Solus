@@ -4,7 +4,14 @@
 import { describe, it, expect } from 'vitest'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
 import type { ExtensionInstallApi } from '../../lib/api/resources.extensions'
-import { railEntriesFrom, RAIL_EXTENSION_CAP } from './extensionRail'
+import type { DevExtensionEntry } from '../devExtensions/devExtensionsStore'
+import {
+  devRailEntriesFrom,
+  mergeRailEntries,
+  railEntriesFrom,
+  RAIL_EXTENSION_CAP,
+  type RailExtensionEntry
+} from './extensionRail'
 
 function install(
   slug: string,
@@ -32,7 +39,8 @@ describe('railEntriesFrom', () => {
         label: 'BOM',
         iconPath: 'bom.svg',
         version: '1.2.0',
-        installedAt: '2026-09-01T00:00:00Z'
+        installedAt: '2026-09-01T00:00:00Z',
+        dev: false
       }
     ])
   })
@@ -88,5 +96,98 @@ describe('railEntriesFrom', () => {
 
   it('returns an empty list for no installs', () => {
     expect(railEntriesFrom([])).toEqual([])
+  })
+})
+
+/** A dev-store row as main would have validated it. */
+function devEntry(
+  slug: string,
+  loadedAt: string,
+  views: Partial<ReturnType<typeof fakeManifest>['views']> = {
+    page: { entry: 'page.html', icon: `${slug}.svg`, label: `${slug.toUpperCase()} (dev)` }
+  }
+): DevExtensionEntry {
+  return {
+    manifest: fakeManifest({ extension: { ...fakeManifest().extension, id: slug }, views }),
+    devPath: `/code/${slug}`,
+    loadedAt,
+    problems: []
+  }
+}
+
+describe('devRailEntriesFrom', () => {
+  it('maps a dev registration with a page view to a DEV entry, label and icon from its manifest', () => {
+    const entries = devRailEntriesFrom({
+      entries: { bom: devEntry('bom', '2026-09-05T00:00:00Z') }
+    })
+    expect(entries).toEqual([
+      {
+        slug: 'bom',
+        label: 'BOM (dev)',
+        iconPath: 'bom.svg',
+        version: 'dev',
+        installedAt: '2026-09-05T00:00:00Z',
+        dev: true
+      }
+    ])
+  })
+
+  it('skips registrations without a page view and rows that never validated', () => {
+    const entries = devRailEntriesFrom({
+      entries: {
+        'widget-only': devEntry('widget-only', '2026-09-05T00:00:00Z', {
+          widget: { entry: 'w.html', preferred: 'standard' }
+        }),
+        broken: {
+          manifest: null,
+          devPath: '/code/broken',
+          loadedAt: 'x',
+          problems: ['views: bad']
+        },
+        cam: devEntry('cam', '2026-09-06T00:00:00Z')
+      }
+    })
+    expect(entries.map((e) => e.slug)).toEqual(['cam'])
+  })
+
+  it('orders by load time, then label', () => {
+    const entries = devRailEntriesFrom({
+      entries: {
+        zed: devEntry('zed', '2026-09-05T00:00:00Z'),
+        alpha: devEntry('alpha', '2026-09-05T00:00:00Z'),
+        first: devEntry('first', '2026-09-04T00:00:00Z')
+      }
+    })
+    expect(entries.map((e) => e.slug)).toEqual(['first', 'alpha', 'zed'])
+  })
+})
+
+describe('mergeRailEntries', () => {
+  const registry: readonly RailExtensionEntry[] = railEntriesFrom([
+    install('bom', '2026-09-01T00:00:00Z'),
+    install('cam', '2026-09-02T00:00:00Z')
+  ])
+
+  it('appends dev entries after the registry ones', () => {
+    const dev = devRailEntriesFrom({ entries: { lab: devEntry('lab', '2026-09-05T00:00:00Z') } })
+    const merged = mergeRailEntries(registry, dev)
+    expect(merged.map((e) => [e.slug, e.dev])).toEqual([
+      ['bom', false],
+      ['cam', false],
+      ['lab', true]
+    ])
+  })
+
+  it('lets a dev registration shadow the registry install of the same slug (the frame resolver prefers dev)', () => {
+    const dev = devRailEntriesFrom({ entries: { bom: devEntry('bom', '2026-09-05T00:00:00Z') } })
+    const merged = mergeRailEntries(registry, dev)
+    expect(merged.map((e) => [e.slug, e.dev])).toEqual([
+      ['cam', false],
+      ['bom', true]
+    ])
+  })
+
+  it('returns the registry list itself when there is nothing to merge', () => {
+    expect(mergeRailEntries(registry, [])).toBe(registry)
   })
 })
