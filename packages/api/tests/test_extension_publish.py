@@ -9,20 +9,26 @@ publish creates, and the §5.3 `latest_approved_version_id` recompute.
 
 import hashlib
 import io
+import os
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from conftest import me
 from fastapi import FastAPI
 from fixtures.extensions import (
+    FULL_MANIFEST_TOML,
     MINIMAL_MANIFEST_TOML,
+    PNG_MAGIC,
     build_zip,
+    full_files,
     minimal_files,
     with_manifest,
     without,
 )
 from httpx import AsyncClient, Response
+from solus_api.extensions import bundle as bundle_module
 from solus_api.models import (
     DataEvent,
     Extension,
@@ -339,6 +345,46 @@ async def test_invalid_bundle_is_422_bundle_invalid_with_problems(
     assert await db.scalar(select(ExtensionVersion)) is None
     assert await db.scalar(select(ExtensionPublisher)) is None
     assert list(app.state.artifact_store.root.iterdir()) == []
+
+
+async def test_publish_route_never_runs_the_full_inspector(
+    client: AsyncClient, alice_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 4 H1(4): the request path runs `inspect_bundle_structure` (manifest
+    + header checks) only; the full, member-inflating `inspect_bundle` belongs
+    to the review job. If the route ever called it, this publish would 500."""
+
+    def boom(*args: Any) -> Any:
+        raise AssertionError("inspect_bundle must not run in the request path")
+
+    # Both the public name and the stage it dispatches to (the route could only
+    # reach the latter through the former).
+    monkeypatch.setattr(bundle_module, "inspect_bundle", boom)
+    monkeypatch.setattr(bundle_module, "_full_stage", boom)
+    assert not hasattr(publish, "inspect_bundle")
+    resp = await _publish(client, alice_headers, _bundle())
+    assert resp.status_code == 202, resp.text
+
+
+async def test_publish_route_rejects_header_level_problems_without_inflating_members(
+    client: AsyncClient, alice_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A screenshot whose header says 2 MiB is refused from the central directory
+    alone — the route inflates exactly one member, the manifest."""
+    names: list[str] = []
+    original = bundle_module._read_bounded
+
+    def spy(zf: Any, name: str, max_bytes: int, budget: Any) -> bytes:
+        names.append(name)
+        return original(zf, name, max_bytes, budget)
+
+    monkeypatch.setattr(bundle_module, "_read_bounded", spy)
+    toml = FULL_MANIFEST_TOML.replace('publisher = "Ada Lovelace"', 'publisher = "Ada"')
+    files = {**full_files(), "shots/table.png": PNG_MAGIC + os.urandom(2 * 1024 * 1024)}
+    resp = await _publish(client, alice_headers, build_zip(with_manifest(files, toml)))
+    assert resp.status_code == 422, resp.text
+    assert any("shots/table.png" in p and "exceeds" in p for p in resp.json()["error"]["details"])
+    assert names == ["extension.toml"]
 
 
 # ------------------------------------------------- M4 publisher impersonation

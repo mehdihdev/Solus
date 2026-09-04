@@ -10,7 +10,9 @@ from __future__ import annotations
 import io
 import struct
 import zipfile
+import zlib
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 MINIMAL_MANIFEST_TOML = """\
 schema_version = 1
@@ -143,3 +145,82 @@ def with_manifest(files: Mapping[str, bytes], toml_text: str) -> dict[str, bytes
 
 def without(files: Mapping[str, bytes], *names: str) -> dict[str, bytes]:
     return {k: v for k, v in files.items() if k not in names}
+
+
+# --- hand-rolled archives (zip-bomb shapes the stdlib writer cannot produce) ----
+ZIP_DEFLATE_METHOD = 8
+
+
+@dataclass(frozen=True)
+class RawEntry:
+    """One member written with EXACTLY these header fields — `file_size`,
+    `compress_size` and `crc` may lie about `compressed`."""
+
+    name: str
+    compressed: bytes
+    file_size: int
+    crc: int
+    compress_size: int | None = None
+    method: int = ZIP_DEFLATE_METHOD
+
+    @property
+    def declared_compress_size(self) -> int:
+        return len(self.compressed) if self.compress_size is None else self.compress_size
+
+
+def deflate_raw(data: bytes, level: int = 9) -> bytes:
+    """A raw DEFLATE stream (no zlib header) — what a zip member carries."""
+    compressor = zlib.compressobj(level, zlib.DEFLATED, -zlib.MAX_WBITS)
+    return compressor.compress(data) + compressor.flush()
+
+
+def raw_entry(name: str, data: bytes, *, file_size: int | None = None) -> RawEntry:
+    """A deflated member of `data` whose header optionally UNDERSTATES `file_size`
+    (the CRC stays that of the real stream, as a lying archive would ship it)."""
+    return RawEntry(
+        name=name,
+        compressed=deflate_raw(data),
+        file_size=len(data) if file_size is None else file_size,
+        crc=zlib.crc32(data) & 0xFFFFFFFF,
+    )
+
+
+def raw_zip(entries: list[RawEntry]) -> bytes:
+    """Assemble local headers, central directory and EOCD by hand."""
+    out = io.BytesIO()
+    central: list[bytes] = []
+    for entry in entries:
+        name = entry.name.encode()
+        offset = out.tell()
+        fields = (entry.method, 0, 0x21, entry.crc, entry.declared_compress_size, entry.file_size)
+        out.write(struct.pack("<4sHHHHHIIIHH", b"PK\x03\x04", 20, 0, *fields, len(name), 0))
+        out.write(name)
+        out.write(entry.compressed)
+        central.append(
+            struct.pack(
+                "<4sHHHHHHIIIHHHHHII",
+                b"PK\x01\x02",
+                20,
+                20,
+                0,
+                *fields,
+                len(name),
+                0,
+                0,
+                0,
+                0,
+                0,
+                offset,
+            )  # fmt: skip
+            + name
+        )
+    cd_offset = out.tell()
+    for record in central:
+        out.write(record)
+    cd_size = out.tell() - cd_offset
+    out.write(
+        struct.pack(
+            "<4sHHHHIIH", b"PK\x05\x06", 0, 0, len(central), len(central), cd_size, cd_offset, 0
+        )
+    )
+    return out.getvalue()

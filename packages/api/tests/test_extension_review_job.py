@@ -10,18 +10,24 @@ recompute of `latest_approved_version_id`, idempotency, and the internal-error �
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import tomllib
 import uuid
+import zlib
 from typing import Any
 
 import pytest
 from fixtures.extensions import (
     FULL_MANIFEST_TOML,
     MINIMAL_MANIFEST_TOML,
+    RawEntry,
     build_zip,
+    deflate_raw,
     full_files,
     minimal_files,
+    raw_entry,
+    raw_zip,
     with_manifest,
 )
 from solus_api.connectors.worker import build_worker_settings
@@ -160,6 +166,52 @@ async def _events(db: AsyncSession, event_type: str = "extension.review_complete
 
 
 # ------------------------------------------------------------ rejections
+async def test_zip_bomb_is_rejected_by_the_full_inspection(
+    db: AsyncSession, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 4 H1: the job runs the FULL inspector under the cumulative
+    inflation budget — a 1,000-member archive with understated headers is
+    rejected with one problem, never approved, never a crash."""
+    store = FakeStore()
+    extension, _ = await _seed(db)
+    real = b"\0" * (8 * 1024 * 1024)
+    stream = deflate_raw(real)
+    crc = zlib.crc32(real) & 0xFFFFFFFF
+    entries = [raw_entry(k, v) for k, v in minimal_files().items()] + [
+        RawEntry(f"b/{i}.js", stream, file_size=24 * 1024, crc=crc) for i in range(1_000)
+    ]
+    data = raw_zip(entries)
+    version = ExtensionVersion(
+        extension_id=extension.id,
+        version="1.0.0",
+        manifest=_manifest_of(minimal_files()),
+        bundle_storage=store.backend,
+        content_hash=hashlib.sha256(data).hexdigest(),
+        bundle_size_bytes=len(data),
+    )
+    db.add(version)
+    await db.commit()
+    await store.put(str(version.id), data)
+    calls: list[str] = []
+    monkeypatch.setattr(review_module, "inspect_bundle", _spy(calls, review_module.inspect_bundle))
+
+    assert await extension_review(_ctx(engine, store), str(version.id)) == "rejected"
+
+    assert calls == ["inspect_bundle"]  # the FULL inspector, not the structure gate
+    row = await _reload(db, version)
+    assert row.review_status is ExtensionReviewStatus.REJECTED
+    assert len(row.review_problems) == 1, row.review_problems
+    assert set(store.blobs) == {str(version.id)}
+
+
+def _spy(calls: list[str], fn: Any) -> Any:
+    def wrapped(data: bytes) -> Any:
+        calls.append("inspect_bundle")
+        return fn(data)
+
+    return wrapped
+
+
 async def test_path_traversal_entry_is_rejected(db: AsyncSession, engine: AsyncEngine) -> None:
     store = FakeStore()
     extension, _ = await _seed(db)
@@ -502,3 +554,38 @@ async def test_minimal_manifest_produces_only_the_overview_asset(
 def test_extension_review_is_registered_with_the_arq_worker(settings: Settings) -> None:
     worker: Any = build_worker_settings(settings)
     assert extension_review in worker.functions
+    # Phase 4 H1(5): the pool is bounded so one publisher's reviews cannot
+    # monopolize it, and each review is CPU-bound inflation work.
+    assert worker.max_jobs == 4
+
+
+async def test_at_most_two_reviews_run_concurrently_per_publisher(
+    db: AsyncSession, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 4 H1(5): the per-publisher slot guard. Five pending versions of one
+    publisher reviewed at once → never more than two inspections in flight."""
+    store = FakeStore()
+    extension, _ = await _seed(db)
+    versions = [
+        await _publish(db, store, extension, minimal_files(), semver=f"1.0.{i}") for i in range(5)
+    ]
+    in_flight = {"now": 0, "peak": 0}
+    original_check = review_module._check
+
+    async def check(session: Any, store_: Any, target: Any) -> Any:
+        in_flight["now"] += 1
+        in_flight["peak"] = max(in_flight["peak"], in_flight["now"])
+        try:
+            await asyncio.sleep(0.02)  # let every other task reach the slot guard
+            return await original_check(session, store_, target)
+        finally:
+            in_flight["now"] -= 1
+
+    monkeypatch.setattr(review_module, "_check", check)
+    ctx = _ctx(engine, store)
+
+    results = await asyncio.gather(*(extension_review(ctx, str(v.id)) for v in versions))
+
+    assert results == ["approved"] * 5
+    assert in_flight["peak"] <= review_module.MAX_CONCURRENT_REVIEWS_PER_PUBLISHER == 2
+    assert review_module.publisher_slots_in_use() == 0  # idle slots are dropped

@@ -1,8 +1,10 @@
 """§5.1 publish + §5.3 unpublish (SOLUSDEV-235 / ADR-035, EXT-07;
 docs/api/extensions.md). Multipart upload hygiene mirrors `routers/artifacts.py`
 (411/413 pre-check + streamed cap, unknown fields 422, per-user fixed window);
-the bundle is inspected in the request path by the pure, bounded
-`inspect_bundle` and then stored VERBATIM — never unzipped to disk, never run.
+the bundle is gated in the request path by the header-only
+`inspect_bundle_structure` (Phase 4 H1: the manifest is the ONLY member it
+inflates; the full, member-reading `inspect_bundle` is the review job's) and
+then stored VERBATIM — never unzipped to disk, never run.
 
 Exports `router`; the aggregator (`routers/extensions/__init__.py`) mounts it.
 """
@@ -21,7 +23,7 @@ from starlette.datastructures import UploadFile
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import CurrentUser, RequireVerified, SessionDep, SettingsDep
-from solus_api.extensions.bundle import inspect_bundle
+from solus_api.extensions.bundle import inspect_bundle_structure
 from solus_api.extensions.publishing import (
     IdempotencyRecord,
     IdempotencyStore,
@@ -155,7 +157,7 @@ async def publish_extension(
     if (record := idempotency.get(user.id, idempotency_key)) is not None:
         return _replay_or_conflict(record, content_hash)
 
-    report = inspect_bundle(data)
+    report = inspect_bundle_structure(data)
     if not report.ok or report.manifest is None:
         raise APIError(422, "bundle_invalid", "Bundle failed validation", details=report.problems)
     manifest = report.manifest

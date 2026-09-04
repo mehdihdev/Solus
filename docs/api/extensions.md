@@ -382,6 +382,8 @@ Request-path processing, in order — nothing here fully unzips or executes the 
    decoded with stdlib `tomllib` and validated with `parse_extension_manifest` (the contract).
    Contract problems → `422 validation_error` with `details` = the dotted-path problem strings
    (identical text to the desktop developer mode).
+   Every file the manifest references is checked for presence and declared size from the central
+   directory's header fields alone; nothing else is inflated in the request path (Phase 4 H1).
 3. Slug claim: if `extensions.slug` (case-insensitive) does not exist, the slug is claimed for
    this publisher; an `extension_publishers` row is created on the user's first publish
    (`display_name` seeded from the manifest's `extension.publisher`). If the slug is owned by
@@ -418,7 +420,8 @@ decision, 2026-09-03):
 ```
 
 **The review job** (`JobKind.EXTENSION_REVIEW`, ARQ, queue-level concurrency-limited so one
-publisher cannot monopolize the worker pool): sets `checking`; re-validates the manifest; walks
+publisher cannot monopolize the worker pool — the worker runs at most 4 jobs at once and at most 2
+reviews per publisher, an in-process guard until the worker goes multi-instance): sets `checking`; re-validates the manifest; walks
 the zip under the same bomb/traversal guards; enforces the per-file byte caps
 (`MANIFEST_LIMITS`: icon 16 KiB, overview 32 KiB, section 16 KiB, screenshot 1 MiB); enforces an
 **asset-type allowlist** for the whole bundle (`.html .js .css .svg .png .webp .md .json .toml
