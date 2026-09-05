@@ -52,6 +52,7 @@ def settings() -> Settings:
         supabase_jwt_audience="authenticated",
         database_url=TEST_DATABASE_URL,
         rate_limit_per_minute=100_000,
+        write_rate_limit_per_minute=100_000,
         sync_inline=True,
         public_api_base_url="http://testserver",
         staff_user_ids=str(STAFF_ID),

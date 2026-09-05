@@ -187,6 +187,7 @@ def settings() -> Settings:
         supabase_jwt_audience=TEST_AUDIENCE,
         database_url=TEST_DATABASE_URL,
         rate_limit_per_minute=100_000,
+        write_rate_limit_per_minute=100_000,
         sync_inline=True,  # deterministic syncs in tests (no ARQ/background)
         public_api_base_url="http://testserver",
         stripe_webhook_secret="whsec_test",  # SOLUSDEV-83 webhook signature tests
@@ -446,6 +447,7 @@ def bridge_settings(**overrides: Any) -> Settings:
         "supabase_jwt_audience": TEST_AUDIENCE,
         "database_url": TEST_DATABASE_URL,
         "rate_limit_per_minute": 100_000,
+        "write_rate_limit_per_minute": 100_000,
         "sync_inline": True,
         "bridge_allowlist_root": BRIDGE_ALLOWLIST_ROOT,
     }

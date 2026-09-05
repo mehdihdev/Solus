@@ -12,6 +12,8 @@ export interface ApiClientOptions {
   /** Returns the current Supabase JWT, or null when unauthenticated. */
   getToken?: () => Promise<string | null> | string | null
   fetchImpl?: typeof fetch
+  /** Clock for the 429 cooldown (injectable for tests). Defaults to Date.now. */
+  now?: () => number
 }
 
 export interface RequestOptions {
@@ -81,16 +83,64 @@ export interface ApiClient {
   requestPage<T>(path: string, options?: RequestOptions): Promise<Page<T>>
 }
 
+/** How long reads pause after a 429 whose `Retry-After` is missing or unparsable. */
+export const DEFAULT_RETRY_AFTER_MS = 5_000
+/** Ceiling on any `Retry-After` we honour. Our own limiter's window is 60 s;
+ *  an intermediary's `86400` must not freeze every read until app restart. */
+export const MAX_RETRY_AFTER_MS = 60_000
+
+interface Sent {
+  status: number
+  body: unknown
+}
+
+/** `Retry-After` in delta-seconds → ms, clamped; `null` when absent/malformed. */
+function parseRetryAfterMs(header: string | null): number | null {
+  if (header === null) return null
+  const seconds = Number(header)
+  if (!Number.isFinite(seconds) || seconds < 0) return null
+  return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
+}
+
+/** The API middleware stamps `X-RateLimit-Remaining` on EVERY response, so a
+ *  429 minted by a route's own limiter (extension bundles, artifact content)
+ *  arrives with headroom left in the shared read budget. Only a 429 that
+ *  exhausted that budget (or one with no such header, i.e. an intermediary)
+ *  should pause reads. */
+function isReadBudgetExhausted(res: Response): boolean {
+  const remaining = res.headers.get('X-RateLimit-Remaining')
+  return remaining === null || Number(remaining) <= 0
+}
+
+function rateLimitedLocally(): Sent {
+  return {
+    status: 429,
+    body: { error: { code: 'rate_limited', message: 'Rate limit exceeded' } }
+  }
+}
+
+const isRead = (req: RequestOptions): boolean => (req.method ?? 'GET') === 'GET'
+
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
+  const now = options.now ?? Date.now
+  // SOLUSDEV-234. The desktop is polling-heavy (bench, bridge, sources,
+  // extensions, widgets — several hooks mounted more than once), and a burst
+  // over the API's per-token budget used to snowball: every poller kept
+  // firing into a 429ing server until the window reset, taking user-initiated
+  // reads down with it. Two guards, both GET-only so a mutation is never
+  // silently swallowed, and both scoped to the bearer token so that a
+  // sign-out/sign-in on a shared machine can neither be handed the previous
+  // account's in-flight response nor inherit its pause:
+  //   - concurrent identical reads share ONE in-flight request (dropped when
+  //     a mutation completes, so a refetch after a write is always fresh);
+  //   - a read-budget 429 pauses reads until the server's own Retry-After.
+  const inFlight = new Map<string, Promise<Sent>>()
+  let readsPaused: { token: string | null; untilMs: number } = { token: null, untilMs: 0 }
 
-  async function send(
-    path: string,
-    req: RequestOptions
-  ): Promise<{ status: number; body: unknown }> {
+  async function transmit(path: string, req: RequestOptions, token: string | null): Promise<Sent> {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (req.body !== undefined) headers['Content-Type'] = 'application/json'
-    const token = typeof options.getToken === 'function' ? await options.getToken() : null
     if (token) headers.Authorization = `Bearer ${token}`
 
     const res = await fetchImpl(joinUrl(options.baseUrl, path), {
@@ -100,7 +150,36 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       signal: req.signal
     })
     const text = await res.text()
+    if (res.status === 429 && isRead(req) && isReadBudgetExhausted(res)) pauseReads(res, token)
     return { status: res.status, body: text ? JSON.parse(text) : null }
+  }
+
+  /** Extend (never shorten) the read pause for `token` to the server's Retry-After. */
+  function pauseReads(res: Response, token: string | null): void {
+    const retryMs = parseRetryAfterMs(res.headers.get('Retry-After')) ?? DEFAULT_RETRY_AFTER_MS
+    const untilMs = now() + retryMs
+    if (readsPaused.token !== token || untilMs > readsPaused.untilMs) {
+      readsPaused = { token, untilMs }
+    }
+  }
+
+  async function send(path: string, req: RequestOptions): Promise<Sent> {
+    const token = typeof options.getToken === 'function' ? await options.getToken() : null
+    if (!isRead(req)) {
+      return transmit(path, req, token).finally(() => inFlight.clear())
+    }
+    if (readsPaused.token === token && now() < readsPaused.untilMs) return rateLimitedLocally()
+    // An abortable read is never shared: its caller's cancellation must not
+    // cancel (or be ignored by) a sibling with a different lifetime.
+    if (req.signal !== undefined) return transmit(path, req, token)
+    const key = `${token ?? ''}\u0000${path}`
+    const pending = inFlight.get(key)
+    if (pending) return pending
+    const started = transmit(path, req, token).finally(() => {
+      if (inFlight.get(key) === started) inFlight.delete(key)
+    })
+    inFlight.set(key, started)
+    return started
   }
 
   return {

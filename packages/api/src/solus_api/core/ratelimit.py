@@ -18,22 +18,37 @@ from solus_api.core.errors import error_response
 EXEMPT_PATHS = frozenset({"/healthz", "/readyz"})
 WINDOW_SECONDS = 60
 MAX_TRACKED_KEYS = 10_000
+#: Methods that read. Everything else is a write and draws on the (smaller)
+#: write budget — SOLUSDEV-234.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """`path_limits` gives named paths their OWN per-client fixed-window bucket
-    (with its own limit), fully separate from the global budget — e.g. the
-    MO-04 classify preview, which is called on every typing pause and must
-    neither starve nor consume the shared per-minute allowance."""
+    """Per-client fixed-window budgets.
+
+    Reads (`SAFE_METHODS`) and writes are SEPARATE buckets (SOLUSDEV-234): the
+    desktop is a polling-heavy client whose steady-state GET volume needs a
+    budget an order of magnitude above anything a human's clicks can produce,
+    while the write budget is the interim burst bound on model-calling POSTs
+    until ADR-019's Redis frequency cap is live — raising one must never raise
+    the other. `path_limits` gives named paths their OWN bucket (with its own
+    limit), fully separate from both — e.g. the MO-04 classify preview, which
+    is called on every typing pause and must neither starve nor consume the
+    shared allowance.
+    """
 
     def __init__(
         self,
         app: ASGIApp,
         limit_per_minute: int,
         path_limits: dict[str, int] | None = None,
+        write_limit_per_minute: int | None = None,
     ) -> None:
         super().__init__(app)
         self._limit = limit_per_minute
+        self._write_limit = (
+            write_limit_per_minute if write_limit_per_minute is not None else limit_per_minute
+        )
         self._path_limits = dict(path_limits or {})
         self._counters: dict[str, tuple[int, int]] = {}
 
@@ -54,6 +69,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             stale = [k for k, (w, _) in self._counters.items() if w != window]
             for k in stale:
                 del self._counters[k]
+            # A flood of unique keys inside ONE window has no stale entries to
+            # shed; drop the oldest so the table stays bounded regardless.
+            while len(self._counters) >= MAX_TRACKED_KEYS:
+                del self._counters[next(iter(self._counters))]
         self._counters[key] = (window, count)
         return count
 
@@ -64,10 +83,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         now = int(time.time())
         window = now // WINDOW_SECONDS
         path_limit = self._path_limits.get(request.url.path)
-        limit = path_limit if path_limit is not None else self._limit
+        is_write = request.method.upper() not in SAFE_METHODS
         key = self._client_key(request)
         if path_limit is not None:
+            limit = path_limit
             key = f"{key}|{request.url.path}"  # separate bucket, separate budget
+        elif is_write:
+            limit = self._write_limit
+            key = f"{key}|write"
+        else:
+            limit = self._limit
         count = self._bump(key, window)
         reset = (window + 1) * WINDOW_SECONDS
 

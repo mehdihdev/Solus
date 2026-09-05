@@ -314,18 +314,15 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
 
     register_error_handlers(app)
-    # CORS for the Electron renderer / browser dev server (must precede the
-    # rate-limit middleware so preflight OPTIONS are answered, not counted).
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=resolved_settings.cors_origin_list,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # Starlette wraps each add_middleware around the previous, so the LAST one
+    # added is outermost. The limiter goes first so CORS ends up outside it:
+    # preflight OPTIONS are answered by CORS, never counted, and a 429 still
+    # carries the CORS headers the renderer needs to read `rate_limited`
+    # (SOLUSDEV-234 — the old order had these backwards).
     app.add_middleware(
         RateLimitMiddleware,
         limit_per_minute=resolved_settings.rate_limit_per_minute,
+        write_limit_per_minute=resolved_settings.write_rate_limit_per_minute,
         # MO-04: the classify preview fires on typing pauses — its own generous
         # bucket, never counted against the shared budget.
         path_limits={
@@ -333,8 +330,15 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # A7-01: unauthenticated, and behind the ALB every caller shares one
             # bucket (core/ratelimit sees the LB's IP), so it gets its own rather
             # than eating the shared budget every panel load.
-            "/api/v1/panel/pair/start": resolved_settings.rate_limit_per_minute,
+            "/api/v1/panel/pair/start": resolved_settings.panel_pair_rate_limit_per_minute,
         },
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=resolved_settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     app.include_router(meta.router)
