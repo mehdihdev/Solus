@@ -238,14 +238,16 @@ class IntegrationCache:
         entry, so N refreshes inside the window — from N principals sharing
         one grant — cost one provider walk, not N.
         """
-        max_age = None if refresh else float("inf")
-        hit = await self._stored(key, max_age_seconds=min_age_seconds if refresh else max_age)
+        # A refresh accepts only an entry younger than the cooldown; a plain
+        # read accepts any entry the store still holds.
+        window = min_age_seconds if refresh else float("inf")
+        hit = await self._stored(key, window)
         if hit is not None:
             return hit
         flight = f"{key}:flight"
         await single_flight(self._store, flight, ttl_seconds=_FETCH_FLIGHT_SECONDS)
         try:
-            hit = await self._stored(key, max_age_seconds=min_age_seconds if refresh else max_age)
+            hit = await self._stored(key, window)
             if hit is not None:
                 return hit
             value = await fetch()
@@ -260,10 +262,10 @@ class IntegrationCache:
         finally:
             await release_flight(self._store, flight)
 
-    async def _stored(self, key: str, *, max_age_seconds: float | None) -> Fetched[Any] | None:
+    async def _stored(self, key: str, max_age_seconds: float) -> Fetched[Any] | None:
         """The stored entry when it exists and is no older than `max_age_seconds`
-        (`None`: never — the refresh posture with no cooldown)."""
-        if max_age_seconds is None:
+        (`inf`: any age; `0`: the refresh posture with no cooldown)."""
+        if max_age_seconds <= 0:
             return None
         entry = await self.get(key)
         if not (isinstance(entry, dict) and "value" in entry and "fetched_at" in entry):

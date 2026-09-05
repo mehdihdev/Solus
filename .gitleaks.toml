@@ -25,8 +25,14 @@ paths = [
 # attributed to whichever commit sits on the graft boundary, and that boundary
 # MOVES with every push. A fingerprint pinned to one SHA therefore passes once
 # and fails on the next pipeline; a value-based rule holds forever.
+regexTarget = "line"
 regexes = [
   '''sk_live_abc123''',
+  # SOLUSDEV-241: a cache-lookup call, `self._stored(key, max_age_seconds=…)`,
+  # that the generic-api-key rule read as "key = <value>". The call was
+  # rewritten, but the line lives in history (commit 8db7aaa) and re-surfaces
+  # on every graft boundary — hence a value rule, not a fingerprint.
+  '''_stored\(key, max_age_seconds=''',
   # SOLUSDEV-100: the opaque storage-key UUID in the artifact-store tests — an
   # artifact id, never a credential (the constant is named STORAGE_REF now, but
   # the literal remains in history and re-surfaces on every graft boundary).
