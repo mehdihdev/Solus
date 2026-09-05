@@ -2221,6 +2221,32 @@
         ]
       }
     },
+    "/api/v1/users/me/connections/adopt": {
+      "post": {
+        "summary": "Adopt",
+        "description": "Move the caller's project-scoped OAuth grants to account scope\n(SOLUSDEV-242 / HOME H2) \u2014 no sign-in, no widened scope. Idempotent; Home\ncalls it before listing. The project-owned token copies are deleted only\nafter the commit, so a failure leaves every project exactly as it was.",
+        "operationId": "adopt_api_v1_users_me_connections_adopt_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Adopt Api V1 Users Me Connections Adopt Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/users/me/connections/{connection_id}": {
       "get": {
         "summary": "Get Connection",

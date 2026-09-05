@@ -35,7 +35,41 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - Account-level actions stay on Home: `Join team` (invite token) and `New team`
   (both make the new team active), and the **CONNECTED ACCOUNTS** card
   (SOLUSDEV-241: OAuth binds at account scope; each project picks what it
-  tracks on its Sources page).
+  tracks on its Sources page). See "Connected accounts" below (HOME H2).
+
+## Connected accounts (SOLUSDEV-242 / HOME H2)
+
+```
+| CONNECTED ACCOUNTS                                                          |
+| [On] Onshape · ada@example.com                                              |
+|      Used in Rover and Arm · Read only                        [Revoke]      |
+| [Gh] GitHub · octocat                                                       |
+|      Used in Rover · Access level not recorded · moved from a project       |
+|      ⚠ Linked from a project before account-level connections; what Solus   |
+|        may do with it was never recorded. Re-authorize to confirm —          |
+|        existing syncs keep working until then.   [Re-authorize] [Revoke]    |
+| [Gl] GitLab                                                                 |
+|      Not connected                                            [Connect]     |
+```
+
+- One row per OAuth provider from the live registry. **Connect** opens the
+  connect wizard in account mode (rail `Choose access → Sign in`; no document
+  picking here — that is the project's Sources page, W2).
+- **Scope is stated on every linked row**: `Read only`, `Read and edit`, or
+  `Access level not recorded`. Scopes are fixed in connector code; nothing on
+  this surface widens one.
+- **Migration** (`POST /users/me/connections/adopt`, called before the list):
+  a project-scoped grant from before account-level connections appears here as
+  the account it always was, marked `moved from a project`, with no sign-in.
+  The project keeps syncing on the very same token. When that grant never
+  recorded its access mode, the row says so and offers **Re-authorize**; the
+  copy states plainly that existing syncs keep working until then. A failed
+  handshake row (`error`) offers Re-authorize too, with the provider's message.
+- **Re-authorize** runs the same account-mode wizard as Connect; the finished
+  sign-in lands on the SAME row (I1 dedupes by account), so the old token is
+  replaced only once the new consent succeeded, and the flag clears.
+- **Revoke** is confirmed and names the projects it disconnects (unchanged).
+- Hidden while offline (honest empty state elsewhere on Home).
 
 ## Project grid
 

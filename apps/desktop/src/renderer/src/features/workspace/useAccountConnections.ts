@@ -4,7 +4,12 @@
 // workspace hook, so surfaces show honest empty states rather than a spinner
 // that never resolves.
 import { useCallback, useEffect, useState } from 'react'
-import { listConnections, revokeConnection, type Connection } from '../../lib/api/resources'
+import {
+  adoptConnections,
+  listConnections,
+  revokeConnection,
+  type Connection
+} from '../../lib/api/resources'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 export type AccountConnectionsStatus = 'loading' | 'ready' | 'offline'
@@ -36,6 +41,11 @@ export function useAccountConnections(): AccountConnectionsData {
   const load = useCallback(async (): Promise<void> => {
     if (!fetchEnabled) return
     try {
+      // SOLUSDEV-242 (H2): a project-scoped grant from before I1 becomes the
+      // account it always was, without a sign-in — before the list is read,
+      // so Home never shows a stale "Not connected" for a working account. A
+      // failed adoption is not a failed listing.
+      await adoptConnections().catch(() => undefined)
       const listed = await listConnections()
       setConnections(listed)
       setLoaded('ready')

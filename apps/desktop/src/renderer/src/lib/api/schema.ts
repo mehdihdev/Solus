@@ -692,6 +692,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/connections/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt
+         * @description Move the caller's project-scoped OAuth grants to account scope
+         *     (SOLUSDEV-242 / HOME H2) — no sign-in, no widened scope. Idempotent; Home
+         *     calls it before listing. The project-owned token copies are deleted only
+         *     after the commit, so a failure leaves every project exactly as it was.
+         */
+        post: operations["adopt_api_v1_users_me_connections_adopt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/connections/{connection_id}": {
         parameters: {
             query?: never;
@@ -4012,6 +4035,28 @@ export interface operations {
         };
     };
     list_connections_api_v1_users_me_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    adopt_api_v1_users_me_connections_adopt_post: {
         parameters: {
             query?: never;
             header?: never;

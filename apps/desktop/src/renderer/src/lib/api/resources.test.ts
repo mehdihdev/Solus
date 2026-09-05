@@ -13,6 +13,7 @@ import {
   listSelectable,
   startOAuth,
   exchangeOAuth,
+  adoptConnections,
   listConnections,
   revokeConnection,
   listConnectionDocuments,
@@ -268,6 +269,10 @@ describe('account connections (SOLUSDEV-241)', () => {
   it("lists and revokes the signed-in user's grants", async () => {
     const list = stubClient([])
     await listConnections(list.client)
+    const adopt = stubClient({ adopted: [] })
+    expect(await adoptConnections(adopt.client)).toEqual([])
+    expect(adopt.calls[0].path).toBe('/users/me/connections/adopt')
+    expect(adopt.calls[0].options).toMatchObject({ method: 'POST' })
     expect(list.calls[0].path).toBe('/users/me/connections')
 
     const revoke = stubClient({ id: 'c1', disconnected_sources: 2 })

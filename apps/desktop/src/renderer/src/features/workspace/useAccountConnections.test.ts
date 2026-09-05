@@ -6,10 +6,16 @@ import { linkedAccountFor, useAccountConnections } from './useAccountConnections
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
-  return { ...actual, listConnections: vi.fn(), revokeConnection: vi.fn() }
+  return {
+    ...actual,
+    adoptConnections: vi.fn(),
+    listConnections: vi.fn(),
+    revokeConnection: vi.fn()
+  }
 })
 
 const mockedList = vi.mocked(resources.listConnections)
+const mockedAdopt = vi.mocked(resources.adoptConnections)
 const mockedRevoke = vi.mocked(resources.revokeConnection)
 
 const ONSHAPE: resources.Connection = {
@@ -18,6 +24,8 @@ const ONSHAPE: resources.Connection = {
   status: 'connected',
   account_login: 'ada@example.com',
   access: 'read',
+  origin: 'home',
+  needs_reauth: null,
   last_error: null,
   projects: [{ project_id: 'p1', name: 'Rover' }],
   created_at: '',
@@ -28,6 +36,34 @@ beforeEach(() => {
   vi.spyOn(online, 'useWorkspaceFetchEnabled').mockReturnValue(true)
   mockedList.mockReset()
   mockedRevoke.mockReset()
+  mockedAdopt.mockReset()
+  mockedAdopt.mockResolvedValue([])
+})
+
+describe('useAccountConnections — adoption first (SOLUSDEV-242 / H2)', () => {
+  it('adopts project-scoped grants BEFORE listing, so a legacy connection shows as its account', async () => {
+    const order: string[] = []
+    mockedAdopt.mockImplementation(async () => {
+      order.push('adopt')
+      return []
+    })
+    mockedList.mockImplementation(async () => {
+      order.push('list')
+      return [ONSHAPE]
+    })
+    const { result } = renderHook(() => useAccountConnections())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(order).toEqual(['adopt', 'list'])
+    expect(result.current.connections).toEqual([ONSHAPE])
+  })
+
+  it('a failed adoption never blocks the listing', async () => {
+    mockedAdopt.mockRejectedValue(new Error('500'))
+    mockedList.mockResolvedValue([ONSHAPE])
+    const { result } = renderHook(() => useAccountConnections())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.connections).toEqual([ONSHAPE])
+  })
 })
 
 describe('useAccountConnections', () => {

@@ -7,6 +7,12 @@
 // OAuth) and the live connection list — no provider ids in this file. Revoking
 // is a confirmed, destructive action: it disconnects the account in EVERY
 // project that uses it, so the confirmation names them.
+//
+// SOLUSDEV-242 (H2): every row states its SCOPE plainly (read only / read and
+// edit / not recorded), a grant adopted from a project says so, and a row that
+// needs a fresh consent — access never recorded, or a failed handshake — offers
+// Re-authorize, which lands on the same account (no duplicate, no widened scope;
+// the old token keeps working until the new one succeeds).
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -18,7 +24,7 @@ import { integrationLogo } from '../onboarding/integrationLogos'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
-import { revokeDetail, usageText } from './connectedAccounts'
+import { reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
 import { ModalShell } from './modals'
 import { useAccountConnections } from './useAccountConnections'
 
@@ -98,42 +104,62 @@ function ProviderMark({ entry }: { entry: CatalogEntry }): React.JSX.Element {
 function AccountRow({
   entry,
   connection,
-  onRevoke
+  onRevoke,
+  onReauthorize
 }: {
   entry: CatalogEntry
   connection: Connection
   onRevoke: () => Promise<boolean>
+  onReauthorize: () => void
 }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
-  const errored = connection.status === 'error'
+  const reauth = reauthText(connection)
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
-      <ProviderMark entry={entry} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-          {entry.name}
-          {connection.account_login && (
-            <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
-              {' '}
-              · {connection.account_login}
-            </span>
-          )}
+    <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <ProviderMark entry={entry} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+            {entry.name}
+            {connection.account_login && (
+              <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
+                {' '}
+                · {connection.account_login}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+            {usageText(connection)} · {scopeText(connection)}
+            {connection.origin === 'migrated' && ' · moved from a project'}
+          </div>
         </div>
-        <div style={{ fontSize: 10.5, color: errored ? 'var(--err)' : 'var(--mut)' }}>
-          {errored
-            ? (connection.last_error?.message ?? 'The last sign-in failed')
-            : usageText(connection)}
-          {connection.access === 'write' && ' · read and edit'}
-        </div>
+        <Button
+          kind="ghost"
+          size="sm"
+          aria-label={`Revoke ${entry.name}`}
+          onClick={() => setConfirming(true)}
+        >
+          Revoke
+        </Button>
       </div>
-      <Button
-        kind="ghost"
-        size="sm"
-        aria-label={`Revoke ${entry.name}`}
-        onClick={() => setConfirming(true)}
-      >
-        Revoke
-      </Button>
+      {reauth && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <div
+            role="note"
+            style={{ flex: 1, fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}
+          >
+            {reauth}
+          </div>
+          <Button
+            kind="soft"
+            size="sm"
+            aria-label={`Re-authorize ${entry.name}`}
+            onClick={onReauthorize}
+          >
+            Re-authorize
+          </Button>
+        </div>
+      )}
       {confirming && (
         <RevokeModal
           providerName={entry.name}
@@ -203,6 +229,10 @@ export function ConnectedAccountsCard(): React.JSX.Element | null {
                     entry={entry}
                     connection={connection}
                     onRevoke={() => accounts.revoke(connection.id)}
+                    // The same account-scope handshake as Connect: a finished
+                    // sign-in lands on THIS row (I1 dedupes by account), so the
+                    // old token is replaced only once the new one succeeded.
+                    onReauthorize={() => wizard.open(entry)}
                   />
                 ))
               )}

@@ -27,16 +27,18 @@ from solus_api.connectors.contracts import (
     Connector,
     ConnectorError,
     Credentials,
+    OAuthConnector,
 )
 from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.integration_cache import Fetched, IntegrationCache
+from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
 from solus_api.connectors.runtime import (
     call_with_refresh,
     connector_error_payload,
     refresh_secret_ref,
     resolve_credentials,
 )
-from solus_api.connectors.secrets import SecretStore
+from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.core.errors import APIError
 from solus_api.models import (
     AccountConnection,
@@ -62,6 +64,14 @@ CONNECTION_REF_PREFIX = "connection/"
 #: A PENDING connection older than this is a handshake nobody finished; it is
 #: neither listed nor reused, and the next start mints a fresh one.
 PENDING_CONNECTION_TTL = timedelta(minutes=10)
+#: `config` keys the H2 surface reads (SOLUSDEV-242): where the grant came
+#: from, and why it still asks for a sign-in. Never secret material.
+ORIGIN_KEY = "origin"
+NEEDS_REAUTH_KEY = "needs_reauth"
+#: The legacy source never recorded which access mode its token was granted
+#: (pre SOLUS-ONS-A2), so Solus cannot say what it may do — only a fresh consent
+#: can. The token keeps working meanwhile; nothing is widened silently.
+REAUTH_ACCESS_UNKNOWN = "access_unknown"
 
 
 def connection_secret_ref(connection_id: uuid.UUID, provider: str) -> str:
@@ -249,8 +259,11 @@ async def complete_connection(
     connection.account_login = account.login
     connection.account_external_id = account.external_id
     connection.last_error = None
-    if access:
-        connection.config = {**connection.config, "access": access}
+    # A finished handshake IS the re-consent a migrated grant may have asked
+    # for (SOLUSDEV-242 / H2): the flag clears, and the chosen access is the
+    # recorded one.
+    config = {k: v for k, v in connection.config.items() if k != NEEDS_REAUTH_KEY}
+    connection.config = {**config, "access": access} if access else config
     await session.flush()
     await remirror_sources(session, connection)
     return connection
@@ -360,6 +373,185 @@ async def revoke_connection(
     connection.secret_ref = None
     await session.flush()
     return len(bound)
+
+
+# --------------------------------------------------------------- adoption (H2)
+
+
+async def _existing_live_connection(
+    session: AsyncSession, user: User, provider: SourceType, external_id: str | None
+) -> AccountConnection | None:
+    if not external_id:
+        return None
+    return (
+        await session.scalars(
+            select(AccountConnection).where(
+                AccountConnection.user_id == user.id,
+                AccountConnection.provider == provider,
+                AccountConnection.account_external_id == external_id,
+                AccountConnection.status != ConnectionStatus.REVOKED,
+            )
+        )
+    ).first()
+
+
+async def _legacy_oauth_sources(
+    session: AsyncSession, registry: ConnectorRegistry, user: User
+) -> list[Source]:
+    """The caller's own project-scoped OAuth grants: sources that carry their own
+    token (a `source/…` ref, no connection) for a provider whose connector is
+    OAuth. Token-connected (PAT) sources use the same ref shape, so the connector
+    alone cannot tell them apart — but a PAT is a personal token the user chose
+    to give ONE project, and it is adopted too: it is still the user's
+    account-wide credential for that provider."""
+    rows = (
+        await session.scalars(
+            select(Source)
+            .where(
+                Source.created_by == user.id,
+                Source.connection_id.is_(None),
+                Source.secret_ref.is_not(None),
+                Source.status.in_(
+                    (SourceStatus.CONNECTED, SourceStatus.ERROR, SourceStatus.SYNCING)
+                ),
+            )
+            .order_by(Source.created_at, Source.id)
+        )
+    ).all()
+    adoptable: list[Source] = []
+    for source in rows:
+        if is_connection_owned(source.secret_ref):
+            continue
+        try:
+            connector = registry.create(source.type.value)
+        except UnknownConnectorError:
+            continue
+        if isinstance(connector, OAuthConnector):
+            adoptable.append(source)
+    return adoptable
+
+
+async def _copy_secret_family(
+    secret_store: SecretStore, old_ref: str, new_ref: str
+) -> list[str] | None:
+    """Copy the access token, its refresh token and any hosted add-on grants
+    from the source's ref family to the connection's. Returns the OLD refs that
+    now hold duplicates (for the caller to delete AFTER commit), or None when
+    the access token itself is missing — nothing to move, nothing to adopt."""
+    try:
+        token = await secret_store.get(old_ref)
+    except SecretNotFoundError:
+        return None
+    await secret_store.put(new_ref, token)
+    moved = [old_ref]
+    try:
+        refresh = await secret_store.get(refresh_secret_ref(old_ref))
+    except SecretNotFoundError:
+        refresh = None
+    if refresh is not None:
+        await secret_store.put(refresh_secret_ref(new_ref), refresh)
+        moved.append(refresh_secret_ref(old_ref))
+    for old_hosted, new_hosted in zip(hosted_refs(old_ref), hosted_refs(new_ref), strict=True):
+        try:
+            grant = await secret_store.get(old_hosted)
+        except SecretNotFoundError:
+            continue
+        await secret_store.put(new_hosted, grant)
+        moved.append(old_hosted)
+    return moved
+
+
+async def adopt_legacy_sources(
+    session: AsyncSession,
+    secret_store: SecretStore,
+    registry: ConnectorRegistry,
+    user: User,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Move the caller's project-scoped OAuth grants to ACCOUNT scope
+    (SOLUSDEV-242 / HOME H2) without a sign-in.
+
+    For each legacy source the caller authorized, the stored token is copied
+    to a connection the source then MIRRORS (`bind_source`), so every credential
+    path is unchanged and the project keeps syncing. An account the caller has
+    since connected on Home is reused — the source lands on that grant rather
+    than minting a second row for the same account. Nothing is widened: the
+    connection records the access mode the source recorded, and when the source
+    never recorded one the connection is flagged `needs_reauth=access_unknown`
+    and Home says so; the token keeps working until the user re-consents.
+
+    Idempotent. Returns what was adopted and the OLD secret refs, which the
+    caller deletes only AFTER its commit — a failed commit must leave the
+    project's own token exactly where it was.
+    """
+    adopted: list[dict[str, Any]] = []
+    old_refs: list[str] = []
+    for source in await _legacy_oauth_sources(session, registry, user):
+        provider = source.type.value
+        assert source.secret_ref is not None  # filtered above
+        existing = await _existing_live_connection(
+            session, user, source.type, source.account_external_id
+        )
+        if existing is not None and existing.secret_ref:
+            connection = existing
+            # The account's CURRENT grant wins; the project's own copy is retired.
+            old_refs.append(source.secret_ref)
+            old_refs.append(refresh_secret_ref(source.secret_ref))
+            old_refs.extend(hosted_refs(source.secret_ref))
+        else:
+            access = source.config.get("access") if isinstance(source.config, dict) else None
+            config: dict[str, Any] = {ORIGIN_KEY: "migrated"}
+            if isinstance(access, str) and access:
+                config["access"] = access
+            else:
+                config[NEEDS_REAUTH_KEY] = REAUTH_ACCESS_UNKNOWN
+            connection = existing or AccountConnection(
+                user_id=user.id,
+                provider=source.type,
+                status=ConnectionStatus.CONNECTED,
+                account_login=source.account_login,
+                account_external_id=source.account_external_id,
+                config=config,
+            )
+            if existing is None:
+                session.add(connection)
+                await session.flush()
+            new_ref = connection_secret_ref(connection.id, provider)
+            moved = await _copy_secret_family(secret_store, source.secret_ref, new_ref)
+            if moved is None:
+                # No token to move: the source is already broken and its own
+                # page says so. Leave it; do not mint an empty grant.
+                if existing is None:
+                    await session.delete(connection)
+                    await session.flush()
+                continue
+            connection.secret_ref = new_ref
+            connection.status = ConnectionStatus.CONNECTED
+            connection.last_error = None
+            old_refs.extend(moved)
+        bind_source(source, connection)
+        adopted.append(
+            {
+                "connection_id": connection.id,
+                "provider": provider,
+                "source_id": source.id,
+                "project_id": source.project_id,
+                "team_id": source.team_id,
+                "needs_reauth": connection.config.get(NEEDS_REAUTH_KEY),
+            }
+        )
+    if adopted:
+        await session.flush()
+    return adopted, old_refs
+
+
+async def delete_retired_secrets(secret_store: SecretStore, refs: list[str]) -> None:
+    """Best effort, AFTER commit: drop the project-owned copies adoption retired.
+    A ref that was never there is not an error."""
+    for ref in refs:
+        try:
+            await secret_store.delete(ref)
+        except SecretNotFoundError:
+            continue
 
 
 # --------------------------------------------------------------- the listing

@@ -84,6 +84,13 @@ export interface Connection {
   account_login: string | null
   /** The grant the user chose at connect time (`read` / `write`), if any. */
   access: string | null
+  /** SOLUSDEV-242 (H2): `home` for a grant linked here, `migrated` for a
+   *  project-scoped grant adopted to account scope without a sign-in. */
+  origin: 'home' | 'migrated'
+  /** Why Home asks for a fresh sign-in: the migrated grant never recorded its
+   *  access mode (`access_unknown`), or the last handshake failed
+   *  (`token_error`). Null when nothing is needed. */
+  needs_reauth: 'access_unknown' | 'token_error' | null
   last_error: SourceError | null
   projects: ConnectionProject[]
   created_at: string
@@ -646,6 +653,24 @@ export function listConnections(client: ApiClient = api): Promise<Connection[]> 
 
 export function getConnection(connectionId: string, client: ApiClient = api): Promise<Connection> {
   return client.request<Connection>(`/users/me/connections/${connectionId}`)
+}
+
+/** One project-scoped grant moved to account scope (SOLUSDEV-242 / H2). */
+export interface AdoptedConnection {
+  connection_id: string
+  provider: string
+  source_id: string
+  project_id: string
+  needs_reauth: Connection['needs_reauth']
+}
+
+/** Move the caller's project-scoped OAuth grants to account scope without a
+ *  sign-in (API.md §2.1, SOLUSDEV-242). Idempotent; Home calls it before
+ *  listing so a pre-I1 project connection appears as the account it is. */
+export function adoptConnections(client: ApiClient = api): Promise<AdoptedConnection[]> {
+  return client
+    .request<{ adopted: AdoptedConnection[] }>('/users/me/connections/adopt', { method: 'POST' })
+    .then((r) => r.adopted)
 }
 
 /** Revoke a grant. Every source bound to it, in every project, is disconnected

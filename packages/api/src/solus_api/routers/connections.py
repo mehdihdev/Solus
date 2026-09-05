@@ -34,7 +34,9 @@ from solus_api.schemas import serialize_connection
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
+    adopt_legacy_sources,
     connection_projects,
+    delete_retired_secrets,
     list_documents,
     list_live_connections,
     owned_connection,
@@ -50,6 +52,57 @@ async def list_connections(user: CurrentUser, session: SessionDep) -> dict[str, 
     connections = await list_live_connections(session, user)
     projects = await connection_projects(session, [c.id for c in connections])
     return envelope([serialize_connection(c, projects.get(c.id)) for c in connections])
+
+
+@router.post("/adopt")
+async def adopt(
+    user: CurrentUser,
+    session: SessionDep,
+    secret_store: SecretStoreDep,
+    registry: RegistryDep,
+) -> dict[str, Any]:
+    """Move the caller's project-scoped OAuth grants to account scope
+    (SOLUSDEV-242 / HOME H2) — no sign-in, no widened scope. Idempotent; Home
+    calls it before listing. The project-owned token copies are deleted only
+    after the commit, so a failure leaves every project exactly as it was."""
+    adopted, retired = await adopt_legacy_sources(session, secret_store, registry, user)
+    for item in adopted:
+        record_activity(
+            session,
+            team_id=item["team_id"],
+            activity_type="connection.adopted",
+            actor_id=user.id,
+            project_id=item["project_id"],
+            domain="integrations",
+            payload={"provider": item["provider"]},
+        )
+    if adopted:
+        emit_event(
+            session,
+            user=user,
+            event_type="connection.adopted",
+            payload={
+                "sources": len(adopted),
+                "connections": len({str(a["connection_id"]) for a in adopted}),
+                "needs_reauth": sum(1 for a in adopted if a["needs_reauth"]),
+            },
+        )
+    await session.commit()
+    await delete_retired_secrets(secret_store, retired)
+    return envelope(
+        {
+            "adopted": [
+                {
+                    "connection_id": item["connection_id"],
+                    "provider": item["provider"],
+                    "source_id": item["source_id"],
+                    "project_id": item["project_id"],
+                    "needs_reauth": item["needs_reauth"],
+                }
+                for item in adopted
+            ]
+        }
+    )
 
 
 @router.get("/{connection_id}")

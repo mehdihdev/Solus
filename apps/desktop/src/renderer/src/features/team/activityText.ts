@@ -31,6 +31,8 @@ const TEXTERS: Record<string, Texter> = {
   'source.connected': (p) => `connected ${str(p.type)} source "${str(p.name)}"`,
   'source.disconnected': (p) => `disconnected a ${str(p.type)} source`,
   'source.sync_started': () => 'started a source sync',
+  'connection.adopted': (p) => `moved the ${str(p.provider)} connection to account scope`,
+  'connection.revoked': (p) => `revoked the ${str(p.provider)} account`,
   'job.cancelled': (p) => `cancelled a ${str(p.kind)} job`
 }
 

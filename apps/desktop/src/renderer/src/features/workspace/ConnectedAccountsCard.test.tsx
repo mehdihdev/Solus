@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
-import { revokeDetail, usageText } from './connectedAccounts'
+import { reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
 import * as accountsHook from './useAccountConnections'
 import * as catalogHook from '../onboarding/useIntegrationCatalog'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
@@ -47,6 +47,8 @@ const LINKED: Connection = {
   status: 'connected',
   account_login: 'ada@example.com',
   access: 'read',
+  origin: 'home',
+  needs_reauth: null,
   last_error: null,
   projects: [
     { project_id: 'p1', name: 'Rover' },
@@ -87,7 +89,7 @@ describe('ConnectedAccountsCard', () => {
     mockAccounts({ connections: [LINKED] })
     render(<ConnectedAccountsCard />)
     expect(screen.getByText('· ada@example.com')).toBeInTheDocument()
-    expect(screen.getByText('Used in Rover and Arm')).toBeInTheDocument()
+    expect(screen.getByText(/Used in Rover and Arm/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Connect Onshape' })).not.toBeInTheDocument()
   })
 
@@ -121,6 +123,47 @@ describe('ConnectedAccountsCard', () => {
   })
 })
 
+describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', () => {
+  it('states the scope of every linked account plainly', () => {
+    mockAccounts({ connections: [LINKED, { ...LINKED, id: 'c2', access: 'write' }] })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByText(/Used in Rover and Arm · Read only/)).toBeInTheDocument()
+    expect(screen.getByText(/Used in Rover and Arm · Read and edit/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /re-authorize/i })).toBeNull()
+  })
+
+  it('says a migrated grant’s access was never recorded and offers Re-authorize without forcing it', async () => {
+    mockAccounts({
+      connections: [{ ...LINKED, access: null, origin: 'migrated', needs_reauth: 'access_unknown' }]
+    })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByText(/Access level not recorded · moved from a project/)).toBeInTheDocument()
+    expect(screen.getByRole('note')).toHaveTextContent(/existing syncs keep working until then/)
+    // Still listed as a working account: usage, and Revoke, are there.
+    expect(screen.getByRole('button', { name: 'Revoke Onshape' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Re-authorize Onshape' }))
+    const dialog = screen.getByRole('dialog', { name: 'Connect Onshape' })
+    const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
+    expect(steps).toEqual(['Sign in'])
+  })
+
+  it('offers Re-authorize for a grant whose last sign-in failed', () => {
+    mockAccounts({
+      connections: [
+        {
+          ...LINKED,
+          status: 'error',
+          needs_reauth: 'token_error',
+          last_error: { code: 'invalid_credentials', message: 'token revoked' }
+        }
+      ]
+    })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByRole('note')).toHaveTextContent('token revoked Re-authorize to reconnect.')
+    expect(screen.getByRole('button', { name: 'Re-authorize Onshape' })).toBeInTheDocument()
+  })
+})
+
 describe('copy helpers', () => {
   it('usageText counts beyond two projects', () => {
     expect(usageText({ ...LINKED, projects: [] })).toBe('Not used by any project yet')
@@ -128,6 +171,17 @@ describe('copy helpers', () => {
     expect(
       usageText({ ...LINKED, projects: [...LINKED.projects, { project_id: 'p3', name: 'Leg' }] })
     ).toBe('Used in 3 projects')
+  })
+
+  it('scopeText and reauthText say only what is known', () => {
+    expect(scopeText(LINKED)).toBe('Read only')
+    expect(scopeText({ ...LINKED, access: 'write' })).toBe('Read and edit')
+    expect(scopeText({ ...LINKED, access: null })).toBe('Access level not recorded')
+    expect(reauthText(LINKED)).toBeNull()
+    expect(reauthText({ ...LINKED, needs_reauth: 'access_unknown' })).toMatch(/never recorded/)
+    expect(reauthText({ ...LINKED, status: 'error', needs_reauth: 'token_error' })).toMatch(
+      /last sign-in failed/
+    )
   })
 
   it('revokeDetail is honest about what is lost', () => {

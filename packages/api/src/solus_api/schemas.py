@@ -16,6 +16,7 @@ from solus_api.models import (
     Artifact,
     ArtifactScope,
     ArtifactStorage,
+    ConnectionStatus,
     CreditTxnType,
     Domain,
     GraphEdge,
@@ -288,6 +289,12 @@ def serialize_connection(
         "status": connection.status.value,
         "account_login": connection.account_login,
         "access": config.get("access"),
+        # SOLUSDEV-242 (H2): where the grant came from, and whether Home should
+        # ask for a fresh sign-in — a migrated grant whose access mode was never
+        # recorded, or a grant whose last handshake failed.
+        "origin": config.get("origin", "home"),
+        "needs_reauth": config.get("needs_reauth")
+        or ("token_error" if connection.status is ConnectionStatus.ERROR else None),
         "last_error": connection.last_error,
         "projects": [{"project_id": p["project_id"], "name": p["name"]} for p in (projects or [])],
         "created_at": connection.created_at,
