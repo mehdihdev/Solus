@@ -35,12 +35,19 @@ from solus_api.connectors.httpcache import (
     release_flight,
     single_flight,
 )
-from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry, build_registry
+from solus_api.connectors.registry import (
+    ConnectorContext,
+    ConnectorRegistry,
+    Purpose,
+    build_integration_cache,
+    build_registry,
+)
 from solus_api.connectors.runtime import _resolve_credentials, run_sync
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore, build_secret_store
 from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.graph.live import LiveHub
 from solus_api.models import Source, SourceStatus, SyncTrigger
+from solus_api.services.connections import account_ref_for
 
 if TYPE_CHECKING:
     from solus_api.core.config import Settings
@@ -53,6 +60,14 @@ EnqueueFn = Callable[[uuid.UUID], Awaitable[None]]
 #: than a slow Onshape export (translation + poll + download), short enough that
 #: a killed worker does not park the source for an operator's coffee break.
 _SYNC_FLIGHT_TTL_SECONDS = 300
+
+
+#: Sync trigger → scoped-connector purpose (see `registry.Purpose`).
+_PURPOSES: dict[SyncTrigger, Purpose] = {
+    SyncTrigger.MANUAL: "user",
+    SyncTrigger.SCHEDULED: "scheduled",
+    SyncTrigger.WEBHOOK: "webhook",
+}
 
 
 async def execute_source_sync(
@@ -95,7 +110,8 @@ async def execute_source_sync(
         provider = source.type.value
         project_id = source.project_id
         team_id = source.team_id
-        account_ref = source.account_external_id
+        # SOLUSDEV-241: the ONE identity rule for cache keys and the meter.
+        account_ref = account_ref_for(source)
         resolved_acting_user_id = (
             acting_user_id if acting_user_id is not None else source.created_by
         )
@@ -104,9 +120,10 @@ async def execute_source_sync(
         team_id=team_id,
         acting_user_id=resolved_acting_user_id,
         account_ref=account_ref,
-        # A manual trigger carries a job id; the sweep does not. Only a human's
-        # explicit action keeps spending in the degraded band.
-        purpose="user" if job_id is not None else "scheduled",
+        # Only a human's explicit action keeps spending in the degraded band —
+        # and (SOLUSDEV-241) only it trusts a recorded change signal for the
+        # full window; the sweep refreshes it, a doorbell never trusts it.
+        purpose=_PURPOSES[trigger],
     )
     connector = registry.create_scoped(provider, ctx)
     if store is None:
@@ -238,7 +255,7 @@ async def run_change_detection(
                 s.secret_ref,
                 dict(s.config),
                 dict(s.cursor),
-                s.account_external_id,
+                account_ref_for(s),
             )
             for s in sources
         ]
@@ -381,15 +398,18 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     # SOLUSDEV-167: the worker runs the UNATTENDED syncs — the ones that can
     # actually run away — so it must share the API's quota ledger rather than
     # silently degrade to an unmetered registry.
-    ctx["registry"] = build_registry(settings, redis=ctx.get("redis"))
-    ctx["secret_store"] = build_secret_store(settings, sessionmaker)
-    ctx["artifact_store"] = build_artifact_store(settings)
     # SOLUSDEV-167. The worker runs the UNATTENDED syncs — the ones that can
     # actually run away — so it must share the API's cache and single-flight
     # store, not silently degrade to an uncoalesced one. `ctx["redis"]` is arq's
     # own ArqRedis, a redis.asyncio.Redis subclass, so no second connection.
     redis = ctx.get("redis")
     ctx["integration_store"] = RedisCacheStore(redis) if redis is not None else InMemoryCacheStore()
+    # SOLUSDEV-241: and the read cache over it, handed to the scoped connectors
+    # so the sweep's probes REFRESH the signals a human's sync then reads.
+    ctx["integration_cache"] = build_integration_cache(settings, ctx["integration_store"])
+    ctx["registry"] = build_registry(settings, redis=redis, cache=ctx["integration_cache"])
+    ctx["secret_store"] = build_secret_store(settings, sessionmaker)
+    ctx["artifact_store"] = build_artifact_store(settings)
     # And the fan-out hub. Without this the ARQ path — which IS the production
     # path whenever Redis is configured, because _dispatch_sync enqueues rather
     # than running inline — published nothing at all, so live propagation worked

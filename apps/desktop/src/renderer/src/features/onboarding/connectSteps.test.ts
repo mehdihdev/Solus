@@ -24,6 +24,28 @@ const ACCESS: IntegrationAccessModes = {
 }
 
 describe('wizardSteps', () => {
+  it('ends at the sign-in for an ACCOUNT-scoped connect (SOLUSDEV-241)', () => {
+    const steps = wizardSteps({
+      mode: 'oauth',
+      ...NO_SHAPE,
+      selection: SELECTION,
+      accessModes: ACCESS,
+      scope: 'account'
+    })
+    expect(steps.map((s) => s.id)).toEqual(['access', 'authorize'])
+  })
+
+  it('skips the grant and the sign-in when the user already holds a linked account', () => {
+    const steps = wizardSteps({
+      mode: 'oauth',
+      ...NO_SHAPE,
+      selection: SELECTION,
+      accessModes: ACCESS,
+      linkedAccount: true
+    })
+    expect(steps.map((s) => s.id)).toEqual(['configure', 'index'])
+  })
+
   it('builds sign-in → pick → index for an OAuth connector with a selection', () => {
     const steps = wizardSteps({ mode: 'oauth', ...NO_SHAPE, selection: SELECTION })
     expect(steps.map((s) => s.id)).toEqual(['authorize', 'configure', 'index'])

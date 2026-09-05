@@ -12,6 +12,7 @@ import { useConnectWizard, NOT_LINKED_ERROR } from './useConnectWizard'
 import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
 import { useOnboardingStore } from './onboardingStore'
 import * as oauthConnect from './oauthConnect'
+import * as accountConnect from './accountConnect'
 import * as edaConnect from './edaConnect'
 import * as resources from '../../lib/api/resources'
 import * as bridgeModule from '../../lib/desktopBridge'
@@ -20,6 +21,10 @@ import type { CatalogEntry } from './integrationCatalog'
 vi.mock('./oauthConnect', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./oauthConnect')>()
   return { ...actual, runOAuthConnect: vi.fn() }
+})
+vi.mock('./accountConnect', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./accountConnect')>()
+  return { ...actual, runAccountConnect: vi.fn() }
 })
 vi.mock('./edaConnect', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./edaConnect')>()
@@ -34,7 +39,20 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
 })
 
 const mockedOAuth = vi.mocked(oauthConnect.runOAuthConnect)
+const mockedAccount = vi.mocked(accountConnect.runAccountConnect)
 const mockedEda = vi.mocked(edaConnect.runEdaConnect)
+
+const LINKED_GITHUB: resources.Connection = {
+  id: 'c1',
+  provider: 'github',
+  status: 'connected',
+  account_login: 'octocat',
+  access: null,
+  last_error: null,
+  projects: [],
+  created_at: '',
+  updated_at: ''
+}
 const mockedDisconnect = vi.mocked(resources.disconnectSource)
 
 const GITHUB: CatalogEntry = {
@@ -124,6 +142,47 @@ describe('useConnectWizard', () => {
     await act(async () => result.current.begin())
     expect(mockedOAuth).not.toHaveBeenCalled()
     expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
+  })
+
+  it('reuses a CONNECTED linked account for the entry (SOLUSDEV-241)', async () => {
+    withBridge()
+    const { result } = renderHook(() =>
+      useConnectWizard({ projectId: 'p1', linkedConnections: [LINKED_GITHUB] })
+    )
+    act(() => result.current.open(GITHUB))
+    expect(result.current.linkedAccount).toEqual(LINKED_GITHUB)
+    await act(async () => result.current.begin())
+    expect(mockedOAuth.mock.calls[0][3]).toMatchObject({
+      linkedConnection: { id: 'c1', login: 'octocat' }
+    })
+  })
+
+  it('ignores a linked account that is not connected', async () => {
+    withBridge()
+    const errored = { ...LINKED_GITHUB, status: 'error' as const }
+    const { result } = renderHook(() =>
+      useConnectWizard({ projectId: 'p1', linkedConnections: [errored] })
+    )
+    act(() => result.current.open(GITHUB))
+    expect(result.current.linkedAccount).toBeNull()
+    await act(async () => result.current.begin())
+    expect(mockedOAuth.mock.calls[0][3]).not.toHaveProperty('linkedConnection')
+  })
+
+  it('account scope binds the account with no project at all', async () => {
+    withBridge()
+    mockedAccount.mockResolvedValue({ ok: true, connectionId: 'c1', result: 'Connected as x' })
+    const onConnected = vi.fn()
+    const { result } = renderHook(() =>
+      useConnectWizard({ projectId: null, scope: 'account', onConnected })
+    )
+    act(() => result.current.open(GITHUB))
+    expect(result.current.linkedAccount).toBeNull()
+    await act(async () => result.current.begin())
+    expect(mockedAccount).toHaveBeenCalledTimes(1)
+    expect(mockedAccount.mock.calls[0][1]).toBe('github')
+    expect(mockedOAuth).not.toHaveBeenCalled()
+    expect(onConnected).toHaveBeenCalledTimes(1)
   })
 
   it('begin drives the OAuth flow and reports success through onConnected', async () => {

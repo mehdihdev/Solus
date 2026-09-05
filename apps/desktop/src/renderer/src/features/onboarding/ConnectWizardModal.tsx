@@ -13,7 +13,13 @@ import type { IntegrationAccessModes, SelectableItem } from '../../lib/api/resou
 import { useSettingsStore } from '../../store/settingsStore'
 import { ModalShell } from '../workspace/modals'
 import { SelectionPicker, PICKER_FIELD_STYLE } from './SelectionPicker'
-import { stepInstruction, wizardPosition, wizardSteps, type WizardStep } from './connectSteps'
+import {
+  stepInstruction,
+  wizardPosition,
+  wizardSteps,
+  type WizardScope,
+  type WizardStep
+} from './connectSteps'
 import type { CatalogEntry } from './integrationCatalog'
 import { integrationLogo } from './integrationLogos'
 import type { ConnectionState } from './onboardingStore'
@@ -27,6 +33,12 @@ export interface ConnectWizardModalProps {
   entry: CatalogEntry
   /** Live flow state from the store; absent until the flow starts. */
   state?: ConnectionState
+  /** SOLUSDEV-241: `account` binds a provider account with no project (Home).
+   *  Default `project`. */
+  scope?: WizardScope
+  /** SOLUSDEV-241: the linked account this connect will reuse, if any — the
+   *  rail then skips the sign-in and the idle action says so. */
+  linkedAccount?: { login: string | null } | null
   /** Start (or retry) the flow — OAuth path. */
   onBegin: () => void
   /** Start the flow with the user's picked committed export. The FILE is
@@ -269,9 +281,13 @@ function AccessPicker({
 /** The step-zero call to action: pick the export file, or start the OAuth flow. */
 function IdleAction({
   entry,
+  linkedAccount,
   onBegin,
   onPickFile
-}: Pick<ConnectWizardModalProps, 'entry' | 'onBegin' | 'onPickFile'>): React.JSX.Element {
+}: Pick<
+  ConnectWizardModalProps,
+  'entry' | 'linkedAccount' | 'onBegin' | 'onPickFile'
+>): React.JSX.Element {
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const pickFile = (input: HTMLInputElement): void => {
@@ -282,9 +298,19 @@ function IdleAction({
 
   if (entry.mode !== 'export-file') {
     return (
-      <Button kind="primary" size="sm" onClick={onBegin}>
-        Connect {entry.name}
-      </Button>
+      <>
+        <Button kind="primary" size="sm" onClick={onBegin}>
+          Connect {entry.name}
+        </Button>
+        {linkedAccount && (
+          <div
+            data-testid="cw-linked-account"
+            style={{ marginTop: 8, fontSize: 11, color: 'var(--mut)' }}
+          >
+            Using your linked account{linkedAccount.login ? ` · ${linkedAccount.login}` : ''}
+          </div>
+        )}
+      </>
     )
   }
   return (
@@ -417,9 +443,9 @@ function CloseButton({ onClose }: { onClose: () => void }): React.JSX.Element {
 }
 
 export function ConnectWizardModal(props: ConnectWizardModalProps): React.JSX.Element {
-  const { entry, state, onClose } = props
+  const { entry, state, onClose, scope = 'project', linkedAccount = null } = props
   const solMode = useSettingsStore((s) => s.solMode)
-  const steps = wizardSteps(entry)
+  const steps = wizardSteps({ ...entry, scope, linkedAccount: linkedAccount !== null })
   const { status, stepIndex } = wizardPosition(steps, state)
   const step = steps[Math.min(stepIndex, steps.length - 1)]
   const { headline, instruction } = wizardCopy(status, step, entry, state, solMode)

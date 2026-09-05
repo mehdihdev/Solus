@@ -56,11 +56,46 @@ export interface Source {
   status: SourceStatus
   config: Record<string, unknown>
   account_login: string | null
+  /** The account grant this source rides (SOLUSDEV-241), or null when it
+   *  holds its own credential (PAT, committed-export). */
+  connection_id?: string | null
   last_synced_at: string | null
   last_error: SourceError | null
   entity_count?: number
   created_at: string
   updated_at: string
+}
+
+export type ConnectionStatus = 'pending' | 'connected' | 'error' | 'revoked'
+
+/** A project that uses an account grant (SOLUSDEV-241). */
+export interface ConnectionProject {
+  project_id: string
+  name: string
+}
+
+/** One ACCOUNT-scoped OAuth grant the signed-in user holds (SOLUSDEV-241 / I1,
+ *  API.md §2.1). Bound on Home; projects attach through their sources. Never
+ *  carries a secret or a secret ref. */
+export interface Connection {
+  id: string
+  provider: string
+  status: ConnectionStatus
+  account_login: string | null
+  /** The grant the user chose at connect time (`read` / `write`), if any. */
+  access: string | null
+  last_error: SourceError | null
+  projects: ConnectionProject[]
+  created_at: string
+  updated_at: string
+}
+
+/** A cached listing (API.md §2.1 / §2.5): the items, plus whether this call
+ *  was served from the integration cache and when the provider was last asked. */
+export interface CachedListing<T> {
+  items: T[]
+  cached: boolean
+  fetched_at: string | null
 }
 
 export type SyncStatus = 'queued' | 'running' | 'succeeded' | 'failed'
@@ -274,7 +309,17 @@ export function probeHostedStatus(
 export interface OAuthStartResponse {
   authorize_url: string
   state: string
-  source_id: string
+  /** SOLUSDEV-241: the ACCOUNT connection the grant lands on — always. */
+  connection_id: string
+  /** The project's source, when the handshake was started from a project. */
+  source_id: string | null
+}
+
+/** What the exchange answers with (SOLUSDEV-241): the account connection, and
+ *  the project's now-bound source when a project started the handshake. */
+export interface OAuthExchangeResult {
+  connection: Connection
+  source: Source | null
 }
 
 export type ApiSolMode = 'guide' | 'expert'
@@ -540,13 +585,18 @@ export function getSource(
 }
 
 /** What a connected source can be pointed at (repositories, CAD documents, …).
- *  One generic route for every connector. */
+ *  One generic route for every connector. Served from the account-keyed
+ *  integration cache (SOLUSDEV-241); `refresh` asks the provider again. */
 export function listSelectable(
   projectId: string,
   sourceId: string,
-  client: ApiClient = api
+  client: ApiClient = api,
+  options: { refresh?: boolean } = {}
 ): Promise<SelectableItem[]> {
-  return client.request<SelectableItem[]>(`/projects/${projectId}/sources/${sourceId}/selectable`)
+  const query = options.refresh ? '?refresh=true' : ''
+  return client.request<SelectableItem[]>(
+    `/projects/${projectId}/sources/${sourceId}/selectable${query}`
+  )
 }
 
 /**
@@ -554,35 +604,116 @@ export function listSelectable(
  * The provider is an argument, never baked into the path — the backend routes
  * are `/{provider}/oauth/*`, so every OAuth connector the registry grows is
  * reachable without a change here.
+ *
+ * SOLUSDEV-241: the grant binds at ACCOUNT scope. `projectId` null starts an
+ * account-only handshake (Home); a project id also creates/reuses that
+ * project's source and binds it on completion (the Workspace wizard).
  */
 export function startOAuth(
-  projectId: string,
+  projectId: string | null,
   provider: string,
   input: { redirect_uri?: string; name?: string; access?: string } = {},
   client: ApiClient = api
 ): Promise<OAuthStartResponse> {
   return client.request<OAuthStartResponse>(`/integrations/${provider}/oauth/start`, {
     method: 'POST',
-    body: { project_id: projectId, ...input }
+    body: { ...(projectId ? { project_id: projectId } : {}), ...input }
   })
 }
 
-/** Exchange the OAuth state + code for a connected source. */
+/** Exchange the OAuth state + code for the account connection (+ the bound
+ *  source when a project started the handshake). */
 export function exchangeOAuth(
   provider: string,
   input: { state: string; code: string },
   client: ApiClient = api
-): Promise<Source> {
-  return client.request<Source>(`/integrations/${provider}/oauth/exchange`, {
+): Promise<OAuthExchangeResult> {
+  return client.request<OAuthExchangeResult>(`/integrations/${provider}/oauth/exchange`, {
     method: 'POST',
     body: input
   })
 }
 
-/** Connect a source directly (non-OAuth providers, e.g. committed-export EDA). */
+// --- Account connections (SOLUSDEV-241 / I1, API.md §2.1) -----------------
+
+/** The signed-in user's account-scoped grants. Owner-only on the server. */
+export function listConnections(client: ApiClient = api): Promise<Connection[]> {
+  return client.request<Connection[]>('/users/me/connections')
+}
+
+export function getConnection(connectionId: string, client: ApiClient = api): Promise<Connection> {
+  return client.request<Connection>(`/users/me/connections/${connectionId}`)
+}
+
+/** Revoke a grant. Every source bound to it, in every project, is disconnected
+ *  — the app's confirmation names those projects before this is called. */
+export function revokeConnection(
+  connectionId: string,
+  client: ApiClient = api
+): Promise<{ id: string; disconnected_sources: number }> {
+  return client.request<{ id: string; disconnected_sources: number }>(
+    `/users/me/connections/${connectionId}`,
+    { method: 'DELETE' }
+  )
+}
+
+/** The account's selectable documents/repositories, from the integration
+ *  cache — zero provider calls after the first. `refresh` asks again. */
+export async function listConnectionDocuments(
+  connectionId: string,
+  options: { refresh?: boolean } = {},
+  client: ApiClient = api
+): Promise<CachedListing<SelectableItem>> {
+  const query = options.refresh ? '?refresh=true' : ''
+  const page = await client.requestPage<SelectableItem[]>(
+    `/users/me/connections/${connectionId}/documents${query}`
+  )
+  const meta = page.meta as { cached?: unknown; fetched_at?: unknown }
+  return {
+    items: page.data,
+    cached: meta.cached === true,
+    fetched_at: typeof meta.fetched_at === 'string' ? meta.fetched_at : null
+  }
+}
+
+/** Track one more of the account's documents in a project (SOLUSDEV-241).
+ *  The server queues the sync; `job_id` is null when it was already tracked. */
+export function addSourceDocument(
+  projectId: string,
+  sourceId: string,
+  documentId: string,
+  client: ApiClient = api
+): Promise<{ job_id: string | null; status: string; source: Source }> {
+  return client.request<{ job_id: string | null; status: string; source: Source }>(
+    `/projects/${projectId}/sources/${sourceId}/documents`,
+    { method: 'POST', body: { id: documentId } }
+  )
+}
+
+/** Stop tracking a document in a project; other projects are untouched. */
+export function removeSourceDocument(
+  projectId: string,
+  sourceId: string,
+  documentId: string,
+  client: ApiClient = api
+): Promise<{ job_id: string | null; status: string; source: Source }> {
+  return client.request<{ job_id: string | null; status: string; source: Source }>(
+    `/projects/${projectId}/sources/${sourceId}/documents/${encodeURIComponent(documentId)}`,
+    { method: 'DELETE' }
+  )
+}
+
+/** Connect a source directly (non-OAuth providers, e.g. committed-export EDA)
+ *  — or, with `connection_id`, attach the project to an account the user
+ *  already linked on Home (SOLUSDEV-241): no second sign-in. */
 export function createSource(
   projectId: string,
-  input: { type: string; name: string; config?: Record<string, unknown> },
+  input: {
+    type: string
+    name: string
+    config?: Record<string, unknown>
+    connection_id?: string
+  },
   client: ApiClient = api
 ): Promise<Source> {
   return client.request<Source>(`/projects/${projectId}/sources`, {

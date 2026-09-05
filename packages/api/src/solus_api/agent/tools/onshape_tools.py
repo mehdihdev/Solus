@@ -48,7 +48,7 @@ from solus_api.connectors.onshape_ops import OnshapeOperation, every_operation
 from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
 from solus_api.connectors.runtime import call_with_refresh, resolve_credentials
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
-from solus_api.models import Source, SourceStatus, SourceType
+from solus_api.models import AccountConnection, Source, SourceStatus, SourceType
 
 if TYPE_CHECKING:
     from solus_api.connectors.onshape import OnshapeConnector
@@ -110,7 +110,20 @@ def _tool_error(exc: ConnectorError) -> ToolException:
 _WRITE_ACCESS = "write"
 
 
-def _may_write(source: Source) -> bool:
+async def _may_write(session_factory: async_sessionmaker[AsyncSession], source: Source) -> bool:
+    """Whether the customer granted edit rights. SOLUSDEV-241: a source bound to
+    an account connection answers from the CONNECTION's record — the grant is
+    the account's, and `source.config` is member-editable — so a patched-in
+    `access` on the source can never widen what the owner granted."""
+    if source.connection_id is not None:
+        async with session_factory() as session:
+            connection = await session.get(AccountConnection, source.connection_id)
+        config = (
+            connection.config
+            if connection is not None and isinstance(connection.config, dict)
+            else {}
+        )
+        return config.get("access") == _WRITE_ACCESS
     config = source.config if isinstance(source.config, dict) else {}
     return config.get("access") == _WRITE_ACCESS
 
@@ -135,7 +148,7 @@ async def _prepare(
             code=ToolErrorCode.NOT_FOUND,
             retryable=False,
         )
-    if is_write and not _may_write(source):
+    if is_write and not await _may_write(session_factory, source):
         raise ToolException(
             "This Onshape source is connected read-only. Reconnect it and choose "
             "'Read and edit' to let Solus change your models.",

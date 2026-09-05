@@ -11,6 +11,7 @@ from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
 from solus_api.models import (
     SOL_CUSTOM_INSTRUCTION_CAP,
+    AccountConnection,
     Activity,
     Artifact,
     ArtifactScope,
@@ -154,6 +155,10 @@ class SourceCreate(StrictModel):
     # Optional pre-supplied token (e.g. a PAT). Goes straight to the secret
     # store, is validated, and is never echoed back (CLAUDE.md §7).
     token: str | None = Field(default=None, max_length=4096)
+    # SOLUSDEV-241: attach the project to an ACCOUNT the caller already
+    # authorized (Home), instead of running a second OAuth. Exclusive with
+    # `token`; must be the caller's own connection for this provider.
+    connection_id: str | None = Field(default=None, max_length=64)
 
     _name_not_blank = field_validator("name")(_not_blank)
 
@@ -169,6 +174,14 @@ class SourceDisconnect(StrictModel):
     retain_entities: bool = False
 
 
+class DocumentAdd(StrictModel):
+    """Track one more of the account's documents in this project (SOLUSDEV-241).
+    The id is validated by the CONNECTOR's own rule before it can reach a
+    request path — the schema only bounds it."""
+
+    id: str = Field(min_length=1, max_length=255)
+
+
 class ConfirmationDecision(StrictModel):
     """Approve or reject one parked destructive action (SOLUS-ONS-A5).
 
@@ -182,7 +195,10 @@ class ConfirmationDecision(StrictModel):
 
 
 class OAuthStart(StrictModel):
-    project_id: str = Field(min_length=1)
+    # SOLUSDEV-241: optional. Absent, the handshake binds an ACCOUNT only
+    # (Home); present, it also creates/reuses this project's source and binds
+    # it on completion (the Workspace wizard, unchanged).
+    project_id: str | None = Field(default=None, min_length=1, max_length=64)
     # Optional repo to pre-select; the user can also pick after connecting.
     repo: str | None = Field(default=None, max_length=512)
     name: str | None = Field(default=None, max_length=512)
@@ -232,6 +248,8 @@ def serialize_source(
             if not k.startswith("_") and k not in _BULK_CONFIG_KEYS
         },
         "account_login": source.account_login,
+        # SOLUSDEV-241: the account grant this source rides, when it rides one.
+        "connection_id": source.connection_id,
         "last_synced_at": source.last_synced_at,
         "last_error": source.last_error,
         "created_at": source.created_at,
@@ -256,6 +274,25 @@ def serialize_source(
             "estimated": quota.estimated,
         }
     return data
+
+
+def serialize_connection(
+    connection: AccountConnection, projects: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Account-connection view (SOLUSDEV-241). No secret material, no secret
+    ref — the grant's existence and identity, never its credential."""
+    config = connection.config if isinstance(connection.config, dict) else {}
+    return {
+        "id": connection.id,
+        "provider": connection.provider.value,
+        "status": connection.status.value,
+        "account_login": connection.account_login,
+        "access": config.get("access"),
+        "last_error": connection.last_error,
+        "projects": [{"project_id": p["project_id"], "name": p["name"]} for p in (projects or [])],
+        "created_at": connection.created_at,
+        "updated_at": connection.updated_at,
+    }
 
 
 def serialize_entity(entity: GraphEntity) -> dict[str, Any]:

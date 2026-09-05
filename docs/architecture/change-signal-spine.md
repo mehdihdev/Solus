@@ -110,8 +110,8 @@ gate for both, metering would become opt-in too — and every expensive call (th
 the STEP download, the picker) is deliberately uncached, so the ledger would count the cheap reads
 and miss the ones that burn the quota.
 
-Cache keys carry `(provider, source_id, account_external_id, scope, version)`. Both identity
-segments are required:
+Cache keys carry `(provider, account_external_id, item, version)` — the ACCOUNT, and (since I1,
+below) never a project or a source. The identity choice was argued here first:
 
 - `team_id` is **wrong**: a team can hold two projects with two Onshape sources connected by two
   different accounts.
@@ -139,12 +139,51 @@ So "we could not ask" is classified apart from "it changed". Quota and rate-limi
 rather than swallowed, the sweep logs and skips them instead of enqueuing a full sync, and an
 observed 402 latches: further spend is refused until the latch expires, cache-only, visibly.
 
+## The read side, built (SOLUSDEV-241 / I1 — the connection model)
+
+The caching rules above were a specification; I1 builds them as `connectors/integration_cache.py`,
+and moves the OAuth grant to where the keys already said it belonged: **the account**.
+
+**OAuth binds at ACCOUNT scope.** `account_connections` is one row per provider grant per user
+(Home, H2). A project attaches through `sources.connection_id` (Workspace, W2) and MIRRORS the
+connection's secret ref (`connection/{id}/{provider}`), so every credential read path — `run_sync`,
+the sweep, the picker, the SOL tools, hosted add-ons — is unchanged. What changes is ownership:
+a connection-owned ref is never deleted by a source disconnect or a project teardown; revoking the
+connection deletes the whole family and disconnects every bound source. A document may therefore
+belong to several projects on one grant, and their fetches share one cache.
+
+**Three entry kinds, one key discipline.** Keys carry `(provider, account_external_id, …)` — never
+a project or a source, for the reasons the section above records — and a hit is only ever served to
+a caller that resolved that account's credentials (`services/connections.account_ref_for`).
+
+| Entry | Key | Moves when |
+| --- | --- | --- |
+| **listing** — the picker's documents/repositories | `…:listing` | an explicit `refresh=true` (at most one walk per cooldown window per ACCOUNT, however many members share the grant; each refresh is a logged data event), or a webhook doorbell for any source on the account. **Never a timer** — the TTL is storage hygiene. |
+| **signal** — a document's microversion + the workspace fetched to read it | `…:signal:{document}` | every probe that actually asked. Readers say how old a recorded one may be: a human's sync trusts it for the sweep interval (the sweep is what moves it); the sweep trusts one a few minutes old (two projects on one document → one probe per sweep); a **webhook never trusts it** — a doorbell means "it changed". |
+| **payload** — the element list, a STEP export, part metadata | `…:{kind}:{document}:{microversion}[:{element}]` | never invalidated: a change makes the key unreachable. Payloads above 8 MiB are used but not stored. |
+
+So "sync on first select, then ONLY when the change signal moves" holds literally: a manual sync
+reads the recorded signal (zero calls); the hourly sweep and the doorbell are the only things that
+move it; and a second project — or a teammate — at the same microversion costs zero calls end to end
+because every read it makes is keyed by a version someone already paid for. Measured in
+`tests/test_onshape_call_budget.py` (the I1 block), never claimed.
+
+Windows are settings (`SOLUS_INTEGRATION_SIGNAL_TTL_SECONDS`, `…_SIGNAL_SWEEP_REUSE_SECONDS`,
+`…_LISTING_TTL_SECONDS`, `…_LISTING_REFRESH_COOLDOWN_SECONDS`, `…_PAYLOAD_TTL_SECONDS`,
+`…_CACHE_MAX_PAYLOAD_BYTES`). Revoking a connection or deleting the account drops every entry
+for that account (a per-account key index): derived copies of a customer's CAD do not outlive the
+grant. An unidentified account (no provider account id) caches nothing. The honest bound:
+without a registered webhook a teammate's "Sync now" can be up to one sweep interval stale by
+design; the UI shows "Synced … ago", not "live".
+
 ## Freshness is not a new table
 
 Everything the spine needs already has a home: the per-document change tokens and the resolved
 workspace ids live in `Source.cursor`; the webhook token digest and the provider account id live on
 `Source`; the cache, the probe due-gate and the annual ledger live in Redis; and the event vocabulary
-is an unconstrained string column. **No migration.**
+is an unconstrained string column. **No migration** — for the spine. I1 adds one
+(`account_connections`, `sources.connection_id`, nullable `oauth_states.source_id`) because the
+account is a new scoping anchor, not new freshness state.
 
 The workspace id in particular belongs in the cursor rather than the cache: it is fetched *in order
 to build* the microversion URL, so there is no version to key it on, and a TTL'd entry would be

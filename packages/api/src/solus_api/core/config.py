@@ -189,6 +189,21 @@ class Settings(BaseSettings):
     #: Fraction of the allowance above which DEFERRABLE work (the sweep, agent
     #: turns) pauses. A user's explicit action still reaches the provider.
     integration_degrade_ratio: float = 0.7
+    #: SOLUSDEV-241 (I1) — the integration cache windows. A human's sync trusts
+    #: a recorded change signal for `signal_ttl` (the sweep cadence, so the
+    #: sweep is what moves it); the sweep itself reuses one younger than
+    #: `signal_sweep_reuse` so two projects tracking one document cost one
+    #: probe per sweep; a webhook doorbell never trusts one. Listings move only
+    #: on an explicit refresh or a doorbell — the long TTL is storage hygiene,
+    #: not a poll. Payloads are keyed by change token so their TTL is hygiene too.
+    integration_signal_ttl_seconds: int = 3600
+    integration_signal_sweep_reuse_seconds: int = 300
+    integration_listing_ttl_seconds: int = 7 * 24 * 3600
+    integration_payload_ttl_seconds: int = 30 * 24 * 3600
+    integration_cache_max_payload_bytes: int = 8 * 1024 * 1024
+    #: An explicit listing refresh inside this window is served from the cache:
+    #: one provider walk per window per ACCOUNT, however many members share it.
+    integration_listing_refresh_cooldown_seconds: int = 60
 
     # Where the OAuth callback sends the user back to (the desktop app deep
     # link or a local page). Defaults to the renderer dev origin. Renamed from

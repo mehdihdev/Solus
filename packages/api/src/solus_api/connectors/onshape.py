@@ -35,7 +35,7 @@ import asyncio
 import dataclasses
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, ClassVar
 from urllib.parse import urlencode
 
@@ -52,6 +52,7 @@ from solus_api.connectors.contracts import (
     SyncResult,
 )
 from solus_api.connectors.export_common import ErrorRecorder, label
+from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.mechanical import (
     MAX_CAD_EXPORT_BYTES,
     CadModel,
@@ -74,6 +75,7 @@ _ID_RE = re.compile(r"^[A-Za-z0-9]{1,40}$")
 #: with the SAME pattern the connector uses, so there is one definition of what
 #: an Onshape id may look like and no second, weaker gate.
 ONSHAPE_ID_RE = _ID_RE
+
 
 def element_base_path(kind: str, document_id: str, workspace_id: str, element_id: str) -> str:
     """The `/{kind}/d/{did}/w/{wid}/e/{eid}` prefix every element call hangs off.
@@ -217,6 +219,18 @@ class _Target:
 _UPSTREAM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+@dataclasses.dataclass(frozen=True)
+class _DocumentPlan:
+    """One selected document, resolved: where it lives, which version it is
+    at, and the elements to export. `workspace_id` is None and `microversion`
+    is `_GONE` for a document Onshape no longer has."""
+
+    document_id: str
+    workspace_id: str | None
+    microversion: str
+    targets: list[_Target]
+
+
 def _text(value: Any) -> str:
     """A bounded display string from untrusted upstream JSON."""
     return label(str(value or "").strip(), _METADATA_LIMIT)
@@ -353,6 +367,9 @@ class OnshapeConnector(OAuthConnector):
         max_elements: int = _MAX_ELEMENTS,
         max_document_pages: int = _MAX_DOCUMENT_PAGES,
         meter: CallMeter | None = None,
+        cache: IntegrationCache | None = None,
+        account_ref: str | None = None,
+        signal_max_age_seconds: float | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -365,6 +382,14 @@ class OnshapeConnector(OAuthConnector):
         # tests, the picker, the plain registry factory — keeps working
         # unmetered; the scoped factory supplies a real one.
         self._meter = meter
+        # SOLUSDEV-241. The integration cache, keyed on the ACCOUNT whose
+        # credentials this connector holds, and how old a recorded change
+        # signal may be before this caller must ask Onshape again (`None`:
+        # always ask — the webhook posture). Same opt-in as the meter: absent,
+        # every read goes upstream exactly as before.
+        self._cache = cache if account_ref else None
+        self._account_ref = account_ref or ""
+        self._signal_max_age = signal_max_age_seconds
 
     # ----------------------------------------------------------- oauth
 
@@ -490,6 +515,11 @@ class OnshapeConnector(OAuthConnector):
         tombstone its whole subtree. Only a document Onshape reports as GONE
         (404) is dropped, which is exactly the case where tombstoning is right.
         Every other failure aborts the sync and leaves the graph untouched.
+
+        SOLUSDEV-241: every read is keyed by the document's microversion and
+        served through the integration cache when one is attached, so a second
+        project on the same account — or a teammate — at the same version
+        costs zero calls.
         """
         recorder = ErrorRecorder()
         entities: list[Any] = []
@@ -498,25 +528,21 @@ class OnshapeConnector(OAuthConnector):
         resolved_workspaces: dict[str, str] = {}
 
         async with self.http(ctx.credentials) as client:
-            targets, workspaces = await self._resolve_targets(client, ctx, recorder)
-            # A cursor entry for EVERY selected document, including ones that hold
-            # no assemblies and ones that are gone. `detect_changes` compares the
-            # cursor's key set with the selection, so a document missing an entry
-            # would read as "selection changed" on every poll — an endless
-            # re-sync loop.
-            for document_id in self._selected_document_ids(ctx):
-                workspace_id = workspaces.get(document_id)
-                microversions[document_id] = (
-                    _GONE
-                    if workspace_id is None
-                    else await self._current_microversion(client, document_id, workspace_id)
-                )
-                if workspace_id is not None:
-                    resolved_workspaces[document_id] = workspace_id
-            for target in targets:
-                target_entities, target_relations = await self._ingest(client, target, recorder)
-                entities.extend(target_entities)
-                relations.extend(target_relations)
+            for plan in await self._plan(client, ctx, recorder):
+                # A cursor entry for EVERY selected document, including ones
+                # that hold no assemblies and ones that are gone.
+                # `detect_changes` compares the cursor's key set with the
+                # selection, so a document missing an entry would read as
+                # "selection changed" on every poll — an endless re-sync loop.
+                microversions[plan.document_id] = plan.microversion
+                if plan.workspace_id is not None:
+                    resolved_workspaces[plan.document_id] = plan.workspace_id
+                for target in plan.targets:
+                    target_entities, target_relations = await self._ingest(
+                        client, target, recorder, version=plan.microversion
+                    )
+                    entities.extend(target_entities)
+                    relations.extend(target_relations)
 
         return SyncResult(
             entities=entities,
@@ -529,18 +555,31 @@ class OnshapeConnector(OAuthConnector):
         )
 
     async def _ingest(
-        self, client: httpx.AsyncClient, target: _Target, recorder: ErrorRecorder
+        self,
+        client: httpx.AsyncClient,
+        target: _Target,
+        recorder: ErrorRecorder,
+        *,
+        version: str,
     ) -> tuple[list[Any], list[Any]]:
         """One element → graph records, namespaced to its document."""
-        export = await self._fetch_step(
+        export = await self._cached(
+            self._payload_key("export", target.document_id, version, target.element_id),
+            lambda: self._fetch_step(
+                client,
+                target.document_id,
+                target.workspace_id,
+                target.element_id,
+                target.collection,
+            ),
+        )
+        metadata = await self._fetch_part_metadata(
             client,
             target.document_id,
             target.workspace_id,
             target.element_id,
-            target.collection,
-        )
-        metadata = await self._fetch_part_metadata(
-            client, target.document_id, target.workspace_id, target.element_id, recorder
+            recorder,
+            version=version,
         )
         model = self._enrich(parse_step(export), metadata)
         # ONE recorder across every stage and every document, so the
@@ -550,6 +589,27 @@ class OnshapeConnector(OAuthConnector):
             model, recorder, scope=target.scope, provenance=target.provenance
         )
         return target_entities, target_relations
+
+    # ----------------------------------------------------------- the cache
+
+    def _signal_key(self, document_id: str) -> str:
+        return IntegrationCache.signal_key(self.provider, self._account_ref, document_id)
+
+    def _payload_key(self, kind: str, document_id: str, version: str, *parts: str) -> str:
+        return IntegrationCache.payload_key(
+            self.provider, self._account_ref, document_id, version, kind, *parts
+        )
+
+    async def _cached[T](self, key: str, fetch: Callable[[], Awaitable[T]]) -> T:
+        """`fetch()` through the integration cache, or directly when none is
+        attached. A payload is keyed by the document's change token, so a hit
+        can never be stale — a change makes the key unreachable."""
+        if self._cache is None:
+            return await fetch()
+        fetched = await self._cache.fetch(
+            key, ttl_seconds=self._cache.payload_ttl_seconds, fetch=fetch
+        )
+        return fetched.value
 
     # ----------------------------------------------------------- selection
 
@@ -591,45 +651,49 @@ class OnshapeConnector(OAuthConnector):
             return {document_ids[0]: legacy}
         return {}
 
-    async def _resolve_targets(
+    async def _plan(
         self, client: httpx.AsyncClient, ctx: SyncContext, recorder: ErrorRecorder
-    ) -> tuple[list[_Target], dict[str, str]]:
+    ) -> list[_DocumentPlan]:
         """Expand the selection into exportable elements: each document's default
-        workspace, then every assembly in it.
+        workspace and current microversion, then every exportable element in it.
 
-        Also returns the resolved workspace per document — including documents
-        that hold no assemblies — so the caller can cursor every live document.
-        A document absent from that map is GONE.
+        Every selected document gets a plan — including ones that hold no
+        assemblies and ones that are GONE (workspace `None`, microversion
+        `_GONE`) — so the caller can cursor all of them.
         """
         legacy = self._legacy_target(ctx)
         if legacy is not None:
-            return [legacy], {legacy.document_id: legacy.workspace_id}
+            microversion = await self._current_microversion(
+                client, legacy.document_id, legacy.workspace_id
+            )
+            return [_DocumentPlan(legacy.document_id, legacy.workspace_id, microversion, [legacy])]
 
-        targets: list[_Target] = []
-        workspaces: dict[str, str] = {}
+        plans: list[_DocumentPlan] = []
+        seen = 0
         for document_id in self._selected_document_ids(ctx):
             try:
-                workspace_id = await self.default_workspace(client, document_id)
-                elements = await self._exportable_elements(client, document_id, workspace_id)
+                workspace_id, microversion = await self._locate(client, ctx, document_id)
+                elements = await self._elements_at(client, document_id, workspace_id, microversion)
             except ConnectorError as exc:
                 if exc.code != "not_found":
                     raise
                 # Deleted upstream: dropping it (and letting its entities be
                 # reconciled away) is the correct reading of "gone".
                 recorder.record(label(document_id), "document is no longer available; skipped")
+                plans.append(_DocumentPlan(document_id, None, _GONE, []))
                 continue
-            workspaces[document_id] = workspace_id
+            targets: list[_Target] = []
             for element_id, collection in elements:
-                if len(targets) >= self._max_elements:
+                seen += 1
+                if seen > self._max_elements:
                     # NOT a truncation. `sync` treats its result as a COMPLETE
-                    # snapshot, so returning a partial target list left every
-                    # document past the cap absent from `workspaces` — which
-                    # `sync` reads as GONE. Its live entities were soft-deleted,
-                    # and the `_GONE` it cursored never matched the real
-                    # microversion again, so `detect_changes` said "changed"
-                    # forever: silent data loss plus a re-sync loop against an
-                    # annual call allowance. A snapshot that cannot be complete
-                    # must fail instead.
+                    # snapshot, so returning a partial target list would leave
+                    # every document past the cap reading as GONE — its live
+                    # entities soft-deleted, and a `_GONE` cursor that never
+                    # matches the real microversion again, so `detect_changes`
+                    # says "changed" forever: silent data loss plus a re-sync
+                    # loop against an annual allowance. A snapshot that cannot
+                    # be complete must fail instead.
                     raise ConnectorError(
                         "selection_too_large",
                         f"This selection expands to more than {self._max_elements} "
@@ -640,47 +704,101 @@ class OnshapeConnector(OAuthConnector):
                     _Target(
                         document_id=document_id,
                         workspace_id=workspace_id,
-                        element_id=element_id,
-                        collection=collection,
+                        element_id=str(element_id),
+                        collection=str(collection),
                     )
                 )
-        return targets, workspaces
+            plans.append(_DocumentPlan(document_id, workspace_id, microversion, targets))
+        return plans
+
+    async def _elements_at(
+        self, client: httpx.AsyncClient, document_id: str, workspace_id: str, version: str
+    ) -> list[tuple[str, str]]:
+        """The exportable elements at one version — cached by it."""
+
+        async def fetch() -> list[tuple[str, str]]:
+            return await self._exportable_elements(client, document_id, workspace_id)
+
+        rows = await self._cached(self._payload_key("elements", document_id, version), fetch)
+        # A cached list comes back as JSON lists; the plan wants pairs.
+        return [(str(element_id), str(collection)) for element_id, collection in rows]
+
+    async def _locate(
+        self, client: httpx.AsyncClient, ctx: SyncContext, document_id: str
+    ) -> tuple[str, str]:
+        """`(workspace_id, microversion)` for a live document — raising
+        `not_found` for a gone one.
+
+        SOLUSDEV-241: the recorded signal answers first when this caller's
+        purpose may trust it (a human's sync inside the sweep window; the sweep
+        inside its own short reuse window; a webhook never). Otherwise ONE
+        probe call — the workspace id rides the cursor (SOLUSDEV-167) or the
+        last recorded signal, so it is fetched only on first sight — and the
+        answer is recorded for everyone else on this account.
+
+        A stale workspace is self-healing: the microversion read 404s and we
+        re-resolve once before concluding GONE, so a moved default workspace
+        does not tombstone a live document's subtree.
+        """
+        recorded = await self._recorded_signal(document_id)
+        if recorded is not None and self._cache is not None:
+            observed = recorded.get("observed_at")
+            if self._cache.is_fresh(observed, max_age_seconds=self._signal_max_age):
+                return str(recorded["workspace"]), str(recorded["version"])
+        workspace_id = self._known_workspace(ctx, document_id)
+        if workspace_id is None and recorded is not None:
+            workspace_id = str(recorded["workspace"])
+        if workspace_id is None:
+            workspace_id = await self.default_workspace(client, document_id)
+        try:
+            microversion = await self._current_microversion(client, document_id, workspace_id)
+        except ConnectorError as exc:
+            if exc.code != "not_found":
+                raise
+            # Either the document is gone or the remembered workspace is.
+            fresh = await self.default_workspace(client, document_id)
+            if fresh == workspace_id:
+                raise
+            workspace_id = fresh
+            microversion = await self._current_microversion(client, document_id, fresh)
+        if self._cache is not None:
+            await self._cache.record_signal(
+                self._signal_key(document_id),
+                {"workspace": workspace_id, "version": microversion},
+            )
+        return workspace_id, microversion
+
+    async def _recorded_signal(self, document_id: str) -> dict[str, Any] | None:
+        """The last signal anyone recorded for this document, however old — the
+        workspace in it is still worth a call even when the version is not."""
+        if self._cache is None:
+            return None
+        entry = await self._cache.get(self._signal_key(document_id))
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("workspace"), str)
+            and _ID_RE.fullmatch(entry["workspace"])
+            and isinstance(entry.get("version"), str)
+            and entry["version"]
+        ):
+            return entry
+        return None
 
     async def _probe(self, client: httpx.AsyncClient, ctx: SyncContext, document_id: str) -> str:
         """This document's current change token, or `_GONE` when Onshape no
         longer has it — matching what `sync` records, so a deleted document that
         is still selected settles instead of scheduling a sync forever.
 
-        SOLUSDEV-167: costs ONE call, not two. The microversion URL needs a
-        workspace id, and resolving it was a second `GET /documents/{did}` on
-        every single probe — for a value that essentially never changes. It now
-        rides the cursor next to the microversion it is needed for. Not a cache:
-        a cache would need a TTL, and there is no version to key it on (the
-        workspace is what you fetch IN ORDER to learn the version), so a TTL'd
-        entry would be exactly the unversioned staleness this design avoids. In
-        the cursor it is durable, cross-process, and free. A stale entry is
-        self-healing — the microversion read 404s and we re-resolve once.
+        SOLUSDEV-167: costs ONE call, not two — the workspace id rides the
+        cursor. SOLUSDEV-241: costs ZERO when a trusted signal is recorded.
         """
         try:
-            workspace_id = self._known_workspace(ctx, document_id)
-            if workspace_id is None:
-                workspace_id = await self.default_workspace(client, document_id)
-            try:
-                return await self._current_microversion(client, document_id, workspace_id)
-            except ConnectorError as exc:
-                if exc.code != "not_found":
-                    raise
-                # Either the document is gone or the remembered workspace is.
-                # Re-resolve once before concluding GONE, so a moved default
-                # workspace does not tombstone a live document's subtree.
-                fresh = await self.default_workspace(client, document_id)
-                if fresh == workspace_id:
-                    raise
-                return await self._current_microversion(client, document_id, fresh)
+            _workspace_id, microversion = await self._locate(client, ctx, document_id)
         except ConnectorError as exc:
             if exc.code != "not_found":
                 raise
             return _GONE
+        return microversion
 
     def _known_workspace(self, ctx: SyncContext, document_id: str) -> str | None:
         """The workspace id a previous sync or probe already resolved."""
@@ -725,6 +843,13 @@ class OnshapeConnector(OAuthConnector):
             if collection and isinstance(raw, str) and _ID_RE.fullmatch(raw):
                 elements.append((raw, collection))
         return elements
+
+    def validate_selection(self, ids: list[str]) -> None:
+        """The selection rule, for the routes that edit a project's document
+        list (SOLUSDEV-241). Duck-typed like `list_selectable`; raises
+        `ConnectorError('config_invalid')` — the SAME gate `sync` and the SOL
+        tools apply, so nothing malformed can be stored under `SELECTION_KEY`."""
+        tracked_document_ids({SELECTION_KEY: ids}, max_documents=self._max_documents)
 
     async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
         """Documents the authorized account can reach, for the app's picker.
@@ -911,25 +1036,42 @@ class OnshapeConnector(OAuthConnector):
         workspace_id: str,
         element_id: str,
         recorder: ErrorRecorder,
+        *,
+        version: str,
     ) -> dict[str, tuple[str | None, str | None]]:
         """Part number + material per part NAME.
 
         Enrichment, not structure: if this call fails the team still gets their
-        assembly tree, with the loss recorded on the Sync row.
+        assembly tree, with the loss recorded on the Sync row. A failure is
+        never cached — only a table Onshape actually returned is.
         """
         try:
-            body = await self.get_json(
-                client,
-                f"/api/v6/parts/d/{document_id}/w/{workspace_id}/e/{element_id}",
-                what="part metadata",
+            rows = await self._cached(
+                self._payload_key("parts", document_id, version, element_id),
+                lambda: self._read_part_metadata(client, document_id, workspace_id, element_id),
             )
         except ConnectorError as exc:
             recorder.record(
                 "metadata", f"part metadata unavailable ({exc.code}); part numbers skipped"
             )
             return {}
+        return {
+            str(name): (number, material)
+            for name, number, material in rows
+            if isinstance(name, str)
+        }
 
-        table: dict[str, tuple[str | None, str | None]] = {}
+    async def _read_part_metadata(
+        self, client: httpx.AsyncClient, document_id: str, workspace_id: str, element_id: str
+    ) -> list[tuple[str, str | None, str | None]]:
+        """The raw table as `(name, part number, material)` rows — a JSON-safe
+        shape, since it is what the cache stores."""
+        body = await self.get_json(
+            client,
+            f"/api/v6/parts/d/{document_id}/w/{workspace_id}/e/{element_id}",
+            what="part metadata",
+        )
+        table: list[tuple[str, str | None, str | None]] = []
         for part in body if isinstance(body, list) else []:
             if not isinstance(part, dict):
                 continue
@@ -943,7 +1085,7 @@ class OnshapeConnector(OAuthConnector):
             if isinstance(material_block, dict):
                 raw_material = str(material_block.get("displayName", "")).strip()
                 material = label(raw_material, _METADATA_LIMIT) if raw_material else None
-            table[name] = (number, material)
+            table.append((name, number, material))
         return table
 
     @staticmethod

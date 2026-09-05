@@ -18,6 +18,7 @@ import { useHomeData, type HomeData } from './useHomeData'
 import { useOfflineReason } from './workspaceOnline'
 import { useShellStore } from './shellStore'
 import { NameModal, JoinTeamModal, DeleteConfirmModal } from './modals'
+import { ConnectedAccountsCard } from './ConnectedAccountsCard'
 
 export interface HomeScreenProps {
   onOpenProject: (project: { id: string; name: string }) => void
@@ -113,7 +114,12 @@ function LiveHome({
           )}
         </div>
 
-        <RecentActivity activity={home.activity} total={home.activityTotal} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <RecentActivity activity={home.activity} total={home.activityTotal} />
+          {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account
+              here once; each project picks what it tracks on its Sources page. */}
+          <ConnectedAccountsCard />
+        </div>
       </div>
 
       <HomeModals

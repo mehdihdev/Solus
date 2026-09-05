@@ -20,8 +20,9 @@ import respx
 from conftest import requires_occt
 from fixtures.onshape_fake import FakeOnshape, Meter
 from solus_api.connectors.httpcache import CacheStore, InMemoryCacheStore
+from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.onshape import OnshapeConnector
-from solus_api.connectors.registry import ConnectorRegistry
+from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.connectors.worker import execute_source_sync
@@ -34,8 +35,10 @@ from solus_api.models import (
     SourceStatus,
     SourceType,
     Sync,
+    SyncTrigger,
     Team,
 )
+from solus_api.services.connections import list_documents
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -297,3 +300,265 @@ async def test_concurrent_resync_leaves_no_duplicates(onshape: Any, maker: Any) 
     assert all(st is JobStatus.SUCCEEDED for st in statuses), (
         f"a concurrent re-sync failed instead of serializing: {statuses}"
     )
+
+
+# --------------------------------------------------------------- SOLUSDEV-241 (I1)
+#
+# The connection model's acceptance, measured the same way: OAuth binds at
+# account scope, so two projects (or two teammates) on one account share ONE
+# integration cache keyed on that account.
+
+
+async def _seed_shared(
+    maker: async_sessionmaker[AsyncSession],
+    store: InMemorySecretStore,
+    *,
+    documents: list[str] | None = None,
+    account: str = "acct-1",
+) -> uuid.UUID:
+    """One project + one CONNECTED source on `account`, its credentials in the
+    SHARED store — the shape two projects bound to one connection have."""
+    async with maker() as db:
+        team = Team(name="T")
+        db.add(team)
+        await db.flush()
+        project = Project(team_id=team.id, name="P")
+        db.add(project)
+        await db.flush()
+        secret_ref = f"connection/{uuid.uuid4()}/onshape"
+        source = Source(
+            project_id=project.id,
+            team_id=team.id,
+            type=SourceType.ONSHAPE,
+            name="onshape",
+            status=SourceStatus.CONNECTED,
+            config={"documents": documents if documents is not None else [DID]},
+            secret_ref=secret_ref,
+            account_external_id=account,
+        )
+        db.add(source)
+        await db.commit()
+        source_id = source.id
+    await store.put(secret_ref, "tok")
+    await store.put(refresh_secret_ref(secret_ref), "rt")
+    return source_id
+
+
+class _Clock:
+    """The cache's clock, so a test can move time instead of sleeping."""
+
+    def __init__(self) -> None:
+        self.now = 1_700_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _shared_cache() -> tuple[IntegrationCache, _Clock]:
+    clock = _Clock()
+    return IntegrationCache(InMemoryCacheStore(clock=clock), clock=clock), clock
+
+
+def _cached_registry(cache: IntegrationCache) -> ConnectorRegistry:
+    """The production shape: a SCOPED factory that hands the connector the
+    cache, the account it is charged to, and the trust window its purpose
+    earns (a human: an hour; the sweep: five minutes; a webhook: never)."""
+    windows = {"user": 3600.0, "scheduled": 300.0, "webhook": None}
+    registry = ConnectorRegistry()
+    registry.register(
+        "onshape",
+        lambda: OnshapeConnector(client_id="cid", client_secret="sec", poll_interval=0.0),
+    )
+    registry.register_scoped(
+        "onshape",
+        lambda ctx: OnshapeConnector(
+            client_id="cid",
+            client_secret="sec",
+            poll_interval=0.0,
+            cache=cache,
+            account_ref=ctx.account_ref,
+            signal_max_age_seconds=windows[ctx.purpose],
+        ),
+    )
+    return registry
+
+
+async def _sync_cached(
+    maker: async_sessionmaker[AsyncSession],
+    registry: ConnectorRegistry,
+    source_id: uuid.UUID,
+    store: Any,
+    *,
+    trigger: SyncTrigger = SyncTrigger.MANUAL,
+) -> None:
+    await execute_source_sync(
+        source_id=source_id,
+        sessionmaker=maker,
+        registry=registry,
+        secret_store=store,
+        trigger=trigger,
+        # A manual trigger carries a job in production; the purpose is derived
+        # from the trigger, so none is needed here.
+        store=None,
+    )
+
+
+async def _live_entities(maker: async_sessionmaker[AsyncSession], source_id: uuid.UUID) -> int:
+    async with maker() as db:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(GraphEntity)
+            .where(GraphEntity.source_id == source_id, GraphEntity.deleted_at.is_(None))
+        )
+    return int(count or 0)
+
+
+async def test_two_projects_sharing_one_document_pay_for_it_once(onshape: Any, maker: Any) -> None:
+    """I1 acceptance — two projects share one Onshape document on one account:
+    the second project's FIRST sync costs ZERO calls and lands the same graph."""
+    fake, meter = onshape
+    store = InMemorySecretStore()
+    cache = IntegrationCache(InMemoryCacheStore())
+    registry = _cached_registry(cache)
+    source_a = await _seed_shared(maker, store)
+    source_b = await _seed_shared(maker, store)
+
+    await _sync_cached(maker, registry, source_a, store)
+    assert meter.counted > 0, "the first project must actually fetch"
+    landed = await _live_entities(maker, source_a)
+    assert landed > 0
+
+    meter.reset()
+    await _sync_cached(maker, registry, source_b, store)
+
+    assert meter.counted == 0, (
+        f"the second project paid {meter.counted} calls for a cached document: "
+        f"{dict(meter.by_route)}"
+    )
+    assert await _live_entities(maker, source_b) == landed, "project B got a different graph"
+
+
+async def test_a_teammates_repeat_sync_costs_zero_calls(onshape: Any, maker: Any) -> None:
+    """I1 acceptance — a repeat read costs zero: the signal recorded by the
+    first sync answers the freshness gate, so not even the probe is paid."""
+    fake, meter = onshape
+    store = InMemorySecretStore()
+    registry = _cached_registry(IntegrationCache(InMemoryCacheStore()))
+    source_id = await _seed_shared(maker, store)
+
+    await _sync_cached(maker, registry, source_id, store)
+    meter.reset()
+    await _sync_cached(maker, registry, source_id, store)
+
+    assert meter.counted == 0, f"a repeat sync cost {meter.counted}: {dict(meter.by_route)}"
+
+
+async def test_the_sweep_moves_the_signal_and_a_users_sync_then_sees_it(
+    onshape: Any, maker: Any
+) -> None:
+    """Sync ONLY when the change signal moves — and the SWEEP is what moves it.
+
+    A human's sync inside the window trusts the recorded signal (zero calls,
+    even though upstream changed); the scheduled probe asks Onshape, sees the
+    new microversion, and re-exports; the next human sync is current again for
+    free.
+    """
+    fake, meter = onshape
+    store = InMemorySecretStore()
+    cache, clock = _shared_cache()
+    registry = _cached_registry(cache)
+    source_id = await _seed_shared(maker, store)
+    await _sync_cached(maker, registry, source_id, store)
+
+    fake.bump_microversion()
+    meter.reset()
+    await _sync_cached(maker, registry, source_id, store)
+    assert meter.counted == 0, "a human's sync inside the window must not spend"
+
+    # The sweep reuses a signal only a few minutes old (two projects on one
+    # document then cost one probe per sweep); past that it asks.
+    clock.now += 600
+    meter.reset()
+    await _sync_cached(maker, registry, source_id, store, trigger=SyncTrigger.SCHEDULED)
+    assert meter.by_route["microversion"] >= 1, "the sweep must ask the provider"
+    assert meter.by_route["translations_start"] >= 1, "the sweep saw the change and re-exported"
+
+    meter.reset()
+    await _sync_cached(maker, registry, source_id, store)
+    assert meter.counted == 0, "after the sweep the human's sync is current for free"
+
+
+async def test_a_webhook_sync_never_trusts_the_recorded_signal(onshape: Any, maker: Any) -> None:
+    """A doorbell means 'it changed'. Whatever was recorded a moment ago, the
+    webhook-triggered sync probes — and re-exports when the version moved."""
+    fake, meter = onshape
+    store = InMemorySecretStore()
+    registry = _cached_registry(IntegrationCache(InMemoryCacheStore()))
+    source_id = await _seed_shared(maker, store)
+    await _sync_cached(maker, registry, source_id, store)
+
+    fake.bump_microversion()
+    meter.reset()
+    await _sync_cached(maker, registry, source_id, store, trigger=SyncTrigger.WEBHOOK)
+    assert meter.by_route["microversion"] >= 1
+    assert meter.by_route["translations_start"] >= 1, "a real change was skipped"
+
+
+async def test_the_shared_cache_never_crosses_accounts(onshape: Any, maker: Any) -> None:
+    """Two accounts tracking the same document id each pay for their own
+    fetch: a cache hit is only ever served to the credentials that earned it."""
+    fake, meter = onshape
+    store = InMemorySecretStore()
+    registry = _cached_registry(IntegrationCache(InMemoryCacheStore()))
+    source_a = await _seed_shared(maker, store, account="acct-1")
+    source_b = await _seed_shared(maker, store, account="acct-2")
+
+    await _sync_cached(maker, registry, source_a, store)
+    meter.reset()
+    await _sync_cached(maker, registry, source_b, store)
+    assert meter.by_route["translations_start"] >= 1, "account 2 was served account 1's export"
+
+
+async def test_listing_the_accounts_documents_costs_zero_calls_after_the_first(
+    onshape: Any, maker: Any
+) -> None:
+    """I1 acceptance — listing is served from the cache after the first walk;
+    only an explicit refresh walks the pages again."""
+    fake, meter = onshape
+    store = InMemorySecretStore()
+    # About the cache, not the refresh cooldown (a unit test covers that).
+    cache = IntegrationCache(InMemoryCacheStore(), listing_refresh_cooldown_seconds=0)
+    registry = _cached_registry(cache)
+    source_id = await _seed_shared(maker, store)
+    async with maker() as db:
+        source = await db.get(Source, source_id)
+        assert source is not None and source.secret_ref
+        secret_ref = source.secret_ref
+    connector = registry.create_scoped(
+        "onshape", ConnectorContext(account_ref="acct-1", purpose="user")
+    )
+
+    async def listing(refresh: bool = False) -> Any:
+        return await list_documents(
+            cache,
+            connector=connector,
+            secret_store=store,
+            secret_ref=secret_ref,
+            provider="onshape",
+            account_ref="acct-1",
+            refresh=refresh,
+        )
+
+    first = await listing()
+    assert first.cached is False and len(first.value) > 0
+    assert meter.by_route["document_list"] >= 1, "the first listing walks the pages"
+
+    meter.reset()
+    second = await listing()
+    assert second.cached is True and second.value == first.value
+    assert meter.counted == 0, f"a repeat listing cost {meter.counted}"
+
+    meter.reset()
+    third = await listing(refresh=True)
+    assert third.cached is False
+    assert meter.by_route["document_list"] >= 1, "an explicit refresh asks again"

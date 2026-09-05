@@ -11,6 +11,7 @@ import { useRef } from 'react'
 import {
   startOAuth,
   exchangeOAuth,
+  createSource,
   listSelectable,
   updateSource,
   triggerSync,
@@ -25,6 +26,7 @@ import {
 } from '../../lib/api/resources'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { accessChoiceStep } from './accessChoiceStep'
+import { runAccountConnect, type AccountConnectResult } from './accountConnect'
 import { addOnStep } from './addOnStep'
 import { fieldsConfigureStep } from './fieldsConfigureStep'
 import { selectionConfigureStep } from './selectionConfigureStep'
@@ -40,6 +42,7 @@ import { useOnboardingStore, type ConnectionState } from './onboardingStore'
 const oauthApi: OAuthConnectApi = {
   startOAuth,
   exchangeOAuth,
+  createSource,
   updateSource,
   triggerSync,
   getSyncs,
@@ -58,6 +61,9 @@ export interface OAuthConnectStartOptions {
   /** A vendor-hosted add-on this connector carries, enabled as part of the
    *  connect rather than on a button afterwards (SOLUSDEV-168). */
   hosted?: IntegrationHosted | null
+  /** SOLUSDEV-241: an account the user already linked on Home. Present, the
+   *  project is bound to it and no browser handshake runs. */
+  linkedConnection?: { id: string; login: string | null } | null
 }
 
 export interface UseOAuthConnect {
@@ -68,6 +74,12 @@ export interface UseOAuthConnect {
     provider: string,
     options?: OAuthConnectStartOptions
   ) => Promise<OAuthConnectResult>
+  /** SOLUSDEV-241: bind a provider ACCOUNT with no project (Home). Only the
+   *  grant choice and the handshake run; what to track is chosen per project. */
+  startAccount: (
+    provider: string,
+    options?: OAuthConnectStartOptions
+  ) => Promise<AccountConnectResult>
   /** Resolve the in-flow picker. */
   select: (items: SelectableItem[] | null) => void
   /** Resolve the in-flow connector-details form. */
@@ -180,6 +192,33 @@ export function useOAuthConnect(): UseOAuthConnect {
       { api: oauthApi, bridge, onProgress, configure, chooseAccess, addOn },
       projectId,
       provider,
+      {
+        redirectUri,
+        displayName: options.displayName,
+        ...(options.linkedConnection ? { linkedConnection: options.linkedConnection } : {})
+      }
+    )
+  }
+
+  const startAccount = async (
+    provider: string,
+    options: OAuthConnectStartOptions = {}
+  ): Promise<AccountConnectResult> => {
+    const attempt: Attempt = { cancelled: false }
+    currentAttempt.current = attempt
+    const bridge = getDesktopOAuthBridge()
+    const redirectUri = bridge ? await bridge.getConnectorRedirectUrl() : ''
+    const onProgress = (state: ConnectionState): void => {
+      if (!attempt.cancelled) setConnection(provider, state)
+    }
+    const chooseAccess = accessChoiceStep({
+      accessModes: options.accessModes,
+      onProgress,
+      onChoose: () => awaitChoice(accessChoice, attempt, currentAttempt)
+    })
+    return runAccountConnect(
+      { api: { startOAuth, exchangeOAuth }, bridge, onProgress, chooseAccess },
+      provider,
       { redirectUri, displayName: options.displayName }
     )
   }
@@ -201,6 +240,7 @@ export function useOAuthConnect(): UseOAuthConnect {
 
   return {
     start,
+    startAccount,
     select: (items) => selectChoice.current?.(items),
     submitConfig: (values) => configSubmit.current?.(values),
     chooseAccess: (mode) => accessChoice.current?.(mode),

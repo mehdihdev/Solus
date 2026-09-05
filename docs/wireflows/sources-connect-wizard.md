@@ -156,6 +156,27 @@ implied**, and it renders **verbatim** — backend-authored consent copy is neve
 by the renderer. Per ADR-016 only the mode-aware LEAD-IN changes (`noticeLead`): Expert mode
 gets to be terse, it does not get to hide what a connection turns on.
 
+## A linked account skips the sign-in (SOLUSDEV-241 / I1)
+
+OAuth binds at ACCOUNT scope. Home (H2) carries a **Connected accounts** card
+(`features/workspace/ConnectedAccountsCard.tsx`): every OAuth connector from the live
+registry with a *Connect* action that opens THIS wizard in account mode (`projectId: null`)
+— rail `[Choose access →] Sign in`, done copy "Connected as <login>" — plus each linked
+account with the projects that use it and a confirmed *Revoke* that names those projects
+("Disconnects Onshape in Rover and Arm").
+
+On the Sources page, when the user already has a CONNECTED account for the tile's provider,
+the wizard **reuses it**: the rail drops `access` and `authorize` and reads
+`Pick <plural noun> → Build graph`, the idle action area says *Connect <name>* over
+"Using your linked account · <login>", and `begin()` goes `POST /projects/{p}/sources
+{type, connection_id}` (no browser handshake) → the unchanged configure + index steps. The
+engine stage for that bind is `link`. A user with no linked account sees exactly the old
+rail; the wizard never asks twice for a grant it already holds.
+
+Teammates never see another member's accounts (they are owner-only); they use the shared
+grant through the project's source exactly as before, and the picker they open is served
+from the same account-keyed cache.
+
 ## Guards (honest, never faked)
 
 - No linked project → tile errors "Solus API unreachable — retry once you are
@@ -165,6 +186,8 @@ gets to be terse, it does not get to hide what a connection turns on.
 ## Files
 
 `connectSteps.ts` (+test) · `integrationLogos.ts` (+test) ·
+`accountConnect.ts` (+test, account-mode engine) · `useAccountConnections.ts` (+test) ·
+`ConnectedAccountsCard.tsx` (+test, Home) ·
 `ConnectWizardModal.tsx` (+test) · `useConnectWizard.ts` (+test) ·
 `ConnectCatalog.tsx` (+test) · `ConnectTile.tsx` (launcher, +test) ·
 engine stage emissions in `oauthConnect.ts` / `edaConnect.ts` /

@@ -204,9 +204,14 @@ async def test_oauth_exchange_connects_source(
         headers=alice_headers,
     )
     assert exchange.status_code == 200, exchange.text
-    source = exchange.json()["data"]
+    # SOLUSDEV-241: the exchange lands on an ACCOUNT connection; the project's
+    # source rides beside it when the handshake started from a project.
+    payload = exchange.json()["data"]
+    source = payload["source"]
     assert source["status"] == "connected"
     assert source["account_login"] == "octocat"
+    assert source["connection_id"] == payload["connection"]["id"]
+    assert payload["connection"]["status"] == "connected"
 
 
 async def test_oauth_exchange_rejects_foreign_state(

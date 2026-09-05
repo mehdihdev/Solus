@@ -14,6 +14,9 @@
 // finished work is never silently discarded.
 import { useRef, useState } from 'react'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
+import type { Connection } from '../../lib/api/resources'
+import { linkedAccountFor } from '../workspace/useAccountConnections'
+import type { WizardScope } from './connectSteps'
 import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
 import type { CatalogEntry } from './integrationCatalog'
 import { noBridgeError } from './oauthConnect'
@@ -35,11 +38,19 @@ export interface UseConnectWizardOptions {
   projectId: string | null
   /** Called once a connect settles successfully (refresh lists, recount, …). */
   onConnected?: () => void
+  /** SOLUSDEV-241: `account` binds a provider account with no project (Home).
+   *  Default `project`. */
+  scope?: WizardScope
+  /** SOLUSDEV-241: the user's linked accounts. A CONNECTED one for the
+   *  entry's provider is reused — no second sign-in. */
+  linkedConnections?: readonly Connection[]
 }
 
 export interface UseConnectWizard {
   /** The entry the wizard is open for, or null when it is closed. */
   active: CatalogEntry | null
+  /** The linked account the active entry will reuse, if any (SOLUSDEV-241). */
+  linkedAccount: Connection | null
   open: (entry: CatalogEntry) => void
   /** Start (or retry) the flow for the active entry — OAuth path. */
   begin: () => Promise<void>
@@ -54,8 +65,10 @@ export interface UseConnectWizard {
 }
 
 export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWizard {
-  const { projectId, onConnected } = options
+  const { projectId, onConnected, scope = 'project', linkedConnections = [] } = options
   const [active, setActive] = useState<CatalogEntry | null>(null)
+  const linkedAccount =
+    active && scope === 'project' ? linkedAccountFor(linkedConnections, active.id) : null
   const oauth = useOAuthConnect()
   const eda = useEdaConnect()
   /** The latest attempt per entry id. */
@@ -86,7 +99,7 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
 
   const guard = (entry: CatalogEntry): boolean => {
     const { failConnect } = useOnboardingStore.getState()
-    if (!projectId) {
+    if (scope === 'project' && !projectId) {
       failConnect(entry.id, NOT_LINKED_ERROR)
       return false
     }
@@ -101,7 +114,16 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     const entry = active
     if (!entry || !guard(entry)) return
     const attempt = beginAttempt(entry)
-    const result = await oauth.start(projectId!, entry.id, connectOptions(entry))
+    if (scope === 'account') {
+      const bound = await oauth.startAccount(entry.id, connectOptions(entry))
+      settle(entry, attempt, bound)
+      return
+    }
+    const linked = linkedAccountFor(linkedConnections, entry.id)
+    const result = await oauth.start(projectId!, entry.id, {
+      ...connectOptions(entry),
+      linkedConnection: linked ? { id: linked.id, login: linked.account_login } : null
+    })
     settle(entry, attempt, result)
   }
 
@@ -146,6 +168,7 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
 
   return {
     active,
+    linkedAccount,
     open: setActive,
     begin,
     pickFile,

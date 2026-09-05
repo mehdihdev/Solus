@@ -23,6 +23,7 @@ from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.billing.credits import grant_trial_credits
 from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.bridge.registry import BridgeSessionRegistry
+from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.config import Settings
@@ -70,6 +71,11 @@ def get_settings(request: Request) -> Settings:
 def get_connector_registry(request: Request) -> "ConnectorRegistry":
     registry: ConnectorRegistry = request.app.state.connector_registry
     return registry
+
+
+def get_integration_cache(request: Request) -> "IntegrationCache":
+    cache: IntegrationCache = request.app.state.integration_cache
+    return cache
 
 
 def get_secret_store(request: Request) -> "SecretStore":
@@ -121,6 +127,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 BridgeSessionsDep = Annotated["BridgeSessionRegistry", Depends(get_bridge_sessions)]
 RegistryDep = Annotated["ConnectorRegistry", Depends(get_connector_registry)]
 SecretStoreDep = Annotated["SecretStore", Depends(get_secret_store)]
+IntegrationCacheDep = Annotated["IntegrationCache", Depends(get_integration_cache)]
 SupabaseAdminDep = Annotated["SupabaseAdmin", Depends(get_supabase_admin)]
 JwksClientDep = Annotated[PyJWKClient | None, Depends(get_jwks_client)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
