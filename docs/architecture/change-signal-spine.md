@@ -158,7 +158,7 @@ a caller that resolved that account's credentials (`services/connections.account
 
 | Entry | Key | Moves when |
 | --- | --- | --- |
-| **listing** — the picker's documents/repositories | `…:listing` | an explicit `refresh=true`, or a webhook doorbell for any source on the account. **Never a timer** — the TTL is storage hygiene. |
+| **listing** — the picker's documents/repositories | `…:listing` | an explicit `refresh=true` (at most one walk per cooldown window per ACCOUNT, however many members share the grant; each refresh is a logged data event), or a webhook doorbell for any source on the account. **Never a timer** — the TTL is storage hygiene. |
 | **signal** — a document's microversion + the workspace fetched to read it | `…:signal:{document}` | every probe that actually asked. Readers say how old a recorded one may be: a human's sync trusts it for the sweep interval (the sweep is what moves it); the sweep trusts one a few minutes old (two projects on one document → one probe per sweep); a **webhook never trusts it** — a doorbell means "it changed". |
 | **payload** — the element list, a STEP export, part metadata | `…:{kind}:{document}:{microversion}[:{element}]` | never invalidated: a change makes the key unreachable. Payloads above 8 MiB are used but not stored. |
 
@@ -169,7 +169,10 @@ because every read it makes is keyed by a version someone already paid for. Meas
 `tests/test_onshape_call_budget.py` (the I1 block), never claimed.
 
 Windows are settings (`SOLUS_INTEGRATION_SIGNAL_TTL_SECONDS`, `…_SIGNAL_SWEEP_REUSE_SECONDS`,
-`…_LISTING_TTL_SECONDS`, `…_PAYLOAD_TTL_SECONDS`, `…_CACHE_MAX_PAYLOAD_BYTES`). The honest bound:
+`…_LISTING_TTL_SECONDS`, `…_LISTING_REFRESH_COOLDOWN_SECONDS`, `…_PAYLOAD_TTL_SECONDS`,
+`…_CACHE_MAX_PAYLOAD_BYTES`). Revoking a connection or deleting the account drops every entry
+for that account (a per-account key index): derived copies of a customer's CAD do not outlive the
+grant. An unidentified account (no provider account id) caches nothing. The honest bound:
 without a registered webhook a teammate's "Sync now" can be up to one sweep interval stale by
 design; the UI shows "Synced … ago", not "live".
 

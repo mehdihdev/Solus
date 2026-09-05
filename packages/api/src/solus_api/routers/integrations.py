@@ -33,6 +33,7 @@ from solus_api.core.responses import envelope
 from solus_api.deps import (
     CurrentUser,
     RegistryDep,
+    RequireVerified,
     SecretStoreDep,
     SessionDep,
     SettingsDep,
@@ -51,6 +52,7 @@ from solus_api.models import (
 )
 from solus_api.schemas import OAuthExchange, OAuthStart, serialize_connection, serialize_source
 from solus_api.services.connections import (
+    StaleHandshakeError,
     bind_source,
     complete_connection,
     connection_projects,
@@ -156,8 +158,12 @@ async def oauth_start(
     session: SessionDep,
     settings: SettingsDep,
     registry: RegistryDep,
+    _verified: RequireVerified,
 ) -> dict[str, Any]:
     source_type = _provider_type(provider)
+    # The plan's integration cap applies to an ACCOUNT-only start too — a grant
+    # is an integration whether or not a project is attached yet.
+    await check_can_add_integration(session, user)
     try:
         connector = registry.create(provider)
     except UnknownConnectorError as exc:
@@ -241,7 +247,6 @@ async def _project_source_for_start(
         raise APIError(404, "not_found", "Project not found")
     if membership.role == Role.VIEWER:
         raise APIError(403, "forbidden", "Requires member role on this team")
-    await check_can_add_integration(session, user)
 
     config: dict[str, Any] = {"repo": body.repo} if body.repo else {}
     if body.access:
@@ -350,15 +355,22 @@ async def _complete_oauth(
     await session.delete(record)
     await session.flush()
     access = connection.config.get("access") if isinstance(connection.config, dict) else None
-    connection = await complete_connection(
-        session,
-        secret_store,
-        connection,
-        provider=provider,
-        creds=creds,
-        account=account,
-        access=access if isinstance(access, str) else None,
-    )
+    try:
+        connection = await complete_connection(
+            session,
+            secret_store,
+            connection,
+            provider=provider,
+            creds=creds,
+            account=account,
+            access=access if isinstance(access, str) else None,
+        )
+    except StaleHandshakeError:
+        # A second state for a row that already completed: refused, so a
+        # CONNECTED account can never be re-pointed at whichever account the
+        # browser authorized second (security review C1).
+        await session.commit()
+        return connection, source, "stale_handshake"
     if source is not None:
         bind_source(source, connection)
         if not source.name or source.name == provider:

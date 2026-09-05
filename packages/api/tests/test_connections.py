@@ -389,8 +389,10 @@ async def test_deleting_the_account_sweeps_connection_secrets(
 
 
 async def test_listing_documents_costs_zero_calls_after_the_first(
-    client: AsyncClient, alice_headers: dict[str, str]
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
 ) -> None:
+    # This test is about the cache, not the refresh cooldown (covered below).
+    app.state.integration_cache.listing_refresh_cooldown_seconds = 0
     connection = (await _connect_account(client, alice_headers))["connection"]
     path = f"/api/v1/users/me/connections/{connection['id']}/documents"
 
@@ -510,3 +512,110 @@ async def test_document_routes_are_project_scoped(
 async def test_alice_identity_is_the_provisioned_user(alice_headers: dict[str, str]) -> None:
     """Guard the fixture assumption the tenancy tests above rely on."""
     assert ALICE["email"].startswith("alice")
+
+
+# ----------------------------------------------------------- security review (I1)
+
+
+async def test_a_stale_handshake_cannot_repoint_a_connected_account(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """Two starts inside the reuse window share one pending row. Once the
+    second completes, the first (still valid) state must be REFUSED — never
+    allowed to overwrite the account the bound sources now mirror."""
+    project_a = await _project(client, alice_headers, name="Rover")
+    project_b = await _project(client, alice_headers, name="Arm")
+    first = (
+        await client.post(
+            "/api/v1/integrations/onshape/oauth/start",
+            json={"project_id": project_a},
+            headers=alice_headers,
+        )
+    ).json()["data"]
+    second = (
+        await client.post(
+            "/api/v1/integrations/onshape/oauth/start",
+            json={"project_id": project_b},
+            headers=alice_headers,
+        )
+    ).json()["data"]
+    assert first["connection_id"] == second["connection_id"]
+
+    done = await client.post(
+        "/api/v1/integrations/onshape/oauth/exchange",
+        json={"state": second["state"], "code": "good"},
+        headers=alice_headers,
+    )
+    assert done.status_code == 200, done.text
+
+    stale = await client.post(
+        "/api/v1/integrations/onshape/oauth/exchange",
+        json={"state": first["state"], "code": "good"},
+        headers=alice_headers,
+    )
+    assert stale.status_code == 400
+    assert stale.json()["error"]["code"] == "stale_handshake"
+    # The account is untouched and still bound exactly as the winner left it.
+    listed = await _connections(client, alice_headers)
+    assert [c["status"] for c in listed] == ["connected"]
+    assert [p["name"] for p in listed[0]["projects"]] == ["Arm"]
+
+
+async def test_deleting_the_account_disconnects_sources_in_surviving_teams(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """Bob owns the team; Alice links her account and attaches Bob's project to
+    it, then deletes her account. Bob's project must show the source
+    DISCONNECTED — not CONNECTED on a ref whose secret is gone."""
+    await me(client, bob_headers)
+    team = await create_team(client, bob_headers)
+    project = await create_project(client, bob_headers, team["id"])
+    await me(client, alice_headers)
+    await add_member(client, bob_headers, alice_headers, ALICE, team["id"])
+    connection = (await _connect_account(client, alice_headers))["connection"]
+    source = await _bind(client, alice_headers, project["id"], connection["id"])
+
+    gone = await client.delete("/api/v1/users/me", headers=alice_headers)
+    assert gone.status_code == 204, gone.text
+
+    detail = await client.get(
+        f"/api/v1/projects/{project['id']}/sources/{source['id']}", headers=bob_headers
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["status"] == "disconnected"
+    assert detail.json()["data"]["connection_id"] is None
+
+
+async def test_listing_refresh_is_cooled_down_per_account(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """A refresh button held down — by anyone on the grant — buys one provider
+    walk per cooldown window, not one per click."""
+    connection = (await _connect_account(client, alice_headers))["connection"]
+    path = f"/api/v1/users/me/connections/{connection['id']}/documents"
+    await client.get(path, headers=alice_headers)
+    assert _CountingAccountLevel.listings == 1
+    for _ in range(5):
+        resp = await client.get(path, params={"refresh": "true"}, headers=alice_headers)
+        assert resp.status_code == 200
+        assert resp.json()["meta"]["cached"] is True
+    assert _CountingAccountLevel.listings == 1, "refresh inside the cooldown reached the provider"
+
+
+async def test_access_cannot_be_patched_onto_a_source(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """The grant is the connection's; `source.config.access` is a mirror, never
+    a member-editable setting."""
+    connection = (await _connect_account(client, alice_headers))["connection"]
+    project_id = await _project(client, alice_headers)
+    source = await _bind(client, alice_headers, project_id, connection["id"])
+    resp = await client.patch(
+        f"/api/v1/projects/{project_id}/sources/{source['id']}",
+        json={"config": {"access": "write", "documents": ["dA"]}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    config = resp.json()["data"]["config"]
+    assert config.get("documents") == ["dA"]
+    assert config.get("access") != "write"

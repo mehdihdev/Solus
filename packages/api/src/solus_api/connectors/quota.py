@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import quote
 
 logger = logging.getLogger("solus.connectors.quota")
 
@@ -76,11 +77,16 @@ class QuotaState:
 
 
 def _year_key(provider: str, account_ref: str, year: int) -> str:
-    return f"{_KEY_PREFIX}:{provider}:acct:{account_ref}:{year}"
+    return f"{_KEY_PREFIX}:{provider}:acct:{_segment(account_ref)}:{year}"
 
 
 def _latch_key(provider: str, account_ref: str) -> str:
-    return f"{_KEY_PREFIX}:{provider}:acct:{account_ref}:402"
+    return f"{_KEY_PREFIX}:{provider}:acct:{_segment(account_ref)}:402"
+
+
+def _segment(value: str) -> str:
+    """A provider-supplied id cannot contain the separator and shift a key."""
+    return quote(value, safe="")
 
 
 class CallMeter:

@@ -172,6 +172,7 @@ def build_integration_cache(settings: Settings, store: CacheStore) -> Integratio
         signal_ttl_seconds=settings.integration_signal_ttl_seconds,
         payload_ttl_seconds=settings.integration_payload_ttl_seconds,
         max_payload_bytes=settings.integration_cache_max_payload_bytes,
+        listing_refresh_cooldown_seconds=settings.integration_listing_refresh_cooldown_seconds,
     )
 
 
@@ -190,12 +191,15 @@ def _signal_window(settings: Settings, purpose: str) -> float | None:
     return None
 
 
-def _cache_account_ref(ctx: ConnectorContext) -> str:
-    # `execute_source_sync` and the routes pass `services.connections.account_ref_for`,
-    # which never yields an empty ref; this fallback exists for a construction
-    # site that passes none at all, and scopes it to the project — the same rule
-    # the meter uses — so an unidentified account never shares entries.
-    return ctx.account_ref or f"source-scope:{ctx.project_id}"
+def _cache_account_ref(ctx: ConnectorContext) -> str | None:
+    """The identity the connector caches under — or None, in which case the
+    connector caches NOTHING. `execute_source_sync` and the routes pass
+    `services.connections.account_ref_for`, which never yields an empty ref; a
+    construction site that passes none must not be handed a project-shaped
+    fallback (that is the METER's rule, where a shared ledger is the failure
+    mode), because "source-scope:None" would be one bucket for every
+    unidentified account across every tenant."""
+    return ctx.account_ref or None
 
 
 def build_registry(

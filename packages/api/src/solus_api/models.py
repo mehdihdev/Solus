@@ -867,9 +867,23 @@ class AccountConnection(UuidPkMixin, TimestampMixin, Base):
     store (`connection/{id}/{provider}`, refresh token under `/refresh`, hosted
     add-on grants under `/hosted/{server}`). `config` carries the non-secret
     grant shape — the access mode the user chose (`read`/`write`).
+
+    The ref is derivable from the row id, which the API returns. That is only
+    safe while NO endpoint accepts a secret ref as input; keep it that way
+    (a ref-accepting route would turn every connection id into a lookup key).
     """
 
     __tablename__ = "account_connections"
+    __table_args__ = (
+        Index(
+            "uq_account_connections_live_identity",
+            "user_id",
+            "provider",
+            "account_external_id",
+            unique=True,
+            postgresql_where=text("status <> 'revoked' AND account_external_id IS NOT NULL"),
+        ),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True

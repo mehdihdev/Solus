@@ -201,6 +201,9 @@ class Settings(BaseSettings):
     integration_listing_ttl_seconds: int = 7 * 24 * 3600
     integration_payload_ttl_seconds: int = 30 * 24 * 3600
     integration_cache_max_payload_bytes: int = 8 * 1024 * 1024
+    #: An explicit listing refresh inside this window is served from the cache:
+    #: one provider walk per window per ACCOUNT, however many members share it.
+    integration_listing_refresh_cooldown_seconds: int = 60
 
     # Where the OAuth callback sends the user back to (the desktop app deep
     # link or a local page). Defaults to the renderer dev origin. Renamed from

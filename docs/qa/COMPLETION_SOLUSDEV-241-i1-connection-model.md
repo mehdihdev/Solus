@@ -113,7 +113,38 @@ linked-account sync end to end; the QA file's §2–§8 cover it.
 - code-reviewer: **APPROVE**, no CRITICAL/HIGH/MEDIUM; three LOW notes, all fixed (one identity
   fallback via `account_ref_for`; one cache read in `_locate`; connector-declared
   `validate_selection` instead of a provider check in the router).
-- security-reviewer: see the addendum below.
+- security-reviewer: initial verdict **FAIL** (C1, H1, H2, M1–M5, L1–L7). Fixed in the follow-up
+  commit, each with a test where the finding was behavioural:
+  - **C1** a second valid OAuth state could re-point an already-CONNECTED account: only a PENDING
+    row may complete (`stale_handshake` → 400), bound sources are re-mirrored from the landing
+    row, and a partial unique index guards one live grant per (user, provider, account)
+    (`test_a_stale_handshake_cannot_repoint_a_connected_account`).
+  - **H1** account deletion left sources in surviving teams CONNECTED on a dangling ref: `delete_me`
+    now revokes each connection (`test_deleting_the_account_disconnects_sources_in_surviving_teams`).
+  - **H2** `refresh=true` had no cost bound: a per-ACCOUNT refresh cooldown (60 s default,
+    `SOLUS_INTEGRATION_LISTING_REFRESH_COOLDOWN_SECONDS`) inside the cache's single-flight, and every
+    refresh is logged as an `integration.listing_refreshed` data event
+    (`test_listing_refresh_is_cooled_down_per_account`). Not done: a dedicated rate bucket —
+    `path_limits` is exact-path only and the routes carry ids; the cooldown bounds spend per
+    account regardless of how many principals share it.
+  - **M1** the registry's fallback defeated the connector's "no account, no cache" guard: the
+    scoped factory now passes `None`, so an unidentified account caches nothing.
+  - **M2** revoke / account deletion left cached CAD payloads for up to 30 days: the cache keeps a
+    per-account key index and `invalidate_account` drops it on revoke and deletion.
+  - **M4** `source.config.access` was member-patchable: `PATCH` strips `access`, and the SOL write
+    gate reads the CONNECTION's grant when the source is bound
+    (`test_access_cannot_be_patched_onto_a_source`).
+  - **M5** account-only `oauth/start` skipped the verified-user and plan-limit checks: both now
+    apply to every start.
+  - **L1–L7**: connector-declared `validate_selection`; oversize text refused before encoding;
+    `connection_projects` ignores soft-deleted projects; log lines carry a key kind + hash, never
+    an account or document id; the cache has its own `solus:icache` prefix; the ref-derivability
+    constraint is recorded on the model; quota ledger keys quote the account ref.
+  - **M3 (open — a design decision):** removing a member leaves the team's sources on that member's
+    account-wide grant (same as today for source-owned tokens; the lever is the owner's Home
+    revoke, all-or-nothing). Proposed follow-up: disconnect a departing member's bound sources on
+    removal, and a per-project unbind (`DELETE /users/me/connections/{id}/projects/{p}`). Needs a
+    human call on policy; not built.
 
 ## Deviations, flags, and values to set
 

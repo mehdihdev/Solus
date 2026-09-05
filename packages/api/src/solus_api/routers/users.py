@@ -19,6 +19,7 @@ from solus_api.core.responses import envelope
 from solus_api.deps import (
     TRIAL_DAYS,
     CurrentUser,
+    IntegrationCacheDep,
     RequireVerified,
     SecretStoreDep,
     SessionDep,
@@ -28,6 +29,7 @@ from solus_api.deps import (
 from solus_api.models import (
     AccountConnection,
     Activity,
+    ConnectionStatus,
     CreditBalance,
     CreditLedger,
     CreditTxnType,
@@ -64,7 +66,7 @@ from solus_api.schemas import (
     serialize_team_summary,
     serialize_user,
 )
-from solus_api.services.connections import delete_connection_secrets, is_connection_owned
+from solus_api.services.connections import is_connection_owned, revoke_connection
 from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_team
 
@@ -213,6 +215,7 @@ async def delete_me(
     session: SessionDep,
     secret_store: SecretStoreDep,
     supabase_admin: SupabaseAdminDep,
+    cache: IntegrationCacheDep,
     _verified: RequireVerified,
 ) -> Response:
     blockers = await _sole_owner_blockers(session, user)
@@ -247,12 +250,19 @@ async def delete_me(
             )
     await _forfeit_credits(session, user)
     # SOLUSDEV-241: the account-scoped grants are the USER's, not any team's, so
-    # no team cascade reaches them. Delete every credential family they own
-    # before the row goes — a live grant must not outlive the account.
+    # no team cascade reaches them. REVOKE each one before the row goes: the
+    # secrets are deleted, the account's cache is dropped, and every source
+    # bound to it — including sources in teams that survive this user — is
+    # disconnected rather than left CONNECTED on a dangling ref.
     for connection in (
-        await session.scalars(select(AccountConnection).where(AccountConnection.user_id == user.id))
+        await session.scalars(
+            select(AccountConnection).where(
+                AccountConnection.user_id == user.id,
+                AccountConnection.status != ConnectionStatus.REVOKED,
+            )
+        )
     ).all():
-        await delete_connection_secrets(secret_store, connection)
+        await revoke_connection(session, secret_store, connection, cache)
     # Tombstone the identity so a still-valid token cannot re-provision (durable delete).
     session.add(DeletedAccount(supabase_user_id=user.supabase_user_id))
     await session.execute(delete(Notification).where(Notification.user_id == user.id))

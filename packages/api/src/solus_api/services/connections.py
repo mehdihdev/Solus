@@ -50,6 +50,14 @@ from solus_api.models import (
     utcnow,
 )
 
+
+class StaleHandshakeError(Exception):
+    """A completion arrived for a connection that already completed. The state
+    that carried it was minted before another state for the same pending row
+    finished, and honouring it would re-point a CONNECTED account at whatever
+    account the browser happened to authorize second."""
+
+
 CONNECTION_REF_PREFIX = "connection/"
 #: A PENDING connection older than this is a handshake nobody finished; it is
 #: neither listed nor reused, and the next start mints a fresh one.
@@ -129,6 +137,7 @@ async def connection_projects(
             .where(
                 Source.connection_id.in_(connection_ids),
                 Source.status != SourceStatus.DISCONNECTED,
+                Project.deleted_at.is_(None),
             )
             .order_by(Source.created_at, Source.id)
         )
@@ -162,6 +171,26 @@ async def pending_connection(
     ).first()
     if existing is not None and ensure_utc(existing.created_at) >= cutoff:
         return existing
+    # A failed attempt that never proved an identity is a retry target, not a
+    # second row on Home.
+    failed = (
+        await session.scalars(
+            select(AccountConnection)
+            .where(
+                AccountConnection.user_id == user.id,
+                AccountConnection.provider == provider,
+                AccountConnection.status == ConnectionStatus.ERROR,
+                AccountConnection.account_external_id.is_(None),
+            )
+            .order_by(AccountConnection.created_at.desc())
+            .limit(1)
+        )
+    ).first()
+    if failed is not None:
+        failed.status = ConnectionStatus.PENDING
+        failed.last_error = None
+        await session.flush()
+        return failed
     connection = AccountConnection(
         user_id=user.id, provider=provider, status=ConnectionStatus.PENDING
     )
@@ -186,7 +215,17 @@ async def complete_connection(
     row: the sources bound to the first one mirror ITS ref, so the rotated token
     is written under that ref and the pending row is discarded. Any other
     outcome would strand every project on a token the provider just replaced.
+
+    Two invariants hold the identity still (security review C1):
+
+    * only a PENDING row may complete — a state whose row already completed is
+      a superseded handshake and is refused, never allowed to overwrite the
+      account a bound source already mirrors;
+    * every source bound to the landing row is re-mirrored from it, so a
+      mirror can never diverge from its connection by construction.
     """
+    if pending.status is not ConnectionStatus.PENDING:
+        raise StaleHandshakeError(str(pending.id))
     existing = (
         await session.scalars(
             select(AccountConnection).where(
@@ -213,7 +252,19 @@ async def complete_connection(
     if access:
         connection.config = {**connection.config, "access": access}
     await session.flush()
+    await remirror_sources(session, connection)
     return connection
+
+
+async def remirror_sources(session: AsyncSession, connection: AccountConnection) -> None:
+    """Every source bound to `connection` carries exactly its ref and identity."""
+    bound = (
+        await session.scalars(select(Source).where(Source.connection_id == connection.id))
+    ).all()
+    for source in bound:
+        bind_source(source, connection)
+    if bound:
+        await session.flush()
 
 
 def record_connection_failure(connection: AccountConnection, exc: ConnectorError) -> None:
@@ -285,11 +336,18 @@ async def delete_connection_secrets(
 
 
 async def revoke_connection(
-    session: AsyncSession, secret_store: SecretStore, connection: AccountConnection
+    session: AsyncSession,
+    secret_store: SecretStore,
+    connection: AccountConnection,
+    cache: IntegrationCache | None = None,
 ) -> int:
-    """Revoke the grant: delete its secrets, mark it REVOKED, and disconnect
-    every source bound to it in every project. Returns how many were cut off."""
+    """Revoke the grant: delete its secrets, mark it REVOKED, disconnect every
+    source bound to it in every project, and drop the account's cached
+    listings/exports (derived copies of the customer's CAD must not outlive the
+    grant). Returns how many sources were cut off."""
     await delete_connection_secrets(secret_store, connection)
+    if cache is not None:
+        await cache.invalidate_account(connection.provider.value, account_ref_for(connection))
     bound = (
         await session.scalars(select(Source).where(Source.connection_id == connection.id))
     ).all()
@@ -348,6 +406,8 @@ async def list_documents(
         ttl_seconds=cache.listing_ttl_seconds,
         fetch=fetch,
         refresh=refresh,
+        # The refresh cooldown: one walk per window per ACCOUNT, whoever asks.
+        min_age_seconds=cache.listing_refresh_cooldown_seconds,
     )
 
 

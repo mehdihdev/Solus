@@ -302,7 +302,11 @@ async def update_source(
         source.name = data["name"]
     if data.get("config") is not None:
         merged = {**source.config}
-        merged.update({k: v for k, v in data["config"].items() if not k.startswith("_")})
+        # `access` is a GRANT fact, mirrored from the connection at bind time —
+        # never a setting a member may patch in (security review M4).
+        merged.update(
+            {k: v for k, v in data["config"].items() if not k.startswith("_") and k != "access"}
+        )
         source.config = merged
     await session.commit()
     await session.refresh(source)

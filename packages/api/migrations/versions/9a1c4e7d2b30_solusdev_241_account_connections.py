@@ -53,6 +53,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_account_connections_user_id", "account_connections", ["user_id"])
+    # One LIVE grant per (user, provider, account): the dedupe in
+    # `complete_connection` assumes it, and two concurrent completions for one
+    # account must not leave two live rows of which a revoke kills only one.
+    op.create_index(
+        "uq_account_connections_live_identity",
+        "account_connections",
+        ["user_id", "provider", "account_external_id"],
+        unique=True,
+        postgresql_where=sa.text("status <> 'revoked' AND account_external_id IS NOT NULL"),
+    )
 
     op.add_column(
         "sources",
@@ -97,5 +107,8 @@ def downgrade() -> None:
     op.alter_column("oauth_states", "source_id", existing_type=sa.Uuid(), nullable=False)
     op.drop_index("ix_sources_connection_id", table_name="sources")
     op.drop_column("sources", "connection_id")
+    op.drop_index(
+        "uq_account_connections_live_identity", table_name="account_connections", if_exists=True
+    )
     op.drop_index("ix_account_connections_user_id", table_name="account_connections")
     op.drop_table("account_connections")

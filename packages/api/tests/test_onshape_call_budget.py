@@ -526,7 +526,8 @@ async def test_listing_the_accounts_documents_costs_zero_calls_after_the_first(
     only an explicit refresh walks the pages again."""
     fake, meter = onshape
     store = InMemorySecretStore()
-    cache = IntegrationCache(InMemoryCacheStore())
+    # About the cache, not the refresh cooldown (a unit test covers that).
+    cache = IntegrationCache(InMemoryCacheStore(), listing_refresh_cooldown_seconds=0)
     registry = _cached_registry(cache)
     source_id = await _seed_shared(maker, store)
     async with maker() as db:

@@ -67,6 +67,7 @@ async def revoke(
     user: CurrentUser,
     session: SessionDep,
     secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
     _verified: RequireVerified,
 ) -> dict[str, Any]:
     """Revoke the grant. Every source bound to it, in EVERY project, is
@@ -74,7 +75,7 @@ async def revoke(
     app's confirmation says before the user clicks."""
     connection = await owned_connection(session, user, connection_id)
     affected = await connection_projects(session, [connection.id])
-    disconnected = await revoke_connection(session, secret_store, connection)
+    disconnected = await revoke_connection(session, secret_store, connection, cache)
     for project in affected.get(connection.id, []):
         record_activity(
             session,
