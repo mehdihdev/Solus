@@ -7,8 +7,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   adoptConnections,
   listConnections,
+  listLegacyConnections,
   revokeConnection,
-  type Connection
+  type Connection,
+  type LegacyConnection
 } from '../../lib/api/resources'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
@@ -17,6 +19,8 @@ export type AccountConnectionsStatus = 'loading' | 'ready' | 'offline'
 export interface AccountConnectionsData {
   status: AccountConnectionsStatus
   connections: Connection[]
+  /** Project-scoped grants not yet at account scope (SOLUSDEV-242 / H2). */
+  legacy: LegacyConnection[]
   refresh: () => Promise<void>
   /** Revoke a grant. Resolves false on failure so the caller can say so. */
   revoke: (connectionId: string) => Promise<boolean>
@@ -34,6 +38,7 @@ export function useAccountConnections(): AccountConnectionsData {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const [loaded, setLoaded] = useState<AccountConnectionsStatus>('loading')
   const [connections, setConnections] = useState<Connection[]>([])
+  const [legacy, setLegacy] = useState<LegacyConnection[]>([])
   // Derived, not set: with fetching disabled there is nothing to load, and
   // the surfaces read `offline` without an effect having to write it.
   const status: AccountConnectionsStatus = fetchEnabled ? loaded : 'offline'
@@ -41,16 +46,21 @@ export function useAccountConnections(): AccountConnectionsData {
   const load = useCallback(async (): Promise<void> => {
     if (!fetchEnabled) return
     try {
-      // SOLUSDEV-242 (H2): a project-scoped grant from before I1 becomes the
-      // account it always was, without a sign-in — before the list is read,
-      // so Home never shows a stale "Not connected" for a working account. A
-      // failed adoption is not a failed listing.
+      // SOLUSDEV-242 (H2): legacy project-scoped grants for an account the
+      // user has already proved bind to it BEFORE the list is read, so Home
+      // never shows "Not connected" for a working account. A failed claim is
+      // not a failed listing; the unclaimed ones list separately.
       await adoptConnections().catch(() => undefined)
-      const listed = await listConnections()
+      const [listed, unclaimed] = await Promise.all([
+        listConnections(),
+        listLegacyConnections().catch(() => [] as LegacyConnection[])
+      ])
       setConnections(listed)
+      setLegacy(unclaimed)
       setLoaded('ready')
     } catch {
       setConnections([])
+      setLegacy([])
       setLoaded('offline')
     }
   }, [fetchEnabled])
@@ -79,5 +89,5 @@ export function useAccountConnections(): AccountConnectionsData {
     [load]
   )
 
-  return { status, connections, refresh: load, revoke }
+  return { status, connections, legacy, refresh: load, revoke }
 }

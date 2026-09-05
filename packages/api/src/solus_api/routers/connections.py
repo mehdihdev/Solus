@@ -17,6 +17,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
+from sqlalchemy import select
 
 from solus_api.connectors.registry import ConnectorContext, UnknownConnectorError
 from solus_api.core.errors import APIError
@@ -29,18 +30,19 @@ from solus_api.deps import (
     SecretStoreDep,
     SessionDep,
 )
-from solus_api.models import ConnectionStatus
-from solus_api.schemas import serialize_connection
+from solus_api.models import ConnectionStatus, Project
+from solus_api.schemas import serialize_connection, serialize_legacy_connection
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
-    adopt_legacy_sources,
+    claim_legacy_sources,
     connection_projects,
-    delete_retired_secrets,
+    legacy_sources,
     list_documents,
     list_live_connections,
     owned_connection,
     revoke_connection,
+    sweep_retired_secrets,
 )
 from solus_api.services.events import emit_event
 
@@ -54,55 +56,79 @@ async def list_connections(user: CurrentUser, session: SessionDep) -> dict[str, 
     return envelope([serialize_connection(c, projects.get(c.id)) for c in connections])
 
 
+@router.get("/legacy")
+async def list_legacy(
+    user: CurrentUser, session: SessionDep, registry: RegistryDep
+) -> dict[str, Any]:
+    """The caller's project-scoped grants from before account-level connections
+    that are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as
+    "sign in once to move it"; the sign-in proves the account and claims them.
+    Nothing here is a usable grant — no documents, no revoke."""
+    rows = await legacy_sources(session, registry, user)
+    names: dict[uuid.UUID, str] = {}
+    if rows:
+        found = await session.execute(
+            select(Project.id, Project.name).where(Project.id.in_({r.project_id for r in rows}))
+        )
+        names = {project_id: name for project_id, name in found.all()}
+    groups: dict[tuple[str, str], list[Any]] = {}
+    for source in rows:
+        key = (source.type.value, source.account_external_id or f"source:{source.id}")
+        groups.setdefault(key, []).append(source)
+    return envelope(
+        [
+            serialize_legacy_connection(provider, sources[0].account_login, sources, names)
+            for (provider, _), sources in groups.items()
+        ]
+    )
+
+
 @router.post("/adopt")
 async def adopt(
     user: CurrentUser,
     session: SessionDep,
     secret_store: SecretStoreDep,
     registry: RegistryDep,
+    _verified: RequireVerified,
 ) -> dict[str, Any]:
-    """Move the caller's project-scoped OAuth grants to account scope
-    (SOLUSDEV-242 / HOME H2) — no sign-in, no widened scope. Idempotent; Home
-    calls it before listing. The project-owned token copies are deleted only
-    after the commit, so a failure leaves every project exactly as it was."""
-    adopted, retired = await adopt_legacy_sources(session, secret_store, registry, user)
-    for item in adopted:
-        record_activity(
-            session,
-            team_id=item["team_id"],
-            activity_type="connection.adopted",
-            actor_id=user.id,
-            project_id=item["project_id"],
-            domain="integrations",
-            payload={"provider": item["provider"]},
-        )
+    """Claim the caller's legacy project-scoped grants to account scope
+    (SOLUSDEV-242 / H2) — only where the caller has PROVED the account with a
+    connection of their own (no sign-in for those, no copied secret, nothing
+    widened). Idempotent; Home calls it before listing. A grant whose account the
+    caller has not proved stays project-owned and is listed by `/legacy`."""
+    adopted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for connection in await list_live_connections(session, user):
+        claimed, rejected = await claim_legacy_sources(session, registry, user, connection)
+        skipped.extend(rejected)
+        for source in claimed:
+            record_activity(
+                session,
+                team_id=source.team_id,
+                activity_type="connection.adopted",
+                actor_id=user.id,
+                project_id=source.project_id,
+                domain="integrations",
+                payload={"provider": connection.provider.value},
+            )
+            adopted.append(
+                {
+                    "connection_id": connection.id,
+                    "provider": connection.provider.value,
+                    "source_id": source.id,
+                    "project_id": source.project_id,
+                }
+            )
     if adopted:
         emit_event(
             session,
             user=user,
             event_type="connection.adopted",
-            payload={
-                "sources": len(adopted),
-                "connections": len({str(a["connection_id"]) for a in adopted}),
-                "needs_reauth": sum(1 for a in adopted if a["needs_reauth"]),
-            },
+            payload={"sources": len(adopted), "skipped": len(skipped)},
         )
     await session.commit()
-    await delete_retired_secrets(secret_store, retired)
-    return envelope(
-        {
-            "adopted": [
-                {
-                    "connection_id": item["connection_id"],
-                    "provider": item["provider"],
-                    "source_id": item["source_id"],
-                    "project_id": item["project_id"],
-                    "needs_reauth": item["needs_reauth"],
-                }
-                for item in adopted
-            ]
-        }
-    )
+    await sweep_retired_secrets(session, secret_store, user)
+    return envelope({"adopted": adopted, "skipped": skipped})
 
 
 @router.get("/{connection_id}")

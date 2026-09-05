@@ -14,32 +14,38 @@ Workspace with no second OAuth" is I1's model; it is re-verified here by
 
 ## What H2 built
 
-**Migration without re-auth** (`services/connections.py::adopt_legacy_sources`,
-`POST /users/me/connections/adopt`): every project-scoped OAuth grant the caller authorized
-(a `source/…` ref with no connection row — pre-I1 wizard connects and token connects) becomes an
-account connection: the access, refresh and hosted add-on secrets are copied under the
-connection's ref, the source mirrors the connection (`bind_source`, so every credential path is
-unchanged and the project keeps syncing), an account already connected on Home is reused rather
-than duplicated, and the project-owned copies are deleted only after the commit. Idempotent;
-owner-only; committed-export and already-bound sources are ignored; a source whose token is gone
-is skipped, never given an empty grant. Home's hook calls it before listing.
+**Migration by proof, not by hint** (`services/connections.py`, `routers/connections.py`,
+`routers/integrations.py`). A source connected before I1 holds its own token under a `source/…`
+ref. Its row's `created_by` is NOT proof of whose token it holds (the pre-I1 "switch account" path
+let a teammate complete a handshake on someone else's row — security review C1), so nothing is
+moved blind. Instead:
 
-**No scope widened, re-consent said plainly.** The connection records the access mode the source
-recorded. When the source never recorded one, the connection carries `needs_reauth =
-access_unknown`; the API row exposes `origin` (`home` | `migrated`) and `needs_reauth`
-(`access_unknown` | `token_error` | null). Home states the scope on every row (Read only / Read
-and edit / Access level not recorded), marks a migrated grant, and offers **Re-authorize** with
-the copy "existing syncs keep working until then". Re-authorize runs the same account-mode
-wizard as Connect; the finished sign-in lands on the same row (I1's dedupe by account), which now
-clears the flag and records the chosen access — the old token survives until the new one
-succeeded. Connector scope sets are untouched (Onshape read = `OAuth2Read`, write = `OAuth2Read
-OAuth2Write`; asserted in a test).
+- `GET /users/me/connections/legacy` lists the caller's own legacy grants (creator hint, live
+  non-viewer membership, live project) so Home can say "sign in once to move it".
+- A finished Home handshake PROVES a provider account; the server then claims every legacy source
+  for that account the user can act on (`claim_legacy_sources`, also run by
+  `POST /users/me/connections/adopt` for accounts already connected on Home, before the list).
+  The source MIRRORS the grant — nothing is copied, no secret exists without a row that owns it —
+  and keeps syncing. Concurrent claims serialise (`FOR UPDATE`); the retired project-owned refs
+  are remembered on the source and deleted after the commit, a failed delete retried, never leaked.
+- **Nothing widened.** A source whose recorded access mode differs from the grant's is left
+  project-owned and reported (`skipped: access_mismatch`); a source with no recorded mode takes the
+  grant the user just chose. Connector scope sets are untouched and asserted.
+- Membership is enforced on every read and write (removed members, viewers and deleted projects
+  see and move nothing); the adopt route requires a verified user.
+
+**Home card.** Every catalog tool is listed (the user reported the card hid most tools): OAuth
+tools link an account; committed-export and local-companion tools say where they connect
+instead. Linked rows state their scope (Read only / Read and edit / Access level not recorded);
+legacy rows read "Connected in a project, not yet on your account" with a note naming the projects
+and stating plainly that they keep syncing until moved, plus **Sign in to move** (the account-mode
+wizard); a row whose last sign-in failed offers **Re-authorize** with the provider's message.
+Re-authorize/Sign in land on the same row (I1's dedupe), so the old token is replaced only once the
+new one succeeded.
 
 **Allowlist pinned.** A parametrised test asserts `127.0.0.1` and `localhost` redirects at any
-port are accepted (the existing test covers the rejection).
-
-**Activity/events.** `connection.adopted` per project (humanised on the desktop, with
-`connection.revoked` which had no text before); a `connection.adopted` data event.
+port are accepted. **Activity/events**: `connection.adopted` per project (humanised on the
+desktop, with `connection.revoked`).
 
 ## Governing docs
 
@@ -51,49 +57,54 @@ route and the two new row fields), `docs/wireflows/home.md` (new "Connected acco
 
 ## Verification
 
-- API: `tests/test_connection_adoption.py` (12 new), `tests/test_integrations.py` (+3 parametrised
-  allowlist cases); `test_connections.py`, `test_integrations.py`, `test_sources*.py` green after
-  the change to `complete_connection`. ruff + mypy clean.
-- Desktop: full suite green (see the H1/H2 commit messages for counts); typecheck and eslint clean
-  on touched files. New/updated: `ConnectedAccountsCard.test.tsx` (+3), `useAccountConnections.test.ts`
-  (+2), `connectedAccounts` helpers, `resources.test.ts`, `activityText.test.ts`.
-- **Run for real** against a private API instance (port 8001, the dev Postgres, the dev
-  `SOLUS_SECRETS_KEY` local store) and a scratch renderer: a pre-I1 Onshape source was seeded for
-  the QA user in Rover with an encrypted token and refresh token and no connection row. Opening
-  Home adopted it (one `POST …/adopt`, one list): the row read "Onshape · ada-legacy · Used in
-  Rover · Access level not recorded · moved from a project" with the re-consent note, Re-authorize
-  and Revoke, and no Connect; Re-authorize opened the account-mode wizard (rail Choose access →
-  Sign in); dismissing it left the row and the grant intact; Rover's Sources page still listed the
-  source connected. Database and secret-store checks: the source's `connection_id` and `secret_ref`
-  point at the new connection, the token and refresh token moved intact, both old refs are gone,
-  a second adopt returned nothing, and Arm bound to the connection by id with **zero**
-  `oauth/start` calls in the API log; Home then read "Used in Rover and Arm". Screenshots in the
-  session scratchpad (not committed).
+- API: `tests/test_connection_adoption.py` (17 cases: listing without moving; the Home sign-in
+  claim; claim on load for an already-connected account; two projects one connection; a second
+  project with no OAuth; an errored source healed by the proved grant; **C1** creator ≠ token
+  owner never claimed by the creator, claimed by the owner; **C2** removed member, viewer and
+  deleted project claim nothing; **H1** access mismatch reported, never widened; concurrent
+  adopts claim once with no 500; a failed secret delete is retried not leaked; an errored
+  connection never claims; 401/403), `tests/test_integrations.py` (+3 allowlist cases).
+  `test_connections.py`, `test_integrations.py`, `test_sources.py`, `test_onshape_call_budget.py`
+  green. ruff + mypy clean.
+- Desktop: full suite green; typecheck and eslint clean on touched files. `ConnectedAccountsCard.test.tsx`
+  (legacy row, side-by-side, all catalog tools, scope, Re-authorize), `useAccountConnections.test.ts`
+  (adopt-before-list, legacy list, failure isolation), copy helpers, `resources.test.ts`, `activityText.test.ts`.
+- **Run for real** (private API on 8001 against the dev Postgres and the dev local secret store;
+  scratch renderer; Electron harness): see "Live run" below.
 
 ## Decisions under delegated judgment
 
-1. Adoption is an explicit idempotent POST the Home hook calls before listing — not a side effect
-   of GET and not an Alembic step, because the secrets live outside the database.
-2. Ownership follows `Source.created_by`: the person who authorized owns the account; teammates keep
-   using the source through the mirror (I1's model). A source with no `created_by` is never adopted.
-3. Token-connected (PAT) sources are adopted too — the token is the user's account credential.
-4. "Re-consent is unavoidable" is signalled only where Solus genuinely cannot say what the grant
-   allows (no recorded access mode). Granted scopes are not persisted at exchange time today, so
-   a scope drift between an old token and the connector's current scope set cannot be detected;
-   recording `granted_scope` from the exchange response is a small follow-up, not done here.
-5. When a legacy source recorded a DIFFERENT access mode than an account already connected on
-   Home, the account's current grant wins and the source mirrors it (one live grant per account is
-   an I1 invariant). The narrowing is visible on the row; no token is mixed.
+1. **No silent migration.** The ticket allows "where re-consent is unavoidable, say so plainly";
+   proving whose account a legacy token belongs to IS unavoidable without a handshake, so the one
+   sign-in per account is the migration, and Home says exactly that. A user who has already linked
+   the account on Home gets the move with no sign-in.
+2. Ownership follows the proved provider account (`account_external_id` vouched by the provider
+   at handshake), never `created_by`; `created_by` only decides what Home SHOWS as legacy.
+3. Token-connected (PAT) legacy sources are claimable the same way (a PAT for the same account).
+4. Access mismatch is reported, not resolved: changing a project's grant belongs on that project's
+   Sources page (W2 follow-up), where the concrete change can be confirmed.
+5. Granted scopes are still not persisted at exchange time, so drift between an old token and the
+   connector's current scope set cannot be detected; recording `granted_scope` is a small follow-up.
 
 ## Deviations / open concerns
 
-- A real Onshape OAuth completion in a browser, and therefore a real Re-authorize landing and a
-  real document pick, were not run (no headless way; same limit as I1). The unit tests drive both
-  through the real routes with a fake connector; the QA plan covers them.
-- A legacy source with no `account_external_id` adopts into a connection without one; a later
-  re-auth of that account cannot be matched by identity and would create a second row (the unique
-  index only guards non-null ids). Revoke cleans it up; noted in the QA edge cases.
-- The `sources` row seeded for the live run remains in the dev database (project Rover of team
-  "Strider QA", user h1-qa@solus.dev), adopted, alongside the H1 seed data.
-- No `.env` values are required. Secret backend, Onshape/GitHub OAuth client settings are as
-  documented by I1.
+- A real Onshape OAuth completion in a browser — and therefore a real "Sign in to move" landing —
+  was not run (no headless way; same limit as I1). The claim-on-completion path is driven through
+  the real routes with a fake connector in the tests; the live run proves the claim-on-load path
+  with a connection row written the way a real handshake writes it.
+- The user reported the card "doesn't show all the available options": fixed on this branch by
+  listing every catalog tool (previously only OAuth tools rendered).
+- Dev database state left behind: the QA user's Rover Onshape source (claimed to a seeded
+  connection) and the H1 seed data (team "Strider QA"); safe to leave or delete.
+- No `.env` values are required.
+
+## Phase 4 reviews
+
+The first H2 commit (`004b703`) received a **FAIL** from the security review: adoption trusted
+`Source.created_by` as proof of the token's owner (C1, cross-user grant theft) and mutated team
+rows with no membership check (C2), plus H1 (silent widening on the "Home account wins" rule),
+M1–M6 and the code review's ERROR-masking, dead-branch, concurrency and rollback findings. The
+follow-up commit replaces the design as described above; every finding is either fixed with a
+test (C1, C2, H1, M1 — no copies at all, M2, M3, M4, M6, ERROR/SYNCING, concurrency) or moot
+(dead `existing`-without-ref branch, hosted-ref copy — nothing is copied). The reviews were re-run
+on the follow-up; see the final section of this report.

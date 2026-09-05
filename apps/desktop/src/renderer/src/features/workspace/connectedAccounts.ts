@@ -1,7 +1,7 @@
 // Copy helpers for Home's connected-accounts card (SOLUSDEV-241). Pure, so the
 // card file exports only components (fast refresh) and the words are testable
 // without rendering.
-import type { Connection } from '../../lib/api/resources'
+import type { Connection, LegacyConnection } from '../../lib/api/resources'
 
 /** "Used in Rover and Arm" / "Used in 3 projects" / "Not used by any project yet". */
 export function usageText(connection: Connection): string {
@@ -18,15 +18,25 @@ export function scopeText(connection: Connection): string {
   return 'Access level not recorded'
 }
 
+/** A project-scoped grant not yet at account scope: where it is used, and
+ *  that one sign-in moves it. Plain about what keeps working meanwhile. */
+export function legacyText(legacy: LegacyConnection): string {
+  const names = legacy.projects.map((p) => p.name).filter(Boolean)
+  const where =
+    names.length === 0
+      ? 'a project'
+      : names.length <= 2
+        ? names.join(' and ')
+        : `${names.length} projects`
+  return (
+    `Connected in ${where} before account-level connections. Sign in once to move it to ` +
+    `your account — ${names.length === 1 ? names[0] : 'those projects'} keep${names.length === 1 ? 's' : ''} syncing until then.`
+  )
+}
+
 /** Why the row asks for a fresh sign-in, or null. Never forces it: the
  *  existing token keeps working until the new consent succeeds. */
 export function reauthText(connection: Connection): string | null {
-  if (connection.needs_reauth === 'access_unknown') {
-    return (
-      'Linked from a project before account-level connections; what Solus may do with it ' +
-      'was never recorded. Re-authorize to confirm — existing syncs keep working until then.'
-    )
-  }
   if (connection.needs_reauth === 'token_error' || connection.status === 'error') {
     return connection.last_error?.message
       ? `${connection.last_error.message} Re-authorize to reconnect.`

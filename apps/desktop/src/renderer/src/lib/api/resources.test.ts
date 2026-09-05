@@ -15,6 +15,7 @@ import {
   exchangeOAuth,
   adoptConnections,
   listConnections,
+  listLegacyConnections,
   revokeConnection,
   listConnectionDocuments,
   addSourceDocument,
@@ -273,6 +274,9 @@ describe('account connections (SOLUSDEV-241)', () => {
     expect(await adoptConnections(adopt.client)).toEqual([])
     expect(adopt.calls[0].path).toBe('/users/me/connections/adopt')
     expect(adopt.calls[0].options).toMatchObject({ method: 'POST' })
+    const legacy = stubClient([])
+    await listLegacyConnections(legacy.client)
+    expect(legacy.calls[0].path).toBe('/users/me/connections/legacy')
     expect(list.calls[0].path).toBe('/users/me/connections')
 
     const revoke = stubClient({ id: 'c1', disconnected_sources: 2 })

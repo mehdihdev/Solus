@@ -10,12 +10,14 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     ...actual,
     adoptConnections: vi.fn(),
     listConnections: vi.fn(),
+    listLegacyConnections: vi.fn(),
     revokeConnection: vi.fn()
   }
 })
 
 const mockedList = vi.mocked(resources.listConnections)
 const mockedAdopt = vi.mocked(resources.adoptConnections)
+const mockedLegacy = vi.mocked(resources.listLegacyConnections)
 const mockedRevoke = vi.mocked(resources.revokeConnection)
 
 const ONSHAPE: resources.Connection = {
@@ -24,7 +26,6 @@ const ONSHAPE: resources.Connection = {
   status: 'connected',
   account_login: 'ada@example.com',
   access: 'read',
-  origin: 'home',
   needs_reauth: null,
   last_error: null,
   projects: [{ project_id: 'p1', name: 'Rover' }],
@@ -38,6 +39,8 @@ beforeEach(() => {
   mockedRevoke.mockReset()
   mockedAdopt.mockReset()
   mockedAdopt.mockResolvedValue([])
+  mockedLegacy.mockReset()
+  mockedLegacy.mockResolvedValue([])
 })
 
 describe('useAccountConnections — adoption first (SOLUSDEV-242 / H2)', () => {
@@ -54,6 +57,20 @@ describe('useAccountConnections — adoption first (SOLUSDEV-242 / H2)', () => {
     const { result } = renderHook(() => useAccountConnections())
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(order).toEqual(['adopt', 'list'])
+    expect(result.current.connections).toEqual([ONSHAPE])
+  })
+
+  it('lists the unclaimed legacy grants alongside the accounts, and a failed legacy read is empty', async () => {
+    mockedList.mockResolvedValue([ONSHAPE])
+    mockedLegacy.mockResolvedValue([
+      { provider: 'github', account_login: 'octo', projects: [], source_ids: ['s1'] }
+    ])
+    const { result } = renderHook(() => useAccountConnections())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.legacy.map((l) => l.provider)).toEqual(['github'])
+    mockedLegacy.mockRejectedValue(new Error('500'))
+    await act(() => result.current.refresh())
+    expect(result.current.legacy).toEqual([])
     expect(result.current.connections).toEqual([ONSHAPE])
   })
 

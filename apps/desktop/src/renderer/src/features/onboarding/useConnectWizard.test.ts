@@ -48,7 +48,6 @@ const LINKED_GITHUB: resources.Connection = {
   status: 'connected',
   account_login: 'octocat',
   access: null,
-  origin: 'home',
   needs_reauth: null,
   last_error: null,
   projects: [],

@@ -289,16 +289,28 @@ def serialize_connection(
         "status": connection.status.value,
         "account_login": connection.account_login,
         "access": config.get("access"),
-        # SOLUSDEV-242 (H2): where the grant came from, and whether Home should
-        # ask for a fresh sign-in — a migrated grant whose access mode was never
-        # recorded, or a grant whose last handshake failed.
-        "origin": config.get("origin", "home"),
-        "needs_reauth": config.get("needs_reauth")
-        or ("token_error" if connection.status is ConnectionStatus.ERROR else None),
+        # SOLUSDEV-242 (H2): Home offers Re-authorize when the last handshake failed.
+        "needs_reauth": "token_error" if connection.status is ConnectionStatus.ERROR else None,
         "last_error": connection.last_error,
         "projects": [{"project_id": p["project_id"], "name": p["name"]} for p in (projects or [])],
         "created_at": connection.created_at,
         "updated_at": connection.updated_at,
+    }
+
+
+def serialize_legacy_connection(
+    provider: str, account_login: str | None, sources: list[Source], names: dict[Any, str]
+) -> dict[str, Any]:
+    """A project-scoped grant not yet claimed to account scope (SOLUSDEV-242 / H2):
+    what Home lists as "sign in once to move it". Identity and where it is used;
+    never a secret, never a ref."""
+    return {
+        "provider": provider,
+        "account_login": account_login,
+        "projects": [
+            {"project_id": s.project_id, "name": names.get(s.project_id, "")} for s in sources
+        ],
+        "source_ids": [s.id for s in sources],
     }
 
 

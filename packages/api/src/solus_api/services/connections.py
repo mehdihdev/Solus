@@ -43,7 +43,9 @@ from solus_api.core.errors import APIError
 from solus_api.models import (
     AccountConnection,
     ConnectionStatus,
+    Membership,
     Project,
+    Role,
     Source,
     SourceStatus,
     SourceType,
@@ -64,14 +66,10 @@ CONNECTION_REF_PREFIX = "connection/"
 #: A PENDING connection older than this is a handshake nobody finished; it is
 #: neither listed nor reused, and the next start mints a fresh one.
 PENDING_CONNECTION_TTL = timedelta(minutes=10)
-#: `config` keys the H2 surface reads (SOLUSDEV-242): where the grant came
-#: from, and why it still asks for a sign-in. Never secret material.
-ORIGIN_KEY = "origin"
-NEEDS_REAUTH_KEY = "needs_reauth"
-#: The legacy source never recorded which access mode its token was granted
-#: (pre SOLUS-ONS-A2), so Solus cannot say what it may do — only a fresh consent
-#: can. The token keeps working meanwhile; nothing is widened silently.
-REAUTH_ACCESS_UNKNOWN = "access_unknown"
+#: SOLUSDEV-242 (H2): the project-owned secret refs a claimed source retired,
+#: kept on the source until they are actually deleted (after commit) so a
+#: failed delete is retried rather than leaking a live token forever.
+RETIRED_REFS_KEY = "retired_secret_refs"
 
 
 def connection_secret_ref(connection_id: uuid.UUID, provider: str) -> str:
@@ -259,11 +257,8 @@ async def complete_connection(
     connection.account_login = account.login
     connection.account_external_id = account.external_id
     connection.last_error = None
-    # A finished handshake IS the re-consent a migrated grant may have asked
-    # for (SOLUSDEV-242 / H2): the flag clears, and the chosen access is the
-    # recorded one.
-    config = {k: v for k, v in connection.config.items() if k != NEEDS_REAUTH_KEY}
-    connection.config = {**config, "access": access} if access else config
+    if access:
+        connection.config = {**connection.config, "access": access}
     await session.flush()
     await remirror_sources(session, connection)
     return connection
@@ -375,183 +370,172 @@ async def revoke_connection(
     return len(bound)
 
 
-# --------------------------------------------------------------- adoption (H2)
+# --------------------------------------------------------------- claiming legacy grants (H2)
+#
+# A source connected before I1 owns its token under a `source/…` ref and has no
+# connection row. Moving it to ACCOUNT scope needs PROOF of whose account the
+# token is — and `Source.created_by` is not that proof: the pre-I1 "switch
+# account" path let any teammate complete a handshake on a row someone else
+# created, so the row's creator and the token's owner can differ (security
+# review C1). The only proof Solus holds is a handshake the caller completed:
+# a CONNECTED connection whose `account_external_id` the provider vouched for.
+#
+# So a legacy source is CLAIMED, never adopted blind: when the caller's proven
+# account matches the source's account, the source binds to that grant (and
+# keeps syncing on it); otherwise the source keeps its own token, Home lists it
+# as "sign in once to move it", and the claim happens when that sign-in lands.
+# Nothing is copied — the source mirrors an existing grant — so no secret is
+# ever written without a row that owns it, and nothing is widened: a source
+# whose recorded access differs from the grant's is left alone and reported.
 
 
-async def _existing_live_connection(
-    session: AsyncSession, user: User, provider: SourceType, external_id: str | None
-) -> AccountConnection | None:
-    if not external_id:
-        return None
+def _live_member_projects() -> Any:
+    """Sources the caller may act on: a LIVE, non-viewer membership in the
+    source's team and a project that still exists (security review C2)."""
     return (
-        await session.scalars(
-            select(AccountConnection).where(
-                AccountConnection.user_id == user.id,
-                AccountConnection.provider == provider,
-                AccountConnection.account_external_id == external_id,
-                AccountConnection.status != ConnectionStatus.REVOKED,
-            )
+        select(Source.id)
+        .join(Project, Project.id == Source.project_id)
+        .join(
+            Membership,
+            (Membership.team_id == Source.team_id) & (Membership.deleted_at.is_(None)),
         )
-    ).first()
+        .where(Project.deleted_at.is_(None), Membership.role != Role.VIEWER)
+    )
 
 
-async def _legacy_oauth_sources(
+def _own_token_sources(user: User) -> Any:
+    """Unbound sources holding their own token for this caller's live projects."""
+    return (
+        select(Source)
+        .where(
+            Source.connection_id.is_(None),
+            Source.secret_ref.is_not(None),
+            Source.status.in_((SourceStatus.CONNECTED, SourceStatus.ERROR, SourceStatus.SYNCING)),
+            Source.id.in_(_live_member_projects().where(Membership.user_id == user.id)),
+        )
+        .order_by(Source.created_at, Source.id)
+    )
+
+
+def _is_oauth_source(registry: ConnectorRegistry, source: Source) -> bool:
+    if is_connection_owned(source.secret_ref):
+        return False
+    try:
+        connector = registry.create(source.type.value)
+    except UnknownConnectorError:
+        return False
+    return isinstance(connector, OAuthConnector)
+
+
+async def legacy_sources(
     session: AsyncSession, registry: ConnectorRegistry, user: User
 ) -> list[Source]:
-    """The caller's own project-scoped OAuth grants: sources that carry their own
-    token (a `source/…` ref, no connection) for a provider whose connector is
-    OAuth. Token-connected (PAT) sources use the same ref shape, so the connector
-    alone cannot tell them apart — but a PAT is a personal token the user chose
-    to give ONE project, and it is adopted too: it is still the user's
-    account-wide credential for that provider."""
+    """What Home lists as "sign in once to move it": the caller's OWN legacy
+    grants by the only hint available (`created_by`), in projects the caller
+    is a live member of. A hint decides what is SHOWN, never what is moved."""
+    rows = (
+        await session.scalars(_own_token_sources(user).where(Source.created_by == user.id))
+    ).all()
+    return [s for s in rows if _is_oauth_source(registry, s)]
+
+
+def _access_of(row: AccountConnection | Source) -> str | None:
+    access = row.config.get("access") if isinstance(row.config, dict) else None
+    return access if isinstance(access, str) and access else None
+
+
+async def claim_legacy_sources(
+    session: AsyncSession,
+    registry: ConnectorRegistry,
+    user: User,
+    connection: AccountConnection,
+) -> tuple[list[Source], list[dict[str, Any]]]:
+    """Bind every legacy source for the account `connection` PROVED to the
+    connection — no sign-in, no copy, nothing widened.
+
+    Returns (claimed, skipped). Skipped carries a reason: `access_mismatch` when
+    both the source and the grant recorded an access mode and they differ —
+    binding would silently widen (or break) that project, so the user must
+    change it deliberately. The retired project-owned refs are recorded on the
+    source; `sweep_retired_secrets` deletes them after the caller's commit.
+    """
+    if (
+        connection.status is not ConnectionStatus.CONNECTED
+        or not connection.secret_ref
+        or not connection.account_external_id
+    ):
+        return [], []
+    candidates = (
+        await session.scalars(
+            _own_token_sources(user)
+            .where(
+                Source.type == connection.provider,
+                Source.account_external_id == connection.account_external_id,
+            )
+            # Serialise concurrent claims (two Home loads) on the same rows.
+            .with_for_update()
+        )
+    ).all()
+    claimed: list[Source] = []
+    skipped: list[dict[str, Any]] = []
+    grant_access = _access_of(connection)
+    for source in candidates:
+        if not _is_oauth_source(registry, source):
+            continue
+        source_access = _access_of(source)
+        if source_access and grant_access and source_access != grant_access:
+            skipped.append(
+                {
+                    "source_id": source.id,
+                    "project_id": source.project_id,
+                    "reason": "access_mismatch",
+                }
+            )
+            continue
+        old_ref = source.secret_ref
+        assert old_ref is not None  # filtered by the query
+        retired = [old_ref, refresh_secret_ref(old_ref), *hosted_refs(old_ref)]
+        bind_source(source, connection)
+        source.config = {**source.config, RETIRED_REFS_KEY: retired}
+        claimed.append(source)
+    if claimed:
+        await session.flush()
+    return claimed, skipped
+
+
+async def sweep_retired_secrets(
+    session: AsyncSession, secret_store: SecretStore, user: User
+) -> int:
+    """AFTER commit: delete the project-owned token copies that claims retired.
+    Durable — the refs live on the source until the delete succeeds, so a
+    failed delete is retried on the next call instead of leaking a live token.
+    Best effort per ref; returns how many were removed."""
     rows = (
         await session.scalars(
             select(Source)
-            .where(
-                Source.created_by == user.id,
-                Source.connection_id.is_(None),
-                Source.secret_ref.is_not(None),
-                Source.status.in_(
-                    (SourceStatus.CONNECTED, SourceStatus.ERROR, SourceStatus.SYNCING)
-                ),
-            )
-            .order_by(Source.created_at, Source.id)
+            .join(AccountConnection, AccountConnection.id == Source.connection_id)
+            .where(AccountConnection.user_id == user.id)
         )
     ).all()
-    adoptable: list[Source] = []
+    removed = 0
     for source in rows:
-        if is_connection_owned(source.secret_ref):
+        refs = source.config.get(RETIRED_REFS_KEY) if isinstance(source.config, dict) else None
+        if not refs:
             continue
-        try:
-            connector = registry.create(source.type.value)
-        except UnknownConnectorError:
-            continue
-        if isinstance(connector, OAuthConnector):
-            adoptable.append(source)
-    return adoptable
-
-
-async def _copy_secret_family(
-    secret_store: SecretStore, old_ref: str, new_ref: str
-) -> list[str] | None:
-    """Copy the access token, its refresh token and any hosted add-on grants
-    from the source's ref family to the connection's. Returns the OLD refs that
-    now hold duplicates (for the caller to delete AFTER commit), or None when
-    the access token itself is missing — nothing to move, nothing to adopt."""
-    try:
-        token = await secret_store.get(old_ref)
-    except SecretNotFoundError:
-        return None
-    await secret_store.put(new_ref, token)
-    moved = [old_ref]
-    try:
-        refresh = await secret_store.get(refresh_secret_ref(old_ref))
-    except SecretNotFoundError:
-        refresh = None
-    if refresh is not None:
-        await secret_store.put(refresh_secret_ref(new_ref), refresh)
-        moved.append(refresh_secret_ref(old_ref))
-    for old_hosted, new_hosted in zip(hosted_refs(old_ref), hosted_refs(new_ref), strict=True):
-        try:
-            grant = await secret_store.get(old_hosted)
-        except SecretNotFoundError:
-            continue
-        await secret_store.put(new_hosted, grant)
-        moved.append(old_hosted)
-    return moved
-
-
-async def adopt_legacy_sources(
-    session: AsyncSession,
-    secret_store: SecretStore,
-    registry: ConnectorRegistry,
-    user: User,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Move the caller's project-scoped OAuth grants to ACCOUNT scope
-    (SOLUSDEV-242 / HOME H2) without a sign-in.
-
-    For each legacy source the caller authorized, the stored token is copied
-    to a connection the source then MIRRORS (`bind_source`), so every credential
-    path is unchanged and the project keeps syncing. An account the caller has
-    since connected on Home is reused — the source lands on that grant rather
-    than minting a second row for the same account. Nothing is widened: the
-    connection records the access mode the source recorded, and when the source
-    never recorded one the connection is flagged `needs_reauth=access_unknown`
-    and Home says so; the token keeps working until the user re-consents.
-
-    Idempotent. Returns what was adopted and the OLD secret refs, which the
-    caller deletes only AFTER its commit — a failed commit must leave the
-    project's own token exactly where it was.
-    """
-    adopted: list[dict[str, Any]] = []
-    old_refs: list[str] = []
-    for source in await _legacy_oauth_sources(session, registry, user):
-        provider = source.type.value
-        assert source.secret_ref is not None  # filtered above
-        existing = await _existing_live_connection(
-            session, user, source.type, source.account_external_id
-        )
-        if existing is not None and existing.secret_ref:
-            connection = existing
-            # The account's CURRENT grant wins; the project's own copy is retired.
-            old_refs.append(source.secret_ref)
-            old_refs.append(refresh_secret_ref(source.secret_ref))
-            old_refs.extend(hosted_refs(source.secret_ref))
-        else:
-            access = source.config.get("access") if isinstance(source.config, dict) else None
-            config: dict[str, Any] = {ORIGIN_KEY: "migrated"}
-            if isinstance(access, str) and access:
-                config["access"] = access
-            else:
-                config[NEEDS_REAUTH_KEY] = REAUTH_ACCESS_UNKNOWN
-            connection = existing or AccountConnection(
-                user_id=user.id,
-                provider=source.type,
-                status=ConnectionStatus.CONNECTED,
-                account_login=source.account_login,
-                account_external_id=source.account_external_id,
-                config=config,
-            )
-            if existing is None:
-                session.add(connection)
-                await session.flush()
-            new_ref = connection_secret_ref(connection.id, provider)
-            moved = await _copy_secret_family(secret_store, source.secret_ref, new_ref)
-            if moved is None:
-                # No token to move: the source is already broken and its own
-                # page says so. Leave it; do not mint an empty grant.
-                if existing is None:
-                    await session.delete(connection)
-                    await session.flush()
+        remaining: list[str] = []
+        for ref in refs:
+            try:
+                await secret_store.delete(ref)
+                removed += 1
+            except SecretNotFoundError:
                 continue
-            connection.secret_ref = new_ref
-            connection.status = ConnectionStatus.CONNECTED
-            connection.last_error = None
-            old_refs.extend(moved)
-        bind_source(source, connection)
-        adopted.append(
-            {
-                "connection_id": connection.id,
-                "provider": provider,
-                "source_id": source.id,
-                "project_id": source.project_id,
-                "team_id": source.team_id,
-                "needs_reauth": connection.config.get(NEEDS_REAUTH_KEY),
-            }
-        )
-    if adopted:
-        await session.flush()
-    return adopted, old_refs
-
-
-async def delete_retired_secrets(secret_store: SecretStore, refs: list[str]) -> None:
-    """Best effort, AFTER commit: drop the project-owned copies adoption retired.
-    A ref that was never there is not an error."""
-    for ref in refs:
-        try:
-            await secret_store.delete(ref)
-        except SecretNotFoundError:
-            continue
+            except Exception:  # noqa: BLE001 - a store outage must not lose the retry list
+                remaining.append(ref)
+        config = {k: v for k, v in source.config.items() if k != RETIRED_REFS_KEY}
+        source.config = {**config, RETIRED_REFS_KEY: remaining} if remaining else config
+    if rows:
+        await session.commit()
+    return removed
 
 
 # --------------------------------------------------------------- the listing

@@ -1,61 +1,84 @@
 """SOLUSDEV-242 (HOME H2) — connections move to account scope.
 
 A source connected before I1 owns its token under a `source/…` ref and never
-appears on Home. Adoption moves it to an ACCOUNT connection without a sign-in:
-the token is copied, the source mirrors the connection, the project keeps
-syncing, and nothing is widened — a grant whose access mode was never recorded
-is flagged for re-consent rather than assumed.
+appears on Home. It is CLAIMED to account scope only where the caller has
+PROVED the account — a connection of their own for the same provider account —
+because `created_by` never proved whose token a legacy row holds (the pre-I1
+"switch account" path let any teammate complete a handshake on someone else's
+row). Until then it is listed as "sign in once to move it" and keeps working
+on its own token. Nothing is copied; nothing is widened.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import Any, ClassVar
 
 import pytest
-from conftest import BOB, FakeGitHub, add_member, create_project, create_team, me
+from conftest import BOB, FakeGitHub, add_member, bearer, create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
+from solus_api.connectors.contracts import AccountInfo, ConnectorError, Credentials
 from solus_api.connectors.onshape import OnshapeConnector
 from solus_api.connectors.registry import ConnectorRegistry
-from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import SecretNotFoundError
-from solus_api.models import AccountConnection, Source
+from solus_api.models import AccountConnection, Membership, Role, Source
 from solus_api.services.connections import connection_secret_ref
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class _AccountLevelOnshape(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
-    """Onshape's shape on the fake: OAuth, account-level selection, and — like
-    every pre-I1 wizard path — token-connectable, which is how a LEGACY
-    project-scoped grant is minted through the real route."""
+class _IdentityOnshape(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
+    """Onshape's shape on the fake, with IDENTITY carried by the token: a token
+    `tok:<who>` or a code `<who>` proves provider account `<who>`. That is what
+    lets a test hold a row created by Alice whose token is Bob's."""
 
     provider = "onshape"
     selection = {"mode": "multi", "config_key": "documents", "label": "document"}
     supports_token_connect = True
+    listings: ClassVar[int] = 0
+
+    async def exchange_code(self, *, code: str, redirect_uri: str) -> Credentials:
+        if code == "bad-code":
+            raise ConnectorError("oauth_exchange_failed", "bad verification code")
+        return Credentials(token=f"oauth:{code}")
+
+    async def validate_credentials(self, creds: Credentials) -> AccountInfo:
+        who = creds.token.split(":", 1)[1] if ":" in creds.token else "42"
+        return AccountInfo(external_id=who, login=f"{who}@onshape", name=who)
+
+    def validate_selection(self, ids: list[str]) -> None:
+        from solus_api.connectors.onshape import tracked_document_ids
+
+        tracked_document_ids({"documents": ids})
+
+    async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
+        type(self).listings += 1
+        return [{"id": "dA", "name": "Rover chassis"}, {"id": "dB", "name": "Gripper"}]
 
 
 @pytest.fixture(autouse=True)
 def _install_fakes(app: FastAPI, fake_registry: ConnectorRegistry) -> None:
-    fake_registry.register("onshape", _AccountLevelOnshape)
+    fake_registry.register("onshape", _IdentityOnshape)
     app.state.connector_registry = fake_registry
 
 
-async def _project(client: AsyncClient, headers: dict[str, str], name: str = "Rover") -> str:
+async def _team_and_project(
+    client: AsyncClient, headers: dict[str, str], name: str = "Rover"
+) -> tuple[str, str]:
     await me(client, headers)
     team = await create_team(client, headers)
     project = await create_project(client, headers, team["id"], name=name)
-    project_id: str = project["id"]
-    return project_id
+    return str(team["id"]), str(project["id"])
 
 
 async def _legacy_source(
-    client: AsyncClient, headers: dict[str, str], project_id: str, token: str = "legacy-token"
+    client: AsyncClient, headers: dict[str, str], project_id: str, who: str = "alice"
 ) -> dict[str, Any]:
-    """A pre-I1 grant: the project holds its own token, no connection row."""
+    """A pre-I1 grant: the project holds its own token for account `who`."""
     resp = await client.post(
         f"/api/v1/projects/{project_id}/sources",
-        json={"type": "onshape", "name": "cad", "token": token},
+        json={"type": "onshape", "name": "cad", "token": f"tok:{who}"},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -64,11 +87,11 @@ async def _legacy_source(
     return data
 
 
-async def _adopt(client: AsyncClient, headers: dict[str, str]) -> list[dict[str, Any]]:
+async def _adopt(client: AsyncClient, headers: dict[str, str]) -> dict[str, Any]:
     resp = await client.post("/api/v1/users/me/connections/adopt", headers=headers)
     assert resp.status_code == 200, resp.text
-    adopted: list[dict[str, Any]] = resp.json()["data"]["adopted"]
-    return adopted
+    data: dict[str, Any] = resp.json()["data"]
+    return data
 
 
 async def _connections(client: AsyncClient, headers: dict[str, str]) -> list[dict[str, Any]]:
@@ -78,28 +101,37 @@ async def _connections(client: AsyncClient, headers: dict[str, str]) -> list[dic
     return data
 
 
-async def _source_row(db: AsyncSession, source_id: str) -> tuple[str | None, str | None]:
+async def _legacy(client: AsyncClient, headers: dict[str, str]) -> list[dict[str, Any]]:
+    resp = await client.get("/api/v1/users/me/connections/legacy", headers=headers)
+    assert resp.status_code == 200, resp.text
+    data: list[dict[str, Any]] = resp.json()["data"]
+    return data
+
+
+async def _source_row(db: AsyncSession, source_id: str) -> tuple[str | None, str | None, dict]:
     row = (
         await db.execute(
-            select(Source.secret_ref, Source.connection_id).where(Source.id == source_id)
+            select(Source.secret_ref, Source.connection_id, Source.config).where(
+                Source.id == source_id
+            )
         )
     ).one()
-    return row[0], (str(row[1]) if row[1] else None)
+    return row[0], (str(row[1]) if row[1] else None), dict(row[2] or {})
 
 
 async def _connect_on_home(
-    client: AsyncClient, headers: dict[str, str], access: str | None = None
+    client: AsyncClient, headers: dict[str, str], who: str = "alice", access: str | None = None
 ) -> dict[str, Any]:
+    """The Home handshake, proving provider account `who`."""
     start = await client.post(
         "/api/v1/integrations/onshape/oauth/start",
         json={} if access is None else {"access": access},
         headers=headers,
     )
     assert start.status_code == 201, start.text
-    started = start.json()["data"]
     exchange = await client.post(
         "/api/v1/integrations/onshape/oauth/exchange",
-        json={"state": started["state"], "code": "good"},
+        json={"state": start.json()["data"]["state"], "code": who},
         headers=headers,
     )
     assert exchange.status_code == 200, exchange.text
@@ -107,75 +139,80 @@ async def _connect_on_home(
     return connection
 
 
-# ----------------------------------------------------------- adoption
+# ----------------------------------------------------------- listing, not moving
 
 
-async def test_a_legacy_project_grant_becomes_an_account_connection_without_a_sign_in(
-    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
-) -> None:
-    project_id = await _project(client, alice_headers)
-    source = await _legacy_source(client, alice_headers, project_id)
-    old_ref, _ = await _source_row(db, source["id"])
-    assert old_ref and old_ref.startswith("source/")
-    assert await _connections(client, alice_headers) == []  # invisible on Home before H2
-
-    adopted = await _adopt(client, alice_headers)
-    assert [a["source_id"] for a in adopted] == [source["id"]]
-
-    listed = await _connections(client, alice_headers)
-    assert len(listed) == 1
-    row = listed[0]
-    assert row["provider"] == "onshape"
-    assert row["status"] == "connected"
-    assert row["origin"] == "migrated"
-    assert row["account_login"] == source["account_login"]
-    assert [p["project_id"] for p in row["projects"]] == [project_id]
-    # Never recorded which grant the token carries → say so, do not assume.
-    assert row["access"] is None
-    assert row["needs_reauth"] == "access_unknown"
-    assert "secret" not in str(row)
-
-    # The source now MIRRORS the connection and the very same token moved with it.
-    new_ref, connection_id = await _source_row(db, source["id"])
-    assert connection_id == row["id"]
-    assert new_ref == connection_secret_ref(row["id"], "onshape")
-    store = app.state.secret_store
-    assert await store.get(new_ref) == "legacy-token"
-    with pytest.raises(SecretNotFoundError):
-        await store.get(old_ref)  # the project-owned copy is retired after commit
-
-
-async def test_adoption_is_idempotent(client: AsyncClient, alice_headers: dict[str, str]) -> None:
-    project_id = await _project(client, alice_headers)
-    await _legacy_source(client, alice_headers, project_id)
-    assert len(await _adopt(client, alice_headers)) == 1
-    assert await _adopt(client, alice_headers) == []
-    assert len(await _connections(client, alice_headers)) == 1
-
-
-async def test_a_recorded_access_mode_is_kept_and_never_widened(
+async def test_a_legacy_grant_is_listed_for_its_creator_not_moved(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
-    project_id = await _project(client, alice_headers)
+    _, project_id = await _team_and_project(client, alice_headers)
     source = await _legacy_source(client, alice_headers, project_id)
-    # A SOLUS-ONS-A2-era source recorded the grant it was authorized with.
-    await db.execute(
-        update(Source).where(Source.id == source["id"]).values(config={"access": "read"})
-    )
-    await db.commit()
+    assert await _connections(client, alice_headers) == []
+    (legacy,) = await _legacy(client, alice_headers)
+    assert legacy["provider"] == "onshape"
+    assert legacy["account_login"] == "alice@onshape"
+    assert [p["project_id"] for p in legacy["projects"]] == [project_id]
+    assert legacy["source_ids"] == [source["id"]]
+    assert "secret" not in str(legacy) and "tok:" not in str(legacy)
+    # Nothing moved: no connection, the project still owns its token.
+    assert await _adopt(client, alice_headers) == {"adopted": [], "skipped": []}
+    ref, connection_id, _ = await _source_row(db, source["id"])
+    assert ref and ref.startswith("source/") and connection_id is None
 
-    await _adopt(client, alice_headers)
+
+# ----------------------------------------------------------- the claim
+
+
+async def test_the_home_sign_in_claims_the_legacy_grant_for_the_proved_account(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
+) -> None:
+    """The acceptance: connect once on Home; the existing project connection
+    keeps working — now on the account grant, its old token retired."""
+    team, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    old_ref, _, _ = await _source_row(db, source["id"])
+    assert old_ref
+    store = app.state.secret_store
+    assert await store.get(old_ref) == "tok:alice"
+
+    home = await _connect_on_home(client, alice_headers, who="alice", access="read")
+
     (row,) = await _connections(client, alice_headers)
-    assert row["access"] == "read"
-    assert row["needs_reauth"] is None
-    # The scopes a re-consent would request are the connector's, fixed in code:
-    # read stays read, and nothing here asks for more than the source had.
-    modes = {m["id"]: tuple(m["scopes"]) for m in (OnshapeConnector.access_modes or {})["modes"]}
-    assert modes == {"read": ("OAuth2Read",), "write": ("OAuth2Read", "OAuth2Write")}
-    assert OnshapeConnector.scopes == ("OAuth2Read",)
+    assert row["id"] == home["id"] and row["status"] == "connected"
+    assert row["access"] == "read" and row["needs_reauth"] is None
+    assert [p["project_id"] for p in row["projects"]] == [project_id]
+    assert await _legacy(client, alice_headers) == []
+    ref, connection_id, config = await _source_row(db, source["id"])
+    assert connection_id == home["id"]
+    assert ref == connection_secret_ref(home["id"], "onshape")
+    assert config.get("access") == "read"
+    assert "retired_secret_refs" not in config  # swept after the commit
+    with pytest.raises(SecretNotFoundError):
+        await store.get(old_ref)
+    feed = await client.get(
+        f"/api/v1/teams/{team}/activity?project_id={project_id}&type=connection.adopted",
+        headers=alice_headers,
+    )
+    assert [a["payload"]["provider"] for a in feed.json()["data"]] == ["onshape"]
 
 
-async def test_two_legacy_projects_on_one_account_share_one_connection(
+async def test_adopt_claims_for_an_account_already_connected_on_home(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """Home connected first, the legacy source appears later (another device,
+    an old wizard): the next Home load binds it — no sign-in."""
+    home = await _connect_on_home(client, alice_headers, who="alice")
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    result = await _adopt(client, alice_headers)
+    assert [a["source_id"] for a in result["adopted"]] == [source["id"]]
+    assert result["adopted"][0]["connection_id"] == home["id"]
+    assert await _adopt(client, alice_headers) == {"adopted": [], "skipped": []}
+    (row,) = await _connections(client, alice_headers)
+    assert [p["project_id"] for p in row["projects"]] == [project_id]
+
+
+async def test_two_legacy_projects_on_one_account_bind_to_one_connection(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     await me(client, alice_headers)
@@ -184,119 +221,26 @@ async def test_two_legacy_projects_on_one_account_share_one_connection(
     arm = (await create_project(client, alice_headers, team, name="Arm"))["id"]
     await _legacy_source(client, alice_headers, rover)
     await _legacy_source(client, alice_headers, arm)
-
-    adopted = await _adopt(client, alice_headers)
-    assert len(adopted) == 2
-    assert len({a["connection_id"] for a in adopted}) == 1
+    await _connect_on_home(client, alice_headers, who="alice")
     (row,) = await _connections(client, alice_headers)
     assert sorted(p["name"] for p in row["projects"]) == ["Arm", "Rover"]
 
 
-async def test_a_legacy_grant_lands_on_the_account_already_connected_on_home(
-    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
-) -> None:
-    """The account's CURRENT grant wins; the project's own copy is retired and
-    no second row appears for the same account."""
-    project_id = await _project(client, alice_headers)
-    source = await _legacy_source(client, alice_headers, project_id, token="stale-project-token")
-    old_ref, _ = await _source_row(db, source["id"])
-    home = await _connect_on_home(client, alice_headers, access="read")
-
-    adopted = await _adopt(client, alice_headers)
-    assert [a["connection_id"] for a in adopted] == [home["id"]]
-    listed = await _connections(client, alice_headers)
-    assert [c["id"] for c in listed] == [home["id"]]
-    assert listed[0]["origin"] == "home"
-    assert listed[0]["access"] == "read"
-    assert listed[0]["needs_reauth"] is None
-    new_ref, connection_id = await _source_row(db, source["id"])
-    assert connection_id == home["id"]
-    assert new_ref == connection_secret_ref(home["id"], "onshape")
-    with pytest.raises(SecretNotFoundError):
-        await app.state.secret_store.get(old_ref)
-
-
-async def test_only_the_authorizing_user_adopts_a_grant(
-    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
-) -> None:
-    """A teammate's project-scoped token is THEIR account, not the caller's."""
-    await me(client, alice_headers)
-    bob = await me(client, bob_headers)
-    team = (await create_team(client, alice_headers))["id"]
-    await add_member(client, alice_headers, bob_headers, BOB, team)
-    project = (await create_project(client, alice_headers, team, name="Rover"))["id"]
-    await _legacy_source(client, bob_headers, project)
-
-    assert await _adopt(client, alice_headers) == []
-    assert await _connections(client, alice_headers) == []
-    adopted = await _adopt(client, bob_headers)
-    assert len(adopted) == 1
-    (row,) = await _connections(client, bob_headers)
-    assert row["provider"] == "onshape"
-    assert bob["id"]  # Bob is the owner; Alice never sees it.
-    assert await _connections(client, alice_headers) == []
-
-
-async def test_non_oauth_and_already_bound_sources_are_left_alone(
+async def test_a_claimed_source_serves_a_second_project_with_no_oauth(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
-    project_id = await _project(client, alice_headers)
-    # A committed-export connector carries no tool credential.
-    kicad = await client.post(
-        f"/api/v1/projects/{project_id}/sources",
-        json={"type": "kicad", "name": "board", "config": {"export": "hw/board.xml"}},
-        headers=alice_headers,
-    )
-    assert kicad.status_code == 201, kicad.text
-    # A source bound on Home is already at account scope.
-    home = await _connect_on_home(client, alice_headers)
-    bound = await client.post(
-        f"/api/v1/projects/{project_id}/sources",
-        json={"type": "onshape", "name": "cad", "connection_id": home["id"]},
-        headers=alice_headers,
-    )
-    assert bound.status_code == 201, bound.text
-
-    assert await _adopt(client, alice_headers) == []
-    assert len(await _connections(client, alice_headers)) == 1
-
-
-async def test_a_source_whose_token_is_gone_is_skipped_not_invented(
-    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
-) -> None:
-    project_id = await _project(client, alice_headers)
-    source = await _legacy_source(client, alice_headers, project_id)
-    old_ref, _ = await _source_row(db, source["id"])
-    await app.state.secret_store.delete(old_ref)
-
-    assert await _adopt(client, alice_headers) == []
-    assert await _connections(client, alice_headers) == []
-    ref, connection_id = await _source_row(db, source["id"])
-    assert ref == old_ref and connection_id is None
-
-
-# ----------------------------------------------------------- after adoption
-
-
-async def test_a_second_project_reuses_the_adopted_account_with_no_oauth(
-    client: AsyncClient, alice_headers: dict[str, str]
-) -> None:
-    """The acceptance: an existing project connection still works, and a second
-    project picks documents from that account with no second OAuth prompt."""
     await me(client, alice_headers)
     team = (await create_team(client, alice_headers))["id"]
     rover = (await create_project(client, alice_headers, team, name="Rover"))["id"]
     arm = (await create_project(client, alice_headers, team, name="Arm"))["id"]
     await _legacy_source(client, alice_headers, rover)
-    (adopted,) = await _adopt(client, alice_headers)
-
+    home = await _connect_on_home(client, alice_headers, who="alice")
     bound = await client.post(
         f"/api/v1/projects/{arm}/sources",
-        json={"type": "onshape", "name": "cad", "connection_id": adopted["connection_id"]},
+        json={"type": "onshape", "name": "cad", "connection_id": home["id"]},
         headers=alice_headers,
     )
     assert bound.status_code == 201, bound.text
-    assert bound.json()["data"]["status"] == "connected"
     for doc in ("dA", "dB"):
         added = await client.post(
             f"/api/v1/projects/{arm}/sources/{bound.json()['data']['id']}/documents",
@@ -308,74 +252,270 @@ async def test_a_second_project_reuses_the_adopted_account_with_no_oauth(
     assert sorted(p["name"] for p in row["projects"]) == ["Arm", "Rover"]
 
 
-async def test_re_consent_lands_on_the_migrated_row_and_keeps_the_old_token_until_then(
-    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
-) -> None:
-    project_id = await _project(client, alice_headers)
-    source = await _legacy_source(client, alice_headers, project_id)
-    (adopted,) = await _adopt(client, alice_headers)
-    ref = connection_secret_ref(adopted["connection_id"], "onshape")
-    store = app.state.secret_store
-    assert await store.get(ref) == "legacy-token"
-
-    # The user re-authorizes from Home, choosing the grant this time.
-    start = await client.post(
-        "/api/v1/integrations/onshape/oauth/start", json={"access": "read"}, headers=alice_headers
-    )
-    assert start.status_code == 201, start.text
-    # Until the handshake completes, the migrated token is untouched and listed.
-    assert await store.get(ref) == "legacy-token"
-    (before,) = await _connections(client, alice_headers)
-    assert before["needs_reauth"] == "access_unknown"
-
-    exchange = await client.post(
-        "/api/v1/integrations/onshape/oauth/exchange",
-        json={"state": start.json()["data"]["state"], "code": "good"},
-        headers=alice_headers,
-    )
-    assert exchange.status_code == 200, exchange.text
-    assert exchange.json()["data"]["connection"]["id"] == adopted["connection_id"]
-
-    (after,) = await _connections(client, alice_headers)
-    assert after["id"] == adopted["connection_id"]
-    assert after["needs_reauth"] is None
-    assert after["access"] == "read"
-    assert after["origin"] == "migrated"
-    assert await store.get(ref) != "legacy-token"  # rotated in place
-    new_ref, connection_id = await _source_row(db, source["id"])
-    assert connection_id == adopted["connection_id"] and new_ref == ref
-    with pytest.raises(SecretNotFoundError):
-        await store.get(refresh_secret_ref("source/never"))  # sanity: unrelated refs untouched
-
-
-async def test_adoption_records_activity_for_the_project(
-    client: AsyncClient, alice_headers: dict[str, str]
-) -> None:
-    await me(client, alice_headers)
-    team = (await create_team(client, alice_headers))["id"]
-    project = (await create_project(client, alice_headers, team, name="Rover"))["id"]
-    await _legacy_source(client, alice_headers, project)
-    await _adopt(client, alice_headers)
-    feed = await client.get(
-        f"/api/v1/teams/{team}/activity?project_id={project}&type=connection.adopted",
-        headers=alice_headers,
-    )
-    assert feed.status_code == 200
-    assert [a["payload"]["provider"] for a in feed.json()["data"]] == ["onshape"]
-
-
-async def test_an_adopted_connection_row_is_a_live_row(
+async def test_an_errored_legacy_source_is_healed_by_the_proved_grant(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
-    project_id = await _project(client, alice_headers)
-    await _legacy_source(client, alice_headers, project_id)
-    (adopted,) = await _adopt(client, alice_headers)
-    row = (
-        await db.execute(
-            select(AccountConnection.status, AccountConnection.config).where(
-                AccountConnection.id == adopted["connection_id"]
-            )
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    await db.execute(
+        update(Source)
+        .where(Source.id == source["id"])
+        .values(status="error", last_error={"code": "invalid_credentials", "message": "revoked"})
+    )
+    await db.commit()
+    await _connect_on_home(client, alice_headers, who="alice")
+    detail = await client.get(
+        f"/api/v1/projects/{project_id}/sources/{source['id']}", headers=alice_headers
+    )
+    assert detail.json()["data"]["status"] == "connected"
+    assert detail.json()["data"]["last_error"] is None
+
+
+# ----------------------------------------------------------- what is NEVER moved
+
+
+async def test_created_by_is_not_proof_a_row_holding_a_teammates_token_is_never_claimed(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    app: FastAPI,
+    db: AsyncSession,
+) -> None:
+    """Security review C1: Alice created the row, Bob completed the handshake
+    (pre-I1 "switch account"), so the token is BOB's. Alice proving HER account
+    must not take it; Bob proving his does."""
+    team, project_id = await _team_and_project(client, alice_headers)
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team)
+    # Created by Alice, token and identity Bob's.
+    source = await _legacy_source(client, alice_headers, project_id, who="bob")
+    old_ref, _, _ = await _source_row(db, source["id"])
+    assert old_ref
+
+    await _connect_on_home(client, alice_headers, who="alice")
+    assert await _adopt(client, alice_headers) == {"adopted": [], "skipped": []}
+    (alice_row,) = await _connections(client, alice_headers)
+    assert alice_row["projects"] == []
+    ref, connection_id, _ = await _source_row(db, source["id"])
+    assert ref == old_ref and connection_id is None
+    assert await app.state.secret_store.get(old_ref) == "tok:bob"
+    # Alice's Home still lists it as legacy (she created it), honestly unmoved.
+    assert len(await _legacy(client, alice_headers)) == 1
+
+    bob_home = await _connect_on_home(client, bob_headers, who="bob")
+    ref, connection_id, _ = await _source_row(db, source["id"])
+    assert connection_id == bob_home["id"]
+    (bob_row,) = await _connections(client, bob_headers)
+    assert [p["project_id"] for p in bob_row["projects"]] == [project_id]
+    assert await _legacy(client, alice_headers) == []
+
+
+async def test_a_removed_member_cannot_claim_or_list_a_grant_in_that_team(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Security review C2: leaving the team ends every reach into its sources."""
+    team, project_id = await _team_and_project(client, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team)
+    source = await _legacy_source(client, bob_headers, project_id, who="bob")
+    removed = await client.delete(
+        f"/api/v1/teams/{team}/members/{bob['id']}", headers=alice_headers
+    )
+    assert removed.status_code in (200, 204), removed.text
+
+    assert await _legacy(client, bob_headers) == []
+    await _connect_on_home(client, bob_headers, who="bob")
+    assert await _adopt(client, bob_headers) == {"adopted": [], "skipped": []}
+    (row,) = await _connections(client, bob_headers)
+    assert row["projects"] == []
+    ref, connection_id, _ = await _source_row(db, source["id"])
+    assert ref and ref.startswith("source/") and connection_id is None
+    feed = await client.get(
+        f"/api/v1/teams/{team}/activity?type=connection.adopted", headers=alice_headers
+    )
+    assert feed.json()["data"] == []
+
+
+async def test_a_viewer_cannot_claim_a_grant(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    team, project_id = await _team_and_project(client, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team)
+    source = await _legacy_source(client, bob_headers, project_id, who="bob")
+    await db.execute(
+        update(Membership)
+        .where(Membership.team_id == team, Membership.user_id == bob["id"])
+        .values(role=Role.VIEWER)
+    )
+    await db.commit()
+    assert await _legacy(client, bob_headers) == []
+    await _connect_on_home(client, bob_headers, who="bob")
+    assert await _adopt(client, bob_headers) == {"adopted": [], "skipped": []}
+    _, connection_id, _ = await _source_row(db, source["id"])
+    assert connection_id is None
+
+
+async def test_a_grant_in_a_deleted_project_is_neither_listed_nor_claimed(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    deleted = await client.delete(
+        f"/api/v1/projects/{project_id}?confirm=true", headers=alice_headers
+    )
+    assert deleted.status_code in (200, 204), deleted.text
+    assert await _legacy(client, alice_headers) == []
+    await _connect_on_home(client, alice_headers, who="alice")
+    assert await _adopt(client, alice_headers) == {"adopted": [], "skipped": []}
+    # Project teardown swept the source with it; nothing was left to claim.
+    gone = (await db.execute(select(Source.id).where(Source.id == source["id"]))).first()
+    assert gone is None
+
+
+async def test_a_recorded_access_mismatch_is_reported_never_widened(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
+) -> None:
+    """Security review H1: a read-only project must not silently become
+    read-and-edit because the account grant is wider, nor lose a write token
+    to a narrower grant. The source keeps its own token; the mismatch is said."""
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    await db.execute(
+        update(Source).where(Source.id == source["id"]).values(config={"access": "read"})
+    )
+    await db.commit()
+    old_ref, _, _ = await _source_row(db, source["id"])
+    assert old_ref
+
+    await _connect_on_home(client, alice_headers, who="alice", access="write")
+    result = await _adopt(client, alice_headers)
+    assert result["adopted"] == []
+    assert [s["reason"] for s in result["skipped"]] == ["access_mismatch"]
+    ref, connection_id, config = await _source_row(db, source["id"])
+    assert ref == old_ref and connection_id is None and config["access"] == "read"
+    assert await app.state.secret_store.get(old_ref) == "tok:alice"
+    # Scope sets stay the connector's, fixed in code.
+    modes = {m["id"]: tuple(m["scopes"]) for m in (OnshapeConnector.access_modes or {})["modes"]}
+    assert modes == {"read": ("OAuth2Read",), "write": ("OAuth2Read", "OAuth2Write")}
+    assert OnshapeConnector.scopes == ("OAuth2Read",)
+
+
+async def test_a_grant_whose_access_was_never_recorded_takes_the_proved_grants_access(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    await _connect_on_home(client, alice_headers, who="alice", access="read")
+    _, connection_id, config = await _source_row(db, source["id"])
+    assert connection_id is not None and config["access"] == "read"
+
+
+async def test_non_oauth_and_already_bound_sources_are_left_alone(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project_id = await _team_and_project(client, alice_headers)
+    kicad = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={"type": "kicad", "name": "board", "config": {"export": "hw/board.xml"}},
+        headers=alice_headers,
+    )
+    assert kicad.status_code == 201, kicad.text
+    home = await _connect_on_home(client, alice_headers, who="alice")
+    bound = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={"type": "onshape", "name": "cad", "connection_id": home["id"]},
+        headers=alice_headers,
+    )
+    assert bound.status_code == 201, bound.text
+    assert await _legacy(client, alice_headers) == []
+    assert await _adopt(client, alice_headers) == {"adopted": [], "skipped": []}
+
+
+# ----------------------------------------------------------- robustness
+
+
+async def test_concurrent_adopt_calls_claim_once_and_never_500(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    home = await _connect_on_home(client, alice_headers, who="alice")
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    responses = await asyncio.gather(
+        *(
+            client.post("/api/v1/users/me/connections/adopt", headers=alice_headers)
+            for _ in range(3)
         )
-    ).one()
-    assert row[0].value == "connected"
-    assert row[1]["origin"] == "migrated"
+    )
+    assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
+    claimed = [a for r in responses for a in r.json()["data"]["adopted"]]
+    assert {a["source_id"] for a in claimed} == {source["id"]}
+    assert len(await _connections(client, alice_headers)) == 1
+    _, connection_id, _ = await _source_row(db, source["id"])
+    assert connection_id == home["id"]
+
+
+async def test_a_failed_retirement_is_retried_not_leaked(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Security review M2: the retired refs live on the source until deleted."""
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    old_ref, _, _ = await _source_row(db, source["id"])
+    store = app.state.secret_store
+    real_delete = store.delete
+
+    async def failing_delete(ref: str) -> None:
+        raise RuntimeError("store outage")
+
+    monkeypatch.setattr(store, "delete", failing_delete)
+    await _connect_on_home(client, alice_headers, who="alice")
+    _, connection_id, config = await _source_row(db, source["id"])
+    assert connection_id is not None
+    assert old_ref in config["retired_secret_refs"]  # remembered, not lost
+    assert await store.get(old_ref) == "tok:alice"
+
+    monkeypatch.setattr(store, "delete", real_delete)
+    await _adopt(client, alice_headers)  # the sweep runs again
+    _, _, config = await _source_row(db, source["id"])
+    assert "retired_secret_refs" not in config
+    with pytest.raises(SecretNotFoundError):
+        await store.get(old_ref)
+
+
+async def test_an_errored_connection_never_claims(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """Security review M4: only a CONNECTED grant with a secret is proof."""
+    home = await _connect_on_home(client, alice_headers, who="alice")
+    await db.execute(
+        update(AccountConnection).where(AccountConnection.id == home["id"]).values(status="error")
+    )
+    await db.commit()
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    assert (await _adopt(client, alice_headers))["adopted"] == []
+    _, connection_id, _ = await _source_row(db, source["id"])
+    assert connection_id is None
+    (row,) = await _connections(client, alice_headers)
+    assert row["needs_reauth"] == "token_error"
+
+
+async def test_adopt_requires_a_verified_signed_in_user(client: AsyncClient) -> None:
+    assert (await client.post("/api/v1/users/me/connections/adopt")).status_code == 401
+    unverified = bearer("unverified-sub-h2", "unverified-h2@example.com", email_verified=False)
+    await me(client, unverified)
+    resp = await client.post("/api/v1/users/me/connections/adopt", headers=unverified)
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "email_not_verified"
+    assert (await client.get("/api/v1/users/me/connections/legacy")).status_code == 401

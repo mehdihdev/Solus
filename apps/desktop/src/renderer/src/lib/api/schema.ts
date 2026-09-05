@@ -692,6 +692,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/connections/legacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Legacy
+         * @description The caller's project-scoped grants from before account-level connections
+         *     that are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as
+         *     "sign in once to move it"; the sign-in proves the account and claims them.
+         *     Nothing here is a usable grant — no documents, no revoke.
+         */
+        get: operations["list_legacy_api_v1_users_me_connections_legacy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/connections/adopt": {
         parameters: {
             query?: never;
@@ -703,10 +726,11 @@ export interface paths {
         put?: never;
         /**
          * Adopt
-         * @description Move the caller's project-scoped OAuth grants to account scope
-         *     (SOLUSDEV-242 / HOME H2) — no sign-in, no widened scope. Idempotent; Home
-         *     calls it before listing. The project-owned token copies are deleted only
-         *     after the commit, so a failure leaves every project exactly as it was.
+         * @description Claim the caller's legacy project-scoped grants to account scope
+         *     (SOLUSDEV-242 / H2) — only where the caller has PROVED the account with a
+         *     connection of their own (no sign-in for those, no copied secret, nothing
+         *     widened). Idempotent; Home calls it before listing. A grant whose account the
+         *     caller has not proved stays project-owned and is listed by `/legacy`.
          */
         post: operations["adopt_api_v1_users_me_connections_adopt_post"];
         delete?: never;
@@ -4035,6 +4059,28 @@ export interface operations {
         };
     };
     list_connections_api_v1_users_me_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_legacy_api_v1_users_me_connections_legacy_get: {
         parameters: {
             query?: never;
             header?: never;

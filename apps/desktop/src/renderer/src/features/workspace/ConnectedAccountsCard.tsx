@@ -8,23 +8,26 @@
 // is a confirmed, destructive action: it disconnects the account in EVERY
 // project that uses it, so the confirmation names them.
 //
-// SOLUSDEV-242 (H2): every row states its SCOPE plainly (read only / read and
-// edit / not recorded), a grant adopted from a project says so, and a row that
-// needs a fresh consent — access never recorded, or a failed handshake — offers
-// Re-authorize, which lands on the same account (no duplicate, no widened scope;
-// the old token keeps working until the new one succeeds).
+// SOLUSDEV-242 (H2): every linked row states its SCOPE plainly (read only /
+// read and edit / not recorded); a grant whose last sign-in failed offers
+// Re-authorize, which lands on the same account (no duplicate, no widened
+// scope; the old token keeps working until the new one succeeds); a
+// project-scoped grant from before account-level connections is listed as
+// "sign in once to move it" — the sign-in PROVES the account and claims it.
+// Every catalog tool appears: file-export and local tools have no account to
+// link, and the row says where they connect instead.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
-import type { Connection } from '../../lib/api/resources'
+import type { Connection, LegacyConnection } from '../../lib/api/resources'
 import { ConnectWizardModal } from '../onboarding/ConnectWizardModal'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import { integrationLogo } from '../onboarding/integrationLogos'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
-import { reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
+import { legacyText, reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
 import { ModalShell } from './modals'
 import { useAccountConnections } from './useAccountConnections'
 
@@ -130,7 +133,6 @@ function AccountRow({
           </div>
           <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
             {usageText(connection)} · {scopeText(connection)}
-            {connection.origin === 'migrated' && ' · moved from a project'}
           </div>
         </div>
         <Button
@@ -172,6 +174,71 @@ function AccountRow({
   )
 }
 
+/** A grant still owned by a project: one sign-in proves the account and moves it. */
+function LegacyRow({
+  entry,
+  legacy,
+  onSignIn
+}: {
+  entry: CatalogEntry
+  legacy: LegacyConnection
+  onSignIn: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <ProviderMark entry={entry} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+            {entry.name}
+            {legacy.account_login && (
+              <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
+                {' '}
+                · {legacy.account_login}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+            Connected in a project, not yet on your account
+          </div>
+        </div>
+        <Button
+          kind="soft"
+          size="sm"
+          aria-label={`Sign in to move ${entry.name}`}
+          onClick={onSignIn}
+        >
+          Sign in to move
+        </Button>
+      </div>
+      <div role="note" style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}>
+        {legacyText(legacy)}
+      </div>
+    </div>
+  )
+}
+
+/** A tool with no account to link: it connects per project (a committed export
+ *  or the local companion), so the row says so instead of pretending. */
+function NoAccountRow({ entry }: { entry: CatalogEntry }): React.JSX.Element {
+  const where =
+    entry.mode === 'local-bridge'
+      ? "Connects on this computer from a project's Sources page — no account to link"
+      : "Connects from a project's Sources page as a committed export — no account to link"
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
+      <ProviderMark entry={entry} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{where}</div>
+      </div>
+      <Mono size={8.5} color="var(--mut)">
+        PER PROJECT
+      </Mono>
+    </div>
+  )
+}
+
 function ConnectRow({
   entry,
   onConnect
@@ -202,7 +269,12 @@ export function ConnectedAccountsCard(): React.JSX.Element | null {
     scope: 'account',
     onConnected: () => void accounts.refresh()
   })
-  const providers = catalog.filter((entry) => entry.mode === 'oauth')
+  // Every tool the registry knows, account or not — the user asked "what can I
+  // connect?", and a missing row reads as "unsupported". Account tools first;
+  // the per-project ones follow so the linkable rows read as one group.
+  const providers = [...catalog].sort(
+    (a, b) => Number(b.mode === 'oauth') - Number(a.mode === 'oauth')
+  )
   if (accounts.status === 'offline' || providers.length === 0) return null
 
   return (
@@ -215,26 +287,42 @@ export function ConnectedAccountsCard(): React.JSX.Element | null {
       <Card pad={0}>
         {providers.map((entry, i) => {
           const linked = accounts.connections.filter((c) => c.provider === entry.id)
+          const unclaimed = accounts.legacy.filter((l) => l.provider === entry.id)
           return (
             <div
               key={entry.id}
               style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
             >
-              {linked.length === 0 ? (
-                <ConnectRow entry={entry} onConnect={() => wizard.open(entry)} />
+              {entry.mode !== 'oauth' ? (
+                <NoAccountRow entry={entry} />
               ) : (
-                linked.map((connection) => (
-                  <AccountRow
-                    key={connection.id}
-                    entry={entry}
-                    connection={connection}
-                    onRevoke={() => accounts.revoke(connection.id)}
-                    // The same account-scope handshake as Connect: a finished
-                    // sign-in lands on THIS row (I1 dedupes by account), so the
-                    // old token is replaced only once the new one succeeded.
-                    onReauthorize={() => wizard.open(entry)}
-                  />
-                ))
+                <>
+                  {linked.map((connection) => (
+                    <AccountRow
+                      key={connection.id}
+                      entry={entry}
+                      connection={connection}
+                      onRevoke={() => accounts.revoke(connection.id)}
+                      // The same account-scope handshake as Connect: a finished
+                      // sign-in lands on THIS row (I1 dedupes by account), so the
+                      // old token is replaced only once the new one succeeded.
+                      onReauthorize={() => wizard.open(entry)}
+                    />
+                  ))}
+                  {unclaimed.map((legacy) => (
+                    <LegacyRow
+                      key={legacy.source_ids.join(',')}
+                      entry={entry}
+                      legacy={legacy}
+                      // The sign-in proves the account; the finished handshake
+                      // claims every legacy grant for it (server side).
+                      onSignIn={() => wizard.open(entry)}
+                    />
+                  ))}
+                  {linked.length === 0 && unclaimed.length === 0 && (
+                    <ConnectRow entry={entry} onConnect={() => wizard.open(entry)} />
+                  )}
+                </>
               )}
             </div>
           )

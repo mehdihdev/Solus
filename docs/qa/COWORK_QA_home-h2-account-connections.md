@@ -2,9 +2,12 @@
 
 OAuth binds the WHOLE ACCOUNT once, on Home. Picking documents happens later in a project's
 Sources page against that account. A project-scoped connection made before account-level
-connections is moved to account scope without a sign-in; where Solus cannot tell what the old
-grant allows, Home says so plainly and offers Re-authorize — never forcing it, never widening a
-scope. This plan assumes the running application and nothing else.
+connections is listed on Home as "sign in once to move it": ONE sign-in proves the account and
+moves every such grant for it (no second OAuth per project); a grant for an account the user
+already connected on Home moves on the next Home load with no sign-in at all. Nothing is copied,
+nothing is widened, and the project keeps syncing on its own token until the move. Every tool the
+registry knows is listed — file-export and local tools say they connect per project. This plan
+assumes the running application and nothing else.
 
 ## Required setup
 
@@ -22,41 +25,45 @@ scope. This plan assumes the running application and nothing else.
 
 Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failure.
 
-## Flow 1 — A legacy project grant appears on Home as the account it is
+## Flow 1 — A legacy project grant is listed, honestly unmoved
 
-1. Sign in as A. Before opening Home, confirm on **Rover → Sources** that the legacy Onshape source
-   is listed and connected. ☐
-2. Open **Home**. Expected under CONNECTED ACCOUNTS: an **Onshape** row naming the account, reading
-   "Used in Rover · Access level not recorded · moved from a project", a warning note "Linked from a
-   project before account-level connections; what Solus may do with it was never recorded.
-   Re-authorize to confirm — existing syncs keep working until then.", and two buttons:
-   **Re-authorize** and **Revoke**. No **Connect** for Onshape. ☐
-3. Reload Home. Expected: the same single row (adoption is idempotent; no duplicates). ☐
-4. **Rover → Sources**. Expected: the Onshape source is still connected with the same account label.
-   Click **Sync now**. Expected: the sync runs on the migrated token (it succeeds, or fails only for
-   reasons unrelated to credentials, e.g. an invalid seeded token — say which). ☐
-5. Recent activity on Rover's Home card (or the Team feed) includes "moved the onshape connection to
-   account scope". ☐
+1. Sign in as A. On **Rover → Sources**, confirm the legacy Onshape source is listed and connected. ☐
+2. Open **Home**. Expected under CONNECTED ACCOUNTS: an **Onshape** row naming the account
+   (e.g. "Onshape · ada-legacy"), the line "Connected in a project, not yet on your account", a
+   warning note "Connected in Rover before account-level connections. Sign in once to move it to
+   your account — Rover keeps syncing until then.", and a **Sign in to move** button. No Revoke on
+   that row, no separate Connect for Onshape. ☐
+3. Reload Home. Expected: the same single row (nothing moved, no duplicates). ☐
+4. **Rover → Sources → Sync now**. Expected: the sync runs on the project's own token as before. ☐
+5. The card also lists **KiCad** and **Altium** with "Connects from a project's Sources page as a
+   committed export — no account to link" and a PER PROJECT mark, and any local companion tool with
+   "Connects on this computer…" — no Connect button on those rows. ☐
 
-## Flow 2 — A second project uses the migrated account with no OAuth prompt
+## Flow 2 — One sign-in moves it; a second project needs no OAuth
 
-6. Open **Arm → Sources**, click the **Onshape** tile. Expected: the wizard rail reads
-   **Pick documents → Build graph** and, under the button, "Using your linked account · <login>". ☐
-7. Click **Connect Onshape**. Expected: **no browser window opens**. The picker lists the account's
-   documents. Pick **two** documents. Continue to the build. ☐
-8. Home: the Onshape row now reads "Used in Rover and Arm". ☐
+6. Home → **Sign in to move** on the Onshape row. Expected: the connect wizard opens in account mode,
+   rail **Choose access → Sign in** only (no document picking). Choose **Read only**, complete the
+   sign-in in the browser **with the same Onshape account the legacy source used**. ☐
+7. Expected: the wizard ends "Connected as <login>". Home's Onshape row now reads "Used in Rover ·
+   Read only" with **Revoke**; the "not yet on your account" row is gone. ☐
+8. Rover → Sources: the source is still connected; **Sync now** works (now on the account grant).
+   Rover's recent activity shows "moved the onshape connection to account scope". ☐
+9. Open **Arm → Sources**, click the **Onshape** tile. Expected: rail **Pick documents → Build graph**
+   and "Using your linked account · <login>". Click Connect Onshape: **no browser opens**; pick
+   **two** documents; build. Home: "Used in Rover and Arm". ☐
+10. Sign in with a DIFFERENT Onshape account than the legacy source used (optional). Expected: a new
+    linked row for that account, and the legacy row stays listed and unmoved — a grant moves only to
+    the account that proves it. ☐
 
-## Flow 3 — Re-authorize confirms the scope without dropping the old grant
+## Flow 3 — Already connected on Home: the move needs no sign-in
 
-9. Home → **Re-authorize** on the Onshape row. Expected: the connect wizard opens in account mode
-   with the rail **Choose access → Sign in** only (no document picking). ☐
-10. Close the wizard without signing in. Expected: the row is unchanged; the note still shows;
-    Rover and Arm still sync. ☐
-11. Re-authorize again, choose **Read only**, complete the sign-in in the browser. Expected: the
-    wizard ends "Connected as <login>". Home's row now reads "Used in Rover and Arm · Read only ·
-    moved from a project", the warning note and the Re-authorize button are gone, and there is
-    still exactly ONE Onshape row. ☐
-12. Rover and Arm → Sources: both sources still connected; Sync now works on the new token. ☐
+11. With an Onshape account connected on Home (Flow 4 step 13), have an operator seed a legacy
+    project-scoped source for the SAME account in another project (or connect one through an old
+    wizard build). Open Home. Expected: it is claimed on load — the row's "Used in" gains that
+    project, no wizard, no browser. ☐
+12. A legacy source whose recorded access mode differs from the account grant (e.g. the project
+    recorded read-only, the account is read and edit) is **not** moved: it stays listed as legacy
+    and keeps its own token; nothing on Home widens or narrows it. ☐
 
 ## Flow 4 — Connect an account on Home, then pick documents in Workspace (fresh account)
 
@@ -74,15 +81,17 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
 16. Sign in as B (member of Team A). Home: B sees **no** Onshape account (A's grant is A's). ☐
 17. B → Rover → Sources: the Onshape source connected by A is listed and B can **Sync now** (the
     shared grant works through the source). ☐
-18. If B has a legacy project-scoped grant of their own in Team A: it appears on B's Home, not A's,
-    after B opens Home. ☐
+18. A legacy source whose row A created but whose token B authorized (old "switch account"): A's
+    sign-in with A's account does NOT move it; B's sign-in with B's account does. ☐
+19. Remove B from Team A (or make B a viewer). Expected: B's Home no longer lists Team A's legacy
+    grants, and B's sign-in moves nothing in Team A. ☐
 
 ## Flow 6 — Errors, revoke, and the allowlist
 
 19. Cancel an OAuth sign-in in the browser. Expected: the wizard shows the cancellation; Home shows
     no half-made account (a pending handshake never lists). ☐
 20. On a row whose last sign-in failed (status error): the note shows the provider's message plus
-    "Re-authorize to reconnect." and Re-authorize is offered. ☐
+    "Re-authorize to reconnect." and Re-authorize is offered. Such a row never moves a legacy grant. ☐
 21. **Revoke** the Onshape row. Expected: the confirmation names Rover and Arm; after confirming, both
     projects' Onshape sources show disconnected and the row is gone. ☐
 22. Desktop loopback: the OAuth redirect to `http://127.0.0.1:<port>/...` and `http://localhost:<port>/...`

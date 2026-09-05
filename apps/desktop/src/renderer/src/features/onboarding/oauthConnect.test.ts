@@ -40,7 +40,6 @@ function connection(): Connection {
     status: 'connected',
     account_login: 'maya',
     access: null,
-    origin: 'home',
     needs_reauth: null,
     last_error: null,
     projects: [],

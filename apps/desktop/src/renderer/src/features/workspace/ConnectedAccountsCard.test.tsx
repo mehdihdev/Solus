@@ -6,11 +6,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
-import { reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
+import { legacyText, reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
 import * as accountsHook from './useAccountConnections'
 import * as catalogHook from '../onboarding/useIntegrationCatalog'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
-import type { Connection } from '../../lib/api/resources'
+import type { Connection, LegacyConnection } from '../../lib/api/resources'
 
 vi.mock('./useAccountConnections', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./useAccountConnections')>()
@@ -47,7 +47,6 @@ const LINKED: Connection = {
   status: 'connected',
   account_login: 'ada@example.com',
   access: 'read',
-  origin: 'home',
   needs_reauth: null,
   last_error: null,
   projects: [
@@ -58,12 +57,20 @@ const LINKED: Connection = {
   updated_at: ''
 }
 
+const LEGACY: LegacyConnection = {
+  provider: 'onshape',
+  account_login: 'ada-legacy',
+  projects: [{ project_id: 'p1', name: 'Rover' }],
+  source_ids: ['s-legacy']
+}
+
 function mockAccounts(
   overrides: Partial<accountsHook.AccountConnectionsData> = {}
 ): accountsHook.AccountConnectionsData {
   const value: accountsHook.AccountConnectionsData = {
     status: 'ready',
     connections: [],
+    legacy: [],
     refresh: vi.fn(async () => undefined),
     revoke: vi.fn(async () => true),
     ...overrides
@@ -77,12 +84,14 @@ beforeEach(() => {
 })
 
 describe('ConnectedAccountsCard', () => {
-  it('lists only OAuth providers, offering Connect when nothing is linked', () => {
+  it('offers Connect for an OAuth provider when nothing is linked', () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
     expect(screen.getByText('Onshape')).toBeInTheDocument()
-    expect(screen.queryByText('KiCad')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Connect Onshape' })).toBeInTheDocument()
+    // A file-export tool is listed too, but has no account to connect.
+    expect(screen.getByText('KiCad')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect KiCad' })).toBeNull()
   })
 
   it('shows a linked account with the projects using it', () => {
@@ -132,19 +141,38 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.queryByRole('button', { name: /re-authorize/i })).toBeNull()
   })
 
-  it('says a migrated grant’s access was never recorded and offers Re-authorize without forcing it', async () => {
-    mockAccounts({
-      connections: [{ ...LINKED, access: null, origin: 'migrated', needs_reauth: 'access_unknown' }]
-    })
+  it('lists a legacy project-scoped grant as "sign in once to move it", unmoved and honest', async () => {
+    mockAccounts({ legacy: [LEGACY] })
     render(<ConnectedAccountsCard />)
-    expect(screen.getByText(/Access level not recorded · moved from a project/)).toBeInTheDocument()
-    expect(screen.getByRole('note')).toHaveTextContent(/existing syncs keep working until then/)
-    // Still listed as a working account: usage, and Revoke, are there.
-    expect(screen.getByRole('button', { name: 'Revoke Onshape' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Re-authorize Onshape' }))
+    expect(screen.getByText(/Onshape/)).toBeInTheDocument()
+    expect(screen.getByText('Connected in a project, not yet on your account')).toBeInTheDocument()
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Connected in Rover before account-level connections. Sign in once to move it to your account — Rover keeps syncing until then.'
+    )
+    // Not a usable grant: no Revoke, no duplicate Connect.
+    expect(screen.queryByRole('button', { name: 'Revoke Onshape' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Connect Onshape' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in to move Onshape' }))
     const dialog = screen.getByRole('dialog', { name: 'Connect Onshape' })
     const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
     expect(steps).toEqual(['Sign in'])
+  })
+
+  it('shows a linked account and a still-legacy grant for the same provider side by side', () => {
+    mockAccounts({ connections: [LINKED], legacy: [LEGACY] })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByRole('button', { name: 'Revoke Onshape' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in to move Onshape' })).toBeInTheDocument()
+  })
+
+  it('lists every catalog tool — file-export and local tools say where they connect instead, after the account tools', () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByText('KiCad')).toBeInTheDocument()
+    const names = screen.getAllByText(/^(Onshape|KiCad)$/).map((n) => n.textContent)
+    expect(names).toEqual(['Onshape', 'KiCad'])
+    expect(screen.getByText(/committed export — no account to link/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect KiCad' })).toBeNull()
   })
 
   it('offers Re-authorize for a grant whose last sign-in failed', () => {
@@ -178,7 +206,11 @@ describe('copy helpers', () => {
     expect(scopeText({ ...LINKED, access: 'write' })).toBe('Read and edit')
     expect(scopeText({ ...LINKED, access: null })).toBe('Access level not recorded')
     expect(reauthText(LINKED)).toBeNull()
-    expect(reauthText({ ...LINKED, needs_reauth: 'access_unknown' })).toMatch(/never recorded/)
+    expect(legacyText(LEGACY)).toMatch(/Connected in Rover before/)
+    expect(legacyText({ ...LEGACY, projects: [] })).toMatch(/Connected in a project/)
+    expect(
+      legacyText({ ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] })
+    ).toMatch(/Rover and Arm.*those projects keep syncing/)
     expect(reauthText({ ...LINKED, status: 'error', needs_reauth: 'token_error' })).toMatch(
       /last sign-in failed/
     )

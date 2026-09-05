@@ -2221,10 +2221,36 @@
         ]
       }
     },
+    "/api/v1/users/me/connections/legacy": {
+      "get": {
+        "summary": "List Legacy",
+        "description": "The caller's project-scoped grants from before account-level connections\nthat are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as\n\"sign in once to move it\"; the sign-in proves the account and claims them.\nNothing here is a usable grant \u2014 no documents, no revoke.",
+        "operationId": "list_legacy_api_v1_users_me_connections_legacy_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Legacy Api V1 Users Me Connections Legacy Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/users/me/connections/adopt": {
       "post": {
         "summary": "Adopt",
-        "description": "Move the caller's project-scoped OAuth grants to account scope\n(SOLUSDEV-242 / HOME H2) \u2014 no sign-in, no widened scope. Idempotent; Home\ncalls it before listing. The project-owned token copies are deleted only\nafter the commit, so a failure leaves every project exactly as it was.",
+        "description": "Claim the caller's legacy project-scoped grants to account scope\n(SOLUSDEV-242 / H2) \u2014 only where the caller has PROVED the account with a\nconnection of their own (no sign-in for those, no copied secret, nothing\nwidened). Idempotent; Home calls it before listing. A grant whose account the\ncaller has not proved stays project-owned and is listed by `/legacy`.",
         "operationId": "adopt_api_v1_users_me_connections_adopt_post",
         "responses": {
           "200": {
