@@ -659,14 +659,23 @@ export interface AdoptedConnection {
   project_id: string
 }
 
-/** Claim the caller's legacy project-scoped grants to account scope — only
- *  where the caller has already PROVED that account with a connection of
- *  their own (API.md §2.1, SOLUSDEV-242). No sign-in, no copied secret,
- *  nothing widened. Idempotent; Home calls it before listing. */
-export function adoptConnections(client: ApiClient = api): Promise<AdoptedConnection[]> {
-  return client
-    .request<{ adopted: AdoptedConnection[] }>('/users/me/connections/adopt', { method: 'POST' })
-    .then((r) => r.adopted)
+export interface AdoptResult {
+  adopted: AdoptedConnection[]
+  skipped: { source_id: string; project_id: string | null; reason: string }[]
+}
+
+/** Move NAMED legacy project-scoped grants to the caller's proved account
+ *  (API.md §2.1, SOLUSDEV-242) — an explicit, confirmed action: no sign-in,
+ *  no copied secret, nothing widened unless `confirm_access` accepts the
+ *  grant shown in the confirmation. */
+export function adoptConnections(
+  input: { source_ids: string[]; confirm_access: boolean },
+  client: ApiClient = api
+): Promise<AdoptResult> {
+  return client.request<AdoptResult>('/users/me/connections/adopt', {
+    method: 'POST',
+    body: input
+  })
 }
 
 /** A project-scoped grant from before account-level connections that is not
@@ -678,6 +687,9 @@ export interface LegacyConnection {
   account_login: string | null
   projects: ConnectionProject[]
   source_ids: string[]
+  /** The caller's CONNECTED grant that proves this account, when they hold
+   *  one — Home then offers the confirmed move instead of a sign-in. */
+  claimable_connection_id: string | null
 }
 
 export function listLegacyConnections(client: ApiClient = api): Promise<LegacyConnection[]> {

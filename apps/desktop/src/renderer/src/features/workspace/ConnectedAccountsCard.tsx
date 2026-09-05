@@ -13,7 +13,9 @@
 // Re-authorize, which lands on the same account (no duplicate, no widened
 // scope; the old token keeps working until the new one succeeds); a
 // project-scoped grant from before account-level connections is listed as
-// "sign in once to move it" — the sign-in PROVES the account and claims it.
+// "sign in once to move it"; once the user holds the proving grant the row
+// offers the move as an explicit, confirmed action naming the projects and the
+// grant — never a side effect of loading Home.
 // Every catalog tool appears: file-export and local tools have no account to
 // link, and the row says where they connect instead.
 import { useState } from 'react'
@@ -27,18 +29,33 @@ import { integrationLogo } from '../onboarding/integrationLogos'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
-import { legacyText, reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
+import {
+  legacyText,
+  moveDetail,
+  reauthText,
+  revokeDetail,
+  scopeText,
+  usageText
+} from './connectedAccounts'
 import { ModalShell } from './modals'
 import { useAccountConnections } from './useAccountConnections'
 
-function RevokeModal({
-  providerName,
-  connection,
+function ConfirmModal({
+  title,
+  detail,
+  action,
+  busyLabel,
+  failure,
+  danger = false,
   onClose,
   onConfirm
 }: {
-  providerName: string
-  connection: Connection
+  title: string
+  detail: string
+  action: string
+  busyLabel: string
+  failure: string
+  danger?: boolean
   onClose: () => void
   onConfirm: () => Promise<boolean>
 }): React.JSX.Element {
@@ -52,28 +69,55 @@ function RevokeModal({
       return
     }
     setBusy(false)
-    setError("Couldn't revoke this account. Check your connection and try again.")
+    setError(failure)
   }
-  const who = connection.account_login ? ` (${connection.account_login})` : ''
   return (
     <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>
-        Revoke {providerName}
-        {who}?
-      </div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        {revokeDetail(providerName, connection)}
+        {detail}
       </div>
       {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
         <Button kind="ghost" size="sm" onClick={onClose}>
           Cancel
         </Button>
-        <Button kind="danger" size="sm" disabled={busy} onClick={() => void confirm()}>
-          {busy ? 'Revoking…' : 'Revoke'}
+        <Button
+          kind={danger ? 'danger' : 'primary'}
+          size="sm"
+          disabled={busy}
+          onClick={() => void confirm()}
+        >
+          {busy ? busyLabel : action}
         </Button>
       </div>
     </ModalShell>
+  )
+}
+
+function RevokeModal({
+  providerName,
+  connection,
+  onClose,
+  onConfirm
+}: {
+  providerName: string
+  connection: Connection
+  onClose: () => void
+  onConfirm: () => Promise<boolean>
+}): React.JSX.Element {
+  const who = connection.account_login ? ` (${connection.account_login})` : ''
+  return (
+    <ConfirmModal
+      title={`Revoke ${providerName}${who}?`}
+      detail={revokeDetail(providerName, connection)}
+      action="Revoke"
+      busyLabel="Revoking…"
+      failure="Couldn't revoke this account. Check your connection and try again."
+      danger
+      onClose={onClose}
+      onConfirm={onConfirm}
+    />
   )
 }
 
@@ -174,16 +218,23 @@ function AccountRow({
   )
 }
 
-/** A grant still owned by a project: one sign-in proves the account and moves it. */
+/** A grant still owned by a project: a sign-in proves the account; once the
+ *  caller holds that grant, the move is offered and confirmed here. */
 function LegacyRow({
   entry,
   legacy,
-  onSignIn
+  grant,
+  onSignIn,
+  onMove
 }: {
   entry: CatalogEntry
   legacy: LegacyConnection
+  grant: Connection | null
   onSignIn: () => void
+  onMove: () => Promise<boolean>
 }): React.JSX.Element {
+  const [confirming, setConfirming] = useState(false)
+  const claimable = legacy.claimable_connection_id !== null
   return (
     <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -202,18 +253,40 @@ function LegacyRow({
             Connected in a project, not yet on your account
           </div>
         </div>
-        <Button
-          kind="soft"
-          size="sm"
-          aria-label={`Sign in to move ${entry.name}`}
-          onClick={onSignIn}
-        >
-          Sign in to move
-        </Button>
+        {claimable ? (
+          <Button
+            kind="primary"
+            size="sm"
+            aria-label={`Move ${entry.name} to your account`}
+            onClick={() => setConfirming(true)}
+          >
+            Move to your account
+          </Button>
+        ) : (
+          <Button
+            kind="soft"
+            size="sm"
+            aria-label={`Sign in to move ${entry.name}`}
+            onClick={onSignIn}
+          >
+            Sign in to move
+          </Button>
+        )}
       </div>
       <div role="note" style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}>
         {legacyText(legacy)}
       </div>
+      {confirming && (
+        <ConfirmModal
+          title={`Move ${entry.name} to your account?`}
+          detail={moveDetail(entry.name, legacy, grant)}
+          action="Move"
+          busyLabel="Moving…"
+          failure={`Couldn't move this ${entry.name} connection. Check your connection and try again.`}
+          onClose={() => setConfirming(false)}
+          onConfirm={onMove}
+        />
+      )}
     </div>
   )
 }
@@ -314,9 +387,11 @@ export function ConnectedAccountsCard(): React.JSX.Element | null {
                       key={legacy.source_ids.join(',')}
                       entry={entry}
                       legacy={legacy}
-                      // The sign-in proves the account; the finished handshake
-                      // claims every legacy grant for it (server side).
+                      grant={linked.find((c) => c.id === legacy.claimable_connection_id) ?? null}
+                      // The sign-in proves the account; the move is then offered
+                      // and confirmed on this row — never automatic.
                       onSignIn={() => wizard.open(entry)}
+                      onMove={() => accounts.move(legacy)}
                     />
                   ))}
                   {linked.length === 0 && unclaimed.length === 0 && (

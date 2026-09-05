@@ -13,7 +13,8 @@ describe('MENUS', () => {
 
   it('only links to https destinations', () => {
     for (const m of MENUS)
-      for (const i of m.items) if (i !== 'separator' && 'href' in i) expect(i.href).toMatch(/^https:\/\//)
+      for (const i of m.items)
+        if (i !== 'separator' && 'href' in i) expect(i.href).toMatch(/^https:\/\//)
   })
 
   it('gives every project-scoped menu a hint for the no-project state', () => {

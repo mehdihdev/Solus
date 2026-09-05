@@ -270,10 +270,13 @@ describe('account connections (SOLUSDEV-241)', () => {
   it("lists and revokes the signed-in user's grants", async () => {
     const list = stubClient([])
     await listConnections(list.client)
-    const adopt = stubClient({ adopted: [] })
-    expect(await adoptConnections(adopt.client)).toEqual([])
+    const adopt = stubClient({ adopted: [], skipped: [] })
+    await adoptConnections({ source_ids: ['s1'], confirm_access: true }, adopt.client)
     expect(adopt.calls[0].path).toBe('/users/me/connections/adopt')
-    expect(adopt.calls[0].options).toMatchObject({ method: 'POST' })
+    expect(adopt.calls[0].options).toMatchObject({
+      method: 'POST',
+      body: { source_ids: ['s1'], confirm_access: true }
+    })
     const legacy = stubClient([])
     await listLegacyConnections(legacy.client)
     expect(legacy.calls[0].path).toBe('/users/me/connections/legacy')

@@ -47,22 +47,18 @@ from solus_api.models import (
     Source,
     SourceStatus,
     SourceType,
-    User,
     ensure_utc,
     utcnow,
 )
 from solus_api.schemas import OAuthExchange, OAuthStart, serialize_connection, serialize_source
-from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     StaleHandshakeError,
     bind_source,
-    claim_legacy_sources,
     complete_connection,
     connection_projects,
     pending_connection,
     record_connection_failure,
     reusable_source,
-    sweep_retired_secrets,
 )
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_add_integration
@@ -379,38 +375,8 @@ async def _complete_oauth(
         bind_source(source, connection)
         if not source.name or source.name == provider:
             source.name = account.login
-    await _claim_after_handshake(session, registry, secret_store, record, connection, provider)
-    return connection, source, None
-
-
-async def _claim_after_handshake(
-    session: SessionDep,
-    registry: ConnectorRegistry,
-    secret_store: SecretStore,
-    record: OAuthState,
-    connection: AccountConnection,
-    provider: str,
-) -> None:
-    """SOLUSDEV-242 (H2): the handshake PROVED the account — every project-scoped
-    legacy grant for the same account the user can act on now binds to it, and
-    the project-owned token copies are retired after the commit."""
-    owner = await session.get(User, record.user_id)
-    if owner is None:
-        await session.commit()
-        return
-    claimed, _ = await claim_legacy_sources(session, registry, owner, connection)
-    for legacy in claimed:
-        record_activity(
-            session,
-            team_id=legacy.team_id,
-            activity_type="connection.adopted",
-            actor_id=owner.id,
-            project_id=legacy.project_id,
-            domain="integrations",
-            payload={"provider": provider},
-        )
     await session.commit()
-    await sweep_retired_secrets(session, secret_store, owner)
+    return connection, source, None
 
 
 @router.post("/{provider}/oauth/exchange")

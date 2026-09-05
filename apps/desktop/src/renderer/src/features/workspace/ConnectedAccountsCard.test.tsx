@@ -6,7 +6,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
-import { legacyText, reauthText, revokeDetail, scopeText, usageText } from './connectedAccounts'
+import {
+  legacyText,
+  moveDetail,
+  reauthText,
+  revokeDetail,
+  scopeText,
+  usageText
+} from './connectedAccounts'
 import * as accountsHook from './useAccountConnections'
 import * as catalogHook from '../onboarding/useIntegrationCatalog'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
@@ -61,7 +68,8 @@ const LEGACY: LegacyConnection = {
   provider: 'onshape',
   account_login: 'ada-legacy',
   projects: [{ project_id: 'p1', name: 'Rover' }],
-  source_ids: ['s-legacy']
+  source_ids: ['s-legacy'],
+  claimable_connection_id: null
 }
 
 function mockAccounts(
@@ -73,6 +81,7 @@ function mockAccounts(
     legacy: [],
     refresh: vi.fn(async () => undefined),
     revoke: vi.fn(async () => true),
+    move: vi.fn(async () => true),
     ...overrides
   }
   vi.mocked(accountsHook.useAccountConnections).mockReturnValue(value)
@@ -165,6 +174,41 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByRole('button', { name: 'Sign in to move Onshape' })).toBeInTheDocument()
   })
 
+  it('offers the move as a confirmed action naming the project and the grant once the account is proved', async () => {
+    const accounts = mockAccounts({
+      connections: [LINKED],
+      legacy: [{ ...LEGACY, claimable_connection_id: LINKED.id }]
+    })
+    render(<ConnectedAccountsCard />)
+    expect(screen.queryByRole('button', { name: 'Sign in to move Onshape' })).toBeNull()
+    expect(screen.getByRole('note')).toHaveTextContent('Your linked account matches')
+    await userEvent.click(screen.getByRole('button', { name: 'Move Onshape to your account' }))
+    // Nothing moves before the confirmation; the dialog says exactly what happens.
+    expect(accounts.move).not.toHaveBeenCalled()
+    expect(
+      screen.getByText(/Rover will use your linked Onshape account \(read only access\)/)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/own Onshape token — and any add-on grant on it — is removed/)
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Move' }))
+    expect(accounts.move).toHaveBeenCalledWith(
+      expect.objectContaining({ source_ids: ['s-legacy'] })
+    )
+  })
+
+  it('keeps the move dialog open and says so when the move fails', async () => {
+    const accounts = mockAccounts({
+      connections: [LINKED],
+      legacy: [{ ...LEGACY, claimable_connection_id: LINKED.id }]
+    })
+    vi.mocked(accounts.move).mockResolvedValue(false)
+    render(<ConnectedAccountsCard />)
+    await userEvent.click(screen.getByRole('button', { name: 'Move Onshape to your account' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move' }))
+    expect(screen.getByText(/Couldn't move this Onshape connection/)).toBeInTheDocument()
+  })
+
   it('lists every catalog tool — file-export and local tools say where they connect instead, after the account tools', () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
@@ -211,6 +255,13 @@ describe('copy helpers', () => {
     expect(
       legacyText({ ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] })
     ).toMatch(/Rover and Arm.*those projects keep syncing/)
+    expect(legacyText({ ...LEGACY, claimable_connection_id: 'c1' })).toMatch(
+      /linked account matches/
+    )
+    expect(moveDetail('Onshape', LEGACY, LINKED)).toMatch(
+      /Rover will use your linked Onshape account \(read only access\)/
+    )
+    expect(moveDetail('Onshape', LEGACY, null)).toMatch(/\(its access\)/)
     expect(reauthText({ ...LINKED, status: 'error', needs_reauth: 'token_error' })).toMatch(
       /last sign-in failed/
     )

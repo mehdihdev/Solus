@@ -703,8 +703,8 @@ export interface paths {
          * List Legacy
          * @description The caller's project-scoped grants from before account-level connections
          *     that are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as
-         *     "sign in once to move it"; the sign-in proves the account and claims them.
-         *     Nothing here is a usable grant — no documents, no revoke.
+         *     "sign in once to move it" — or, when the caller already holds the proving
+         *     grant, offers the confirmed move. Nothing here is a usable grant.
          */
         get: operations["list_legacy_api_v1_users_me_connections_legacy_get"];
         put?: never;
@@ -726,11 +726,12 @@ export interface paths {
         put?: never;
         /**
          * Adopt
-         * @description Claim the caller's legacy project-scoped grants to account scope
-         *     (SOLUSDEV-242 / H2) — only where the caller has PROVED the account with a
-         *     connection of their own (no sign-in for those, no copied secret, nothing
-         *     widened). Idempotent; Home calls it before listing. A grant whose account the
-         *     caller has not proved stays project-owned and is listed by `/legacy`.
+         * @description Move the NAMED legacy grants to the caller's account (SOLUSDEV-242 / H2)
+         *     — explicit and confirmed by the caller, only for an account they have
+         *     PROVED with a CONNECTED connection of their own, only in live projects they
+         *     are a non-viewer member of. The source mirrors the grant (no copied secret,
+         *     the project keeps syncing); nothing widens without `confirm_access`. The
+         *     project-owned token family is swept after the commit.
          */
         post: operations["adopt_api_v1_users_me_connections_adopt_post"];
         delete?: never;
@@ -2068,6 +2069,21 @@ export interface components {
          * @enum {string}
          */
         ActionMode: "guide" | "do";
+        /**
+         * AdoptRequest
+         * @description SOLUSDEV-242 (H2): the explicit, confirmed move of NAMED legacy sources
+         *     to the caller's proved account. `confirm_access` is the caller accepting a
+         *     grant wider than a source ever recorded (shown in the confirmation).
+         */
+        AdoptRequest: {
+            /** Source Ids */
+            source_ids: string[];
+            /**
+             * Confirm Access
+             * @default false
+             */
+            confirm_access: boolean;
+        };
         /**
          * AttachmentIn
          * @description A measurable attachment fact for classify/completion requests (MO-04):
@@ -4109,7 +4125,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -4120,6 +4140,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

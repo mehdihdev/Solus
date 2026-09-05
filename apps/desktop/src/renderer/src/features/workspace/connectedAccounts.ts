@@ -18,19 +18,42 @@ export function scopeText(connection: Connection): string {
   return 'Access level not recorded'
 }
 
-/** A project-scoped grant not yet at account scope: where it is used, and
- *  that one sign-in moves it. Plain about what keeps working meanwhile. */
-export function legacyText(legacy: LegacyConnection): string {
+function projectWords(legacy: LegacyConnection): { where: string; they: string; keep: string } {
   const names = legacy.projects.map((p) => p.name).filter(Boolean)
-  const where =
-    names.length === 0
-      ? 'a project'
-      : names.length <= 2
-        ? names.join(' and ')
-        : `${names.length} projects`
+  if (names.length === 0) return { where: 'a project', they: 'it', keep: 'keeps' }
+  if (names.length === 1) return { where: names[0], they: names[0], keep: 'keeps' }
+  const where = names.length <= 2 ? names.join(' and ') : `${names.length} projects`
+  return { where, they: 'those projects', keep: 'keep' }
+}
+
+/** A project-scoped grant not yet at account scope: where it is used, and
+ *  what moves it. Plain about what keeps working meanwhile. */
+export function legacyText(legacy: LegacyConnection): string {
+  const { where, they, keep } = projectWords(legacy)
+  if (legacy.claimable_connection_id) {
+    return (
+      `Connected in ${where} before account-level connections. Your linked account matches — ` +
+      `move it so ${they} use${they === 'it' || they === where ? 's' : ''} your account grant.`
+    )
+  }
   return (
     `Connected in ${where} before account-level connections. Sign in once to move it to ` +
-    `your account — ${names.length === 1 ? names[0] : 'those projects'} keep${names.length === 1 ? 's' : ''} syncing until then.`
+    `your account — ${they} ${keep} syncing until then.`
+  )
+}
+
+/** The confirmation must say exactly what a move does (CLAUDE.md §7). */
+export function moveDetail(
+  providerName: string,
+  legacy: LegacyConnection,
+  grant: Connection | null
+): string {
+  const { where } = projectWords(legacy)
+  const scope = grant ? scopeText(grant).toLowerCase() : 'its'
+  return (
+    `${where} will use your linked ${providerName} account (${scope} access). ` +
+    `The project's own ${providerName} token — and any add-on grant on it — is removed; ` +
+    `syncing continues on your account.`
   )
 }
 

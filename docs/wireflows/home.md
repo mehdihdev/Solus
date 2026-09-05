@@ -47,6 +47,9 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 |      Connected in a project, not yet on your account   [Sign in to move]   |
 |      ⚠ Connected in Rover before account-level connections. Sign in once   |
 |        to move it to your account — Rover keeps syncing until then.         |
+|      (once signed in:)                          [Move to your account]      |
+|      ⚠ …Your linked account matches — move it so Rover uses your account   |
+|        grant.  → confirmation names the project, the grant, the removal     |
 | [Gl] GitLab                                                                 |
 |      Not connected                                            [Connect]     |
 | [Ki] KiCad                                                                  |
@@ -69,16 +72,21 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **Legacy grants** (`GET /users/me/connections/legacy`): a project-scoped grant
   from before account-level connections, made by this user, is listed under its
   provider as "Connected in a project, not yet on your account" with a note
-  naming the projects and stating plainly that they keep syncing until it is
-  moved. It is not a usable grant here (no Revoke). **Sign in to move** runs the
-  account-mode wizard; the finished sign-in PROVES the account and the server
-  claims every legacy grant for that account the user can act on (the source
-  then mirrors the account grant; its own token is retired after the commit).
-  A grant whose account the user has already connected here is claimed on the
-  next Home load with no sign-in (`POST /users/me/connections/adopt` runs before
-  the list). A project whose recorded access mode differs from the account
-  grant's is never moved silently — it keeps its own token (its Sources page is
-  where that changes; W2 follow-up).
+  naming the projects. It is not a usable grant here (no Revoke). Two states:
+  - no proving grant yet → note "…Sign in once to move it to your account —
+    Rover keeps syncing until then." and **Sign in to move** (the account-mode
+    wizard; the finished sign-in proves the account, nothing moves yet);
+  - the user holds the matching CONNECTED grant → note "…Your linked account
+    matches — move it so Rover uses your account grant." and **Move to your
+    account**, which opens a confirmation stating exactly what happens: "Rover
+    will use your linked Onshape account (read only access). The project's own
+    Onshape token — and any add-on grant on it — is removed; syncing continues
+    on your account." Confirm → `POST /users/me/connections/adopt` with those
+    source ids and `confirm_access: true` → the row joins the linked account's
+    "Used in". A move is never a side effect of loading Home or of a handshake.
+    A project whose recorded access mode differs from the account grant's is
+    never moved — it keeps its own token (its Sources page is where that changes;
+    W2 follow-up).
 - **Re-authorize** appears on a row whose last sign-in failed, with the
   provider's message; it runs the same account-mode wizard and lands on the SAME
   row (I1 dedupes by account), so the old token is replaced only once the new

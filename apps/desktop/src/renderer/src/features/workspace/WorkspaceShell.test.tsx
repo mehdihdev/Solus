@@ -499,14 +499,12 @@ describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-2
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
     renderShell()
     act(() => {
-      useShellStore
-        .getState()
-        .setToast({
-          title: 'SOL replied',
-          body: 'open SOL to read it',
-          action: 'View',
-          screen: 'sol'
-        })
+      useShellStore.getState().setToast({
+        title: 'SOL replied',
+        body: 'open SOL to read it',
+        action: 'View',
+        screen: 'sol'
+      })
     })
     expect(screen.getByText('SOL replied')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))

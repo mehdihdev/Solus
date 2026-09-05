@@ -10,7 +10,7 @@ Account-scoped OAuth (`oauth/start` without a project), the Home **Connected acc
 sign-in when a linked account exists, the account document listing, and the per-project
 document add/remove routes. H2's acceptance "connect Onshape once in Home; pick two documents in
 Workspace with no second OAuth" is I1's model; it is re-verified here by
-`test_a_second_project_reuses_the_adopted_account_with_no_oauth` and the live run below.
+`test_a_claimed_source_serves_a_second_project_with_no_oauth` and the live run below.
 
 ## What H2 built
 
@@ -22,15 +22,18 @@ moved blind. Instead:
 
 - `GET /users/me/connections/legacy` lists the caller's own legacy grants (creator hint, live
   non-viewer membership, live project) so Home can say "sign in once to move it".
-- A finished Home handshake PROVES a provider account; the server then claims every legacy source
-  for that account the user can act on (`claim_legacy_sources`, also run by
-  `POST /users/me/connections/adopt` for accounts already connected on Home, before the list).
-  The source MIRRORS the grant — nothing is copied, no secret exists without a row that owns it —
-  and keeps syncing. Concurrent claims serialise (`FOR UPDATE`); the retired project-owned refs
-  are remembered on the source and deleted after the commit, a failed delete retried, never leaked.
-- **Nothing widened.** A source whose recorded access mode differs from the grant's is left
-  project-owned and reported (`skipped: access_mismatch`); a source with no recorded mode takes the
-  grant the user just chose. Connector scope sets are untouched and asserted.
+- A finished Home handshake PROVES a provider account (`claimable_connection_id` on the legacy
+  row); the MOVE itself is the user's explicit, confirmed request naming the sources
+  (`POST /users/me/connections/adopt {source_ids, confirm_access}`) — never a side effect of
+  loading Home or of a handshake. The source MIRRORS the grant — nothing is copied, no secret
+  exists without a row that owns it — and keeps syncing. The grant is re-read FOR UPDATE and the
+  sources locked; the project-owned token family is DERIVED from the source id (an underscore
+  marker, never patchable, never serialized, names no ref) and deleted after the commit, a failed
+  delete retried, never leaked, never a 500.
+- **Nothing widened.** A recorded access mismatch is refused (`skipped: access_mismatch`); a
+  `write` grant on a source that never recorded its access needs the user's explicit acceptance
+  (`confirm_access`, stated in the confirmation) or is refused (`access_unknown`). Connector scope
+  sets are untouched and asserted.
 - Membership is enforced on every read and write (removed members, viewers and deleted projects
   see and move nothing); the adopt route requires a verified user.
 
@@ -39,7 +42,9 @@ tools link an account; committed-export and local-companion tools say where they
 instead. Linked rows state their scope (Read only / Read and edit / Access level not recorded);
 legacy rows read "Connected in a project, not yet on your account" with a note naming the projects
 and stating plainly that they keep syncing until moved, plus **Sign in to move** (the account-mode
-wizard); a row whose last sign-in failed offers **Re-authorize** with the provider's message.
+wizard) or, once the account is proved, **Move to your account** behind a confirmation that names
+the projects, the grant, and the removal of the project's own token; a row whose last sign-in
+failed offers **Re-authorize** with the provider's message.
 Re-authorize/Sign in land on the same row (I1's dedupe), so the old token is replaced only once the
 new one succeeded.
 
@@ -75,9 +80,11 @@ route and the two new row fields), `docs/wireflows/home.md` (new "Connected acco
 ## Decisions under delegated judgment
 
 1. **No silent migration.** The ticket allows "where re-consent is unavoidable, say so plainly";
-   proving whose account a legacy token belongs to IS unavoidable without a handshake, so the one
-   sign-in per account is the migration, and Home says exactly that. A user who has already linked
-   the account on Home gets the move with no sign-in.
+   proving whose account a legacy token belongs to IS unavoidable without a handshake, so one
+   sign-in per account is the proof, and the move is one confirmed click per legacy row that names
+   what changes (CLAUDE.md §7: destructive effects need explicit confirmation with the concrete
+   action shown). A user who has already linked the account on Home skips the sign-in, not the
+   confirmation.
 2. Ownership follows the proved provider account (`account_external_id` vouched by the provider
    at handshake), never `created_by`; `created_by` only decides what Home SHOWS as legacy.
 3. Token-connected (PAT) legacy sources are claimable the same way (a PAT for the same account).

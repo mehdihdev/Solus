@@ -13,6 +13,7 @@ picker and gated on a verified user.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Annotated, Any
 
@@ -31,20 +32,24 @@ from solus_api.deps import (
     SessionDep,
 )
 from solus_api.models import ConnectionStatus, Project
-from solus_api.schemas import serialize_connection, serialize_legacy_connection
+from solus_api.schemas import AdoptRequest, serialize_connection, serialize_legacy_connection
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
     claim_legacy_sources,
+    claimable_connections,
     connection_projects,
     legacy_sources,
     list_documents,
     list_live_connections,
+    named_legacy_sources,
     owned_connection,
     revoke_connection,
     sweep_retired_secrets,
 )
 from solus_api.services.events import emit_event
+
+logger = logging.getLogger("solus.connections")
 
 router = APIRouter(prefix="/api/v1/users/me/connections")
 
@@ -62,8 +67,8 @@ async def list_legacy(
 ) -> dict[str, Any]:
     """The caller's project-scoped grants from before account-level connections
     that are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as
-    "sign in once to move it"; the sign-in proves the account and claims them.
-    Nothing here is a usable grant — no documents, no revoke."""
+    "sign in once to move it" — or, when the caller already holds the proving
+    grant, offers the confirmed move. Nothing here is a usable grant."""
     rows = await legacy_sources(session, registry, user)
     names: dict[uuid.UUID, str] = {}
     if rows:
@@ -71,35 +76,68 @@ async def list_legacy(
             select(Project.id, Project.name).where(Project.id.in_({r.project_id for r in rows}))
         )
         names = {project_id: name for project_id, name in found.all()}
+    proving = await claimable_connections(session, user, rows)
     groups: dict[tuple[str, str], list[Any]] = {}
     for source in rows:
         key = (source.type.value, source.account_external_id or f"source:{source.id}")
         groups.setdefault(key, []).append(source)
     return envelope(
         [
-            serialize_legacy_connection(provider, sources[0].account_login, sources, names)
+            serialize_legacy_connection(
+                provider,
+                sources[0].account_login,
+                sources,
+                names,
+                next((proving[s.id].id for s in sources if s.id in proving), None),
+            )
             for (provider, _), sources in groups.items()
         ]
     )
 
 
+async def _sweep_after_commit(session: SessionDep, secret_store: SecretStoreDep, user: Any) -> None:
+    """Best effort, never a 500 on top of a committed claim: the marker makes
+    a failed sweep the next call's work (security/code review follow-ups)."""
+    try:
+        if await sweep_retired_secrets(session, secret_store, user):
+            await session.commit()
+    except Exception:  # noqa: BLE001 - logged, retried next time
+        logger.warning("retired-secret sweep deferred user=%s", user.id, exc_info=True)
+        await session.rollback()
+
+
 @router.post("/adopt")
 async def adopt(
+    body: AdoptRequest,
     user: CurrentUser,
     session: SessionDep,
     secret_store: SecretStoreDep,
     registry: RegistryDep,
     _verified: RequireVerified,
 ) -> dict[str, Any]:
-    """Claim the caller's legacy project-scoped grants to account scope
-    (SOLUSDEV-242 / H2) — only where the caller has PROVED the account with a
-    connection of their own (no sign-in for those, no copied secret, nothing
-    widened). Idempotent; Home calls it before listing. A grant whose account the
-    caller has not proved stays project-owned and is listed by `/legacy`."""
+    """Move the NAMED legacy grants to the caller's account (SOLUSDEV-242 / H2)
+    — explicit and confirmed by the caller, only for an account they have
+    PROVED with a CONNECTED connection of their own, only in live projects they
+    are a non-viewer member of. The source mirrors the grant (no copied secret,
+    the project keeps syncing); nothing widens without `confirm_access`. The
+    project-owned token family is swept after the commit."""
+    wanted = set(body.source_ids)
+    legacy = await named_legacy_sources(session, registry, user, wanted)
+    proving = await claimable_connections(session, user, legacy)
+    by_connection: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for source in legacy:
+        connection = proving.get(source.id)
+        if connection is not None:
+            by_connection.setdefault(connection.id, set()).add(source.id)
     adopted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for connection in await list_live_connections(session, user):
-        claimed, rejected = await claim_legacy_sources(session, registry, user, connection)
+        ids = by_connection.get(connection.id)
+        if not ids:
+            continue
+        claimed, rejected = await claim_legacy_sources(
+            session, registry, user, connection, ids, confirm_access=body.confirm_access
+        )
         skipped.extend(rejected)
         for source in claimed:
             record_activity(
@@ -119,6 +157,10 @@ async def adopt(
                     "project_id": source.project_id,
                 }
             )
+    unproved = wanted - {s.id for s in legacy if s.id in proving}
+    skipped.extend(
+        {"source_id": sid, "project_id": None, "reason": "not_claimable"} for sid in unproved
+    )
     if adopted:
         emit_event(
             session,
@@ -127,7 +169,7 @@ async def adopt(
             payload={"sources": len(adopted), "skipped": len(skipped)},
         )
     await session.commit()
-    await sweep_retired_secrets(session, secret_store, user)
+    await _sweep_after_commit(session, secret_store, user)
     return envelope({"adopted": adopted, "skipped": skipped})
 
 

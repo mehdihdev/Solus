@@ -298,8 +298,21 @@ def serialize_connection(
     }
 
 
+class AdoptRequest(StrictModel):
+    """SOLUSDEV-242 (H2): the explicit, confirmed move of NAMED legacy sources
+    to the caller's proved account. `confirm_access` is the caller accepting a
+    grant wider than a source ever recorded (shown in the confirmation)."""
+
+    source_ids: list[UUID] = Field(min_length=1, max_length=50)
+    confirm_access: bool = False
+
+
 def serialize_legacy_connection(
-    provider: str, account_login: str | None, sources: list[Source], names: dict[Any, str]
+    provider: str,
+    account_login: str | None,
+    sources: list[Source],
+    names: dict[Any, str],
+    claimable_connection_id: UUID | None,
 ) -> dict[str, Any]:
     """A project-scoped grant not yet claimed to account scope (SOLUSDEV-242 / H2):
     what Home lists as "sign in once to move it". Identity and where it is used;
@@ -311,6 +324,9 @@ def serialize_legacy_connection(
             {"project_id": s.project_id, "name": names.get(s.project_id, "")} for s in sources
         ],
         "source_ids": [s.id for s in sources],
+        # The caller's CONNECTED grant that proves this account, when they hold
+        # one: Home then offers the confirmed move instead of a sign-in.
+        "claimable_connection_id": claimable_connection_id,
     }
 
 

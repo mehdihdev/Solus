@@ -24,6 +24,9 @@ export interface AccountConnectionsData {
   refresh: () => Promise<void>
   /** Revoke a grant. Resolves false on failure so the caller can say so. */
   revoke: (connectionId: string) => Promise<boolean>
+  /** Move a legacy grant's sources to the proved account (confirmed by the
+   *  user). Resolves false on failure or when nothing moved. */
+  move: (legacy: LegacyConnection) => Promise<boolean>
 }
 
 /** The linked, usable account for a provider, if the user has one. */
@@ -46,11 +49,9 @@ export function useAccountConnections(): AccountConnectionsData {
   const load = useCallback(async (): Promise<void> => {
     if (!fetchEnabled) return
     try {
-      // SOLUSDEV-242 (H2): legacy project-scoped grants for an account the
-      // user has already proved bind to it BEFORE the list is read, so Home
-      // never shows "Not connected" for a working account. A failed claim is
-      // not a failed listing; the unclaimed ones list separately.
-      await adoptConnections().catch(() => undefined)
+      // SOLUSDEV-242 (H2): legacy project-scoped grants list separately and
+      // move only on the user's confirmed request (`move`) — never as a side
+      // effect of loading Home. A failed legacy read is an empty list.
       const [listed, unclaimed] = await Promise.all([
         listConnections(),
         listLegacyConnections().catch(() => [] as LegacyConnection[])
@@ -89,5 +90,21 @@ export function useAccountConnections(): AccountConnectionsData {
     [load]
   )
 
-  return { status, connections, legacy, refresh: load, revoke }
+  const move = useCallback(
+    async (legacy: LegacyConnection): Promise<boolean> => {
+      try {
+        const result = await adoptConnections({
+          source_ids: legacy.source_ids,
+          confirm_access: true
+        })
+        await load().catch(() => undefined)
+        return result.adopted.length > 0
+      } catch {
+        return false
+      }
+    },
+    [load]
+  )
+
+  return { status, connections, legacy, refresh: load, revoke, move }
 }

@@ -2,10 +2,10 @@
 
 OAuth binds the WHOLE ACCOUNT once, on Home. Picking documents happens later in a project's
 Sources page against that account. A project-scoped connection made before account-level
-connections is listed on Home as "sign in once to move it": ONE sign-in proves the account and
-moves every such grant for it (no second OAuth per project); a grant for an account the user
-already connected on Home moves on the next Home load with no sign-in at all. Nothing is copied,
-nothing is widened, and the project keeps syncing on its own token until the move. Every tool the
+connections is listed on Home as "sign in once to move it": ONE sign-in proves the account, after
+which the row offers **Move to your account** — an explicit confirmation naming the projects and
+the grant (no second OAuth per project, never a silent move). Nothing is copied, nothing is
+widened, and the project keeps syncing on its own token until the move. Every tool the
 registry knows is listed — file-export and local tools say they connect per project. This plan
 assumes the running application and nothing else.
 
@@ -44,8 +44,16 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
 6. Home → **Sign in to move** on the Onshape row. Expected: the connect wizard opens in account mode,
    rail **Choose access → Sign in** only (no document picking). Choose **Read only**, complete the
    sign-in in the browser **with the same Onshape account the legacy source used**. ☐
-7. Expected: the wizard ends "Connected as <login>". Home's Onshape row now reads "Used in Rover ·
-   Read only" with **Revoke**; the "not yet on your account" row is gone. ☐
+7. Expected: the wizard ends "Connected as <login>". Home now shows TWO Onshape rows: the linked
+   account ("Not used by any project yet · Read only", Revoke) AND the legacy row, whose note now
+   reads "…Your linked account matches — move it so Rover uses your account grant." with a
+   **Move to your account** button. Nothing has moved yet: Rover → Sources still shows the old
+   source unchanged. ☐
+   7b. Click **Move to your account**. Expected: a dialog "Move Onshape to your account?" stating
+   "Rover will use your linked Onshape account (read only access). The project's own Onshape
+   token — and any add-on grant on it — is removed; syncing continues on your account." Cancel:
+   nothing changes. Confirm: the legacy row disappears and the linked row reads "Used in Rover ·
+   Read only". ☐
 8. Rover → Sources: the source is still connected; **Sync now** works (now on the account grant).
    Rover's recent activity shows "moved the onshape connection to account scope". ☐
 9. Open **Arm → Sources**, click the **Onshape** tile. Expected: rail **Pick documents → Build graph**
@@ -59,8 +67,11 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
 
 11. With an Onshape account connected on Home (Flow 4 step 13), have an operator seed a legacy
     project-scoped source for the SAME account in another project (or connect one through an old
-    wizard build). Open Home. Expected: it is claimed on load — the row's "Used in" gains that
-    project, no wizard, no browser. ☐
+    wizard build). Open Home. Expected: a legacy row with **Move to your account** (no wizard, no
+    browser); nothing moves until you confirm the dialog. Reload Home twice: still unmoved. ☐
+    11b. If the linked account is **Read and edit** and the legacy source never recorded an access
+    mode, the dialog says "(read and edit access)" — confirming is the user's explicit acceptance
+    of the wider grant for that project. ☐
 12. A legacy source whose recorded access mode differs from the account grant (e.g. the project
     recorded read-only, the account is read and edit) is **not** moved: it stays listed as legacy
     and keeps its own token; nothing on Home widens or narrows it. ☐
@@ -91,7 +102,10 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
 19. Cancel an OAuth sign-in in the browser. Expected: the wizard shows the cancellation; Home shows
     no half-made account (a pending handshake never lists). ☐
 20. On a row whose last sign-in failed (status error): the note shows the provider's message plus
-    "Re-authorize to reconnect." and Re-authorize is offered. Such a row never moves a legacy grant. ☐
+    "Re-authorize to reconnect." and Re-authorize is offered. Such a row never proves an account
+    (the legacy row keeps offering Sign in to move). ☐
+    20b. Revoke the linked account while a legacy row shows Move to your account, then click Move.
+    Expected: the move fails honestly (dialog error) and Rover keeps its own working token. ☐
 21. **Revoke** the Onshape row. Expected: the confirmation names Rover and Arm; after confirming, both
     projects' Onshape sources show disconnected and the row is gone. ☐
 22. Desktop loopback: the OAuth redirect to `http://127.0.0.1:<port>/...` and `http://localhost:<port>/...`
