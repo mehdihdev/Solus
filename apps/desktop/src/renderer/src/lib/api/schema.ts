@@ -3481,6 +3481,7 @@ export interface operations {
                 type?: string | null;
                 domain?: string | null;
                 actor?: string | null;
+                project_id?: string | null;
             };
             header?: never;
             path: {

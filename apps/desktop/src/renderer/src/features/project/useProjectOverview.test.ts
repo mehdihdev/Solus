@@ -1,7 +1,7 @@
 // Project hub overview data (SOLUSDEV-164): project detail + sources for the
 // open project, degrading to offline like useGraphSummary (SOLUSDEV-152).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { renderHook, waitFor, act } from '@testing-library/react'
 import { useProjectOverview } from './useProjectOverview'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
@@ -71,5 +71,37 @@ describe('useProjectOverview', () => {
     const { result } = renderHook(() => useProjectOverview())
     await waitFor(() => expect(result.current.status).toBe('offline'))
     expect(result.current.sources).toHaveLength(0)
+  })
+})
+
+describe('useProjectOverview — project switch mid-flight (SOLUSDEV-242)', () => {
+  it('drops a response for a project the user has since left', async () => {
+    useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover MK2' } })
+    let resolveA: (detail: resources.ProjectDetail) => void = () => undefined
+    // A's detail hangs until we release it; B's answers at once.
+    vi.mocked(resources.getProject).mockImplementation((id) =>
+      id === 'p1'
+        ? new Promise<resources.ProjectDetail>((resolve) => (resolveA = resolve))
+        : Promise.resolve({
+            ...DETAIL,
+            id: 'p2',
+            name: 'Arm',
+            stats: { entities: 1, relations: 0 }
+          })
+    )
+    vi.mocked(resources.listSources).mockResolvedValue([])
+    const { result, rerender } = renderHook(() => useProjectOverview())
+    act(() => {
+      useWorkspaceStore.setState({ project: { id: 'p2', name: 'Arm' } })
+    })
+    rerender()
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.name).toBe('Arm')
+    await act(async () => {
+      resolveA(DETAIL)
+      await Promise.resolve()
+    })
+    expect(result.current.name).toBe('Arm')
+    expect(result.current.entityCount).toBe(1)
   })
 })

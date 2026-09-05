@@ -47,9 +47,14 @@ export function useProjectSources(): ProjectSourcesData {
       return
     }
     try {
-      setSources(await listSources(projectId))
+      const next = await listSources(projectId)
+      // A response for a project the user has since left must never paint
+      // its documents over the new project's (SOLUSDEV-242).
+      if (useWorkspaceStore.getState().project?.id !== projectId) return
+      setSources(next)
       setStatus('ready')
     } catch {
+      if (useWorkspaceStore.getState().project?.id !== projectId) return
       // Now that this also runs on a 10s timer, a single failed refresh must not
       // blank a list that is already on screen — one blip would otherwise wipe
       // the page and then restore it a moment later. Only report offline when

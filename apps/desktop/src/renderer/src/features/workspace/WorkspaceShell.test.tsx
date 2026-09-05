@@ -16,6 +16,7 @@ import type { Page } from '../../lib/api/client'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
 import { catalogItem, installRow, manifest } from '../extensions/testing/fixtures'
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
+import { graphCache } from '../graph/graphCache'
 
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
@@ -236,7 +237,13 @@ describe('WorkspaceShell — Store and project switching (SOLUSDEV-235)', () => 
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
     await userEvent.click(await screen.findByText('Rover MK3'))
     // Context changed, but we stayed on Live Bench (no jump to Overview).
-    expect(useWorkspaceStore.getState().project).toEqual({ id: 'p2', name: 'Rover MK3' })
+    expect(useWorkspaceStore.getState().project).toEqual({
+      id: 'p2',
+      name: 'Rover MK3',
+      teamId: 't1'
+    })
+    // The project's team becomes the active team (SOLUSDEV-242).
+    expect(useWorkspaceStore.getState().teamId).toBe('t1')
     expect(useShellStore.getState().lastMain).toBe('bench')
     // The topbar now shows the switched-to project as the active context.
     expect(screen.getByText('Rover MK3')).toBeInTheDocument()
@@ -432,7 +439,7 @@ describe('WorkspaceShell — extension rail limits and project scope (EXT-14)', 
     await userEvent.click(await screen.findByText('Rover MK3'))
     expect(screen.queryByTestId('ext-page-screen')).toBeNull()
     expect(useShellStore.getState().lastMain).toBe('overview')
-    expect(useWorkspaceStore.getState().project).toEqual({ id: 'p2', name: 'Rover MK3' })
+    expect(useWorkspaceStore.getState().project).toMatchObject({ id: 'p2', name: 'Rover MK3' })
   })
 })
 
@@ -484,5 +491,58 @@ describe('WorkspaceShell — email verification banner', () => {
     renderShell()
     await userEvent.click(screen.getByText('Resend email'))
     expect(screen.getByText('Verification email sent.')).toBeInTheDocument()
+  })
+})
+
+describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-242)', () => {
+  it('drops a toast raised under the previous project', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
+    renderShell()
+    act(() => {
+      useShellStore
+        .getState()
+        .setToast({
+          title: 'SOL replied',
+          body: 'open SOL to read it',
+          action: 'View',
+          screen: 'sol'
+        })
+    })
+    expect(screen.getByText('SOL replied')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
+    await userEvent.click(await screen.findByText('Rover MK3'))
+    expect(useShellStore.getState().toast).toBe(null)
+    expect(screen.queryByText('SOL replied')).toBeNull()
+  })
+
+  it('leaves an open alert detail for Overview — the alert id belonged to the previous project', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
+    renderShell()
+    act(() => {
+      useShellStore
+        .getState()
+        .setToast({ title: 'Alert', body: 'USB-C port blocked', action: 'View', alertId: 'al-1' })
+    })
+    // The toast's View (the menu bar has a 'View' menu too; the toast renders last).
+    await userEvent.click(screen.getAllByRole('button', { name: 'View' }).at(-1) as HTMLElement)
+    expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
+    await userEvent.click(await screen.findByText('Rover MK3'))
+    expect(useShellStore.getState().lastMain).toBe('overview')
+    expect(document.querySelector('[data-screen-label="Overview"]')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: /back/i })).toBeNull()
+  })
+
+  it('clears the retained entity list on sign-out, like the focus cache (WS-01)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
+    graphCache.set('p1', {
+      version: 'v',
+      entities: [],
+      counts: { entityCount: 0, relationCount: 0, sourceCount: 0 },
+      fetchedAtMs: Date.now()
+    })
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(graphCache.size).toBe(0))
   })
 })

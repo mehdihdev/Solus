@@ -29,8 +29,14 @@ async def list_activity(
     type: Annotated[str | None, Query()] = None,  # noqa: A002 - API.md filter name
     domain: Annotated[str | None, Query()] = None,
     actor: Annotated[uuid.UUID | None, Query()] = None,
+    project_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> dict[str, Any]:
+    # Team scope FIRST; every filter below narrows within it. A project id from
+    # another team therefore matches nothing rather than leaking its rows.
     conditions: list[ColumnElement[bool]] = [Activity.team_id == ctx.team.id]
+    if project_id is not None:
+        # SOLUSDEV-242 (HOME H1): Home renders recent activity per project.
+        conditions.append(Activity.project_id == project_id)
     if type is not None:
         conditions.append(Activity.type == type)
     if domain is not None:

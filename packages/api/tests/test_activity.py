@@ -158,3 +158,61 @@ async def test_activity_pagination(client: AsyncClient, alice_headers: dict[str,
         headers=alice_headers,
     )
     assert rest.json()["meta"]["has_next"] is False
+
+
+async def test_activity_filter_by_project(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """SOLUSDEV-242 (HOME H1): Home shows recent activity PER PROJECT, so the
+    feed filters by `project_id` and `meta.total` follows the filter."""
+    team = await create_team(client, alice_headers)
+    rover = await create_project(client, alice_headers, team["id"], "Rover")
+    arm = await create_project(client, alice_headers, team["id"], "Arm")
+    resp = await client.patch(
+        f"/api/v1/projects/{rover['id']}", json={"name": "Rover MK2"}, headers=alice_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?project_id={rover['id']}", headers=alice_headers
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    types = [a["type"] for a in body["data"]]
+    assert types == ["project.updated", "project.created"]
+    assert all(a["project_id"] == rover["id"] for a in body["data"])
+    assert body["meta"]["total"] == 2
+
+    only_arm = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?project_id={arm['id']}", headers=alice_headers
+    )
+    assert [a["type"] for a in only_arm.json()["data"]] == ["project.created"]
+    assert only_arm.json()["meta"]["total"] == 1
+
+
+async def test_activity_project_filter_stays_team_scoped(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """A project id from ANOTHER team filters to nothing on this team's feed —
+    the team scope is applied first, the project filter narrows within it
+    (CLAUDE.md §7 cross-tenant isolation)."""
+    team_a = await create_team(client, alice_headers)
+    team_b = await create_team(client, bob_headers)
+    foreign = await create_project(client, bob_headers, team_b["id"], "Theirs")
+
+    resp = await client.get(
+        f"/api/v1/teams/{team_a['id']}/activity?project_id={foreign['id']}", headers=alice_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] == []
+    assert resp.json()["meta"]["total"] == 0
+
+
+async def test_activity_project_filter_rejects_non_uuid(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    team = await create_team(client, alice_headers)
+    resp = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?project_id=not-a-uuid", headers=alice_headers
+    )
+    assert resp.status_code == 422

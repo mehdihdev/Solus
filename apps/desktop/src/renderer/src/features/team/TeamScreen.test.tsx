@@ -241,7 +241,9 @@ describe('TeamScreen — live (API-backed)', () => {
     await waitFor(() =>
       expect(vi.mocked(resources.createProject)).toHaveBeenCalledWith('t1', { name: 'Arm' })
     )
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith({ id: 'p2', name: 'Arm' }))
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledWith({ id: 'p2', name: 'Arm', teamId: 't1' })
+    )
   })
 
   it('opens an existing project when its row is clicked', async () => {
@@ -249,7 +251,7 @@ describe('TeamScreen — live (API-backed)', () => {
     render(<TeamScreen onOpenProject={onOpen} />)
     await waitFor(() => expect(screen.getByText('Rover Nav')).toBeInTheDocument())
     await userEvent.click(screen.getByText('Rover Nav'))
-    expect(onOpen).toHaveBeenCalledWith({ id: 'p1', name: 'Rover Nav' })
+    expect(onOpen).toHaveBeenCalledWith({ id: 'p1', name: 'Rover Nav', teamId: 't1' })
   })
 
   it('shows no view-all affordance when the feed fits the panel', async () => {

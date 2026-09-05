@@ -407,11 +407,13 @@ describe('team resources', () => {
     const { client, calls } = stubClient([])
     await listActivityPage('t1', { cursor: 'cur9' }, client)
     await listActivityPage('t1', {}, client)
+    await listActivityPage('t1', { projectId: 'p1', limit: 3 }, client)
     await listNotificationsPage('cur9', client)
     await listNotificationsPage(undefined, client)
     expect(calls.map((c) => c.path)).toEqual([
       '/teams/t1/activity?cursor=cur9',
       '/teams/t1/activity',
+      '/teams/t1/activity?limit=3&project_id=p1',
       '/users/me/notifications?cursor=cur9',
       '/users/me/notifications'
     ])

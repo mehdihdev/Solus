@@ -13,7 +13,7 @@ import { getProject } from '../../lib/api/resources'
 import { classifyFetchError } from '../../lib/api/errors'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { useFocusStore } from './focusStore'
+import { switchWorkspaceProject } from './projectSwitch'
 
 export function useValidateProject(): void {
   const isAuthenticated = useAuthStore((s) => s.status === 'authenticated')
@@ -38,11 +38,9 @@ export function useValidateProject(): void {
       if (cancelled || classifyFetchError(error) !== 'gone') return
       // Re-read: the user may have switched projects while this was in flight.
       if (useWorkspaceStore.getState().project?.id !== projectId) return
-      useWorkspaceStore.getState().setProject(null)
-      // The one setProject path outside WorkspaceShell — clear the focus like
-      // the shell's own switch/sign-out paths do, so no widget keeps polling a
-      // focus scoped to the dead project.
-      useFocusStore.getState().clearProject()
+      // Through the shell's own choke point, so no widget keeps polling a
+      // focus scoped to the dead project (SOLUSDEV-242).
+      switchWorkspaceProject(null, 'validation')
     })
     return () => {
       cancelled = true

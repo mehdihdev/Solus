@@ -182,3 +182,25 @@ async def test_a_removed_member_cannot_scope_events_to_the_old_project(
     assert resp.status_code == 202
     rows = await _stored(db)
     assert len(rows) == 1 and rows[0].project_id is None
+
+
+async def test_project_switched_is_a_client_event(client: AsyncClient, db: AsyncSession) -> None:
+    """SOLUSDEV-242 (HOME H1): the desktop reports project switches so the
+    data-collection system can see how people move across projects. Scoped to
+    the project being opened; the previous project rides in the payload."""
+    alice_id = await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    event = {
+        "event_type": "project.switched",
+        "project_id": project["id"],
+        "payload": {"from_project_id": None, "surface": "home"},
+    }
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "project.switched")
+    rows = list((await db.scalars(stmt)).all())
+    assert len(rows) == 1
+    assert str(rows[0].user_id) == alice_id
+    assert str(rows[0].project_id) == project["id"]
+    assert rows[0].payload["surface"] == "home"

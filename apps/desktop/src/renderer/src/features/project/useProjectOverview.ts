@@ -47,6 +47,9 @@ export function useProjectOverview(): ProjectOverview {
     }
     try {
       const [detail, sources] = await Promise.all([getProject(projectId), listSources(projectId)])
+      // Stale guard (SOLUSDEV-242): a slow answer for the previous project
+      // must not land on the one the user switched to.
+      if (useWorkspaceStore.getState().project?.id !== projectId) return
       setData({
         name: detail.name,
         description: detail.description,
@@ -56,6 +59,7 @@ export function useProjectOverview(): ProjectOverview {
       })
       setStatus('ready')
     } catch {
+      if (useWorkspaceStore.getState().project?.id !== projectId) return
       setStatus('offline')
       setData(EMPTY)
     }

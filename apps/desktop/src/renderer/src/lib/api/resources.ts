@@ -270,9 +270,12 @@ export function startHostedOAuth(
   server: string,
   client: ApiClient = api
 ): Promise<HostedOAuthStart> {
-  return client.request<HostedOAuthStart>(`${hostedPath(projectId, sourceId, server)}/oauth/start`, {
-    method: 'POST'
-  })
+  return client.request<HostedOAuthStart>(
+    `${hostedPath(projectId, sourceId, server)}/oauth/start`,
+    {
+      method: 'POST'
+    }
+  )
 }
 
 /** Complete it. Authenticated on purpose — the unauthenticated connector
@@ -285,10 +288,10 @@ export function exchangeHostedOAuth(
   body: { state: string; code: string },
   client: ApiClient = api
 ): Promise<HostedStatus> {
-  return client.request<HostedStatus>(
-    `${hostedPath(projectId, sourceId, server)}/oauth/exchange`,
-    { method: 'POST', body }
-  )
+  return client.request<HostedStatus>(`${hostedPath(projectId, sourceId, server)}/oauth/exchange`, {
+    method: 'POST',
+    body
+  })
 }
 
 /** Re-check after the user says they have subscribed. The ONLY trustworthy
@@ -968,6 +971,8 @@ export interface ActivityPageOptions {
   cursor?: string
   /** Server caps at 100 (API.md §2.2); defaults to 50 when omitted. */
   limit?: number
+  /** Narrow the team feed to one project (SOLUSDEV-242 — Home's per-project activity). */
+  projectId?: string
 }
 
 /** One cursor page of the team activity feed (§2.2) — carries pagination meta
@@ -980,6 +985,7 @@ export function listActivityPage(
   const params = new URLSearchParams()
   if (options.cursor) params.set('cursor', options.cursor)
   if (options.limit !== undefined) params.set('limit', String(options.limit))
+  if (options.projectId) params.set('project_id', options.projectId)
   const query = params.toString()
   // teamId is server-issued today; encoded anyway so it can never alter the path.
   return client.requestPage<ActivityApi[]>(

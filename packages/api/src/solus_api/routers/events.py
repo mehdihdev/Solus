@@ -38,7 +38,13 @@ logger = logging.getLogger("solus.events.ingest")
 router = APIRouter(prefix="/api/v1/events")
 
 #: Event names a client may assert. Everything else is server-originated.
-CLIENT_EVENT_TYPES = frozenset({"extension.bridge_refused"})
+CLIENT_EVENT_TYPES = frozenset(
+    {
+        "extension.bridge_refused",
+        # SOLUSDEV-242 (HOME H1): the desktop opened/switched to a project.
+        "project.switched",
+    }
+)
 MAX_EVENTS_PER_BATCH = 50
 MAX_PAYLOAD_BYTES = 4096
 MAX_PAYLOAD_KEYS = 16

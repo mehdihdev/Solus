@@ -9,6 +9,10 @@ import { getDesktopCompanionBridge } from '../lib/desktopBridge'
 export interface WorkspaceProject {
   id: string
   name: string
+  /** The team the project belongs to (SOLUSDEV-242): opening a project also
+   *  makes its team the ACTIVE team, so Home and the Team screen follow. Optional
+   *  because pre-242 persisted state and the onboarding path lack it. */
+  teamId?: string
 }
 
 export interface WorkspaceState {
