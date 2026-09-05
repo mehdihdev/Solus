@@ -116,6 +116,10 @@ export function ProjectCard({
           className="interactive"
           onClick={() => setShowActivity(true)}
           style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            whiteSpace: 'nowrap',
             background: 'transparent',
             border: 'none',
             color: 'var(--mut)',

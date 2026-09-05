@@ -8,8 +8,10 @@ feed UI; `docs/api/API.md §5` remains the route map for the screens hosting it.
 
 1. **Team screen — `TEAM ACTIVITY` panel** (left column, beside `MEMBERS`,
    below `PROJECTS`). Single-team feed with actor avatars and names.
-2. **Home screen — `RECENT ACTIVITY` panel** (right column, beside the team
-   cards). Merged cross-team feed, plain rows (no roster in scope).
+2. **Home screen — per-project cards** (SOLUSDEV-242, `home.md`). Each
+   project card previews up to 2 of ITS OWN rows from one fetch of the active
+   team's feed, and `All activity →` opens `ActivityModal` server-filtered by
+   `?project_id=` with `Load more`. The merged cross-team panel is gone.
 
 ## Panel behavior (both surfaces)
 

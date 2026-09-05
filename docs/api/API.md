@@ -449,7 +449,7 @@ React Router (memory/hash history in Electron). The persistent SOL "ball of ener
 /login                                  Supabase auth (password, magic link, GitHub OAuth)
 /onboarding                             First-run: create/join team, connect first source, pick SOL mode
 
-/                                       Workspace home: project list across teams, recent activity
+/                                       Home (SOLUSDEV-242): the ACTIVE team's project grid — create / open / switch / archive, recent activity per project — team selector, account-scoped connections
 /projects/:projectId                    Project overview: graph stats, source health, open warnings, recent jobs
 /projects/:projectId/graph              Graph explorer (subgraph view, entity inspector panel)
 /projects/:projectId/graph/:entityId    Entity detail (relations, provenance, warnings, identity links)
