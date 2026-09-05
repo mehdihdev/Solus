@@ -138,7 +138,7 @@ the `credit_ledger` row for attribution, and still meters the **invoking user** 
 | PATCH  | `/api/v1/projects/{project_id}`           | Update name/description/settings                                                                              |
 | POST   | `/api/v1/projects/{project_id}/archive`   | Archive (soft delete; leaves default listing, keeps graph) — added SOLUSDEV-84                                |
 | POST   | `/api/v1/projects/{project_id}/unarchive` | Restore an archived project — added SOLUSDEV-84                                                               |
-| DELETE | `/api/v1/projects/{project_id}`           | Delete (admin, confirmation required)                                                                         |
+| DELETE | `/api/v1/projects/{project_id}`           | Delete (OWNER only per ADR-025, confirmation required)                                                        |
 
 ### 2.4 Graph — entities & relations (ADR-001, the core)
 

@@ -22,7 +22,9 @@ import {
   type TeamSummary
 } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { graphCache } from '../graph/graphCache'
 import { resolveTeam } from './activeTeam'
+import { switchWorkspaceProject } from './projectSwitch'
 import {
   groupActivityByProject,
   HOME_ACTIVITY_FETCH_LIMIT,
@@ -91,12 +93,20 @@ export function useHomeData(): HomeData {
   // Loads are sequenced: a team switch mid-flight must not let the previous
   // team's answer land on the new one (nothing carried across — SOLUSDEV-242).
   const loadSeq = useRef(0)
+  const loadedTeamId = useRef<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current
     if (!fetchEnabled) {
       setStatus('offline')
       return
+    }
+    // A different team than the one on screen: clear the grid rather than show
+    // the previous team's projects under the new team's name while it loads.
+    if (loadedTeamId.current !== null && loadedTeamId.current !== storedTeamId) {
+      setProjects([])
+      setActivityByProject({})
+      setStatus('loading')
     }
     try {
       const snap = await fetchHome(storedTeamId)
@@ -106,6 +116,7 @@ export function useHomeData(): HomeData {
       setProjects(snap.projects)
       setActivityByProject(snap.activityByProject)
       setStatus('ready')
+      loadedTeamId.current = storedTeamId
     } catch {
       if (seq === loadSeq.current) setStatus('offline')
     }
@@ -130,6 +141,16 @@ export function useHomeData(): HomeData {
   )
 
   const setActiveTeam = (teamId: string): void => useWorkspaceStore.getState().setTeamId(teamId)
+
+  // Archiving or deleting the OPEN project closes it: the shell must not stay
+  // scoped to a project that is hidden or gone (its retained entity list goes
+  // with a deletion). Through the choke point, so everything else clears too.
+  const closeIfOpen = (projectId: string, forget: boolean): void => {
+    if (forget) graphCache.delete(projectId)
+    if (useWorkspaceStore.getState().project?.id === projectId) {
+      switchWorkspaceProject(null, 'home')
+    }
+  }
 
   const actions: HomeActions = {
     switchTeam: setActiveTeam,
@@ -164,9 +185,17 @@ export function useHomeData(): HomeData {
       }
     },
     renameProject: (projectId, name) => runAction(() => updateProjectApi(projectId, { name })),
-    archiveProject: (projectId) => runAction(() => archiveProjectApi(projectId)),
+    archiveProject: (projectId) =>
+      runAction(async () => {
+        await archiveProjectApi(projectId)
+        closeIfOpen(projectId, false)
+      }),
     unarchiveProject: (projectId) => runAction(() => unarchiveProjectApi(projectId)),
-    deleteProject: (projectId) => runAction(() => deleteProjectApi(projectId)),
+    deleteProject: (projectId) =>
+      runAction(async () => {
+        await deleteProjectApi(projectId)
+        closeIfOpen(projectId, true)
+      }),
     refresh: load
   }
 

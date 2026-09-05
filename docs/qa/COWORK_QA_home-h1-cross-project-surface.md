@@ -10,7 +10,7 @@ and nothing else.
 
 - API running (Postgres reachable), desktop renderer running against it, one signed-in user.
 - The user belongs to **two teams**: their personal team and a shared team ("Team A" below) where they
-  are **owner or admin** (delete needs admin+). If not, create a team from Home (`New team`).
+  are the **owner** (only an owner can delete a project — ADR-025). If not, create a team from Home (`New team`).
 - In Team A create two projects, **Rover** and **Arm**. Connect a DIFFERENT source to each (Sources
   screen; a GitHub repo on Rover and a GitLab repo on Arm is enough — a PAT is not required to create
   the row). Rename Rover once so it has more activity than Arm.
@@ -62,8 +62,9 @@ Requires SOL to work. If it cannot, record "SOL unavailable" and skip to Flow 4.
 3. Pill → Rover. Expected: the transcript and the approval card are back, still awaiting a decision. ☐
 4. Reject the card. Expected: the card clears; no error. ☐
 5. In Rover, send any short question, then immediately switch to Arm before the reply finishes.
-   Expected: a toast "SOL replied" MAY appear; if it does it must NOT offer a "View" action that lands
-   on Arm's SOL page showing Rover's reply. (Toasts raised before a switch are cleared by the switch.) ☐
+   Expected: if a "SOL replied" toast appears it reads "A turn finished in another project — switch
+   back to read it." with NO "View" action; it never quotes Rover's prompt. (Toasts raised before a
+   switch are cleared by the switch.) ☐
 
 ## Flow 4 — Alerts, Store detail, Live Bench across a switch
 
@@ -84,12 +85,17 @@ Requires SOL to work. If it cannot, record "SOL unavailable" and skip to Flow 4.
    project. ☐
 3. ⋯ on Gripper v2 → Archive. Expected: the card leaves the grid; a collapsed row **▸ ARCHIVED (1)**
    appears under the grid; the project pill's switcher no longer lists it. ☐
-4. Expand ARCHIVED. Expected: Gripper v2 with **Unarchive** and a ✕ (delete, admin+ only). ☐
+4. Expand ARCHIVED. Expected: Gripper v2 with **Unarchive** and a ✕ (delete, owner only). ☐
 5. Unarchive. Expected: the card returns to the grid; ARCHIVED disappears (count 0). ☐
 6. Archive again, expand, click ✕ → a confirmation dialog names the project → **Delete project**.
    Expected: it is gone from the grid, ARCHIVED, and the pill. ☐
 7. Sign in as a **viewer** of Team A (or change your role). Expected: no ⋯ menus, no New project tile;
-   cards still open. As a **member** (not admin): ⋯ shows Rename/Archive but not Delete. ☐
+   cards still open. As a **member** or **admin**: ⋯ shows Rename/Archive but not Delete. ☐
+9. Open Rover (pill reads "Rover"), go Home, ⋯ on Rover → Archive. Expected: Rover leaves the grid AND
+   the pill reads "No project" — the shell never stays scoped to a hidden project. Unarchive it. ☐
+10. Open Rover again, go Home, archive it, expand ARCHIVED, ✕ → Delete project. Expected: the pill
+    reads "No project"; Overview/Sources/Context Model show their no-project state, never Rover's old
+    entities. (Recreate Rover with its source if you still need it for other flows.) ☐
 8. Force a failure (e.g. disconnect the API, then Archive). Expected: toast "That didn't work —
    Couldn't archive "<name>"."; the card stays. ☐
 

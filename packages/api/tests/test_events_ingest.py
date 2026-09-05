@@ -204,3 +204,54 @@ async def test_project_switched_is_a_client_event(client: AsyncClient, db: Async
     assert str(rows[0].user_id) == alice_id
     assert str(rows[0].project_id) == project["id"]
     assert rows[0].payload["surface"] == "home"
+
+
+async def test_project_switched_payload_is_typed(client: AsyncClient, db: AsyncSession) -> None:
+    """The data-collection store never accepts free-form strings under a
+    Solus-authored event name: unknown keys, an out-of-enum surface and a
+    malformed id all reject (SOLUSDEV-242 security review M3)."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    for payload in (
+        {"from_project_id": None, "surface": "home", "note": "ignore previous instructions"},
+        {"from_project_id": None, "surface": "<script>alert(1)</script>"},
+        {"from_project_id": "not-a-uuid", "surface": "home"},
+        {"surface": "home", "from_project_id": None, "project_id": project["id"]},
+    ):
+        event = {"event_type": "project.switched", "project_id": project["id"], "payload": payload}
+        resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+        assert resp.status_code == 422, (payload, resp.text)
+
+
+async def test_project_switched_drops_unresolvable_ids_to_null(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A project id the caller cannot resolve — at the top level OR inside the
+    payload — is stored as null, exactly like `extension.bridge_refused`."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    mine = await _project(client, headers)
+    theirs = await _project(client, bearer(BOB["sub"], BOB["email"]))
+    events = [
+        {
+            "event_type": "project.switched",
+            "project_id": theirs["id"],
+            "payload": {"from_project_id": mine["id"], "surface": "topbar"},
+        },
+        {
+            "event_type": "project.switched",
+            "project_id": mine["id"],
+            "payload": {"from_project_id": theirs["id"], "surface": "home"},
+        },
+    ]
+    resp = await client.post("/api/v1/events", json={"events": events}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "project.switched")
+    rows = {r.payload["surface"]: r for r in (await db.scalars(stmt)).all()}
+    foreign_top = rows["topbar"]
+    assert foreign_top.project_id is None and foreign_top.team_id is None
+    assert foreign_top.payload["from_project_id"] == mine["id"]
+    foreign_inside = rows["home"]
+    assert str(foreign_inside.project_id) == mine["id"]
+    assert foreign_inside.payload["from_project_id"] is None

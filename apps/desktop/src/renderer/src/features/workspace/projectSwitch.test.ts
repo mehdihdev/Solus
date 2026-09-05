@@ -10,6 +10,17 @@ import { selectSession, useSolChatStore, EMPTY_SESSION } from '../sol/solChatSto
 import * as ext from '../../lib/api/resources.extensions'
 import type { Neighborhood } from '../../lib/api/resources'
 
+// The dev bypass reads `authenticated` but has no token the API accepts; the
+// switch event must not fire under it. Off by default here so the reporting
+// tests exercise the real path.
+const bypass = vi.hoisted(() => ({ active: false }))
+vi.mock('../../lib/supabase', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/supabase')>()),
+  get devBypassActive() {
+    return bypass.active
+  }
+}))
+
 vi.mock('../../lib/api/resources.extensions', async (importOriginal) => ({
   ...(await importOriginal<typeof ext>()),
   postDataEvents: vi.fn(async () => undefined)
@@ -61,6 +72,7 @@ function seedProjectA(): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  bypass.active = false
   useWorkspaceStore.getState().reset()
   useFocusStore.getState().reset()
   useShellStore.getState().reset()
@@ -133,6 +145,12 @@ describe('switchWorkspaceProject', () => {
 
   it('sends no data event under the dev bypass, for a no-op re-select, or when leaving to no project', () => {
     seedProjectA()
+    bypass.active = true
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'dev@solus.local' } })
+    switchWorkspaceProject(B, 'home')
+    bypass.active = false
+    useAuthStore.setState({ status: 'unauthenticated', user: null })
+    useWorkspaceStore.setState({ project: A })
     switchWorkspaceProject(B, 'home')
     switchWorkspaceProject(null, 'validation')
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' } })

@@ -10,8 +10,8 @@ import { ProjectCard } from './ProjectCard'
 import type { ActivityByProject } from './projectActivity'
 import type { HomeActions } from './useHomeData'
 
-/** Roles allowed to permanently delete a project (API.md §2.3 — admin+). */
-const MANAGER_ROLES: readonly string[] = ['owner', 'admin']
+/** Roles allowed to permanently delete a project — only an OWNER (ADR-025; the server enforces it). */
+const MANAGER_ROLES: readonly string[] = ['owner']
 
 export interface ProjectGridProps {
   team: TeamSummary

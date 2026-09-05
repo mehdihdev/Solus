@@ -30,23 +30,25 @@
 // every store through a switch.
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
+import { devBypassActive } from '../../lib/supabase'
 import { postDataEvents } from '../../lib/api/resources.extensions'
 import { useExtensionsStore } from '../extensions/extensionsStore'
 import { useFocusStore } from './focusStore'
 import { useShellStore } from './shellStore'
 
 /** Where the switch came from — recorded on the data event (ADR-011). */
-export type SwitchSurface = 'home' | 'topbar' | 'team' | 'validation'
+export type SwitchSurface = 'home' | 'topbar' | 'team' | 'validation' | 'onboarding' | 'overview'
 
 /** Data-collection event, best effort: consent is gated server-side and a
- *  failed post never disturbs the switch. Skipped for the dev bypass (no
- *  token to send) and for a switch to no project. */
+ *  failed post never disturbs the switch. Skipped for the dev bypass — its
+ *  fake session reads `authenticated` but carries no token the API accepts —
+ *  and for a switch to no project. */
 function reportSwitch(
   next: WorkspaceProject,
   previousId: string | null,
   surface: SwitchSurface
 ): void {
-  if (useAuthStore.getState().status !== 'authenticated') return
+  if (devBypassActive || useAuthStore.getState().status !== 'authenticated') return
   void postDataEvents([
     {
       event_type: 'project.switched',
@@ -75,4 +77,15 @@ export function switchWorkspaceProject(
   useExtensionsStore.getState().select(null)
   useShellStore.getState().clearToast()
   if (next) reportSwitch(next, previousId, surface)
+}
+
+/**
+ * The open project was renamed: keep the pill and switcher in step WITHOUT
+ * dropping its team — the one non-switch write, still through the choke point
+ * so nothing is cleared and nothing is reported.
+ */
+export function renameWorkspaceProject(name: string): void {
+  const current = useWorkspaceStore.getState().project
+  if (!current) return
+  switchWorkspaceProject({ ...current, name }, 'overview')
 }

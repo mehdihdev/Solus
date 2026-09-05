@@ -5,6 +5,8 @@ import { renderHook, waitFor, act } from '@testing-library/react'
 import { useHomeData } from './useHomeData'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
+import { useFocusStore } from './focusStore'
+import { graphCache } from '../graph/graphCache'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -252,5 +254,74 @@ describe('useHomeData — actions', () => {
     const { result } = renderHook(() => useHomeData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(await result.current.actions.archiveProject('p1')).toBe(false)
+  })
+})
+
+describe('useHomeData — the open project is closed when hidden or gone (SOLUSDEV-242)', () => {
+  const entry = {
+    version: 'v',
+    entities: [],
+    counts: { entityCount: 0, relationCount: 0, sourceCount: 0 },
+    fetchedAtMs: Date.now()
+  }
+  beforeEach(() => {
+    useFocusStore.getState().reset()
+    graphCache.clear()
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
+    useFocusStore.setState({ focusedEntityId: 'e1', cache: { 'p1:e1@1': {} as never } })
+    graphCache.set('p1', entry)
+  })
+
+  it('deleting the open project drops the shell to no project and forgets its entities', async () => {
+    vi.mocked(resources.deleteProject).mockResolvedValue(undefined)
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.deleteProject('p1')).toBe(true)
+    })
+    expect(useWorkspaceStore.getState().project).toBe(null)
+    expect(useFocusStore.getState().cache).toEqual({})
+    expect(graphCache.has('p1')).toBe(false)
+  })
+
+  it('archiving the open project closes it but keeps its retained entities (archive is not delete)', async () => {
+    vi.mocked(resources.archiveProject).mockResolvedValue(PROJECT)
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.archiveProject('p1')).toBe(true)
+    })
+    expect(useWorkspaceStore.getState().project).toBe(null)
+    expect(graphCache.has('p1')).toBe(true)
+  })
+
+  it('deleting ANOTHER project leaves the open one alone', async () => {
+    vi.mocked(resources.deleteProject).mockResolvedValue(undefined)
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.actions.deleteProject('p-other')
+    })
+    expect(useWorkspaceStore.getState().project?.id).toBe('p1')
+    expect(useFocusStore.getState().focusedEntityId).toBe('e1')
+  })
+
+  it('clears the grid while another team loads, so no team wears the wrong projects', async () => {
+    let release: (rows: resources.Project[]) => void = () => undefined
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.projects).toHaveLength(1)
+    vi.mocked(resources.listProjects).mockImplementation(
+      () => new Promise<resources.Project[]>((resolve) => (release = resolve))
+    )
+    act(() => result.current.actions.switchTeam('t-me'))
+    await waitFor(() => expect(result.current.status).toBe('loading'))
+    expect(result.current.projects).toEqual([])
+    await act(async () => {
+      release([])
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.team?.team_id).toBe('t-me')
   })
 })

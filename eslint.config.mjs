@@ -21,8 +21,8 @@ export default tseslint.config(
       // CI sets PNPM_STORE/UV_CACHE_DIR inside the project dir; never lint the
       // package stores (they contain third-party require()-style sources).
       "**/.pnpm-store/**",
-      "**/.uv-cache/**"
-    ]
+      "**/.uv-cache/**",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -32,8 +32,8 @@ export default tseslint.config(
     // .ts/.tsx, so these globals only apply to JS files.
     files: ["**/*.{js,cjs,mjs}"],
     languageOptions: {
-      globals: { ...globals.node, ...globals.browser }
-    }
+      globals: { ...globals.node, ...globals.browser },
+    },
   },
   {
     files: ["**/*.{ts,tsx}"],
@@ -44,8 +44,29 @@ export default tseslint.config(
       "@typescript-eslint/explicit-module-boundary-types": "warn",
       complexity: ["error", 10],
       "max-lines-per-function": ["warn", 80],
-      "no-console": ["warn", { allow: ["warn", "error"] }]
-    }
+      "no-console": ["warn", { allow: ["warn", "error"] }],
+    },
   },
-  prettier
+  {
+    // SOLUSDEV-242: every project switch goes through ONE choke point so no
+    // project-scoped store is left behind. Direct `setProject` calls belong to
+    // the store itself and to projectSwitch.ts only.
+    files: ["apps/desktop/src/renderer/src/**/*.{ts,tsx}"],
+    ignores: [
+      "**/features/workspace/projectSwitch.ts",
+      "**/store/workspaceStore.ts",
+      "**/*.test.{ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.property.name='setProject']",
+          message:
+            "Switch projects through switchWorkspaceProject()/renameWorkspaceProject() in features/workspace/projectSwitch.ts — never setProject directly (SOLUSDEV-242).",
+        },
+      ],
+    },
+  },
+  prettier,
 );

@@ -216,3 +216,28 @@ async def test_activity_project_filter_rejects_non_uuid(
         f"/api/v1/teams/{team['id']}/activity?project_id=not-a-uuid", headers=alice_headers
     )
     assert resp.status_code == 422
+
+
+async def test_activity_project_filter_combines_with_other_filters(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """`project_id` narrows WITHIN the other filters and the team scope; the
+    total follows the combination."""
+    team = await create_team(client, alice_headers)
+    rover = await create_project(client, alice_headers, team["id"], "Rover")
+    await create_project(client, alice_headers, team["id"], "Arm")
+    for name in ("Rover 2", "Rover 3"):
+        resp = await client.patch(
+            f"/api/v1/projects/{rover['id']}", json={"name": name}, headers=alice_headers
+        )
+        assert resp.status_code == 200, resp.text
+
+    resp = await client.get(
+        f"/api/v1/teams/{team['id']}/activity?project_id={rover['id']}&type=project.updated",
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [a["type"] for a in body["data"]] == ["project.updated", "project.updated"]
+    assert all(a["project_id"] == rover["id"] for a in body["data"])
+    assert body["meta"]["total"] == 2

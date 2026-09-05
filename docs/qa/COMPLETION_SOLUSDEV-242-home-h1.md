@@ -49,7 +49,7 @@ No tier-2 file (contracts, DECISIONS.md, CLAUDE.md) was touched.
 
 ## Verification
 
-- Desktop: 247 files / 2582 tests green (`vitest run`), typecheck (node + web) clean, eslint clean on
+- Desktop: 247 files / 2589 tests green (`vitest run`), typecheck (node + web) clean, eslint clean on
   touched files, prettier applied to touched files. New/updated suites: `projectSwitch.test.ts`
   (every store driven through a switch, incl. the parked-confirmation case), `activeTeam.test.ts`,
   `useHomeData.test.ts`, `useProjectActivity.test.ts`, `projectActivity.test.ts`, `HomeScreen.test.tsx`
@@ -84,6 +84,35 @@ No tier-2 file (contracts, DECISIONS.md, CLAUDE.md) was touched.
 5. `project.switched` is reported only for signed-in sessions (the dev bypass has no token) and never
    for a re-select of the current project.
 
+## Phase 4 review findings and what was done
+
+Code review (fresh context) and security review both returned no CRITICAL/HIGH findings. Every MEDIUM
+and LOW was fixed on the branch except the detached-orb follow-up:
+
+- **Deleting or archiving the OPEN project from Home left the shell scoped to it** (both reviews,
+  MEDIUM): `useHomeData` now closes the open project through the choke point after a successful
+  archive/delete (delete also forgets its retained entity list). Tests added.
+- **Three `setProject` call sites bypassed the choke point** (security MEDIUM): Overview rename now
+  uses `renameWorkspaceProject()` (keeps `teamId`); both onboarding writes go through
+  `switchWorkspaceProject(…, 'onboarding')`. A root eslint `no-restricted-syntax` rule now forbids
+  `setProject(` in the renderer outside `projectSwitch.ts`/`workspaceStore.ts`/tests.
+- **`project.switched` payload untyped** (security MEDIUM): the API validates each client event with
+  a schema (`from_project_id: UUID|null`, `surface` enum, `extra="forbid"` → 422 otherwise) and applies
+  the same resolvability rule to `from_project_id` as to the top-level id (unresolvable → null).
+  Tests added (422 cases, foreign ids at top level and inside the payload).
+- **`reportSwitch` still fired under the dev bypass** (code review MEDIUM): it now skips when
+  `devBypassActive`; the test mocks the flag both ways.
+- **Away-toast showed project A's prompt under project B** (LOW): the body is project-neutral when the
+  user has moved on. Test added.
+- **Delete affordance for admins** (LOW): the server allows OWNER only (ADR-025); the client and
+  `API.md §2.3` now say so.
+- **Stale grid while a team loads** (LOW): the grid clears and shows loading when the team changes.
+- **XSS regression guard** (requested test): Home renders hostile names/descriptions/payloads as text.
+- **Combined activity filters** (requested test): `project_id` + `type` stays team-scoped with a matching
+  total.
+- Not done: an index on `activities.project_id` (the team index carries the filter; the count scan is
+  capped) — noted for a later migration if project feeds grow.
+
 ## Deviations / open concerns
 
 - **Detached orb window**: it rehydrates the workspace project once from localStorage and does not
@@ -95,4 +124,11 @@ No tier-2 file (contracts, DECISIONS.md, CLAUDE.md) was touched.
   reviewable.
 - Harness gotchas (same-URL hash reload, stale Electron partition) were recorded in session memory,
   not in the repo.
-- Suite runs: (filled in below after the full API suite.)
+- Full API suite (run once, after the live-run servers were stopped): 3540 passed, 2 failed —
+  `test_artifact_upload.py::test_viewer_role_forbidden_from_uploading` and
+  `test_bench_router.py::test_summary_returns_w007_windows`. Both pass in isolation, and neither file
+  nor the code they exercise is touched by this branch (`git diff main` is empty for them); they are
+  order-dependent against the shared dev Postgres. An earlier full run also hit a transient setup
+  error while my private API instance held connections on the same database. Flagged, not fixed.
+- Full desktop suite after the review fixes: 247 files / 2589 tests green; typecheck and eslint clean
+  on every touched file (the new `no-restricted-syntax` guard included).

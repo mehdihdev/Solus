@@ -54,8 +54,8 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - Footer button: `Open` (no project open, or this one) / `Switch to` (another
   project is open). Clicking anywhere on the card body does the same. Opening
   lands on the project Overview (SOLUSDEV-164).
-- `⋯` menu (member+): `Rename` (name dialog) · `Archive` · `Delete` (admin+,
-  confirmed). The menu never opens the project. A failed archive raises the
+- `⋯` menu (member+): `Rename` (name dialog) · `Archive` · `Delete` (owner only,
+  ADR-025, confirmed). The menu never opens the project. A failed archive raises the
   shell toast "That didn't work".
 - **New project** tile (member+): dashed, last in the grid; the name dialog
   creates in the active team and opens the project. In an empty team it adds
@@ -66,7 +66,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 
 - `▸ ARCHIVED (N)` collapsed by default beneath the grid; absent when N = 0.
   Archive hides without deleting: rows keep the name, offer `Unarchive`
-  (member+) and `✕` delete (admin+, confirmed). Archived projects never appear
+  (member+) and `✕` delete (owner only, confirmed). Archived projects never appear
   in the grid or the project pill.
 
 ## Switching projects — nothing carried across
@@ -78,7 +78,9 @@ focus engine (entity ids are project-scoped), the Store's detail selection, and
 the shell toast; the shell drops `alert` and `ext-page` detail routes to
 Overview; per-screen hooks discard responses for a project the user has left.
 SOL sessions are keyed by project: a parked confirmation in project A stays
-parked in A and is never selected for B. The switch is reported as the
+parked in A and is never selected for B. Archiving or deleting the OPEN project
+closes it (the shell drops to no project) so nothing stays scoped to a hidden
+or deleted project. The switch is reported as the
 `project.switched` data event. The module header lists every project-scoped
 store and how it is kept honest; new project state is added there.
 

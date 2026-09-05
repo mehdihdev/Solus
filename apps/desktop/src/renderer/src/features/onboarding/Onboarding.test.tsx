@@ -116,7 +116,7 @@ describe('Onboarding flow — build + provisioning', () => {
     )
     // The async provision result lands in the workspace store.
     await vi.waitFor(() => {
-      expect(useWorkspaceStore.getState().project).toEqual({ id: 'p1', name: 'Strider' })
+      expect(useWorkspaceStore.getState().project).toMatchObject({ id: 'p1', name: 'Strider' })
     })
     expect(useWorkspaceStore.getState().linked).toBe(true)
   })

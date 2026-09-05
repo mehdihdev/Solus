@@ -43,6 +43,24 @@ beforeEach(() => {
 })
 
 describe('background completion + away toast', () => {
+  it('names the fact, not the prompt, when the reply lands under another project (SOLUSDEV-242)', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover' } })
+    useShellStore.getState().setLastMain('sol')
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      // The user switches to Arm while Rover's turn is still streaming.
+      useWorkspaceStore.setState({ project: { id: 'p2', name: 'Arm' } })
+      onEvent(messageEvent('All good.'))
+    })
+    await act(async () => {
+      await sendMessage('p1', 'why is joint 2 stalling?', 'guide')
+    })
+    const toast = useShellStore.getState().toast
+    expect(toast?.title).toBe('SOL replied')
+    expect(toast?.body).not.toContain('joint 2')
+    expect(toast?.action).toBeUndefined()
+  })
+
   it('raises the shell toast when a reply completes while the user is away', async () => {
     useOrbStore.getState().setConversation('p1', 'c1')
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover' } })

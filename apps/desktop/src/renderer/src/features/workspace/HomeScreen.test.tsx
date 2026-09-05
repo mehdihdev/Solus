@@ -249,12 +249,28 @@ describe('HomeScreen — manage', () => {
     expect(screen.queryByRole('button', { name: /new project/i })).toBeNull()
   })
 
-  it('hides delete for members who cannot delete', async () => {
-    mockHome({ team: { ...TEAM, role: 'member' } })
+  it('hides delete for admins and members — only an owner deletes (ADR-025)', async () => {
+    mockHome({ team: { ...TEAM, role: 'admin' } })
     render(<HomeScreen onOpenProject={vi.fn()} />)
     await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
     expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: 'Delete' })).toBeNull()
+  })
+})
+
+describe('HomeScreen — untrusted text is text', () => {
+  it('renders project names, descriptions and activity payloads as literal text, never markup', () => {
+    const hostile = '<img src=x onerror="alert(1)">'
+    mockHome({
+      projects: [{ ...PROJECT, name: hostile, description: '<b>bold</b>' }],
+      activityByProject: {
+        p1: [{ ...ROW, type: 'source.connected', payload: { type: '<script>', name: hostile } }]
+      }
+    })
+    const { container } = render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(container.querySelector('img, script, b')).toBeNull()
+    expect(screen.getAllByText(hostile).length).toBeGreaterThan(0)
+    expect(screen.getByText('<b>bold</b>')).toBeInTheDocument()
   })
 })
 
