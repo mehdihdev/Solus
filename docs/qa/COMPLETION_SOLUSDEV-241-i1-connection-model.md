@@ -65,7 +65,7 @@ reuses the linked account.
 
 ## Test coverage
 
-- API: **3530 passed, 4 skipped, 1 failed** on an isolated DB (`SOLUS_TEST_DATABASE_URL`).
+- API: **3537 passed, 4 skipped, 1 failed** (final run, after the security fixes) on an isolated DB (`SOLUS_TEST_DATABASE_URL`).
   The one failure, `test_bridge_e2e.py::test_full_companion_cloud_round_trip`, **fails
   identically on the pristine tree** (verified by stashing this diff and re-running) — the
   companion mock-server fixture on this machine, not this change.
