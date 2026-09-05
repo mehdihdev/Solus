@@ -13,6 +13,12 @@ import {
   listSelectable,
   startOAuth,
   exchangeOAuth,
+  listConnections,
+  revokeConnection,
+  listConnectionDocuments,
+  addSourceDocument,
+  removeSourceDocument,
+  createSource,
   updateSource,
   disconnectSource,
   triggerSync,
@@ -223,8 +229,22 @@ describe('OAuth routes are provider-driven', () => {
     })
   })
 
+  it('startOAuth omits project_id for an ACCOUNT-scoped handshake (SOLUSDEV-241)', async () => {
+    const { client, calls } = stubClient({
+      authorize_url: 'u',
+      state: 'st',
+      connection_id: 'c1',
+      source_id: null
+    })
+    await startOAuth(null, 'onshape', { access: 'read' }, client)
+    expect(calls[0].options).toMatchObject({ method: 'POST', body: { access: 'read' } })
+    expect((calls[0].options as { body: Record<string, unknown> }).body).not.toHaveProperty(
+      'project_id'
+    )
+  })
+
   it('exchangeOAuth POSTs the state + code', async () => {
-    const { client, calls } = stubClient({ id: 's1', status: 'connected' })
+    const { client, calls } = stubClient({ connection: { id: 'c1' }, source: null })
     await exchangeOAuth('github', { state: 'st', code: 'cd' }, client)
     expect(calls[0].path).toBe('/integrations/github/oauth/exchange')
     expect(calls[0].options).toMatchObject({ method: 'POST', body: { state: 'st', code: 'cd' } })
@@ -242,6 +262,63 @@ describe('OAuth routes are provider-driven', () => {
       expect(exchange.calls[0].path).toBe(`/integrations/${provider}/oauth/exchange`)
     }
   )
+})
+
+describe('account connections (SOLUSDEV-241)', () => {
+  it("lists and revokes the signed-in user's grants", async () => {
+    const list = stubClient([])
+    await listConnections(list.client)
+    expect(list.calls[0].path).toBe('/users/me/connections')
+
+    const revoke = stubClient({ id: 'c1', disconnected_sources: 2 })
+    await revokeConnection('c1', revoke.client)
+    expect(revoke.calls[0]).toEqual({
+      path: '/users/me/connections/c1',
+      options: { method: 'DELETE' }
+    })
+  })
+
+  it('reads the cached listing with its meta, and asks again on refresh', async () => {
+    const calls: { path: string }[] = []
+    const client: ApiClient = {
+      request: vi.fn(),
+      requestPage: vi.fn(async (path: string) => {
+        calls.push({ path })
+        return { data: [{ id: 'dA', name: 'Rover' }], meta: { cached: true, fetched_at: 't' } }
+      })
+    } as unknown as ApiClient
+    const listing = await listConnectionDocuments('c1', {}, client)
+    expect(listing).toEqual({ items: [{ id: 'dA', name: 'Rover' }], cached: true, fetched_at: 't' })
+    expect(calls[0].path).toBe('/users/me/connections/c1/documents')
+
+    await listConnectionDocuments('c1', { refresh: true }, client)
+    expect(calls[1].path).toBe('/users/me/connections/c1/documents?refresh=true')
+  })
+
+  it('binds a project to a linked account through createSource', async () => {
+    const { client, calls } = stubClient({ id: 's1' })
+    await createSource('p1', { type: 'onshape', name: 'cad', connection_id: 'c1' }, client)
+    expect(calls[0]).toEqual({
+      path: '/projects/p1/sources',
+      options: { method: 'POST', body: { type: 'onshape', name: 'cad', connection_id: 'c1' } }
+    })
+  })
+
+  it('adds and removes a document on a project source', async () => {
+    const add = stubClient({ job_id: 'j1', status: 'queued', source: { id: 's1' } })
+    await addSourceDocument('p1', 's1', 'dB', add.client)
+    expect(add.calls[0]).toEqual({
+      path: '/projects/p1/sources/s1/documents',
+      options: { method: 'POST', body: { id: 'dB' } }
+    })
+
+    const remove = stubClient({ job_id: 'j2', status: 'queued', source: { id: 's1' } })
+    await removeSourceDocument('p1', 's1', 'd/B', remove.client)
+    expect(remove.calls[0]).toEqual({
+      path: '/projects/p1/sources/s1/documents/d%2FB',
+      options: { method: 'DELETE' }
+    })
+  })
 })
 
 describe('personalTeam', () => {

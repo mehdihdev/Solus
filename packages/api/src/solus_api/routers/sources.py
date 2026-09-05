@@ -17,10 +17,9 @@ from sqlalchemy import delete, select, update
 
 from solus_api.connectors.contracts import AuthKind, ConnectorError, Credentials
 from solus_api.connectors.hosted_oauth import hosted_refs
+from solus_api.connectors.registry import Purpose
 from solus_api.connectors.runtime import (
-    call_with_refresh,
     refresh_secret_ref,
-    resolve_credentials,
     source_entity_count,
     source_entity_counts,
 )
@@ -30,6 +29,7 @@ from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
+    IntegrationCacheDep,
     ProjectCtx,
     RegistryDep,
     RequireVerified,
@@ -39,6 +39,8 @@ from solus_api.deps import (
     require_role,
 )
 from solus_api.models import (
+    AccountConnection,
+    ConnectionStatus,
     GraphEdge,
     GraphEntity,
     Job,
@@ -51,12 +53,21 @@ from solus_api.models import (
     Sync,
 )
 from solus_api.schemas import (
+    DocumentAdd,
     SourceCreate,
     SourceUpdate,
     serialize_source,
     serialize_sync,
 )
 from solus_api.services.activity import record_activity
+from solus_api.services.connections import (
+    account_ref_for,
+    bind_source,
+    is_connection_owned,
+    list_documents,
+    owned_connection,
+    reusable_source,
+)
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_add_integration
 
@@ -81,7 +92,7 @@ def _resolve_connector(
     *,
     source: Source | None = None,
     ctx: Any = None,
-    purpose: str = "user",
+    purpose: Purpose = "user",
 ) -> Any:
     """A connector for a route, METERED whenever we know whose quota it spends.
 
@@ -105,7 +116,7 @@ def _resolve_connector(
                     project_id=ctx.project.id,
                     team_id=ctx.team.id,
                     acting_user_id=ctx.user.id,
-                    account_ref=source.account_external_id,
+                    account_ref=account_ref_for(source),
                     purpose=purpose,
                 ),
             )
@@ -186,20 +197,30 @@ async def connect_source(
     await check_can_add_integration(session, ctx.user)
     provider = body.type
     connector = _resolve_connector(registry, provider)
+    if body.connection_id and body.token:
+        raise APIError(400, "validation_error", "Pass a connection_id or a token, not both")
 
-    source = Source(
-        project_id=ctx.project.id,
-        team_id=ctx.team.id,
-        type=SourceType(provider),
-        name=body.name,
-        config={k: v for k, v in body.config.items() if not k.startswith("_")},
-        status=SourceStatus.PENDING,
-        created_by=ctx.user.id,
-    )
-    session.add(source)
+    source: Source | None = None
+    connection: AccountConnection | None = None
+    if body.connection_id:
+        connection = await _bindable_connection(session, ctx, provider, body.connection_id)
+        source = await reusable_source(session, ctx.project, SourceType(provider), connector)
+    if source is None:
+        source = Source(
+            project_id=ctx.project.id,
+            team_id=ctx.team.id,
+            type=SourceType(provider),
+            name=body.name,
+            config={k: v for k, v in body.config.items() if not k.startswith("_")},
+            status=SourceStatus.PENDING,
+            created_by=ctx.user.id,
+        )
+        session.add(source)
     await session.flush()
 
-    if body.token:
+    if connection is not None:
+        bind_source(source, connection)
+    elif body.token:
         if not connector.supports_token_connect:
             raise APIError(
                 400,
@@ -247,6 +268,22 @@ async def connect_source(
     return envelope(serialize_source(source))
 
 
+async def _bindable_connection(
+    session: SessionDep, ctx: ProjectCtx, provider: str, connection_id: str
+) -> AccountConnection:
+    """SOLUSDEV-241: the account the CALLER authorized on Home, checked before a
+    project is attached to it. Owner-only by construction — `owned_connection`
+    answers 404 for anyone else's grant, membership notwithstanding."""
+    connection = await owned_connection(session, ctx.user, _connection_uuid(connection_id))
+    if connection.provider.value != provider:
+        raise APIError(
+            400, "connection_mismatch", f"That account is a {connection.provider.value} account"
+        )
+    if connection.status is not ConnectionStatus.CONNECTED or not connection.secret_ref:
+        raise APIError(409, "not_connected", "That account is not connected")
+    return connection
+
+
 @router.get("/{source_id}")
 async def get_source(source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep) -> dict[str, Any]:
     source = await _scoped_source(session, ctx, source_id)
@@ -282,7 +319,10 @@ async def disconnect_source(
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id)
-    if source.secret_ref:
+    # SOLUSDEV-241: a connection-owned ref is the ACCOUNT's credential, shared
+    # by every project bound to it. Disconnecting one project must not revoke
+    # the others; only `DELETE /users/me/connections/{id}` deletes that family.
+    if source.secret_ref and not is_connection_owned(source.secret_ref):
         await secret_store.delete(source.secret_ref)
         # The OAuth refresh token lives under its own ref (SOLUS-CAD-01) and
         # outlives the access token unless it is deleted here. Leaving it would
@@ -341,12 +381,22 @@ async def trigger_sync(
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id)
+    _require_syncable(source, registry)
+    job_id = await _enqueue_sync(
+        session, ctx, source, request, background_tasks, settings, response
+    )
+    return envelope({"job_id": job_id, "status": JobStatus.QUEUED.value})
+
+
+def _require_syncable(source: Source, registry: RegistryDep) -> None:
     # auth-NONE connectors (committed exports) never hold a secret_ref — only
     # credentialed connectors must prove one before a sync (SOLUSDEV-100).
     needs_credentials = (
         _resolve_connector(registry, source.type.value).auth_kind is not AuthKind.NONE
     )
-    if source.status == SourceStatus.PENDING or (needs_credentials and not source.secret_ref):
+    if source.status in (SourceStatus.PENDING, SourceStatus.DISCONNECTED) or (
+        needs_credentials and not source.secret_ref
+    ):
         raise APIError(409, "not_connected", "Source is not connected yet")
     # Debounce: don't stack a second sync while one is in flight (a cheap
     # per-source guard; per-team budget/concurrency is ADR-019). The scheduled
@@ -354,6 +404,17 @@ async def trigger_sync(
     if source.status == SourceStatus.SYNCING:
         raise APIError(409, "sync_in_progress", "A sync is already running for this source")
 
+
+async def _enqueue_sync(
+    session: SessionDep,
+    ctx: ProjectCtx,
+    source: Source,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: Settings,
+    response: Response,
+) -> uuid.UUID:
+    """Record the job + activity, commit, dispatch (ADR-005), set Location."""
     job = Job(
         project_id=ctx.project.id,
         team_id=ctx.team.id,
@@ -387,7 +448,7 @@ async def trigger_sync(
         request.app, settings, background_tasks, source.id, job_id, acting_user_id=ctx.user.id
     )
     response.headers["Location"] = f"/api/v1/jobs/{job_id}"
-    return envelope({"job_id": job_id, "status": JobStatus.QUEUED.value})
+    return job_id
 
 
 @router.get("/{source_id}/syncs")
@@ -429,38 +490,163 @@ async def list_selectable(
     session: SessionDep,
     registry: RegistryDep,
     secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
+    refresh: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     """What this connected source can be pointed at: repositories, CAD documents,
     …. One generic picker route, so a new connector becomes pickable by
     implementing `list_selectable` — no route and no frontend change.
 
-    Credentials go through the refresh path: an Onshape access token lives 60
-    minutes, so editing a selection an hour after connecting must refresh rather
-    than 502.
+    SOLUSDEV-241: served from the integration cache, keyed on the ACCOUNT — so
+    Home's listing, this project's picker and a teammate's picker on another
+    project bound to the same account cost ONE provider walk between them.
+    `refresh=true` spends again; nothing else does.
     """
-    # A picker open costs up to 10 quota-counted provider calls, so it needs the
-    # same MEMBER floor its sibling routes have. Without it the lowest-privilege
+    # A refresh costs up to 10 quota-counted provider calls, so the route keeps
+    # the MEMBER floor its sibling routes have. Without it the lowest-privilege
     # principal in the system could drain an annual allowance in minutes.
     require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id)
     if not source.secret_ref:
         raise APIError(409, "not_connected", "Source is not connected yet")
     connector = _resolve_connector(registry, source.type.value, source=source, ctx=ctx)
-    lister = getattr(connector, "list_selectable", None)
-    if lister is None:
-        raise APIError(400, "unsupported", "This provider has nothing to select")
-    credentials = await resolve_credentials(secret_store, source.secret_ref)
+    fetched = await list_documents(
+        cache,
+        connector=connector,
+        secret_store=secret_store,
+        secret_ref=source.secret_ref,
+        provider=source.type.value,
+        account_ref=account_ref_for(source),
+        refresh=refresh,
+    )
+    return envelope(
+        fetched.value, meta={"cached": fetched.cached, "fetched_at": fetched.fetched_at}
+    )
+
+
+# --- per-project documents (SOLUSDEV-241 / I1) ---
+
+
+def _tracked_key(registry: RegistryDep, source: Source) -> str:
+    """The config key a multi-selection connector tracks its items under. A
+    connector that declares anything else has no document list to edit."""
+    selection = getattr(_resolve_connector(registry, source.type.value), "selection", None)
+    if not isinstance(selection, dict) or selection.get("mode") != "multi":
+        raise APIError(400, "unsupported", "This source does not track a document list")
+    return str(selection["config_key"])
+
+
+def _tracked_ids(source: Source, key: str) -> list[str]:
+    raw = source.config.get(key, [])
+    return [v for v in raw if isinstance(v, str)] if isinstance(raw, list) else []
+
+
+def _validate_tracked(registry: RegistryDep, source: Source, ids: list[str]) -> None:
+    """The CONNECTOR's own rule decides what an id may look like: a duck-typed
+    `validate_selection`, resolved exactly as `list_selectable` is, so the next
+    multi-selection connector is validated without a router edit. Onshape's is
+    the same `tracked_document_ids` gate the SOL tools refuse on — one
+    definition, no second, weaker one. Malformed is a 400, never stored."""
+    validate = getattr(_resolve_connector(registry, source.type.value), "validate_selection", None)
+    if validate is None:
+        return
     try:
-        items = await call_with_refresh(
-            connector=connector,
-            credentials=credentials,
-            secret_store=secret_store,
-            secret_ref=source.secret_ref,
-            run=lister,
-        )
+        validate(ids)
     except ConnectorError as exc:
-        raise APIError(502, exc.code, exc.message) from exc
-    return envelope(items)
+        raise APIError(400, exc.code, exc.message) from exc
+
+
+def _connection_uuid(value: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise APIError(404, "not_found", "Connection not found") from exc
+
+
+@router.post("/{source_id}/documents")
+async def add_document(
+    body: DocumentAdd,
+    source_id: uuid.UUID,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: SettingsDep,
+    registry: RegistryDep,
+    response: Response,
+) -> dict[str, Any]:
+    """Track one more of the account's documents in THIS project, and sync so
+    it is ingested. 202 with the job when the selection moved; 200 `unchanged`
+    when it was already tracked — nothing to spend on."""
+    require_role(ctx, Role.MEMBER)
+    source = await _scoped_source(session, ctx, source_id)
+    key = _tracked_key(registry, source)
+    current = _tracked_ids(source, key)
+    if body.id in current:
+        response.status_code = 200
+        return envelope({"job_id": None, "status": "unchanged", "source": serialize_source(source)})
+    wanted = [*current, body.id]
+    _validate_tracked(registry, source, wanted)
+    _require_syncable(source, registry)
+    source.config = {**source.config, key: wanted}
+    record_activity(
+        session,
+        team_id=ctx.team.id,
+        activity_type="source.document_added",
+        actor_id=ctx.user.id,
+        project_id=ctx.project.id,
+        domain="integrations",
+        payload={"source_id": str(source.id), "document_id": body.id},
+    )
+    job_id = await _enqueue_sync(
+        session, ctx, source, request, background_tasks, settings, response
+    )
+    await session.refresh(source)
+    response.status_code = 202
+    return envelope(
+        {"job_id": job_id, "status": JobStatus.QUEUED.value, "source": serialize_source(source)}
+    )
+
+
+@router.delete("/{source_id}/documents/{document_id}")
+async def remove_document(
+    source_id: uuid.UUID,
+    document_id: str,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: SettingsDep,
+    registry: RegistryDep,
+    response: Response,
+) -> dict[str, Any]:
+    """Stop tracking a document in THIS project. The sync that follows reconciles
+    its entities away (soft-delete); other projects tracking it are untouched."""
+    require_role(ctx, Role.MEMBER)
+    source = await _scoped_source(session, ctx, source_id)
+    key = _tracked_key(registry, source)
+    current = _tracked_ids(source, key)
+    if document_id not in current:
+        raise APIError(404, "not_found", "That document is not tracked by this project")
+    _require_syncable(source, registry)
+    source.config = {**source.config, key: [d for d in current if d != document_id]}
+    record_activity(
+        session,
+        team_id=ctx.team.id,
+        activity_type="source.document_removed",
+        actor_id=ctx.user.id,
+        project_id=ctx.project.id,
+        domain="integrations",
+        payload={"source_id": str(source.id), "document_id": document_id},
+    )
+    job_id = await _enqueue_sync(
+        session, ctx, source, request, background_tasks, settings, response
+    )
+    await session.refresh(source)
+    response.status_code = 202
+    return envelope(
+        {"job_id": job_id, "status": JobStatus.QUEUED.value, "source": serialize_source(source)}
+    )
 
 
 # --- sync dispatch (ADR-005) ---

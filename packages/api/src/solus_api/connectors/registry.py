@@ -11,14 +11,23 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from solus_api.connectors import quota
 from solus_api.connectors.acquisition import ExportAcquirer
 from solus_api.connectors.contracts import Connector
+from solus_api.connectors.httpcache import CacheStore
+from solus_api.connectors.integration_cache import IntegrationCache
 
 if TYPE_CHECKING:
     from solus_api.core.config import Settings
+
+#: Who is asking for a scoped connector. Decides how much a recorded change
+#: signal may be trusted (SOLUSDEV-241) and whether the caller may spend in the
+#: degraded quota band (SOLUSDEV-167): a human's explicit action ("user") reads
+#: the cache and may spend; the sweep ("scheduled") refreshes the signal and
+#: defers; a doorbell ("webhook") never trusts a recorded signal.
+Purpose = Literal["user", "scheduled", "webhook"]
 
 ConnectorFactory = Callable[[], Connector]
 
@@ -32,8 +41,11 @@ class ConnectorContext:
     requester nor `source.created_by` resolved to one, in which case live
     acquisition is skipped (the acquirer itself declines cleanly)."""
 
-    project_id: uuid.UUID
-    team_id: uuid.UUID
+    #: SOLUSDEV-241: both optional — an ACCOUNT-scoped call (Home listing an
+    #: account's documents) has no project. Every project-scoped construction
+    #: site still passes both.
+    project_id: uuid.UUID | None = None
+    team_id: uuid.UUID | None = None
     acting_user_id: uuid.UUID | None = None
     # SOLUSDEV-167 quota accounting. All defaulted, so every existing
     # construction site is unchanged.
@@ -44,7 +56,7 @@ class ConnectorContext:
     account_ref: str | None = None
     #: Who is spending. Only "user" survives the degraded band; scheduled sweeps
     #: and agent turns can wait.
-    purpose: str = "user"
+    purpose: Purpose = "user"
 
 
 ScopedConnectorFactory = Callable[[ConnectorContext], Connector]
@@ -145,10 +157,45 @@ def _onshape_meter(
         year=datetime.now(UTC).year,
         allowance=settings.onshape_annual_call_allowance,
         degrade_ratio=settings.integration_degrade_ratio,
-        # Anything unrecognised is treated as deferrable: an unknown caller
-        # must not inherit a human's privilege to spend past the threshold.
-        purpose=cast("quota.Purpose", ctx.purpose if ctx.purpose == "user" else "scheduled"),
+        # Anything but a human's explicit action is deferrable: a sweep or a
+        # doorbell must not inherit the privilege to spend past the threshold.
+        purpose="user" if ctx.purpose == "user" else "scheduled",
     )
+
+
+def build_integration_cache(settings: Settings, store: CacheStore) -> IntegrationCache:
+    """The read side of the change-signal spine (SOLUSDEV-241), over whichever
+    store the app assembled — Redis when configured, per-process otherwise."""
+    return IntegrationCache(
+        store,
+        listing_ttl_seconds=settings.integration_listing_ttl_seconds,
+        signal_ttl_seconds=settings.integration_signal_ttl_seconds,
+        payload_ttl_seconds=settings.integration_payload_ttl_seconds,
+        max_payload_bytes=settings.integration_cache_max_payload_bytes,
+    )
+
+
+def _signal_window(settings: Settings, purpose: str) -> float | None:
+    """How old a recorded change signal may be and still be believed.
+
+    A human's sync trusts it for the sweep interval — the sweep is what moves
+    it. The sweep reuses one only a few minutes old, so two projects tracking
+    one document cost one probe per sweep rather than two. A doorbell means
+    "it changed": never trust, always ask.
+    """
+    if purpose == "user":
+        return float(settings.integration_signal_ttl_seconds)
+    if purpose == "scheduled":
+        return float(settings.integration_signal_sweep_reuse_seconds)
+    return None
+
+
+def _cache_account_ref(ctx: ConnectorContext) -> str:
+    # `execute_source_sync` and the routes pass `services.connections.account_ref_for`,
+    # which never yields an empty ref; this fallback exists for a construction
+    # site that passes none at all, and scopes it to the project — the same rule
+    # the meter uses — so an unidentified account never shares entries.
+    return ctx.account_ref or f"source-scope:{ctx.project_id}"
 
 
 def build_registry(
@@ -156,6 +203,7 @@ def build_registry(
     *,
     acquirer_factory: AcquirerFactory | None = None,
     redis: object | None = None,
+    cache: IntegrationCache | None = None,
 ) -> ConnectorRegistry:
     """The default registry. Code hosts shipped (SOLUSDEV-103/104); the rest of
     the roster (KiCad, Onshape, ROS) registers here as each connector lands."""
@@ -199,12 +247,18 @@ def build_registry(
     # kicad and altium had scoped factories, so `create_scoped("onshape", ctx)`
     # silently fell back to `create()` and the context was discarded — which is
     # why nothing could attribute a call to a tenant.
+    # SOLUSDEV-241: the same scoped construction hands the connector the
+    # integration cache, keyed on the account being charged, and the trust
+    # window its purpose earns.
     registry.register_scoped(
         "onshape",
         lambda ctx: OnshapeConnector(
             client_id=settings.onshape_client_id or "",
             client_secret=settings.onshape_client_secret or "",
             meter=_onshape_meter(settings, redis, ctx),
+            cache=cache,
+            account_ref=_cache_account_ref(ctx),
+            signal_max_age_seconds=_signal_window(settings, ctx.purpose),
         ),
     )
     if acquirer_factory is not None:

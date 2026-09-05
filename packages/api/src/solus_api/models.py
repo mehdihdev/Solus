@@ -234,6 +234,15 @@ class SourceStatus(enum.StrEnum):
     DISCONNECTED = "disconnected"  # credentials revoked / removed
 
 
+class ConnectionStatus(enum.StrEnum):
+    """Lifecycle of an account-scoped OAuth grant (SOLUSDEV-241 / I1)."""
+
+    PENDING = "pending"  # oauth/start issued, handshake not completed
+    CONNECTED = "connected"  # token stored, usable by every bound source
+    ERROR = "error"  # the last handshake failed (see last_error)
+    REVOKED = "revoked"  # the user revoked it; bound sources were disconnected
+
+
 class SyncTrigger(enum.StrEnum):
     MANUAL = "manual"
     SCHEDULED = "scheduled"  # change-detection scheduler
@@ -842,6 +851,40 @@ class Activity(UuidPkMixin, Base):
     )
 
 
+class AccountConnection(UuidPkMixin, TimestampMixin, Base):
+    """One provider ACCOUNT bound to one Solus user by OAuth (SOLUSDEV-241 / I1).
+
+    The grant is the user's — an Onshape/GitHub authorization is account-wide
+    and belongs to the person who clicked "Authorize" — so this row references
+    `User`, not a team or a project (the same reasoning `PanelBinding` records:
+    a project-scoped row would be torn down by CASCADE the moment one project
+    disconnected, taking every other project's credential with it). Projects
+    attach to it through `Source.connection_id`; a document may therefore be
+    tracked by several projects on one grant, and their fetches share one
+    integration cache keyed on the account.
+
+    The credential itself is never here: `secret_ref` names it in the secret
+    store (`connection/{id}/{provider}`, refresh token under `/refresh`, hosted
+    add-on grants under `/hosted/{server}`). `config` carries the non-secret
+    grant shape — the access mode the user chose (`read`/`write`).
+    """
+
+    __tablename__ = "account_connections"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[SourceType] = mapped_column(_enum_column(SourceType))
+    status: Mapped[ConnectionStatus] = mapped_column(
+        _enum_column(ConnectionStatus), default=ConnectionStatus.PENDING
+    )
+    account_login: Mapped[str | None] = mapped_column(String(255), default=None)
+    account_external_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    secret_ref: Mapped[str | None] = mapped_column(String(512), default=None)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    last_error: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+
+
 class Source(UuidPkMixin, TimestampMixin, Base):
     """A connected external tool that populates the graph (API.md §2.5).
 
@@ -849,9 +892,23 @@ class Source(UuidPkMixin, TimestampMixin, Base):
     (AWS Secrets Manager / local encrypted dev backend). `config` holds
     non-secret settings (repo, branch); `cursor` holds the connector's last
     sync state for incremental change detection.
+
+    SOLUSDEV-241 (I1, the connection model): OAuth binds at ACCOUNT scope. A
+    source bound to an `AccountConnection` carries `connection_id` and MIRRORS
+    the connection's `secret_ref` (`connection/{id}/{provider}`), so every
+    existing credential read path — sync, the sweep, the picker, the SOL tools,
+    hosted add-ons — works unchanged. The one rule that changes is OWNERSHIP:
+    a connection-owned ref is never deleted by a source disconnect or a project
+    teardown (`connections.is_connection_owned`); only revoking the connection
+    deletes it. A source without `connection_id` owns its own ref (PAT connects,
+    committed-export connectors, pre-I1 rows) exactly as before.
     """
 
     __tablename__ = "sources"
+
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("account_connections.id", ondelete="SET NULL"), default=None, index=True
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
@@ -989,15 +1046,27 @@ class OAuthState(Base):
     """Short-lived CSRF state for the connector OAuth handshake (CLAUDE.md §7).
 
     Created at oauth/start, consumed (and deleted) at the callback. Binds the
-    returning `state` to the user, project, and pending source so a forged or
-    replayed callback cannot attach a token to someone else's source."""
+    returning `state` to the user, the pending ACCOUNT connection and — when the
+    handshake was started from a project — the pending source, so a forged or
+    replayed callback cannot attach a token to someone else's account.
+
+    SOLUSDEV-241: the grant binds at account scope, so `connection_id` is the
+    row the token lands on and `source_id` is nullable — a Home-started
+    handshake has no project and no source. `project_id` is recorded so the
+    completion can bind the source without a second lookup."""
 
     __tablename__ = "oauth_states"
 
     state: Mapped[str] = mapped_column(String(128), primary_key=True)
     provider: Mapped[str] = mapped_column(String(32))
-    source_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sources.id", ondelete="CASCADE"), index=True
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("account_connections.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid)
     redirect_uri: Mapped[str] = mapped_column(String(1024))

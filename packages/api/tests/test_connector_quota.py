@@ -303,6 +303,8 @@ def test_a_route_connector_is_metered_by_default() -> None:
         onshape_client_secret: str = "sec"
         onshape_annual_call_allowance: int = 1800
         integration_degrade_ratio: float = 0.7
+        integration_signal_ttl_seconds: int = 3600
+        integration_signal_sweep_reuse_seconds: int = 300
 
     registry = build_registry(_Settings(), redis=FakeRedis())  # type: ignore[arg-type]
     source = Source(

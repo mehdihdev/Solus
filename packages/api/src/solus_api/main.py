@@ -20,7 +20,12 @@ from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.connectors.httpcache import InMemoryCacheStore, RedisCacheStore
 from solus_api.connectors.mcp_acquire import BridgeExportAcquirer
-from solus_api.connectors.registry import AcquirerFactory, ConnectorContext, build_registry
+from solus_api.connectors.registry import (
+    AcquirerFactory,
+    ConnectorContext,
+    build_integration_cache,
+    build_registry,
+)
 from solus_api.connectors.secrets import build_secret_store
 from solus_api.core.config import Settings
 from solus_api.core.db import build_engine, build_sessionmaker
@@ -41,6 +46,7 @@ from solus_api.routers import (
     artifacts,
     billing,
     bridge,
+    connections,
     entities,
     events,
     extensions,
@@ -127,6 +133,10 @@ def _build_bridge_acquirer_factory(app: FastAPI, settings: Settings) -> Acquirer
     export (well after `create_app` returns and every attribute is set)."""
 
     def _factory(ctx: ConnectorContext, tool_name: str) -> BridgeExportAcquirer:
+        if ctx.project_id is None or ctx.team_id is None:
+            # Live acquisition resolves a companion session by project; an
+            # account-scoped context (SOLUSDEV-241) has none to resolve.
+            raise ValueError("live export acquisition needs a project-scoped context")
         return BridgeExportAcquirer(
             sessions=app.state.bridge_sessions,
             sessionmaker=app.state.sessionmaker,
@@ -230,6 +240,12 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             "integration cache is per-process (no SOLUS_REDIS_URL): concurrent "
             "syncs coalesce within one API process only"
         )
+    # SOLUSDEV-241: the read side of the spine — listings, change signals and
+    # versioned payloads, keyed on the provider ACCOUNT so projects and
+    # teammates on one grant share one fetch. Same store, same backend choice.
+    app.state.integration_cache = build_integration_cache(
+        resolved_settings, app.state.integration_store
+    )
     # SOLUSDEV-167: project-scoped graph-change fan-out. Routing is structural
     # — one channel per project — so a frame's channel, never its body, decides
     # who receives it.
@@ -242,6 +258,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.connector_registry = build_registry(
         resolved_settings,
         acquirer_factory=_build_bridge_acquirer_factory(app, resolved_settings),
+        redis=app.state.redis,
+        cache=app.state.integration_cache,
     )
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
     # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
@@ -354,6 +372,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(projects.project_router)
     app.include_router(jobs.router)
     app.include_router(integrations.router)
+    app.include_router(connections.router)
     app.include_router(billing.router)
     app.include_router(billing.actions_router)
     app.include_router(sources.router)

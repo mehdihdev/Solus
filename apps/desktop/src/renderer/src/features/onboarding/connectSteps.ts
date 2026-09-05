@@ -22,7 +22,15 @@ export interface WizardShape {
   readonly accessModes: IntegrationAccessModes | null
   readonly selection: IntegrationSelection | null
   readonly configFields: readonly string[]
+  /** SOLUSDEV-241: `account` binds a provider account with no project (Home)
+   *  — the rail ends at the sign-in. Default `project`. */
+  readonly scope?: WizardScope
+  /** SOLUSDEV-241: the user already holds a linked account for this provider,
+   *  so the wizard skips the grant + sign-in and goes straight to picking. */
+  readonly linkedAccount?: boolean
 }
+
+export type WizardScope = 'project' | 'account'
 
 /** Where the wizard is on its rail. `stepIndex` is past the end when done. */
 export interface WizardPosition {
@@ -39,11 +47,18 @@ export function wizardSteps(shape: WizardShape): readonly WizardStep[] {
     ]
   }
   const steps: WizardStep[] = []
-  // A single offered grant is sent implicitly (accessChoiceStep) — no step.
-  if (shape.accessModes && shape.accessModes.modes.length > 1) {
-    steps.push({ id: 'access', title: 'Choose access' })
+  // A linked account already carries a grant — asking again would be asking
+  // for something the user already gave (SOLUSDEV-241).
+  if (!shape.linkedAccount) {
+    // A single offered grant is sent implicitly (accessChoiceStep) — no step.
+    if (shape.accessModes && shape.accessModes.modes.length > 1) {
+      steps.push({ id: 'access', title: 'Choose access' })
+    }
+    steps.push({ id: 'authorize', title: 'Sign in' })
   }
-  steps.push({ id: 'authorize', title: 'Sign in' })
+  // Account scope binds the account and stops: what to track is a per-project
+  // choice, made from the Workspace later.
+  if (shape.scope === 'account') return steps
   if (shape.selection) {
     steps.push({ id: 'configure', title: `Pick ${plural(shape.selection.label)}` })
   } else if (shape.configFields.length > 0) {

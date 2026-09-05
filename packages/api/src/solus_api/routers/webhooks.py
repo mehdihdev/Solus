@@ -34,6 +34,7 @@ from solus_api.connectors.webhook_token import WEBHOOK_TOKEN_KEY, token_matches
 from solus_api.core.errors import APIError
 from solus_api.deps import SessionDep, SettingsDep
 from solus_api.models import Source, SourceStatus
+from solus_api.services.connections import account_ref_for, invalidate_listing
 
 logger = logging.getLogger("solus.webhooks")
 
@@ -150,6 +151,11 @@ async def provider_webhook(
         return Response(status_code=204)
 
     logger.info("webhook accepted provider=%s source=%s", provider, source_id)
+    # SOLUSDEV-241: the doorbell is the one signal that can move the ACCOUNT's
+    # cached listing (a rename, a new document) without a user spending quota.
+    cache = getattr(request.app.state, "integration_cache", None)
+    if cache is not None:
+        await invalidate_listing(cache, provider=provider, account_ref=account_ref_for(source))
     background.add_task(_probe_source, request.app, source_id)
     return Response(status_code=204)
 

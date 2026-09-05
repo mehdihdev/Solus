@@ -9,7 +9,7 @@
 // export-file connects).
 import { useState } from 'react'
 import { Card } from '../../components/ui/Card'
-import type { LocalTool } from '../../lib/api/resources'
+import type { Connection, LocalTool } from '../../lib/api/resources'
 import { LocalBridgeConnectModal } from '../project/localconnections/LocalBridgeConnectModal'
 import { ConnectTile } from './ConnectTile'
 import { ConnectWizardModal } from './ConnectWizardModal'
@@ -25,16 +25,20 @@ export interface ConnectCatalogProps {
   onConnected?: () => void
   /** Style for the tile grid (surfaces differ only in spacing). */
   gridStyle?: React.CSSProperties
+  /** SOLUSDEV-241: the user's linked accounts. A CONNECTED one for a tile's
+   *  provider is reused by the wizard — no second sign-in. */
+  linkedConnections?: readonly Connection[]
 }
 
 export function ConnectCatalog({
   projectId,
   onConnected,
-  gridStyle
+  gridStyle,
+  linkedConnections
 }: ConnectCatalogProps): React.JSX.Element {
   const catalog = useIntegrationCatalog()
   const connections = useOnboardingStore((s) => s.connections)
-  const wizard = useConnectWizard({ projectId, onConnected })
+  const wizard = useConnectWizard({ projectId, onConnected, linkedConnections })
   // Which local-bridge tool's guidance modal is open (SOLUSDEV-72).
   const [bridgeTool, setBridgeTool] = useState<LocalTool | null>(null)
 
@@ -72,6 +76,9 @@ export function ConnectCatalog({
         <ConnectWizardModal
           entry={wizard.active}
           state={connections[wizard.active.id]}
+          linkedAccount={
+            wizard.linkedAccount ? { login: wizard.linkedAccount.account_login } : null
+          }
           onBegin={() => void wizard.begin()}
           onPickFile={(file) => void wizard.pickFile(file)}
           onSelect={wizard.select}

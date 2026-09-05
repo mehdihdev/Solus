@@ -8,7 +8,7 @@
 // needs before it can sync — is injected as a `ConfigureStep`, never branched on
 // a provider id. All transport + bridge access is injected so this is unit
 // testable without React or Electron.
-import type { OAuthStartResponse, Source, Sync } from '../../lib/api/resources'
+import type { OAuthExchangeResult, OAuthStartResponse, Source, Sync } from '../../lib/api/resources'
 import type { OAuthBridge } from '../auth/githubOAuth'
 import type { AccessChoiceStep } from './accessChoiceStep'
 import type { AddOnStep } from './addOnStep'
@@ -22,7 +22,16 @@ export interface OAuthConnectApi {
     provider: string,
     input: { redirect_uri?: string; name?: string; access?: string }
   ) => Promise<OAuthStartResponse>
-  exchangeOAuth: (provider: string, input: { state: string; code: string }) => Promise<Source>
+  exchangeOAuth: (
+    provider: string,
+    input: { state: string; code: string }
+  ) => Promise<OAuthExchangeResult>
+  /** SOLUSDEV-241: attach the project to an account the user already linked
+   *  on Home — no browser handshake. */
+  createSource: (
+    projectId: string,
+    input: { type: string; name: string; connection_id: string }
+  ) => Promise<Source>
   updateSource: (
     projectId: string,
     sourceId: string,
@@ -75,6 +84,10 @@ export interface OAuthConnectOptions {
   redirectUri: string
   /** Human name for progress copy ("Onshape"); falls back to the provider id. */
   displayName?: string
+  /** SOLUSDEV-241: a linked account to reuse. Present, the grant choice and the
+   *  sign-in are skipped — asking again would be asking for something the user
+   *  already gave — and the project is bound to it directly. */
+  linkedConnection?: { id: string; login: string | null } | null
 }
 
 export interface OAuthConnectResult {
@@ -113,17 +126,12 @@ export async function runOAuthConnect(
   }
 
   try {
-    const authorized = await authorize(deps, deps.bridge, projectId, provider, options, label)
-    if ('error' in authorized) {
-      deps.onProgress({ phase: 'error', error: authorized.error, sourceId: authorized.sourceId })
-      return { ok: false, error: authorized.error, sourceId: authorized.sourceId }
+    const linked = await link(deps, deps.bridge, projectId, provider, options, label)
+    if ('error' in linked) {
+      deps.onProgress({ phase: 'error', error: linked.error, sourceId: linked.sourceId })
+      return { ok: false, error: linked.error, sourceId: linked.sourceId }
     }
-
-    deps.onProgress(busy('link', `Linking your ${label} account…`, authorized.sourceId))
-    const source = await deps.api.exchangeOAuth(provider, {
-      state: authorized.state,
-      code: authorized.code
-    })
+    const source = linked.source
 
     // HERE, and not on a button afterwards. The account exists as of the line
     // above, the browser still holds the vendor session from the handshake that
@@ -146,8 +154,50 @@ export async function runOAuthConnect(
 }
 
 type Authorized =
-  | { state: string; code: string; sourceId: string }
+  | { state: string; code: string; sourceId?: string }
   | { error: string; sourceId?: string }
+
+type Linked = { source: Source } | { error: string; sourceId?: string }
+
+/**
+ * Get the project a CONNECTED source: bind it to a linked account when one is
+ * offered (SOLUSDEV-241 — no handshake), otherwise authorize + exchange.
+ */
+async function link(
+  deps: OAuthConnectDeps,
+  bridge: OAuthBridge,
+  projectId: string,
+  provider: string,
+  options: OAuthConnectOptions,
+  label: string
+): Promise<Linked> {
+  if (options.linkedConnection) {
+    deps.onProgress(busy('link', `Using your linked ${label} account…`))
+    const source = await deps.api.createSource(projectId, {
+      type: provider,
+      name: label,
+      connection_id: options.linkedConnection.id
+    })
+    return { source }
+  }
+  const authorized = await authorize(deps, bridge, projectId, provider, options, label)
+  if ('error' in authorized) return authorized
+
+  deps.onProgress(busy('link', `Linking your ${label} account…`, authorized.sourceId))
+  const exchanged = await deps.api.exchangeOAuth(provider, {
+    state: authorized.state,
+    code: authorized.code
+  })
+  if (!exchanged.source) {
+    // The grant landed on the account but nothing attached it to this project
+    // — a server contract breach, reported rather than papered over.
+    return {
+      error: `${label} was linked to your account but not to this project.`,
+      sourceId: authorized.sourceId
+    }
+  }
+  return { source: exchanged.source }
+}
 
 /**
  * Everything up to and including the provider handshake: choose the grant, mint
@@ -176,12 +226,13 @@ async function authorize(
   // Match the callback on the backend's own OAuth state, which the provider
   // echoes back — the connector redirect URL carries no nonce of its own so
   // that strict providers (Onshape) can match it exactly.
+  const sourceId = start.source_id ?? undefined
   const callback = await bridge.awaitOAuth(start.authorize_url, start.state)
-  if (callback.error) return { error: callback.error, sourceId: start.source_id }
+  if (callback.error) return { error: callback.error, sourceId }
   if (!callback.code) {
-    return { error: `${label} sign-in was cancelled.`, sourceId: start.source_id }
+    return { error: `${label} sign-in was cancelled.`, sourceId }
   }
-  return { state: start.state, code: callback.code, sourceId: start.source_id }
+  return { state: start.state, code: callback.code, sourceId }
 }
 
 /** Write the chosen config onto the source, sync, poll, and report the result. */

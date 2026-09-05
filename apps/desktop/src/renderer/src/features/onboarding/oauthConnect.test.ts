@@ -10,7 +10,7 @@ import {
   type OAuthConnectApi,
   type OAuthConnectDeps
 } from './oauthConnect'
-import type { Source, Sync } from '../../lib/api/resources'
+import type { Connection, Source, Sync } from '../../lib/api/resources'
 import type { OAuthBridge } from '../auth/githubOAuth'
 import type { ConnectionState } from './onboardingStore'
 
@@ -33,6 +33,20 @@ function source(overrides: Partial<Source> = {}): Source {
   }
 }
 
+function connection(): Connection {
+  return {
+    id: 'c1',
+    provider: PROVIDER,
+    status: 'connected',
+    account_login: 'maya',
+    access: null,
+    last_error: null,
+    projects: [],
+    created_at: '',
+    updated_at: ''
+  }
+}
+
 function sync(overrides: Partial<Sync> = {}): Sync {
   return {
     id: 'sy1',
@@ -49,9 +63,11 @@ function stubApi(overrides: Partial<OAuthConnectApi> = {}): OAuthConnectApi {
     startOAuth: vi.fn(async () => ({
       authorize_url: 'https://example.test/authorize?x=1',
       state: 'st',
+      connection_id: 'c1',
       source_id: 's1'
     })),
-    exchangeOAuth: vi.fn(async () => source()),
+    exchangeOAuth: vi.fn(async () => ({ connection: connection(), source: source() })),
+    createSource: vi.fn(async () => source()),
     updateSource: vi.fn(async () => source()),
     triggerSync: vi.fn(async () => ({ job_id: 'j1', status: 'queued' })),
     getSyncs: vi.fn(async () => [sync()]),
@@ -161,6 +177,54 @@ describe('runOAuthConnect', () => {
     expect(result.error).toMatch(/desktop app/i)
     expect(api.startOAuth).not.toHaveBeenCalled()
     expect(states[states.length - 1].phase).toBe('error')
+  })
+
+  it('reuses a linked account: binds the project and skips the handshake (SOLUSDEV-241)', async () => {
+    const api = stubApi()
+    const bridge = stubBridge({ code: 'cd' })
+    const { deps, states } = makeDeps(api, bridge)
+    const chooseAccess = vi.fn(async () => ({ access: 'write' }))
+
+    const result = await runOAuthConnect({ ...deps, chooseAccess }, 'p1', PROVIDER, {
+      redirectUri: 'http://127.0.0.1:7421/cb',
+      displayName: 'Future CAD',
+      linkedConnection: { id: 'c1', login: 'maya' }
+    })
+
+    expect(result.ok).toBe(true)
+    expect(api.createSource).toHaveBeenCalledWith('p1', {
+      type: PROVIDER,
+      name: 'Future CAD',
+      connection_id: 'c1'
+    })
+    // No grant asked for, no browser opened, no code exchanged.
+    expect(chooseAccess).not.toHaveBeenCalled()
+    expect(api.startOAuth).not.toHaveBeenCalled()
+    expect(bridge.awaitOAuth).not.toHaveBeenCalled()
+    expect(api.exchangeOAuth).not.toHaveBeenCalled()
+    // …but the picker and the sync still run.
+    expect(api.updateSource).toHaveBeenCalledWith('p1', 's1', { config: { document_id: 'd1' } })
+    expect(api.triggerSync).toHaveBeenCalledWith('p1', 's1')
+    expect(states[0]).toEqual({
+      phase: 'busy',
+      stage: 'link',
+      label: 'Using your linked Future CAD account…',
+      sourceId: undefined
+    })
+  })
+
+  it('reports an exchange that linked the account but attached no source', async () => {
+    const api = stubApi({
+      exchangeOAuth: vi.fn(async () => ({ connection: connection(), source: null }))
+    })
+    const { deps } = makeDeps(api, stubBridge({ code: 'cd' }))
+    const result = await runOAuthConnect(deps, 'p1', PROVIDER, {
+      redirectUri: 'u',
+      displayName: 'Future CAD'
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('Future CAD was linked to your account but not to this project.')
+    expect(api.triggerSync).not.toHaveBeenCalled()
   })
 
   it('marks an error when the OAuth callback returns an error', async () => {

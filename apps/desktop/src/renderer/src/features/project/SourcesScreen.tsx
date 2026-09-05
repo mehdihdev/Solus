@@ -26,6 +26,7 @@ import { HostedAddOnRow } from './HostedAddOnRow'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { sourceErrorText, sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectSources } from './useProjectSources'
+import { useAccountConnections } from '../workspace/useAccountConnections'
 import { LocalConnectionsSection } from './localconnections/LocalConnectionsSection'
 
 /** What a source tracks today, read from its own config under the connector's
@@ -195,61 +196,61 @@ function SourceRow({
 
   return (
     <div style={{ borderBottom: last ? 'none' : '1px solid var(--bd)' }}>
-    <div
-      style={{
-        display: 'flex',
-        gap: 12,
-        alignItems: 'center',
-        padding: '13px 16px'
-        // The separator moved to the wrapper above, so an add-on block renders
-        // INSIDE this source's boundary rather than looking like the next row.
-      }}
-    >
-      <span
-        aria-hidden
+      <div
         style={{
-          width: 8,
-          height: 8,
-          borderRadius: 99,
-          background: sourceStatusColor(source.status),
-          flexShrink: 0
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          padding: '13px 16px'
+          // The separator moved to the wrapper above, so an add-on block renders
+          // INSIDE this source's boundary rather than looking like the next row.
         }}
-      />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{source.name}</div>
-        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
-          {sourceTypeLabel(source.type)}
-          {account && ` · ${account}`} · {synced}
-          {entities}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 99,
+            background: sourceStatusColor(source.status),
+            flexShrink: 0
+          }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{source.name}</div>
+          <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+            {sourceTypeLabel(source.type)}
+            {account && ` · ${account}`} · {synced}
+            {entities}
+          </div>
+          {errorText && (
+            <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>{errorText}</div>
+          )}
         </div>
-        {errorText && (
-          <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>{errorText}</div>
+        <Mono size={8.5} color="var(--mut)">
+          {source.status.toUpperCase()}
+        </Mono>
+        <Button kind="ghost" size="sm" onClick={onSync}>
+          <Icons.play size={11} /> Sync now
+        </Button>
+        <SelectionAction source={source} projectId={projectId} onSaved={onSelectionSaved} />
+        <Button
+          kind="ghost"
+          size="sm"
+          aria-label={`Disconnect ${source.name}`}
+          onClick={() => setConfirming(true)}
+        >
+          Disconnect
+        </Button>
+        {confirming && (
+          <DisconnectModal
+            name={source.name}
+            onClose={() => setConfirming(false)}
+            onConfirm={onDisconnect}
+          />
         )}
       </div>
-      <Mono size={8.5} color="var(--mut)">
-        {source.status.toUpperCase()}
-      </Mono>
-      <Button kind="ghost" size="sm" onClick={onSync}>
-        <Icons.play size={11} /> Sync now
-      </Button>
-      <SelectionAction source={source} projectId={projectId} onSaved={onSelectionSaved} />
-      <Button
-        kind="ghost"
-        size="sm"
-        aria-label={`Disconnect ${source.name}`}
-        onClick={() => setConfirming(true)}
-      >
-        Disconnect
-      </Button>
-      {confirming && (
-        <DisconnectModal
-          name={source.name}
-          onClose={() => setConfirming(false)}
-          onConfirm={onDisconnect}
-        />
-      )}
-    </div>
-    <SourceAddOn source={source} projectId={projectId} onChanged={onSelectionSaved} />
+      <SourceAddOn source={source} projectId={projectId} onChanged={onSelectionSaved} />
     </div>
   )
 }
@@ -336,11 +337,18 @@ function ConnectPanel({
   useEffect(() => {
     useOnboardingStore.getState().reset()
   }, [])
+  // SOLUSDEV-241: an account linked on Home is reused here — the wizard skips
+  // the sign-in and goes straight to picking what this project tracks.
+  const accounts = useAccountConnections()
 
   return (
     <>
       <SectionLabel>CONNECT A TOOL</SectionLabel>
-      <ConnectCatalog projectId={projectId} onConnected={onConnected} />
+      <ConnectCatalog
+        projectId={projectId}
+        onConnected={onConnected}
+        linkedConnections={accounts.connections}
+      />
     </>
   )
 }

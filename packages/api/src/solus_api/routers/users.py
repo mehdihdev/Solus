@@ -26,6 +26,7 @@ from solus_api.deps import (
     SupabaseAdminDep,
 )
 from solus_api.models import (
+    AccountConnection,
     Activity,
     CreditBalance,
     CreditLedger,
@@ -63,6 +64,7 @@ from solus_api.schemas import (
     serialize_team_summary,
     serialize_user,
 )
+from solus_api.services.connections import delete_connection_secrets, is_connection_owned
 from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_team
 
@@ -145,7 +147,10 @@ async def delete_projects_cascade(
     ).all()
     if secret_store is not None:
         for _sid, ref in sources:
-            if ref:
+            # SOLUSDEV-241: a connection-owned ref is the account's, shared by
+            # every project bound to it — the connection's own lifecycle deletes
+            # it (revoke / account deletion), never a project teardown.
+            if ref and not is_connection_owned(ref):
                 await secret_store.delete(ref)
                 # The OAuth refresh token has its own ref (SOLUS-CAD-01); without
                 # this, deleting an account would leave a live grant against the
@@ -241,6 +246,13 @@ async def delete_me(
                 )
             )
     await _forfeit_credits(session, user)
+    # SOLUSDEV-241: the account-scoped grants are the USER's, not any team's, so
+    # no team cascade reaches them. Delete every credential family they own
+    # before the row goes — a live grant must not outlive the account.
+    for connection in (
+        await session.scalars(select(AccountConnection).where(AccountConnection.user_id == user.id))
+    ).all():
+        await delete_connection_secrets(secret_store, connection)
     # Tombstone the identity so a still-valid token cannot re-provision (durable delete).
     session.add(DeletedAccount(supabase_user_id=user.supabase_user_id))
     await session.execute(delete(Notification).where(Notification.user_id == user.id))
