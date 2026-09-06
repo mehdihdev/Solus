@@ -308,6 +308,15 @@ observations of one physical part — not rows synced from any external source. 
   rights as an `origin == "manual"` ALLOWLIST so fingerprint rows are born read-only.
 - Decision A's stance stands: `origin` remains a free `String(16)` — this amendment
   documents the third well-known value, it adds no enum.
+
+**Amended — 2026-09-05, SOLUSDEV-246 (STORE ST1, origin vocabulary, human-approved in-chat per
+ADR-032):** `origin="extension"` is the fourth well-known value. It marks rows written by a
+first-party bundle's in-repo backend (ADR-035 as amended the same day): `kind` is the bundle's
+namespaced `ext:<id>:<name>`, `source_id` and `external_ref` are NULL, and the rows are
+soft-deleted when the bundle is uninstalled from the project. Connector reconciliation sweeps
+never touch them (as for `fingerprint`); edit rights follow the `origin == "manual"` allowlist
+stance, so they are read-only through the generic entity routes. No enum is added.
+
 - Re-key note: a normalization-policy change (e.g. the 2026-07-12 separator stripping:
   bases `MPU-6050`→`MPU6050`, `AMS1117-3.3`→`AMS11173.3`) changes the affected uuid5
   canonical ids and `canonical_key` values; orphaned old-base rows are accepted for
@@ -654,6 +663,29 @@ the iframe sandbox; an extension needs a capability the closed scope set cannot 
 (add the scope here, never as a bridge special case); or publish volume needs automated
 review beyond static checks.
 
+**Amended — 2026-09-05, SOLUSDEV-246 (STORE ST1, human-approved in-chat per ADR-032):**
+
+1. **First-party bundles may carry server-side capability — declared, never shipped.**
+   `extension.toml` `schema_version = 2` adds optional `[backend]`, `[graph]` and `[tools]`
+   tables. The code behind them is an **in-repo** Python package
+   (`packages/api/src/solus_api/widgets/<id>/`), reviewed at the MR exactly as ADR-031/MCP-03
+   treat any code that runs outside the sandbox; a bundle zip never carries executable server
+   code, and the publish validator rejects these tables unless the publisher is Solus staff and
+   the in-repo package exists and provides what is declared. Community bundles are unchanged:
+   the sandbox + bridge remain their whole surface. Routes mount at
+   `/api/v1/projects/{project_id}/widgets/<id>/…`; tools register through the untouched W0-04
+   `ToolRegistry` as `<id>.<name>`; kinds land as `ext:<id>:<name>` with `origin="extension"`.
+2. **§4 amended — the repo `.solus/` layer gains one extension-related occupant.**
+   `.solus/project.toml` may carry `[ext.<id>]` tables, one per installed first-party bundle,
+   holding non-secret team defaults validated against that bundle's declared settings schema
+   at read time. The git connector lands the file as a single `solus_config` entity; nothing
+   else extension-related lives in `.solus/`, and an `extensions/` folder there is still
+   ignored.
+3. **Uninstall leaves no trace.** Removing a bundle soft-deletes the graph entities of its
+   declared kinds in that project (ADR-027 soft delete — reversible), deletes its settings,
+   `storage.own` rows and canvas slots; the desktop removes its cache as before. The former
+   "graph data it already added stays" copy is retired.
+
 ---
 
 ## ADR-035: MCP hosting model, third pattern — vendor-hosted servers we cannot fork
@@ -671,9 +703,9 @@ vendored tree to hash. It authenticates per CUSTOMER over OAuth and spends that 
 Onshape API allocation. ADR-031's enforcement machinery — provenance record, license boundary,
 pinned `bin/launch`, a security review voided by a vendored-tree hash change — has no subject
 here, and applying it literally would either block the integration or be theatre. Its SECURITY
-posture, however — *everything a server advertises or returns is untrusted; the tool namespace
+posture, however — _everything a server advertises or returns is untrusted; the tool namespace
 available to any SOL invocation is fixed cloud-side against the Solus-owned allowlist, never by
-what a machine advertises* — is exactly what a vendor-hosted server needs, and more.
+what a machine advertises_ — is exactly what a vendor-hosted server needs, and more.
 
 **Decision.** Solus adds a THIRD pattern to the ADR-031 hosting model. ADR-031 stands unchanged
 for Patterns 1 and 2.
@@ -684,12 +716,12 @@ not posture:
 
 1. **No forking obligation, because no Solus-shipped code runs on the customer's machine.**
    ADR-031's fork-harden-own requirements (PROVENANCE record, MIT/Apache-only boundary, pinned
-   `bin/launch`, vendored-tree hash) are *inapplicable* to Pattern 3 and are formally waived for
+   `bin/launch`, vendored-tree hash) are _inapplicable_ to Pattern 3 and are formally waived for
    it. They exist to control code Solus ships onto a customer's machine; Pattern 3 ships none.
    The supply-chain question is replaced by a vendor-admission question, answered by the review
    below.
 2. **Hosted servers live in their own cloud-side registry, never in the loopback catalog.** The
-   local catalog's `url` field means *loopback, on this machine* as a security invariant — a
+   local catalog's `url` field means _loopback, on this machine_ as a security invariant — a
    non-loopback entry there would hand the companion an SSRF primitive inside the customer's
    network. Hosted servers get a separate registry (`agent/tools/remote_mcp.py`), and adding one
    is a DATA entry there and nothing else. If adding a server ever requires editing that
