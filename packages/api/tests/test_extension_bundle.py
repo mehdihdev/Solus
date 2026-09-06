@@ -56,7 +56,7 @@ def test_minimal_bundle_is_ok() -> None:
     report = inspect_bundle(data)
     assert isinstance(report, BundleReport)
     assert report.ok and report.problems == []
-    assert report.manifest is not None and report.manifest.extension.id == "bom"
+    assert report.manifest is not None and report.manifest.extension.id == "bom-lite"
     assert report.size_bytes == len(data)
     assert [a.path for a in report.assets] == ["OVERVIEW.md"]
 
@@ -317,7 +317,7 @@ def test_structure_inspector_reads_only_the_manifest(monkeypatch: pytest.MonkeyP
 
     assert spy.names == ["extension.toml"]
     assert not report.ok and report.manifest is not None
-    assert report.manifest.extension.id == "bom"
+    assert report.manifest.extension.id == "bom-lite"
     assert any(
         p.startswith("store.sections.0.body:") and "docs/HOW.md" in p for p in report.problems
     )
@@ -367,7 +367,9 @@ def test_single_folder_wrapper_is_rejected_with_a_hint() -> None:
 
 
 def test_invalid_manifest_problems_come_through_and_stop_the_inspection() -> None:
-    files = with_manifest(minimal_files(), FULL_MANIFEST_TOML.replace('id = "bom"', 'id = "B"'))
+    files = with_manifest(
+        minimal_files(), FULL_MANIFEST_TOML.replace('id = "bom-lite"', 'id = "B"')
+    )
     report = inspect_bundle(build_zip(files))
     assert not report.ok and report.manifest is None
     assert any(p.startswith("extension.id:") for p in report.problems), report.problems

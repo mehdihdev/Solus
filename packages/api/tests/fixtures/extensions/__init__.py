@@ -14,11 +14,13 @@ import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+# The community fixtures publish as `bom-lite`: `bom` is a first-party capability id
+# (SOLUSDEV-246 ST4) and the publish gate reserves it for Solus staff.
 MINIMAL_MANIFEST_TOML = """\
 schema_version = 1
 
 [extension]
-id = "bom"
+id = "bom-lite"
 name = "BOM"
 version = "1.0.0"
 publisher = "Ada Lovelace"
@@ -35,7 +37,7 @@ FULL_MANIFEST_TOML = """\
 schema_version = 1
 
 [extension]
-id = "bom"
+id = "bom-lite"
 name = "BOM"
 version = "1.2.0"
 publisher = "Ada Lovelace"

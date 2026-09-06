@@ -16,7 +16,7 @@ from solus_contracts.extension_manifest import ExtensionManifest
 def test_loads_a_minimal_manifest() -> None:
     manifest = load_manifest(MINIMAL_MANIFEST_TOML)
     assert isinstance(manifest, ExtensionManifest)
-    assert manifest.extension.id == "bom"
+    assert manifest.extension.id == "bom-lite"
     assert manifest.views.widget is not None
     assert manifest.views.widget.entry == "widget.html"
     assert manifest_text_problems(MINIMAL_MANIFEST_TOML) == []
@@ -30,7 +30,7 @@ def test_loads_a_full_manifest() -> None:
 
 
 def test_contract_problems_use_dotted_paths() -> None:
-    text = MINIMAL_MANIFEST_TOML.replace('id = "bom"', 'id = "Not A Slug"')
+    text = MINIMAL_MANIFEST_TOML.replace('id = "bom-lite"', 'id = "Not A Slug"')
     problems = manifest_text_problems(text)
     assert problems and any(p.startswith("extension.id:") for p in problems), problems
     with pytest.raises(ManifestError) as exc:
@@ -67,4 +67,4 @@ def test_empty_text_is_a_problem_not_a_crash() -> None:
 
 def test_manifest_error_message_lists_the_problems() -> None:
     with pytest.raises(ManifestError, match="extension.id"):
-        load_manifest(MINIMAL_MANIFEST_TOML.replace('id = "bom"', 'id = "B"'))
+        load_manifest(MINIMAL_MANIFEST_TOML.replace('id = "bom-lite"', 'id = "B"'))

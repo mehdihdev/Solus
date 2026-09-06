@@ -62,7 +62,7 @@ async def _reconcile(client: AsyncClient, headers: dict[str, str], project_id: s
 async def _installed(
     client: AsyncClient, headers: dict[str, str], project_id: str, **kw: Any
 ) -> None:
-    resp = await install(client, headers, project_id, "bom", grants=FULL_GRANTS, **kw)
+    resp = await install(client, headers, project_id, "bom-lite", grants=FULL_GRANTS, **kw)
     assert resp.status_code == 201, resp.text
 
 
@@ -111,7 +111,7 @@ async def test_install_bom_shows_a_bom_node_beside_live_bench_and_uninstall_remo
     user = await me(client, alice_headers)
     await consent(db, user["id"])
     _, project_id = await project_for(client, alice_headers)
-    await seed_extension(db, "bom")
+    await seed_extension(db, "bom-lite")
     assert await _graph(client, alice_headers, project_id) == ABSENT
 
     await _installed(client, alice_headers, project_id)
@@ -124,7 +124,7 @@ async def test_install_bom_shows_a_bom_node_beside_live_bench_and_uninstall_remo
     assert bom["type"] == WIDGET_KIND and bom["domain"] == "workspace"
     assert bom["origin"] == "system"
     assert bom["properties"] == {
-        "slug": "bom",
+        "slug": "bom-lite",
         "version": "1.2.0",
         "enabled": True,
         "blocked": False,
@@ -151,7 +151,7 @@ async def test_install_bom_shows_a_bom_node_beside_live_bench_and_uninstall_remo
         WORKSPACE_KIND,
     ]
 
-    gone = await client.delete(ext_url(project_id, "bom"), headers=alice_headers)
+    gone = await client.delete(ext_url(project_id, "bom-lite"), headers=alice_headers)
     assert gone.status_code == 204, gone.text
     after = await _graph(client, alice_headers, project_id)
     assert after["widgets"] == [] and len(after["edges"]) == 1
@@ -173,7 +173,7 @@ async def test_disable_enable_block_and_update_mirror_into_the_node(
 ) -> None:
     team_id, project_id = await project_for(client, alice_headers)
     catalog = await seed_extension(
-        db, "bom", {"1.2.0": manifest_with("1.2.0"), "1.3.0": manifest_with("1.3.0")}
+        db, "bom-lite", {"1.2.0": manifest_with("1.2.0"), "1.3.0": manifest_with("1.3.0")}
     )
     await _installed(client, alice_headers, project_id, version="1.2.0")
 
@@ -183,18 +183,18 @@ async def test_disable_enable_block_and_update_mirror_into_the_node(
         return dict(widgets[0]["properties"])
 
     off = await client.patch(
-        ext_url(project_id, "bom"), json={"enabled": False}, headers=alice_headers
+        ext_url(project_id, "bom-lite"), json={"enabled": False}, headers=alice_headers
     )
     assert off.status_code == 200, off.text
     assert (await props())["enabled"] is False
     on = await client.patch(
-        ext_url(project_id, "bom"), json={"enabled": True}, headers=alice_headers
+        ext_url(project_id, "bom-lite"), json={"enabled": True}, headers=alice_headers
     )
     assert on.status_code == 200
     assert (await props())["enabled"] is True
 
     moved = await install(
-        client, alice_headers, project_id, "bom", grants=FULL_GRANTS, version="1.3.0"
+        client, alice_headers, project_id, "bom-lite", grants=FULL_GRANTS, version="1.3.0"
     )
     assert moved.status_code == 200, moved.text
     assert (await props())["version"] == "1.3.0"
@@ -218,7 +218,7 @@ async def test_the_read_route_writes_nothing_even_for_a_viewer(
     bob_headers: dict[str, str],
 ) -> None:
     team_id, project_id = await project_for(client, alice_headers)
-    await seed_extension(db, "bom")
+    await seed_extension(db, "bom-lite")
     await _installed(client, alice_headers, project_id)
     # Tombstone the widget node behind the API's back: a pure read must NOT heal it.
     await db.execute(
@@ -249,7 +249,7 @@ async def test_reconcile_heals_behind_the_member_floor_and_the_write_budget(
     user = await me(client, alice_headers)
     await consent(db, user["id"])
     team_id, project_id = await project_for(client, alice_headers)
-    await seed_extension(db, "bom")
+    await seed_extension(db, "bom-lite")
     await _installed(client, alice_headers, project_id)
     pid = uuid.UUID(project_id)
     # Simulate a pre-ST2 install: wipe the whole layer.
@@ -268,7 +268,7 @@ async def test_reconcile_heals_behind_the_member_floor_and_the_write_budget(
     healed = await _reconcile(client, alice_headers, project_id)
     assert healed.status_code == 200, healed.text
     data = healed.json()["data"]
-    assert [w["properties"]["slug"] for w in data["widgets"]] == ["bom"]
+    assert [w["properties"]["slug"] for w in data["widgets"]] == ["bom-lite"]
     assert len(data["edges"]) == 2
     assert data["reconciled"]["created"] >= 1 and data["reconciled"]["pruned"] == 0
     assert await _dangling(db, project_id) == 0
@@ -296,7 +296,7 @@ async def test_team_b_cannot_read_team_a_layer_and_a_viewer_can(
     bob_headers: dict[str, str],
 ) -> None:
     team_id, project_id = await project_for(client, alice_headers)
-    await seed_extension(db, "bom")
+    await seed_extension(db, "bom-lite")
     await _installed(client, alice_headers, project_id)
     assert (await client.get(_graph_url(project_id), headers=bob_headers)).status_code == 404
     assert (await _reconcile(client, bob_headers, project_id)).status_code == 404
@@ -316,7 +316,7 @@ async def test_the_layer_is_read_only_through_the_generic_entity_routes(
     Robot subtype only; a `system`-origin workspace node must be refused (ADR-027:
     edit rights are an `origin == manual` allowlist), and the row must not move."""
     _, project_id = await project_for(client, alice_headers)
-    await seed_extension(db, "bom")
+    await seed_extension(db, "bom-lite")
     await _installed(client, alice_headers, project_id)
     root_id = (await _graph(client, alice_headers, project_id))["root"]["id"]
     url = f"/api/v1/projects/{project_id}/entities/{root_id}"
@@ -346,12 +346,12 @@ async def test_a_published_v1_bundle_installs_and_registers_its_node_end_to_end(
         "/api/v1/extensions/publish",
         files={
             "bundle": (
-                "bom.zip",
+                "bom-lite.zip",
                 io.BytesIO(build_zip(with_manifest(full_files(), FULL_MANIFEST_TOML))),
                 "application/zip",
             )
         },
-        headers={**bob_headers, "Idempotency-Key": "e2e-bom"},
+        headers={**bob_headers, "Idempotency-Key": "e2e-bom-lite"},
     )
     assert published.status_code == 202, published.text
     version = await db.scalar(select(ExtensionVersion).where(ExtensionVersion.version == "1.2.0"))
@@ -366,9 +366,13 @@ async def test_a_published_v1_bundle_installs_and_registers_its_node_end_to_end(
 
     _, project_id = await project_for(client, alice_headers)
     installed = await install(
-        client, alice_headers, project_id, "bom", grants={"scopes": ["graph.read"], "network": []}
+        client,
+        alice_headers,
+        project_id,
+        "bom-lite",
+        grants={"scopes": ["graph.read"], "network": []},
     )
     assert installed.status_code == 201, installed.text
     graph = await _graph(client, alice_headers, project_id)
-    assert [w["properties"]["slug"] for w in graph["widgets"]] == ["bom"]
+    assert [w["properties"]["slug"] for w in graph["widgets"]] == ["bom-lite"]
     assert graph["widgets"][0]["properties"]["publisher"] == "Ada Lovelace"

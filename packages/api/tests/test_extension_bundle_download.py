@@ -32,8 +32,8 @@ from solus_api.storage.extension_bundle_store import ExtensionBundleStore
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-BUNDLE_URL = "/api/v1/extensions/bom/versions/1.0.0/bundle"
-ASSET_URL = "/api/v1/extensions/bom/versions/1.0.0/assets/"
+BUNDLE_URL = "/api/v1/extensions/bom-lite/versions/1.0.0/bundle"
+ASSET_URL = "/api/v1/extensions/bom-lite/versions/1.0.0/assets/"
 
 
 @pytest.fixture
@@ -112,7 +112,7 @@ async def test_publisher_downloads_own_pending_bundle_with_verifiable_headers(
     assert resp.headers["x-solus-content-hash"] == hashlib.sha256(data).hexdigest()
     # Phase 4 M6: never sniffed, always a download named after the version.
     assert resp.headers["x-content-type-options"] == "nosniff"
-    assert resp.headers["content-disposition"] == 'attachment; filename="bom-1.0.0.zip"'
+    assert resp.headers["content-disposition"] == 'attachment; filename="bom-lite-1.0.0.zip"'
 
 
 @pytest.mark.parametrize(
@@ -172,7 +172,10 @@ async def test_unknown_slug_or_version_is_404(
 
 @pytest.mark.parametrize(
     "url",
-    ["/api/v1/extensions/-bom/versions/1.0.0/bundle", "/api/v1/extensions/bom/versions/v1/bundle"],
+    [
+        "/api/v1/extensions/-bom-lite/versions/1.0.0/bundle",
+        "/api/v1/extensions/bom-lite/versions/v1/bundle",
+    ],
 )
 async def test_bad_slug_or_version_syntax_is_422(
     client: AsyncClient, alice_headers: dict[str, str], url: str

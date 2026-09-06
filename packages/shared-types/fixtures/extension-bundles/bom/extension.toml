@@ -1,0 +1,51 @@
+# SOLUSDEV-246 (STORE ST4) — the first-party BOM widget. Every part in the robot,
+# raw materials and anything purchased, as ONE view over canonical parts. The
+# page itself is rendered in-repo by the Solus desktop (first-party pages are
+# trusted React, not a sandboxed frame); `page.html` is the honest fallback for
+# any host that mounts the bundle as a plain extension. Backend, graph kind and
+# SOL tool are implemented in packages/api/src/solus_api/widgets/bom/.
+# Publishable only by Solus staff (the first-party gate).
+schema_version = 2
+
+[extension]
+id = "bom"
+name = "BOM"
+version = "0.1.0"
+publisher = "Solus"
+summary = "Every part in the robot, raw materials and purchases — one row per physical part."
+requires = [["eda", "cad"]]
+
+[views]
+page = { entry = "page.html", icon = "icon.svg", label = "BOM" }
+
+[backend]
+capability = "bom"
+routes = true
+
+[graph]
+kinds = [{ name = "item", domain = "project" }]
+
+[tools]
+names = ["add_item"]
+
+[settings]
+[[settings.fields]]
+key = "preferred_suppliers"
+type = "string"
+label = "Preferred suppliers (comma-separated)"
+
+[[settings.fields]]
+key = "cost_target"
+type = "number"
+label = "Cost target"
+min = 0
+
+[[settings.fields]]
+key = "currency"
+type = "select"
+label = "Currency"
+options = ["USD", "EUR", "GBP"]
+default = "USD"
+
+[store]
+overview = "OVERVIEW.md"

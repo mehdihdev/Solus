@@ -467,7 +467,7 @@ async def test_a_community_publisher_cannot_squat_a_capability_id(
 ) -> None:
     """M4: a plain v1 manifest whose id is an in-repo capability is refused, so
     the slug stays claimable by Solus."""
-    toml = MINIMAL_MANIFEST_TOML.replace('id = "bom"', 'id = "fixture-bundle"')
+    toml = MINIMAL_MANIFEST_TOML.replace('id = "bom-lite"', 'id = "fixture-bundle"')
     refused = await _publish(
         client, alice_headers, build_zip(with_manifest(minimal_files(), toml)), "m4-1"
     )
