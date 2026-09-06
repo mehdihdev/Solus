@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from solus_contracts.extension_manifest import SEMVER_PATTERN, ExtensionManifest
+from solus_contracts.extension_manifest import SEMVER_PATTERN, ExtensionManifest, manifest_document
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
@@ -216,7 +216,10 @@ async def create_version(
         id=version_id,
         extension_id=extension.id,
         version=manifest.extension.version,
-        manifest=manifest.model_dump(mode="json", exclude_none=True),
+        # The AUTHORED shape (contract `manifest_document`): a v1 manifest must not
+        # gain the defaulted v2 tables, or its own re-parse — on install, and on
+        # the desktop — rejects it as unknown fields.
+        manifest=manifest_document(manifest),
         bundle_storage=store.backend,
         content_hash=content_hash,
         bundle_size_bytes=len(data),

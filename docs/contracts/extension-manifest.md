@@ -98,6 +98,15 @@ under the provider's 128-char cap the prompt layer enforces). Parsed shape gains
 `backend?: Backend`, `graph: Graph` (default `{ kinds: [] }`), `tools: Tools` (default
 `{ names: [] }`); `schema_version` is `1 | 2`.
 
+## Stored form — `manifest_document`
+
+What the registry stores on the version row (and ships to the desktop on the install row) is
+`manifest_document(manifest)` (Python), not a bare `model_dump`: the manifest **as authored**. At
+`schema_version` 1 the defaulted first-party tables are omitted, because a v1 manifest's own
+re-parse — on install, and in the desktop — treats them as unknown fields. Found by the STORE ST2
+real run, not by a suite; the round-trip is now a contract test on every valid fixture, and
+migration `c4d5e6f7a8b9` repaired rows stored between the two.
+
 ## Closed permission scopes (v1)
 
 | scope            | what the host bridge lets the extension do                                    |

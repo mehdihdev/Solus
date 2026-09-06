@@ -419,6 +419,18 @@ class ExtensionManifest(_Strict):
         return self
 
 
+def manifest_document(manifest: ExtensionManifest) -> dict[str, Any]:
+    """The manifest as a JSON object BOTH parsers accept again — what gets stored
+    on the version row and shipped to the desktop. A plain ``model_dump`` is not
+    that: at ``schema_version`` 1 the defaulted first-party tables would come
+    back as unknown fields (the bug the STORE ST2 real run caught)."""
+    document = manifest.model_dump(mode="json", exclude_none=True)
+    if manifest.schema_version == 1:
+        for key in FIRST_PARTY_TABLES:
+            document.pop(key, None)
+    return document
+
+
 def declares_first_party(manifest: ExtensionManifest) -> bool:
     """True when the manifest uses any first-party table — the publish validator
     then demands a staff publisher and a matching in-repo capability."""

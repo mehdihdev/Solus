@@ -213,3 +213,48 @@ async def test_the_layer_is_read_only_through_the_generic_entity_routes(
     assert deleted.status_code in (403, 405, 409, 422), deleted.text
     still = await db.get(GraphEntity, uuid.UUID(root_id))
     assert still is not None and still.deleted_at is None and still.name == "Workspace"
+
+
+async def test_a_published_v1_bundle_installs_and_registers_its_node_end_to_end(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """The path the STORE ST2 real run broke: publish (stores the manifest) →
+    approve → install (re-parses the STORED manifest) → node. No seeded rows."""
+    import io
+
+    from fixtures.extensions import FULL_MANIFEST_TOML, build_zip, full_files, with_manifest
+    from solus_api.models import Extension, ExtensionReviewStatus, ExtensionVersion, utcnow
+
+    published = await client.post(
+        "/api/v1/extensions/publish",
+        files={
+            "bundle": (
+                "bom.zip",
+                io.BytesIO(build_zip(with_manifest(full_files(), FULL_MANIFEST_TOML))),
+                "application/zip",
+            )
+        },
+        headers={**bob_headers, "Idempotency-Key": "e2e-bom"},
+    )
+    assert published.status_code == 202, published.text
+    version = await db.scalar(select(ExtensionVersion).where(ExtensionVersion.version == "1.2.0"))
+    assert version is not None
+    assert not ({"backend", "graph", "tools"} & set(version.manifest))  # stored as authored
+    version.review_status = ExtensionReviewStatus.APPROVED
+    version.published_at = utcnow()
+    extension = await db.get(Extension, version.extension_id)
+    assert extension is not None
+    extension.latest_approved_version_id = version.id
+    await db.commit()
+
+    _, project_id = await project_for(client, alice_headers)
+    installed = await install(
+        client, alice_headers, project_id, "bom", grants={"scopes": ["graph.read"], "network": []}
+    )
+    assert installed.status_code == 201, installed.text
+    graph = await _graph(client, alice_headers, project_id)
+    assert [w["properties"]["slug"] for w in graph["widgets"]] == ["bom"]
+    assert graph["widgets"][0]["properties"]["publisher"] == "Ada Lovelace"

@@ -41,6 +41,7 @@ from solus_contracts.extension_manifest import (
     declares_first_party,
     graph_kind_name,
     is_safe_extension_id,
+    manifest_document,
     manifest_problems,
     parse_extension_manifest,
 )
@@ -69,6 +70,30 @@ def test_fixtures_validate(name: str, schema_version: int) -> None:
     assert manifest.schema_version == schema_version
     assert manifest.schema_version in SUPPORTED_SCHEMA_VERSIONS
     assert manifest_problems(_load(name)) == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "manifest-full.json",
+        "manifest-minimal.json",
+        "manifest-v2-first-party.json",
+        "manifest-v2-community.json",
+    ],
+)
+def test_the_stored_document_round_trips_through_both_parsers(name: str) -> None:
+    """What the registry stores (and ships to the desktop) must parse again. A
+    bare model_dump does not at schema_version 1 — the defaulted v2 tables come
+    back as unknown fields (caught by the STORE ST2 real run, not by a suite)."""
+    original = _load(name)
+    document = manifest_document(parse_extension_manifest(original))
+    assert manifest_problems(document) == [], document
+    assert parse_extension_manifest(document) == parse_extension_manifest(original)
+    if original["schema_version"] == 1:
+        assert not ({"backend", "graph", "tools"} & document.keys())
+    # A bare dump of a v1 manifest is exactly the shape both parsers refuse.
+    bare = parse_extension_manifest(original).model_dump(mode="json", exclude_none=True)
+    assert (manifest_problems(bare) == []) == (original["schema_version"] == 2)
 
 
 def test_latest_schema_version_is_two_and_one_stays_supported() -> None:
@@ -241,7 +266,8 @@ def test_newer_schema_version_is_rejected_here() -> None:
 
 
 def _minimal() -> dict[str, Any]:
-    return _load("manifest-minimal.json")
+    data: dict[str, Any] = _load("manifest-minimal.json")
+    return data
 
 
 def _with_privacy(m: dict[str, Any]) -> dict[str, Any]:

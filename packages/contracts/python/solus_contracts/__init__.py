@@ -37,6 +37,7 @@ from solus_contracts.extension_manifest import (
     graph_kind_name,
     is_safe_bundle_path,
     is_safe_extension_id,
+    manifest_document,
     manifest_problems,
     parse_extension_manifest,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "declares_first_party",
     "graph_kind_name",
     "is_safe_bundle_path",
+    "manifest_document",
     "is_safe_extension_id",
     "manifest_problems",
     "parse_extension_manifest",
