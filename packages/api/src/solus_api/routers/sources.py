@@ -62,7 +62,7 @@ from solus_api.schemas import (
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
-    bind_source,
+    bind_to_account,
     delete_legacy_family_if_retired,
     is_connection_owned,
     list_documents,
@@ -236,7 +236,8 @@ async def connect_source(
     await session.flush()
 
     if connection is not None:
-        bind_source(source, connection, preserve_state=reused)
+        # A reused legacy/PAT row retires its own token family (SOLUSDEV-242 MEDIUM-1).
+        bind_to_account(source, connection, preserve_state=reused)
     elif body.token:
         if not connector.supports_token_connect:
             raise APIError(

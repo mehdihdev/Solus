@@ -19,7 +19,7 @@
 //   shellStore       toast cleared here (a "SOL replied — View" raised by A
 //                    must not open B's SOL page); detail routes reset by the
 //                    shell (`alert`, `ext-page` → Overview)
-//   graphCache       keyed by project id (cleared on sign-out by the shell)
+//   retained graph   keyed by project id in useWorkspaceGraph (cleared on sign-out by the shell)
 //   projectFolderStore, solCache (~/.solus), companion — keyed by project id;
 //                    main respawns the companion on the relay in `setProject`
 //   per-screen hooks (overview, sources, graph summary, widgets, bench) —

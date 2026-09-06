@@ -36,7 +36,7 @@ import { MenuBar } from './MenuBar'
 import { useShellStore, routeKey, type MainScreen, type ShellRoute } from './shellStore'
 import { useFocusStore } from './focusStore'
 import { switchWorkspaceProject } from './projectSwitch'
-import { graphCache } from '../graph/graphCache'
+import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 import { useExtensionRail, type ExtensionRailData } from './useExtensionRail'
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import type { RailExtensionEntry } from './extensionRail'
@@ -125,8 +125,8 @@ function useShellNavigation(): ShellNavigation {
     // shared workstation, leaving it would let the NEXT user read them with no request and no
     // authorization check (WS-01).
     useFocusStore.getState().reset()
-    // The retained entity list is the same kind of data (SOLUSDEV-234 cache, WS-01 rule).
-    graphCache.clear()
+    // The retained graph snapshots are the same kind of data (SOLUSDEV-234 cache, WS-01 rule).
+    clearWorkspaceGraphCache()
     // Per-project install state is this user's workspace configuration; on a shared
     // workstation it must not outlive the session (same reasoning as WS-01).
     useExtensionsStore.getState().reset()

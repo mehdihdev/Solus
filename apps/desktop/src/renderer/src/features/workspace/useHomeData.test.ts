@@ -6,7 +6,12 @@ import { useHomeData } from './useHomeData'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
 import { useFocusStore } from './focusStore'
-import { graphCache } from '../graph/graphCache'
+import { forgetWorkspaceGraph } from '../graph/useWorkspaceGraph'
+
+vi.mock('../graph/useWorkspaceGraph', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../graph/useWorkspaceGraph')>()),
+  forgetWorkspaceGraph: vi.fn()
+}))
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -258,18 +263,11 @@ describe('useHomeData — actions', () => {
 })
 
 describe('useHomeData — the open project is closed when hidden or gone (SOLUSDEV-242)', () => {
-  const entry = {
-    version: 'v',
-    entities: [],
-    counts: { entityCount: 0, relationCount: 0, sourceCount: 0 },
-    fetchedAtMs: Date.now()
-  }
   beforeEach(() => {
     useFocusStore.getState().reset()
-    graphCache.clear()
+    vi.mocked(forgetWorkspaceGraph).mockClear()
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
     useFocusStore.setState({ focusedEntityId: 'e1', cache: { 'p1:e1@1': {} as never } })
-    graphCache.set('p1', entry)
   })
 
   it('deleting the open project drops the shell to no project and forgets its entities', async () => {
@@ -281,7 +279,7 @@ describe('useHomeData — the open project is closed when hidden or gone (SOLUSD
     })
     expect(useWorkspaceStore.getState().project).toBe(null)
     expect(useFocusStore.getState().cache).toEqual({})
-    expect(graphCache.has('p1')).toBe(false)
+    expect(forgetWorkspaceGraph).toHaveBeenCalledWith('p1')
   })
 
   it('archiving the open project closes it but keeps its retained entities (archive is not delete)', async () => {
@@ -292,7 +290,7 @@ describe('useHomeData — the open project is closed when hidden or gone (SOLUSD
       expect(await result.current.actions.archiveProject('p1')).toBe(true)
     })
     expect(useWorkspaceStore.getState().project).toBe(null)
-    expect(graphCache.has('p1')).toBe(true)
+    expect(forgetWorkspaceGraph).not.toHaveBeenCalled()
   })
 
   it('deleting ANOTHER project leaves the open one alone', async () => {

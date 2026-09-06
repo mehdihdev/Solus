@@ -15,6 +15,7 @@ const connection: resources.Connection = {
   account_login: 'builder',
   access: 'read',
   last_error: null,
+  needs_reauth: null,
   projects: [],
   created_at: '',
   updated_at: ''

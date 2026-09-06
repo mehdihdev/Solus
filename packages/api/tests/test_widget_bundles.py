@@ -97,7 +97,7 @@ def test_the_fixture_capability_is_discovered_by_package_name() -> None:
 def _module(name: str, capability: Any) -> types.ModuleType:
     module = types.ModuleType(name)
     if capability is not None:
-        module.CAPABILITY = capability
+        vars(module)["CAPABILITY"] = capability
     return module
 
 

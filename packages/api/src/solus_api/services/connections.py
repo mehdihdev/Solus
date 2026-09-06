@@ -570,14 +570,16 @@ def retire_legacy_family(source: Source) -> None:
     source.config = {**config, RETIRE_MARKER_KEY: True}
 
 
-def bind_to_account(source: Source, connection: AccountConnection) -> None:
+def bind_to_account(
+    source: Source, connection: AccountConnection, *, preserve_state: bool = False
+) -> None:
     """Attach a project source to the caller's account grant — THE way a source
     that may hold its own token is re-pointed. A reused pre-I1 or PAT row
     mirrors the grant from here on: its old family is unreferenced and is
     swept after the commit, never left live in the store (SOLUSDEV-242)."""
     if source.secret_ref and not is_connection_owned(source.secret_ref):
         retire_legacy_family(source)
-    bind_source(source, connection)
+    bind_source(source, connection, preserve_state=preserve_state)
 
 
 def _claim_rejection(source: Source, grant_access: str | None, confirm_access: bool) -> str | None:

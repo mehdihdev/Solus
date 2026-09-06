@@ -30,7 +30,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class _IdentityOnshape(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
+class _IdentityOnshape(FakeGitHub):  # type: ignore[misc,unused-ignore]  # conftest: Any unless passed
     """Onshape's shape on the fake, with IDENTITY carried by the token: a token
     `tok:<who>` or a code `<who>` proves provider account `<who>`. That is what
     lets a test hold a row created by Alice whose token is Bob's."""
@@ -127,7 +127,9 @@ async def _legacy(client: AsyncClient, headers: dict[str, str]) -> list[dict[str
     return data
 
 
-async def _source_row(db: AsyncSession, source_id: str) -> tuple[str | None, str | None, dict]:
+async def _source_row(
+    db: AsyncSession, source_id: str
+) -> tuple[str | None, str | None, dict[str, Any]]:
     db.expire_all()
     row = (
         await db.execute(
@@ -670,7 +672,9 @@ async def test_a_revoke_racing_the_move_leaves_the_project_on_its_own_token(
     home = await _connect_on_home(client, alice_headers, who="alice")
     db.expire_all()
     stale = await db.get(AccountConnection, home["id"])  # the snapshot a request would hold
+    assert stale is not None
     user = await db.get(User, stale.user_id)
+    assert user is not None
     revoked = await client.delete(
         f"/api/v1/users/me/connections/{home['id']}", headers=alice_headers
     )
@@ -703,12 +707,13 @@ async def test_adopt_requires_a_verified_signed_in_user_and_named_sources(
     assert (await client.get("/api/v1/users/me/connections/legacy")).status_code == 401
     verified = bearer("verified-sub-h2", "verified-h2@example.com", email_verified=True)
     await me(client, verified)
-    for bad in (
+    bad_bodies: tuple[dict[str, Any], ...] = (
         {},
         {"source_ids": []},
         {"source_ids": ["x"]},
         {"source_ids": [body["source_ids"][0]], "extra": 1},
-    ):
+    )
+    for bad in bad_bodies:
         resp = await client.post("/api/v1/users/me/connections/adopt", json=bad, headers=verified)
         assert resp.status_code == 422, (bad, resp.text)
 
@@ -881,25 +886,29 @@ async def test_a_move_drops_the_hosted_add_on_state_that_rode_the_old_token(
     assert "hosted" not in config and "_hosted" not in config
 
 
-async def test_reconnecting_a_legacy_source_through_the_oauth_wizard_retires_its_own_token(
+async def test_reconnecting_through_the_oauth_wizard_leaves_a_legacy_row_and_its_token_alone(
     client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
 ) -> None:
-    """Security review (final pass): the project-started OAuth handshake lands
-    on the reused legacy row too — its family must go the same way."""
+    """The project-started OAuth handshake has proved no account when it starts,
+    so it never lands on (or re-points) a completed legacy row: a fresh PENDING
+    row is bound to the grant at the exchange, and the legacy row keeps its own,
+    still-referenced token family — nothing becomes an orphan the sweep could
+    miss, and no completed source is ever switched to a second account."""
     _, project_id = await _team_and_project(client, alice_headers)
     source = await _legacy_source(client, alice_headers, project_id)
     old_ref, _, _ = await _source_row(db, source["id"])
     assert old_ref
     store = app.state.secret_store
-    for ref in (refresh_secret_ref(old_ref), *hosted_refs(old_ref)):
-        await store.put(ref, "riding-the-old-token")
+    for stale_ref in (refresh_secret_ref(old_ref), *hosted_refs(old_ref)):
+        await store.put(stale_ref, "riding-the-old-token")
     start = await client.post(
         "/api/v1/integrations/onshape/oauth/start",
         json={"project_id": project_id, "access": "read"},
         headers=alice_headers,
     )
     assert start.status_code == 201, start.text
-    assert start.json()["data"]["source_id"] == source["id"]  # the reused row
+    started_id = start.json()["data"]["source_id"]
+    assert started_id and started_id != source["id"]  # never the legacy row
     exchange = await client.post(
         "/api/v1/integrations/onshape/oauth/exchange",
         json={"state": start.json()["data"]["state"], "code": "alice"},
@@ -907,13 +916,15 @@ async def test_reconnecting_a_legacy_source_through_the_oauth_wizard_retires_its
     )
     assert exchange.status_code == 200, exchange.text
     connection_id = exchange.json()["data"]["connection"]["id"]
-    ref, bound_to, config = await _source_row(db, source["id"])
+    ref, bound_to, config = await _source_row(db, started_id)
     assert bound_to == connection_id and ref == connection_secret_ref(connection_id, "onshape")
     assert "_legacy_secrets_retire" not in config
+    legacy_ref, legacy_bound_to, legacy_config = await _source_row(db, source["id"])
+    assert legacy_bound_to is None and legacy_ref == old_ref
+    assert "_legacy_secrets_retire" not in legacy_config
     for ref in (old_ref, refresh_secret_ref(old_ref), *hosted_refs(old_ref)):
-        with pytest.raises(SecretNotFoundError):
-            await store.get(ref)
-    # And nothing is left for teardown to find either.
+        assert await store.get(ref)  # still the legacy row's own, live family
+    # Deleting the project takes the legacy row AND its family with it.
     deleted = await client.delete(
         f"/api/v1/projects/{project_id}?confirm=true", headers=alice_headers
     )
@@ -922,10 +933,11 @@ async def test_reconnecting_a_legacy_source_through_the_oauth_wizard_retires_its
         await store.get(old_ref)
 
 
-async def test_the_web_callback_leg_retires_a_reused_legacy_row_too(
+async def test_the_web_callback_leg_binds_the_pending_row_not_a_legacy_one(
     client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
 ) -> None:
-    """The unauthenticated redirect completion reaches the same `_complete_oauth`."""
+    """The unauthenticated redirect completion reaches the same `_complete_oauth`:
+    the started PENDING row is bound; the legacy row is left exactly as it was."""
     _, project_id = await _team_and_project(client, alice_headers)
     source = await _legacy_source(client, alice_headers, project_id)
     old_ref, _, _ = await _source_row(db, source["id"])
@@ -936,14 +948,17 @@ async def test_the_web_callback_leg_retires_a_reused_legacy_row_too(
         headers=alice_headers,
     )
     assert start.status_code == 201, start.text
+    started_id = start.json()["data"]["source_id"]
+    assert started_id and started_id != source["id"]
     state = start.json()["data"]["state"]
     callback = await client.get(
         f"/api/v1/integrations/onshape/oauth/callback?code=alice&state={state}",
         follow_redirects=False,
     )
     assert callback.status_code in (302, 303, 307), callback.text
-    ref, bound_to, config = await _source_row(db, source["id"])
-    assert bound_to is not None and ref == connection_secret_ref(bound_to, "onshape")
+    ref, bound_to, config = await _source_row(db, started_id)
+    assert bound_to is not None and ref == connection_secret_ref(uuid_of(bound_to), "onshape")
     assert "_legacy_secrets_retire" not in config
-    with pytest.raises(SecretNotFoundError):
-        await app.state.secret_store.get(old_ref)
+    legacy_ref, legacy_bound_to, _ = await _source_row(db, source["id"])
+    assert legacy_bound_to is None and legacy_ref == old_ref
+    assert await app.state.secret_store.get(old_ref) == "tok:alice"

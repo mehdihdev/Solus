@@ -22,7 +22,7 @@ from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.secrets import SecretNotFoundError
 
 
-class _CountingAccountLevel(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
+class _CountingAccountLevel(FakeGitHub):  # type: ignore[misc,unused-ignore]  # conftest: Any unless passed
     """An ACCOUNT-level connector (Onshape's shape) whose picker COUNTS every
     upstream listing it performs — the instrument behind the zero-call claims."""
 

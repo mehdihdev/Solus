@@ -23,7 +23,7 @@ from test_connections import _bind, _connect_account, _CountingAccountLevel, _pr
 from test_runtime import ScriptedConnector, _seed_source
 
 
-class _RepositoryAccount(FakeGitHub):  # type: ignore[misc]
+class _RepositoryAccount(FakeGitHub):  # type: ignore[misc,unused-ignore]  # conftest: Any unless passed
     selection = {"mode": "single", "config_key": "repo", "label": "repository"}
 
 

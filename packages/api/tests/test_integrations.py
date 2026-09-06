@@ -10,7 +10,7 @@ from httpx import AsyncClient
 from solus_api.connectors.registry import ConnectorRegistry
 
 
-class _FakeAccountLevel(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
+class _FakeAccountLevel(FakeGitHub):  # type: ignore[misc,unused-ignore]  # conftest: Any unless passed
     """An ACCOUNT-level connector (Onshape and every CAD tool after it): one
     grant covers the whole account and the tracked set lives in that source's
     config, so a second source for the same provider is only ever a duplicate."""

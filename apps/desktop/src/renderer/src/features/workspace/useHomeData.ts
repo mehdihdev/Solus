@@ -22,7 +22,7 @@ import {
   type TeamSummary
 } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { graphCache } from '../graph/graphCache'
+import { forgetWorkspaceGraph } from '../graph/useWorkspaceGraph'
 import { resolveTeam } from './activeTeam'
 import { switchWorkspaceProject } from './projectSwitch'
 import {
@@ -146,7 +146,7 @@ export function useHomeData(): HomeData {
   // scoped to a project that is hidden or gone (its retained entity list goes
   // with a deletion). Through the choke point, so everything else clears too.
   const closeIfOpen = (projectId: string, forget: boolean): void => {
-    if (forget) graphCache.delete(projectId)
+    if (forget) forgetWorkspaceGraph(projectId)
     if (useWorkspaceStore.getState().project?.id === projectId) {
       switchWorkspaceProject(null, 'home')
     }

@@ -16,11 +16,17 @@ import type { Page } from '../../lib/api/client'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
 import { catalogItem, installRow, manifest } from '../extensions/testing/fixtures'
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
-import { graphCache } from '../graph/graphCache'
+import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
 vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
+
+// Sign-out must drop the retained graph snapshots (WS-01); the module's own clear is the seam.
+vi.mock('../graph/useWorkspaceGraph', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../graph/useWorkspaceGraph')>()),
+  clearWorkspaceGraphCache: vi.fn()
+}))
 
 // The Store reads the server catalog and install rows (EXT-17) and the rail
 // polls the same install list (EXT-14): one mock serves both. beforeEach seeds
@@ -531,16 +537,11 @@ describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-2
     expect(screen.queryByRole('button', { name: /back/i })).toBeNull()
   })
 
-  it('clears the retained entity list on sign-out, like the focus cache (WS-01)', async () => {
+  it('clears the retained graph snapshots on sign-out, like the focus cache (WS-01)', async () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
-    graphCache.set('p1', {
-      version: 'v',
-      entities: [],
-      counts: { entityCount: 0, relationCount: 0, sourceCount: 0 },
-      fetchedAtMs: Date.now()
-    })
+    vi.mocked(clearWorkspaceGraphCache).mockClear()
     renderShell()
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
-    await waitFor(() => expect(graphCache.size).toBe(0))
+    await waitFor(() => expect(clearWorkspaceGraphCache).toHaveBeenCalled())
   })
 })

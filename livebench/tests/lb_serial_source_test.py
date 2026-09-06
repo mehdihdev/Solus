@@ -1,5 +1,6 @@
 """LB-02: serial packet source — LB-06 JSON lines over a REAL pyserial link (pty pair)."""
 
+import asyncio
 import os
 from datetime import UTC, datetime
 
@@ -65,17 +66,27 @@ async def test_generic_json_lines_get_the_port_identity() -> None:
     assert received[1].values == {"volt": 12.1}
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
 async def test_oversized_line_is_dropped_stream_survives() -> None:
     master, slave = os.openpty()
     port = pyserial.Serial(os.ttyname(slave), baudrate=115200, timeout=0.2)
-    os.write(master, b"x" * 6000 + b"\n")  # an over-long line (no valid JSON)
-    os.write(master, b'{"ok": 1.0}\n')
-
     source = SerialPacketSource(port, clock=clock, max_line_bytes=4096)
+    # An over-long line (no valid JSON) followed by a good one. A pty's input
+    # queue is small on macOS — a 6000-byte write blocks until the reader drains
+    # it — so the bytes are fed from a thread WHILE the source reads; on Linux
+    # the whole write lands at once with the same outcome.
+    payload = b"x" * 6000 + b"\n" + b'{"ok": 1.0}\n'
+    writer = asyncio.get_running_loop().run_in_executor(None, _write_all, master, payload)
     received = []
     async for p in source:
         received.append(p)
         await source.aclose()
+    await writer
     os.close(master)
     os.close(slave)
 
