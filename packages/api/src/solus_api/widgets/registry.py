@@ -19,6 +19,9 @@ from solus_contracts.extension_manifest import is_safe_extension_id
 
 from solus_api.widgets.capability import WidgetCapability
 
+#: Path segments under `/projects/{id}/widgets/` that are routes, not bundles.
+RESERVED_CAPABILITY_IDS = frozenset({"graph"})
+
 
 def collect_capabilities(
     modules: Iterable[tuple[str, ModuleType]],
@@ -30,7 +33,7 @@ def collect_capabilities(
         capability = getattr(module, "CAPABILITY", None)
         if not isinstance(capability, WidgetCapability):
             raise ValueError(f"{name}: must export CAPABILITY = WidgetCapability(...)")
-        if not is_safe_extension_id(capability.id):
+        if not is_safe_extension_id(capability.id) or capability.id in RESERVED_CAPABILITY_IDS:
             raise ValueError(f"{name}: capability id {capability.id!r} is not a valid slug")
         if capability.id in found:
             raise ValueError(

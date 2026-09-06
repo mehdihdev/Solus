@@ -40,6 +40,7 @@ from solus_api.graph.neighborhood import (
     to_graph_context,
 )
 from solus_api.rag import retrieval
+from solus_api.widgets.graph_nodes import NON_WORKSPACE_DOMAINS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -93,7 +94,9 @@ class DbSolSystems:
                 roots=scope.anchor_entity_ids,
                 depth=depth,
                 entity_types=scope.kinds,
-                domains=scope.domains or None,
+                # SOLUSDEV-246 ST2: the workspace layer (`solus:*`, domain
+                # `workspace`) is never robot context unless explicitly asked for.
+                domains=scope.domains or list(NON_WORKSPACE_DOMAINS),
                 max_entities=max_entities,
             )
         ctx = to_graph_context(neighborhood)

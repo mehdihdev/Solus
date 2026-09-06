@@ -175,3 +175,41 @@ publisher_name_reserved` (security review M3).
 | Ingested content is data       | `[ext.<slug>]` values are typed against the settings schema and never enter a prompt unframed                                                                              |
 | Rate limits                    | Install-writes budget on capability writes; SOL turns under the existing budgets                                                                                           |
 | No secrets                     | `.solus/` is committed, team-visible; nothing secret is accepted from it                                                                                                   |
+
+## 10. Widgets in the graph (STORE ST2)
+
+Every installed extension — community or first-party — has a node in the project's graph, a peer
+of Live Bench under a per-project workspace root. ADR-027 as amended 2026-09-06 (domain
+`workspace`, origin `system`). Code: `packages/api/src/solus_api/widgets/graph_nodes.py`.
+
+| kind               | one per        | name                  | attrs                                                         |
+| ------------------ | -------------- | --------------------- | ------------------------------------------------------------- |
+| `solus:workspace`  | project        | `Workspace`           | `{}`                                                          |
+| `solus:live_bench` | project        | `Live Bench`          | `{}`                                                          |
+| `solus:widget`     | install (slug) | the manifest's `name` | `{ slug, version, enabled, publisher, views: ["widget", …] }` |
+
+Edges: `solus:workspace -[contains]-> solus:live_bench` and `-[contains]-> solus:widget`, all
+`domain_pair = "workspace<->workspace"`, `origin = "system"`. Every row has `domain = workspace`,
+`origin = system`, `source_id`/`external_ref` NULL.
+
+**Lifecycle (Solus code only — a bundle never registers its own node, ADR-035):**
+
+- `PUT …/extensions/{slug}` (install) registers the node in the install transaction and re-registers
+  on a version change (name / version / views follow the new pinned manifest). `extension.install`
+  carries `graph_node_id`.
+- `PATCH …/extensions/{slug} { enabled }` mirrors into `attrs.enabled`.
+- `DELETE …/extensions/{slug}` soft-deletes the node and **every** live edge touching it, in either
+  direction and of any origin, in the same transaction as the ST1 sweep — no dangling edge, ever.
+  `extension.uninstall` carries `graph_node_id`.
+- Registration is idempotent per `(project, slug)`; a stale pinned manifest skips registration
+  rather than failing the install.
+
+| Method | Path                                          | Description                                                                                                                                                                                                                                                              |
+| ------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET    | `/api/v1/projects/{project_id}/widgets/graph` | `{ root, live_bench, widgets[], edges[] }` (standard entity/relation shapes). Runs `reconcile_workspace_graph` first: heals installs that predate the layer, prunes orphan nodes. `ProjectCtx`; reads exempt from the member floor. `graph` is a reserved capability id. |
+
+**What never sees the layer:** SOL's graph feed reads `NON_WORKSPACE_DOMAINS` unless a scope
+names `workspace` explicitly; checkers run on that feed; fingerprinting keys on connector refs the
+layer does not have; connector reconciliation is `source_id`-scoped. The generic entity routes
+list the layer (the Context Model screen shows `solus:widget · workspace`) but cannot edit it
+(`origin != manual`).

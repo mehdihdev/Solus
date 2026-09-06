@@ -45,12 +45,21 @@ from solus_api.models import (
     WIDGET_LAYOUT_MAX_SLOTS,
     Extension,
     ExtensionInstall,
+    ExtensionPublisher,
     ExtensionStorage,
     ExtensionVersion,
+    GraphEntity,
     Role,
     WidgetLayout,
 )
 from solus_api.services.events import emit_event
+from solus_api.widgets.graph_nodes import (
+    facts_from_install,
+    find_widget_node,
+    register_widget_node,
+    unregister_widget_node,
+    update_widget_node,
+)
 from solus_api.widgets.guard import pinned_manifest_or_none
 from solus_api.widgets.uninstall import BundleSweep, remove_bundle_traces
 
@@ -279,6 +288,7 @@ async def _create_install(
     )
     session.add(install)
     extension.install_count = extension.install_count + 1
+    node = await _register_node(session, extension, install, target)
     _emit(
         session,
         ctx,
@@ -288,10 +298,27 @@ async def _create_install(
             "version": target.version,
             "granted_scopes": sorted(requested.scopes),
             "granted_network": sorted(requested.network),
+            "graph_node_id": str(node.id) if node is not None else None,
         },
     )
     await session.commit()
     return install
+
+
+async def _register_node(
+    session: AsyncSession,
+    extension: Extension,
+    install: ExtensionInstall,
+    pinned: ExtensionVersion,
+) -> GraphEntity | None:
+    """SOLUSDEV-246 ST2: the install's `solus:widget` node (widget-bundles.md §10).
+    Registration is Solus code inside the install transaction — never a bundle's
+    own call. None only when the pinned manifest no longer parses."""
+    publisher = await session.get(ExtensionPublisher, extension.publisher_id)
+    facts = facts_from_install(extension, install, pinned, publisher)
+    if facts is None:
+        return None
+    return await register_widget_node(session, install.project_id, facts)
 
 
 async def _update_install(
@@ -316,6 +343,7 @@ async def _update_install(
         # Re-pin: settings the new manifest no longer declares are dropped.
         new_settings = coerce_settings(parse_extension_manifest(target.manifest), install.settings)
         install.version_id = target.id
+        await _register_node(session, extension, install, target)  # name/version/views follow
     changed_keys = _changed_keys(install.settings, new_settings)
     added, removed = requested - current, current - requested
     if added or removed or changed_keys:
@@ -365,6 +393,7 @@ async def patch_install(
         _emit(session, ctx, "extension.settings_changed", {**base, "changed_keys": changed})
     if body.enabled is not None:
         install.enabled = body.enabled
+        await update_widget_node(session, ctx.project.id, extension.slug, enabled=body.enabled)
         if body.enabled:
             _emit(session, ctx, "extension.enable", base)
         else:
@@ -413,6 +442,9 @@ async def uninstall_extension(
         if manifest is not None
         else BundleSweep(0, 0)
     )
+    # ST2: the widget's graph node and every edge touching it go in the same transaction.
+    node = await find_widget_node(session, ctx.project.id, extension.slug)
+    await unregister_widget_node(session, ctx.project.id, extension.slug)
     await session.delete(install)
     extension.install_count = max(0, extension.install_count - 1)
     _emit(
@@ -425,6 +457,7 @@ async def uninstall_extension(
             "storage_rows_deleted": deleted,
             "entities_soft_deleted": swept.entities_soft_deleted,
             "layout_slots_pruned": swept.layout_slots_pruned,
+            "graph_node_id": str(node.id) if node is not None else None,
         },
     )
     await session.commit()
