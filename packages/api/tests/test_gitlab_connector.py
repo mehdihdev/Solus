@@ -305,6 +305,26 @@ async def test_solus_project_toml_faults_are_sync_errors() -> None:
     _mock_with_solus(b"x" * 70_000)
     result = await GitLabConnector().sync(_ctx())
     assert any("exceeds" in err.message for err in result.errors)
+    assert ".solus/project.toml" in {e.source_key for e in result.entities}  # plain blob stays
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_oversized_solus_project_toml_is_cut_off_while_streaming() -> None:
+    """No content-length header, so only the running byte total can stop it —
+    the read must abort before the whole body is buffered (CLAUDE.md §7)."""
+    served: list[int] = []
+
+    async def body() -> Any:
+        for _ in range(200):  # 200 × 1 KiB = 200 KiB, far past the 64 KiB cap
+            served.append(1024)
+            yield b"y" * 1024
+
+    _mock_with_solus()
+    respx.get(RAW_URL).mock(return_value=httpx.Response(200, stream=body()))
+    result = await GitLabConnector().sync(_ctx())
+    assert any("exceeds" in err.message for err in result.errors)
+    assert sum(served) < 200 * 1024
 
     respx.reset()
     _mock_with_solus(status=500)

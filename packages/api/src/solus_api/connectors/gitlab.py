@@ -267,20 +267,30 @@ class GitLabConnector(OAuthConnector):
             return None, []
         url = f"{self._project_url(repo)}/repository/files/{quote(SOLUS_CONFIG_PATH, safe='')}/raw"
         try:
-            response = await client.get(url, params={"ref": sha})
-            if response.status_code >= httpx.codes.BAD_REQUEST:
-                raise ConnectorError(
-                    "gitlab_error", f"GitLab request failed ({response.status_code})."
-                )
-            if len(response.content) > MAX_PROJECT_TOML_BYTES:
-                return None, [
-                    SyncError(
-                        item=SOLUS_CONFIG_PATH, message=f"{SOLUS_CONFIG_PATH}: exceeds size cap"
-                    )
-                ]
-            return response.content.decode("utf-8"), []
+            async with client.stream("GET", url, params={"ref": sha}) as response:
+                return await self._read_bounded_text(response), []
         except (ConnectorError, ValueError) as exc:
             return None, [SyncError(item=SOLUS_CONFIG_PATH, message=str(exc))]
+
+    @staticmethod
+    async def _read_bounded_text(response: httpx.Response) -> str:
+        """The raw-file body, bounded AS IT STREAMS (the Onshape `_read_export`
+        pattern): the declared length is checked first, then the running total,
+        so an oversized committed file is never held in memory (CLAUDE.md §7)."""
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise ConnectorError("gitlab_error", f"GitLab request failed ({response.status_code}).")
+        too_large = ConnectorError("too_large", f"{SOLUS_CONFIG_PATH}: exceeds size cap")
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_PROJECT_TOML_BYTES:
+            raise too_large
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_PROJECT_TOML_BYTES:
+                raise too_large
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8")
 
     def _build_graph(
         self,
