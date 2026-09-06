@@ -128,8 +128,8 @@ function mockTeam(overrides: Partial<homeTeam.HomeTeam> = {}): homeTeam.HomeTeam
     actions: {
       invite: vi.fn(),
       revoke: vi.fn(),
-      changeRole: vi.fn(async () => true),
-      remove: vi.fn(async () => true),
+      changeRole: vi.fn(async () => ({ ok: true as const })),
+      remove: vi.fn(async () => ({ ok: true as const })),
       leave: vi.fn(),
       rename: vi.fn(),
       deleteTeam: vi.fn(),
@@ -506,3 +506,21 @@ describe('HomeScreen — the team layer (SOLUSDEV-244 / HOME H5)', () => {
 function cleanupMenus(): void {
   for (const menu of document.querySelectorAll('[role="menu"]')) menu.remove()
 }
+
+describe("HomeScreen — the team layer renders other users' text as text", () => {
+  it('member names and emails, the team name, and feed payloads are literal', () => {
+    const hostile = '<img src=x onerror=alert(1)>'
+    mockHome({ team: { ...TEAM, name: hostile } })
+    mockTeam({
+      members: [
+        { user_id: 'u9', email: `${hostile}@x.dev`, name: hostile, role: 'member', joined_at: '' }
+      ],
+      activity: [{ ...ROW, type: 'invite.created', actor_id: 'u9', payload: { email: hostile } }]
+    })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(
+      screen.getAllByText(new RegExp(hostile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length
+    ).toBeGreaterThan(2)
+    expect(document.querySelector('img')).toBeNull()
+  })
+})

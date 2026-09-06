@@ -80,6 +80,8 @@ function LeaveTeamModal({
 export interface HomeTeamModalsProps {
   modal: HomeTeamModal
   teamName: string | null
+  /** Inviting from the personal team spins up a collaborative one — said before Send. */
+  isPersonal?: boolean
   home: HomeActions
   team: HomeTeam
   onClose: () => void
@@ -89,6 +91,7 @@ export interface HomeTeamModalsProps {
 export function HomeTeamModals({
   modal,
   teamName,
+  isPersonal = false,
   home,
   team,
   onClose,
@@ -96,7 +99,14 @@ export function HomeTeamModals({
 }: HomeTeamModalsProps): React.JSX.Element | null {
   switch (modal) {
     case 'invite':
-      return <InviteModal onClose={onClose} onInvite={team.actions.invite} onUpgrade={onUpgrade} />
+      return (
+        <InviteModal
+          onClose={onClose}
+          onInvite={team.actions.invite}
+          onUpgrade={onUpgrade}
+          isPersonal={isPersonal}
+        />
+      )
     case 'newTeam':
       return (
         <NameModal

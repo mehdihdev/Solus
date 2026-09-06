@@ -60,25 +60,12 @@ function team(status: TeamData['status'] = 'ready'): TeamData {
       member_count: 1,
       role: 'owner'
     },
-    members: [
-      { user_id: 'u1', email: 'maya@strider.dev', name: 'Maya K', role: 'owner', joined_at: '' }
-    ],
-    invites: [],
-    activity: [],
-    activityHasMore: false,
-    activityTotal: 0,
     loadMoreActivity: vi.fn(async () => undefined),
-    projects: [],
     teams: [],
     myRole: 'owner',
     actions: {
-      invite: vi.fn(async () => null),
-      revoke: vi.fn(async () => true),
-      changeRole: vi.fn(async () => true),
-      remove: vi.fn(async () => true),
       updateTeam: vi.fn(async () => true),
       deleteTeam: vi.fn(async () => true),
-      switchTeam: vi.fn(),
       createTeam: vi.fn(async () => true),
       joinTeam: vi.fn(async () => null),
       createProject: vi.fn(async () => null),

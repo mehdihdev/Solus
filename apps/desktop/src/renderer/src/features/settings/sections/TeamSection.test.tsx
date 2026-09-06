@@ -18,22 +18,12 @@ function teamData(overrides: Partial<TeamData> = {}, role: TeamRole = 'owner'): 
       member_count: 2,
       role
     },
-    members: [],
-    invites: [],
-    activity: [],
-    activityHasMore: false,
-    activityTotal: 0,
     loadMoreActivity: vi.fn(async () => undefined),
     teams: [],
     myRole: role,
     actions: {
-      invite: vi.fn(async () => null),
-      revoke: vi.fn(async () => true),
-      changeRole: vi.fn(async () => true),
-      remove: vi.fn(async () => true),
       updateTeam: vi.fn(async () => true),
       deleteTeam: vi.fn(async () => true),
-      switchTeam: vi.fn(),
       refresh: vi.fn(async () => undefined)
     },
     ...overrides
@@ -71,7 +61,12 @@ describe('TeamSection', () => {
     const team = teamData({ actions: { ...teamData().actions, deleteTeam } })
     render(<TeamSection team={team} />)
     await userEvent.click(screen.getByText('Delete team'))
-    await userEvent.click(screen.getByText('Confirm delete'))
+    // The shared dialog names the team and the cascade before anything runs.
+    expect(screen.getByText('Strider Robotics')).toBeInTheDocument()
+    expect(screen.getByText(/every project in it/)).toBeInTheDocument()
+    expect(deleteTeam).not.toHaveBeenCalled()
+    const buttons = screen.getAllByRole('button', { name: 'Delete team' })
+    await userEvent.click(buttons[buttons.length - 1])
     expect(deleteTeam).toHaveBeenCalled()
   })
 

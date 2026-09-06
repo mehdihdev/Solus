@@ -37,8 +37,10 @@ export function teamLimitText(limit: TeamLimitPosition | null): string | null {
   return `${limit.current} of ${limit.max} collaborative teams on your plan · your personal team never counts`
 }
 
+/** The same sentence the server refuses with (services/limits.py) — no client
+ *  claim about what an upgrade buys. */
 export const AT_LIMIT_MESSAGE =
-  "You're at your plan's collaborative-team limit. Leave a team, or upgrade for unlimited teams."
+  "You're at your collaborative-team limit. Leave a team or upgrade your plan."
 
 function TeamMenu({
   canRename,

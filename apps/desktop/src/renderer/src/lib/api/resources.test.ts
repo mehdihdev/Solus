@@ -466,17 +466,16 @@ describe('team resources', () => {
   })
 
   it('fetches team detail, activity, and notifications', async () => {
-    const { getTeamDetail, listActivity, listNotifications, markNotificationRead, updateTeam } =
-      await import('./resources')
+    const { getTeamDetail, listNotifications, markNotificationRead, updateTeam } = await import(
+      './resources'
+    )
     const { client, calls } = stubClient([])
     await getTeamDetail('t1', client)
-    await listActivity('t1', client)
     await listNotifications(client)
     await markNotificationRead('n1', client)
     await updateTeam('t1', { settings: { notify_project_created: false } }, client)
     expect(calls.map((c) => c.path)).toEqual([
       '/teams/t1',
-      '/teams/t1/activity',
       '/users/me/notifications',
       '/users/me/notifications/n1/read',
       '/teams/t1'
@@ -542,7 +541,8 @@ describe('project management', () => {
     const { deleteProject } = await import('./resources')
     const { client, calls } = stubClient(undefined)
     await deleteProject('p1', client)
-    expect(calls[0].path).toBe('/projects/p1')
+    // The API demands ?confirm=true (HOME H5 review).
+    expect(calls[0].path).toBe('/projects/p1?confirm=true')
     expect(calls[0].options).toMatchObject({ method: 'DELETE' })
   })
 })

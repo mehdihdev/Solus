@@ -183,6 +183,7 @@ function LiveHome({
       <HomeTeamModals
         modal={modal}
         teamName={home.team?.name ?? null}
+        isPersonal={home.team?.is_personal ?? false}
         home={home.actions}
         team={team}
         onClose={() => setModal(null)}

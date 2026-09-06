@@ -47,13 +47,37 @@ export type InviteOutcome =
 
 export type LeaveOutcome = { ok: true } | { ok: false; reason: 'last_owner' | 'failed' }
 
+/** A member/invite mutation's verdict — named, never a swallowed 403. */
+export type MemberOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'forbidden' | 'last_owner' | 'failed' }
+
+function memberRefusal(error: unknown): MemberOutcome {
+  if (error instanceof ApiError && error.status === 403) return { ok: false, reason: 'forbidden' }
+  if (error instanceof ApiError && error.code === 'last_owner') {
+    return { ok: false, reason: 'last_owner' }
+  }
+  return { ok: false, reason: 'failed' }
+}
+
+/** Invites list for admins only: a member's or viewer's 403 (or a 404) is
+ *  "none visible"; anything else is a real failure and propagates. */
+async function invitesOrNone(teamId: string): Promise<InviteApi[]> {
+  try {
+    return await listInvites(teamId)
+  } catch (error: unknown) {
+    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) return []
+    throw error
+  }
+}
+
 export interface HomeTeamActions {
   /** Create a one-time invite. On a PERSONAL team the server spins up a new
    *  collaborative team and issues the invite there — Home follows it. */
   invite: (email: string, role?: Exclude<TeamRole, 'owner'>) => Promise<InviteOutcome>
-  revoke: (inviteId: string) => Promise<boolean>
-  changeRole: (userId: string, role: TeamRole) => Promise<boolean>
-  remove: (userId: string) => Promise<boolean>
+  revoke: (inviteId: string) => Promise<MemberOutcome>
+  changeRole: (userId: string, role: TeamRole) => Promise<MemberOutcome>
+  remove: (userId: string) => Promise<MemberOutcome>
   /** Leave the team (any member); Home moves to my personal team. */
   leave: () => Promise<LeaveOutcome>
   rename: (name: string) => Promise<boolean>
@@ -89,8 +113,7 @@ async function fetchTeam(teamId: string): Promise<TeamSnapshot> {
   const [detail, members, invites, feed] = await Promise.all([
     getTeamDetail(teamId),
     listMembers(teamId),
-    // Invites list for admins only; a member's or viewer's 403 is not an error.
-    listInvites(teamId).catch(() => [] as InviteApi[]),
+    invitesOrNone(teamId),
     listActivityPage(teamId)
   ])
   return { detail, members, invites, activity: feed.data, meta: feed.meta }
@@ -120,6 +143,11 @@ export function useHomeTeam(
   const [meta, setMeta] = useState<ApiMeta>({})
   const [limits, setLimits] = useState<Record<string, number | null> | null>(null)
   const loadSeq = useRef(0)
+  // The team the hook is CURRENTLY for — a refresh that resolves after a team
+  // switch must not land the previous team's roster under the new team's name
+  // (HOME H5 code review H2).
+  const teamIdRef = useRef(teamId)
+  teamIdRef.current = teamId
 
   const load = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current
@@ -171,10 +199,14 @@ export function useHomeTeam(
   }, [me?.id])
 
   const refreshMembers = useCallback(async () => {
-    if (teamId) setMembers(await listMembers(teamId))
+    if (!teamId) return
+    const rows = await listMembers(teamId)
+    if (teamIdRef.current === teamId) setMembers(rows)
   }, [teamId])
   const refreshInvites = useCallback(async () => {
-    if (teamId) setInvites(await listInvites(teamId).catch(() => [] as InviteApi[]))
+    if (!teamId) return
+    const rows = await invitesOrNone(teamId)
+    if (teamIdRef.current === teamId) setInvites(rows)
   }, [teamId])
 
   const run = async (
@@ -187,6 +219,18 @@ export function useHomeTeam(
       return true
     } catch {
       return false
+    }
+  }
+  const runMember = async (
+    action: () => Promise<unknown>,
+    after: () => Promise<void>
+  ): Promise<MemberOutcome> => {
+    try {
+      await action()
+      await after().catch(() => undefined)
+      return { ok: true }
+    } catch (error: unknown) {
+      return memberRefusal(error)
     }
   }
 
@@ -218,13 +262,17 @@ export function useHomeTeam(
       }
     },
     revoke: (inviteId) =>
-      teamId ? run(() => revokeInvite(teamId, inviteId), refreshInvites) : Promise.resolve(false),
+      teamId
+        ? runMember(() => revokeInvite(teamId, inviteId), refreshInvites)
+        : Promise.resolve({ ok: false, reason: 'failed' }),
     changeRole: (userId, role) =>
       teamId
-        ? run(() => changeMemberRole(teamId, userId, role), refreshMembers)
-        : Promise.resolve(false),
+        ? runMember(() => changeMemberRole(teamId, userId, role), refreshMembers)
+        : Promise.resolve({ ok: false, reason: 'failed' }),
     remove: (userId) =>
-      teamId ? run(() => removeMember(teamId, userId), refreshMembers) : Promise.resolve(false),
+      teamId
+        ? runMember(() => removeMember(teamId, userId), refreshMembers)
+        : Promise.resolve({ ok: false, reason: 'failed' }),
     leave: async () => {
       if (!teamId || !me) return { ok: false, reason: 'failed' }
       try {
@@ -252,6 +300,7 @@ export function useHomeTeam(
       if (!teamId || !meta.has_next || !meta.next_cursor) return
       try {
         const page = await listActivityPage(teamId, { cursor: meta.next_cursor })
+        if (teamIdRef.current !== teamId) return
         setActivity((prev) => [...prev, ...page.data])
         setMeta(page.meta)
       } catch {

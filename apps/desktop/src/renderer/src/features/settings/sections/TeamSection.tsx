@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { Button } from '../../../components/ui/Button'
 import { Segmented } from '../../../components/ui/Segmented'
 import { Section, Row } from '../settingsUi'
+import { DeleteConfirmModal } from '../../workspace/modals'
 import type { TeamData } from '../../team/useTeamData'
 
 const NOTIFY_OPTIONS = ['On', 'Off'] as const
@@ -48,25 +49,31 @@ function TeamNameRow({
   )
 }
 
-function DeleteTeamRow({ onDelete }: { onDelete: () => void }): React.JSX.Element {
+/** Owner-only. The shared delete dialog names the team and what goes with it
+ *  (HOME H5 security review H2: the old inline "Delete this team?" named neither). */
+function DeleteTeamRow({
+  teamName,
+  onDelete
+}: {
+  teamName: string
+  onDelete: () => Promise<boolean>
+}): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
-  if (!confirming) {
-    return (
+  return (
+    <>
       <Button kind="danger" size="sm" onClick={() => setConfirming(true)}>
         Delete team
       </Button>
-    )
-  }
-  return (
-    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-      <span style={{ fontSize: 11.5, color: 'var(--mut)' }}>Delete this team?</span>
-      <Button kind="ghost" size="sm" onClick={() => setConfirming(false)}>
-        Cancel
-      </Button>
-      <Button kind="danger" size="sm" onClick={onDelete}>
-        Confirm delete
-      </Button>
-    </span>
+      {confirming && (
+        <DeleteConfirmModal
+          name={teamName}
+          noun="team"
+          detail="and every project in it"
+          onClose={() => setConfirming(false)}
+          onConfirm={onDelete}
+        />
+      )}
+    </>
   )
 }
 
@@ -99,7 +106,7 @@ export function TeamSection({ team }: { team: TeamData }): React.JSX.Element {
       </Row>
       {showDanger && (
         <Row label="Danger zone">
-          <DeleteTeamRow onDelete={() => void actions.deleteTeam()} />
+          <DeleteTeamRow teamName={detail.name} onDelete={actions.deleteTeam} />
         </Row>
       )}
     </Section>

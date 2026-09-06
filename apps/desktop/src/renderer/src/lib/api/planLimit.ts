@@ -9,6 +9,8 @@
 import { ApiError } from './envelope.types'
 import type { TeamSummary } from './resources'
 
+const PLAN_LIMIT_MESSAGE_CAP = 300
+
 export interface PlanLimitRefusal {
   /** Which limit: `max_teams`, `max_projects`, `max_integrations`, or null. */
   limit: string | null
@@ -32,7 +34,8 @@ export function planLimitFromError(error: unknown): PlanLimitRefusal | null {
     limit: typeof block.limit === 'string' ? block.limit : null,
     current: asInt(block.current),
     max: asInt(block.max),
-    message: error.message
+    // Server-authored, but bounded: a registry-supplied name can reach this field.
+    message: error.message.slice(0, PLAN_LIMIT_MESSAGE_CAP)
   }
 }
 

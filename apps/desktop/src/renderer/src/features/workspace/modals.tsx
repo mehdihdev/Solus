@@ -171,7 +171,10 @@ export function JoinTeamModal({
     }
     setError(
       result === false
-        ? { message: "Couldn't join with that token. It may be invalid, expired, or for another email." }
+        ? {
+            message:
+              "Couldn't join with that token. It may be invalid, expired, or for another email."
+          }
         : result
     )
   }
@@ -247,6 +250,56 @@ export function DeleteConfirmModal({
         </Button>
         <Button kind="danger" size="sm" onClick={() => void confirm()}>
           {busy ? <Spinner size={11} /> : `Delete ${noun}`}
+        </Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+/** A yes/no confirmation for an action with real effect (CLAUDE.md §7): the
+ *  body names the concrete target and consequence; nothing runs until the
+ *  danger button is clicked. A false or ModalFailure result keeps it open. */
+export function ConfirmModal({
+  title,
+  body,
+  confirmLabel,
+  onClose,
+  onConfirm
+}: {
+  title: string
+  body: React.ReactNode
+  confirmLabel: string
+  onClose: () => void
+  onConfirm: () => Promise<ModalResult>
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<ModalFailure | null>(null)
+  const confirm = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    const result = await onConfirm()
+    if (result === true) {
+      onClose()
+      return
+    }
+    setBusy(false)
+    setError(
+      result === false ? { message: "That didn't work. Check your role and try again." } : result
+    )
+  }
+  return (
+    <ModalShell onClose={onClose}>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
+        {body}
+      </div>
+      {error && <FailureLine failure={error} />}
+      <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
+        <Button kind="ghost" size="sm" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button kind="danger" size="sm" onClick={() => void confirm()}>
+          {busy ? <Spinner size={11} /> : confirmLabel}
         </Button>
       </div>
     </ModalShell>

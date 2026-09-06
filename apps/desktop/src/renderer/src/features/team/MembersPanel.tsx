@@ -11,14 +11,31 @@ import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
-import { ModalShell } from '../workspace/modals'
+import { ConfirmModal, ModalShell } from '../workspace/modals'
 import { PlanLimitNotice } from '../workspace/PlanLimitNotice'
-import type { InviteOutcome } from '../workspace/useHomeTeam'
+import type { InviteOutcome, MemberOutcome } from '../workspace/useHomeTeam'
 
-export type ChangeRoleFn = (userId: string, role: TeamRole) => Promise<boolean>
-export type RemoveMemberFn = (userId: string) => Promise<boolean>
-export type RevokeInviteFn = (inviteId: string) => Promise<boolean>
+export type ChangeRoleFn = (userId: string, role: TeamRole) => Promise<MemberOutcome>
+export type RemoveMemberFn = (userId: string) => Promise<MemberOutcome>
+export type RevokeInviteFn = (inviteId: string) => Promise<MemberOutcome>
 export type InviteFn = (email: string) => Promise<InviteOutcome>
+
+/** Why a member mutation was refused — shown inline, never swallowed
+ *  (HOME H5 security review H3: a silent 403 read as "done"). */
+export const MEMBER_FAILURE: Record<Exclude<MemberOutcome, { ok: true }>['reason'], string> = {
+  forbidden: "You don't have permission to do that on this team.",
+  last_owner: 'A team must keep at least one owner. Make someone else an owner first.',
+  failed: "That didn't work. Check your role and try again."
+}
+
+export function memberFailureText(outcome: MemberOutcome): string | null {
+  return outcome.ok ? null : MEMBER_FAILURE[outcome.reason]
+}
+
+type PendingConfirm =
+  | { kind: 'remove'; member: TeamMemberApi }
+  | { kind: 'revoke'; invite: InviteApi }
+  | null
 
 export const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 export const MANAGER_ROLES: readonly TeamRole[] = ['owner', 'admin']
@@ -52,8 +69,8 @@ function MemberRow({
 }: {
   member: TeamMemberApi
   canManage: boolean
-  onChangeRole: ChangeRoleFn
-  onRemove: RemoveMemberFn
+  onChangeRole: (userId: string, role: TeamRole) => void
+  onRemove: (member: TeamMemberApi) => void
 }): React.JSX.Element {
   return (
     <div
@@ -75,7 +92,7 @@ function MemberRow({
           <select
             aria-label={`Role for ${member.email}`}
             value={member.role}
-            onChange={(e) => void onChangeRole(member.user_id, e.target.value as TeamRole)}
+            onChange={(e) => onChangeRole(member.user_id, e.target.value as TeamRole)}
             style={selectStyle}
           >
             {ASSIGNABLE_ROLES.map((r) => (
@@ -87,7 +104,7 @@ function MemberRow({
           <button
             type="button"
             aria-label={`Remove ${member.email}`}
-            onClick={() => void onRemove(member.user_id)}
+            onClick={() => onRemove(member)}
             style={iconButtonStyle}
           >
             <Icons.x size={13} />
@@ -109,7 +126,7 @@ function PendingInviteRow({
 }: {
   invite: InviteApi
   canManage: boolean
-  onRevoke: RevokeInviteFn
+  onRevoke: (invite: InviteApi) => void
 }): React.JSX.Element {
   return (
     <div
@@ -146,7 +163,7 @@ function PendingInviteRow({
         <button
           type="button"
           aria-label={`Revoke invite for ${invite.email}`}
-          onClick={() => void onRevoke(invite.id)}
+          onClick={() => onRevoke(invite)}
           style={iconButtonStyle}
         >
           <Icons.x size={13} />
@@ -168,7 +185,9 @@ export interface LiveMembersProps {
   onInvite?: () => void
 }
 
-/** The MEMBERS card: roster + pending invites, with inline role/remove/revoke. */
+/** The MEMBERS card: roster + pending invites. Removing a member and revoking
+ *  an invite are CONFIRMED with the person named (§7: an irreversible access
+ *  change never runs on a reflex click); every refusal is shown inline. */
 export function LiveMembers({
   members,
   invites,
@@ -179,6 +198,23 @@ export function LiveMembers({
   onRevoke,
   onInvite
 }: LiveMembersProps): React.JSX.Element {
+  const [confirm, setConfirm] = useState<PendingConfirm>(null)
+  const [error, setError] = useState<string | null>(null)
+  const report = (outcome: MemberOutcome): boolean => {
+    setError(memberFailureText(outcome))
+    return outcome.ok
+  }
+  const changeRole = (userId: string, role: TeamRole): void => {
+    void onChangeRole(userId, role).then(report)
+  }
+  const confirmed = async (): Promise<boolean | { message: string }> => {
+    if (!confirm) return false
+    const outcome =
+      confirm.kind === 'remove'
+        ? await onRemove(confirm.member.user_id)
+        : await onRevoke(confirm.invite.id)
+    return outcome.ok ? true : { message: MEMBER_FAILURE[outcome.reason] }
+  }
   return (
     <Card pad={0}>
       <div
@@ -205,18 +241,57 @@ export function LiveMembers({
           key={m.user_id}
           member={m}
           canManage={canManage && m.role !== 'owner'}
-          onChangeRole={onChangeRole}
-          onRemove={onRemove}
+          onChangeRole={changeRole}
+          onRemove={(member) => setConfirm({ kind: 'remove', member })}
         />
       ))}
       {invites.map((inv) => (
-        <PendingInviteRow key={inv.id} invite={inv} canManage={canManage} onRevoke={onRevoke} />
+        <PendingInviteRow
+          key={inv.id}
+          invite={inv}
+          canManage={canManage}
+          onRevoke={(invite) => setConfirm({ kind: 'revoke', invite })}
+        />
       ))}
+      {error && (
+        <div role="alert" style={{ padding: '10px 16px', fontSize: 11.5, color: 'var(--err)' }}>
+          {error}
+        </div>
+      )}
       <div style={{ padding: '12px 16px', fontSize: 11, color: 'var(--mut)', lineHeight: 1.55 }}>
         {myRole === 'viewer'
           ? 'You have view access to this team.'
           : 'Teammates are notified when their changes cross into your domains.'}
       </div>
+      {confirm?.kind === 'remove' && (
+        <ConfirmModal
+          title="Remove member"
+          body={
+            <>
+              Remove <strong style={{ color: 'var(--tx)' }}>{confirm.member.email}</strong> from
+              this team? They lose access to every project in it.
+            </>
+          }
+          confirmLabel="Remove"
+          onClose={() => setConfirm(null)}
+          onConfirm={confirmed}
+        />
+      )}
+      {confirm?.kind === 'revoke' && (
+        <ConfirmModal
+          title="Revoke invite"
+          body={
+            <>
+              Revoke the invite for{' '}
+              <strong style={{ color: 'var(--tx)' }}>{confirm.invite.email}</strong>? Its token
+              stops working; you can send a new one.
+            </>
+          }
+          confirmLabel="Revoke"
+          onClose={() => setConfirm(null)}
+          onConfirm={confirmed}
+        />
+      )}
     </Card>
   )
 }
@@ -250,6 +325,7 @@ function TokenReveal({
   onClose: () => void
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const [armed, setArmed] = useState(false)
   const done = (): void => {
     if (copied || armed || !token) {
@@ -281,6 +357,11 @@ function TokenReveal({
       >
         {token ?? 'The token was not returned. Revoke this invite and send a new one.'}
       </div>
+      {copyFailed && (
+        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
+          Copy failed — select the token above and copy it by hand.
+        </div>
+      )}
       {armed && (
         <div role="alert" style={{ marginTop: 8, fontSize: 11.5, color: 'var(--warn)' }}>
           You won&apos;t see this token again. Copy it, or click Done once more to close anyway.
@@ -291,7 +372,12 @@ function TokenReveal({
           <Button
             kind="ghost"
             size="sm"
-            onClick={() => void copyToClipboard(token).then((ok) => setCopied(ok))}
+            onClick={() =>
+              void copyToClipboard(token).then((ok) => {
+                setCopied(ok)
+                setCopyFailed(!ok)
+              })
+            }
           >
             {copied ? 'Copied' : 'Copy token'}
           </Button>
@@ -309,11 +395,15 @@ function TokenReveal({
 export function InviteModal({
   onClose,
   onInvite,
-  onUpgrade
+  onUpgrade,
+  isPersonal = false
 }: {
   onClose: () => void
   onInvite: InviteFn
   onUpgrade?: () => void
+  /** Inviting from the PERSONAL team creates a collaborative team that counts
+   *  against the plan (ADR-025/023) — said BEFORE Send, not after. */
+  isPersonal?: boolean
 }): React.JSX.Element {
   const [email, setEmail] = useState('')
   const [sending, setSending] = useState(false)
@@ -350,7 +440,9 @@ export function InviteModal({
       ) : (
         <>
           <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 4, lineHeight: 1.5 }}>
-            They&apos;ll join with access to this team&apos;s projects.
+            {isPersonal
+              ? 'Your personal workspace stays yours alone: sending this invite creates a new collaborative team (it counts against your plan) and Home switches to it.'
+              : "They'll join with access to this team's projects."}
           </div>
           <input
             aria-label="Teammate email"
