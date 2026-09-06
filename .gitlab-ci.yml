@@ -93,6 +93,7 @@ typecheck:python:
 
 typecheck:node:
   extends: [.node-base, .node-rules]
+  resource_group: arm-runner-heavy
   stage: typecheck
   variables:
     # The renderer's `tsc` needs ~500 MB of V8 heap; the ARM runner's default
@@ -103,12 +104,16 @@ typecheck:node:
 test:python:
   extends: [.python-base, .python-rules]
   stage: test
-  # SOLUSDEV-246: the full suite on the 2 GB ARM runner outgrew the 1 h default
-  # (a run was killed at 63 %). The effective limit is min(this, the runner's
-  # "Maximum job timeout" in Settings → CI/CD → Runners), so that setting must be
-  # ≥ 3h too. A genuinely hung test no longer eats the budget: pytest-timeout
-  # (pyproject `timeout = 300`) fails it with every thread's stack after 5 min.
+  # SOLUSDEV-246: the full suite on the 2 GB ARM runner outgrew the 1 h default.
+  # The effective limit is min(this, the runner's "Maximum job timeout" in
+  # Settings → CI/CD → Runners), so that setting must be ≥ 3h too. A genuinely
+  # hung test no longer eats the budget: pytest-timeout (pyproject
+  # `timeout = 300`) fails it with every thread's stack after 5 min.
   timeout: 3h
+  # One heavy job at a time on the shared 2 GB box: with `needs: []` every job is
+  # a DAG root, so test:node's vitest workers and this suite's OCCT/MuJoCo
+  # imports could land on the runner together and OOM each other.
+  resource_group: arm-runner-heavy
   services:
     - name: pgvector/pgvector:pg16
       alias: postgres
@@ -127,14 +132,16 @@ test:python:
     # Fail LOUDLY if that ever regresses. A silent skip is the failure mode that
     # hid this: the suite stays green while the CAD path goes entirely untested.
     - uv run python -c 'from solus_api.connectors.step_parser import step_reader_available as ok; assert ok(), "OCCT unavailable — CAD tests would silently skip"'
-    # 8 workers on purpose even though the runner has few cores: the suite is
-    # wait-bound (DB round trips, 3 s timeout tests), so oversubscription still
-    # pays — 631 s serial → 272 s at -n 8 on a dev box. Each worker builds its own
-    # database (conftest appends the worker id), so they never share tables.
-    - uv run pytest -q -n 2 -rfE
+    # SERIAL on purpose. `-n 2` on the 2 GB ARM runner OOM-killed nine xdist
+    # workers in one run ("node down: Not properly terminated"); each restart
+    # re-imports OCCT + MuJoCo, which is how a 10-minute suite took 95 minutes.
+    # One worker (~700 MB) fits. Restore `-n 2` (conftest already gives every
+    # xdist worker its own database) once the runner has ≥ 4 GB.
+    - uv run pytest -q -rfE
 
 test:node:
   extends: [.node-base, .node-rules]
+  resource_group: arm-runner-heavy
   stage: test
   script: pnpm test
 
