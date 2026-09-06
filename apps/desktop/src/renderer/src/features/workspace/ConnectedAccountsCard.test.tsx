@@ -277,7 +277,7 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
       ]
     })
     render(<ConnectedAccountsCard />)
-    expect(screen.getByRole('note')).toHaveTextContent('token revoked Re-authorize to reconnect.')
+    expect(screen.getByRole('note')).toHaveTextContent('token revoked. Re-authorize to reconnect.')
     expect(screen.getByRole('button', { name: 'Re-authorize Onshape' })).toBeInTheDocument()
   })
 })

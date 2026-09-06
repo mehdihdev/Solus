@@ -244,11 +244,13 @@ function HealthBadge({ connection }: { connection: Connection }): React.JSX.Elem
       role="status"
       aria-label={`${label}`}
       style={{
+        display: 'inline-block',
         marginLeft: 8,
         fontSize: 9.5,
         fontWeight: 500,
         letterSpacing: '0.06em',
         textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
         color,
         fontFamily: 'var(--font-mono)'
       }}

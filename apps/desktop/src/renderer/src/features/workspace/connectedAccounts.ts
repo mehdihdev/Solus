@@ -63,9 +63,10 @@ export function moveDetail(
  *  source the provider rejected also means the grant is gone. */
 export function reauthText(connection: Connection): string | null {
   if (connection.needs_reauth === 'token_error' || connection.status === 'error') {
-    return connection.last_error?.message
-      ? `${connection.last_error.message} Re-authorize to reconnect.`
-      : 'The last sign-in failed. Re-authorize to reconnect.'
+    const message = connection.last_error?.message?.trim()
+    if (!message) return 'The last sign-in failed. Re-authorize to reconnect.'
+    const sentence = /[.!?]$/.test(message) ? message : `${message}.`
+    return `${sentence} Re-authorize to reconnect.`
   }
   if (connection.health === 'token_expired') {
     return "The provider rejected this account's token. Re-authorize to reconnect."
