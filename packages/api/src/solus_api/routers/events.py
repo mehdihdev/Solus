@@ -22,7 +22,15 @@ import uuid
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +51,9 @@ CLIENT_EVENT_TYPES = frozenset(
         "extension.bridge_refused",
         # SOLUSDEV-242 (HOME H1): the desktop opened/switched to a project.
         "project.switched",
+        # SOLUSDEV-246 (STORE ST3): the desktop suggested a widget in context after a
+        # source kind connected.
+        "store.suggested",
     }
 )
 MAX_EVENTS_PER_BATCH = 50
@@ -61,10 +72,28 @@ class ProjectSwitchedPayload(BaseModel):
     surface: Literal["home", "topbar", "team", "validation", "onboarding", "overview"]
 
 
+class StoreSuggestedPayload(BaseModel):
+    """`store.suggested` (SOLUSDEV-246 ST3): which extension the desktop
+    suggested, the newly connected source kinds that unlocked it, and how many
+    candidates there were. Slugs follow the manifest id rule; kinds are the
+    contract's closed set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    slug: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]{1,63}$")]
+    unlocked_by: Annotated[
+        list[Literal["code", "eda", "cad", "canbus", "runtime"]], Field(max_length=5)
+    ]
+    candidates: Annotated[int, Field(ge=1, le=500)]
+
+
 #: Per-event payload schemas. A client event WITH a schema is validated against
 #: it (unknown keys, bad enums and malformed ids reject); the data-collection
 #: store never accepts free-form strings under a Solus-authored event name.
-PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {"project.switched": ProjectSwitchedPayload}
+PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
+    "project.switched": ProjectSwitchedPayload,
+    "store.suggested": StoreSuggestedPayload,
+}
 
 
 class ClientEvent(BaseModel):

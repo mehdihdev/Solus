@@ -5,10 +5,12 @@
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Icons } from '../../components/ui/icons.constants'
+import { Mono } from '../../components/ui/Mono'
 import { relativeTime } from '../../lib/relativeTime'
 import { ModalShell } from '../workspace/modals'
 import { ExtensionIconTile, PublisherBadge } from './ExtensionCard'
-import { installsLabel } from './extensionLogic'
+import { installsLabel, isFirstParty } from './extensionLogic'
+import { PinButton } from './detail/PinButton'
 import type { ExtensionView } from './extension.types'
 import type { ExtensionActions } from './extensionActions'
 import { GrantPermissionsModal } from './detail/GrantPermissionsModal'
@@ -76,9 +78,11 @@ export function ExtensionDetail({
               {catalog.name}
             </h1>
             <PublisherBadge publisher={catalog.publisher} verified={catalog.verified} />
+            {isFirstParty(view.manifest) && <FirstPartyBadge />}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 4 }}>{metaLine(view)}</div>
         </div>
+        <PinButton slug={catalog.slug} />
         <HeaderActions
           view={view}
           actions={actions}
@@ -109,6 +113,29 @@ export function ExtensionDetail({
         />
       )}
     </div>
+  )
+}
+
+/** A first-party bundle: its backend, graph kinds and SOL tools are Solus code
+ *  (ADR-035 as amended for STORE ST1), not community code in a sandbox. */
+function FirstPartyBadge(): React.JSX.Element {
+  return (
+    <span
+      data-testid="first-party-badge"
+      title="Its backend, graph kinds and SOL tools are implemented inside Solus"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '2px 7px',
+        borderRadius: 3,
+        border: '1px solid color-mix(in srgb, var(--acc) 45%, var(--bd))',
+        background: 'color-mix(in srgb, var(--acc) 9%, var(--sur2))'
+      }}
+    >
+      <Mono size={8.5} ls="0.12em" color="var(--acc)">
+        FIRST-PARTY
+      </Mono>
+    </span>
   )
 }
 

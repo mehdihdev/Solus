@@ -102,6 +102,9 @@ centralized middleware (`CurrentUser`, `ProjectCtx`, `TeamCtx`, `require_role`,
 | DELETE | `/projects/{project_id}/extensions/{slug}/storage/{key}` | Delete one value                                              | `204`         |
 | GET    | `/projects/{project_id}/widget-layout`                   | The caller's widget layout for this project                   | `200`         |
 | PUT    | `/projects/{project_id}/widget-layout`                   | Replace the caller's layout                                   | `200`         |
+| GET    | `/users/me/extension-pins`                               | STORE ST3 (§6.5): the caller's "pin for all projects" list    | `200`         |
+| PUT    | `/users/me/extension-pins/{slug}`                        | Pin an extension for every project the caller opens           | `201` / `200` |
+| DELETE | `/users/me/extension-pins/{slug}`                        | Unpin                                                         | `204`         |
 
 ### 2.4 Team policy — `TeamCtx`, `owner` only
 
@@ -601,6 +604,41 @@ the project — see [widget-bundles.md](widget-bundles.md) §5. Findings raised 
 Content`; emits `extension.uninstall` with `{ slug, version, storage_rows_deleted,
 entities_soft_deleted, layout_slots_pruned }`. Unknown slug for this project → `404`.
 
+### 6.5 Per-user pins — `/api/v1/users/me/extension-pins` (SOLUSDEV-246, STORE ST3)
+
+"Pin for all projects": a pinned extension's tab shows in the rail of EVERY project this user
+opens, whether or not it is installed there. A pin is **account state** (`CurrentUser`, no project
+or team context), installs nothing, grants nothing, and is invisible to teammates. Table
+`user_extension_pins` (`docs/schemas/extensions.md` §4.12). Writes take the same install-write
+budget as §6.2 (`429` + `Retry-After`).
+
+| Method | Path                                       | Purpose                                                                                                          | Success       |
+| ------ | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------- |
+| GET    | `/api/v1/users/me/extension-pins`          | The caller's pins in pin order; an unpublished extension's pin is hidden (kept, and shown again if republished) | `200`         |
+| PUT    | `/api/v1/users/me/extension-pins/{slug}`   | Pin (`201`), or `200` when already pinned; `404` for an unknown/unpublished slug; `422` beyond 32 pins            | `201` / `200` |
+| DELETE | `/api/v1/users/me/extension-pins/{slug}`   | Unpin; idempotent for a known slug (`204` whether or not pinned); `404` for an unknown slug                       | `204`         |
+
+Item shape — what the rail needs to draw a tab where the bundle is NOT installed:
+
+```json
+{
+  "slug": "bom",
+  "name": "BOM",
+  "verified": true,
+  "publisher": { "display_name": "Solus" },
+  "version": "0.1.0",
+  "views": ["page"],
+  "page": { "label": "BOM", "icon": "icon.svg" },
+  "pinned_at": "2026-09-06T14:00:00.000Z"
+}
+```
+
+`version`, `views` and `page` come from the latest APPROVED version (null / `[]` / null when there
+is none); an installed project still draws the tab from its own pinned manifest. The desktop
+merges pins with the project's installs (`extensionRail.ts`): pinned entries first, by pin time,
+then the project's other installs by install time; a pin-only entry opens an honest "not installed
+in this project" state whose Install lands on this extension's Store detail page.
+
 ---
 
 ## 7. Storage routes — the `storage.own` backing store
@@ -769,6 +807,8 @@ resolved context. Payloads carry ids and slugs, never settings VALUES, never sto
 | `extension.unpublish`        | §5.3                                   | `slug, version`                                                                                                |
 | `extension.verified_changed` | §5.4                                   | `slug, verified`                                                                                               |
 | `extension.rate_limited`     | every §12 `429`                        | `route, budget?, limit?`                                                                                       |
+| `extension.pinned`           | §6.5 `PUT` (`201` only)                | `slug`                                                                                                         |
+| `extension.unpinned`         | §6.5 `DELETE` (a pin was removed)      | `slug`                                                                                                         |
 
 The desktop's own refusals (unknown method, undeclared scope or network host, blocked, rate
 limited) reach `data_events` through `POST /api/v1/events` (API.md §2.13, implemented with
@@ -776,7 +816,10 @@ SOLUSDEV-235): body `{ "events": [{ "event_type": "extension.bridge_refused", "p
 "payload": { slug, version, method, code } }] }`, ≤ 50 per batch, payload ≤ 4 KiB, a closed
 `event_type` set, `project_id` kept only when the caller can resolve the project, per-user batch
 limit (`client_event_batches_per_minute_per_user`). The host batches every 2 s and caps itself at
-20 refusal events per extension per minute.
+20 refusal events per extension per minute. **STORE ST3** adds the client event `store.suggested`
+`{ slug, unlocked_by: [<source kind>…], candidates }` — typed server-side (slug rule, the closed
+kind set, `1 ≤ candidates ≤ 500`) — emitted once when a newly connected source kind unlocks an
+extension and the desktop raised its in-context suggestion.
 
 ---
 
@@ -814,7 +857,7 @@ L3). Exceeded → `429 rate_limited` + `Retry-After`; every 429 is a data event 
 | 403  | `email_not_verified`       | §5.1, §5.3, §5.4 without a verified email                                                                                                                                                                                                                            |
 | 403  | `extension_blocked`        | §6.2 install / §6.3 `enabled: true` of a team-blocked extension                                                                                                                                                                                                      |
 | 403  | `scope_denied`             | §7 without an enabled install granting `storage.own`; §9 header without an enabled install granting `sol.ask`                                                                                                                                                        |
-| 404  | `not_found`                | non-member project/team; unknown slug; unapproved/deleted version to a non-publisher; unrecorded asset path; unknown storage key; no install / no policy row                                                                                                         |
+| 404  | `not_found`                | non-member project/team; unknown slug; unapproved/deleted version to a non-publisher; unrecorded asset path; unknown storage key; no install / no policy row; §6.5 unknown or unpublished slug                                                                       |
 | 400  | `idempotency_key_required` | §5.1 without an `Idempotency-Key` header                                                                                                                                                                                                                             |
 | 409  | `slug_taken`               | §5.1 — slug owned by another publisher                                                                                                                                                                                                                               |
 | 409  | `version_exists`           | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                                                                                                                                      |
@@ -824,7 +867,7 @@ L3). Exceeded → `429 rate_limited` + `Retry-After`; every 429 is a data event 
 | 411  | `length_required`          | §5.1 without (or with a malformed) `Content-Length`                                                                                                                                                                                                                  |
 | 413  | `payload_too_large`        | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                                                                                                                              |
 | 413  | `storage_quota_exceeded`   | §7 — `(project, extension)` total would exceed 256 KiB                                                                                                                                                                                                               |
-| 422  | `validation_error`         | bad slug/version/key/path syntax; unknown form or body fields; undeclared grants; settings/layout/policy shape violations                                                                                                                                            |
+| 422  | `validation_error`         | bad slug/version/key/path syntax; unknown form or body fields; undeclared grants; settings/layout/policy shape violations; §6.5 more than 32 pins                                                                                                                    |
 | 422  | `bundle_invalid`           | §5.1 — manifest contract problems or zip guard violations; `details` = the dotted-path problem strings. SOLUSDEV-246: also the first-party gate ([widget-bundles.md](widget-bundles.md) §7) — `backend: first-party only (publisher is not Solus staff)` and friends |
 | 429  | `rate_limited`             | §12 budgets or the global limiter                                                                                                                                                                                                                                    |
 

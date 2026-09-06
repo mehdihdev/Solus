@@ -59,19 +59,34 @@ extension_blocked`);
 - **+ Create extension**: opens a dialog explaining the manifest model and
   linking the manifest docs; the authoring flow itself is not in this build and
   the dialog says so. (Design TBD — see completion report.)
+- **In-context suggestion (STORE ST3)**: when a NEW source kind connects on the
+  Sources page (an EDA tool, a CAD tool, a robot…), the desktop reads the
+  catalog once and raises ONE toast for the first extension that just became
+  installable — "BOM is now available · You connected an EDA tool. <summary>
+  · N more widgets are available too." — whose `View` lands on that
+  extension's detail page. Never for something already installed, blocked, or
+  installable before; never on a timer; silent when the catalog cannot be read.
+  Recorded as the client event `store.suggested`.
 
 ## Extension detail (click a card)
 
 Replaces the catalog in place. The `← Store` link (and the rail's Store button
 or `View → Store`) return to the catalog.
 
-- **Header**: 56px icon tile · name (h1) · publisher badge · meta line
+- **Header**: 56px icon tile · name (h1) · publisher badge · `FIRST-PARTY`
+  badge (accent, STORE ST3) when the manifest declares `[backend]`, `[graph]`
+  or `[tools]` — its server code is Solus's, not community code in a sandbox
+  — · meta line
   `<Publisher> · v<pinned or latest> · <N installs | — installs> · updated
 <relative>`. The version reads `v1.2.0 → 1.3.0 available` when the install
   is behind; an install whose version left the catalog appends `no longer in
   the catalog`. Install counts come from the catalog's aggregate and render as
   `—` when it reports none (SOLUSDEV-152: never a fabricated number).
 - **Header actions**:
+  - `Pin for all projects` / `Pinned for all projects` (soft toggle, STORE
+    ST3): the same account-level pin as the rail's right-click menu
+    (`extensions-runtime.md` §2). Available whether or not the extension is
+    installed here; a refusal shows "Couldn't change the pin." inline.
   - installed → `Update to <latest>` (primary, only when an update exists),
     `Disable` / `Enable` (toggles enablement here) and `Uninstall` (danger).
     Uninstall opens a confirm: "Uninstall <name>? Its widgets, tools and the
@@ -112,7 +127,10 @@ Two columns: content (flex) and a 260px card stack.
 
 - **WHAT IT ADDS**: one row per view the manifest really declares — `Widget`
   (▦), `Page: <label>` (≡), `Window: <title>` (▢) — plus a `Permissions` (✓)
-  summary row ("2 scopes · 1 network origin", or "Asks for nothing"). Nothing
+  summary row ("2 scopes · 1 network origin", or "Asks for nothing"), and for
+  a first-party bundle a `Runs in Solus (first-party)` (⬡) row naming what the
+  in-repo code provides ("backend routes · 1 graph kind · 1 SOL tool —
+  implemented and reviewed inside Solus, never shipped in the bundle"). Nothing
   is invented beyond `[views]`. Before the manifest is fetched the catalog's
   view kinds stand in without labels, under "Loading the extension's
   manifest…".
@@ -186,3 +204,9 @@ Two columns: content (flex) and a 260px card stack.
   (`install`, `update`, `uninstall`, `setEnabled`, `setSettings`,
   `loadDetail`, `refresh`), each doing the server write first and the
   machine-local bundle step second, and reporting what actually happened.
+- Pins (STORE ST3): `pinsStore` mirrors `GET /users/me/extension-pins`
+  (account state; hydrated when the rail can draw, re-read on its poll, reset
+  on sign-out); the rail, the detail header and the right-click menu read it.
+- First-party pages (STORE ST4): `features/extensions/firstParty.ts` maps a
+  slug to an in-repo React page; the shell renders it for an INSTALLED entry
+  instead of the sandboxed frame. BOM: `docs/wireflows/bom.md`.

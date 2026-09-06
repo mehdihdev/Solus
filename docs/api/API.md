@@ -416,10 +416,30 @@ capability, guarded by `ProjectCtx` plus the install row (installed, enabled, no
 | GET    | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes` | Fixture capability: the project's `ext:fixture-bundle:note` entities                                                                              |
 | GET    | `/api/v1/projects/{project_id}/widgets/graph`                | STORE ST2: the workspace layer — `solus:workspace` root, `solus:live_bench`, one `solus:widget` per install, `contains` edges; reconciled on read |
 | POST   | `/api/v1/projects/{project_id}/widgets/graph/reconcile`      | STORE ST2: heal the workspace layer from the install rows (member floor + install-write budget); the GET above is a pure read                     |
+| GET    | `/api/v1/projects/{project_id}/widgets/bom/rows`             | STORE ST4: the BOM view — one row per canonical part (+ hand-added raw materials / purchases), lifecycle state, config, totals (widget-bundles.md §11) |
+| POST   | `/api/v1/projects/{project_id}/widgets/bom/rows`             | STORE ST4: add a raw-material / purchase row (`planned`)                                                                                          |
+| PATCH  | `/api/v1/projects/{project_id}/widgets/bom/rows/{key}`       | STORE ST4: lifecycle state / supplier / cost / notes (design rows via an overlay; their name and quantity are the design's)                        |
+| DELETE | `/api/v1/projects/{project_id}/widgets/bom/rows/{key}`       | STORE ST4: soft-delete a hand-added row, or clear a design row's overlay                                                                          |
+| GET    | `/api/v1/projects/{project_id}/widgets/bom/export.csv`       | STORE ST4: the BOM as a CSV attachment                                                                                                            |
 
 Amends §2.17: `DELETE …/extensions/{slug}` also soft-deletes the bundle's declared kinds and
 prunes its canvas slots (widget-bundles.md §5). Data events: `widget_bundle.route_refused`,
-`widget_bundle.tool_registered`; `extension.uninstall` payload widened.
+`widget_bundle.tool_registered`; `extension.uninstall` payload widened. STORE ST4 adds
+`bom.item_added`, `bom.row_updated`, `bom.item_removed`, `bom.exported`.
+
+### 2.19 Per-user extension pins (SOLUSDEV-246, STORE ST3) — full plan in [extensions.md](extensions.md) §6.5
+
+"Pin for all projects": account state (`CurrentUser`), no project context; a pin installs nothing.
+Writes share the install-write budget. **Unmetered.**
+
+| Method | Path                                     | Description                                                                                          |
+| ------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/users/me/extension-pins`        | The caller's pins in pin order, each with the latest approved version's page view for the rail       |
+| PUT    | `/api/v1/users/me/extension-pins/{slug}` | Pin (`201`; `200` if already); `404` unknown/unpublished slug; `422` beyond 32 pins                   |
+| DELETE | `/api/v1/users/me/extension-pins/{slug}` | Unpin (`204`, idempotent for a known slug)                                                           |
+
+Data events: `extension.pinned`, `extension.unpinned` (server), `store.suggested` (client, §2.13 —
+the desktop's in-context widget suggestion after a new source kind connects).
 
 ---
 

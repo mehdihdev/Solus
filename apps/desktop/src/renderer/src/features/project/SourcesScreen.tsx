@@ -27,6 +27,7 @@ import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { sourceErrorText, sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectSources } from './useProjectSources'
 import { useAccountConnections } from '../workspace/useAccountConnections'
+import { useSourceSuggestions } from '../extensions/useSourceSuggestions'
 import { LocalConnectionsSection } from './localconnections/LocalConnectionsSection'
 
 /** What a source tracks today, read from its own config under the connector's
@@ -55,6 +56,9 @@ export function SourcesScreen(): React.JSX.Element {
 function SourcesView({ projectId }: { projectId: string }): React.JSX.Element {
   const data = useProjectSources()
   const reason = useOfflineReason()
+  // STORE ST3: a newly connected kind (an EDA tool, a robot) suggests the
+  // widget it unlocks, in context, with one toast into the Store.
+  useSourceSuggestions(projectId, data.sources, data.status)
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>

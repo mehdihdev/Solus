@@ -423,6 +423,32 @@ No new table. What changes around the existing ones (`docs/api/widget-bundles.md
   `uq_graph_entity_workspace_widget_slug` `(project_id, attrs->>'slug')` for `solus:widget`, both
   restricted to `domain='workspace' AND origin='system' AND deleted_at IS NULL`.
 
+### 4.12 `user_extension_pins` — "Pin for all projects" (SOLUSDEV-246, STORE ST3)
+
+| column         | type        | constraints                                                    |
+| -------------- | ----------- | -------------------------------------------------------------- |
+| `id`           | uuid        | PK                                                             |
+| `user_id`      | uuid        | NOT NULL; FK → `users.id` `ON DELETE CASCADE`; indexed          |
+| `extension_id` | uuid        | NOT NULL; FK → `extensions.id` `ON DELETE CASCADE`; indexed     |
+| `created_at`   | timestamptz | NOT NULL — the pin time (rail order)                           |
+| `updated_at`   | timestamptz | NOT NULL                                                       |
+
+- Unique `(user_id, extension_id)` (`uq_user_extension_pins_user_extension`).
+- Scope: **account** — no `team_id` / `project_id` by design: the pin follows the user into every
+  project they open. Every read filters on `user_id = current_user.id`; no route addresses a pin by
+  bare id. A teammate never sees another user's pins.
+- State, not history: hard-deleted on unpin (the history is `extension.pinned` /
+  `extension.unpinned` in `data_events`); cascades with the user and with a hard-deleted
+  extension. A SOFT-deleted (unpublished) extension keeps the row and the list hides it.
+- Cap: 32 live rows per user, enforced at the route (`422`).
+- Migration `e1f2a3b4c5d6` (revises `f7a8b9c0d1e2`). Route plan: `docs/api/extensions.md` §6.5.
+
+**STORE ST4 (BOM, `widget-bundles.md` §11):** no new table. `graph_entity` rows of kind
+`ext:bom:item` (`origin = extension`, `domain = project`) carry `attrs = { category:
+raw_material | purchase | overlay, state, quantity, row_key?, part_number?, manufacturer?,
+supplier?, unit_cost?, notes?, created_by }`; overlays are found by `attrs->>'category' =
+'overlay' AND attrs->>'row_key' = <key>` inside the project. Uninstall soft-deletes them all.
+
 ## 5. `review_status` state machine
 
 ```mermaid

@@ -235,3 +235,62 @@ refuses any connector entity claiming the workspace domain. The generic entity r
 layer (the Context Model screen shows `solus:widget · workspace`); the mutating entity routes
 SOLUSDEV-242 added accept only manual Physical Robot roots and answer `409 conflict` for a
 `system`-origin node (tested).
+
+## 11. The BOM widget (STORE ST4)
+
+The first-party bundle `bom` (`packages/shared-types/fixtures/extension-bundles/bom/`, capability
+`packages/api/src/solus_api/widgets/bom/`) — every part in the robot, raw materials and anything
+purchased — as **one view over canonical parts**. Requires an EDA or CAD source. Its page is
+rendered **in-repo** by the desktop (`features/bom/`, registered in
+`features/extensions/firstParty.ts`): a first-party page cannot be a sandboxed frame because its
+data lives behind these routes, which the ADR-035 bridge deliberately cannot reach (see
+`docs/architecture/extensions-runtime.md` §10).
+
+### 11.1 The view — how a row is made (pure, `widgets/bom/rows.py`)
+
+- **Design rows** come from connector-owned parts: EDA `component` and CAD `part` entities
+  (assemblies excluded). Cross-domain identity comes from exactly two graph shapes, both written by
+  Solus code that already carries the zero-false-merge posture (ADR-012): `canonical_part_id` (the
+  fingerprint's assertion, `canonical_part` rows) and live `same_as` edges (the linker / a
+  confirmed match). **The BOM never merges a CAD part with a schematic symbol on its own** — two
+  observations sharing an MPN string across domains stay two rows until the fingerprint says
+  otherwise. Within ONE domain, identical normalized part numbers (`fingerprint.normalize`, the
+  one normalizer) aggregate into one row whose **quantity** is the number of placements.
+- **Row keys** (stable across re-syncs where possible): `canonical:<uuid>` · `group:<min entity
+  uuid>` (same_as-linked) · `mpn:<domain>:<normalized base>` · `entity:<uuid>` (no MPN) ·
+  `item:<uuid>` (a hand-added row). A dangling `canonical_part_id` (soft-deleted canonical) is
+  treated as unlinked, never as a group.
+- **Items** are `ext:bom:item` entities (`origin = extension`, domain `project`, soft-deleted like
+  every ADR-027 row): `category = raw_material | purchase` for rows with no design counterpart
+  (default state `planned`), or `category = overlay` — the per-row lifecycle state, supplier, unit
+  cost and notes for a DESIGN row, keyed by `attrs.row_key`, never touching the connector rows.
+- **Lifecycle (R5, locked in-chat 2026-09-06):** `planned → ordered → received → installed →
+  retired`, free transitions; a design row defaults to `installed`, a hand-added row to `planned`.
+- **Config** = `effective_bundle_config` (manifest defaults ← repo `[ext.bom]` ← install settings):
+  `preferred_suppliers` (comma-separated string → list, ≤ 16), `cost_target` (number ≥ 0),
+  `currency` (`USD | EUR | GBP`). Totals report priced rows, the sum, and `over_target`.
+- Bounded: at most 20 000 part rows per project are read; the payload says `truncated: true`
+  beyond that rather than pretending.
+
+### 11.2 Routes — `/api/v1/projects/{project_id}/widgets/bom/…` (under the §3 guard)
+
+| Method | Path            | Description                                                                                                                                                            |
+| ------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/rows`         | `{ slug, rows[], totals, config, states, truncated }` — the whole view                                                                                                  |
+| POST   | `/rows`         | Add a raw-material / purchase row `{ name ≤ 120, category, quantity? 1–100000, state?, part_number? ≤ 64, manufacturer?, supplier? ≤ 80, unit_cost? ≥ 0, notes? ≤ 500 }` → `201` the row |
+| PATCH  | `/rows/{key}`   | `{ name?, quantity?, state?, supplier?, unit_cost?, notes? }` (≥ 1 field). Item rows: edited in place. Design rows: written to the overlay; `name`/`quantity` refused (`422`) — they are the design's |
+| DELETE | `/rows/{key}`   | Item row: soft-delete. Design row: clears its overlay (the part itself is never removed). `404` when nothing to remove                                                  |
+| GET    | `/export.csv`   | `text/csv` attachment `bom-<project id>.csv`: `key,kind,name,part_number,manufacturer,quantity,state,supplier,unit_cost,line_cost,sources,notes`; formula-leading cells are quote-prefixed |
+
+`{key}` must match the row-key grammar (`422` otherwise). Writes take the member floor and the
+install-write budget through the guard. Every query is project-scoped; team B sees `404`.
+
+### 11.3 SOL tool, events, uninstall
+
+- `bom.add_item { name, category, quantity?, part_number?, manufacturer?, supplier?, unit_cost?, notes? }`
+  adds a planned row (additive and reversible → not confirmation-gated); `additionalProperties:
+  false` makes a smuggled `project_id` an `INVALID_ARGS` result.
+- Events: `bom.item_added { category, item_id }` · `bom.row_updated { row_kind, fields }` ·
+  `bom.item_removed { row_key_kind }` · `bom.exported { rows }`.
+- Uninstall soft-deletes every `ext:bom:item` (items AND overlays) through the §5 sweep; design
+  rows, canonical parts and links are untouched.

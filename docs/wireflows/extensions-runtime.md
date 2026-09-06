@@ -92,19 +92,43 @@ An extension with `[views.page]` gets a rail entry and a screen
 | Live Bench|                                                                  |
 | SOL       |                    <iframe fills the screen>                     |
 | Team      |                                                                  |
-| ▣ BOM     |  ← page entries, directly ABOVE the Store `+`                    |
 | + Store   |                                                                  |
+| ───       |  ← separator (only when there are tabs)                          |
+| ▣ BOM  •  |  ← tabs AFTER the Store: pinned first (• mark), then this project's |
+| ▣ CAM     |                                                                  |
 ```
 
-- **Rail entry**: inserted between `Team` and the Store `+`, one per
-  installed+enabled extension with a page view, ordered by install date.
+- **Rail entry (as amended by SOLUSDEV-246 STORE ST3)**: the tabs sit AFTER
+  the Store `+`, behind a thin separator that is drawn only when there is at
+  least one tab. One per installed+enabled extension with a page view, plus
+  one per **pin**. Order: the user's pinned extensions first (by pin time),
+  then the project's other installs by install date.
   Icon = the manifest's `views.page.icon` reduced by the host to a path-only
   SVG subset (paths, fill, viewBox — no scripts, no external refs, no
   `<foreignObject>`, no filters), drawn with the rail's current color like a
   built-in icon. Label = `views.page.label`. Dev registrations get a small
-  `DEV` corner mark on the icon. The rail shows at most 8 page entries (as
-  shipped, SOLUSDEV-235 EXT-14); the rest stay reachable from the Store. A
-  `▾ More` popover for the overflow is a follow-up.
+  `DEV` corner mark on the icon; pinned entries a small accent dot. The rail
+  shows at most 8 page entries (as shipped, SOLUSDEV-235 EXT-14; pins count
+  first); the rest stay reachable from the Store. A `▾ More` popover for the
+  overflow is a follow-up.
+- **Right-click on a tab** (`ContextMenu`, STORE ST3): `Pin for all projects`
+  / `Unpin from all projects` — the pin is ACCOUNT state (`PUT|DELETE
+/users/me/extension-pins/{slug}`, docs/api/extensions.md §6.5), so the tab
+  then shows in every project the user opens; otherwise a tab is per project
+  (it follows the install). `Open in Store` lands on the detail page. A
+  developer registration cannot be pinned (disabled, with the reason).
+- **A pinned tab in a project where the bundle is not installed** draws muted
+  (tooltip "<label> — not installed here", icon from the latest approved
+  manifest or the neutral glyph). Opening it shows the honest state — "<label>
+  isn't installed in <project>" · "This tab is pinned for all your projects.
+  Install the extension here to use it in this one." · `Install in this
+  project` (→ the Store detail page and its permissions step) · `Unpin` —
+  never a frame that pretends. A team block or a disabled install here is
+  likewise a pin-only tab.
+- **First-party pages** (STORE ST4): for an INSTALLED bundle whose slug has an
+  in-repo page (`features/extensions/firstParty.ts` — today `bom`), the
+  screen is that trusted React page, not an `ExtensionFrame`. Everything
+  below (frame, states) is the community surface.
 - **Header**: 24px icon tile · extension name · `DEV` badge (mono, warn
   tint) when a dev registration · publisher badge · `v<version>` (or `dev`).
   Right: `Open in window ↗` only when the manifest also declares
