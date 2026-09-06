@@ -646,6 +646,9 @@ class LlmRunner:
             window=plan.window,
             budget=plan.budget,
             k=plan.k,
+            # CORPUS C2 (ADR-036): mode only orders corpus ties — Guide reads
+            # fundamentals first, Expert reference first. Never a filter.
+            mode=ctx.sol_mode,
         )
         # SOLUSDEV-233: declare the turn's context up front so clients can show
         # what SOL is grounded in. Manifest only — no section text.
