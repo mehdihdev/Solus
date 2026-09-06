@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "updatedAt": "2026-09-06T12:00:00Z",
+  "freeText": "Prefer 0.1 mm clearance minimum on all boards.",
+  "codeStyle": "C++17, no dynamic allocation in ISRs.",
+  "mechanical": "Metric fasteners only; 6061-T6 unless stated.",
+  "electrical": "JST-GH for signal, XT30 for power.",
+  "documentation": "Every board ships with a one-page bring-up note.",
+  "unitsStandards": "SI units; ISO 2768-m general tolerances."
+}
