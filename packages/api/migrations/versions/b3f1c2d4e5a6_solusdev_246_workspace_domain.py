@@ -21,7 +21,10 @@ branch_labels = None
 depends_on = None
 
 DOMAIN_OLD = ("code", "electrical", "mechanical", "simulation", "runtime")
-DOMAIN_NEW = (*DOMAIN_OLD, "workspace")
+# `project` (SOLUSDEV-240, migration b7e2d4a9c1f0 on a sibling branch) is included so
+# this step never DROPS a value a database already holds when it runs AFTER that
+# branch: a CHECK may be wider than the code's enum, never narrower than the data.
+DOMAIN_NEW = (*DOMAIN_OLD, "project", "workspace")
 TABLES = ("graph_entity", "error_solution")
 
 
