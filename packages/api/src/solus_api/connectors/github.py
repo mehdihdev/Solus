@@ -18,6 +18,7 @@ Authorization header and is never logged.
 
 from __future__ import annotations
 
+import base64
 import re
 from typing import Any, ClassVar, Final
 from urllib.parse import quote, urlencode
@@ -29,6 +30,9 @@ from solus_api.connectors.code_host import (
     file_entity,
     module_entity,
     parent_key,
+    solus_config_blob,
+    solus_config_entity,
+    solus_config_too_large,
 )
 from solus_api.connectors.contracts import (
     NO_SIGNAL_CODES,
@@ -43,6 +47,7 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.widgets.solus_config import SOLUS_CONFIG_PATH
 
 GITHUB_API: Final = "https://api.github.com"
 GITHUB_OAUTH: Final = "https://github.com/login/oauth"
@@ -216,8 +221,10 @@ class GitHubConnector(OAuthConnector):
             )
             sha, etag = await self._head_sha_and_etag(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
+            solus_text, solus_errors = await self._solus_config_text(client, repo, tree)
 
-        entities, relations, errors = self._build_graph(repo, branch, sha, tree)
+        entities, relations, errors = self._build_graph(repo, branch, sha, tree, solus_text)
+        errors = [*solus_errors, *errors]
         if truncated:
             # GitHub caps the recursive tree (~100k objects) and returns a partial
             # list — surface it so a partial graph isn't mistaken for complete.
@@ -288,8 +295,34 @@ class GitHubConnector(OAuthConnector):
 
     # -------------------------------------------------------- graph building
 
+    async def _solus_config_text(
+        self, client: httpx.AsyncClient, repo: str, tree: list[dict[str, Any]]
+    ) -> tuple[str | None, list[SyncError]]:
+        """SOLUSDEV-246: the one blob the connector reads — `.solus/project.toml`,
+        only when the tree lists it and its declared size is within the cap. A
+        fetch failure is a SyncError on that path, never a failed sync."""
+        item = solus_config_blob(tree)
+        if item is None:
+            return None, []
+        if solus_config_too_large(item):
+            return None, [
+                SyncError(item=SOLUS_CONFIG_PATH, message=f"{SOLUS_CONFIG_PATH}: exceeds size cap")
+            ]
+        try:
+            response = await client.get(f"{GITHUB_API}/repos/{repo}/git/blobs/{item['sha']}")
+            body = self._repo_json(response)
+            raw = base64.b64decode(str(body.get("content", "")), validate=False)
+            return raw.decode("utf-8"), []
+        except (ConnectorError, ValueError, KeyError) as exc:
+            return None, [SyncError(item=SOLUS_CONFIG_PATH, message=str(exc))]
+
     def _build_graph(
-        self, repo: str, branch: str, sha: str, tree: list[dict[str, Any]]
+        self,
+        repo: str,
+        branch: str,
+        sha: str,
+        tree: list[dict[str, Any]],
+        solus_text: str | None = None,
     ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
         errors: list[SyncError] = []
         entities_by_key: dict[str, EntityOut] = {
@@ -303,6 +336,11 @@ class GitHubConnector(OAuthConnector):
         }
         for item in tree:
             self._land_item(item, entities_by_key, errors)
+        if solus_text is not None:
+            config, problems = solus_config_entity(solus_text)
+            errors.extend(SyncError(item=SOLUS_CONFIG_PATH, message=p) for p in problems)
+            if config is not None:
+                entities_by_key[SOLUS_CONFIG_PATH] = config
 
         known_dirs = {key for key, ent in entities_by_key.items() if ent.type == "code_module"}
         relations = [
