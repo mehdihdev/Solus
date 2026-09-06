@@ -888,6 +888,47 @@ which this design forbids and which would need a new decision.
 
 ---
 
+## ADR-036: Engineering corpus — a global long-prose table under extended ADR-033 containment
+
+**Status:** Accepted (2026-09-06 — approved in-session by Mehdi against the concrete text below;
+review at the SOLUSDEV-241 CORPUS C2 MR)
+**Context:** CORPUS C1 (`docs/corpus/SCOPE.md`, `docs/corpus/LICENSING.md`,
+`docs/schemas/corpus-chunk.md`) defined what SOL ships knowing and left storage open, flagging
+that a chunk store would be the first global table whose rows are long prose — exactly what
+ADR-033's "typed columns only" rule was written to prevent. The C2 ticket asks for ingestion
+into pgvector through the existing RAG (SYS-02), domain-filtered retrieval, a versioned shipped
+artifact, and a CI eval.
+
+**Decision.** Two tables, `corpus_chunk` and `corpus_release`, with **no tenant column and no FK
+to projects, teams, or users** (ADR-033 rule 1). The one relaxation of ADR-033 rule 2: `title`
+and `body` are prose columns, contained by closed enums on every categorical field, per-column
+caps from `docs/schemas/corpus-chunk.md`, no JSONB or free-form container, and a provenance
+vocabulary with no customer or model value. The **only write path** is
+`solus_api/corpus/ingest.py` reading the Solus-committed content tree and manifest, run as a
+deploy/admin step and enforced by a tripwire test (ADR-033 rule 3). Retrieval filters by domain,
+topic, and applicability in SQL first, then ANN when a query embedding exists and full-text
+otherwise (ADR-033 rule 4, lexical-first); only `status = active` rows serve — `draft` never.
+Chunks enter prompts only as `kind=context_corpus` nonce-fenced data blocks, packed below tenant
+context (graph, error, document hits) and below the user's engineering preferences (ADR-034
+amendment 2026-09-06). The corpus is versioned by a manifest (semver plus per-chunk content
+hashes); ingest is idempotent, chunks absent from a newer manifest are marked `withdrawn` and
+never deleted, and every applied version is recorded in `corpus_release`. `embedding` populates
+at ingest, unmetered at Solus's cost, because `embed()` now exists (SYS-02); ADR-033's "until
+`embed()` exists" condition is met.
+
+**Why.** Prose is the content here, not a label, so the tool-knowledge prose patterns cannot be
+the filter; containment must come from the absence of any field that could reference a customer,
+closed vocabularies, one curated write path, and a serve gate on human review. A static bundle
+would satisfy containment too, but forfeits ANN retrieval and contradicts the ticket.
+
+**Consequences.** A second global prose table qualifies only under all of the above, and a
+reviewer signature (`reviewer`, `reviewed_at`) is what moves a chunk from `draft` to served.
+Adding any field named in `docs/schemas/corpus-chunk.md` §3 is a security change, not a schema
+change. Content authored with LLM assistance is `drafting = llm_assisted` and is signed by the
+human reviewer at the MR — the model is never the reviewer.
+
+---
+
 ## How to add or change a decision
 
 1. New decision: append an entry with the next ADR number, date it, set Status: Accepted.
