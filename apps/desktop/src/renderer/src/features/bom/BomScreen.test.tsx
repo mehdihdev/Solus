@@ -42,8 +42,19 @@ beforeEach(() => {
   useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' } })
 })
 
+const PUBLISHER = { displayName: 'Solus', verified: true }
+
 function renderScreen(props: Partial<Parameters<typeof BomScreen>[0]> = {}): void {
-  render(<BomScreen projectId="p1" slug="bom" onBack={vi.fn()} onOpenStore={vi.fn()} {...props} />)
+  render(
+    <BomScreen
+      projectId="p1"
+      slug="bom"
+      publisher={PUBLISHER}
+      onBack={vi.fn()}
+      onOpenStore={vi.fn()}
+      {...props}
+    />
+  )
 }
 
 describe('BomScreen', () => {
@@ -51,6 +62,7 @@ describe('BomScreen', () => {
     mockBom({})
     renderScreen()
     expect(screen.getByRole('heading', { level: 1, name: 'BOM' })).toBeInTheDocument()
+    expect(screen.getByTestId('ext-page-header')).toHaveTextContent('by Solus')
     const servo = screen.getByRole('row', { name: /MG996R/ })
     expect(within(servo).getByText('TowerPro')).toBeInTheDocument()
     expect(within(servo).getByText('electrical: U3 · mechanical: Servo body')).toBeInTheDocument()
@@ -149,20 +161,22 @@ describe('BomScreen', () => {
 
   it('is honest when empty, not installed, or offline', () => {
     mockBom({ view: bomView({ rows: [] }) })
-    const { unmount } = render(<BomScreen projectId="p1" slug="bom" />)
+    const { unmount } = render(<BomScreen projectId="p1" slug="bom" publisher={PUBLISHER} />)
     expect(screen.getByText(/No parts yet/)).toBeInTheDocument()
     unmount()
 
     const onOpenStore = vi.fn()
     mockBom({ status: 'not_installed', view: null })
-    const second = render(<BomScreen projectId="p1" slug="bom" onOpenStore={onOpenStore} />)
+    const second = render(
+      <BomScreen projectId="p1" slug="bom" publisher={PUBLISHER} onOpenStore={onOpenStore} />
+    )
     expect(screen.getByText(/isn't installed in this project/)).toBeInTheDocument()
     screen.getByRole('button', { name: 'Open in Store' }).click()
     expect(onOpenStore).toHaveBeenCalledOnce()
     second.unmount()
 
     mockBom({ status: 'offline', view: null })
-    render(<BomScreen projectId="p1" slug="bom" />)
+    render(<BomScreen projectId="p1" slug="bom" publisher={null} />)
     expect(screen.getByText(/can't reach Solus/)).toBeInTheDocument()
   })
 

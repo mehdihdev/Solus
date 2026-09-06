@@ -349,10 +349,11 @@ function ExtensionPageRoute({
     )
   }
   const firstParty =
-    entry?.installed && !entry.dev && project
+    entry?.installed && entry.firstParty && !entry.dev && project
       ? renderFirstPartyPage(slug, {
           projectId: project.id,
           slug,
+          publisher: entry.publisher,
           onBack: goBack,
           onOpenStore: () => openStoreDetail(slug)
         })

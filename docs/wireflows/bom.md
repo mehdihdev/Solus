@@ -35,8 +35,10 @@ any extension (`store.md`), suggested in context when the first EDA/CAD tool con
   `over target <t>`.
 - Muted: `Preferred suppliers: …` (or "No preferred suppliers set") · currency · `cost target <t>`
   / "no cost target". These are CONFIGURATION, not data: the bundle's settings (Store › BOM ›
-  Settings: `preferred_suppliers`, `cost_target`, `currency`) or the team's `[ext.bom]` table in
-  the repo's `.solus/project.toml`, layered manifest ← repo ← install settings.
+  Settings: `preferred_suppliers`, `cost_target`, `max_items`, `currency`) or the team's
+  `[ext.bom]` table in the repo's `.solus/project.toml`, layered manifest ← repo ← install
+  settings. Past `max_items` hand-added rows, `Add row` (and SOL's `bom.add_item`) is refused
+  with the reason.
 
 ## The table
 

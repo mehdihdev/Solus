@@ -17,6 +17,7 @@
 // matching the frame resolver, which prefers the dev registration.
 import type { ExtensionInstallApi, ExtensionPinApi } from '../../lib/api/resources.extensions'
 import { selectDevRegistration } from '../devExtensions/devExtensionsStore'
+import { isFirstParty } from '../extensions/extensionLogic'
 import { DEV_VERSION } from '../extensions/frame/extUrl'
 
 export interface RailExtensionEntry {
@@ -37,6 +38,11 @@ export interface RailExtensionEntry {
   readonly pinned: boolean
   /** An enabled, unblocked install exists in the open project. False for a pin-only entry. */
   readonly installed: boolean
+  /** The PINNED manifest declares a first-party table (ADR-035 amended): the
+   *  shell may render an in-repo page for it. Never true for a pin-only or dev entry. */
+  readonly firstParty: boolean
+  /** The install row's publisher, for the in-repo page header; null when unknown. */
+  readonly publisher: { readonly displayName: string; readonly verified: boolean } | null
 }
 
 /** The dev store's shape as `selectDevRegistration` reads it — the gate that
@@ -57,7 +63,12 @@ function toEntry(row: ExtensionInstallApi, pinned: ReadonlySet<string>): RailExt
     installedAt: row.installed_at,
     dev: false,
     pinned: pinned.has(row.extension.slug),
-    installed: true
+    installed: true,
+    firstParty: isFirstParty(row.version.manifest),
+    publisher: {
+      displayName: row.extension.publisher.display_name,
+      verified: row.extension.verified
+    }
   }
 }
 
@@ -72,7 +83,9 @@ function toPinEntry(pin: ExtensionPinApi): RailExtensionEntry {
     installedAt: pin.pinned_at,
     dev: false,
     pinned: true,
-    installed: false
+    installed: false,
+    firstParty: false,
+    publisher: { displayName: pin.publisher.display_name, verified: pin.verified }
   }
 }
 
@@ -87,7 +100,9 @@ function toDevEntry(state: DevStoreState, slug: string): RailExtensionEntry | nu
     installedAt: state.entries[slug]?.loadedAt ?? '',
     dev: true,
     pinned: false,
-    installed: false
+    installed: false,
+    firstParty: false,
+    publisher: null
   }
 }
 

@@ -125,10 +125,13 @@ An extension with `[views.page]` gets a rail entry and a screen
   project` (→ the Store detail page and its permissions step) · `Unpin` —
   never a frame that pretends. A team block or a disabled install here is
   likewise a pin-only tab.
-- **First-party pages** (STORE ST4): for an INSTALLED bundle whose slug has an
-  in-repo page (`features/extensions/firstParty.ts` — today `bom`), the
-  screen is that trusted React page, not an `ExtensionFrame`. Everything
-  below (frame, states) is the community surface.
+- **First-party pages** (STORE ST4): for an INSTALLED bundle whose PINNED
+  manifest declares a first-party table (`[backend]`/`[graph]`/`[tools]` —
+  staff-only at publish) AND whose slug has an in-repo page
+  (`features/extensions/firstParty.ts` — today `bom`), the screen is that
+  trusted React page, not an `ExtensionFrame`; its header names the install
+  row's publisher. A community bundle carrying the same slug still gets the
+  frame. Everything below (frame, states) is the community surface.
 - **Header**: 24px icon tile · extension name · `DEV` badge (mono, warn
   tint) when a dev registration · publisher badge · `v<version>` (or `dev`).
   Right: `Open in window ↗` only when the manifest also declares

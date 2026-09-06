@@ -6,7 +6,10 @@
 // cannot reach. So a first-party page is trusted React in this repo, keyed by
 // the bundle's slug, using the typed API client like any other screen. The
 // rail entry, install, enablement and team block are still the install row's:
-// the shell only picks the renderer, and only for an INSTALLED entry.
+// the shell only picks the renderer, and only for an INSTALLED entry whose
+// PINNED manifest declares a first-party table (the publish gate restricts those
+// tables to Solus staff) — a community bundle that happens to carry the slug
+// still gets the sandboxed frame.
 // Adding a first-party page is adding one line here plus its feature folder.
 import { createElement, type ComponentType, type ReactElement } from 'react'
 import { BomScreen } from '../bom/BomScreen'
@@ -14,6 +17,8 @@ import { BomScreen } from '../bom/BomScreen'
 export interface FirstPartyPageProps {
   readonly projectId: string
   readonly slug: string
+  /** The install row's publisher — the header never hardcodes one. */
+  readonly publisher: { readonly displayName: string; readonly verified: boolean } | null
   readonly onBack?: () => void
   readonly onOpenStore?: () => void
 }

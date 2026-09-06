@@ -12,13 +12,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from solus_contracts.extension_manifest import ExtensionManifest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.agent.tools.shapes import ToolErrorCode
+from solus_api.agent.tools.tool import ToolException
 from solus_api.models import Domain, GraphEdge, GraphEntity, utcnow
 from solus_api.widgets.bom.rows import (
     CANONICAL_KIND,
     DEFAULT_ITEM_STATE,
+    DEFAULT_MAX_ITEMS,
     DESIGN_KINDS,
     ITEM_KIND,
     OVERLAY,
@@ -31,6 +34,7 @@ from solus_api.widgets.bom.rows import (
     canonical_from_entity,
     item_from_entity,
     observation_from_entity,
+    row_for_item,
 )
 from solus_api.widgets.solus_config import effective_bundle_config
 
@@ -57,6 +61,8 @@ class BomConfig:
     preferred_suppliers: list[str]
     cost_target: float | None
     currency: str
+    #: Live `ext:bom:item` rows this project may hold (items + overlays).
+    max_items: int = DEFAULT_MAX_ITEMS
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -118,11 +124,45 @@ async def load_config(
         float(target) if isinstance(target, int | float) and not isinstance(target, bool) else None
     )
     currency = config.get("currency")
+    raw_max = config.get("max_items")
+    max_items = (
+        int(raw_max)
+        if isinstance(raw_max, int | float) and not isinstance(raw_max, bool) and raw_max >= 1
+        else DEFAULT_MAX_ITEMS
+    )
     return BomConfig(
         preferred_suppliers=suppliers[:16],
         cost_target=cost_target if cost_target is None or cost_target >= 0 else None,
         currency=currency if isinstance(currency, str) and currency else DEFAULT_CURRENCY,
+        max_items=max_items,
     )
+
+
+async def _live_item_count(session: AsyncSession, project_id: uuid.UUID) -> int:
+    total = await session.scalar(
+        select(func.count())
+        .select_from(GraphEntity)
+        .where(
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == ITEM_KIND,
+            GraphEntity.deleted_at.is_(None),
+        )
+    )
+    return int(total or 0)
+
+
+async def enforce_item_cap(
+    session: AsyncSession, project_id: uuid.UUID, manifest: ExtensionManifest | None
+) -> None:
+    """Refuse a NEW item row past the project's `max_items` (security review M4).
+    Raises ToolException so the tool path reports a typed failure; the route
+    maps it to `422`. Both writers call this before inserting."""
+    limit = (await load_config(session, project_id, manifest)).max_items
+    if await _live_item_count(session, project_id) >= limit:
+        raise ToolException(
+            f"this project already holds {limit} BOM rows (max_items)",
+            code=ToolErrorCode.TOOL_ERROR,
+        )
 
 
 def _item_attrs(fields: dict[str, Any], user_id: uuid.UUID | None) -> dict[str, Any]:
@@ -139,9 +179,12 @@ async def create_item(
     name: str,
     category: str,
     fields: dict[str, Any],
+    manifest: ExtensionManifest | None,
 ) -> GraphEntity:
     """A standalone raw-material / purchase row. `fields` are already validated
-    (route body or tool schema); state defaults to `planned`."""
+    (route body or tool schema); state defaults to `planned`. Raises
+    ToolException at the project's item cap; does NOT commit."""
+    await enforce_item_cap(session, project_id, manifest)
     values = {"category": category, "state": DEFAULT_ITEM_STATE, "quantity": 1, **fields}
     row = GraphEntity(
         project_id=project_id,
@@ -204,12 +247,14 @@ async def upsert_overlay(
     user_id: uuid.UUID | None,
     row: BomRow,
     patch: dict[str, Any],
+    manifest: ExtensionManifest | None,
 ) -> GraphEntity:
     existing = await find_overlay(session, project_id, row.key)
     if existing is not None:
         apply_patch(existing, patch)
         await session.flush()
         return existing
+    await enforce_item_cap(session, project_id, manifest)
     values = {"category": OVERLAY, "row_key": row.key, "state": row.state, "quantity": 1, **patch}
     overlay = GraphEntity(
         project_id=project_id,
@@ -226,3 +271,20 @@ async def upsert_overlay(
 
 def soft_delete(row: GraphEntity) -> None:
     row.deleted_at = utcnow()
+
+
+__all__ = [
+    "BomConfig",
+    "BomInputs",
+    "apply_patch",
+    "create_item",
+    "enforce_item_cap",
+    "find_item",
+    "find_overlay",
+    "item_from_entity",
+    "load_config",
+    "load_inputs",
+    "row_for_item",
+    "soft_delete",
+    "upsert_overlay",
+]

@@ -32,6 +32,7 @@ def test_the_bom_folder_passes_the_full_bundle_validator() -> None:
     assert [f.key for f in manifest.settings.fields] == [
         "preferred_suppliers",
         "cost_target",
+        "max_items",
         "currency",
     ]
     assert declares_first_party(manifest)

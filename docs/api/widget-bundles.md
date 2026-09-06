@@ -268,7 +268,13 @@ data lives behind these routes, which the ADR-035 bridge deliberately cannot rea
   retired`, free transitions; a design row defaults to `installed`, a hand-added row to `planned`.
 - **Config** = `effective_bundle_config` (manifest defaults ← repo `[ext.bom]` ← install settings):
   `preferred_suppliers` (comma-separated string → list, ≤ 16), `cost_target` (number ≥ 0),
-  `currency` (`USD | EUR | GBP`). Totals report priced rows, the sum, and `over_target`.
+  `currency` (`USD | EUR | GBP`), `max_items` (1–20 000, default 2 000 — the live hand-added rows,
+  items AND overlays, a project may hold; the route answers `422` and the tool a typed
+  `tool_error` past it). Totals report priced rows, the sum, and `over_target`.
+- **Bounds shared by the route and the tool:** `unit_cost` ≤ `COST_MAX` (1e9) on both; a stored
+  cost that is non-finite or over the bound is read as unknown so a row can never make
+  `line_cost` / the totals non-finite. Names, suppliers, part numbers and notes reject Unicode
+  control and format characters (bidi overrides included); notes keep newlines.
 - Bounded: at most 20 000 part rows per project are read; the payload says `truncated: true`
   beyond that rather than pretending.
 

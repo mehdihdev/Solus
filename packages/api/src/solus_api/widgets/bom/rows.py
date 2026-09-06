@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -50,6 +51,13 @@ NAME_MAX = 120
 TEXT_MAX = 80
 NOTES_MAX = 500
 QUANTITY_MAX = 100_000
+#: One bound for every cost field, route AND tool (security review H1): a unit
+#: cost past this is refused at the boundary and dropped on read, so a stored
+#: value can never make `line_cost` non-finite and 500 the whole view.
+COST_MAX = 1e9
+#: Live hand-added rows (items + overlays) per project unless the bundle's
+#: `max_items` setting says otherwise (security review M4).
+DEFAULT_MAX_ITEMS = 2000
 
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _DOMAINS = "code|electrical|mechanical|simulation|runtime|project"
@@ -129,7 +137,10 @@ class BomRow:
 
     @property
     def line_cost(self) -> float | None:
-        return round(self.unit_cost * self.quantity, 2) if self.unit_cost is not None else None
+        if self.unit_cost is None:
+            return None
+        total = round(self.unit_cost * self.quantity, 2)
+        return total if math.isfinite(total) else None
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -168,9 +179,14 @@ def _str(value: Any, cap: int = 512) -> str | None:
 
 
 def _number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+    """A stored cost, or None when it is not a finite number within COST_MAX —
+    a row written before a bound existed can never poison the view."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number) or number < 0 or number > COST_MAX:
+        return None
+    return number
 
 
 def _manufacturer(attrs: dict[str, Any]) -> str | None:
@@ -320,6 +336,11 @@ def _design_row(
         item_id=overlay.id if overlay else None,
         canonical_id=canonical_ids[0] if canonical_ids else None,
     )
+
+
+def row_for_item(item: Item) -> BomRow:
+    """A hand-added row on its own — the shape POST/PATCH answer with."""
+    return _item_row(item)
 
 
 def _item_row(item: Item) -> BomRow:

@@ -17,6 +17,7 @@ from solus_api.widgets.bom.rows import (
     DEFAULT_DESIGN_STATE,
     DEFAULT_ITEM_STATE,
     LIFECYCLE_STATES,
+    QUANTITY_MAX,
     BomRow,
     Canonical,
     Item,
@@ -364,3 +365,30 @@ def test_csv_has_a_header_one_line_per_row_and_neutralises_formulas() -> None:
 )
 def test_csv_cell_guard(raw: str, expected: str) -> None:
     assert csv_cell(raw) == expected
+
+
+def test_costs_past_the_bound_or_non_finite_are_unknown_not_infinite() -> None:
+    from solus_api.widgets.bom.rows import COST_MAX
+
+    huge = item(1, "A", "purchase", quantity=QUANTITY_MAX, unit_cost=COST_MAX)
+    [row] = build_rows([], [], [], [huge])
+    assert row.line_cost == round(COST_MAX * QUANTITY_MAX, 2)
+    assert row.line_cost is not None and row.line_cost < float("inf")
+    assert totals([row], None)["line_cost_total"] == row.line_cost
+
+
+@pytest.mark.parametrize("raw", [float("inf"), float("nan"), -1, 1e300, True, "12"])
+def test_item_from_entity_drops_bad_costs(raw: object) -> None:
+    from solus_api.models import GraphEntity
+    from solus_api.widgets.bom.rows import item_from_entity
+
+    entity = GraphEntity(
+        id=_id(1),
+        project_id=_id(2),
+        kind="ext:bom:item",
+        domain="project",
+        name="x",
+        attrs={"category": "purchase", "state": "planned", "unit_cost": raw},
+    )
+    parsed = item_from_entity(entity)
+    assert parsed is not None and parsed.unit_cost is None

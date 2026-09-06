@@ -615,8 +615,8 @@ budget as §6.2 (`429` + `Retry-After`).
 | Method | Path                                       | Purpose                                                                                                          | Success       |
 | ------ | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------- |
 | GET    | `/api/v1/users/me/extension-pins`          | The caller's pins in pin order; an unpublished extension's pin is hidden (kept, and shown again if republished) | `200`         |
-| PUT    | `/api/v1/users/me/extension-pins/{slug}`   | Pin (`201`), or `200` when already pinned; `404` for an unknown/unpublished slug; `422` beyond 32 pins            | `201` / `200` |
-| DELETE | `/api/v1/users/me/extension-pins/{slug}`   | Unpin; idempotent for a known slug (`204` whether or not pinned); `404` for an unknown slug                       | `204`         |
+| PUT    | `/api/v1/users/me/extension-pins/{slug}`   | Pin (`201`), or `200` when already pinned; `404` for an unknown slug OR one with no approved version (its publisher excepted — the catalog's visibility rule, never an existence oracle); `422` beyond 32 pins | `201` / `200` |
+| DELETE | `/api/v1/users/me/extension-pins/{slug}`   | Unpin the caller's own pin; ALWAYS `204` (unknown, unpublished and never-pinned slugs are indistinguishable); `422` only for a malformed slug | `204`         |
 
 Item shape — what the rail needs to draw a tab where the bundle is NOT installed:
 

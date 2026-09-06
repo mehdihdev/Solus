@@ -435,8 +435,8 @@ Writes share the install-write budget. **Unmetered.**
 | Method | Path                                     | Description                                                                                          |
 | ------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | GET    | `/api/v1/users/me/extension-pins`        | The caller's pins in pin order, each with the latest approved version's page view for the rail       |
-| PUT    | `/api/v1/users/me/extension-pins/{slug}` | Pin (`201`; `200` if already); `404` unknown/unpublished slug; `422` beyond 32 pins                   |
-| DELETE | `/api/v1/users/me/extension-pins/{slug}` | Unpin (`204`, idempotent for a known slug)                                                           |
+| PUT    | `/api/v1/users/me/extension-pins/{slug}` | Pin (`201`; `200` if already); `404` unknown or unapproved slug (publisher excepted); `422` beyond 32 pins |
+| DELETE | `/api/v1/users/me/extension-pins/{slug}` | Unpin (always `204` — no existence oracle)                                                           |
 
 Data events: `extension.pinned`, `extension.unpinned` (server), `store.suggested` (client, §2.13 —
 the desktop's in-context widget suggestion after a new source kind connects).

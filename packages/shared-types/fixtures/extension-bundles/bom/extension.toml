@@ -41,6 +41,14 @@ label = "Cost target"
 min = 0
 
 [[settings.fields]]
+key = "max_items"
+type = "number"
+label = "Hand-added rows to keep"
+min = 1
+max = 20000
+default = 2000
+
+[[settings.fields]]
 key = "currency"
 type = "select"
 label = "Currency"

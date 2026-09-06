@@ -8,6 +8,7 @@ follow the catalog row (an unpublished extension's pin disappears from the list)
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -24,7 +25,7 @@ from fixtures.extensions.routes import (
 )
 from httpx import AsyncClient
 from solus_api.core.config import Settings
-from solus_api.models import Extension, UserExtensionPin, utcnow
+from solus_api.models import Extension, ExtensionPublisher, UserExtensionPin, utcnow
 from solus_api.routers.extensions import pins as pins_router
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -171,10 +172,48 @@ async def test_unpin_is_idempotent_and_emits_events(
     assert [e.payload for e in unpinned] == [{"slug": "bom"}]
 
 
-async def test_unpin_unknown_slug_is_404_not_a_silent_204(
-    client: AsyncClient, alice_headers: dict[str, str]
+async def test_unpin_never_reveals_whether_a_slug_exists(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
-    assert (await client.delete(f"{PINS}/ghost", headers=alice_headers)).status_code == 404
+    """Security review M1: DELETE answers 204 for an unknown slug, an
+    unpublished slug and a never-pinned slug alike — no existence oracle."""
+    assert (await client.delete(f"{PINS}/ghost", headers=alice_headers)).status_code == 204
+    gone = await seed_extension(db, "gone")
+    await db.execute(
+        update(Extension).where(Extension.id == gone.extension_id).values(deleted_at=utcnow())
+    )
+    await db.commit()
+    assert (await client.delete(f"{PINS}/gone", headers=alice_headers)).status_code == 204
+    assert (await client.delete(f"{PINS}/Not_A_Slug!", headers=alice_headers)).status_code == 422
+
+
+async def test_pinning_an_unapproved_extension_is_404_except_for_its_publisher(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Security review M1: the catalog's visibility rule applies — a pending
+    listing exists only for its publisher; nobody else learns its name."""
+    catalog = await seed_extension(db, "pending-only", pending=("0.9.0",))
+    await db.execute(
+        update(Extension)
+        .where(Extension.id == catalog.extension_id)
+        .values(latest_approved_version_id=None)
+    )
+    bob = await me(client, bob_headers)
+    await db.execute(
+        update(ExtensionPublisher)
+        .where(ExtensionPublisher.display_name == "Solus")
+        .values(user_id=uuid.UUID(bob["id"]))
+    )
+    await db.commit()
+    refused = await client.put(f"{PINS}/pending-only", headers=alice_headers)
+    assert refused.status_code == 404
+    assert "pending" not in refused.text
+    allowed = await client.put(f"{PINS}/pending-only", headers=bob_headers)
+    assert allowed.status_code == 201, allowed.text
+    assert allowed.json()["data"]["version"] is None
 
 
 # ------------------------------------------------------------ independence

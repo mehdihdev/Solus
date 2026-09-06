@@ -73,6 +73,10 @@ export function useSourceSuggestions(
   deps: SuggestionDeps = {}
 ): void {
   const known = useRef<{ projectId: string; types: readonly string[] } | null>(null)
+  // Callers pass a fresh `deps` object per render; a ref keeps the effect keyed
+  // on the source list alone (code review LOW).
+  const depsRef = useRef(deps)
+  depsRef.current = deps
   const types = sources.map((s) => s.type)
   const key = types.slice().sort().join('|')
 
@@ -82,8 +86,8 @@ export function useSourceSuggestions(
     known.current = { projectId, types }
     if (!previous || previous.projectId !== projectId) return
     if (newlyConnectedKinds(previous.types, types).length === 0) return
-    void suggest(projectId, previous.types, types, deps).catch(() => undefined)
+    void suggest(projectId, previous.types, types, depsRef.current).catch(() => undefined)
     // `key` stands in for `types` so a re-render with the same list is inert.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, status, key, deps])
+  }, [projectId, status, key])
 }

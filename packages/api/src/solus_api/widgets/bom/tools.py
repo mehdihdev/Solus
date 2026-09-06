@@ -17,6 +17,7 @@ from solus_api.agent.tools.shapes import ToolDescriptor
 from solus_api.agent.tools.tool import InProcessTool, Tool
 from solus_api.widgets.bom import service
 from solus_api.widgets.bom.rows import (
+    COST_MAX,
     DEFAULT_ITEM_STATE,
     ITEM_CATEGORIES,
     NAME_MAX,
@@ -46,7 +47,7 @@ ADD_ITEM = ToolDescriptor(
             "part_number": {"type": "string", "minLength": 1, "maxLength": 64},
             "manufacturer": _STRING,
             "supplier": _STRING,
-            "unit_cost": {"type": "number", "minimum": 0},
+            "unit_cost": {"type": "number", "minimum": 0, "maximum": COST_MAX},
             "notes": {"type": "string", "minLength": 1, "maxLength": NOTES_MAX},
         },
         "required": ["name", "category"],
@@ -82,6 +83,7 @@ def build_add_item(scope: BundleScope) -> Tool:
                 name=str(args["name"]),
                 category=str(args["category"]),
                 fields=fields,
+                manifest=scope.manifest,
             )
             await session.commit()
             return {

@@ -7,18 +7,29 @@ floor and the install-write budget on every write — no handler carries auth.
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
+from collections.abc import Callable
 from typing import Annotated, Any, Literal, get_args
 
 from fastapi import APIRouter, Depends, Path, Response
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
+from solus_api.agent.tools.tool import ToolException
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import SessionDep
 from solus_api.services.events import emit_event
 from solus_api.widgets.bom import service
 from solus_api.widgets.bom.rows import (
+    COST_MAX,
     ITEM_CATEGORIES,
     LIFECYCLE_STATES,
     NAME_MAX,
@@ -36,15 +47,38 @@ from solus_api.widgets.guard import BundleContext, require_bundle
 router = APIRouter()
 Bom = Annotated[BundleContext, Depends(require_bundle(SLUG))]
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=NAME_MAX)]
-Short = Annotated[str, StringConstraints(strip_whitespace=True, max_length=TEXT_MAX)]
-Notes = Annotated[str, StringConstraints(strip_whitespace=True, max_length=NOTES_MAX)]
+
+def _no_control_characters(allow_newlines: bool) -> Callable[[str], str]:
+    """Reject every Unicode "Other" code point (controls, format characters such
+    as bidi overrides, surrogates, unassigned) — security review L4. Notes may
+    keep newlines and tabs."""
+    allowed = {"\n", "\t", "\r"} if allow_newlines else set()
+
+    def check(value: str) -> str:
+        for ch in value:
+            if ch not in allowed and unicodedata.category(ch).startswith("C"):
+                raise ValueError("control characters are not allowed")
+        return value
+
+    return check
+
+
+_ONE_LINE = AfterValidator(_no_control_characters(allow_newlines=False))
+_MULTI_LINE = AfterValidator(_no_control_characters(allow_newlines=True))
+Name = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=NAME_MAX), _ONE_LINE
+]
+Short = Annotated[str, StringConstraints(strip_whitespace=True, max_length=TEXT_MAX), _ONE_LINE]
+Notes = Annotated[str, StringConstraints(strip_whitespace=True, max_length=NOTES_MAX), _MULTI_LINE]
+PartNumber = Annotated[str, StringConstraints(strip_whitespace=True, max_length=64), _ONE_LINE]
 Quantity = Annotated[int, Field(ge=1, le=QUANTITY_MAX)]
-Cost = Annotated[float, Field(ge=0, le=1e9)]
+Cost = Annotated[float, Field(ge=0, le=COST_MAX)]
 State = Literal["planned", "ordered", "received", "installed", "retired"]
 Category = Literal["raw_material", "purchase"]
-assert set(get_args(State)) == set(LIFECYCLE_STATES)  # noqa: S101 — contract pin
-assert set(get_args(Category)) == set(ITEM_CATEGORIES)  # noqa: S101
+if set(get_args(State)) != set(LIFECYCLE_STATES) or set(get_args(Category)) != set(
+    ITEM_CATEGORIES
+):  # pragma: no cover — contract pin, checked at import
+    raise ValueError("BOM route literals drifted from rows.py")
 
 
 class ItemBody(BaseModel):
@@ -53,9 +87,7 @@ class ItemBody(BaseModel):
     category: Category
     quantity: Quantity = 1
     state: State = "planned"
-    part_number: Annotated[str, StringConstraints(strip_whitespace=True, max_length=64)] | None = (
-        None
-    )
+    part_number: PartNumber | None = None
     manufacturer: Short | None = None
     supplier: Short | None = None
     unit_cost: Cost | None = None
@@ -133,29 +165,39 @@ async def list_rows(bundle: Bom, session: SessionDep) -> dict[str, Any]:
     return envelope(_payload(rows, inputs, config))
 
 
+def _item_row(entity: Any) -> BomRow:
+    """An item's own row, without rebuilding the whole view (security review M5)."""
+    item = service.item_from_entity(entity)
+    if item is None:  # pragma: no cover — we just wrote a valid item
+        raise APIError(500, "internal_error", "BOM row is malformed")
+    return service.row_for_item(item)
+
+
 @router.post("/rows", status_code=201)
 async def create_row(body: ItemBody, bundle: Bom, session: SessionDep) -> dict[str, Any]:
     fields = body.model_dump(exclude={"name", "category"}, exclude_none=True)
-    item = await service.create_item(
-        session,
-        project_id=bundle.ctx.project.id,
-        user_id=bundle.ctx.user.id,
-        name=body.name,
-        category=body.category,
-        fields=fields,
-    )
+    try:
+        item = await service.create_item(
+            session,
+            project_id=bundle.ctx.project.id,
+            user_id=bundle.ctx.user.id,
+            name=body.name,
+            category=body.category,
+            fields=fields,
+            manifest=bundle.manifest,
+        )
+    except ToolException as exc:
+        raise APIError(422, "validation_error", exc.message) from exc
     _emit(bundle, session, "bom.item_added", {"category": body.category, "item_id": str(item.id)})
     await session.commit()
-    rows, _, _ = await _view(bundle, session)
-    return envelope(_find(rows, f"item:{item.id}").payload())
+    await session.refresh(item)
+    return envelope(_item_row(item).payload())
 
 
 @router.patch("/rows/{key}")
 async def patch_row(
     key: RowKey, body: PatchBody, bundle: Bom, session: SessionDep
 ) -> dict[str, Any]:
-    rows, _, _ = await _view(bundle, session)
-    row = _find(rows, key)
     patch = body.model_dump(exclude_unset=True)
     project_id = bundle.ctx.project.id
     if key.startswith("item:"):
@@ -163,14 +205,28 @@ async def patch_row(
         if item is None:
             raise APIError(404, "not_found", "No such BOM row")
         service.apply_patch(item, patch)
-    else:
-        if "quantity" in patch or "name" in patch:
-            raise APIError(
-                422, "validation_error", "A design row's name and quantity come from the design"
-            )
-        await service.upsert_overlay(
-            session, project_id=project_id, user_id=bundle.ctx.user.id, row=row, patch=patch
+        kind = str(item.attrs.get("category"))
+        _emit(bundle, session, "bom.row_updated", {"row_kind": kind, "fields": sorted(patch)})
+        await session.commit()
+        await session.refresh(item)
+        return envelope(_item_row(item).payload())
+    if "quantity" in patch or "name" in patch:
+        raise APIError(
+            422, "validation_error", "A design row's name and quantity come from the design"
         )
+    rows, _, _ = await _view(bundle, session)
+    row = _find(rows, key)
+    try:
+        await service.upsert_overlay(
+            session,
+            project_id=project_id,
+            user_id=bundle.ctx.user.id,
+            row=row,
+            patch=patch,
+            manifest=bundle.manifest,
+        )
+    except ToolException as exc:
+        raise APIError(422, "validation_error", exc.message) from exc
     _emit(bundle, session, "bom.row_updated", {"row_kind": row.kind, "fields": sorted(patch)})
     await session.commit()
     rows, _, _ = await _view(bundle, session)

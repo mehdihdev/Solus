@@ -20,12 +20,14 @@ from fixtures.extensions.routes import (
     project_for,
     seed_extension,
 )
+from fixtures.injection_corpus import PAYLOADS, Surface
 from httpx import AsyncClient
+from solus_api.agent.prompt import tool_specs
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode
 from solus_api.models import GraphEdge, GraphEntity
 from solus_api.widgets.bom import CAPABILITY, SLUG
-from solus_api.widgets.bom.rows import ITEM_KIND
+from solus_api.widgets.bom.rows import ITEM_KIND, NAME_MAX
 from solus_contracts.extension_manifest import parse_extension_manifest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -50,6 +52,14 @@ BOM_MANIFEST: dict[str, Any] = {
         "fields": [
             {"key": "preferred_suppliers", "type": "string", "label": "Preferred suppliers"},
             {"key": "cost_target", "type": "number", "label": "Cost target", "min": 0},
+            {
+                "key": "max_items",
+                "type": "number",
+                "label": "Hand-added rows to keep",
+                "min": 1,
+                "max": 20000,
+                "default": 2000,
+            },
             {
                 "key": "currency",
                 "type": "select",
@@ -531,3 +541,207 @@ async def test_uninstall_soft_deletes_bom_items_but_never_design_rows(
     )
     assert len(list(design)) == 8  # 7 observations + the canonical row
     assert (await client.get(_bom(project_id), headers=alice_headers)).status_code == 404
+
+
+# ------------------------------------------------------ security review fixes
+
+
+async def test_a_row_key_from_another_project_never_resolves(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """H2: keys are project-scoped. An item minted in Alice's project is a 404
+    in Bob's (PATCH and DELETE), and a non-member's writes are 404 (no leak)."""
+    _, project_a = await _seed_and_install(client, db, alice_headers)
+    made = await client.post(
+        _bom(project_a),
+        json={"name": "Secret motor", "category": "purchase"},
+        headers=alice_headers,
+    )
+    key = made.json()["data"]["key"]
+    _, project_b = await project_for(client, bob_headers)
+    assert (
+        await install(client, bob_headers, project_b, SLUG, grants=NO_GRANTS)
+    ).status_code == 201
+
+    for method, url, body in (
+        ("PATCH", _bom(project_b, f"rows/{key}"), {"state": "ordered"}),
+        ("DELETE", _bom(project_b, f"rows/{key}"), None),
+        ("PATCH", _bom(project_a, f"rows/{key}"), {"state": "ordered"}),
+        ("DELETE", _bom(project_a, f"rows/{key}"), None),
+        ("POST", _bom(project_a), {"name": "x", "category": "purchase"}),
+    ):
+        resp = await client.request(method, url, json=body, headers=bob_headers)
+        assert resp.status_code == 404, (method, url, resp.text)
+    rows = (await _rows(client, alice_headers, project_a))["rows"]
+    assert [r["name"] for r in rows] == ["Secret motor"]
+    assert rows[0]["state"] == "planned"
+
+
+async def test_costs_are_bounded_on_every_path_and_never_break_the_view(
+    client: AsyncClient, db: AsyncSession, engine: AsyncEngine, alice_headers: dict[str, str]
+) -> None:
+    """H1: the route and the tool share COST_MAX; a stored non-finite or
+    over-cap value (written before the bound) is read as unknown, so the view
+    and the CSV stay serialisable."""
+    _, project_id = await _seed_and_install(client, db, alice_headers)
+    too_much = await client.post(
+        _bom(project_id),
+        json={"name": "x", "category": "purchase", "unit_cost": 1e12},
+        headers=alice_headers,
+    )
+    assert too_much.status_code == 422
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        uuid.UUID(project_id),
+        bundle_capabilities=[(CAPABILITY, parse_extension_manifest(BOM_MANIFEST))],
+    )
+    result = await registry.invoke(
+        ToolCall(
+            tool="bom.add_item", args={"name": "x", "category": "purchase", "unit_cost": 1e300}
+        )
+    )
+    assert not result.ok and result.error is not None
+    assert result.error.code == ToolErrorCode.INVALID_ARGS
+    # A poisoned row (as if written before the bound existed).
+    db.add(
+        _entity(
+            project_id,
+            ITEM_KIND,
+            "project",
+            "Poisoned",
+            origin="extension",
+            attrs={
+                "category": "purchase",
+                "state": "planned",
+                "quantity": 100000,
+                "unit_cost": 1e308,
+            },
+        )
+    )
+    await db.commit()
+    data = await _rows(client, alice_headers, project_id)
+    poisoned = _by_name(data["rows"])["Poisoned"]
+    assert poisoned["unit_cost"] is None and poisoned["line_cost"] is None
+    assert data["totals"]["line_cost_total"] == 0.0
+    assert (
+        await client.get(_bom(project_id, "export.csv"), headers=alice_headers)
+    ).status_code == 200
+
+
+async def test_hand_added_rows_are_capped_per_project(
+    client: AsyncClient, db: AsyncSession, engine: AsyncEngine, alice_headers: dict[str, str]
+) -> None:
+    """M4: `max_items` (manifest default ← [ext.bom] ← install settings) bounds
+    items AND overlays, on the route and on the tool."""
+    _, project_id = await _seed_and_install(client, db, alice_headers)
+    ids = await _seed_design(db, project_id)
+    patched = await client.patch(
+        f"/api/v1/projects/{project_id}/extensions/{SLUG}",
+        json={"settings": {"max_items": 2}},
+        headers=alice_headers,
+    )
+    assert patched.status_code == 200, patched.text
+    for name in ("one", "two"):
+        ok = await client.post(
+            _bom(project_id), json={"name": name, "category": "purchase"}, headers=alice_headers
+        )
+        assert ok.status_code == 201, ok.text
+    full = await client.post(
+        _bom(project_id), json={"name": "three", "category": "purchase"}, headers=alice_headers
+    )
+    assert full.status_code == 422 and "max_items" in full.json()["error"]["message"]
+    overlay = await client.patch(
+        _bom(project_id, f"rows/canonical:{ids['canonical']}"),
+        json={"state": "ordered"},
+        headers=alice_headers,
+    )
+    assert overlay.status_code == 422
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        uuid.UUID(project_id),
+        bundle_capabilities=[(CAPABILITY, parse_extension_manifest(BOM_MANIFEST))],
+    )
+    result = await registry.invoke(
+        ToolCall(tool="bom.add_item", args={"name": "four", "category": "purchase"})
+    )
+    assert not result.ok and result.error is not None
+    assert "max_items" in result.error.message
+    # Removing one frees a slot.
+    first = _by_name((await _rows(client, alice_headers, project_id))["rows"])["one"]
+    assert (
+        await client.delete(_bom(project_id, f"rows/{first['key']}"), headers=alice_headers)
+    ).status_code == 204
+    assert (
+        await client.post(
+            _bom(project_id), json={"name": "three", "category": "purchase"}, headers=alice_headers
+        )
+    ).status_code == 201
+
+
+async def test_control_characters_are_refused_at_the_boundary(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    _, project_id = await _seed_and_install(client, db, alice_headers)
+    for body in (
+        {"name": "Mo\x00tor", "category": "purchase"},
+        {"name": "Motor", "category": "purchase", "supplier": "A\u202eB"},
+        {"name": "Motor", "category": "purchase", "notes": "line\x07bell"},
+    ):
+        resp = await client.post(_bom(project_id), json=body, headers=alice_headers)
+        assert resp.status_code == 422, body
+    fine = await client.post(
+        _bom(project_id),
+        json={"name": "Motor", "category": "purchase", "notes": "two\nlines"},
+        headers=alice_headers,
+    )
+    assert fine.status_code == 201, fine.text
+
+
+async def test_a_hostile_part_name_is_data_in_the_view_the_csv_and_the_tool_result(
+    client: AsyncClient, db: AsyncSession, engine: AsyncEngine, alice_headers: dict[str, str]
+) -> None:
+    """H3 (CLAUDE.md §7 red team): an injection payload carried by a connector
+    part name or a hand-added row reaches the BOM only as a string field —
+    never as markup, never outside its JSON value, and never changes the tool
+    set offered to SOL."""
+    _, project_id = await _seed_and_install(client, db, alice_headers)
+    # The corpus payload, cut to the BOM's name cap (the content is the point).
+    hostile = next(p.text for p in PAYLOADS if p.surface is Surface.PART_NAME)[:NAME_MAX]
+    db.add(
+        _entity(
+            project_id,
+            "component",
+            "electrical",
+            hostile,
+            modality_hints={"part_number": "INJ-01"},
+            external_ref="INJ",
+        )
+    )
+    await db.commit()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    registry = build_sol_registry(
+        factory,
+        uuid.UUID(project_id),
+        bundle_capabilities=[(CAPABILITY, parse_extension_manifest(BOM_MANIFEST))],
+    )
+    baseline = tool_specs(tuple(registry.list()))
+    result = await registry.invoke(
+        ToolCall(tool="bom.add_item", args={"name": hostile, "category": "raw_material"})
+    )
+    assert result.ok and result.value is not None
+    assert result.value["name"] == hostile  # a value, echoed as a value
+    assert tool_specs(tuple(registry.list())) == baseline
+
+    data = await _rows(client, alice_headers, project_id)
+    rows = data["rows"]
+    # The hand-added row carries it as its name; the connector row shows its
+    # part number and carries the hostile string as a SOURCE name — text either way.
+    assert [r["name"] for r in rows if r["kind"] == "raw_material"] == [hostile]
+    assert any(s["name"] == hostile for r in rows for s in r["sources"])
+    csv_text = (await client.get(_bom(project_id, "export.csv"), headers=alice_headers)).text
+    entry = next(row for row in csv_text.splitlines() if "raw_material" in row)
+    assert hostile.split(" ")[0] in entry
+    assert "\n" not in entry.rstrip("\r")

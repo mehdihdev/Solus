@@ -138,6 +138,11 @@ async def pin_extension(
     if publisher is None:  # RESTRICT FK — unreachable
         raise APIError(500, "internal_error", "Publisher is missing")
     latest = await svc.latest_approved_version(session, extension)
+    # The catalog's visibility rule (catalog.py): an extension with no approved
+    # version exists only for its publisher — never an existence oracle, never
+    # a name/publisher leak (security review M1).
+    if latest is None and publisher.user_id != user.id:
+        raise APIError(404, "not_found", "Extension not found")
 
     existing = await _pin_of(session, user.id, extension.id)
     if existing is not None:
@@ -170,19 +175,18 @@ async def unpin_extension(
     settings: SettingsDep,
 ) -> None:
     _budget(request, user, settings)
-    # Unpublished extensions may still be unpinned — the row is the user's.
-    extension = await session.scalar(
-        select(Extension).where(func.lower(Extension.slug) == slug.lower())
+    # The caller's own pin, by slug — unpublished extensions may still be
+    # unpinned. Always 204: whether the slug exists, is published or was never
+    # pinned is not distinguishable here (security review M1).
+    pin = await session.scalar(
+        select(UserExtensionPin)
+        .join(Extension, Extension.id == UserExtensionPin.extension_id)
+        .where(UserExtensionPin.user_id == user.id, func.lower(Extension.slug) == slug.lower())
     )
-    if extension is None:
-        raise APIError(404, "not_found", "Extension not found")
-    pin = await _pin_of(session, user.id, extension.id)
     if pin is None:
-        return  # idempotent: unpinning what is not pinned is a no-op, not an error
+        return
     await session.delete(pin)
-    emit_event(
-        session, user=user, event_type="extension.unpinned", payload={"slug": extension.slug}
-    )
+    emit_event(session, user=user, event_type="extension.unpinned", payload={"slug": slug})
     await session.commit()
 
 

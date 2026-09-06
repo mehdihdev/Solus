@@ -42,9 +42,24 @@ describe('railEntriesFrom', () => {
         installedAt: '2026-09-01T00:00:00Z',
         dev: false,
         pinned: false,
-        installed: true
+        installed: true,
+        firstParty: false,
+        publisher: { displayName: 'Solus', verified: true }
       }
     ])
+  })
+
+  it('marks an install whose pinned manifest declares a first-party table (STORE ST4)', () => {
+    const row = install('bom', '2026-09-01T00:00:00Z')
+    const firstParty = {
+      ...row,
+      version: {
+        ...row.version,
+        manifest: { ...row.version.manifest, backend: { capability: 'bom', routes: true } }
+      }
+    }
+    expect(railEntriesFrom([firstParty])[0]?.firstParty).toBe(true)
+    expect(railEntriesFrom([row])[0]?.firstParty).toBe(false)
   })
 
   it('drops disabled, blocked and page-less installs', () => {
@@ -127,7 +142,9 @@ describe('railEntriesFrom — pins (STORE ST3)', () => {
         installedAt: '2026-09-06T00:00:00Z',
         dev: false,
         pinned: true,
-        installed: false
+        installed: false,
+        firstParty: false,
+        publisher: { displayName: 'Solus', verified: true }
       }
     ])
   })
@@ -213,7 +230,9 @@ describe('devRailEntriesFrom', () => {
         installedAt: '2026-09-05T00:00:00Z',
         dev: true,
         pinned: false,
-        installed: false
+        installed: false,
+        firstParty: false,
+        publisher: null
       }
     ])
   })

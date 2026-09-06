@@ -542,13 +542,32 @@ describe('WorkspaceShell — pins and first-party pages (STORE ST3 / ST4)', () =
   })
 
   it('an installed first-party bundle opens its in-repo page, not a frame', async () => {
+    const row = pageInstall('bom', '2026-09-01T00:00:00Z')
+    const firstParty = {
+      ...row,
+      version: {
+        ...row.version,
+        manifest: { ...row.version.manifest, backend: { capability: 'bom', routes: true } }
+      }
+    }
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([firstParty]))
+    renderShell()
+    await userEvent.click(await screen.findByLabelText('BOM'))
+    expect(screen.getByTestId('bom-screen')).toBeInTheDocument()
+    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+  })
+
+  it('a COMMUNITY bundle that carries a first-party slug still gets the sandboxed frame', async () => {
+    // The slug alone never picks the trusted page (security review M2): only a
+    // pinned manifest with a first-party table does, and the publish gate keeps
+    // those tables staff-only.
     vi.mocked(ext.listProjectExtensions).mockResolvedValue(
       installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
     )
     renderShell()
     await userEvent.click(await screen.findByLabelText('BOM'))
-    expect(screen.getByTestId('bom-screen')).toBeInTheDocument()
-    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+    expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:bom')
+    expect(screen.queryByTestId('bom-screen')).toBeNull()
   })
 
   it('the context menu opens the Store detail and a dev registration cannot be pinned', async () => {

@@ -21,10 +21,9 @@ import { BomTable } from './BomTable'
 import { csvFilename, formatMoney, totalsLine, viewNote } from './bomLogic'
 import { useBom, type BomData } from './useBom'
 
-const PUBLISHER = { displayName: 'Solus', verified: true } as const
-
 export function BomScreen({
   projectId,
+  publisher,
   onBack,
   onOpenStore
 }: FirstPartyPageProps): React.JSX.Element {
@@ -41,7 +40,7 @@ export function BomScreen({
         iconSvg={null}
         isDev={false}
         version={null}
-        publisher={PUBLISHER}
+        publisher={publisher}
         onBack={onBack}
         actions={<HeaderActions data={data} projectName={projectName} />}
       />
