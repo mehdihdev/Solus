@@ -1,0 +1,518 @@
+{
+  "schema_version": 1,
+  "corpus_version": "0.1.0",
+  "released_at": "2026-09-06",
+  "policy_revision": "docs/corpus/LICENSING.md@43e8a06",
+  "chunks": [
+    {
+      "id": "corpus:electrical/analog_frontend/adc-reference-resolution-and-lsb",
+      "content_hash": "sha256:96a2a834183a136eb2bbe571800530fe30b9ac0bf9a5fe0498a900b2b464996b",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/analog_frontend/input-bias-offset-excitation-antialias",
+      "content_hash": "sha256:e24956bc348e3c8cade5c2f0958b3d589c324038c278e9f82df2fd8fbef912fb",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/analog_frontend/op-amp-supply-rails-and-headroom",
+      "content_hash": "sha256:a8ba2ac29dd212c8535602f8053929f8f4f20ac89513e0ca9e964f9be392bba4",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/bus_addressing/can-id-allocation-and-spi-chip-select",
+      "content_hash": "sha256:1226abc35c10689fd85107f50fb5286865220e17633a9d44e540beb430a75039",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/bus_addressing/i2c-address-conflict-checklist",
+      "content_hash": "sha256:936debd24cf15a8fa80832d7f36b7dc0790b42588fae57c5c775602e4b646a0f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/bus_addressing/i2c-addresses-and-conflicts",
+      "content_hash": "sha256:7272de6d4a997178fbf869d5cd7a7223ffc9c3b5e78eaf1d173bdd9694345f45",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/clearance_creepage/clearance-vs-creepage",
+      "content_hash": "sha256:b00092422d71dd547a14c86d06ed95b227e2c7f415ace26c66c2837e2f5b3859",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/clearance_creepage/pollution-degree-slots-and-coatings",
+      "content_hash": "sha256:2c159fb4525c020bc8fbe46ec9f672a80faec0e929ab0a4d1a1dde2907b51204",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/clearance_creepage/why-48v-still-matters",
+      "content_hash": "sha256:0d053a9175fd76c46eaa2439c5b9dfde1080a38bdeb9b6f4924a7e06ccf67f1c",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/connector_selection/connector-pitfalls",
+      "content_hash": "sha256:e39dbe4fe873b1e2437ccb715fd07fc1d4a2739871a4dc428789ede3fe115afd",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/connector_selection/connector-ratings-and-what-they-mean",
+      "content_hash": "sha256:3b6c99b80c466b5c4fb83a4688eeb80ca1a6f644350f3a84c4f8d83f1444c4b5",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/connector_selection/jst-molex-xt-families-where-each-belongs",
+      "content_hash": "sha256:47c9cb88e25d504c3a49fbbad90045dc97ea55a1e7c0620d126a4e1bb2da0ebf",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/decoupling/ceramic-dc-bias-derating",
+      "content_hash": "sha256:78422300a60fc73e614f9b2dfd6d36d4ac113eb0de50f08e5c88436eb289fa51",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/decoupling/value-spread-bulk-vs-local",
+      "content_hash": "sha256:e0aac3c6dc4da496c75e31d075f9b57a8fe4f9edcb9177aeb26ab0e3e30a21fd",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/decoupling/what-a-decoupling-capacitor-does",
+      "content_hash": "sha256:9ba0fd39b99d1549d4750a78b3bb978d502ca9c1a976aec2801d06d1937dfe5f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/emi_basics/motor-drive-noise-next-to-a-sensor",
+      "content_hash": "sha256:c20a25f566826c0711a688537b966e7d070c5645f24abd057acc01ac1bbd00fe",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/grounding/ground-loops-chassis-vs-signal",
+      "content_hash": "sha256:36dd34d5ef5fa0989f68f34ddc06fc090c72d9c060e85b3edf40795c8a54fe0c",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/grounding/star-vs-plane-and-mixed-signal",
+      "content_hash": "sha256:179f0345377f2967c97a2a7257b4e0556278b0ab3eb9501b760e355897f42e05",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/grounding/where-return-current-flows",
+      "content_hash": "sha256:86382357595275d5cdea59a788ff4a64ecf894320ee458474cf7f64a89033b9e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/motor_drive_electrical/regen-into-a-supply-that-cannot-sink",
+      "content_hash": "sha256:084a19b6436221976419ddc5e07cbeacc5be6ddf45856827c883968b888ee6ef",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/pcb_layout_basics/thermal-relief-via-stitching-test-points",
+      "content_hash": "sha256:41a105d8033bed06536820197c2a635eeae9d635d8808852e72a46a59869cdc3",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/power_design/battery-chemistry-c-rating-cutoff",
+      "content_hash": "sha256:6aee8657b309405b74ecdd7f1ab1b8154f6c68ec66492433d8053a66cd26d784",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/power_design/inrush-brownout-reverse-polarity-hotplug",
+      "content_hash": "sha256:9cf7126c243e265cecc746f07d72e6079054dd014e47aadf92bc22e1f861ac42",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/power_design/ldo-vs-buck-vs-boost",
+      "content_hash": "sha256:0b52abdce37a20ff95f08542b3b72ebabd75f59507b892446918cb283b056ca8",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/signal_integrity/differential-pairs-and-termination",
+      "content_hash": "sha256:9d2fc953a9e34624fae8038b67312a3cd814ee99084975c3ed4edbe51ebe2739",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/signal_integrity/i2c-pullup-reference-values",
+      "content_hash": "sha256:35af6de3bbba871d318d10c6b71181612c67afcadbda55ac7dbcde8e1df52114",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/signal_integrity/i2c-pullups-and-bus-capacitance",
+      "content_hash": "sha256:db0b89a4a13493d44c6c6787d093814d00cd881f0bb2f551ebbb154abb11a967",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/signal_integrity/spi-clock-uart-levels-level-shifting",
+      "content_hash": "sha256:d694e5e09644db1d7dcb77bd35de9f560523db82340c93d5beed7650b2736155",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/trace_width_current/calculator-defaults-and-voltage-drop",
+      "content_hash": "sha256:206bcdb3e63ceec0cdc2754af2aa3c29f10dd30eae3589cb099663dc5093354b",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/trace_width_current/via-current-and-parallel-vias",
+      "content_hash": "sha256:5c04cb77a237541b8330b57118588b94f3de023db54e8c32968296e1333506f1",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/trace_width_current/why-width-and-copper-set-current",
+      "content_hash": "sha256:cec7251c035a2de168dd789104bd731ec86fdac85ef4525f5915ec1311ae1c13",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/wire_gauge/ampacity-vs-voltage-drop",
+      "content_hash": "sha256:51cecf2fa83003d21997ad435790d1a3f541ea9ffa8f65baa0bbd67b73427231",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/wire_gauge/awg-vs-mm2-and-what-limits-a-wire",
+      "content_hash": "sha256:26017f3728f2d016186025d4858e7d57cb6570b8de5fa2ce9e8b89e670499e06",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/wire_gauge/stranded-vs-solid-crimp-vs-solder",
+      "content_hash": "sha256:60578f1976d3cbb377ce27d1efb59c8bfa585f15cab037742a7a763a7d0830e5",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/bearings_shafts/keyways-set-screws-clamping-hubs",
+      "content_hash": "sha256:2234c0af4ec1b71561188af9c16d046697b841795bc8c8d8ca8761a24b8cb2be",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/bearings_shafts/radial-thrust-preload-and-mounting",
+      "content_hash": "sha256:c2bd4c256830aded3e572201293b68512829a1a40bca1703f36f3dd07329791f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/heat-set-inserts-in-printed-parts",
+      "content_hash": "sha256:6664f54ca7425e5982898fe8df715f9f104ecaee402ac39674afdec6ee61a4d1",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/locking-methods",
+      "content_hash": "sha256:6b50ec78a218bd03e477826e3f1cb6b6baa7a95f7d55280ed2d612048d2f5b30",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/preload-not-torque",
+      "content_hash": "sha256:a4de3ca9fe9687490deb9f7c5798ffd0c0dd9cd4c046724039fe07411ecd974c",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/thread-designations-and-property-class",
+      "content_hash": "sha256:edd1d19b749ba8cc80bc5c2efadf8b41059a4b3854364a655a8acc7089bb4a0d",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/thread-engagement-length",
+      "content_hash": "sha256:ada624afe0e2e3b39892b2348c61d237a0866363e1dd74e3d7523b866df37a64",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fits_tolerances/choosing-fits-bearing-dowel-press",
+      "content_hash": "sha256:6e3ef3ecc9eff12e95dd934a362542a9c059a5347e46ca31e91c75c5f644f9fb",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fits_tolerances/fit-classes-and-reading-h7-g6",
+      "content_hash": "sha256:739ecaf0e249bbedfc0fe8b2ff1d8ba6085b16e92bfabdb80a71e2fd656acf4f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fits_tolerances/process-tolerance-capability",
+      "content_hash": "sha256:064cfd1ccae3fd98c5b208b56a7aa9fbb2da130c4a93c7bd35d6aaaa920d4c6e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fits_tolerances/stack-up-worst-case-vs-rss",
+      "content_hash": "sha256:18b1a2001ba542501229968bb7ed99cdc9bd64cd1243a05006f1f80736a4b219",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/gdt/datums-and-feature-control-frames",
+      "content_hash": "sha256:ab26ff7f008162bceda8923b08e2915089f9c5b1d8dd7914a2c324fb7f33bb21",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/gdt/position-vs-profile-and-bonus-tolerance",
+      "content_hash": "sha256:d39cd9ac468736c2fa1a34f9dcf6128a1e647af424bca836e8ca12dc54005c60",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/machining_constraints/cnc-milling-dfm-basics",
+      "content_hash": "sha256:e78921b035ae226cd1b6df13f78558a0fad84c1211ad4caf230342948a5af93e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/machining_constraints/drill-vs-ream",
+      "content_hash": "sha256:079795da0356a0c2d31aece9ad3ed3f7759a28df6e9665bb24d8593f8adbabe0",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/machining_constraints/fdm-orientation-overhangs-bridging",
+      "content_hash": "sha256:a44c3d3b4c1d56cc3c06fdef352464b6358bf0880102ca3151530269098b47bb",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/machining_constraints/sheet-metal-bend-radius-k-factor",
+      "content_hash": "sha256:b1cc6be2aac4405b1650af55fa6605b482a308a90b4f4ddbcce2eb9aeac7a345",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/material_selection/anodise-vs-plate",
+      "content_hash": "sha256:9b3a6749631b0a1e1e63dd144fe9e0c0d9d542507c2310151cb905056f9fb4ad",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/material_selection/common-robot-metals",
+      "content_hash": "sha256:90dde319832086d4f75c1717e63943aaa5cebf4b204d73bb9aa9dff8f563d375",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/material_selection/galling-and-galvanic-pairs",
+      "content_hash": "sha256:bda3a57e0a832cc6f6e91d4aa10cbad3693856cdfa0012d506adeea7dd620bb7",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/material_selection/printed-plastics-temperature-limits",
+      "content_hash": "sha256:1bf4352ab0912ff40cfb2c17cfaad6353d1f8abe4f094963f1c26030020a8f36",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/material_selection/stiffness-vs-strength",
+      "content_hash": "sha256:fd72ddfe9554ee3f70fa023c28f5f07f133d5cdce6e6357d4e41d38977a39f09",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/mechanisms/gear-ratio-backlash-efficiency",
+      "content_hash": "sha256:35fa6279e99b48078f4b42c09148063bbbc2f51ddbf0dca4b1129a307941cdc9",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/actuator_selection/motor-family-trade-offs",
+      "content_hash": "sha256:1c3d566b5c882eb07115caf9ae6d2d14b1f9ce5eca83026738855e3d9940e100",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/actuator_selection/size-from-the-load-not-the-catalogue",
+      "content_hash": "sha256:ea3074f607cbd2f6f6afe473a9f8e112f1087ee2379a85aa131f9c13b7f23a39",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/actuator_selection/stall-torque-is-not-a-rating",
+      "content_hash": "sha256:66618e44525815c3465bb5f8ce2685e529774c205590d2a974c60dce408e4637",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/control_tuning/anti-windup-and-derivative-on-measurement",
+      "content_hash": "sha256:7ff463e1596e50301d3f351e4731513a205739ab6e7d4dfe855c36f47241fe9b",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/control_tuning/sample-rate-and-cascaded-loops",
+      "content_hash": "sha256:e1e4c5104e9cba72156fbda766bb3ae09a079f8a4440e4ba3974bd9672475dbc",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/control_tuning/tuning-a-loop-by-hand",
+      "content_hash": "sha256:c78ea74bde5b92f1d6dd331ae98849cadbebd2c6a099e4e455cd8663af4fb79c",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/control_tuning/what-each-pid-term-does",
+      "content_hash": "sha256:21a117dfdb4d3a9060bf4f1d7a316f207b64c72fbdd7020bd8afa769e2eb69e7",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/dynamics_basics/reflected-inertia-and-gravity",
+      "content_hash": "sha256:0ad77e5605079116e34fb234e198eb827bf8dae82b37b9546ca1481b37d03752",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/kinematics_basics/forward-inverse-and-the-jacobian",
+      "content_hash": "sha256:da731b7a4dc70cafc46568c1f5a848b84c552b1706e59465ca3d50979ba53346",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/kinematics_basics/frames-and-transforms",
+      "content_hash": "sha256:172df846ae7e2ac786ee28a0d650eee06870266bb52f5744da4224a58a058cd1",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/kinematics_basics/urdf-conventions-that-break-models",
+      "content_hash": "sha256:8551c8c14c1b88d0b192aef2e7a09263296b75c6f8ea7e2bcfaa68c9ecfadf6b",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/perception_basics/intrinsics-shutter-and-depth-limits",
+      "content_hash": "sha256:5bad9f15938dabe08156feafa12b150e7e35f2565004d0251f29f98e43558a88",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/sensor_fusion_basics/covariance-as-trust",
+      "content_hash": "sha256:a12814b9237e2db6305490004816ebdb9d1d0ef9e8919818b190209bf12863a8",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/sensor_fusion_basics/encoder-imu-vision-strengths-and-limits",
+      "content_hash": "sha256:a48250fd80291ddb16cc33978320fa1b0f75bd896c1468420f8401682b6fb68a",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/sensor_fusion_basics/timestamps-and-covariance-pitfalls",
+      "content_hash": "sha256:b38b5cbdb55d8b067e504d51e890f0295d45aebb3dd3878c51039ce20275665c",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/simulation_fidelity/what-mujoco-gets-right-and-wrong",
+      "content_hash": "sha256:0d181ba0cfe02b9d2b5d0141198ed6d7d09172cf05adadfb84c4779ca1d3a76e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/build_and_toolchain/cross-compilation-basics",
+      "content_hash": "sha256:3550b21a7ce398104ab1a8ecd35a2088adabe368d33776b58945f3d8d56143df",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/build_and_toolchain/jetpack-cuda-version-coupling",
+      "content_hash": "sha256:ea2877655be43ca220b111760d4c3200eed820a4d6a689c1dd72b20f74731220",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/build_and_toolchain/python-environments-and-pinning",
+      "content_hash": "sha256:19d911572539266d5757f3b2ce3be105f2f7c52954f406f31c5e68ea80434383",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/embedded_patterns/isr-discipline",
+      "content_hash": "sha256:1120d3c5406e25514e1dbd040330dd530f670b773c9a50add3838fcf8ed878b1",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/embedded_patterns/superloop-vs-rtos",
+      "content_hash": "sha256:8a16285ae1e7c8a67921ab770598936f0d560dd9b275b9b1a90cdd3e0618567e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/embedded_patterns/watchdog-fed-from-the-wrong-place",
+      "content_hash": "sha256:aacdef29662d1bebbffe7ecd53ead8a33d0f314f471b43842cb834fb9158c215",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/embedded_testing/off-target-unit-tests-with-mocked-peripherals",
+      "content_hash": "sha256:f07447a3ffe6e82d4a3b5cec481a07da25c56233883dce5d321ea1d71363437f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/firmware_deployment/verify-the-flash-and-mind-the-fuses",
+      "content_hash": "sha256:8676fe05bb4e5f40c8022dcd6d95c7d4a1f26cd5e04f340220eba0c03745bcd7",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/real_time_constraints/delay-in-a-control-loop",
+      "content_hash": "sha256:6d99635a7dee89ee0ba8e08f2ef80574df2980ed4481f922dc8278c56e2a72e0",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/real_time_constraints/hard-vs-soft-real-time-and-jitter",
+      "content_hash": "sha256:b5013e8c3bf3c6fc651bac6819bc520508cdea069e71f8a08f4a90d88fcb4bcc",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/real_time_constraints/priority-inversion",
+      "content_hash": "sha256:dbdf8d042ad5573a7893a03230f30b9a32548cf03cb8ccad6327dd98d3a6b7fc",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/ros_conventions/rep-103-units-and-frames",
+      "content_hash": "sha256:3ecb895dba757ef4f8a46495edf7a56a7bad8ff05ca149a3fbf7d6543f0a5192",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/ros_conventions/tf-tree-hygiene",
+      "content_hash": "sha256:3850aa7dda76323e374be0b362c83b00ada210e7c5f07779798d8b011f9e34e7",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/ros_conventions/topics-services-actions-and-qos",
+      "content_hash": "sha256:e352eab7f60eda2695bfcc9e1fb9c2e880885e59536f378808a22ec47fdd104f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:software/serial_protocols/frame-your-serial-messages",
+      "content_hash": "sha256:d68db5c74407bb34c36213dfc6dad71ca9f85202ede04f61813e480e9732e89b",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/cabling_harness/routing-service-loops-and-connector-count",
+      "content_hash": "sha256:ea381bed41d9ab7f59ce66a3348044c8b3a3a352949afead2bc2888d1598c760",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/enclosure_ingress/ip-code-sealing-versus-venting",
+      "content_hash": "sha256:15923d84e619e12177abd9e5963e10ceb271abbf0da344e278bfe4be77a658ec",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/power_budget/peak-sizes-the-regulator-average-sizes-the-battery",
+      "content_hash": "sha256:16c947b70b9f5c8536c39816e44fe0fb82dd68d4775d5738653f19c224327c5f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/power_budget/servo-browns-out-the-5v-rail",
+      "content_hash": "sha256:8e8a10012b53c7ac0d80a5b92b203529df31584fd831053c80ba59e7c9e88ca2",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/power_budget/worst-case-worksheet",
+      "content_hash": "sha256:def668362884f37089e80ac76c8d30cc76eb83555afb323e47e928d5432d4e7e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/safety_interlocks/category-performance-level-and-sto-vocabulary",
+      "content_hash": "sha256:f0e38686c170c10783f154e34d635e4c1b3f3018a6719f6129929ec3a803acd4",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/safety_interlocks/estop-is-a-hardware-chain",
+      "content_hash": "sha256:a90e9240c58d74bc15ae6f4c435068933ed7f1f020572db2539f1256d8102588",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/safety_interlocks/interlock-vs-enable-pitfalls",
+      "content_hash": "sha256:f7bc168db8c5c308bfb23bef4539f3f8ce96e253dca7fd4282ea4ca683cc70ac",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/system_integration/commissioning-order",
+      "content_hash": "sha256:09325ee8acaf3b6660fbf48003dcb3a95464beeebc58a6b8c99f4b8e8543861a",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/system_integration/cross-domain-changes-that-break-the-other-team",
+      "content_hash": "sha256:29d1544fee383bde960e99895558d19803605d89590cf915aef3e8e79b898c55",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/system_integration/interface-control-who-owns-a-pin",
+      "content_hash": "sha256:b73b0529ed1cb537dd4cc3bb3a66ccb5ffaa58dfa51660017d8f9c09c21bd0f9",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/thermal_budget/derate-for-the-enclosure-not-the-lab",
+      "content_hash": "sha256:18dc58d93cd204cebcfd980fe94c03bbbcf7ee7c019d8a9876ec642570c8e4bc",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/thermal_budget/junction-to-ambient-chain",
+      "content_hash": "sha256:b532935e786cbe30f3ca69d7b8c65cb7563e4f3d952b690273b9e71dda39be15",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/thermal_budget/theta-ja-is-a-test-board-number",
+      "content_hash": "sha256:fab0161ac7f3149967bec3d7cd371afb6f30080ae7ed83d72d04b55efb64a07d",
+      "status": "active"
+    }
+  ]
+}

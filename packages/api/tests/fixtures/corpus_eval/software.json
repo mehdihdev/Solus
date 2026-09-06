@@ -1,0 +1,146 @@
+[
+  {
+    "id": "software-embedded_patterns-01",
+    "domain": "software",
+    "topic": "embedded_patterns",
+    "question": "My Arduino loop runs a 1 kHz current controller, a serial parser and an OLED refresh and the motor stutters whenever the screen updates. Do I need an RTOS or can I keep the single while loop?",
+    "gold_chunk_ids": ["corpus:software/embedded_patterns/superloop-vs-rtos"],
+    "required_facts": ["superloop", "preempt"],
+    "answer": "A superloop only works while every job's worst-case time fits inside the fastest period. A 30 ms display refresh cannot share one loop with a 1 ms control step without stretching it; either slice the display work into a non-blocking state machine or move to an RTOS (FreeRTOS, Zephyr) so the high-priority control task preempts the display task. Three jobs with periods differing by more than about ten to one is the usual threshold for switching."
+  },
+  {
+    "id": "software-embedded_patterns-02",
+    "domain": "software",
+    "topic": "embedded_patterns",
+    "question": "Encoder count from my interrupt handler sometimes reads a garbage value in the main loop even though I marked it volatile. What am I missing?",
+    "gold_chunk_ids": ["corpus:software/embedded_patterns/isr-discipline"],
+    "required_facts": ["volatile", "atomic"],
+    "answer": "volatile only stops the compiler caching the value; it does not make a multi-byte write atomic. On an 8-bit AVR a 16- or 32-bit variable is written in several instructions, so the main loop can read half-old, half-new bytes. Disable interrupts briefly around the read, use a type the core writes in one instruction, or use the platform's atomic types."
+  },
+  {
+    "id": "software-embedded_patterns-03",
+    "domain": "software",
+    "topic": "embedded_patterns",
+    "question": "Our board hangs in the field but the watchdog never resets it. We feed the watchdog from a 10 ms timer interrupt, is that the problem?",
+    "gold_chunk_ids": ["corpus:software/embedded_patterns/watchdog-fed-from-the-wrong-place"],
+    "required_facts": ["watchdog", "timer"],
+    "answer": "Yes. A timer ISR keeps firing while the main loop is deadlocked or blocked, so a watchdog kicked from it never trips. Kick from the main loop (or a low-priority task), ideally only when every subsystem has set an I-ran-this-cycle flag, and read the reset-cause register at boot so watchdog resets are logged rather than mysterious reboots."
+  },
+  {
+    "id": "software-real_time_constraints-01",
+    "domain": "software",
+    "topic": "real_time_constraints",
+    "question": "What is the difference between latency and jitter for a PID loop, and how much jitter is acceptable before I should worry about my gains?",
+    "gold_chunk_ids": ["corpus:software/real_time_constraints/hard-vs-soft-real-time-and-jitter"],
+    "required_facts": ["jitter", "latency"],
+    "answer": "Latency is the fixed delay between the timing event and the code responding; jitter is how much that delay varies cycle to cycle. Constant latency is a phase lag you can tune around, while jitter injects noise into derivative and integral terms. Keep jitter under a few percent of the loop period and treat more than about 10 percent as a scheduling bug to fix before tuning."
+  },
+  {
+    "id": "software-real_time_constraints-02",
+    "domain": "software",
+    "topic": "real_time_constraints",
+    "question": "I put delay(10) at the end of my control loop to get 100 Hz but the loop rate drifts and serial commands get missed. What should I use instead?",
+    "gold_chunk_ids": ["corpus:software/real_time_constraints/delay-in-a-control-loop"],
+    "required_facts": ["delay", "millis"],
+    "answer": "delay() busy-waits, so the period is 10 ms plus the variable work time and nothing else runs meanwhile. Schedule to absolute time instead: track the next deadline with millis() and run the step when it arrives, letting serial polling run every pass; or drive the step from a hardware timer interrupt that sets a flag. With an RTOS use xTaskDelayUntil or an absolute-timeout sleep, and compute dt from measured timestamps."
+  },
+  {
+    "id": "software-real_time_constraints-03",
+    "domain": "software",
+    "topic": "real_time_constraints",
+    "question": "High-priority FreeRTOS control task occasionally misses its deadline by exactly the length of a display refresh, but the display task never touches the I2C bus the controller uses. Why?",
+    "gold_chunk_ids": ["corpus:software/real_time_constraints/priority-inversion"],
+    "required_facts": ["priority inversion", "mutex"],
+    "answer": "Classic priority inversion: a low-priority task holds the I2C mutex, the control task blocks on it, and the medium-priority display task preempts the low task so the mutex is never released. Use a FreeRTOS mutex (which has priority inheritance) rather than a binary semaphore, keep critical sections short with no I/O, or give the bus a single owner task fed by a queue."
+  },
+  {
+    "id": "software-ros_conventions-01",
+    "domain": "software",
+    "topic": "ros_conventions",
+    "question": "Our mechanical team exported the URDF in millimetres and the IMU driver reports degrees per second. Which way should x, y, z point on base_link and what units does ROS expect?",
+    "gold_chunk_ids": ["corpus:software/ros_conventions/rep-103-units-and-frames"],
+    "required_facts": ["rep 103", "right-handed"],
+    "answer": "REP 103 requires base SI units: metres, radians, seconds, so convert millimetres and degrees at the driver boundary. Frames are right-handed with x forward, y left, z up for body frames like base_link; camera optical frames instead use z forward, x right, y down. REP 105 layers the earth, map, odom, base_link frame chain on top."
+  },
+  {
+    "id": "software-ros_conventions-02",
+    "domain": "software",
+    "topic": "ros_conventions",
+    "question": "My ROS 2 lidar driver publishes fine (ros2 topic hz shows 10 Hz) but my node's subscriber callback never fires. No errors. What's wrong?",
+    "gold_chunk_ids": ["corpus:software/ros_conventions/topics-services-actions-and-qos"],
+    "required_facts": ["best-effort", "reliable"],
+    "answer": "Almost certainly a QoS mismatch: sensor drivers publish best-effort (the sensor-data profile) and a reliable subscriber will not connect to a best-effort publisher. Subscribe with best-effort reliability; check with ros2 topic info -v and look for the QoS-incompatibility warning in the log."
+  },
+  {
+    "id": "software-ros_conventions-03",
+    "domain": "software",
+    "topic": "ros_conventions",
+    "question": "The robot jumps back and forth in RViz and I get extrapolation errors. robot_localization and the wheel odometry driver are both running. What should I check in the tf tree?",
+    "gold_chunk_ids": ["corpus:software/ros_conventions/tf-tree-hygiene"],
+    "required_facts": ["one parent", "view_frames"],
+    "answer": "Two nodes are probably both publishing the odom to base_link transform, so the tree flickers between them. Every frame has exactly one parent and every edge one publisher: disable tf publishing in the driver and let the fusion node own odom to base_link. Confirm with ros2 run tf2_tools view_frames, which shows each edge's broadcaster and rate, and check that stamps come from one clock."
+  },
+  {
+    "id": "software-ros_conventions-04",
+    "domain": "software",
+    "topic": "ros_conventions",
+    "question": "Should homing the gantry axis be a ROS service or an action? It takes about 8 seconds.",
+    "gold_chunk_ids": ["corpus:software/ros_conventions/topics-services-actions-and-qos"],
+    "required_facts": ["action", "cancel"],
+    "answer": "An action. Services are for short, bounded request-reply calls where the caller can afford to block; anything that takes seconds and should report progress or be cancellable belongs in an action with a goal, feedback and result."
+  },
+  {
+    "id": "software-build_and_toolchain-01",
+    "domain": "software",
+    "topic": "build_and_toolchain",
+    "question": "The library we need says it requires CUDA 12 but our Jetson has CUDA 11.4. Can I just install the newer CUDA toolkit on the Jetson?",
+    "gold_chunk_ids": ["corpus:software/build_and_toolchain/jetpack-cuda-version-coupling"],
+    "required_facts": ["jetpack", "cuda"],
+    "answer": "No. On Jetson the CUDA version is fixed by the JetPack release, because the GPU driver lives inside L4T. CUDA 11.4 means a JetPack 5 image; CUDA 12 requires reflashing to JetPack 6, which only supports Orin-family modules. Check the JetPack release notes for exact versions, and usually change the dependency version rather than the JetPack."
+  },
+  {
+    "id": "software-build_and_toolchain-02",
+    "domain": "software",
+    "topic": "build_and_toolchain",
+    "question": "After sudo pip install numpy on the robot's Ubuntu 22.04 box, cv_bridge and other ROS 2 Humble Python nodes crash with import errors. How do I keep pip and apt from fighting?",
+    "gold_chunk_ids": ["corpus:software/build_and_toolchain/python-environments-and-pinning"],
+    "required_facts": ["apt", "venv"],
+    "answer": "The pip install overwrote the apt-managed NumPy that ROS was built against. Leave ROS and everything it imports to apt and rosdep, remove the pip copy, and put application dependencies in a virtual environment created from a lock file that pins versions; match the interpreter to ROS's (Python 3.10 for Humble) and use --system-site-packages only if the venv must see ROS packages."
+  },
+  {
+    "id": "software-build_and_toolchain-03",
+    "domain": "software",
+    "topic": "build_and_toolchain",
+    "question": "Firmware builds fine on my laptop but the STM32 faults immediately at reset, and linking against a vendor library complains about float ABI. What do I need to tell CMake for a cross build?",
+    "gold_chunk_ids": ["corpus:software/build_and_toolchain/cross-compilation-basics"],
+    "required_facts": ["toolchain file", "float"],
+    "answer": "Use the target's cross toolchain (arm-none-eabi-gcc, not the host gcc) through a CMake toolchain file that sets CMAKE_SYSTEM_NAME, the compilers and, for Linux targets, CMAKE_SYSROOT. Set the exact core and float ABI flags (-mcpu, -mfpu, -mfloat-abi) consistently; mixing hard and soft float ABIs between your objects and a prebuilt library is a link error or silently wrong calls. Bare metal also needs the part's linker script and start-up code."
+  },
+  {
+    "id": "software-embedded_testing-01",
+    "domain": "software",
+    "topic": "embedded_testing",
+    "question": "How can I unit test my homing state machine and packet parser in CI without a board plugged in?",
+    "gold_chunk_ids": ["corpus:software/embedded_testing/off-target-unit-tests-with-mocked-peripherals"],
+    "required_facts": ["mock", "off-target"],
+    "answer": "Separate the pure logic from a thin hardware layer behind an interface, pass time in as a value, and compile the logic against a mock on the host. Zephyr's ztest with native_sim or PlatformIO's native test runner lets the same tests run on the laptop and later on target; keep a small on-target suite for timing and peripheral behaviour."
+  },
+  {
+    "id": "software-serial_protocols-01",
+    "domain": "software",
+    "topic": "serial_protocols",
+    "question": "We stream comma-separated sensor values over UART at 115200 and the readings occasionally spike or merge together. Is it electrical noise?",
+    "gold_chunk_ids": ["corpus:software/serial_protocols/frame-your-serial-messages"],
+    "required_facts": ["framing", "crc"],
+    "answer": "Probably not noise: unframed ASCII over a byte stream breaks when reads land mid-line, a byte is lost, or the receive buffer overflows. Add framing (start byte plus length, or a delimiter with byte stuffing), a CRC so corrupted frames are dropped rather than parsed, a message id or version, and receive timeouts; parse with a byte-at-a-time state machine."
+  },
+  {
+    "id": "software-firmware_deployment-01",
+    "domain": "software",
+    "topic": "firmware_deployment",
+    "question": "Flashing script reports success but one unit behaves like old firmware, and someone wants to set the STM32 readout protection before shipping. What should we verify and what is irreversible?",
+    "gold_chunk_ids": ["corpus:software/firmware_deployment/verify-the-flash-and-mind-the-fuses"],
+    "required_facts": ["verify", "option bytes"],
+    "answer": "Verify every flash by reading back or checking an image CRC, and print a build id at boot so a stale unit is obvious. Treat fuses and option bytes as one-way doors: STM32 RDP level 1 is reversible with a mass erase but level 2 permanently disables debug and the bootloader; AVR RSTDISBL and wrong clock fuses lock you out; ESP32 eFuses cannot be unburned. Script these values and test on a sacrificial board."
+  }
+]

@@ -1,0 +1,400 @@
+[
+  {
+    "id": "electrical-trace_width_current-01",
+    "domain": "electrical",
+    "topic": "trace_width_current",
+    "question": "What tolerance do I have on trace width for a 3 A motor supply trace — is there a fixed max current per mm of copper?",
+    "gold_chunk_ids": [
+      "corpus:electrical/trace_width_current/why-width-and-copper-set-current"
+    ],
+    "required_facts": [
+      "temperature rise",
+      "cross-section"
+    ],
+    "answer": "There is no fixed ampacity per width. Current capacity is a temperature-rise problem: pick an acceptable rise, then the cross-section (width times copper thickness) and the cooling around the trace set the current. Use the IPC-2152 method with your real copper weight, layer, and ambient rather than a single number."
+  },
+  {
+    "id": "electrical-trace_width_current-02",
+    "domain": "electrical",
+    "topic": "trace_width_current",
+    "question": "How many vias do I need to carry 5 A from the top layer to the bottom layer, and does the drill size matter?",
+    "gold_chunk_ids": [
+      "corpus:electrical/trace_width_current/via-current-and-parallel-vias"
+    ],
+    "required_facts": [
+      "plating",
+      "barrel"
+    ],
+    "answer": "A via conducts through its thin plated barrel, roughly pi times drill diameter times plating thickness, so it is a much smaller conductor than the hole suggests. Add enough vias that the total barrel cross-section at least matches the feeding trace, spread them out, add one extra because current does not share evenly, and confirm plating thickness with the fab."
+  },
+  {
+    "id": "electrical-trace_width_current-03",
+    "domain": "electrical",
+    "topic": "trace_width_current",
+    "question": "The online calculator says 0.5 mm is fine for my 2 A trace, but the rail at the far end reads low under load. Why?",
+    "gold_chunk_ids": [
+      "corpus:electrical/trace_width_current/calculator-defaults-and-voltage-drop"
+    ],
+    "required_facts": [
+      "voltage drop",
+      "neck"
+    ],
+    "answer": "The calculator only answers the heating question with its default rise and ambient. A trace that stays cool can still drop too much voltage over its length (R = rho L / (w t), copper resistance rising about 0.4 % per kelvin), and capacity is limited by the narrowest neck. Check drop at full current against the rail tolerance and widen or use a plane."
+  },
+  {
+    "id": "electrical-clearance_creepage-01",
+    "domain": "electrical",
+    "topic": "clearance_creepage",
+    "question": "What is the difference between clearance and creepage on a PCB? I thought clearance was just the fit between two parts.",
+    "gold_chunk_ids": [
+      "corpus:electrical/clearance_creepage/clearance-vs-creepage"
+    ],
+    "required_facts": [
+      "through the air",
+      "along the surface"
+    ],
+    "answer": "On a board, clearance is the shortest path between two conductors through the air and fails by arc breakdown at peak voltage; creepage is the shortest path along the insulating surface and fails slowly by tracking, driven by working voltage, pollution, and material. Creepage is usually the larger requirement. IEC 60664-1 and IPC-2221 give the values."
+  },
+  {
+    "id": "electrical-clearance_creepage-02",
+    "domain": "electrical",
+    "topic": "clearance_creepage",
+    "question": "Our robot runs a 48 V battery bus. Do I really need to worry about spacing rules at that voltage?",
+    "gold_chunk_ids": [
+      "corpus:electrical/clearance_creepage/why-48v-still-matters",
+      "corpus:electrical/clearance_creepage/pollution-degree-slots-and-coatings"
+    ],
+    "required_facts": [
+      "dc arc",
+      "full charge"
+    ],
+    "answer": "Yes. The bus is not 48 V: a 13S pack is about 54.6 V at full charge and regen pushes it higher, and clearance is judged at peak. DC arcs from a battery do not self-extinguish, and creepage tracking depends on pollution degree not on the shock threshold. Check IPC-2221 spacing at the true peak and IEC 60664-1 creepage for the real environment."
+  },
+  {
+    "id": "electrical-clearance_creepage-03",
+    "domain": "electrical",
+    "topic": "clearance_creepage",
+    "question": "Does cutting a slot in the board or adding conformal coating let me put high-voltage traces closer together?",
+    "gold_chunk_ids": [
+      "corpus:electrical/clearance_creepage/pollution-degree-slots-and-coatings"
+    ],
+    "required_facts": [
+      "slot",
+      "coating"
+    ],
+    "answer": "A slot lengthens the surface path and so increases creepage without moving parts, though it does little for clearance. A conformal coating or potting that qualifies under IEC 60664-3 allows reduced spacing for the covered region; plain solder mask does not count. Pollution degree and worst-case voltage still set the base numbers."
+  },
+  {
+    "id": "electrical-decoupling-01",
+    "domain": "electrical",
+    "topic": "decoupling",
+    "question": "Does it matter if the 100 nF decoupling capacitor sits 5 mm from the MCU's supply pin instead of right at it? Mechanical fit of the connector forced it away.",
+    "gold_chunk_ids": [
+      "corpus:electrical/decoupling/what-a-decoupling-capacitor-does"
+    ],
+    "required_facts": [
+      "loop",
+      "inductance"
+    ],
+    "answer": "What matters is the area of the current loop from the capacitor through the IC's power and ground pins and back, because loop inductance limits how fast the capacitor can supply the switching spike. Five millimetres on a short route over a solid ground plane can be fine; a wandering return through slotted copper is not. Minimise the loop, give the cap its own ground via."
+  },
+  {
+    "id": "electrical-decoupling-02",
+    "domain": "electrical",
+    "topic": "decoupling",
+    "question": "My 10 uF 0402 X5R rated 6.3 V is on a 5 V rail. Why does the buck regulator behave as if the output cap is too small?",
+    "gold_chunk_ids": [
+      "corpus:electrical/decoupling/ceramic-dc-bias-derating"
+    ],
+    "required_facts": [
+      "dc bias",
+      "class ii"
+    ],
+    "answer": "Class II ceramics (X5R/X7R) lose a large fraction of capacitance under DC bias, and the effect is worst in small packages run near their rated voltage. Check the manufacturer's DC-bias curve for the exact part, rate the capacitor at roughly twice the working voltage or step up a package size, or use Class I / polymer where the value must hold."
+  },
+  {
+    "id": "electrical-decoupling-03",
+    "domain": "electrical",
+    "topic": "decoupling",
+    "question": "Should I put 10 nF, 100 nF and 1 uF in parallel on every supply pin to cover all frequencies?",
+    "gold_chunk_ids": [
+      "corpus:electrical/decoupling/value-spread-bulk-vs-local"
+    ],
+    "required_facts": [
+      "anti-resonance",
+      "package"
+    ],
+    "answer": "Not by default. Parallel capacitors of different values create an anti-resonance peak where the combined impedance is worse than either alone, and at high frequency the package inductance, not the value, dominates. Use one small-package capacitor per pin (100 nF or a larger value the datasheet allows), a bulk ceramic per rail group, and follow the regulator's output capacitance requirements."
+  },
+  {
+    "id": "electrical-grounding-01",
+    "domain": "electrical",
+    "topic": "grounding",
+    "question": "My IMU readings shift whenever the drive motors spin up. Is this a grounding problem?",
+    "gold_chunk_ids": [
+      "corpus:electrical/grounding/ground-loops-chassis-vs-signal",
+      "corpus:electrical/grounding/where-return-current-flows"
+    ],
+    "required_facts": [
+      "ground loop",
+      "return"
+    ],
+    "answer": "Very likely a ground loop: motor return current is finding a second path through the conductor the IMU uses as its reference, via chassis, standoffs, connector shells, or a shared ground wire, and the reference shifts by current times impedance. Measure voltage between grounds while motors run, bond chassis at one point, give motors their own return to the battery, and use differential or isolated links."
+  },
+  {
+    "id": "electrical-grounding-02",
+    "domain": "electrical",
+    "topic": "grounding",
+    "question": "Should I split my ground plane into analog and digital halves on a mixed-signal sensor board?",
+    "gold_chunk_ids": [
+      "corpus:electrical/grounding/star-vs-plane-and-mixed-signal"
+    ],
+    "required_facts": [
+      "placement",
+      "plane"
+    ],
+    "answer": "Usually no. Keep one continuous plane and separate the domains by placement: analog parts and traces over one region, digital over another, never routing digital across the analog region. Splitting the plane forces returns to detour around the gap and builds a slot antenna. Tie the converter's AGND and DGND together at the device."
+  },
+  {
+    "id": "electrical-power_design-01",
+    "domain": "electrical",
+    "topic": "power_design",
+    "question": "Can I use an LDO to go from a 12 V battery to 5 V at 1 A, or do I need a switching regulator?",
+    "gold_chunk_ids": [
+      "corpus:electrical/power_design/ldo-vs-buck-vs-boost"
+    ],
+    "required_facts": [
+      "dissipat",
+      "dropout"
+    ],
+    "answer": "An LDO would dissipate about (12 - 5) x 1 = 7 W as heat, which is far beyond a small package. Use a buck converter for the large step (typically 80-95 % efficient) and reserve LDOs for small drops, low currents, or noise-sensitive loads. Also check dropout margin at the battery's low-voltage cutoff."
+  },
+  {
+    "id": "electrical-power_design-02",
+    "domain": "electrical",
+    "topic": "power_design",
+    "question": "What per-cell voltage should my firmware treat as empty for a 4S LiPo, and what does a 20C rating actually mean?",
+    "gold_chunk_ids": [
+      "corpus:electrical/power_design/battery-chemistry-c-rating-cutoff"
+    ],
+    "required_facts": [
+      "3.0 v",
+      "capacity"
+    ],
+    "answer": "For standard Li-ion/LiPo cells, 4.2 V is full and about 3.0 V per cell is the floor; protection ICs trip around 2.5-3.0 V, so firmware should stop the mission earlier, commonly 3.3-3.5 V per cell under light load. A C rating is current as a multiple of capacity: 20C on a 5 Ah pack is 100 A, and hobby-pack burst ratings are optimistic."
+  },
+  {
+    "id": "electrical-power_design-03",
+    "domain": "electrical",
+    "topic": "power_design",
+    "question": "The 5V rail sags and the MCU reboots the moment the servos start moving. Regulator problem or firmware?",
+    "gold_chunk_ids": [
+      "corpus:electrical/power_design/inrush-brownout-reverse-polarity-hotplug"
+    ],
+    "required_facts": [
+      "brown-out",
+      "separate"
+    ],
+    "answer": "Almost certainly a brown-out: servo stall current pulls the shared 5 V rail down for milliseconds and the MCU's brown-out detector resets it. Scope the rail on single-shot trigger, power motors and logic from separate regulators fed from the battery, add bulk capacitance near the logic regulator, and limit motor current."
+  },
+  {
+    "id": "electrical-wire_gauge-01",
+    "domain": "electrical",
+    "topic": "wire_gauge",
+    "question": "What gauge wire for a 10 A motor two metres from the battery on a 24 V bus? Is voltage drop or heating the limit?",
+    "gold_chunk_ids": [
+      "corpus:electrical/wire_gauge/ampacity-vs-voltage-drop",
+      "corpus:electrical/wire_gauge/awg-vs-mm2-and-what-limits-a-wire"
+    ],
+    "required_facts": [
+      "round trip",
+      "voltage drop"
+    ],
+    "answer": "Compute the drop over the round trip first: 18 AWG at about 21 milliohm per metre over 4 m of conductor drops about 0.42 V at 10 A, under 2 % on 24 V and acceptable, with 4.2 W of heat along the wire. Then confirm ampacity for the bundled, enclosed installation and check the connector's per-contact rating, which is often the binding limit."
+  },
+  {
+    "id": "electrical-wire_gauge-02",
+    "domain": "electrical",
+    "topic": "wire_gauge",
+    "question": "Is it acceptable to solder wires straight into the crimp terminals for a tighter fit, and can I use solid core across the arm joint?",
+    "gold_chunk_ids": [
+      "corpus:electrical/wire_gauge/stranded-vs-solid-crimp-vs-solder"
+    ],
+    "required_facts": [
+      "stranded",
+      "crimp"
+    ],
+    "answer": "No to both. Solid wire fatigues and cracks where it flexes; use stranded (high strand count where it moves). A correctly tooled crimp is the preferred harness termination; soldering a crimp or tinning stranded wire stiffens the strands so they fracture at the solder boundary under vibration, and solder creeps under screw terminals. Use ferrules there."
+  },
+  {
+    "id": "electrical-wire_gauge-03",
+    "domain": "electrical",
+    "topic": "wire_gauge",
+    "question": "Convert 18 AWG and 22 AWG to mm² and resistance per metre — I need the numbers for a harness spreadsheet.",
+    "gold_chunk_ids": [
+      "corpus:electrical/wire_gauge/awg-vs-mm2-and-what-limits-a-wire"
+    ],
+    "required_facts": [
+      "0.82 mm",
+      "0.33 mm"
+    ],
+    "answer": "18 AWG is about 1.02 mm diameter, 0.82 mm², roughly 21 milliohm per metre of solid copper at 20 C; 22 AWG is about 0.64 mm, 0.33 mm², roughly 53 milliohm per metre. Stranded wire of the same gauge reads a few percent higher. Every 3 AWG steps halves the area."
+  },
+  {
+    "id": "electrical-connector_selection-01",
+    "domain": "electrical",
+    "topic": "connector_selection",
+    "question": "Which connector family should I use for 5 A motor power versus a 4-pin I2C sensor lead, and are Dupont jumpers acceptable?",
+    "gold_chunk_ids": [
+      "corpus:electrical/connector_selection/jst-molex-xt-families-where-each-belongs"
+    ],
+    "required_facts": [
+      "micro-fit",
+      "jst sh"
+    ],
+    "answer": "Motor current wants a rated, latching family such as Molex Micro-Fit 3.0 (single-digit amps per contact) or Mini-Fit Jr., or XT bullets for battery leads; never 2.54 mm header pins, which are prototyping parts. Small I2C sensors use 1.0 mm JST SH (the Qwiic standard) or latching 1.25 mm JST GH where vibration is present. Give each voltage its own family."
+  },
+  {
+    "id": "electrical-connector_selection-02",
+    "domain": "electrical",
+    "topic": "connector_selection",
+    "question": "The connector datasheet says 3 A per pin but my 8-pin power connector melted at 2.5 A per pin. How is the rating meant to be read?",
+    "gold_chunk_ids": [
+      "corpus:electrical/connector_selection/connector-ratings-and-what-they-mean",
+      "corpus:electrical/connector_selection/connector-pitfalls"
+    ],
+    "required_facts": [
+      "derat",
+      "per contact"
+    ],
+    "answer": "The per-contact rating holds only under stated conditions: the specified wire gauge, a limited number of loaded positions, an ambient, and an allowed temperature rise. With every pin loaded the manufacturer's derating curve applies and each contact is rated for less; running at the limit heats the contact, relaxes the spring, and runs away. Also check the crimp tooling and strain relief."
+  },
+  {
+    "id": "electrical-signal_integrity-01",
+    "domain": "electrical",
+    "topic": "signal_integrity",
+    "question": "What pull-up resistor for I2C at 400 kHz and 3.3 V with about four sensors and a short harness?",
+    "gold_chunk_ids": [
+      "corpus:electrical/signal_integrity/i2c-pullup-reference-values",
+      "corpus:electrical/signal_integrity/i2c-pullups-and-bus-capacitance"
+    ],
+    "required_facts": [
+      "400 pf",
+      "0.8473"
+    ],
+    "answer": "Estimate bus capacitance (about 10 pF per device pin plus wiring, 400 pF maximum for Fast-mode), then R_max = 300 ns / (0.8473 x C_bus): about 3.5 kOhm at 100 pF. R_min at 3.3 V with 3 mA sink is about 0.97 kOhm. Around 2.2 kOhm is a sensible choice; remove duplicate pull-ups on stacked breakouts."
+  },
+  {
+    "id": "electrical-signal_integrity-02",
+    "domain": "electrical",
+    "topic": "signal_integrity",
+    "question": "My CAN bus works on the bench but drops frames once the cable is installed in the chassis. Termination?",
+    "gold_chunk_ids": [
+      "corpus:electrical/signal_integrity/differential-pairs-and-termination"
+    ],
+    "required_facts": [
+      "120",
+      "60"
+    ],
+    "answer": "Check termination: a 120 Ohm resistor across CANH and CANL at each of the two physical ends of the bus and nowhere else. With power off, the resistance between CANH and CANL should read about 60 Ohm; 120 means a terminator is missing. Keep node stubs short and the pair twisted."
+  },
+  {
+    "id": "electrical-signal_integrity-03",
+    "domain": "electrical",
+    "topic": "signal_integrity",
+    "question": "SPI to a sensor over a 40 cm ribbon cable returns garbage above a few MHz. What is going wrong?",
+    "gold_chunk_ids": [
+      "corpus:electrical/signal_integrity/spi-clock-uart-levels-level-shifting"
+    ],
+    "required_facts": [
+      "round-trip",
+      "slow the clock"
+    ],
+    "answer": "SPI is a single-ended, unterminated bus meant for a few centimetres of board. On a cable the clock reflects and MISO's round-trip delay means the master samples before the peripheral has driven the line, corrupting data silently. Slow the clock, shorten the cable, damp the edges with a series resistor, or move to a bus designed for cable such as CAN or RS-485."
+  },
+  {
+    "id": "electrical-bus_addressing-01",
+    "domain": "electrical",
+    "topic": "bus_addressing",
+    "question": "I added a second MPU-6050 on the same I2C bus and now both give mixed readings. What happened and how do I fix it?",
+    "gold_chunk_ids": [
+      "corpus:electrical/bus_addressing/i2c-addresses-and-conflicts",
+      "corpus:electrical/bus_addressing/i2c-address-conflict-checklist"
+    ],
+    "required_facts": [
+      "0x68",
+      "ad0"
+    ],
+    "answer": "Both IMUs answer at the default 0x68, both acknowledge, and the open-drain bus ANDs their data with no error reported. Strap AD0 high on one to move it to 0x69, or put one behind a TCA9548A switch, or use a second I2C peripheral on the MCU."
+  },
+  {
+    "id": "electrical-bus_addressing-02",
+    "domain": "electrical",
+    "topic": "bus_addressing",
+    "question": "How should I assign CAN IDs across six motor controllers and an e-stop node so priority works out?",
+    "gold_chunk_ids": [
+      "corpus:electrical/bus_addressing/can-id-allocation-and-spi-chip-select"
+    ],
+    "required_facts": [
+      "lower",
+      "priorit"
+    ],
+    "answer": "Lower numeric identifiers win arbitration, so give the e-stop and fault frames the lowest IDs and telemetry the highest. No two nodes may transmit the same identifier; give identical controllers a base ID offset by a node number set by switch or configuration, and keep a written ID map in the repository."
+  },
+  {
+    "id": "electrical-bus_addressing-03",
+    "domain": "electrical",
+    "topic": "bus_addressing",
+    "question": "Can two SPI devices share one chip-select line if I only ever talk to one at a time in firmware?",
+    "gold_chunk_ids": [
+      "corpus:electrical/bus_addressing/can-id-allocation-and-spi-chip-select"
+    ],
+    "required_facts": [
+      "chip-select",
+      "miso"
+    ],
+    "answer": "No. A shared chip-select asserts both devices at once regardless of firmware intent, so both drive MISO and fight. Each device needs its own chip-select from the master, only one may be low at a time, and the peripheral must release MISO when deselected; parts that do not need a buffer or their own bus."
+  },
+  {
+    "id": "electrical-analog_frontend-01",
+    "domain": "electrical",
+    "topic": "analog_frontend",
+    "question": "My op amp on a single 5 V supply flat-lines at about 1.5 V when the sensor output should be near zero. Why?",
+    "gold_chunk_ids": [
+      "corpus:electrical/analog_frontend/op-amp-supply-rails-and-headroom"
+    ],
+    "required_facts": [
+      "rail-to-rail",
+      "common-mode"
+    ],
+    "answer": "The amplifier cannot swing its output or accept an input that close to the negative rail: many parts stop 1-2 V short of each supply. Use a rail-to-rail input/output part whose input range includes ground (accepting it still will not reach exactly 0 V), bias the signal to mid-supply, or add a small negative rail."
+  },
+  {
+    "id": "electrical-analog_frontend-02",
+    "domain": "electrical",
+    "topic": "analog_frontend",
+    "question": "Using a 16-bit ADC with VDD as reference, what is my LSB at 3.3 V and is the result really 16-bit accurate?",
+    "gold_chunk_ids": [
+      "corpus:electrical/analog_frontend/adc-reference-resolution-and-lsb"
+    ],
+    "required_facts": [
+      "lsb",
+      "reference"
+    ],
+    "answer": "LSB = 3.3 V / 65536, about 50 microvolts. That is resolution, not accuracy: a VDD reference imports the regulator's tolerance, droop, and ripple, so a 1 % reference leaves roughly 7 bits of absolute accuracy, and board noise limits effective bits further. Use a dedicated reference, or make the measurement ratiometric."
+  },
+  {
+    "id": "electrical-analog_frontend-03",
+    "domain": "electrical",
+    "topic": "analog_frontend",
+    "question": "Why does averaging in software not remove the motor PWM noise from my analog force sensor reading?",
+    "gold_chunk_ids": [
+      "corpus:electrical/analog_frontend/input-bias-offset-excitation-antialias"
+    ],
+    "required_facts": [
+      "alias",
+      "low-pass"
+    ],
+    "answer": "Energy above half the sample rate aliases into the band and becomes indistinguishable from signal before software sees it. Put an RC or active low-pass filter in front of the ADC with its corner below half the sample rate, and sample well above the highest frequency actually present, not just the bandwidth of interest."
+  }
+]

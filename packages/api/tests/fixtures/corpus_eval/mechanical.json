@@ -1,0 +1,164 @@
+[
+  {
+    "id": "mechanical-fits_tolerances-01",
+    "domain": "mechanical",
+    "topic": "fits_tolerances",
+    "question": "The CAD drawing says the encoder shaft bore is H7/g6 — is that a press fit or will the shaft slide in? What do the letters mean?",
+    "gold_chunk_ids": ["corpus:mechanical/fits_tolerances/fit-classes-and-reading-h7-g6"],
+    "required_facts": ["clearance", "fundamental deviation", "hole-basis"],
+    "answer": "It is a close-running clearance fit: the shaft will slide and turn. Upper-case H is the hole, whose tolerance zone starts at nominal and goes larger; lower-case g is the shaft, whose zone sits just below nominal; the digits are the IT grades (zone widths). Because the hole is at or above nominal and the shaft below it, there is always a small clearance. Exact micrometre limits come from ISO 286-2."
+  },
+  {
+    "id": "mechanical-fits_tolerances-02",
+    "domain": "mechanical",
+    "topic": "fits_tolerances",
+    "question": "Which ring of a ball bearing gets the tight fit on my wheel axle, the shaft or the housing? And what hole do I ream for a dowel pin?",
+    "gold_chunk_ids": ["corpus:mechanical/fits_tolerances/choosing-fits-bearing-dowel-press"],
+    "required_facts": ["rotates relative to the load", "m6", "dowel"],
+    "answer": "The ring that rotates relative to the load direction gets the tight fit. For a rotating shaft with a fixed-direction load that is the inner ring: light interference on the shaft (k/m classes) and a close clearance or transition (H7/J7) in the housing; take the exact class from the bearing maker's tables. Standard ISO 8734 dowels are ground to m6, so ream the press side to H7 for a light press and the slip side one class larger; use two dowels."
+  },
+  {
+    "id": "mechanical-fits_tolerances-03",
+    "domain": "mechanical",
+    "topic": "fits_tolerances",
+    "question": "My sensor-to-target gap depends on five toleranced parts. Do I add all the tolerances up, or can I use RSS like the electrical team does for resistor tolerances?",
+    "gold_chunk_ids": ["corpus:mechanical/fits_tolerances/stack-up-worst-case-vs-rss"],
+    "required_facts": ["worst case", "root-sum-square", "independent"],
+    "answer": "Walk the loop with signed nominals, then either add the tolerances (worst case: valid always, guarantees assembly) or take the square root of the sum of squares (RSS: smaller, but only valid when the dimensions come from independent, roughly centred processes and there are enough contributors). Use worst case for safety-related gaps, few contributors, or purchased parts that may sit at their limit; use RSS when worst case fails by a margin that would force expensive tolerances and you accept a small miss rate. If neither closes, redesign with an adjustment or fewer parts in the loop."
+  },
+  {
+    "id": "mechanical-fits_tolerances-04",
+    "domain": "mechanical",
+    "topic": "fits_tolerances",
+    "question": "I modelled a 6.00 mm hole in a 3D-printed bracket for a 6 mm shaft with an H7 tolerance in the drawing and it doesn't fit. What went wrong?",
+    "gold_chunk_ids": ["corpus:mechanical/fits_tolerances/process-tolerance-capability", "corpus:mechanical/machining_constraints/drill-vs-ream"],
+    "required_facts": ["undersize", "ream", "capability"],
+    "answer": "FDM cannot hold an ISO fit class: printed holes come out undersize and the process typically holds only ±0.2–0.5 mm. Specifying H7 on a printed part is asking for a tolerance the process cannot deliver. Model the hole undersize and drill or ream it to size after printing, or use a bushing or insert, and calibrate your printer's hole offset with a test piece."
+  },
+  {
+    "id": "mechanical-fasteners-01",
+    "domain": "mechanical",
+    "topic": "fasteners",
+    "question": "I torqued the motor mount bolts to the value in the table but they keep coming loose after a few runs. Why isn't torque enough?",
+    "gold_chunk_ids": ["corpus:mechanical/fasteners/preload-not-torque", "corpus:mechanical/fasteners/locking-methods"],
+    "required_facts": ["preload", "friction", "nut factor"],
+    "answer": "The goal is preload (bolt stretch clamping the joint), and torque is only a proxy for it through friction: most of the applied torque is spent on friction under the head and in the threads, so the preload achieved from a given torque scatters by ±25 % or more depending on lubrication and surface. If preload is too low the parts micro-slip under vibration and the thread ratchets loose. Fix the preload (bolt size/grade with margin, specified lubrication, re-torque after bedding in) first; then add a prevailing-torque nut or thread-locking adhesive as insurance. Split lock washers do not count as a locking method."
+  },
+  {
+    "id": "mechanical-fasteners-02",
+    "domain": "mechanical",
+    "topic": "fasteners",
+    "question": "How deep does an M5 tapped hole need to be in a 6061 aluminium housing compared with steel, and what about a PETG print?",
+    "gold_chunk_ids": ["corpus:mechanical/fasteners/thread-engagement-length", "corpus:mechanical/fasteners/heat-set-inserts-in-printed-parts"],
+    "required_facts": ["engagement", "aluminium", "heat-set"],
+    "answer": "Size engagement so the bolt breaks before the threads strip. In steel of similar strength to the bolt about one diameter (≈5 mm) is enough; in 6061 aluminium plan for 1.5–2 diameters (7.5–10 mm) because aluminium's shear strength is far lower; engineering plastics want 2–2.5 diameters. Do not rely on threads tapped directly into an FDM print — use a heat-set or threaded insert. Add depth for the chamfer and incomplete threads at the bottom of a blind hole."
+  },
+  {
+    "id": "mechanical-fasteners-03",
+    "domain": "mechanical",
+    "topic": "fasteners",
+    "question": "What does 'M8x1.25 property class 10.9' mean on the BOM, and is a stainless A2-70 screw stronger?",
+    "gold_chunk_ids": ["corpus:mechanical/fasteners/thread-designations-and-property-class"],
+    "required_facts": ["pitch", "property class", "tensile"],
+    "answer": "M8×1.25 is a metric thread of 8 mm nominal diameter with 1.25 mm pitch (the coarse pitch for M8, so it is usually written just M8). Property class 10.9 encodes strength per ISO 898-1: first number ×100 gives about 1000 MPa nominal tensile strength, and the two numbers multiplied ×10 give about 900 MPa yield. A2-70 stainless means austenitic group A2 with about 700 MPa tensile strength — weaker than 10.9 and even than 8.8 carbon steel; stainless is chosen for corrosion resistance, not strength."
+  },
+  {
+    "id": "mechanical-material_selection-01",
+    "domain": "mechanical",
+    "topic": "material_selection",
+    "question": "The arm link deflects too much under payload. If I switch from 6061 to 7075 aluminium will it flex less?",
+    "gold_chunk_ids": ["corpus:mechanical/material_selection/stiffness-vs-strength"],
+    "required_facts": ["modulus", "stiffness", "deflect"],
+    "answer": "No. Deflection is set by stiffness (Young's modulus times second moment of area), and 7075 has essentially the same modulus as 6061 (about 70 GPa) — it is roughly twice as strong, not stiffer. To reduce flex change the geometry (a deeper section: deflection falls with the cube of depth), use a closed tube or rib, or move to a stiffer base metal such as steel (about 200 GPa, at about three times the density)."
+  },
+  {
+    "id": "mechanical-material_selection-02",
+    "domain": "mechanical",
+    "topic": "material_selection",
+    "question": "The electrical team says the chassis ground is floating even though the PCB standoffs are screwed to the aluminium frame. The frame is black anodised. Related?",
+    "gold_chunk_ids": ["corpus:mechanical/material_selection/anodise-vs-plate"],
+    "required_facts": ["anodis", "insulator", "mask"],
+    "answer": "Yes. Anodising grows an aluminium-oxide layer that is an electrical insulator, so an anodised frame does not conduct at its surface and cannot serve as a ground return or shield connection. Fix it by adding a drawing note that masks the standoff and ground-stud areas from anodising, or by using a conductive chemical conversion coating instead of anodising where the whole surface must conduct."
+  },
+  {
+    "id": "mechanical-material_selection-03",
+    "domain": "mechanical",
+    "topic": "material_selection",
+    "question": "Can I use stainless screws into the aluminium battery tray on an outdoor robot, and why did a stainless bolt seize in a stainless nut?",
+    "gold_chunk_ids": ["corpus:mechanical/material_selection/galling-and-galvanic-pairs"],
+    "required_facts": ["galvanic", "galling", "electrolyte"],
+    "answer": "Two separate problems. Stainless in aluminium outdoors is a galvanic pair: with moisture as the electrolyte the aluminium corrodes, and corrosion products in the threads can swell and strip them — isolate the pair, keep it dry or coated, or use an insert or coated steel screw. The seized bolt is galling: stainless sliding on stainless under thread pressure rubs off the oxide and cold-welds. Avoid like-on-like stainless pairs, use anti-seize, drive slowly, or use a nylon-insert or plated nut."
+  },
+  {
+    "id": "mechanical-material_selection-04",
+    "domain": "mechanical",
+    "topic": "material_selection",
+    "question": "Is PLA OK for a bracket that sits next to the motor driver board, which runs around 60 °C?",
+    "gold_chunk_ids": ["corpus:mechanical/material_selection/printed-plastics-temperature-limits"],
+    "required_facts": ["glass transition", "pla", "creep"],
+    "answer": "No. PLA's glass transition is around 55–65 °C, so at 60 °C it softens and creeps under any sustained load, and a preloaded fastener joint in it loosens on its own. Use PETG (~75–85 °C) or ABS/ASA (~95–105 °C) for parts near motors, drivers, or batteries, take the exact heat deflection temperature from the filament's data sheet, and use metal inserts or through-bolts for loaded joints."
+  },
+  {
+    "id": "mechanical-machining_constraints-01",
+    "domain": "mechanical",
+    "topic": "machining_constraints",
+    "question": "The machine shop says my pocket with sharp inside corners and a 20 mm deep 4 mm wide slot will be expensive. What should I change in the CAD?",
+    "gold_chunk_ids": ["corpus:mechanical/machining_constraints/cnc-milling-dfm-basics"],
+    "required_facts": ["corner", "end mill", "reach"],
+    "answer": "An end mill is a cylinder, so internal vertical corners are always rounded: give pocket corners a radius slightly larger than a standard tool radius (or add a dog-bone relief if a mating sharp edge must clear). A 4 mm wide slot 20 mm deep forces a 4 mm tool at five diameters of reach, which deflects and chatters — keep depth to about 3–4 times tool diameter, so widen the slot, shorten it, or split the part. Also keep walls above roughly 0.8 mm in aluminium and minimise the number of setups."
+  },
+  {
+    "id": "mechanical-machining_constraints-02",
+    "domain": "mechanical",
+    "topic": "machining_constraints",
+    "question": "The two bearing bores on opposite walls of my gearbox housing were drilled to 8 mm but the shaft binds. Should I have specified reaming?",
+    "gold_chunk_ids": ["corpus:mechanical/machining_constraints/drill-vs-ream"],
+    "required_facts": ["drill", "ream", "coaxial"],
+    "answer": "Yes — a twist drill is a roughing tool that cuts oversize, out of round, and off position, so it cannot produce a bearing fit. Reaming brings the diameter to the IT6–IT8 grades an H7 bore needs but does not correct position, and two holes drilled and reamed independently on opposite walls will not be coaxial to bearing standards. Specify the fit (Ø8 H7) and have the bores bored or line-reamed in one setup."
+  },
+  {
+    "id": "mechanical-machining_constraints-03",
+    "domain": "mechanical",
+    "topic": "machining_constraints",
+    "question": "My sheet-metal flat pattern comes out with holes misplaced near the bends. What K-factor and bend radius should I use for 2 mm aluminium?",
+    "gold_chunk_ids": ["corpus:mechanical/machining_constraints/sheet-metal-bend-radius-k-factor"],
+    "required_facts": ["k-factor", "neutral axis", "bend allowance"],
+    "answer": "The K-factor is the neutral-axis position as a fraction of thickness (0 to 0.5) and drives the bend allowance BA = (π/180)·θ·(R + K·T); a wrong K shifts every hole near a bend. Use an inside radius of about one thickness (2 mm) for soft-temper aluminium, a K around 0.33–0.45 for air bending at R ≈ T, and ideally the shop's own bend table or a measured test coupon. Keep holes at least about 2·T plus the bend radius from the bend line, or cut them after bending."
+  },
+  {
+    "id": "mechanical-machining_constraints-04",
+    "domain": "mechanical",
+    "topic": "machining_constraints",
+    "question": "My printed cantilever hook keeps snapping clean across. Is it the PLA or how I oriented the print?",
+    "gold_chunk_ids": ["corpus:mechanical/machining_constraints/fdm-orientation-overhangs-bridging"],
+    "required_facts": ["layer", "anisotropic", "orientation"],
+    "answer": "A clean break along a flat plane is a layer-line failure: FDM parts are anisotropic and the inter-layer weld is the weak direction. Reorient the print so the hook's bending stress runs along the layers rather than across them, keep overhangs under about 45° or add supports, and treat orientation, layer height, and temperature as part of the part's specification — they change strength by a factor of two or more."
+  },
+  {
+    "id": "mechanical-gdt-01",
+    "domain": "mechanical",
+    "topic": "gdt",
+    "question": "Reading the drawing for the sensor mount: what does the box with a crossed-circle symbol, Ø0.2, a circled M, and A|B|C mean?",
+    "gold_chunk_ids": ["corpus:mechanical/gdt/datums-and-feature-control-frames", "corpus:mechanical/gdt/position-vs-profile-and-bonus-tolerance"],
+    "required_facts": ["datum", "feature control frame", "bonus"],
+    "answer": "That is a feature control frame applying a position tolerance: the feature's axis must lie in a Ø0.2 mm cylindrical zone at its true position, measured in the datum reference frame A then B then C. The circled M is the maximum-material-condition modifier: the 0.2 applies when the hole is at its smallest allowed size, and as the actual hole is made larger the position tolerance grows by the same amount (bonus tolerance)."
+  },
+  {
+    "id": "mechanical-bearings_shafts-01",
+    "domain": "mechanical",
+    "topic": "bearings_shafts",
+    "question": "The pulley on my drive motor is held with one set screw and keeps slipping and losing encoder counts. What should I use instead?",
+    "gold_chunk_ids": ["corpus:mechanical/bearings_shafts/keyways-set-screws-clamping-hubs"],
+    "required_facts": ["set screw", "clamping", "keyway"],
+    "answer": "A single set screw on a round shaft is a point friction contact and will slip under reversing load, scoring the shaft. Use a clamping (split) hub or collar that grips the full circumference, or a parallel key with separate axial retention, or the motor's flanged/splined output if it has one. Add axial retention separately (shoulder plus retaining ring or a clamp collar) and inspect for polished bands or metal dust that indicate slip."
+  },
+  {
+    "id": "mechanical-mechanisms-01",
+    "domain": "mechanical",
+    "topic": "mechanisms",
+    "question": "Should the arm joint use a harmonic drive or a planetary gearbox if I need near-zero backlash, and will I be able to push the arm by hand when it is powered off?",
+    "gold_chunk_ids": ["corpus:mechanical/mechanisms/gear-ratio-backlash-efficiency"],
+    "required_facts": ["backlash", "backdriv", "efficiency"],
+    "answer": "A strain-wave (harmonic) drive gives essentially zero backlash and a high ratio in one stage, which is why it is the arm-joint default, at lower efficiency than a planetary and with efficiency that depends on ratio, speed, and temperature. Backdrivability depends on ratio and efficiency: a high-ratio, lower-efficiency stage resists being pushed and may hold position unpowered, while a low-ratio belt or single planetary stage is easy to backdrive but needs power to hold a load. Check the vendor's efficiency and backlash figures for the specific unit."
+  }
+]

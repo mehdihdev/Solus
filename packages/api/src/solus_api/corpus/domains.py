@@ -24,12 +24,14 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
         {
             "tolerance",
             "tolerances",
+            "toleranced",
             "fit",
             "fits",
             "h7",
             "g6",
             "press",
             "interference",
+            "clearance",
             "shaft",
             "bore",
             "bearing",
@@ -40,6 +42,7 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "screws",
             "thread",
             "threads",
+            "threaded",
             "preload",
             "insert",
             "inserts",
@@ -72,6 +75,7 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "backlash",
             "belt",
             "datum",
+            "datums",
             "gd&t",
             "flatness",
             "perpendicularity",
@@ -82,11 +86,31 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "bracket",
             "galling",
             "anodise",
+            "anodised",
             "anodize",
+            "anodized",
             "stackup",
             "stack-up",
             "reamed",
             "ream",
+            "drawing",
+            "drawings",
+            "symbol",
+            "callout",
+            "harmonic",
+            "planetary",
+            "backdrivable",
+            "backdrive",
+            "backdriven",
+            "efficiency",
+            "rss",
+            "worst-case",
+            "stiffness",
+            "yield",
+            "torque-to",
+            "heat-set",
+            "tapped",
+            "tap",
         }
     ),
     CorpusDomain.ELECTRICAL: frozenset(
@@ -98,6 +122,7 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "via",
             "vias",
             "creepage",
+            "clearance",
             "decoupling",
             "bypass",
             "capacitor",
@@ -127,11 +152,14 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "i2c",
             "spi",
             "uart",
-            "can",
+            "serial",
+            "can-bus",
+            "canbus",
             "rs-485",
             "rs485",
             "pull-up",
             "pullup",
+            "pull-ups",
             "termination",
             "address",
             "addresses",
@@ -167,7 +195,24 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "24v",
             "48v",
             "resistor",
+            "resistors",
             "mah",
+            "pins",
+            "pin",
+            "power",
+            "supply",
+            "ohm",
+            "ohms",
+            "mosfets",
+            "diode",
+            "led",
+            "oz",
+            "layer",
+            "layers",
+            "can-id",
+            "can-ids",
+            "arbitration",
+            "ids",
         }
     ),
     CorpusDomain.SOFTWARE: frozenset(
@@ -231,11 +276,49 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "docker",
             "pinning",
             "version",
+            "uart",
+            "serial",
+            "baud",
+            "115200",
+            "9600",
+            "parser",
+            "parse",
+            "packet",
+            "packets",
+            "stream",
+            "arduino",
+            "sketch",
+            "loop",
+            "thread",
+            "threads",
+            "task",
+            "tasks",
+            "scheduler",
+            "blocking",
+            "non-blocking",
+            "unit",
+            "test",
+            "tests",
+            "testing",
+            "ci",
+            "mock",
+            "mocks",
+            "mocked",
+            "hil",
+            "logging",
+            "log",
+            "readings",
+            "bytes",
+            "code",
+            "function",
+            "callback",
+            "callbacks",
         }
     ),
     CorpusDomain.SYSTEMS: frozenset(
         {
             "budget",
+            "budgets",
             "thermal",
             "heatsink",
             "heat",
@@ -252,6 +335,12 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "interlocks",
             "safe-torque-off",
             "sto",
+            "safe",
+            "safety",
+            "fail-safe",
+            "failsafe",
+            "brake",
+            "brakes",
             "ip67",
             "ip65",
             "ip",
@@ -261,20 +350,57 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "condensation",
             "harness",
             "routing",
+            "route",
+            "cable",
+            "cables",
+            "loom",
             "gland",
             "commissioning",
             "integration",
             "interface",
+            "icd",
             "peak",
             "stall",
             "worst-case",
             "margin",
+            "headroom",
             "airflow",
             "fan",
             "cabling",
             "label",
             "labelling",
             "service-loop",
+            "power",
+            "rated",
+            "ratings",
+            "sizing",
+            "size",
+            "summed",
+            "typical",
+            "average",
+            "reboot",
+            "reboots",
+            "rebooting",
+            "resets",
+            "browns",
+            "brown-out",
+            "loses",
+            "loss",
+            "disable",
+            "enable",
+            "teams",
+            "team",
+            "across",
+            "swapped",
+            "owner",
+            "owns",
+            "pins",
+            "pin",
+            "pinout",
+            "handoff",
+            "mid-motion",
+            "strain",
+            "relief",
         }
     ),
     CorpusDomain.ROBOTICS: frozenset(
@@ -337,24 +463,42 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "wheel",
             "wheels",
             "traction",
+            "controller",
+            "tuning",
+            "tune",
+            "oscillates",
+            "oscillation",
+            "homing",
         }
     ),
 }
 
-_WORD_RE: Final = re.compile(r"[a-z0-9θ][a-z0-9θ&+()/.-]*")
-#: The leader must beat the runner-up by this factor to be routed alone.
-_MARGIN: Final = 2.0
+_WORD_RE: Final = re.compile(r"[a-z0-9θ&+()/.-]+")
+#: A domain is searched ALONE only on clear evidence: at least this many
+#: distinct lexicon hits with nothing competing, or a comfortable lead.
+_ALONE_MIN: Final = 2
+_LEAD_MIN: Final = 3
+_LEAD_FACTOR: Final = 2
 
 
 def route_domains(query: str) -> list[CorpusDomain] | None:
     """Domains a corpus lookup for `query` should be restricted to, or None
-    when nothing in the query names a domain (search all, let rank decide)."""
+    when nothing in the query names a domain (search all, let rank decide).
+
+    Precision over recall: one weak hit never narrows the search on its own,
+    and contested vocabulary (a power-budget question full of volts and amps)
+    searches every domain that scored — the ranker, not the router, decides.
+    """
     words = {w.strip(".,;:!?'\"") for w in _WORD_RE.findall(query.lower())}
     scores = {domain: len(words & lexicon) for domain, lexicon in _LEXICON.items()}
     ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0].value))
     (leader, top), (_, second) = ranked[0], ranked[1]
     if top == 0:
         return None
-    if second == 0 or top >= _MARGIN * second:
+    uncontested = second == 0 and top >= _ALONE_MIN
+    clear_lead = top >= _LEAD_MIN and top >= _LEAD_FACTOR * second
+    if uncontested or clear_lead:
         return [leader]
-    return [domain for domain, score in ranked if score > 0 and score * _MARGIN > top]
+    if second == 0:
+        return None  # one weak hit: search everything rather than guess
+    return [domain for domain, score in ranked if score > 0]

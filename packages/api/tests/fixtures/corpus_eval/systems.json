@@ -1,0 +1,191 @@
+[
+  {
+    "id": "systems-power_budget-01",
+    "domain": "systems",
+    "topic": "power_budget",
+    "question": "Should I size the 24 V rail off the drive motor's rated current or its stall current? The datasheet typical is way lower than either.",
+    "gold_chunk_ids": [
+      "corpus:systems/power_budget/worst-case-worksheet",
+      "corpus:systems/power_budget/peak-sizes-the-regulator-average-sizes-the-battery"
+    ],
+    "required_facts": [
+      "stall",
+      "typical"
+    ],
+    "answer": "Use the worst case, not the typical: a motor at standstill draws close to its stall current (or the driver's current limit) until it spins up, so stall current is the number that sizes the regulator, wiring, and connectors on that rail. Typical figures are room-temperature characterisations; the duty-weighted average is what sizes the battery."
+  },
+  {
+    "id": "systems-power_budget-02",
+    "domain": "systems",
+    "topic": "power_budget",
+    "question": "My Pi keeps rebooting whenever the arm servo moves, but the 5 V rail reads 5.02 V on the multimeter. What is going on?",
+    "gold_chunk_ids": [
+      "corpus:systems/power_budget/servo-browns-out-the-5v-rail"
+    ],
+    "required_facts": [
+      "spike",
+      "under-voltage"
+    ],
+    "answer": "The servo's start-up current spike dips the shared 5 V rail for tens of milliseconds, below the Pi's under-voltage threshold; a multimeter averages the dip away. Scope the rail at the Pi's supply pin, give the servo its own regulator or rail, add bulk capacitance at the servo end, and star the ground returns."
+  },
+  {
+    "id": "systems-power_budget-03",
+    "domain": "systems",
+    "topic": "power_budget",
+    "question": "How much headroom should I leave between the summed load and the regulator and battery ratings, and is it peak or average that matters for the battery?",
+    "gold_chunk_ids": [
+      "corpus:systems/power_budget/peak-sizes-the-regulator-average-sizes-the-battery",
+      "corpus:systems/power_budget/worst-case-worksheet"
+    ],
+    "required_facts": [
+      "average",
+      "regulator"
+    ],
+    "answer": "Peak current sizes the regulator, wiring, and protection; the duty-weighted average sizes battery energy and thermal load. A common practice is to leave roughly a fifth of a continuous rating unused as a starting margin, tightened as measurements replace estimates, and to budget against the regulator's derating curve at the enclosure's internal temperature. Peak voltage sag under a motor start is what trips regulators and BMS cutoffs."
+  },
+  {
+    "id": "systems-thermal_budget-01",
+    "domain": "systems",
+    "topic": "thermal_budget",
+    "question": "Can I take θJA from the motor driver datasheet, multiply by the power, and call the design fine inside the enclosure?",
+    "gold_chunk_ids": [
+      "corpus:systems/thermal_budget/theta-ja-is-a-test-board-number",
+      "corpus:systems/thermal_budget/junction-to-ambient-chain"
+    ],
+    "required_facts": [
+      "test board",
+      "enclosure"
+    ],
+    "answer": "No. θJA is measured on a standardised JEDEC test board in defined air, so it compares packages rather than predicting your board and enclosure. Use θJC or ψJT with a measured case or top temperature under worst-case load, and make sure exposed pads are soldered to copper with thermal vias."
+  },
+  {
+    "id": "systems-thermal_budget-02",
+    "domain": "systems",
+    "topic": "thermal_budget",
+    "question": "Where does the heat actually go in a fully sealed robot with no fans, and how do I keep the driver junction temperature in spec?",
+    "gold_chunk_ids": [
+      "corpus:systems/thermal_budget/junction-to-ambient-chain",
+      "corpus:systems/thermal_budget/derate-for-the-enclosure-not-the-lab"
+    ],
+    "required_facts": [
+      "conduction",
+      "chassis"
+    ],
+    "answer": "Junction temperature is ambient plus power times the chain of thermal resistances. In a sealed enclosure heat leaves only by conduction to the walls and then convection and radiation outside, so mount the dissipating parts to the metal chassis or a wall through a thermal interface, keep the battery on a different wall, use the internal air temperature at worst duty as ambient, and verify by measuring case temperature."
+  },
+  {
+    "id": "systems-thermal_budget-03",
+    "domain": "systems",
+    "topic": "thermal_budget",
+    "question": "The board is fine on the bench but the robot throttles when running outdoors in summer. What derating should I be applying?",
+    "gold_chunk_ids": [
+      "corpus:systems/thermal_budget/derate-for-the-enclosure-not-the-lab"
+    ],
+    "required_facts": [
+      "derating",
+      "ambient"
+    ],
+    "answer": "Design against the enclosure's internal air temperature at worst duty in the hottest environment, not the lab; every degree above the datasheet's quoted ambient comes off the junction headroom. Read the current-versus-ambient derating curve rather than the headline rating, give airflow an inlet and an outlet, and note that compute modules need a thermal solution sized for their power mode."
+  },
+  {
+    "id": "systems-safety_interlocks-01",
+    "domain": "systems",
+    "topic": "safety_interlocks",
+    "question": "Can I implement the E-stop as a ROS topic that tells the motor controller firmware to disable the drivers?",
+    "gold_chunk_ids": [
+      "corpus:systems/safety_interlocks/estop-is-a-hardware-chain",
+      "corpus:systems/safety_interlocks/interlock-vs-enable-pitfalls"
+    ],
+    "required_facts": [
+      "normally-closed",
+      "contactor"
+    ],
+    "answer": "No. An emergency stop is a hardware chain: normally-closed contacts in series holding a safety relay or contactor energised, so any press or broken wire removes actuator power without a processor in the path. Software may add a heartbeat and a controlled ramp-down above the chain, but a topic or a driver enable pin is a command, not a stop."
+  },
+  {
+    "id": "systems-safety_interlocks-02",
+    "domain": "systems",
+    "topic": "safety_interlocks",
+    "question": "The safety relay datasheet says PL d and Category 3. What do those mean, and does STO on my servo drive act as a brake?",
+    "gold_chunk_ids": [
+      "corpus:systems/safety_interlocks/category-performance-level-and-sto-vocabulary"
+    ],
+    "required_facts": [
+      "risk assessment",
+      "coast"
+    ],
+    "answer": "Performance level is a graded statement of how reliably a safety function performs, decided by a risk assessment of the machine, and category describes the channel architecture; neither is a property you inherit from a component. STO removes the drive's ability to produce torque, so the motor coasts; it is not a brake, and a gravity-loaded joint needs a mechanical brake that engages when de-energised."
+  },
+  {
+    "id": "systems-safety_interlocks-03",
+    "domain": "systems",
+    "topic": "safety_interlocks",
+    "question": "If the robot loses power mid-motion, what should happen to the arm? Is safe torque off enough on its own?",
+    "gold_chunk_ids": [
+      "corpus:systems/safety_interlocks/interlock-vs-enable-pitfalls",
+      "corpus:systems/safety_interlocks/category-performance-level-and-sto-vocabulary"
+    ],
+    "required_facts": [
+      "brake",
+      "gravity"
+    ],
+    "answer": "The de-energised state must be the safe state. STO alone lets the motor coast, so a gravity-loaded axis drops; fit holding brakes that engage when power is removed, choose valves whose de-energised state is safe, and write the safe state for every actuator into the interface record. Also pull driver enable lines inactive so boot glitches cannot assert them."
+  },
+  {
+    "id": "systems-system_integration-01",
+    "domain": "systems",
+    "topic": "system_integration",
+    "question": "The EE swapped two pins on J3 in the schematic and firmware broke a week later. How do we stop this happening across teams?",
+    "gold_chunk_ids": [
+      "corpus:systems/system_integration/interface-control-who-owns-a-pin",
+      "corpus:systems/system_integration/cross-domain-changes-that-break-the-other-team"
+    ],
+    "required_facts": [
+      "owner",
+      "interface record"
+    ],
+    "answer": "Give every cross-domain interface a written definition and a single owner whose artefact is the source of truth; the schematic owns pin-to-signal assignment and the firmware pin map and harness drawing are consumers who must be notified before a change lands. Keep an interface record that lists the consumers and diff pin assignments against it on every schematic change."
+  },
+  {
+    "id": "systems-system_integration-02",
+    "domain": "systems",
+    "topic": "system_integration",
+    "question": "What order should we bring up a freshly built robot for the first time? Power everything up and see what happens?",
+    "gold_chunk_ids": [
+      "corpus:systems/system_integration/commissioning-order"
+    ],
+    "required_facts": [
+      "one at a time",
+      "stop chain"
+    ],
+    "answer": "Commission in layers: cold checks for polarity and shorts, prove the stop chain with actuators disconnected, power rails with loads off then add load groups against the budget, bring up each bus and assign IDs one device at a time, check sensor signs and frames, then power actuators one at a time unloaded with low current limits and confirm direction and encoder sign before closing any loop. Record baseline currents and temperatures at the end."
+  },
+  {
+    "id": "systems-enclosure_ingress-01",
+    "domain": "systems",
+    "topic": "enclosure_ingress",
+    "question": "The robot has to work in rain. Is an IP67 box enough, and why did our sealed enclosure get condensation inside over the summer?",
+    "gold_chunk_ids": [
+      "corpus:systems/enclosure_ingress/ip-code-sealing-versus-venting"
+    ],
+    "required_facts": [
+      "condens",
+      "vent"
+    ],
+    "answer": "An IP rating names a test condition for the enclosure as tested; every added hole re-rates it and immersion and jet tests are different tests. Sealed boxes breathe with temperature cycles and pull in moist air that condenses inside, so equalise pressure with a membrane vent, add a low-point drain, or pot the electronics, and put correctly sized cable glands on the bottom or side with drip loops."
+  },
+  {
+    "id": "systems-cabling_harness-01",
+    "domain": "systems",
+    "topic": "cabling_harness",
+    "question": "How should I route the encoder cable across the arm joint when it has to run next to the motor phase wires?",
+    "gold_chunk_ids": [
+      "corpus:systems/cabling_harness/routing-service-loops-and-connector-count"
+    ],
+    "required_facts": [
+      "bend radius",
+      "twisted"
+    ],
+    "answer": "Cross the joint in a designed flex section anchored on both sides, using a continuous-flex cable at a bend radius well above the vendor's minimum for flexing, keep the encoder cable separated from the motor phase leads and cross them at right angles, use twisted pairs for differential signals, provide strain relief and a service loop at each end, and minimise the number of connectors in the channel."
+  }
+]

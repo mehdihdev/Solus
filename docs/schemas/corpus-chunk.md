@@ -1,8 +1,11 @@
 # Corpus Chunk — Schema (CORPUS C1)
 
-**Ticket:** SOLUSDEV-241 (CORPUS C1) · **Status:** schema document, tier-1 (ADR-032). **No types,
-tables, or migrations ship with this document.** The Pydantic and TypeScript types, fixtures, the
-illegal-construction proof, and the storage ADR land in CORPUS C2 and are built against this page.
+**Ticket:** SOLUSDEV-241 (CORPUS C1, implemented in CORPUS C2) · **Status:** schema document,
+tier-1 (ADR-032). **Implemented by** `packages/api/src/solus_api/corpus/contract.py` (the
+Pydantic type and all rules below, one named test per rule in
+`packages/api/tests/corpus/test_corpus_contract.py`), stored per ADR-036 in `corpus_chunk`
+(`corpus/schema.py`, migration `a9c0d1e2f3b4`). No TypeScript twin exists yet: no desktop code
+constructs a chunk; the desktop reads the served view in `docs/api/corpus.md`.
 **Governs:** every chunk of the engineering corpus (`docs/corpus/SCOPE.md`), classified under
 `docs/corpus/LICENSING.md`.
 **Precedents inherited:** ADR-033 (global content-bearing store: no tenant columns, typed columns
@@ -67,7 +70,7 @@ maxima; C2 may set them lower.
 | `corpus_version`   | semver                                                      | yes               |            | Version the chunk was introduced in                                                                                                             |
 | `revised_in`       | semver                                                      | yes               |            | Version of the last change to any field; equals `corpus_version` when unchanged                                                                 |
 | `content_hash`     | string, `sha256:<hex>`                                      | yes               |            | Over the canonical JSON of every field except `content_hash`, `embedding`                                                                       |
-| `embedding`        | vector or null                                              | yes               |            | **Null at v1.** Populated only when `embed()` exists (ADR-033 rule 4); never part of the hash                                                   |
+| `embedding`        | vector or null                                              | yes               |            | Null in the authored document; populated at ingest by `embed()` (SYS-02, ADR-036) and stored in the table only; never part of the hash          |
 
 ### 2.1 `Provenance`
 
@@ -179,20 +182,25 @@ C2 implements each rule in both halves with a named test. Rule numbers are stabl
    permissive software licence and `derivation = verbatim`. (§5)
 7. `further_reading` entries never carry a `url` to a host that is not the rights-holder's; C2
    applies the same host allowlist as rule 14.
-8. `reviewer` matches the Solus staff-id pattern (C2 fixes the pattern) and is not a UUID, an
-   email address, or a model name; `reviewed_at` is not in the future.
+8. `reviewer` matches the Solus staff-id pattern `^[a-z][a-z0-9_-]{2,63}$` and is not a UUID, an
+   email address, or a model name (`claude`, `gpt`, `model`, `llm`, `assistant`, `sol`, … as a
+   handle token); `reviewed_at` is not in the future.
 9. `status = active` requires `source_license ≠ unknown`, `reviewer` present, and
    `confidence > 0`. `draft` is the only status that may carry `unknown`.
 10. `status = superseded` requires that some active chunk has this id in `supersedes`;
     `withdrawn` chunks keep `id`, `title`, `status`, `corpus_version`, `revised_in`, and an empty
-    `body`. Everything else is cleared on withdrawal so no withdrawn text is served.
+    `body`. `applicability`, `related`, `further_reading`, and `checked_against` are cleared,
+    the embedding is dropped, and `revised_in` becomes the release that withdrew it; the
+    provenance block (class, licence, publisher) is kept so a takedown is auditable (rule 5's
+    `checked_against` requirement therefore does not apply to a withdrawn chunk).
 11. `topic` is bound to `domain`; a mechanical topic on an electrical chunk fails.
 12. `applicability` keys are unique per chunk; values belong to their key's enum.
 13. `body` contains no `<<<` sequence (the fence delimiter; the same rule `prompt.py` relies on),
     no raw HTML, no image syntax, and no link whose target differs from `provenance.source_url`.
 14. `source_url` and every `Citation.url` are `https`, have no userinfo, and resolve to a host on
-    the C2 source-host allowlist for the chunk's `source_class` (the corpus equivalent of
-    `VENDOR_DOC_DOMAINS` in the tool-knowledge ingestion guard).
+    the per-class source-host allowlist in `packages/api/src/solus_api/corpus/hosts.py` (the
+    corpus equivalent of `VENDOR_DOC_DOMAINS` in the tool-knowledge ingestion guard). Citation
+    URLs may use any class's host (they are pointers, not provenance).
 15. `content_hash` recomputes; `embedding` is null at v1 and, when present later, is excluded
     from the hash.
 16. `license = solus-proprietary` (the only value).
@@ -211,9 +219,11 @@ value can express it), and each "same candidate, different facts" pair yields on
 - **SOL cites by id.** An answer that leans on a chunk names `corpus:<domain>/<topic>/<slug>`;
   Guide mode renders the attribution and further reading, Expert mode renders the id and the
   value. Rendering is text-only (model output is untrusted, CLAUDE.md §7).
-- **Retrieval is lexical-first** (ADR-033 rule 4): `domain` + `topic` + `applicability` filter,
-  then full-text over `title` and `body`. `embedding` is a later addition behind the same
-  interface.
+- **Retrieval filters first** (ADR-033 rule 4, ADR-036): `domain` + `topic` + `applicability`
+  are SQL WHERE clauses, then ANN over `embedding` when a query vector exists and English
+  full-text over `title` and `body` otherwise (`corpus/retrieval.py`). The domain of a free-text
+  question is routed deterministically from a Solus-authored lexicon (`corpus/domains.py`).
+  Only `status = active` rows serve.
 - **Preferences select, never speak.** The Layer-2 `.solus/project.toml` facts map to
   `applicability` keys and filter or rank the candidate set. No preference value is ever
   interpolated into prompt text. This is the entire interaction between the corpus and the
@@ -298,11 +308,11 @@ using; a chunk not in the manifest is not served. Local-state rules (ADR-034 Lay
 caches the corpus under `~/.solus`: JSON, `schema_version`, atomic writes, 0600 files, hash
 verified before use, deletable at any time, never a source of truth.
 
-## 9. Open items carried to C2
+## 9. Open items carried to C2 — resolution
 
-- Storage: table under ADR-033 (needs a new ADR: first global table whose rows are long prose)
-  versus a shipped static bundle. The schema is neutral.
-- The Solus staff-id pattern for `reviewer`.
-- The per-class source-host allowlist (rule 14).
-- Whether checker `Warning`s carry chunk ids as a typed field (also `SCOPE.md` §8).
-- Images (`LICENSING.md` §4.14).
+- **Storage:** `corpus_chunk` table, ADR-036. Citations are a typed child table
+  (`corpus_citation`); each applied version is a `corpus_release` row.
+- **Staff-id pattern:** rule 8 above.
+- **Per-class host allowlist:** `corpus/hosts.py` (rule 14).
+- **Checker `Warning`s carrying chunk ids:** still open (also `SCOPE.md` §8).
+- **Images:** not carried. The schema has no image field and C2 adds none.
