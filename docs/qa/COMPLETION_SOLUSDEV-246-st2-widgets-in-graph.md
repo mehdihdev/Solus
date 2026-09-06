@@ -42,7 +42,7 @@ routes and the Context Model list.
   write. Concurrency: four sessions racing the first registration converge on one row per kind.
 - **Affected existing suites** (installs, feeds, builtin tools, get_entity, red team, retrieval,
   runtime, connectors, ST1 suites, contracts): 435 passed after the review fixes. Full API suite:
-  see the line at the end of this section. Shared-types 230 passed; desktop typecheck clean and
+  **3681 passed, 4 skipped** (13 min 01 s, 2026-09-06). Shared-types 230 passed; desktop typecheck clean and
   2608 tests passed after the domain change (desktop types `domain` as a string).
 - **Reviews:** fresh-context code review — 2 HIGH (reconcile pruned installs whose manifest no
   longer parses; singletons had no uniqueness backstop), both fixed. Security review — 2 HIGH
