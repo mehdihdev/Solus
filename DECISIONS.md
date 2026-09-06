@@ -317,6 +317,22 @@ soft-deleted when the bundle is uninstalled from the project. Connector reconcil
 never touch them (as for `fingerprint`); edit rights follow the `origin == "manual"` allowlist
 stance, so they are read-only through the generic entity routes. No enum is added.
 
+**Amended — 2026-09-06, SOLUSDEV-246 (STORE ST2, human-approved in-chat per ADR-032):**
+
+1. **`workspace` is the sixth `Domain` value** — the layer describing the workspace itself: the
+   per-project `solus:workspace` root, the `solus:live_bench` node, and one `solus:widget` node
+   per installed extension (peers under the root, `contains` edges from it). It is a graph-wide
+   change: `models.Domain`, `solus_contracts.connector.Domain`, the manifest's `GRAPH_DOMAINS`,
+   the shared-types `DOMAINS`, and the `domain` CHECK constraints on `graph_entity` and
+   `error_solution` all move together in migration `b3f1c2d4e5a6`. Workspace-domain entities are
+   excluded from SOL context assembly, checkers and fingerprinting; connectors may not emit it.
+2. **`origin="system"`** is a well-known value for rows Solus writes about the workspace (the
+   three kinds above). `source_id` and `external_ref` are NULL; they are read-only through the
+   generic entity routes; created and removed only by the extension install lifecycle
+   (`solus_api/widgets/graph_nodes.py`), never by connector reconciliation. For the record,
+   `origin="linking"` (SOLUSDEV-106/107 cross-domain links) has been in use since LNK-01 and is
+   likewise well-known. `origin` remains a free `String(16)`.
+
 - Re-key note: a normalization-policy change (e.g. the 2026-07-12 separator stripping:
   bases `MPU-6050`→`MPU6050`, `AMS1117-3.3`→`AMS11173.3`) changes the affected uuid5
   canonical ids and `canonical_key` values; orphaned old-base rows are accepted for
