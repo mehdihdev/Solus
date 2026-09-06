@@ -86,7 +86,7 @@ export function TeamActivityPanel({
       )}
       {showAll && (
         <ActivityModal
-          activity={activity}
+          activity={[...activity]}
           total={total}
           members={members}
           hasMore={hasMore}

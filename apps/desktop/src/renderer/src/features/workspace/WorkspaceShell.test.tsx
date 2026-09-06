@@ -181,8 +181,11 @@ describe('WorkspaceShell — chrome', () => {
     renderShell()
     await userEvent.click(screen.getByText('Live Bench'))
     expect(useShellStore.getState().lastMain).toBe('bench')
-    await userEvent.click(screen.getByText('Team'))
-    expect(useShellStore.getState().lastMain).toBe('team')
+    // The Team screen was folded into Home (SOLUSDEV-244 / HOME H5): no rail
+    // item, no menu entry.
+    expect(screen.queryByText('Team')).toBeNull()
+    await userEvent.click(screen.getByText('Home'))
+    expect(useShellStore.getState().lastMain).toBe('home')
   })
 
   it('exposes the project hub and sources in the rail (SOLUSDEV-164)', async () => {
@@ -324,8 +327,8 @@ describe('WorkspaceShell — extension rail (SOLUSDEV-235 / EXT-14)', () => {
     renderShell()
     await screen.findByLabelText('BOM')
     const ids = railIds()
-    expect(ids.slice(ids.indexOf('rail-team'), ids.indexOf('rail-ext-cam') + 1)).toEqual([
-      'rail-team',
+    expect(ids.slice(ids.indexOf('rail-sol'), ids.indexOf('rail-ext-cam') + 1)).toEqual([
+      'rail-sol',
       'rail-store',
       'rail-ext-bom',
       'rail-ext-cam'
@@ -424,8 +427,8 @@ describe('WorkspaceShell — developer registrations in the rail (EXT-20)', () =
     const lab = await screen.findByLabelText('Lab (dev)')
     await screen.findByLabelText('BOM')
     const ids = railIds()
-    expect(ids.slice(ids.indexOf('rail-team'), ids.indexOf('rail-ext-lab') + 1)).toEqual([
-      'rail-team',
+    expect(ids.slice(ids.indexOf('rail-sol'), ids.indexOf('rail-ext-lab') + 1)).toEqual([
+      'rail-sol',
       'rail-store',
       'rail-ext-bom',
       'rail-ext-lab'

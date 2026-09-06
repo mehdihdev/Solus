@@ -17,7 +17,6 @@ import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
 import { SolScreen } from '../sol/SolScreen'
 import { MiniOrb } from '../sol/MiniOrb'
-import { TeamScreen } from '../team/TeamScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
@@ -54,7 +53,6 @@ const SCREEN_TITLES: Readonly<Record<string, string>> = {
   sources: 'Sources',
   bench: 'Live Bench',
   sol: 'SOL',
-  team: 'Team',
   store: 'Store',
   billing: 'Billing',
   settings: 'Settings',
@@ -95,8 +93,8 @@ function useShellNavigation(): ShellNavigation {
   }
   const openProject = (p: WorkspaceProject): void => {
     // Every project-scoped store is swapped in ONE place (SOLUSDEV-242).
-    switchWorkspaceProject(p, route.name === 'team' ? 'team' : 'home')
-    // Opening a project from Home/Team lands on the project hub (SOLUSDEV-164)
+    switchWorkspaceProject(p, 'home')
+    // Opening a project from Home lands on the project hub (SOLUSDEV-164)
     // — an orienting overview — rather than the Context Model canvas.
     go('overview')
   }
@@ -390,8 +388,6 @@ function ScreenView({
       case 'bench':
         // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
         return <BenchScreen onNavigate={navigate} />
-      case 'team':
-        return <TeamScreen onOpenProject={openProject} />
       case 'alert':
         return <AlertScreen onBack={goBack} />
       case 'ext-page':
@@ -440,8 +436,7 @@ const RAIL_TOP: readonly RailItem[] = [
   { screen: 'workspace', icon: <Icons.graph size={17} />, label: 'Workspace' },
   { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
   { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
-  { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
-  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' }
+  { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' }
 ]
 
 /** SOLUSDEV-235: the Store — capabilities are installed, not built in. The

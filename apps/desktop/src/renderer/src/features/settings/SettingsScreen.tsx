@@ -15,7 +15,6 @@ import { BillingSection } from './sections/BillingSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
 import { DeveloperSection } from './sections/DeveloperSection'
 import { PanelLinksSection } from './sections/PanelLinksSection'
-import { MembersSection } from './sections/MembersSection'
 import { TeamSection } from './sections/TeamSection'
 import { AccountSection } from './sections/AccountSection'
 import { useOfflineReason } from '../workspace/workspaceOnline'
@@ -74,7 +73,6 @@ export function SettingsScreen(): React.JSX.Element {
         {online && <PanelLinksSection />}
         {team.status === 'ready' && (
           <>
-            <MembersSection team={team} />
             <TeamSection team={team} />
           </>
         )}

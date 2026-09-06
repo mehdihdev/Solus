@@ -16,8 +16,8 @@ describe('toast', () => {
 
 describe('lastMain', () => {
   it('tracks the last main screen for back navigation', () => {
-    useShellStore.getState().setLastMain('team')
-    expect(useShellStore.getState().lastMain).toBe('team')
+    useShellStore.getState().setLastMain('sol')
+    expect(useShellStore.getState().lastMain).toBe('sol')
   })
 
   it('resets to home', () => {

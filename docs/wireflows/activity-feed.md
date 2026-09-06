@@ -6,8 +6,9 @@ feed UI; `docs/api/API.md §5` remains the route map for the screens hosting it.
 
 ## Surfaces
 
-1. **Team screen — `TEAM ACTIVITY` panel** (left column, beside `MEMBERS`,
-   below `PROJECTS`). Single-team feed with actor avatars and names.
+1. **Home — `TEAM ACTIVITY` panel** (left column under the project grid, beside
+   `MEMBERS`; SOLUSDEV-244 / HOME H5 moved it here from the retired Team
+   screen). Single-team feed with actor avatars and names.
 2. **Home screen — per-project cards** (SOLUSDEV-242, `home.md`). Each
    project card previews up to 2 of ITS OWN rows from one fetch of the active
    team's feed, and `All activity →` opens `ActivityModal` server-filtered by

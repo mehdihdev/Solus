@@ -111,7 +111,8 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Privacy')).toBeInTheDocument()
     expect(screen.getByText('Billing')).toBeInTheDocument()
     expect(screen.getByText('Integrations')).toBeInTheDocument()
-    expect(screen.getByText('Members')).toBeInTheDocument()
+    // Members live on Home since SOLUSDEV-244 / HOME H5; Settings keeps Team.
+    expect(screen.queryByText('Members')).toBeNull()
     expect(screen.getByText('Team')).toBeInTheDocument()
   })
 
@@ -149,10 +150,10 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Developer')).toBeInTheDocument()
   })
 
-  it('omits members + team while the team is still loading', () => {
+  it('omits the team section while the team is still loading', () => {
     teamData.mockReturnValue(team('loading'))
     render(<SettingsScreen />)
-    expect(screen.queryByText('Members')).not.toBeInTheDocument()
+    expect(screen.queryByText('Team')).not.toBeInTheDocument()
     expect(screen.getByText('Profile')).toBeInTheDocument()
   })
 })

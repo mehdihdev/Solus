@@ -52,7 +52,6 @@ export const MENUS: readonly MenuSpec[] = [
       { label: 'Sources', screen: 'sources' },
       { label: 'Live Bench', screen: 'bench' },
       { label: 'SOL', screen: 'sol' },
-      { label: 'Team', screen: 'team' },
       { label: 'Store', screen: 'store' }
     ]
   },

@@ -1,8 +1,10 @@
 # Wireflow — Home, the cross-project surface (SOLUSDEV-242 / HOME H1)
 
-Home manages ACROSS projects and connects WHOLE accounts. Everything
-project-specific (documents, the graph, Live Bench, installed widgets, SOL)
-lives in the workspace screens. Home is `MainScreen 'home'`, the first rail
+Home manages ACROSS projects, carries the TEAM layer (SOLUSDEV-244 / HOME H5:
+the active team, its members and roles, one-time invites, join by token, the
+team feed — the separate Team screen is retired), and connects WHOLE accounts.
+Everything project-specific (documents, the graph, Live Bench, installed
+widgets, SOL) lives in the workspace screens. Home is `MainScreen 'home'`, the first rail
 item, the "All projects" entry of the project pill (`project-topbar.md`), and
 `Solus → Home` in the menu row. `docs/api/API.md §5` ("/") is the route map.
 
@@ -184,6 +186,68 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   server-side; the Custom instruction card on the SOL page (SOLUSDEV-233) stays
   a separate, server-stored answer-styling note.
 
+## The team layer (SOLUSDEV-244 / HOME H5)
+
+```
+| Strider · 3 members  [Strider ▾] ⋯          [✉ Join team] [👥 New team] [+ Invite teammate] |
+| 2 of 2 collaborative teams on your plan · your personal team never counts                   |
+| ⚠ You're at your plan's collaborative-team limit. Leave a team, or upgrade…   [Upgrade]     |
+|                                                                                             |
+| ┌ project grid (H1) ─────────────────────┐  ┌ MEMBERS · 3 · 1 PENDING        [+ Invite] ┐   |
+| │ …                                     │  │ Maya K  maya@…            ● OWNER          │   |
+| └───────────────────────────────────────┘  │ Noor A  noor@…      [member ▾] ✕           │   |
+| ┌ TEAM ACTIVITY                  RECENT ┐  │ new@…   INVITE PENDING · MEMBER        ✕   │   |
+| │ Maya invited noor@… · 2h ago          │  └────────────────────────────────────────────┘   |
+| │ … (6 rows)                            │  ┌ CONNECTED ACCOUNTS ┐  ┌ HOW YOU ENGINEER ┐      |
+| │ View all activity (41) →              │  └────────────────────┘  └──────────────────┘      |
+| └───────────────────────────────────────┘                                                    |
+```
+
+- **The team strip** always names the active team (`TeamStrip`): name, "personal
+  workspace" on the personal team, member count from the team detail; the
+  **switcher** (`TeamSelect`) only when the user belongs to more than one team;
+  a **⋯ menu** with `Rename team` (admin+), `Leave team` (any member of a
+  collaborative team; never on the personal team), and `Delete team` (owner
+  only, never on the personal team, confirmed by the shared delete dialog naming
+  the team and "every project in it"); `Join team` (token) and `New team` for
+  everyone; `Invite teammate` for owners and admins.
+- **Plan position, stated proactively**: "N of M collaborative teams on your
+  plan · your personal team never counts" whenever the subscription's
+  `max_teams` is known and finite (ADR-023: BASIC 2, PRO unlimited; ADR-025:
+  the personal team is exempt). At the limit, a warn note carries the
+  **Upgrade** button (→ Billing). Unknown subscription ⇒ no line (nothing
+  invented).
+- **Named refusals, never a silent failure**: `New team`, `Join team` and
+  `Invite teammate` read the server's `409 plan_limit_reached` and show its
+  sentence with **Upgrade** inside the dialog; a join refusal says which —
+  invalid or used token, expired, issued to another email, already a member.
+  The invitee's OWN plan is what blocks a join (ADR-023 cross-plan rule).
+- **MEMBERS card** (right column, above CONNECTED ACCOUNTS): roster with roles;
+  owners and admins change roles (admin / member / viewer — ownership is
+  transferred, not picked) and remove members, never on an owner row; pending
+  invites with `Revoke`; `+ Invite` in the header for managers.
+- **Invite** (`InviteModal`): email in, then the **one-time join token shown
+  once** with `Copy token`; `Done` while the token is uncopied asks a second
+  time ("You won't see this token again"). The token is never logged or listed
+  again (the server returns it only at creation). Inviting from the PERSONAL
+  team spins up a new collaborative team server-side (ADR-025 keeps the
+  personal team solo): Home follows it and the modal says so.
+- **Later joiners** get the team's existing projects automatically (the
+  ADR-025 auto-grant on accept, `invites.py`); the joined team becomes active
+  and its grid shows those projects without any per-project sharing.
+- **TEAM ACTIVITY** (left column, under the grid; `TeamActivityPanel`): the
+  humanised team feed, six rows with actor attribution, `View all activity (N)
+→` opening the dialog with `Load more` (`activity-feed.md`). Per-project rows
+  stay on the project cards.
+- **Leave** moves Home to the personal workspace; the last owner is told to
+  make someone else an owner first (`409 last_owner`). **Delete** likewise
+  lands on the personal workspace.
+- **Gone**: a stored team that no longer exists (deleted, or the user was
+  removed — a 404, `useHomeData` status `gone`) reads "This team is no longer
+  available…" with `Go to my personal workspace` — never "restart the backend".
+- Settings keeps its Team section (rename, notify-on-new-project, the owner
+  danger zone); its Members section is retired in favour of Home.
+
 ## Project grid
 
 - One card per live project of the active team: accent graph glyph, name
@@ -234,6 +298,18 @@ or deleted project. The switch is reported as the
 `project.switched` data event. The module header lists every project-scoped
 store and how it is kept honest; new project state is added there.
 
+## Switching teams — a broader swap
+
+Every team switch — the strip's selector, a created or joined team, leaving or
+deleting the active team, the gone-team button — goes through
+`switchWorkspaceTeam()` (`teamSwitch.ts`). If the open project belongs to
+another team it is closed THROUGH `switchWorkspaceProject(null)`, so every
+project-scoped store in that module's audit table is cleared; then `teamId`
+moves, `useHomeData` blanks the grid and reloads the project list for the new
+team, and `useHomeTeam` (keyed on the team id with a stale-response guard)
+reloads members, invites and the feed. A project already in the target team
+stays open. Reported as the `team.switched` data event.
+
 ## States
 
 - **Loading**: centred spinner.
@@ -246,5 +322,10 @@ store and how it is kept honest; new project state is added there.
 
 - The per-team cards listing every team's projects, and the merged cross-team
   RECENT ACTIVITY panel with its all-activity dialog (`activity-feed.md` §Home
-  surface). Activity on Home is per project now; the Team screen keeps the team
-  feed.
+  surface). Activity on Home is per project on the cards; since HOME H5 the
+  single-team TEAM ACTIVITY panel also lives on Home (it was the Team screen's).
+
+## Removed (SOLUSDEV-244 / HOME H5)
+
+- The separate Team screen (`MainScreen 'team'`, its rail item and menu entry)
+  and Settings → Members: both consolidated into Home above.
