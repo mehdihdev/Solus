@@ -16,10 +16,12 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.connectors.registry import ConnectorContext, UnknownConnectorError
+from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import (
@@ -29,10 +31,16 @@ from solus_api.deps import (
     RequireVerified,
     SecretStoreDep,
     SessionDep,
+    SettingsDep,
 )
-from solus_api.models import ConnectionStatus, Project
+from solus_api.models import AccountConnection, ConnectionStatus, Project, User
 from solus_api.schemas import AdoptRequest, serialize_connection, serialize_legacy_connection
 from solus_api.services.activity import record_activity
+from solus_api.services.connection_health import (
+    account_quota,
+    connection_health,
+    record_quota_transition,
+)
 from solus_api.services.connections import (
     account_ref_for,
     claim_legacy_sources,
@@ -51,11 +59,44 @@ from solus_api.services.events import emit_event
 router = APIRouter(prefix="/api/v1/users/me/connections")
 
 
-@router.get("")
-async def list_connections(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
-    connections = await list_live_connections(session, user)
+async def _serialize_with_health(
+    request: Request,
+    session: AsyncSession,
+    settings: Settings,
+    user: User,
+    connections: list[AccountConnection],
+) -> list[dict[str, Any]]:
+    """SOLUSDEV-244 (H4): each grant with its derived health and, for a metered
+    provider, the meter's estimated position. A transition into the degraded
+    band or the wall is recorded once as a data event."""
     projects = await connection_projects(session, [c.id for c in connections])
-    return envelope([serialize_connection(c, projects.get(c.id)) for c in connections])
+    redis = getattr(request.app.state, "redis", None)
+    rows: list[dict[str, Any]] = []
+    recorded = False
+    for connection in connections:
+        used_in = projects.get(connection.id) or []
+        quota = await account_quota(settings, redis, connection)
+        if quota is not None:
+            recorded |= await record_quota_transition(
+                session, redis, user=user, connection=connection, quota=quota
+            )
+        health = connection_health(
+            connection,
+            quota=quota,
+            source_error_codes=[p["error_code"] for p in used_in if p.get("error_code")],
+        )
+        rows.append(serialize_connection(connection, used_in, health=health, quota=quota))
+    if recorded:
+        await session.commit()
+    return rows
+
+
+@router.get("")
+async def list_connections(
+    request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
+    connections = await list_live_connections(session, user)
+    return envelope(await _serialize_with_health(request, session, settings, user, connections))
 
 
 @router.get("/legacy")
@@ -164,11 +205,15 @@ async def adopt(
 
 @router.get("/{connection_id}")
 async def get_connection(
-    connection_id: uuid.UUID, user: CurrentUser, session: SessionDep
+    request: Request,
+    connection_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> dict[str, Any]:
     connection = await owned_connection(session, user, connection_id)
-    projects = await connection_projects(session, [connection.id])
-    return envelope(serialize_connection(connection, projects.get(connection.id)))
+    [row] = await _serialize_with_health(request, session, settings, user, [connection])
+    return envelope(row)
 
 
 @router.delete("/{connection_id}")

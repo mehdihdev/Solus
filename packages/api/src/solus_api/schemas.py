@@ -306,12 +306,21 @@ def serialize_source(
 
 
 def serialize_connection(
-    connection: AccountConnection, projects: list[dict[str, Any]] | None = None
+    connection: AccountConnection,
+    projects: list[dict[str, Any]] | None = None,
+    *,
+    health: str = "healthy",
+    quota: "QuotaState | None" = None,
 ) -> dict[str, Any]:
     """Account-connection view (SOLUSDEV-241). No secret material, no secret
-    ref — the grant's existence and identity, never its credential."""
+    ref — the grant's existence and identity, never its credential.
+
+    SOLUSDEV-244 (H4): `health` is the derived state Home badges
+    (`healthy` / `token_expired` / `degraded`, `services/connection_health.py`);
+    `quota` is the meter's ESTIMATED position for a metered provider, the same
+    block `serialize_source` carries, and is omitted when unknowable."""
     config = connection.config if isinstance(connection.config, dict) else {}
-    return {
+    data: dict[str, Any] = {
         "id": connection.id,
         "provider": connection.provider.value,
         "status": connection.status.value,
@@ -320,10 +329,19 @@ def serialize_connection(
         # SOLUSDEV-242 (H2): Home offers Re-authorize when the last handshake failed.
         "needs_reauth": "token_error" if connection.status is ConnectionStatus.ERROR else None,
         "last_error": connection.last_error,
+        "health": health,
         "projects": [{"project_id": p["project_id"], "name": p["name"]} for p in (projects or [])],
         "created_at": connection.created_at,
         "updated_at": connection.updated_at,
     }
+    if quota is not None:
+        data["quota"] = {
+            "status": quota.status,
+            "used": quota.used,
+            "allowance": quota.allowance,
+            "estimated": quota.estimated,
+        }
+    return data
 
 
 class AdoptRequest(StrictModel):
