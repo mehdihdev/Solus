@@ -103,6 +103,7 @@ typecheck:python:
 
 typecheck:node:
   extends: [.node-base, .node-rules]
+  resource_group: arm-runner-heavy
   stage: typecheck
   variables:
     # The renderer's `tsc` needs ~500 MB of V8 heap; retain the established cap.
@@ -112,6 +113,16 @@ typecheck:node:
 test:python:
   extends: [.python-base, .python-rules]
   stage: test
+  # SOLUSDEV-246: the full suite on the 2 GB ARM runner outgrew the 1 h default.
+  # The effective limit is min(this, the runner's "Maximum job timeout" in
+  # Settings → CI/CD → Runners), so that setting must be ≥ 3h too. A genuinely
+  # hung test no longer eats the budget: pytest-timeout (pyproject
+  # `timeout = 300`) fails it with every thread's stack after 5 min.
+  timeout: 3h
+  # One heavy job at a time on the shared 2 GB box: with `needs: []` every job is
+  # a DAG root, so test:node's vitest workers and this suite's OCCT/MuJoCo
+  # imports could land on the runner together and OOM each other.
+  resource_group: arm-runner-heavy
   services:
     - name: pgvector/pgvector:pg16
       alias: postgres
@@ -154,6 +165,7 @@ test:python:
 
 test:node:
   extends: [.node-base, .node-rules]
+  resource_group: arm-runner-heavy
   stage: test
   script: pnpm test
 

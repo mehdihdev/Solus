@@ -11,6 +11,7 @@ import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { switchWorkspaceProject } from '../workspace/projectSwitch'
 import { useSettingsStore } from '../../store/settingsStore'
 import { ConnectCatalog } from './ConnectCatalog'
 import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
@@ -41,7 +42,11 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
       if (cancelled) return
       workspace.setLinked(result.linked)
       if (result.teamId) workspace.setTeamId(result.teamId)
-      if (result.project) workspace.setProject(result.project)
+      if (result.project)
+        switchWorkspaceProject(
+          { ...result.project, ...(result.teamId ? { teamId: result.teamId } : {}) },
+          'onboarding'
+        )
     })
     return () => {
       cancelled = true

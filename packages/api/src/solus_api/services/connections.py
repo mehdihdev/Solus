@@ -14,6 +14,7 @@ secret, and that ownership rule lives here in one place:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -27,9 +28,11 @@ from solus_api.connectors.contracts import (
     Connector,
     ConnectorError,
     Credentials,
+    OAuthConnector,
 )
 from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.integration_cache import Fetched, IntegrationCache
+from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
 from solus_api.connectors.runtime import (
     call_with_refresh,
     connector_error_payload,
@@ -41,7 +44,10 @@ from solus_api.core.errors import APIError
 from solus_api.models import (
     AccountConnection,
     ConnectionStatus,
+    Membership,
+    MembershipStatus,
     Project,
+    Role,
     Source,
     SourceStatus,
     SourceType,
@@ -49,6 +55,8 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+
+logger = logging.getLogger("solus.connections")
 
 
 class StaleHandshakeError(Exception):
@@ -62,6 +70,19 @@ CONNECTION_REF_PREFIX = "connection/"
 #: A PENDING connection older than this is a handshake nobody finished; it is
 #: neither listed nor reused, and the next start mints a fresh one.
 PENDING_CONNECTION_TTL = timedelta(minutes=10)
+#: SOLUSDEV-242 (H2): a claimed source still has its OLD project-owned token
+#: family to delete. The marker is an underscore key — never patchable, never
+#: serialized (routers/sources.py, schemas.serialize_source) — and it names NO
+#: ref: the family is derived from the source's own id, so nothing a member
+#: writes can ever point the sweep at another secret (security review C-NEW-1).
+RETIRE_MARKER_KEY = "_legacy_secrets_retire"
+#: Sources swept per call: the remainder is the next call's work (documented
+#: retry semantics), so an outage spanning many claims never makes one
+#: request pay for all of them.
+SWEEP_BATCH = 200
+#: Hosted add-on state the source recorded for a grant that the sweep deletes
+#: (agent/tools/hosted_tools.py STATE_KEY / INVENTORY_KEY): stale after a move.
+_HOSTED_STATE_KEYS = ("hosted", "_hosted")
 
 
 def connection_secret_ref(connection_id: uuid.UUID, provider: str) -> str:
@@ -414,6 +435,290 @@ async def revoke_connection(
     connection.secret_ref = None
     await session.flush()
     return len(bound)
+
+
+# --------------------------------------------------------------- claiming legacy grants (H2)
+#
+# A source connected before I1 owns its token under a `source/…` ref and has no
+# connection row. Moving it to ACCOUNT scope needs PROOF of whose account the
+# token is — and `Source.created_by` is not that proof: the pre-I1 "switch
+# account" path let any teammate complete a handshake on a row someone else
+# created, so the row's creator and the token's owner can differ (security
+# review C1). The only proof Solus holds is a handshake the caller completed:
+# a CONNECTED connection whose `account_external_id` the provider vouched for.
+#
+# So a legacy source is CLAIMED, never adopted blind, and only on the user's
+# explicit, confirmed request naming the sources (security review H-NEW-1):
+# Home lists the source as "sign in once to move it" until the caller holds a
+# matching grant, then as "move to your account" with a confirmation that names
+# the projects and the grant. Nothing is copied — the source mirrors the
+# existing grant — and nothing is widened: a mismatch in recorded access is
+# refused, and a grant wider than the source ever recorded needs the caller's
+# explicit acceptance in the same request.
+
+
+def _live_member_projects() -> Any:
+    """Sources the caller may act on: an ACTIVE, live, non-viewer membership in
+    the source's OWN team and a project that still exists (security review C2)."""
+    return (
+        select(Source.id)
+        .join(Project, Project.id == Source.project_id)
+        .join(
+            Membership,
+            (Membership.team_id == Source.team_id) & (Membership.deleted_at.is_(None)),
+        )
+        .where(
+            Project.deleted_at.is_(None),
+            Membership.role != Role.VIEWER,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    )
+
+
+def _own_token_sources(user: User) -> Any:
+    """Unbound sources holding their own token in the caller's live projects. A
+    SYNCING source is left alone: a worker is holding that token right now."""
+    return (
+        select(Source)
+        .where(
+            Source.connection_id.is_(None),
+            Source.secret_ref.is_not(None),
+            Source.status.in_((SourceStatus.CONNECTED, SourceStatus.ERROR)),
+            Source.id.in_(_live_member_projects().where(Membership.user_id == user.id)),
+        )
+        .order_by(Source.created_at, Source.id)
+    )
+
+
+def _is_oauth_source(registry: ConnectorRegistry, source: Source) -> bool:
+    if is_connection_owned(source.secret_ref):
+        return False
+    try:
+        connector = registry.create(source.type.value)
+    except UnknownConnectorError:
+        return False
+    return isinstance(connector, OAuthConnector)
+
+
+async def legacy_sources(
+    session: AsyncSession, registry: ConnectorRegistry, user: User
+) -> list[Source]:
+    """What Home lists: the caller's OWN legacy grants by the only hint available
+    (`created_by`), in projects the caller is a live member of. A hint decides
+    what is SHOWN, never what is moved."""
+    rows = (
+        await session.scalars(_own_token_sources(user).where(Source.created_by == user.id))
+    ).all()
+    return [s for s in rows if _is_oauth_source(registry, s)]
+
+
+async def named_legacy_sources(
+    session: AsyncSession, registry: ConnectorRegistry, user: User, source_ids: set[uuid.UUID]
+) -> list[Source]:
+    """The legacy sources a move REQUEST names, among every own-token source in
+    the caller's live projects — not only the ones the caller created: the
+    proof of the account is the handshake, membership is the reach, and the
+    creator hint only decides what Home shows."""
+    if not source_ids:
+        return []
+    rows = (await session.scalars(_own_token_sources(user).where(Source.id.in_(source_ids)))).all()
+    return [s for s in rows if _is_oauth_source(registry, s)]
+
+
+async def claimable_connections(
+    session: AsyncSession, user: User, sources: list[Source]
+) -> dict[uuid.UUID, AccountConnection]:
+    """For each legacy source, the caller's CONNECTED grant that PROVES its
+    account (same provider, same provider-vouched external id), if any."""
+    if not sources:
+        return {}
+    live = (
+        await session.scalars(
+            select(AccountConnection).where(
+                AccountConnection.user_id == user.id,
+                AccountConnection.status == ConnectionStatus.CONNECTED,
+                AccountConnection.secret_ref.is_not(None),
+                AccountConnection.account_external_id.is_not(None),
+            )
+        )
+    ).all()
+    by_identity = {(c.provider, c.account_external_id): c for c in live}
+    return {
+        s.id: by_identity[(s.type, s.account_external_id)]
+        for s in sources
+        if (s.type, s.account_external_id) in by_identity
+    }
+
+
+def _access_of(row: AccountConnection | Source) -> str | None:
+    access = row.config.get("access") if isinstance(row.config, dict) else None
+    return access if isinstance(access, str) and access else None
+
+
+def legacy_secret_family(source: Source) -> list[str]:
+    """The project-owned refs a pre-I1 source held: DERIVED from its id, never
+    read from anywhere a member can write."""
+    ref = f"source/{source.id}/{source.type.value}"
+    return [ref, refresh_secret_ref(ref), *hosted_refs(ref)]
+
+
+def retire_legacy_family(source: Source) -> None:
+    """Mark a source whose OWN token family is now unreferenced (it mirrors a
+    grant from here on) for the post-commit sweep, and drop the hosted add-on
+    state that rode that family — those grants go with it."""
+    config = {k: v for k, v in source.config.items() if k not in _HOSTED_STATE_KEYS}
+    source.config = {**config, RETIRE_MARKER_KEY: True}
+
+
+def bind_to_account(
+    source: Source, connection: AccountConnection, *, preserve_state: bool = False
+) -> None:
+    """Attach a project source to the caller's account grant — THE way a source
+    that may hold its own token is re-pointed. A reused pre-I1 or PAT row
+    mirrors the grant from here on: its old family is unreferenced and is
+    swept after the commit, never left live in the store (SOLUSDEV-242)."""
+    if source.secret_ref and not is_connection_owned(source.secret_ref):
+        retire_legacy_family(source)
+    bind_source(source, connection, preserve_state=preserve_state)
+
+
+def _claim_rejection(source: Source, grant_access: str | None, confirm_access: bool) -> str | None:
+    """Why a source must NOT bind to this grant, or None. Nothing widens
+    silently: a recorded mismatch is refused outright; a grant wider than the
+    source ever recorded needs the caller's explicit acceptance."""
+    source_access = _access_of(source)
+    if source_access and grant_access and source_access != grant_access:
+        return "access_mismatch"
+    if not source_access and grant_access == "write" and not confirm_access:
+        return "access_unknown"
+    return None
+
+
+async def claim_legacy_sources(
+    session: AsyncSession,
+    registry: ConnectorRegistry,
+    user: User,
+    connection: AccountConnection,
+    source_ids: set[uuid.UUID],
+    *,
+    confirm_access: bool = False,
+) -> tuple[list[Source], list[dict[str, Any]]]:
+    """Bind the named legacy sources for the account `connection` PROVED to it —
+    no sign-in, no copy, nothing widened, nothing the caller did not name.
+
+    The grant is re-read FOR UPDATE inside this transaction (a revoke racing
+    the claim must not leave a project on a deleted ref — security review
+    M-NEW-2), and the sources are locked FOR UPDATE so concurrent claims
+    serialise. Returns (claimed, skipped-with-reason). The old project-owned
+    token family is marked for the post-commit sweep.
+    """
+    if not source_ids:
+        return [], []
+    locked = (
+        await session.scalars(
+            # `populate_existing`: the caller's snapshot of this row is already in
+            # the session's identity map, and a plain re-select would hand it back
+            # with STALE attributes — locked, but the status never re-read.
+            select(AccountConnection)
+            .where(AccountConnection.id == connection.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).first()
+    if (
+        locked is None
+        or locked.user_id != user.id
+        or locked.status is not ConnectionStatus.CONNECTED
+        or not locked.secret_ref
+        or not locked.account_external_id
+    ):
+        return [], []
+    candidates = (
+        await session.scalars(
+            _own_token_sources(user)
+            .where(
+                Source.id.in_(source_ids),
+                Source.type == locked.provider,
+                Source.account_external_id == locked.account_external_id,
+            )
+            .with_for_update()
+        )
+    ).all()
+    claimed: list[Source] = []
+    skipped: list[dict[str, Any]] = []
+    grant_access = _access_of(locked)
+    for source in candidates:
+        if not _is_oauth_source(registry, source):
+            continue
+        reason = _claim_rejection(source, grant_access, confirm_access)
+        if reason:
+            skipped.append(
+                {"source_id": source.id, "project_id": source.project_id, "reason": reason}
+            )
+            continue
+        bind_source(source, locked)
+        retire_legacy_family(source)
+        claimed.append(source)
+    if claimed:
+        await session.flush()
+    return claimed, skipped
+
+
+async def delete_legacy_family_if_retired(secret_store: SecretStore, source: Source) -> None:
+    """A source torn down (disconnect, project teardown) while its retired
+    family was still owed: delete the family now, or it is orphaned live with
+    nothing left to derive it from (security review M-NEW-2)."""
+    if not (isinstance(source.config, dict) and source.config.get(RETIRE_MARKER_KEY)):
+        return
+    for ref in legacy_secret_family(source):
+        await secret_store.delete(ref)
+
+
+async def sweep_retired_secrets(
+    session: AsyncSession, secret_store: SecretStore, user: User
+) -> int:
+    """AFTER the caller's commit: delete the project-owned token families that
+    claims retired, for sources in the caller's live teams. The refs are
+    DERIVED from each source's id (never stored, never client-influenced) and
+    the marker survives a store outage, so a failed delete is retried on the
+    next sweep instead of leaking a live token — including after a revoke,
+    which does not touch the marker. Returns how many sources were swept; the
+    caller commits."""
+    rows = (
+        await session.scalars(
+            select(Source)
+            .where(
+                Source.id.in_(_live_member_projects().where(Membership.user_id == user.id)),
+                Source.config[RETIRE_MARKER_KEY].as_boolean().is_(True),
+            )
+            .order_by(Source.updated_at, Source.id)
+            .limit(SWEEP_BATCH)
+        )
+    ).all()
+    swept = 0
+    for source in rows:
+        try:
+            for ref in legacy_secret_family(source):
+                await secret_store.delete(ref)  # a no-op when absent
+        except Exception:  # noqa: BLE001 - a store outage keeps the marker for the retry
+            logger.warning("retired-secret sweep deferred source=%s", source.id, exc_info=True)
+            continue
+        source.config = {k: v for k, v in source.config.items() if k != RETIRE_MARKER_KEY}
+        swept += 1
+    if swept:
+        await session.flush()
+    return swept
+
+
+async def sweep_after_commit(session: AsyncSession, secret_store: SecretStore, user: User) -> None:
+    """Run the retirement sweep AFTER the caller's commit — best effort, never a
+    500 on top of a committed claim: a failed sweep is the next call's work."""
+    try:
+        if await sweep_retired_secrets(session, secret_store, user):
+            await session.commit()
+    except Exception:  # noqa: BLE001 - logged, retried next time
+        logger.warning("retired-secret sweep deferred user=%s", user.id, exc_info=True)
+        await session.rollback()
 
 
 # --------------------------------------------------------------- the listing

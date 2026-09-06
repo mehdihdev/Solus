@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,11 +38,33 @@ logger = logging.getLogger("solus.events.ingest")
 router = APIRouter(prefix="/api/v1/events")
 
 #: Event names a client may assert. Everything else is server-originated.
-CLIENT_EVENT_TYPES = frozenset({"extension.bridge_refused"})
+CLIENT_EVENT_TYPES = frozenset(
+    {
+        "extension.bridge_refused",
+        # SOLUSDEV-242 (HOME H1): the desktop opened/switched to a project.
+        "project.switched",
+    }
+)
 MAX_EVENTS_PER_BATCH = 50
 MAX_PAYLOAD_BYTES = 4096
 MAX_PAYLOAD_KEYS = 16
 LIMITER_ATTR = "client_event_limiter"
+
+
+class ProjectSwitchedPayload(BaseModel):
+    """`project.switched` (SOLUSDEV-242): the project left (resolvability-checked
+    at ingest like the top-level id) and which surface drove the switch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_project_id: uuid.UUID | None = None
+    surface: Literal["home", "topbar", "team", "validation", "onboarding", "overview"]
+
+
+#: Per-event payload schemas. A client event WITH a schema is validated against
+#: it (unknown keys, bad enums and malformed ids reject); the data-collection
+#: store never accepts free-form strings under a Solus-authored event name.
+PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {"project.switched": ProjectSwitchedPayload}
 
 
 class ClientEvent(BaseModel):
@@ -51,6 +73,19 @@ class ClientEvent(BaseModel):
     event_type: str
     project_id: uuid.UUID | None = None
     payload: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _typed_payload(self) -> ClientEvent:
+        schema = PAYLOAD_SCHEMAS.get(self.event_type)
+        if schema is None:
+            return self
+        try:
+            schema.model_validate(self.payload)
+        except ValidationError as exc:
+            raise ValueError(
+                f"payload does not match {self.event_type}: {exc.error_count()} error(s)"
+            ) from exc
+        return self
 
     @field_validator("event_type")
     @classmethod
@@ -95,6 +130,24 @@ async def _resolvable_projects(
     return {project_id: team_id for project_id, team_id in rows.all()}
 
 
+def _from_project_id(event: ClientEvent) -> uuid.UUID | None:
+    """The `from_project_id` a switch event names, already validated as a UUID."""
+    if event.event_type != "project.switched":
+        return None
+    value = event.payload.get("from_project_id")
+    return uuid.UUID(str(value)) if value is not None else None
+
+
+def _scoped_payload(event: ClientEvent, resolvable: dict[uuid.UUID, uuid.UUID]) -> dict[str, Any]:
+    """Apply the same rule to ids INSIDE the payload as to the top-level id: a
+    project the caller cannot resolve is dropped to null, never stored, never
+    reported (no existence oracle). New dict — the event body is not mutated."""
+    fid = _from_project_id(event)
+    if event.event_type != "project.switched":
+        return event.payload
+    return {**event.payload, "from_project_id": str(fid) if fid in resolvable else None}
+
+
 @router.post("", status_code=202, response_model=None)
 async def ingest_events(
     batch: EventBatch,
@@ -114,6 +167,7 @@ async def ingest_events(
         resp.headers["Retry-After"] = "60"
         return resp
     wanted = {e.project_id for e in batch.events if e.project_id is not None}
+    wanted |= {fid for e in batch.events if (fid := _from_project_id(e)) is not None}
     resolvable = await _resolvable_projects(session, user.id, wanted)
     for event in batch.events:
         team_id = resolvable.get(event.project_id) if event.project_id else None
@@ -123,7 +177,7 @@ async def ingest_events(
             event_type=event.event_type,
             team_id=team_id,
             project_id=event.project_id if team_id is not None else None,
-            payload=event.payload,
+            payload=_scoped_payload(event, resolvable),
         )
     await session.commit()
     return envelope({"accepted": len(batch.events)})

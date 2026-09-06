@@ -129,3 +129,26 @@ describe('useProjectSources — live refresh', () => {
     expect(result.current.status).toBe('ready')
   })
 })
+
+describe('useProjectSources — project switch mid-flight (SOLUSDEV-242)', () => {
+  it('drops a response for a project the user has since left', async () => {
+    let resolveA: (sources: resources.Source[]) => void = () => undefined
+    vi.mocked(resources.listSources).mockImplementationOnce(
+      () => new Promise<resources.Source[]>((resolve) => (resolveA = resolve))
+    )
+    const { result, rerender } = renderHook(() => useProjectSources())
+    // Switch to project B while A's list is still in flight; B answers empty.
+    vi.mocked(resources.listSources).mockResolvedValueOnce([])
+    act(() => {
+      useWorkspaceStore.setState({ project: { id: 'p2', name: 'Arm' } })
+    })
+    rerender()
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    // A's documents land late — they must not be painted over B's.
+    await act(async () => {
+      resolveA([SOURCE])
+      await Promise.resolve()
+    })
+    expect(result.current.sources).toEqual([])
+  })
+})

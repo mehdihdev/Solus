@@ -153,9 +153,7 @@ ASSEMBLY_DEFINITION = {
             {"id": "i1", "name": "BasePlate <1>", "type": "Part", "partId": "JHD"},
             {"id": "i2", "name": "Peg <1>", "type": "Part", "partId": "JID"},
         ],
-        "features": [
-            {"message": {"featureType": "mate", "name": "Fastened 1", "featureId": "M1"}}
-        ],
+        "features": [{"message": {"featureType": "mate", "name": "Fastened 1", "featureId": "M1"}}],
         "occurrences": [{"path": ["i1"], "transform": [1, 0, 0, 0] * 4}],
     },
     "subAssemblies": [],

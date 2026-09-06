@@ -14,11 +14,42 @@
 // This module takes the DECODED TOML object (a TOML parser's output), never TOML
 // text, so JSON fixtures and API bodies validate through the same code.
 
+import {
+  FIRST_PARTY_LIMITS,
+  FIRST_PARTY_TABLES,
+  SUPPORTED_SCHEMA_VERSIONS,
+  parseBackend,
+  parseGraph,
+  parseTools,
+  type Backend,
+  type Graph,
+  type Tools,
+} from "./extension-manifest-first-party";
 import type { CompleteKeysOf } from "./json";
 import type { WidgetSlotSize } from "./widget";
 
+export {
+  BACKEND_FIELDS,
+  CAPABILITY_NAME_RE,
+  FIRST_PARTY_TABLES,
+  GRAPH_DOMAINS,
+  GRAPH_FIELDS,
+  GRAPH_KIND_FIELDS,
+  SUPPORTED_SCHEMA_VERSIONS,
+  TOOLS_FIELDS,
+  composedToolName,
+  declaresFirstParty,
+  graphKindName,
+  type Backend,
+  type Graph,
+  type GraphDomain,
+  type GraphKind,
+  type Tools,
+} from "./extension-manifest-first-party";
+
 export const EXTENSION_MANIFEST_FILENAME = "extension.toml";
-export const EXTENSION_MANIFEST_SCHEMA_VERSION = 1;
+// SOLUSDEV-246 (STORE ST1): 2 adds the first-party tables; 1 stays valid.
+export const EXTENSION_MANIFEST_SCHEMA_VERSION = 2;
 
 /** The id doubles as the bundle folder name on case-insensitive file systems,
  *  so it is a lowercase slug, 2–64 chars, and nothing else. */
@@ -65,6 +96,7 @@ export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
 
 /** Every cap in one place; the Python twin (`LIMITS`) carries the same numbers. */
 export const MANIFEST_LIMITS = {
+  ...FIRST_PARTY_LIMITS,
   name: 60,
   publisher: 60,
   summary: 160,
@@ -177,21 +209,31 @@ export interface ExtensionManifestDocument {
   readonly permissions?: Partial<Permissions>;
   readonly settings?: Partial<Settings>;
   readonly store: Partial<Store> & Pick<Store, "overview">;
+  /** schema_version 2, first-party only (SOLUSDEV-246). */
+  readonly backend?: Partial<Backend> & Pick<Backend, "capability">;
+  readonly graph?: Partial<Graph>;
+  readonly tools?: Partial<Tools>;
 }
+
+export type SupportedSchemaVersion = (typeof SUPPORTED_SCHEMA_VERSIONS)[number];
 
 /** The parsed manifest: every optional block present, defaults applied. */
 export interface ExtensionManifest {
-  readonly schema_version: 1;
+  readonly schema_version: SupportedSchemaVersion;
   readonly extension: ExtensionMeta;
   readonly views: Views;
   readonly permissions: Permissions;
   readonly settings: Settings;
   readonly store: Store;
+  /** Absent unless declared (schema_version 2). */
+  readonly backend?: Backend;
+  readonly graph: Graph;
+  readonly tools: Tools;
 }
 
 // Runtime field lists, proven complete against the interfaces at compile time
 // and compared to the Python-emitted manifest (_fields.json) in the test.
-const MANIFEST_FIELDS = [
+const MANIFEST_FIELDS_V1 = [
   "schema_version",
   "extension",
   "views",
@@ -199,6 +241,7 @@ const MANIFEST_FIELDS = [
   "settings",
   "store",
 ] as const;
+const MANIFEST_FIELDS = [...MANIFEST_FIELDS_V1, ...FIRST_PARTY_TABLES] as const;
 export const EXTENSION_MANIFEST_FIELDS: CompleteKeysOf<
   ExtensionManifest,
   typeof MANIFEST_FIELDS
@@ -858,8 +901,12 @@ function parseStore(p: Problems, v: unknown): Store | undefined {
 }
 
 type SchemaCheck =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly version: SupportedSchemaVersion }
   | Exclude<ManifestParseResult, { ok: true }>;
+
+function isSupportedVersion(sv: number): sv is SupportedSchemaVersion {
+  return (SUPPORTED_SCHEMA_VERSIONS as readonly number[]).includes(sv);
+}
 
 function checkSchemaVersion(value: Record<string, unknown>): SchemaCheck {
   const sv = value.schema_version;
@@ -877,27 +924,32 @@ function checkSchemaVersion(value: Record<string, unknown>): SchemaCheck {
         `schema_version: ${sv} is newer than ${EXTENSION_MANIFEST_SCHEMA_VERSION}`,
       ],
     };
-  if (sv !== EXTENSION_MANIFEST_SCHEMA_VERSION)
+  if (!isSupportedVersion(sv))
     return {
       ok: false,
       reason: "invalid",
       problems: [
-        `schema_version: must be ${EXTENSION_MANIFEST_SCHEMA_VERSION}`,
+        `schema_version: must be one of ${SUPPORTED_SCHEMA_VERSIONS.join(", ")}`,
       ],
     };
-  return { ok: true };
+  return { ok: true, version: sv };
 }
 
 interface ManifestParts {
+  readonly schema_version: SupportedSchemaVersion;
   readonly extension: ExtensionMeta | undefined;
   readonly views: Views | undefined;
   readonly permissions: Permissions;
   readonly settings: Settings;
   readonly store: Store | undefined;
+  readonly backend: Backend | undefined;
+  readonly graph: Graph;
+  readonly tools: Tools;
 }
 
-function finish(p: Problems, parts: ManifestParts): ManifestParseResult {
-  const { extension, views, permissions, settings, store } = parts;
+/** Rules that need two blocks at once. */
+function crossBlockChecks(p: Problems, parts: ManifestParts): void {
+  const { extension, permissions, store, backend } = parts;
   const permissioned =
     permissions.scopes.length > 0 || permissions.network.length > 0;
   if (store && permissioned && !store.privacy_policy)
@@ -905,17 +957,27 @@ function finish(p: Problems, parts: ManifestParts): ManifestParseResult {
       "store.privacy_policy",
       "required when permissions.scopes or permissions.network is non-empty",
     );
+  if (backend && extension && backend.capability !== extension.id)
+    p.add("backend.capability", "must equal extension.id");
+}
+
+function finish(p: Problems, parts: ManifestParts): ManifestParseResult {
+  const { extension, views, permissions, settings, store, backend } = parts;
+  crossBlockChecks(p, parts);
   if (p.list.length > 0 || !extension || !views || !store)
     return { ok: false, reason: "invalid", problems: p.list };
   return {
     ok: true,
     manifest: {
-      schema_version: 1,
+      schema_version: parts.schema_version,
       extension,
       views,
       permissions,
       settings,
       store,
+      ...(backend ? { backend } : {}),
+      graph: parts.graph,
+      tools: parts.tools,
     },
   };
 }
@@ -935,12 +997,24 @@ export function parseExtensionManifest(value: unknown): ManifestParseResult {
   const schema = checkSchemaVersion(value);
   if (!schema.ok) return schema;
   const p = new Problems();
-  rejectUnknown(p, "manifest", value, MANIFEST_FIELDS);
+  // The first-party tables are unknown fields at schema_version 1, so a bundle
+  // written before SOLUSDEV-246 fails exactly as it always did.
+  const v2 = schema.version >= 2;
+  rejectUnknown(
+    p,
+    "manifest",
+    value,
+    v2 ? MANIFEST_FIELDS : MANIFEST_FIELDS_V1,
+  );
   return finish(p, {
+    schema_version: schema.version,
     extension: parseMeta(p, value.extension),
     views: parseViews(p, value.views),
     permissions: parsePermissions(p, value.permissions),
     settings: parseSettings(p, value.settings),
     store: parseStore(p, value.store),
+    backend: v2 ? parseBackend(p, value.backend, EXTENSION_ID_RE) : undefined,
+    graph: v2 ? parseGraph(p, value.graph) : { kinds: [] },
+    tools: v2 ? parseTools(p, value.tools) : { names: [] },
   });
 }

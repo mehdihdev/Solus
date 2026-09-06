@@ -8,6 +8,10 @@ treated as untrusted data and parsed defensively (CLAUDE.md §7).
 
 from __future__ import annotations
 
+import base64
+import json
+from typing import Any
+
 import httpx
 import pytest
 import respx
@@ -398,3 +402,110 @@ async def test_a_stale_etag_for_another_branch_is_not_reused() -> None:
     )
 
     assert await GitHubConnector().detect_changes(ctx) is True
+
+
+# --------------------------------------------------------------------------
+# SOLUSDEV-246 (STORE ST1): the repo-committed `.solus/project.toml` `[ext.<id>]`
+# tables land as ONE `solus_config` entity (ADR-035 §4 as amended; widget-bundles.md §6).
+
+SOLUS_TOML = b"""
+[ext.fixture-bundle]
+max_notes = 3
+prefix = "fx"
+
+[ext.other-bundle]
+enabled = true
+"""
+
+
+def _tree_with_solus(size: int = 120) -> dict[str, Any]:
+    body: dict[str, Any] = json.loads(json.dumps(TREE_BODY))
+    body["tree"].append({"path": ".solus", "type": "tree", "sha": "ff00"})
+    body["tree"].append(
+        {"path": ".solus/project.toml", "type": "blob", "size": size, "sha": "ff01"}
+    )
+    return body
+
+
+def _mock_with_solus(
+    blob: bytes | None = SOLUS_TOML, *, size: int = 120, status: int = 200
+) -> None:
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}").mock(
+        return_value=httpx.Response(200, json=REPO_BODY)
+    )
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/commits/{DEFAULT_BRANCH}").mock(
+        return_value=httpx.Response(200, json=COMMIT_BODY)
+    )
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/git/trees/{HEAD_SHA}").mock(
+        return_value=httpx.Response(200, json=_tree_with_solus(size))
+    )
+    content = base64.b64encode(blob or b"").decode()
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/git/blobs/ff01").mock(
+        return_value=httpx.Response(status, json={"content": content, "encoding": "base64"})
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_solus_project_toml_lands_as_one_solus_config_entity() -> None:
+    _mock_with_solus()
+    result = await GitHubConnector().sync(_ctx())
+    by_key = {e.source_key: e for e in result.entities}
+    config = by_key[".solus/project.toml"]
+    assert config.type == "solus_project_toml"
+    assert config.domain == Domain.CODE
+    assert config.properties["ext"] == {
+        "fixture-bundle": {"max_notes": 3, "prefix": "fx"},
+        "other-bundle": {"enabled": True},
+    }
+    assert config.properties["path"] == ".solus/project.toml"
+    assert result.errors == []
+    # The file is still a normal code_file for the tree? No — the config entity
+    # REPLACES the plain blob so the graph holds one row for that path.
+    assert config.type != "code_file"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_malformed_solus_project_toml_is_a_sync_error_not_a_raise() -> None:
+    _mock_with_solus(b"[ext.fixture-bundle\nmax_notes = ")
+    result = await GitHubConnector().sync(_ctx())
+    by_key = {e.source_key: e for e in result.entities}
+    assert ".solus/project.toml" in by_key  # the blob itself is still indexed
+    assert by_key[".solus/project.toml"].type == "code_file"
+    assert any("project.toml" in err.message for err in result.errors)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_oversized_solus_project_toml_is_never_fetched() -> None:
+    _mock_with_solus(size=70_000)
+    result = await GitHubConnector().sync(_ctx())
+    assert not any("git/blobs" in str(call.request.url) for call in respx.calls)
+    assert any("exceeds" in err.message for err in result.errors)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_tree_item_without_a_size_is_not_fetched() -> None:
+    """The size is the only pre-fetch bound; an untrusted tree that omits it
+    fails CLOSED rather than letting an unbounded blob through."""
+    _mock_with_solus()
+    body = _tree_with_solus()
+    for item in body["tree"]:
+        item.pop("size", None)
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/git/trees/{HEAD_SHA}").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await GitHubConnector().sync(_ctx())
+    assert not any("git/blobs" in str(call.request.url) for call in respx.calls)
+    assert any("exceeds" in err.message for err in result.errors)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_blob_fetch_failure_degrades_to_a_sync_error() -> None:
+    _mock_with_solus(status=500)
+    result = await GitHubConnector().sync(_ctx())
+    assert any(".solus/project.toml" in err.item for err in result.errors)
+    assert {e.source_key for e in result.entities} >= {"src/main.py", ".solus/project.toml"}

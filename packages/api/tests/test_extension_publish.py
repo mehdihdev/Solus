@@ -424,16 +424,23 @@ async def test_legitimate_publisher_name_passes(
     assert publisher is not None and publisher.display_name == "Ada Lovelace"
 
 
-async def test_existing_publisher_is_unaffected_by_the_reserved_name_rule(
-    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+async def test_existing_reserved_name_publisher_publishes_only_while_staff(
+    client: AsyncClient, app: FastAPI, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
-    """The denylist gates ROW CREATION only: a publisher row that already exists
-    (vendor-seeded, or pre-dating the rule) keeps publishing."""
+    """SOLUSDEV-246 (security review M3): a publisher row carrying a reserved
+    vendor name — seeded by staff, or pre-dating the rule — publishes only while
+    the account is on `SOLUS_STAFF_USER_IDS`. Off the list, the same row is
+    `409 publisher_name_reserved`; a non-reserved existing row is unaffected."""
     alice = await me(client, alice_headers)
     db.add(ExtensionPublisher(user_id=uuid.UUID(alice["id"]), display_name="Solus"))
     await db.commit()
-    resp = await _publish(client, alice_headers, _bundle(publisher="Solus"))
-    assert resp.status_code == 202, resp.text
+    refused = await _publish(client, alice_headers, _bundle(publisher="Solus"))
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "publisher_name_reserved"
+
+    app.state.settings.staff_user_ids = alice["id"]
+    allowed = await _publish(client, alice_headers, _bundle(publisher="Solus"), key="staff-key")
+    assert allowed.status_code == 202, allowed.text
 
 
 async def test_slug_owned_by_another_publisher_is_409_slug_taken(

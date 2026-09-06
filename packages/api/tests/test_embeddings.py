@@ -139,7 +139,10 @@ async def test_embed_wrong_dimension_from_provider_raises() -> None:
     mock = MockEmbeddingAdapter(dimensions=_DIM + 1)
     with pytest.raises(ProviderError, match="dimension"):
         await embed(
-            ["x"], secret_store=_store(), config=_config(), adapters={"openai": mock},
+            ["x"],
+            secret_store=_store(),
+            config=_config(),
+            adapters={"openai": mock},
             allow_unmetered=True,
         )
 

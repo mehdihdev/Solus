@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "extension": {
+    "id": "fixture-bundle",
+    "name": "Fixture Bundle",
+    "version": "0.1.0",
+    "publisher": "Solus",
+    "summary": "First-party fixture: page, backend routes, a graph kind and two SOL tools.",
+    "requires": []
+  },
+  "views": {
+    "page": {
+      "entry": "page.html",
+      "icon": "icon.svg",
+      "label": "Fixture"
+    }
+  },
+  "backend": {
+    "capability": "fixture-bundle",
+    "routes": true
+  },
+  "graph": {
+    "kinds": [
+      {
+        "name": "note",
+        "domain": "code"
+      }
+    ]
+  },
+  "tools": {
+    "names": [
+      "Add Note"
+    ]
+  },
+  "store": {
+    "overview": "OVERVIEW.md"
+  }
+}

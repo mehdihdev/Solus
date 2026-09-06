@@ -10,7 +10,7 @@ from httpx import AsyncClient
 from solus_api.connectors.registry import ConnectorRegistry
 
 
-class _FakeAccountLevel(FakeGitHub):  # type: ignore[misc]  # conftest follow_imports=skip
+class _FakeAccountLevel(FakeGitHub):  # type: ignore[misc,unused-ignore]  # conftest: Any unless passed
     """An ACCOUNT-level connector (Onshape and every CAD tool after it): one
     grant covers the whole account and the tracked set lives in that source's
     config, so a second source for the same provider is only ever a duplicate."""
@@ -280,3 +280,28 @@ async def test_local_tools_lists_vendor_run_loopback_servers(
 async def test_local_tools_requires_authentication(client: AsyncClient) -> None:
     resp = await client.get("/api/v1/integrations/local-tools")
     assert resp.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://127.0.0.1:53682/auth/callback?solus_cb=abc",
+        "http://localhost:53682/auth/callback",
+        "http://localhost:5173/auth/callback",
+    ],
+)
+async def test_oauth_start_keeps_the_loopback_redirects_for_dev(
+    client: AsyncClient, alice_headers: dict[str, str], redirect_uri: str
+) -> None:
+    """SOLUSDEV-242 (H2) pins the allowlist: both loopback hosts, any port —
+    the desktop's loopback flow and the dev renderer depend on them."""
+    await me(client, alice_headers)
+    resp = await client.post(
+        "/api/v1/integrations/github/oauth/start",
+        json={"redirect_uri": redirect_uri},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert redirect_uri.split("?")[0] in resp.json()["data"]["authorize_url"].replace(
+        "%3A", ":"
+    ).replace("%2F", "/")

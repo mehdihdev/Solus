@@ -361,9 +361,7 @@ async def bench_sources(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
     # a slow udev walk must not stall every other tenant's request).
     probed = await asyncio.to_thread(local.available_simulators)
     devices = await asyncio.to_thread(local.list_devices)
-    simulators = [
-        {"kind": s.kind, "available": s.available, "reason": s.reason} for s in probed
-    ]
+    simulators = [{"kind": s.kind, "available": s.available, "reason": s.reason} for s in probed]
     mcap_ready = bool(settings.bench_data_root)
     simulators.append(
         {

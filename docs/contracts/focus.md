@@ -43,7 +43,14 @@ interface FocusStep {
   readonly relation: string; // graph_edge.relation_type traversed FROM this step
 }
 
-type Domain = "code" | "electrical" | "mechanical" | "simulation" | "runtime" | "project";
+type Domain =
+  | "code"
+  | "electrical"
+  | "mechanical"
+  | "simulation"
+  | "runtime"
+  | "project"
+  | "workspace";
 ```
 
 ### Three decisions worth knowing
@@ -62,9 +69,12 @@ which is a normal state, not a missing one.
 `path[i+1]` (or toward the focus, for the last step). Defining it forward rather than
 backward means every step has one; there is no null-origin case for consumers to handle.
 
-**`Domain` mirrors `solus_api.models.Domain`** (ADR-027) — exactly those six spellings
-(`project` added by the ADR-027 amendment of 2026-09-05 for the `.solus` node and imported
-documents). Adding a domain is a graph-wide decision, not a frontend one.
+**`Domain` mirrors `solus_api.models.Domain`** (ADR-027) — exactly those seven spellings.
+Adding a domain is a graph-wide decision, not a frontend one. `project` (SOLUSDEV-240, ADR-027
+amendment 2026-09-05) is the `.solus` node and imported documents; `workspace` (SOLUSDEV-246 ST2,
+ADR-027 amendment 2026-09-06) is the layer describing the workspace itself — the per-project
+`solus:workspace` root, `solus:live_bench`, and one `solus:widget` per installed extension; a
+widget may focus one of those nodes, but SOL context, checkers and fingerprinting never see them.
 
 ---
 

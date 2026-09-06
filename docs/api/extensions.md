@@ -592,11 +592,14 @@ Body (`extra="forbid"`; at least one key): `{ "enabled"?: bool, "settings"?: obj
 ### 6.4 DELETE /api/v1/projects/{project_id}/extensions/{slug} — uninstall
 
 Deletes the `extension_installs` row and every `extension_storage` row for
-`(project_id, extension_id)` in one transaction; decrements `extensions.install_count`. Graph data
-the extension produced (e.g. findings raised via `findings.write`) **stays** — it is the team's
-data. The caller's `widget_layouts` entries referencing `ext:<slug>` are left as-is (the canvas
-skips refs with no install; the user's arrangement survives a reinstall). `204 No Content`; emits
-`extension.uninstall`. Unknown slug for this project → `404`.
+`(project_id, extension_id)` in one transaction; decrements `extensions.install_count`.
+**Amended SOLUSDEV-246 (STORE ST1, "no orphans"):** the same transaction soft-deletes every live
+`graph_entity` (and its edges) in this project whose `kind` is one of the pinned manifest's
+`ext:<slug>:<name>` kinds, and prunes `ext:<slug>` refs from every user's `widget_layouts` row in
+the project — see [widget-bundles.md](widget-bundles.md) §5. Findings raised via
+`findings.write` are not the bundle's kinds and stay (they are the team's data). `204 No
+Content`; emits `extension.uninstall` with `{ slug, version, storage_rows_deleted,
+entities_soft_deleted, layout_slots_pruned }`. Unknown slug for this project → `404`.
 
 ---
 
@@ -803,27 +806,27 @@ L3). Exceeded → `429 rate_limited` + `Retry-After`; every 429 is a data event 
 
 ## 13. Error code catalogue (this surface)
 
-| HTTP | `error.code`               | Where                                                                                                                                                        |
-| ---- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 401  | `unauthorized`             | missing/invalid/expired JWT                                                                                                                                  |
-| 402  | `insufficient_credits`     | §9 — the EXISTING SOL admission, unchanged; the invoking user is out of credits                                                                              |
-| 403  | `forbidden`                | viewer / share-only on a §6–§8 write; `admin`+below on §10; non-staff on §5.4                                                                                |
-| 403  | `email_not_verified`       | §5.1, §5.3, §5.4 without a verified email                                                                                                                    |
-| 403  | `extension_blocked`        | §6.2 install / §6.3 `enabled: true` of a team-blocked extension                                                                                              |
-| 403  | `scope_denied`             | §7 without an enabled install granting `storage.own`; §9 header without an enabled install granting `sol.ask`                                                |
-| 404  | `not_found`                | non-member project/team; unknown slug; unapproved/deleted version to a non-publisher; unrecorded asset path; unknown storage key; no install / no policy row |
-| 400  | `idempotency_key_required` | §5.1 without an `Idempotency-Key` header                                                                                                                     |
-| 409  | `slug_taken`               | §5.1 — slug owned by another publisher                                                                                                                       |
-| 409  | `version_exists`           | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                              |
-| 409  | `idempotency_conflict`     | §5.1 — same `Idempotency-Key`, different bytes                                                                                                               |
-| 409  | `publisher_name_reserved`  | §5.1 — a FIRST publish whose `extension.publisher` normalizes to a reserved vendor name (`solus`, `solus forge`, …); existing publishers unaffected          |
-| 409  | `grants_required`          | §6.2 — version change widens permissions beyond current grants; `details` lists the additions                                                                |
-| 411  | `length_required`          | §5.1 without (or with a malformed) `Content-Length`                                                                                                          |
-| 413  | `payload_too_large`        | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                      |
-| 413  | `storage_quota_exceeded`   | §7 — `(project, extension)` total would exceed 256 KiB                                                                                                       |
-| 422  | `validation_error`         | bad slug/version/key/path syntax; unknown form or body fields; undeclared grants; settings/layout/policy shape violations                                    |
-| 422  | `bundle_invalid`           | §5.1 — manifest contract problems or zip guard violations; `details` = the dotted-path problem strings                                                       |
-| 429  | `rate_limited`             | §12 budgets or the global limiter                                                                                                                            |
+| HTTP | `error.code`               | Where                                                                                                                                                                                                                                                                |
+| ---- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 401  | `unauthorized`             | missing/invalid/expired JWT                                                                                                                                                                                                                                          |
+| 402  | `insufficient_credits`     | §9 — the EXISTING SOL admission, unchanged; the invoking user is out of credits                                                                                                                                                                                      |
+| 403  | `forbidden`                | viewer / share-only on a §6–§8 write; `admin`+below on §10; non-staff on §5.4                                                                                                                                                                                        |
+| 403  | `email_not_verified`       | §5.1, §5.3, §5.4 without a verified email                                                                                                                                                                                                                            |
+| 403  | `extension_blocked`        | §6.2 install / §6.3 `enabled: true` of a team-blocked extension                                                                                                                                                                                                      |
+| 403  | `scope_denied`             | §7 without an enabled install granting `storage.own`; §9 header without an enabled install granting `sol.ask`                                                                                                                                                        |
+| 404  | `not_found`                | non-member project/team; unknown slug; unapproved/deleted version to a non-publisher; unrecorded asset path; unknown storage key; no install / no policy row                                                                                                         |
+| 400  | `idempotency_key_required` | §5.1 without an `Idempotency-Key` header                                                                                                                                                                                                                             |
+| 409  | `slug_taken`               | §5.1 — slug owned by another publisher                                                                                                                                                                                                                               |
+| 409  | `version_exists`           | §5.1 — `(extension, version)` already used (incl. soft-deleted)                                                                                                                                                                                                      |
+| 409  | `idempotency_conflict`     | §5.1 — same `Idempotency-Key`, different bytes                                                                                                                                                                                                                       |
+| 409  | `publisher_name_reserved`  | §5.1 — a FIRST publish whose `extension.publisher` normalizes to a reserved vendor name (`solus`, `solus forge`, …); existing publishers unaffected                                                                                                                  |
+| 409  | `grants_required`          | §6.2 — version change widens permissions beyond current grants; `details` lists the additions                                                                                                                                                                        |
+| 411  | `length_required`          | §5.1 without (or with a malformed) `Content-Length`                                                                                                                                                                                                                  |
+| 413  | `payload_too_large`        | §5.1 bundle > 25 MiB; §7 value > 64 KiB                                                                                                                                                                                                                              |
+| 413  | `storage_quota_exceeded`   | §7 — `(project, extension)` total would exceed 256 KiB                                                                                                                                                                                                               |
+| 422  | `validation_error`         | bad slug/version/key/path syntax; unknown form or body fields; undeclared grants; settings/layout/policy shape violations                                                                                                                                            |
+| 422  | `bundle_invalid`           | §5.1 — manifest contract problems or zip guard violations; `details` = the dotted-path problem strings. SOLUSDEV-246: also the first-party gate ([widget-bundles.md](widget-bundles.md) §7) — `backend: first-party only (publisher is not Solus staff)` and friends |
+| 429  | `rate_limited`             | §12 budgets or the global limiter                                                                                                                                                                                                                                    |
 
 ---
 

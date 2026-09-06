@@ -1,6 +1,11 @@
 # The `.solus` Folder — Two-Layer Local & Project Config
 
-> **Status: Ticket A IMPLEMENTED (SOLUSDEV-166); Tickets B–E planned.** **SOLUSDEV-233 adds
+> **Status: Ticket A IMPLEMENTED (SOLUSDEV-166); Tickets B–E planned — except that SOLUSDEV-246
+> (STORE ST1) shipped the FIRST slice of Layer 2: the GitHub and GitLab connectors read the
+> committed `.solus/project.toml` and land its `[ext.<id>]` tables (first-party bundle team
+> defaults, ADR-035 §4 as amended 2026-09-05) as one `solus_project_toml` entity; every other table in
+> that file is still ignored (`packages/api/src/solus_api/widgets/solus_config.py`,
+> `docs/api/widget-bundles.md` §6).** **SOLUSDEV-233 adds
 > the first `projects/<id>/` occupant: `projects/<id>/sol/<conversationId>.json` — a
 > machine-local CACHE of a SOL chat's settled turns (instant re-open, offline reading). The
 > server remains the source of truth for conversations; ids are validated main-process-side

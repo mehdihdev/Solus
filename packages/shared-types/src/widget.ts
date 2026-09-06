@@ -21,6 +21,7 @@ const DOMAINS: readonly Domain[] = [
   "simulation",
   "runtime",
   "project",
+  "workspace",
 ];
 const SLOT_SIZES = ["compact", "standard", "wide", "full"] as const;
 /** Stable, URL-safe, lowercase. The id appears in saved layouts and telemetry. */

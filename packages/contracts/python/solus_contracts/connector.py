@@ -34,6 +34,9 @@ class Domain(enum.StrEnum):
     SIMULATION = "simulation"
     RUNTIME = "runtime"
     PROJECT = "project"  # project-level config + documents (ADR-027 amendment, SOLUSDEV-240)
+    #: SOLUSDEV-246 ST2 — the workspace layer (ADR-027 amendment). A connector
+    #: never emits it; it is here so the contract mirrors `models.Domain` exactly.
+    WORKSPACE = "workspace"
 
 
 class AuthKind(enum.StrEnum):

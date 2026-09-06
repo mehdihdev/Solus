@@ -516,7 +516,23 @@ and every error names the step that failed.
 | Red-team fixtures                                    | The bridge test suite includes a hostile bundle fixture (attempts `projectId` params, oversized messages, `../` paths, `javascript:` URLs, private-range `net.fetch`, `sol.ask` with injected instructions) and asserts every refusal and event |
 | IPC sender gating                                    | `ext:*` and `ext-window:*` IPC handlers accept only the app's own renderer windows (`isFromWindow` / `isMainRendererSender`, the SOL window precedent SEC-M1)                                                                                   |
 
-## 10. Open questions
+## 10. First-party capabilities (SOLUSDEV-246, STORE ST1)
+
+Everything above is the COMMUNITY surface and is unchanged. A first-party bundle may in addition
+declare `[backend]`, `[graph]` and `[tools]` in a `schema_version = 2` manifest; the code behind
+those tables is an in-repo package under `packages/api/src/solus_api/widgets/<id>/`, never bytes
+in the bundle, and the publish validator refuses the tables from anyone but Solus staff with a
+matching package. Routes mount at `/api/v1/projects/{project_id}/widgets/<id>/…` behind the
+install row; tools register per request through the W0-04 registry as `<id>.<name>`; kinds land as
+`ext:<id>:<name>` with `origin="extension"`. The desktop needs nothing new: the frame, protocol,
+bridge and Store are exactly as documented here, and the v2 tables are simply parsed and ignored
+by the renderer. Design and routes: `docs/api/widget-bundles.md`. **STORE ST2** adds every
+install to the project graph as a `solus:widget` node beside a `solus:live_bench` node under a
+per-project `solus:workspace` root (domain `workspace`, origin `system`), registered and removed
+by the install lifecycle and readable at `GET /projects/{id}/widgets/graph` for the workspace
+tree a later ticket renders; SOL, checkers and fingerprinting never see that layer.
+
+## 11. Open questions
 
 1. **Persistence of developer registrations across app restarts — RESOLVED as shipped.**
    Registrations persist in `~/.solus/extensions/index.json` as `source: "dev"` entries with

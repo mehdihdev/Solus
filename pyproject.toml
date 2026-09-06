@@ -125,6 +125,11 @@ warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Per-test ceiling (pytest-timeout). The slowest legitimate tests are the 3 s
+# timeout tests and STEP parses (seconds); five minutes is only ever hit by a
+# hang, which then fails with every thread's stack instead of stalling CI.
+timeout = 300
+timeout_method = "thread"
 testpaths = ["packages", "integrations", "reasoning", "livebench", "infrastructure/ci/tests"]
 addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros"
 # Setting norecursedirs REPLACES pytest's defaults, so the defaults we rely on

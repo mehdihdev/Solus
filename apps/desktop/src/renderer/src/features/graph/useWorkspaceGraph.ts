@@ -44,6 +44,11 @@ export function clearWorkspaceGraphCache(): void {
   generation += 1
 }
 
+/** Drop one project's retained snapshot (its graph is gone with the project — SOLUSDEV-242). */
+export function forgetWorkspaceGraph(projectId: string): void {
+  retained.delete(projectId)
+}
+
 useAuthStore.subscribe((next, previous) => {
   if (next.user?.email !== previous.user?.email || next.status !== previous.status)
     clearWorkspaceGraphCache()

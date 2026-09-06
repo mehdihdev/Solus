@@ -20,8 +20,12 @@ from solus_contracts.extension_manifest import (
     EXTENSION_MANIFEST_FILENAME,
     EXTENSION_MANIFEST_SCHEMA_VERSION,
     PERMISSION_SCOPES,
+    SUPPORTED_SCHEMA_VERSIONS,
+    Backend,
     ExtensionManifest,
     ExtensionMeta,
+    Graph,
+    GraphKind,
     PageView,
     Permissions,
     SettingField,
@@ -29,10 +33,15 @@ from solus_contracts.extension_manifest import (
     Store,
     StoreLinks,
     StoreSection,
+    Tools,
     Views,
     WidgetView,
     WindowView,
+    composed_tool_name,
+    declares_first_party,
+    graph_kind_name,
     is_safe_extension_id,
+    manifest_document,
     manifest_problems,
     parse_extension_manifest,
 )
@@ -47,11 +56,136 @@ def _load(name: str) -> Any:
 # --- the shared fixtures validate ------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["manifest-full.json", "manifest-minimal.json"])
-def test_fixtures_validate(name: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "schema_version"),
+    [
+        ("manifest-full.json", 1),
+        ("manifest-minimal.json", 1),
+        ("manifest-v2-first-party.json", 2),
+        ("manifest-v2-community.json", 2),
+    ],
+)
+def test_fixtures_validate(name: str, schema_version: int) -> None:
     manifest = parse_extension_manifest(_load(name))
-    assert manifest.schema_version == EXTENSION_MANIFEST_SCHEMA_VERSION
+    assert manifest.schema_version == schema_version
+    assert manifest.schema_version in SUPPORTED_SCHEMA_VERSIONS
     assert manifest_problems(_load(name)) == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "manifest-full.json",
+        "manifest-minimal.json",
+        "manifest-v2-first-party.json",
+        "manifest-v2-community.json",
+    ],
+)
+def test_the_stored_document_round_trips_through_both_parsers(name: str) -> None:
+    """What the registry stores (and ships to the desktop) must parse again. A
+    bare model_dump does not at schema_version 1 — the defaulted v2 tables come
+    back as unknown fields (caught by the STORE ST2 real run, not by a suite)."""
+    original = _load(name)
+    document = manifest_document(parse_extension_manifest(original))
+    assert manifest_problems(document) == [], document
+    assert parse_extension_manifest(document) == parse_extension_manifest(original)
+    if original["schema_version"] == 1:
+        assert not ({"backend", "graph", "tools"} & document.keys())
+    # A bare dump of a v1 manifest is exactly the shape both parsers refuse.
+    bare = parse_extension_manifest(original).model_dump(mode="json", exclude_none=True)
+    assert (manifest_problems(bare) == []) == (original["schema_version"] == 2)
+
+
+def test_latest_schema_version_is_two_and_one_stays_supported() -> None:
+    # SOLUSDEV-246 (STORE ST1): v2 adds the first-party tables; every v1
+    # manifest published before it parses unchanged.
+    assert EXTENSION_MANIFEST_SCHEMA_VERSION == 2
+    assert SUPPORTED_SCHEMA_VERSIONS == (1, 2)
+
+
+# --- SOLUSDEV-246: the first-party tables ----------------------------------
+
+
+def test_v1_manifests_default_the_first_party_tables_to_nothing() -> None:
+    manifest = parse_extension_manifest(_load("manifest-minimal.json"))
+    assert manifest.backend is None
+    assert manifest.graph.kinds == []
+    assert manifest.tools.names == []
+    assert declares_first_party(manifest) is False
+
+
+def test_v2_community_manifest_declares_nothing_first_party() -> None:
+    manifest = parse_extension_manifest(_load("manifest-v2-community.json"))
+    assert declares_first_party(manifest) is False
+
+
+def test_v2_first_party_manifest_carries_backend_graph_and_tools() -> None:
+    manifest = parse_extension_manifest(_load("manifest-v2-first-party.json"))
+    assert manifest.backend is not None
+    assert manifest.backend.capability == "fixture-bundle"
+    assert manifest.backend.routes is True
+    assert [k.name for k in manifest.graph.kinds] == ["note"]
+    assert manifest.graph.kinds[0].domain == "code"
+    assert manifest.tools.names == ["add_note", "clear_notes"]
+    assert declares_first_party(manifest) is True
+
+
+def test_namespacing_helpers_match_the_documented_shapes() -> None:
+    # Graph kinds land as `ext:<id>:<name>`; tools register as `<id>.<name>`
+    # (the dotted form the model-boundary translation already handles).
+    assert graph_kind_name("fixture-bundle", "note") == "ext:fixture-bundle:note"
+    assert composed_tool_name("fixture-bundle", "add_note") == "fixture-bundle.add_note"
+    # Longest legal id (64) + "." + longest legal name (32) stays under the
+    # provider cap of 128 the prompt layer enforces.
+    assert len(composed_tool_name("a" * 64, "b" * 32)) <= 128
+
+
+@pytest.mark.parametrize(
+    ("name", "needle"),
+    [
+        ("v2-bad-tool-name.invalid.json", "tools.names.0"),
+        ("v2-capability-mismatch.invalid.json", "backend.capability"),
+        ("v1-with-backend.invalid.json", "backend"),
+        ("v2-too-many-kinds.invalid.json", "graph.kinds"),
+    ],
+)
+def test_first_party_tables_are_strict(name: str, needle: str) -> None:
+    with pytest.raises(ValidationError):
+        parse_extension_manifest(_load(name))
+    problems = manifest_problems(_load(name))
+    assert problems and any(needle in p for p in problems), problems
+
+
+def test_v1_manifest_treats_first_party_tables_as_unknown_fields() -> None:
+    # Parity with the TS parser: at schema_version 1 the tables are simply
+    # unknown, so an old bundle carrying them fails exactly as before.
+    problems = manifest_problems(_load("v1-with-backend.invalid.json"))
+    assert any(p.startswith("backend: unknown field") for p in problems), problems
+
+
+def test_graph_kind_names_are_distinct_and_domains_closed() -> None:
+    m = _load("manifest-v2-first-party.json")
+    m["graph"] = {"kinds": [{"name": "note", "domain": "code"}, {"name": "note", "domain": "code"}]}
+    assert any("graph.kinds" in p for p in manifest_problems(m))
+    m["graph"] = {"kinds": [{"name": "note", "domain": "plumbing"}]}
+    assert any("graph.kinds.0.domain" in p for p in manifest_problems(m))
+
+
+def test_tool_names_are_distinct_and_bounded() -> None:
+    m = _load("manifest-v2-first-party.json")
+    m["tools"] = {"names": ["add_note", "add_note"]}
+    assert any("tools.names" in p for p in manifest_problems(m))
+    m["tools"] = {"names": [f"t{i}" for i in range(17)]}
+    assert any("tools.names" in p for p in manifest_problems(m))
+
+
+def test_backend_routes_defaults_false_and_capability_is_required() -> None:
+    m = _load("manifest-v2-first-party.json")
+    m["backend"] = {"capability": "fixture-bundle"}
+    parsed = parse_extension_manifest(m)
+    assert parsed.backend is not None and parsed.backend.routes is False
+    m["backend"] = {"routes": True}
+    assert any("backend.capability" in p for p in manifest_problems(m))
 
 
 def test_minimal_manifest_defaults_the_optional_blocks() -> None:
@@ -90,6 +224,10 @@ def test_the_field_manifest_is_current() -> None:
             Store,
             StoreLinks,
             StoreSection,
+            Backend,
+            Graph,
+            GraphKind,
+            Tools,
         ]
     )
     committed = json.loads(path.read_text()) if path.is_file() else None
@@ -128,7 +266,8 @@ def test_newer_schema_version_is_rejected_here() -> None:
 
 
 def _minimal() -> dict[str, Any]:
-    return _load("manifest-minimal.json")
+    data: dict[str, Any] = _load("manifest-minimal.json")
+    return data
 
 
 def _with_privacy(m: dict[str, Any]) -> dict[str, Any]:

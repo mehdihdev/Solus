@@ -57,7 +57,7 @@ describe('ProjectSwitcher', () => {
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
     const target = await screen.findByText('Rover MK3')
     await userEvent.click(target)
-    expect(onSwitch).toHaveBeenCalledWith({ id: 'p2', name: 'Rover MK3' })
+    expect(onSwitch).toHaveBeenCalledWith({ id: 'p2', name: 'Rover MK3', teamId: 't1' })
   })
 
   it('offers a way back to all projects (Home)', async () => {

@@ -66,7 +66,11 @@ from solus_api.schemas import (
     serialize_team_summary,
     serialize_user,
 )
-from solus_api.services.connections import is_connection_owned, revoke_connection
+from solus_api.services.connections import (
+    delete_legacy_family_if_retired,
+    is_connection_owned,
+    revoke_connection,
+)
 from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_team
 
@@ -142,12 +146,13 @@ async def delete_projects_cascade(
     credentials. Explicit, not FK-cascade (portable across PG/SQLite)."""
     if not project_ids:
         return
-    sources = (
-        await session.execute(
-            select(Source.id, Source.secret_ref).where(Source.project_id.in_(project_ids))
-        )
-    ).all()
+    rows = (await session.scalars(select(Source).where(Source.project_id.in_(project_ids)))).all()
+    sources = [(row.id, row.secret_ref) for row in rows]
     if secret_store is not None:
+        # Families retired by a move but not yet swept go with the rows
+        # (SOLUSDEV-242) — after this, nothing could derive them.
+        for owed in rows:
+            await delete_legacy_family_if_retired(secret_store, owed)
         for _sid, ref in sources:
             # SOLUSDEV-241: a connection-owned ref is the account's, shared by
             # every project bound to it — the connection's own lifecycle deletes

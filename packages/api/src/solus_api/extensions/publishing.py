@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from solus_contracts.extension_manifest import SEMVER_PATTERN, ExtensionManifest
+from solus_contracts.extension_manifest import SEMVER_PATTERN, ExtensionManifest, manifest_document
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
@@ -140,25 +140,30 @@ async def find_extension_by_slug(session: AsyncSession, slug: str) -> Extension 
 
 
 async def get_or_create_publisher(
-    session: AsyncSession, *, user_id: uuid.UUID, display_name: str
+    session: AsyncSession, *, user_id: uuid.UUID, display_name: str, is_staff: bool = False
 ) -> ExtensionPublisher:
     """§5.1 step 3: the row is created on the user's first publish; `display_name`
     is seeded from the manifest then and not rewritten by later publishes. A
     reserved (vendor-impersonating) name is refused at that seeding moment only
-    — `409 publisher_name_reserved` — so existing publishers are unaffected."""
+    — `409 publisher_name_reserved` — so existing publishers are unaffected.
+    Solus staff (SOLUSDEV-246) may seed a reserved name: a first-party bundle
+    really is published by Solus, and the check exists to stop impersonation."""
     publisher = await session.scalar(
         select(ExtensionPublisher).where(
             ExtensionPublisher.user_id == user_id, ExtensionPublisher.deleted_at.is_(None)
         )
     )
+    reserved = APIError(409, "publisher_name_reserved", "This publisher name is reserved for Solus")
     if publisher is None:
-        if is_reserved_publisher_name(display_name):
-            raise APIError(
-                409, "publisher_name_reserved", "This publisher name is reserved for Solus"
-            )
+        if is_reserved_publisher_name(display_name) and not is_staff:
+            raise reserved
         publisher = ExtensionPublisher(user_id=user_id, display_name=display_name)
         session.add(publisher)
         await session.flush()
+    elif is_reserved_publisher_name(publisher.display_name) and not is_staff:
+        # A publisher seeded under a reserved name while on staff stops
+        # publishing as "Solus" the moment the account leaves the staff list.
+        raise reserved
     return publisher
 
 
@@ -211,7 +216,10 @@ async def create_version(
         id=version_id,
         extension_id=extension.id,
         version=manifest.extension.version,
-        manifest=manifest.model_dump(mode="json", exclude_none=True),
+        # The AUTHORED shape (contract `manifest_document`): a v1 manifest must not
+        # gain the defaulted v2 tables, or its own re-parse — on install, and on
+        # the desktop — rejects it as unknown fields.
+        manifest=manifest_document(manifest),
         bundle_storage=store.backend,
         content_hash=content_hash,
         bundle_size_bytes=len(data),

@@ -18,6 +18,7 @@ import { hydrateOnboarding, persistOnboardingStep } from './onboardingSync'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { switchWorkspaceProject } from '../workspace/projectSwitch'
 
 /** Upper bound on waiting for the terminal 'done' write before navigating. */
 const DONE_PERSIST_TIMEOUT_MS = 2000
@@ -74,7 +75,11 @@ export function Onboarding(): React.JSX.Element {
     }).then((result) => {
       workspace.setLinked(result.linked)
       if (result.teamId) workspace.setTeamId(result.teamId)
-      if (result.project) workspace.setProject(result.project)
+      if (result.project)
+        switchWorkspaceProject(
+          { ...result.project, ...(result.teamId ? { teamId: result.teamId } : {}) },
+          'onboarding'
+        )
     })
   }
 

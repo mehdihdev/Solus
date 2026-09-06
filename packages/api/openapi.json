@@ -1316,6 +1316,23 @@
               ],
               "title": "Actor"
             }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
           }
         ],
         "responses": {
@@ -2192,6 +2209,78 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response List Connections Api V1 Users Me Connections Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/connections/legacy": {
+      "get": {
+        "summary": "List Legacy",
+        "description": "The caller's project-scoped grants from before account-level connections\nthat are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as\n\"sign in once to move it\" \u2014 or, when the caller already holds the proving\ngrant, offers the confirmed move. Nothing here is a usable grant.",
+        "operationId": "list_legacy_api_v1_users_me_connections_legacy_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Legacy Api V1 Users Me Connections Legacy Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/connections/adopt": {
+      "post": {
+        "summary": "Adopt",
+        "description": "Move the NAMED legacy grants to the caller's account (SOLUSDEV-242 / H2)\n\u2014 explicit and confirmed by the caller, only for an account they have\nPROVED with a CONNECTED connection of their own, only in live projects they\nare a non-viewer member of. The source mirrors the grant (no copied secret,\nthe project keeps syncing); nothing widens without `confirm_access`. The\nproject-owned token family is swept after the commit.",
+        "operationId": "adopt_api_v1_users_me_connections_adopt_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Adopt Api V1 Users Me Connections Adopt Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -7951,6 +8040,205 @@
           }
         }
       }
+    },
+    "/api/v1/projects/{project_id}/widgets/graph": {
+      "get": {
+        "summary": "Get Workspace Graph",
+        "description": "SOLUSDEV-246 ST2 (widget-bundles.md \u00a710): the workspace layer W5 renders \u2014\nthe `solus:workspace` root, `solus:live_bench`, and one `solus:widget` per\ninstall, with the `contains` edges. A pure READ (a viewer may call it; no\nrow is written): the layer is built by the install lifecycle and healed by\n`POST \u2026/graph/reconcile`. Until then `root`/`live_bench` are null.",
+        "operationId": "get_workspace_graph_api_v1_projects__project_id__widgets_graph_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Workspace Graph Api V1 Projects  Project Id  Widgets Graph Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/widgets/graph/reconcile": {
+      "post": {
+        "summary": "Reconcile Workspace Graph Route",
+        "description": "Heal the layer from the install rows (backfill installs that predate ST2,\nrefresh attrs, prune orphans). A WRITE: `member` floor and the shared\ninstall-write budget, like every other extension mutation.",
+        "operationId": "reconcile_workspace_graph_route_api_v1_projects__project_id__widgets_graph_reconcile_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reconcile Workspace Graph Route Api V1 Projects  Project Id  Widgets Graph Reconcile Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/widgets/fixture-bundle/notes": {
+      "get": {
+        "summary": "List Notes",
+        "operationId": "list_notes_api_v1_projects__project_id__widgets_fixture_bundle_notes_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Notes Api V1 Projects  Project Id  Widgets Fixture Bundle Notes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Note",
+        "description": "A capability WRITE: the guard already applied the member floor and the\ninstall-write budget before this handler ran (widget-bundles.md \u00a73).",
+        "operationId": "create_note_api_v1_projects__project_id__widgets_fixture_bundle_notes_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Note Api V1 Projects  Project Id  Widgets Fixture Bundle Notes Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7963,6 +8251,32 @@
         ],
         "title": "ActionMode",
         "description": "How SOL is allowed to act on this request: explain, or operate."
+      },
+      "AdoptRequest": {
+        "properties": {
+          "source_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Source Ids"
+          },
+          "confirm_access": {
+            "type": "boolean",
+            "title": "Confirm Access",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_ids"
+        ],
+        "title": "AdoptRequest",
+        "description": "SOLUSDEV-242 (H2): the explicit, confirmed move of NAMED legacy sources\nto the caller's proved account. `confirm_access` is the caller accepting a\ngrant wider than a source ever recorded (shown in the confirmation)."
       },
       "AttachmentIn": {
         "properties": {
@@ -8675,6 +8989,22 @@
           "provider"
         ],
         "title": "MujocoSimConfig"
+      },
+      "NoteBody": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "NoteBody"
       },
       "OAuthExchange": {
         "properties": {

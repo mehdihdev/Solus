@@ -104,6 +104,8 @@ describe('ProjectOverview', () => {
       refresh
     })
     vi.mocked(resources.updateProject).mockResolvedValue({} as never)
+    // The Overview only renders for the OPEN project; the rename keeps it in step.
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2' } })
     render(<ProjectOverview onNavigate={vi.fn()} />)
 
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
@@ -120,6 +122,34 @@ describe('ProjectOverview', () => {
     )
     expect(useWorkspaceStore.getState().project).toEqual({ id: 'p1', name: 'Rover MK3' })
     expect(refresh).toHaveBeenCalled()
+  })
+
+  it('renaming keeps the project’s team — a rename is not a switch (SOLUSDEV-242)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
+    vi.mocked(hook.useProjectOverview).mockReturnValue({
+      status: 'ready',
+      id: 'p1',
+      name: 'Rover MK2',
+      description: '',
+      entityCount: 0,
+      relationCount: 0,
+      sources: [],
+      refresh: vi.fn().mockResolvedValue(undefined)
+    })
+    vi.mocked(resources.updateProject).mockResolvedValue({} as never)
+    render(<ProjectOverview onNavigate={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    const name = screen.getByLabelText('Project name')
+    await userEvent.clear(name)
+    await userEvent.type(name, 'Rover MK3')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(useWorkspaceStore.getState().project).toEqual({
+        id: 'p1',
+        name: 'Rover MK3',
+        teamId: 't1'
+      })
+    )
   })
 
   it('offers a local folder section for the open project', () => {

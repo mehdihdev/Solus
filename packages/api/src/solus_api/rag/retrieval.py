@@ -104,6 +104,9 @@ def _entity_scope(project_id: UUID, domains: list[Domain] | None) -> list[Column
     scope: list[ColumnElement[bool]] = [
         GraphEntity.project_id == project_id,  # IN-QUERY tenant scoping — the invariant
         GraphEntity.deleted_at.is_(None),
+        # SOLUSDEV-246 ST2: the workspace layer is never retrievable as context,
+        # whatever `domains` says.
+        GraphEntity.domain != Domain.WORKSPACE,
     ]
     if domains is not None:
         scope.append(GraphEntity.domain.in_(domains))

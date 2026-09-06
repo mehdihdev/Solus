@@ -57,3 +57,15 @@ describe('activityText', () => {
     expect(activityText(row('future.event_kind'))).toBe('future: event kind')
   })
 })
+
+describe('activityText — connections (SOLUSDEV-242)', () => {
+  it('humanises adoption and revocation', () => {
+    const base = { id: 'a', domain: null, actor_id: null, project_id: null, created_at: '' }
+    expect(
+      activityText({ ...base, type: 'connection.adopted', payload: { provider: 'onshape' } })
+    ).toBe('moved the onshape connection to account scope')
+    expect(
+      activityText({ ...base, type: 'connection.revoked', payload: { provider: 'github' } })
+    ).toBe('revoked the github account')
+  })
+})

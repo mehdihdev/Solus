@@ -33,6 +33,11 @@ def test_domain_vocabulary_matches_adr027_canonical_set() -> None:
     from solus_contracts.connector import Domain as ContractDomain
 
     assert {d.value for d in ContractDomain} == {d.value for d in ApiDomain}
+    # SOLUSDEV-246 ST2: the sixth domain — the workspace layer (ADR-027 amendment 2026-09-06).
+    from solus_contracts.extension_manifest import GRAPH_DOMAINS
+
+    assert "workspace" in {d.value for d in ApiDomain}
+    assert set(GRAPH_DOMAINS) == {d.value for d in ApiDomain}
 
 
 def test_auth_kinds_match_the_draft() -> None:

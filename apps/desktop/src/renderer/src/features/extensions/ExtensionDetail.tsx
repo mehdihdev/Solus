@@ -236,8 +236,8 @@ function UninstallModal({
     <ModalShell onClose={onClose}>
       <div style={{ fontSize: 16, fontWeight: 600 }}>Uninstall {name}?</div>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        Its widgets and checks leave this project. Graph data it already added stays. Your settings
-        are kept if you reinstall.
+        Its widgets, tools and the graph data it added leave this project. Its settings are removed
+        too.
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
         <Button kind="ghost" size="sm" onClick={onClose}>

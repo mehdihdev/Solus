@@ -13,14 +13,17 @@ Source of truth: `docs/contracts/extension-manifest.md`;
 
 ## Top level
 
-| Key              | Type    | Required | Rule                                                                                                 |
-| ---------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `schema_version` | integer | yes      | Must be `1`. A higher number is "newer than this Solus" (listed, not loaded) and rejected at publish |
-| `[extension]`    | table   | yes      | Identity — see below                                                                                 |
-| `[views]`        | table   | yes      | At least one of `widget`, `page`, `window`                                                           |
-| `[permissions]`  | table   | no       | Defaults to no scopes, no network                                                                    |
-| `[settings]`     | table   | no       | Defaults to no fields                                                                                |
-| `[store]`        | table   | yes      | `overview` is required                                                                               |
+| Key              | Type    | Required | Rule                                                                                                |
+| ---------------- | ------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `schema_version` | integer | yes      | `1` or `2`. A higher number is "newer than this Solus" (listed, not loaded) and rejected at publish |
+| `[extension]`    | table   | yes      | Identity — see below                                                                                |
+| `[views]`        | table   | yes      | At least one of `widget`, `page`, `window`                                                          |
+| `[permissions]`  | table   | no       | Defaults to no scopes, no network                                                                   |
+| `[settings]`     | table   | no       | Defaults to no fields                                                                               |
+| `[store]`        | table   | yes      | `overview` is required                                                                              |
+| `[backend]`      | table   | no       | **schema_version 2, first-party only** — see below                                                  |
+| `[graph]`        | table   | no       | **schema_version 2, first-party only** — see below                                                  |
+| `[tools]`        | table   | no       | **schema_version 2, first-party only** — see below                                                  |
 
 The manifest text itself must be valid UTF-8 and ≤ 64 KiB.
 
@@ -202,6 +205,39 @@ extension can read project data or send bytes off the machine. It is shown to ev
 they grant. State what you read, what you store (`storage.own`), what you send and to which origins,
 and whether you call SOL (`sol.ask` is metered to the user's own credits).
 
+## `[backend]`, `[graph]`, `[tools]` — first-party only (schema_version 2)
+
+These three tables exist so a bundle Solus ships can add server-side capability: routes, SOL
+tools and a graph node type. They are a **declaration, not code** — the zip never carries Python.
+Publishing a manifest that uses any of them requires a Solus staff account and an in-repo
+capability package with the same id; anyone else gets `422 bundle_invalid` with
+`backend: first-party only (publisher is not Solus staff)`. At `schema_version = 1` they are
+unknown fields. Community bundles do not need them: the bridge is the whole API.
+
+| Table / field        | Type            | Rule                                                                                                                                                                                      |
+| -------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend.capability` | string          | Must equal `extension.id`                                                                                                                                                                 |
+| `backend.routes`     | boolean         | Default `false`. `true` mounts the package's router at `/api/v1/projects/{project_id}/widgets/<id>/`                                                                                      |
+| `graph.kinds`        | array of tables | ≤ 8 of `{ name, domain }`; `name` `^[a-z][a-z0-9_]{0,31}$` and distinct; `domain` ∈ `code \| electrical \| mechanical \| simulation \| runtime \| workspace`. Stored as `ext:<id>:<name>` |
+| `tools.names`        | array of string | ≤ 16, distinct, same name rule. Registered with SOL as `<id>.<name>`                                                                                                                      |
+
+```toml
+schema_version = 2
+
+[backend]
+capability = "fixture-bundle"
+routes = true
+
+[graph]
+kinds = [{ name = "note", domain = "code" }]
+
+[tools]
+names = ["add_note", "clear_notes"]
+```
+
+Uninstalling a first-party bundle soft-deletes the graph entities of its declared kinds in that
+project, removes its settings, storage and canvas slots — nothing of it remains.
+
 ## File references
 
 Every path in the manifest (`entry`, `icon`, `overview`, `privacy_policy`, `screenshots[]`,
@@ -237,7 +273,12 @@ have at most 60 characters`). Find them in `packages/shared-types/src/extension-
 | Path                                                              | Message                                                                                                                                                                             |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `manifest`                                                        | `must be a table` (the file did not decode to a table)                                                                                                                              |
-| `schema_version`                                                  | `must be an integer` · `must be 1` · `2 is newer than 1`                                                                                                                            |
+| `schema_version`                                                  | `must be an integer` · `must be one of 1, 2` · `3 is newer than 2`                                                                                                                  |
+| `manifest.backend` / `.graph` / `.tools` (at schema_version 1)    | `unknown field`                                                                                                                                                                     |
+| `backend.capability`                                              | `must be a lowercase slug (2–64 chars)` · `must equal extension.id`                                                                                                                 |
+| `backend.routes`                                                  | `must be a boolean`                                                                                                                                                                 |
+| `graph.kinds`                                                     | `must be a list of at most 8 kinds` · `entries must be distinct` · `.N.name: must be a lowercase snake_case name (≤32 chars)` · `.N.domain: must be one of code, …`                 |
+| `tools.names`                                                     | `must be a list of at most 16 names` · `entries must be distinct` · `.N: must be a lowercase snake_case name (≤32 chars)`                                                           |
 | `manifest.<key>` / `<table>.<key>`                                | `unknown field` — at every level, including inside `[store]`                                                                                                                        |
 | `extension.id`                                                    | `must be a lowercase slug (2–64 chars)` · `reserved id`                                                                                                                             |
 | `extension.name` etc.                                             | `must be a string` · `length must be 1–60`                                                                                                                                          |

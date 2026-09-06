@@ -10,7 +10,7 @@ import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
 import { Mono } from '../../components/ui/Mono'
 import { useAuthStore } from '../../store/authStore'
-import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import { WorkspaceScreen } from '../graph/WorkspaceScreen'
 import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
@@ -35,6 +35,8 @@ import { TitleBar } from './TitleBar'
 import { MenuBar } from './MenuBar'
 import { useShellStore, routeKey, type MainScreen, type ShellRoute } from './shellStore'
 import { useFocusStore } from './focusStore'
+import { switchWorkspaceProject } from './projectSwitch'
+import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 import { useExtensionRail, type ExtensionRailData } from './useExtensionRail'
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import type { RailExtensionEntry } from './extensionRail'
@@ -60,8 +62,8 @@ interface ShellNavigation {
   notifOpen: boolean
   setNotifOpen: React.Dispatch<React.SetStateAction<boolean>>
   go: (screen: MainScreen) => void
-  openProject: (p: { id: string; name: string }) => void
-  switchProject: (p: { id: string; name: string }) => void
+  openProject: (p: WorkspaceProject) => void
+  switchProject: (p: WorkspaceProject) => void
   openAlert: (alertId: string) => void
   openExtensionPage: (slug: string) => void
   /** The toast's action button: an alert id opens that alert, else the toast's screen. */
@@ -84,24 +86,21 @@ function useShellNavigation(): ShellNavigation {
     setRoute({ name: screen })
     setNotifOpen(false)
   }
-  const openProject = (p: { id: string; name: string }): void => {
-    useWorkspaceStore.getState().setProject(p)
-    // Entity ids are project-scoped, so the focus cache must not survive the switch (WS-01).
-    useFocusStore.getState().clearProject()
+  const openProject = (p: WorkspaceProject): void => {
+    // Every project-scoped store is swapped in ONE place (SOLUSDEV-242).
+    switchWorkspaceProject(p, route.name === 'team' ? 'team' : 'home')
     // Opening a project from Home/Team lands on the project hub (SOLUSDEV-164)
     // — an orienting overview — rather than the Context Model canvas.
     go('overview')
   }
-  const switchProject = (p: { id: string; name: string }): void => {
+  const switchProject = (p: WorkspaceProject): void => {
     // Switching from the topbar only re-scopes the CURRENT screen to the new
     // project — it must not navigate away and interrupt the user's flow.
-    useWorkspaceStore.getState().setProject(p)
-    useFocusStore.getState().clearProject()
-    // A detail page belongs to the project it was opened in (SOLUSDEV-235).
-    useExtensionsStore.getState().select(null)
-    // So does an extension's page view: the new project may not have it
-    // installed, so the rail entry may be gone — fall back to Overview (EXT-14).
-    if (route.name === 'ext-page') go('overview')
+    switchWorkspaceProject(p, 'topbar')
+    // A detail route belongs to the project it was opened in: an alert id is
+    // project-scoped, and an extension's page view may not be installed in
+    // the new project (its rail entry may be gone) — fall back to Overview.
+    if (route.name === 'ext-page' || route.name === 'alert') go('overview')
     setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {
@@ -126,6 +125,8 @@ function useShellNavigation(): ShellNavigation {
     // shared workstation, leaving it would let the NEXT user read them with no request and no
     // authorization check (WS-01).
     useFocusStore.getState().reset()
+    // The retained graph snapshots are the same kind of data (SOLUSDEV-234 cache, WS-01 rule).
+    clearWorkspaceGraphCache()
     // Per-project install state is this user's workspace configuration; on a shared
     // workstation it must not outlive the session (same reasoning as WS-01).
     useExtensionsStore.getState().reset()
@@ -308,14 +309,14 @@ function ScreenView({
   goBack
 }: {
   route: ShellRoute
-  openProject: (project: { id: string; name: string }) => void
+  openProject: (project: WorkspaceProject) => void
   navigate: (screen: MainScreen) => void
   goBack: () => void
 }): React.JSX.Element | null {
   const screen = ((): React.JSX.Element | null => {
     switch (route.name) {
       case 'home':
-        return <HomeScreen onOpenProject={openProject} />
+        return <HomeScreen onOpenProject={openProject} onNavigate={navigate} />
       case 'overview':
         return <ProjectOverview onNavigate={navigate} />
       case 'bench':

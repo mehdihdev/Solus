@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "extension": {
     "id": "future",
     "name": "Future",
@@ -8,6 +8,13 @@
     "summary": "Written by a newer Solus.",
     "requires": []
   },
-  "views": { "widget": { "entry": "index.html", "preferred": "compact" } },
-  "store": { "overview": "OVERVIEW.md" }
+  "views": {
+    "widget": {
+      "entry": "index.html",
+      "preferred": "compact"
+    }
+  },
+  "store": {
+    "overview": "OVERVIEW.md"
+  }
 }

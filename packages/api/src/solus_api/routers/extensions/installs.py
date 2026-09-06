@@ -25,7 +25,12 @@ from solus_api.core.pagination import encode_cursor
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectContext, ProjectCtx, SessionDep, SettingsDep, require_role
 from solus_api.extensions import installs as svc
-from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
+from solus_api.extensions.ratelimit import (
+    INSTALL_WRITE_LIMITER,
+    WRITE_WINDOW_SECONDS,
+    get_or_create_limiter,
+    rate_limited_response,
+)
 from solus_api.extensions.schemas import serialize_install, serialize_storage_value
 from solus_api.extensions.schemas import serialize_widget_layout as _layout_out
 from solus_api.extensions.settings_schema import (
@@ -40,12 +45,23 @@ from solus_api.models import (
     WIDGET_LAYOUT_MAX_SLOTS,
     Extension,
     ExtensionInstall,
+    ExtensionPublisher,
     ExtensionStorage,
     ExtensionVersion,
+    GraphEntity,
     Role,
     WidgetLayout,
 )
 from solus_api.services.events import emit_event
+from solus_api.widgets.graph_nodes import (
+    facts_from_install,
+    find_widget_node,
+    register_widget_node,
+    unregister_widget_node,
+    update_widget_node,
+)
+from solus_api.widgets.guard import pinned_manifest_or_none
+from solus_api.widgets.uninstall import BundleSweep, remove_bundle_traces
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}")
 
@@ -53,10 +69,10 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}")
 LAYOUT_REF_PATTERN = r"^(builtin:[a-z][a-z0-9-]{0,63}|ext:[a-z][a-z0-9-]{1,63})$"
 #: Raw-body ceiling before JSON parsing (the canonical size is what §7 caps).
 _STORAGE_RAW_CEILING = 4 * svc.STORAGE_VALUE_MAX_BYTES
-_INSTALL_LIMITER = "extension_install_write_limiter"
+_INSTALL_LIMITER = INSTALL_WRITE_LIMITER  # shared with widgets/guard.py (SOLUSDEV-246)
 _STORAGE_LIMITER = "extension_storage_write_limiter"
 _STORAGE_READ_LIMITER = "extension_storage_read_limiter"
-_WINDOW_SECONDS = 60
+_WINDOW_SECONDS = WRITE_WINDOW_SECONDS
 _SENTINEL = object()
 
 KeyPath = Annotated[str, Path(pattern=svc.STORAGE_KEY_PATTERN)]
@@ -272,6 +288,7 @@ async def _create_install(
     )
     session.add(install)
     extension.install_count = extension.install_count + 1
+    node = await _register_node(session, ctx, extension, install, target)
     _emit(
         session,
         ctx,
@@ -281,10 +298,31 @@ async def _create_install(
             "version": target.version,
             "granted_scopes": sorted(requested.scopes),
             "granted_network": sorted(requested.network),
+            "graph_node_id": str(node.id) if node is not None else None,
         },
     )
     await session.commit()
     return install
+
+
+async def _register_node(
+    session: AsyncSession,
+    ctx: ProjectContext,
+    extension: Extension,
+    install: ExtensionInstall,
+    pinned: ExtensionVersion,
+) -> GraphEntity | None:
+    """SOLUSDEV-246 ST2: the install's `solus:widget` node (widget-bundles.md §10).
+    Registration is Solus code inside the install transaction — never a bundle's
+    own call. None only when the pinned manifest no longer parses."""
+    publisher = await session.get(ExtensionPublisher, extension.publisher_id)
+    policy = await svc.get_policy(session, ctx.team.id, extension.id)
+    facts = facts_from_install(
+        extension, install, pinned, publisher, blocked=bool(policy and policy.blocked)
+    )
+    if facts is None:
+        return None
+    return await register_widget_node(session, install.project_id, facts)
 
 
 async def _update_install(
@@ -309,6 +347,7 @@ async def _update_install(
         # Re-pin: settings the new manifest no longer declares are dropped.
         new_settings = coerce_settings(parse_extension_manifest(target.manifest), install.settings)
         install.version_id = target.id
+        await _register_node(session, ctx, extension, install, target)  # name/version/views follow
     changed_keys = _changed_keys(install.settings, new_settings)
     added, removed = requested - current, current - requested
     if added or removed or changed_keys:
@@ -358,6 +397,7 @@ async def patch_install(
         _emit(session, ctx, "extension.settings_changed", {**base, "changed_keys": changed})
     if body.enabled is not None:
         install.enabled = body.enabled
+        await update_widget_node(session, ctx.project.id, extension.slug, enabled=body.enabled)
         if body.enabled:
             _emit(session, ctx, "extension.enable", base)
         else:
@@ -396,13 +436,33 @@ async def uninstall_extension(
     extension, install = await _installed(session, ctx, slug)
     pinned = await _pinned(session, install)
     deleted = await svc.delete_storage(session, ctx.project.id, extension.id)
+    # SOLUSDEV-246 "no orphans": the bundle's declared kinds are soft-deleted and
+    # its canvas slots pruned in the same transaction (widget-bundles.md §5). A
+    # pinned manifest that no longer parses must never strand the install:
+    # the sweep is skipped (nothing declared → nothing to sweep) and logged.
+    manifest = pinned_manifest_or_none(pinned)
+    swept = (
+        await remove_bundle_traces(session, ctx.project.id, extension.slug, manifest)
+        if manifest is not None
+        else BundleSweep(0, 0)
+    )
+    # ST2: the widget's graph node and every edge touching it go in the same transaction.
+    node = await find_widget_node(session, ctx.project.id, extension.slug)
+    await unregister_widget_node(session, ctx.project.id, extension.slug)
     await session.delete(install)
     extension.install_count = max(0, extension.install_count - 1)
     _emit(
         session,
         ctx,
         "extension.uninstall",
-        {"slug": extension.slug, "version": pinned.version, "storage_rows_deleted": deleted},
+        {
+            "slug": extension.slug,
+            "version": pinned.version,
+            "storage_rows_deleted": deleted,
+            "entities_soft_deleted": swept.entities_soft_deleted,
+            "layout_slots_pruned": swept.layout_slots_pruned,
+            "graph_node_id": str(node.id) if node is not None else None,
+        },
     )
     await session.commit()
     return Response(status_code=204)

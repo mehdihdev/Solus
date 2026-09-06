@@ -7,7 +7,7 @@
 import { useState } from 'react'
 import type { MainScreen } from '../workspace/shellStore'
 import { updateProject, type Source } from '../../lib/api/resources'
-import { useWorkspaceStore } from '../../store/workspaceStore'
+import { renameWorkspaceProject } from '../workspace/projectSwitch'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -154,7 +154,7 @@ function ProjectHeader({
     try {
       await updateProject(id, { name: nextName, description: nextDescription })
       // Keep the topbar/switcher label in step with the rename.
-      useWorkspaceStore.getState().setProject({ id, name: nextName })
+      renameWorkspaceProject(nextName)
       await onSaved()
       return true
     } catch {

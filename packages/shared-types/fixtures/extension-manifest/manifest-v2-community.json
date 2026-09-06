@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "extension": {
+    "id": "hello-two",
+    "name": "Hello Two",
+    "version": "0.2.0",
+    "publisher": "Ada Lovelace",
+    "summary": "A schema_version 2 manifest that declares nothing first-party.",
+    "requires": []
+  },
+  "views": {
+    "widget": {
+      "entry": "index.html",
+      "preferred": "compact"
+    }
+  },
+  "store": {
+    "overview": "OVERVIEW.md"
+  }
+}

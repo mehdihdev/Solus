@@ -13,7 +13,9 @@ import {
   listSelectable,
   startOAuth,
   exchangeOAuth,
+  adoptConnections,
   listConnections,
+  listLegacyConnections,
   revokeConnection,
   listConnectionDocuments,
   addSourceDocument,
@@ -269,6 +271,16 @@ describe('account connections (SOLUSDEV-241)', () => {
   it("lists and revokes the signed-in user's grants", async () => {
     const list = stubClient([])
     await listConnections(list.client)
+    const adopt = stubClient({ adopted: [], skipped: [] })
+    await adoptConnections({ source_ids: ['s1'], confirm_access: true }, adopt.client)
+    expect(adopt.calls[0].path).toBe('/users/me/connections/adopt')
+    expect(adopt.calls[0].options).toMatchObject({
+      method: 'POST',
+      body: { source_ids: ['s1'], confirm_access: true }
+    })
+    const legacy = stubClient([])
+    await listLegacyConnections(legacy.client)
+    expect(legacy.calls[0].path).toBe('/users/me/connections/legacy')
     expect(list.calls[0].path).toBe('/users/me/connections')
 
     const revoke = stubClient({ id: 'c1', disconnected_sources: 2 })
@@ -408,11 +420,13 @@ describe('team resources', () => {
     const { client, calls } = stubClient([])
     await listActivityPage('t1', { cursor: 'cur9' }, client)
     await listActivityPage('t1', {}, client)
+    await listActivityPage('t1', { projectId: 'p1', limit: 3 }, client)
     await listNotificationsPage('cur9', client)
     await listNotificationsPage(undefined, client)
     expect(calls.map((c) => c.path)).toEqual([
       '/teams/t1/activity?cursor=cur9',
       '/teams/t1/activity',
+      '/teams/t1/activity?limit=3&project_id=p1',
       '/users/me/notifications?cursor=cur9',
       '/users/me/notifications'
     ])

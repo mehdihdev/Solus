@@ -62,11 +62,13 @@ from solus_api.schemas import (
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
-    bind_source,
+    bind_to_account,
+    delete_legacy_family_if_retired,
     is_connection_owned,
     list_documents,
     owned_connection,
     reusable_source,
+    sweep_after_commit,
 )
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_add_integration
@@ -234,7 +236,8 @@ async def connect_source(
     await session.flush()
 
     if connection is not None:
-        bind_source(source, connection, preserve_state=reused)
+        # A reused legacy/PAT row retires its own token family (SOLUSDEV-242 MEDIUM-1).
+        bind_to_account(source, connection, preserve_state=reused)
     elif body.token:
         if not connector.supports_token_connect:
             raise APIError(
@@ -279,8 +282,18 @@ async def connect_source(
         payload={"type": provider},
     )
     await session.commit()
+    await _sweep_if_bound(connection, session, secret_store, ctx.user)
     await session.refresh(source)
     return envelope(serialize_source(source))
+
+
+async def _sweep_if_bound(
+    connection: object | None, session: SessionDep, secret_store: SecretStoreDep, user: Any
+) -> None:
+    """SOLUSDEV-242 H2: after a connection-bound connect commits, retire the
+    legacy token family the bind superseded (no-op for token connects)."""
+    if connection is not None:
+        await sweep_after_commit(session, secret_store, user)
 
 
 async def _bindable_connection(
@@ -341,6 +354,9 @@ async def disconnect_source(
     # SOLUSDEV-241: a connection-owned ref is the ACCOUNT's credential, shared
     # by every project bound to it. Disconnecting one project must not revoke
     # the others; only `DELETE /users/me/connections/{id}` deletes that family.
+    # A family this source retired but the sweep had not yet deleted goes now
+    # — the row is about to lose the id it is derived from (SOLUSDEV-242).
+    await delete_legacy_family_if_retired(secret_store, source)
     if source.secret_ref and not is_connection_owned(source.secret_ref):
         await secret_store.delete(source.secret_ref)
         # The OAuth refresh token lives under its own ref (SOLUS-CAD-01) and

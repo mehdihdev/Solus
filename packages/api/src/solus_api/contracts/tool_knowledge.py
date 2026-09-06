@@ -121,9 +121,7 @@ _SHAPES_FILE: Final = (
 
 def _load_customer_shapes() -> tuple[tuple[re.Pattern[str], str], ...]:
     raw = json.loads(_SHAPES_FILE.read_text())
-    return tuple(
-        (re.compile(entry["re"], re.I), entry["why"]) for entry in raw["patterns"]
-    )
+    return tuple((re.compile(entry["re"], re.I), entry["why"]) for entry in raw["patterns"])
 
 
 _CUSTOMER_SHAPED: Final = _load_customer_shapes()

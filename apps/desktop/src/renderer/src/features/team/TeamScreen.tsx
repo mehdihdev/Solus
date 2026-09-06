@@ -12,6 +12,8 @@ import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { Project, TeamMemberApi } from '../../lib/api/resources'
+import type { WorkspaceProject } from '../../store/workspaceStore'
+import { TeamSelect } from '../workspace/TeamSelect'
 import { activityText, actorName } from './activityText'
 import { ActivityModal, ViewAllActivityButton } from './ActivityModal'
 import { ACTIVITY_PREVIEW_COUNT } from './activityFeed.constants'
@@ -22,7 +24,7 @@ import { MANAGER_ROLES, LiveMembers, InviteModal } from './MembersPanel'
 
 export interface TeamScreenProps {
   /** Open a project in the Context Model (wired by the workspace shell). */
-  onOpenProject?: (project: { id: string; name: string }) => void
+  onOpenProject?: (project: WorkspaceProject) => void
 }
 
 /** Route between live and honest-offline rendering by connection status. */
@@ -95,42 +97,6 @@ function TeamScreenOffline(): React.JSX.Element {
 
 /* ============================ LIVE (API-backed) ============================ */
 
-function TeamSwitcher({
-  teams,
-  currentId,
-  onSwitch
-}: {
-  teams: TeamData['teams']
-  currentId: string | undefined
-  onSwitch: TeamData['actions']['switchTeam']
-}): React.JSX.Element | null {
-  if (teams.length < 2) return null
-  return (
-    <select
-      aria-label="Switch team"
-      value={currentId ?? ''}
-      onChange={(e) => onSwitch(e.target.value)}
-      style={{
-        marginTop: 8,
-        background: 'var(--bg)',
-        color: 'var(--tx)',
-        border: '1px solid var(--bd)',
-        borderRadius: 3,
-        padding: '5px 8px',
-        fontSize: 12,
-        fontFamily: 'var(--font-ui)'
-      }}
-    >
-      {teams.map((t) => (
-        <option key={t.team_id} value={t.team_id}>
-          {t.name}
-          {t.is_personal ? ' (personal)' : ''}
-        </option>
-      ))}
-    </select>
-  )
-}
-
 /** Which modal (if any) the team screen has open. */
 type TeamModal = 'invite' | 'newTeam' | 'join' | 'newProject' | null
 
@@ -155,7 +121,12 @@ function TeamHeader({
           {members.length} {members.length === 1 ? 'member' : 'members'}
           {team && !team.is_personal ? '' : ' · personal workspace'}
         </div>
-        <TeamSwitcher teams={teams} currentId={team?.id} onSwitch={actions.switchTeam} />
+        <TeamSelect
+          teams={teams}
+          currentId={team?.id}
+          onSwitch={actions.switchTeam}
+          style={{ marginTop: 8 }}
+        />
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <Button kind="ghost" size="sm" onClick={() => openModal('join')}>
@@ -270,7 +241,8 @@ function TeamModals({
         onClose={close}
         onSubmit={async (name) => {
           const created = await actions.createProject(name)
-          if (created && onOpenProject) onOpenProject({ id: created.id, name: created.name })
+          if (created && onOpenProject)
+            onOpenProject({ id: created.id, name: created.name, teamId: created.team_id })
           return created !== null
         }}
       />
@@ -319,8 +291,10 @@ function ProjectsPanel({
             key={p.id}
             role="button"
             tabIndex={0}
-            onClick={() => onOpenProject?.({ id: p.id, name: p.name })}
-            onKeyDown={(e) => e.key === 'Enter' && onOpenProject?.({ id: p.id, name: p.name })}
+            onClick={() => onOpenProject?.({ id: p.id, name: p.name, teamId: p.team_id })}
+            onKeyDown={(e) =>
+              e.key === 'Enter' && onOpenProject?.({ id: p.id, name: p.name, teamId: p.team_id })
+            }
             className={onOpenProject ? 'interactive' : undefined}
             style={{
               display: 'flex',

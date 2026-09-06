@@ -3,7 +3,13 @@
 // The reference store is what WS-03 and every widget lane develop against until
 // WS-01 lands, so its behaviour IS the contract, not a convenience.
 import { describe, expect, test, vi } from "vitest";
-import { createFocusStore, descend, isSameEntity, type Focus } from "./focus";
+import {
+  createFocusStore,
+  descend,
+  isSameEntity,
+  type Focus,
+  DOMAINS,
+} from "./focus";
 
 const motor: Focus = {
   entity: {
@@ -202,5 +208,19 @@ describe("isSameEntity", () => {
         entityId: motor.entity.entityId,
       }),
     ).toBe(false);
+  });
+});
+
+describe("the Domain vocabulary (ADR-027)", () => {
+  test("carries the seven canonical spellings including the project and workspace layers (SOLUSDEV-246 ST2)", () => {
+    expect([...DOMAINS]).toEqual([
+      "code",
+      "electrical",
+      "mechanical",
+      "simulation",
+      "runtime",
+      "project",
+      "workspace",
+    ]);
   });
 });

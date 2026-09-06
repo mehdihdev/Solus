@@ -140,7 +140,7 @@ function SwitcherDropdown({
               <MenuRow
                 key={p.id}
                 active={p.id === currentId}
-                onClick={() => onSwitch({ id: p.id, name: p.name })}
+                onClick={() => onSwitch({ id: p.id, name: p.name, teamId: p.team_id })}
               >
                 <span
                   style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}

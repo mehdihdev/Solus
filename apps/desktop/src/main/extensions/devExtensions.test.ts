@@ -110,7 +110,7 @@ describe('loadDevExtension — manifest', () => {
   test('a newer manifest schema is refused (this build cannot serve it)', () => {
     const fs = withDevFolder(
       '/ws/my-ext',
-      manifestToml().replace('schema_version = 1', 'schema_version = 2')
+      manifestToml().replace('schema_version = 1', 'schema_version = 3')
     )
     expect(loadDevExtension('/ws/my-ext', fs).ok).toBe(false)
   })

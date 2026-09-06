@@ -25,7 +25,12 @@ import {
 } from './solApi'
 import type { ContextUsedInfo, SolStreamEvent } from './solStream'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import { purgeAllCachedChats, readCachedChat, removeCachedChat as removeCachedChatFile, writeCachedChat } from './solCache'
+import {
+  purgeAllCachedChats,
+  readCachedChat,
+  removeCachedChat as removeCachedChatFile,
+  writeCachedChat
+} from './solCache'
 import { selectConversationId, useOrbStore } from './orbStore'
 
 export interface TraceEntry {
@@ -226,7 +231,11 @@ function notifyAway(projectId: string, prompt: string, failed: boolean): void {
   useShellStore.getState().setToast({
     kind: failed ? 'warn' : 'ok',
     title: failed ? 'SOL turn failed' : 'SOL replied',
-    body: `“${prompt.slice(0, 60)}${prompt.length > 60 ? '…' : ''}” — open SOL to read it.`,
+    // Another project's prompt is that project's business (SOLUSDEV-242): the
+    // toast names the fact, not the text, when the user has moved on.
+    body: sameProject
+      ? `“${prompt.slice(0, 60)}${prompt.length > 60 ? '…' : ''}” — open SOL to read it.`
+      : 'A turn finished in another project — switch back to read it.',
     ...(sameProject ? { action: 'View', screen: 'sol' as const } : {})
   })
 }
@@ -442,7 +451,10 @@ export async function decideConfirmation(
     ...s,
     items: s.items.map((m) =>
       m.confirmations.some((c) => c.confirmationId === confirmationId)
-        ? { ...m, confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId) }
+        ? {
+            ...m,
+            confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId)
+          }
         : m
     )
   }))
@@ -455,8 +467,7 @@ export async function decideConfirmation(
 useAuthStore.subscribe((state, prev) => {
   if (prev.status !== 'authenticated') return
   const signedOut = state.status === 'unauthenticated'
-  const identitySwapped =
-    state.status === 'authenticated' && state.user?.email !== prev.user?.email
+  const identitySwapped = state.status === 'authenticated' && state.user?.email !== prev.user?.email
   if (signedOut || identitySwapped) {
     resetSolChatSessions()
     purgeAllCachedChats()

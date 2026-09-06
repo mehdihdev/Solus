@@ -424,6 +424,7 @@ async def get_sol_registry(
     # dependency graph must not grow httpx/mcp just to resolve a route.
     from solus_api.agent.runtime import build_sol_registry
     from solus_api.agent.tools.hosted_tools import load_hosted_inventory
+    from solus_api.widgets.guard import load_bundle_capabilities
 
     return build_sol_registry(
         sessionmaker,
@@ -438,6 +439,9 @@ async def get_sol_registry(
         hosted_inventory=await load_hosted_inventory(session, ctx.project.id),
         # The provider-quota meter fails open without it (ADR-019 as amended).
         redis=getattr(request.app.state, "redis", None),
+        # SOLUSDEV-246: first-party bundle tools for the bundles installed,
+        # enabled and unblocked in THIS project (widget-bundles.md §4).
+        bundle_capabilities=await load_bundle_capabilities(session, ctx.project.id, ctx.team.id),
     )
 
 

@@ -36,10 +36,13 @@ from solus_api.agent.perf import SemanticCache
 from solus_api.graph.neighborhood import (
     DEFAULT_MAX_ENTITIES,
     MAX_DEPTH,
+    Neighborhood,
     load_neighborhood,
     to_graph_context,
 )
+from solus_api.models import Domain
 from solus_api.rag import retrieval
+from solus_api.widgets.graph_nodes import NON_WORKSPACE_DOMAINS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -48,6 +51,28 @@ if TYPE_CHECKING:
 
     from solus_api.graph.telemetry import TelemetryPlumbing
     from solus_api.rag.retrieval import EmbedFn
+
+
+def _robot_domains(requested: list[str] | None) -> list[Domain]:
+    """The domains SOL may read: everything but `workspace`, intersected with
+    what the caller asked for. An explicit ask for the layer yields nothing."""
+    allowed = list(NON_WORKSPACE_DOMAINS)
+    if not requested:
+        return allowed
+    wanted = set(requested)
+    return [d for d in allowed if d.value in wanted]
+
+
+def _without_workspace_layer(neighborhood: Neighborhood) -> Neighborhood:
+    """Roots are hydrated regardless of domain (a focused widget node is a
+    legitimate anchor for the UI), so the layer is dropped again here — SOL's
+    context never carries a `workspace` entity or an edge touching one."""
+    kept = [e for e in neighborhood.entities if e.domain is not Domain.WORKSPACE]
+    kept_ids = {e.id for e in kept}
+    edges = [e for e in neighborhood.edges if e.src_id in kept_ids and e.dst_id in kept_ids]
+    if len(kept) == len(neighborhood.entities) and len(edges) == len(neighborhood.edges):
+        return neighborhood
+    return Neighborhood(entities=kept, edges=edges, truncated=neighborhood.truncated)
 
 
 class DbSolSystems:
@@ -93,10 +118,13 @@ class DbSolSystems:
                 roots=scope.anchor_entity_ids,
                 depth=depth,
                 entity_types=scope.kinds,
-                domains=scope.domains or None,
+                # SOLUSDEV-246 ST2: the workspace layer (`solus:*`, domain
+                # `workspace`) is never robot context — a caller-supplied domain
+                # list is INTERSECTED with the allowed set, never trusted over it.
+                domains=_robot_domains(scope.domains),
                 max_entities=max_entities,
             )
-        ctx = to_graph_context(neighborhood)
+        ctx = to_graph_context(_without_workspace_layer(neighborhood))
         if clamped and not ctx.truncated:
             ctx = ctx.model_copy(update={"truncated": True})
         return ctx

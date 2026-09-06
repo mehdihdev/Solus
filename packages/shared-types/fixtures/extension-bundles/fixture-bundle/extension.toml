@@ -1,0 +1,43 @@
+# SOLUSDEV-246 (STORE ST1) — the first-party fixture bundle. All five parts:
+# a page view (below), backend routes + a graph kind + two SOL tools (declared
+# here, implemented in packages/api/src/solus_api/widgets/fixture_bundle/),
+# and the repo `.solus/project.toml` [ext.fixture-bundle] section read by the
+# backend. Publishable only by Solus staff (the first-party gate).
+schema_version = 2
+
+[extension]
+id = "fixture-bundle"
+name = "Fixture Bundle"
+version = "0.1.0"
+publisher = "Solus"
+summary = "First-party fixture: page, backend routes, a graph kind and two SOL tools."
+
+[views]
+page = { entry = "page.html", icon = "icon.svg", label = "Fixture" }
+
+[backend]
+capability = "fixture-bundle"
+routes = true
+
+[graph]
+kinds = [{ name = "note", domain = "code" }]
+
+[tools]
+names = ["add_note", "clear_notes"]
+
+[settings]
+[[settings.fields]]
+key = "max_notes"
+type = "number"
+label = "Notes to keep"
+min = 1
+max = 500
+default = 100
+
+[[settings.fields]]
+key = "prefix"
+type = "string"
+label = "Note prefix"
+
+[store]
+overview = "OVERVIEW.md"

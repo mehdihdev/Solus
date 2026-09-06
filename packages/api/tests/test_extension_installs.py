@@ -81,7 +81,10 @@ async def test_first_install_is_201_with_the_item_shape_and_seeded_defaults(
     assert extension.install_count == 1
     events = await events_of(db, "extension.install")
     assert len(events) == 1
-    assert events[0].payload == {
+    # SOLUSDEV-246 ST2: the install's `solus:widget` graph node rides the payload.
+    payload = dict(events[0].payload)
+    assert uuid.UUID(payload.pop("graph_node_id"))
+    assert payload == {
         "slug": "bom",
         "version": "1.2.0",
         "granted_scopes": ["graph.read", "sources.read"],
@@ -491,9 +494,18 @@ async def test_uninstall_deletes_the_install_and_its_storage_and_decrements(
     await db.refresh(extension)
     assert extension.install_count == 0
     events = await events_of(db, "extension.uninstall")
-    assert [e.payload for e in events] == [
-        {"slug": "bom", "version": "1.2.0", "storage_rows_deleted": 2}
-    ]
+    # SOLUSDEV-246 widened the payload with the "no orphans" sweep counts (ST1)
+    # and the removed widget node (ST2).
+    assert len(events) == 1
+    payload = dict(events[0].payload)
+    assert uuid.UUID(payload.pop("graph_node_id"))
+    assert payload == {
+        "slug": "bom",
+        "version": "1.2.0",
+        "storage_rows_deleted": 2,
+        "entities_soft_deleted": 0,
+        "layout_slots_pruned": 0,
+    }
     again = await client.delete(ext_url(project_id, "bom"), headers=alice_headers)
     assert again.status_code == 404
 

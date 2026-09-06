@@ -4,7 +4,11 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
 import * as resources from '../../lib/api/resources'
 import * as workspace from '../../lib/api/workspace'
-import { clearWorkspaceGraphCache, useWorkspaceGraph } from './useWorkspaceGraph'
+import {
+  clearWorkspaceGraphCache,
+  forgetWorkspaceGraph,
+  useWorkspaceGraph
+} from './useWorkspaceGraph'
 
 vi.mock('../../lib/api/resources', async (original) => ({
   ...(await original<typeof resources>()),
@@ -82,6 +86,16 @@ it('retains complete graph snapshots across screen visits and validates only pro
   await waitFor(() => expect(resources.getProject).toHaveBeenCalledTimes(2))
   expect(resources.listAllEntities).toHaveBeenCalledTimes(1)
   expect(workspace.listAllRelations).toHaveBeenCalledTimes(1)
+})
+
+it('forgets a single retained snapshot so the next visit re-walks that graph (SOLUSDEV-242)', async () => {
+  const first = renderHook(() => useWorkspaceGraph())
+  await waitFor(() => expect(first.result.current.status).toBe('ready'))
+  first.unmount()
+  forgetWorkspaceGraph('p1')
+  const second = renderHook(() => useWorkspaceGraph())
+  await waitFor(() => expect(second.result.current.status).toBe('ready'))
+  expect(resources.listAllEntities).toHaveBeenCalledTimes(2)
 })
 
 it('refreshes cached entities and relations when project counts change', async () => {

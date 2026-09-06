@@ -47,18 +47,20 @@ from solus_api.models import (
     Source,
     SourceStatus,
     SourceType,
+    User,
     ensure_utc,
     utcnow,
 )
 from solus_api.schemas import OAuthExchange, OAuthStart, serialize_connection, serialize_source
 from solus_api.services.connections import (
     StaleHandshakeError,
-    bind_source,
+    bind_to_account,
     complete_connection,
     connection_projects,
     pending_connection,
     record_connection_failure,
     reusable_source,
+    sweep_after_commit,
 )
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_add_integration
@@ -351,6 +353,7 @@ async def _complete_oauth(
         await session.commit()
         return connection, source, "oauth_failed"
 
+    owner_id = record.user_id  # read before the row is deleted
     # The state row is consumed FIRST: it cascades from the pending connection,
     # which `complete_connection` may discard in favour of an existing row for
     # the same account, and a delete racing that cascade matches nothing.
@@ -374,10 +377,19 @@ async def _complete_oauth(
         await session.commit()
         return connection, source, "stale_handshake"
     if source is not None:
-        bind_source(source, connection)
+        # A reused legacy/PAT row retires its own token family (SOLUSDEV-242).
+        bind_to_account(source, connection)
         if not source.name or source.name == provider:
             source.name = account.login
     await session.commit()
+    owner = await session.get(User, owner_id)
+    if owner is not None:
+        await sweep_after_commit(session, secret_store, owner)
+        # The sweep's own rollback (a DB blip) expires what the callers are
+        # about to serialize; the rows are committed, so re-read them.
+        await session.refresh(connection)
+        if source is not None:
+            await session.refresh(source)
     return connection, source, None
 
 

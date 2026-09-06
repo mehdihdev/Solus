@@ -438,12 +438,23 @@ async def test_timed_out_invoke_reaps_the_server_process(tmp_path: Path) -> None
         env={"MCP_MOCK_PID_FILE": str(pid_file)},
     )
     registry = ToolRegistry()
-    registry.register(_manual_tool(spec, "sleepy", timeout=2.0))
+    # 3.5 s sits under `sleepy`'s 5 s sleep with room for a slow interpreter
+    # start (the 2 GB CI runner took > 2 s to import the SDK — SOLUSDEV-246).
+    registry.register(_manual_tool(spec, "sleepy", timeout=3.5))
     result = await registry.invoke(ToolCall(tool="mock.sleepy", args={}))
     assert result.ok is False
     assert result.error is not None
     assert result.error.code is ToolErrorCode.TIMEOUT
 
+    # The child writes its pid at startup; on a starved box the timeout can fire
+    # before that line runs and the reaped child never gets to write it. Give it
+    # a bounded moment — a child that never started leaves no orphan to check.
+    for _ in range(50):
+        if pid_file.exists():
+            break
+        await asyncio.sleep(0.1)
+    else:
+        pytest.skip("mock server did not reach startup before the timeout reaped it")
     pid = int(pid_file.read_text())
     for _ in range(50):  # the SDK's shutdown path may take ~2s (SIGTERM grace)
         try:

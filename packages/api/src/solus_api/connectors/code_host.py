@@ -14,6 +14,12 @@ from __future__ import annotations
 from typing import Any, Final
 
 from solus_api.connectors.contracts import Domain, EntityOut
+from solus_api.widgets.solus_config import (
+    MAX_PROJECT_TOML_BYTES,
+    SOLUS_CONFIG_KIND,
+    SOLUS_CONFIG_PATH,
+    parse_project_toml_ext,
+)
 
 REPO_ROOT_KEY: Final = ":repo"
 
@@ -72,6 +78,39 @@ def design_export_for(path: str) -> tuple[str, Domain] | None:
     if dot == -1:
         return None
     return DESIGN_EXPORTS.get(lowered[dot:])
+
+
+def solus_config_blob(tree: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The `.solus/project.toml` tree item, if the repo commits one (SOLUSDEV-246)."""
+    for item in tree:
+        if item.get("path") == SOLUS_CONFIG_PATH and item.get("type") == "blob":
+            return item
+    return None
+
+
+def solus_config_too_large(item: dict[str, Any]) -> bool:
+    """Decided from the tree's declared size, so an oversized file is never
+    fetched. A missing or non-integer size fails CLOSED — the tree is untrusted
+    input and "unknown" is not "small enough"."""
+    size = item.get("size")
+    return not isinstance(size, int) or isinstance(size, bool) or size > MAX_PROJECT_TOML_BYTES
+
+
+def solus_config_entity(text: str) -> tuple[EntityOut | None, list[str]]:
+    """Parse the committed `.solus/project.toml` into ONE `solus_project_toml` entity
+    (ADR-035 §4 as amended; widget-bundles.md §6). Invalid TOML → no entity and
+    the problem; a valid file always lands, even with no `[ext]` table."""
+    parsed = parse_project_toml_ext(text)
+    if parsed.fatal:
+        return None, parsed.problems
+    entity = EntityOut(
+        source_key=SOLUS_CONFIG_PATH,
+        type=SOLUS_CONFIG_KIND,
+        domain=Domain.CODE,
+        name="project.toml",
+        properties={"path": SOLUS_CONFIG_PATH, "ext": parsed.tables},
+    )
+    return entity, parsed.problems
 
 
 def module_entity(path: str) -> EntityOut:

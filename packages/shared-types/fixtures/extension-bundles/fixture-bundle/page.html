@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture Bundle</title>
+    <link rel="stylesheet" href="page.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Fixture Bundle</h1>
+      <p class="muted">
+        The STORE ST1 fixture. Its backend lives in Solus; this page only proves the
+        rail entry mounts and the bridge handshake completes.
+      </p>
+      <dl>
+        <dt>Status</dt>
+        <dd id="status">waiting for init…</dd>
+        <dt>Mode</dt>
+        <dd id="mode">—</dd>
+        <dt>Version</dt>
+        <dd id="version">—</dd>
+        <dt>Settings</dt>
+        <dd id="settings">—</dd>
+      </dl>
+      <p class="muted">
+        Ask SOL to <code>add a note "hello"</code> — it calls
+        <code>fixture-bundle.add_note</code>; <code>clear the notes</code> parks a confirmation.
+      </p>
+    </main>
+    <script src="bridge.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

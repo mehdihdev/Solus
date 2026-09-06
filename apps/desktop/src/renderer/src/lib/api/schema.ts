@@ -692,6 +692,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/connections/legacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Legacy
+         * @description The caller's project-scoped grants from before account-level connections
+         *     that are not yet at account scope (SOLUSDEV-242 / H2). Home lists them as
+         *     "sign in once to move it" — or, when the caller already holds the proving
+         *     grant, offers the confirmed move. Nothing here is a usable grant.
+         */
+        get: operations["list_legacy_api_v1_users_me_connections_legacy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/connections/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt
+         * @description Move the NAMED legacy grants to the caller's account (SOLUSDEV-242 / H2)
+         *     — explicit and confirmed by the caller, only for an account they have
+         *     PROVED with a CONNECTED connection of their own, only in live projects they
+         *     are a non-viewer member of. The source mirrors the grant (no copied secret,
+         *     the project keeps syncing); nothing widens without `confirm_access`. The
+         *     project-owned token family is swept after the commit.
+         */
+        post: operations["adopt_api_v1_users_me_connections_adopt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/connections/{connection_id}": {
         parameters: {
             query?: never;
@@ -2084,6 +2132,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/widgets/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Graph
+         * @description SOLUSDEV-246 ST2 (widget-bundles.md §10): the workspace layer W5 renders —
+         *     the `solus:workspace` root, `solus:live_bench`, and one `solus:widget` per
+         *     install, with the `contains` edges. A pure READ (a viewer may call it; no
+         *     row is written): the layer is built by the install lifecycle and healed by
+         *     `POST …/graph/reconcile`. Until then `root`/`live_bench` are null.
+         */
+        get: operations["get_workspace_graph_api_v1_projects__project_id__widgets_graph_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/widgets/graph/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Workspace Graph Route
+         * @description Heal the layer from the install rows (backfill installs that predate ST2,
+         *     refresh attrs, prune orphans). A WRITE: `member` floor and the shared
+         *     install-write budget, like every other extension mutation.
+         */
+        post: operations["reconcile_workspace_graph_route_api_v1_projects__project_id__widgets_graph_reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/widgets/fixture-bundle/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Notes */
+        get: operations["list_notes_api_v1_projects__project_id__widgets_fixture_bundle_notes_get"];
+        put?: never;
+        /**
+         * Create Note
+         * @description A capability WRITE: the guard already applied the member floor and the
+         *     install-write budget before this handler ran (widget-bundles.md §3).
+         */
+        post: operations["create_note_api_v1_projects__project_id__widgets_fixture_bundle_notes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2094,6 +2210,21 @@ export interface components {
          * @enum {string}
          */
         ActionMode: "guide" | "do";
+        /**
+         * AdoptRequest
+         * @description SOLUSDEV-242 (H2): the explicit, confirmed move of NAMED legacy sources
+         *     to the caller's proved account. `confirm_access` is the caller accepting a
+         *     grant wider than a source ever recorded (shown in the confirmation).
+         */
+        AdoptRequest: {
+            /** Source Ids */
+            source_ids: string[];
+            /**
+             * Confirm Access
+             * @default false
+             */
+            confirm_access: boolean;
+        };
         /**
          * AttachmentIn
          * @description A measurable attachment fact for classify/completion requests (MO-04):
@@ -2377,6 +2508,11 @@ export interface components {
              * @default 1
              */
             window_seconds: number;
+        };
+        /** NoteBody */
+        NoteBody: {
+            /** Text */
+            text: string;
         };
         /**
          * OAuthExchange
@@ -3624,6 +3760,7 @@ export interface operations {
                 type?: string | null;
                 domain?: string | null;
                 actor?: string | null;
+                project_id?: string | null;
             };
             header?: never;
             path: {
@@ -4171,6 +4308,63 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    list_legacy_api_v1_users_me_connections_legacy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    adopt_api_v1_users_me_connections_adopt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7319,6 +7513,142 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_graph_api_v1_projects__project_id__widgets_graph_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_workspace_graph_route_api_v1_projects__project_id__widgets_graph_reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notes_api_v1_projects__project_id__widgets_fixture_bundle_notes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_note_api_v1_projects__project_id__widgets_fixture_bundle_notes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoteBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
             /** @description Validation Error */
             422: {

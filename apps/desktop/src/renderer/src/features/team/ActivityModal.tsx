@@ -56,6 +56,15 @@ export interface ActivityModalProps {
   hasMore?: boolean
   onLoadMore?: () => Promise<void>
   onClose: () => void
+  /** Dialog heading; Home's per-project dialog names the project (SOLUSDEV-242). */
+  title?: string
+}
+
+const DEFAULT_TITLE = 'ALL ACTIVITY'
+
+/** The dialog's accessible name: the team feed keeps its historical label. */
+function dialogLabel(title: string): string {
+  return title === DEFAULT_TITLE ? 'All activity' : title
 }
 
 /** Full activity feed in a dialog: internal scroll, optional Load more paging. */
@@ -65,7 +74,8 @@ export function ActivityModal({
   members,
   hasMore = false,
   onLoadMore,
-  onClose
+  onClose,
+  title = DEFAULT_TITLE
 }: ActivityModalProps): React.JSX.Element {
   const [loadingMore, setLoadingMore] = useState(false)
   const loadMore = async (): Promise<void> => {
@@ -79,9 +89,9 @@ export function ActivityModal({
   }
   return (
     <ModalShell onClose={onClose} width={560}>
-      <div role="dialog" aria-label="All activity">
+      <div role="dialog" aria-label={dialogLabel(title)}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Mono size={9.5}>ALL ACTIVITY</Mono>
+          <Mono size={9.5}>{title}</Mono>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <Mono size={9} color="var(--mut)">
               {total} {total === 1 ? 'EVENT' : 'EVENTS'}

@@ -16,6 +16,7 @@ function connection(overrides: Partial<Connection> = {}): Connection {
     status: 'connected',
     account_login: 'maya',
     access: 'read',
+    needs_reauth: null,
     last_error: null,
     projects: [],
     created_at: '',

@@ -94,6 +94,9 @@ export interface Connection {
   account_login: string | null
   /** The grant the user chose at connect time (`read` / `write`), if any. */
   access: string | null
+  /** SOLUSDEV-242 (H2): Home offers Re-authorize when the last handshake
+   *  failed (`token_error`). Null when nothing is needed. */
+  needs_reauth: 'token_error' | null
   last_error: SourceError | null
   projects: ConnectionProject[]
   created_at: string
@@ -683,6 +686,51 @@ export function getConnection(connectionId: string, client: ApiClient = api): Pr
   return client.request<Connection>(`/users/me/connections/${connectionId}`)
 }
 
+/** One project-scoped grant claimed to account scope (SOLUSDEV-242 / H2). */
+export interface AdoptedConnection {
+  connection_id: string
+  provider: string
+  source_id: string
+  project_id: string
+}
+
+export interface AdoptResult {
+  adopted: AdoptedConnection[]
+  skipped: { source_id: string; project_id: string | null; reason: string }[]
+}
+
+/** Move NAMED legacy project-scoped grants to the caller's proved account
+ *  (API.md §2.1, SOLUSDEV-242) — an explicit, confirmed action: no sign-in,
+ *  no copied secret, nothing widened unless `confirm_access` accepts the
+ *  grant shown in the confirmation. */
+export function adoptConnections(
+  input: { source_ids: string[]; confirm_access: boolean },
+  client: ApiClient = api
+): Promise<AdoptResult> {
+  return client.request<AdoptResult>('/users/me/connections/adopt', {
+    method: 'POST',
+    body: input
+  })
+}
+
+/** A project-scoped grant from before account-level connections that is not
+ *  at account scope yet (SOLUSDEV-242 / H2). Not a usable grant: Home lists
+ *  it as "sign in once to move it"; the sign-in proves the account and claims
+ *  it. Never carries a secret. */
+export interface LegacyConnection {
+  provider: string
+  account_login: string | null
+  projects: ConnectionProject[]
+  source_ids: string[]
+  /** The caller's CONNECTED grant that proves this account, when they hold
+   *  one — Home then offers the confirmed move instead of a sign-in. */
+  claimable_connection_id: string | null
+}
+
+export function listLegacyConnections(client: ApiClient = api): Promise<LegacyConnection[]> {
+  return client.request<LegacyConnection[]>('/users/me/connections/legacy')
+}
+
 /** Revoke a grant. Every source bound to it, in every project, is disconnected
  *  — the app's confirmation names those projects before this is called. */
 export function revokeConnection(
@@ -1009,6 +1057,8 @@ export interface ActivityPageOptions {
   cursor?: string
   /** Server caps at 100 (API.md §2.2); defaults to 50 when omitted. */
   limit?: number
+  /** Narrow the team feed to one project (SOLUSDEV-242 — Home's per-project activity). */
+  projectId?: string
 }
 
 /** One cursor page of the team activity feed (§2.2) — carries pagination meta
@@ -1021,6 +1071,7 @@ export function listActivityPage(
   const params = new URLSearchParams()
   if (options.cursor) params.set('cursor', options.cursor)
   if (options.limit !== undefined) params.set('limit', String(options.limit))
+  if (options.projectId) params.set('project_id', options.projectId)
   const query = params.toString()
   // teamId is server-issued today; encoded anyway so it can never alter the path.
   return client.requestPage<ActivityApi[]>(

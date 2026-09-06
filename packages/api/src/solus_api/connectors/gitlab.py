@@ -26,6 +26,8 @@ from solus_api.connectors.code_host import (
     file_entity,
     module_entity,
     parent_key,
+    solus_config_blob,
+    solus_config_entity,
 )
 from solus_api.connectors.contracts import (
     AccountInfo,
@@ -39,6 +41,7 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.widgets.solus_config import MAX_PROJECT_TOML_BYTES, SOLUS_CONFIG_PATH
 
 DEFAULT_BASE_URL: Final = "https://gitlab.com"
 REQUEST_TIMEOUT: Final = 30.0
@@ -216,8 +219,10 @@ class GitLabConnector(OAuthConnector):
             )
             sha = await self._head_sha(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
+            solus_text, solus_errors = await self._solus_config_text(client, repo, sha, tree)
 
-        entities, relations, errors = self._build_graph(repo, branch, sha, tree)
+        entities, relations, errors = self._build_graph(repo, branch, sha, tree, solus_text)
+        errors = [*solus_errors, *errors]
         if truncated:
             errors.append(
                 SyncError(
@@ -250,8 +255,48 @@ class GitLabConnector(OAuthConnector):
 
     # -------------------------------------------------------- graph building
 
+    async def _solus_config_text(
+        self, client: httpx.AsyncClient, repo: str, sha: str, tree: list[dict[str, Any]]
+    ) -> tuple[str | None, list[SyncError]]:
+        """SOLUSDEV-246: the one blob the connector reads — `.solus/project.toml`.
+        GitLab's tree carries no size, so the raw read is bounded by bytes
+        received; a fault is a SyncError on that path, never a failed sync."""
+        if solus_config_blob(tree) is None:
+            return None, []
+        url = f"{self._project_url(repo)}/repository/files/{quote(SOLUS_CONFIG_PATH, safe='')}/raw"
+        try:
+            async with client.stream("GET", url, params={"ref": sha}) as response:
+                return await self._read_bounded_text(response), []
+        except (ConnectorError, ValueError) as exc:
+            return None, [SyncError(item=SOLUS_CONFIG_PATH, message=str(exc))]
+
+    @staticmethod
+    async def _read_bounded_text(response: httpx.Response) -> str:
+        """The raw-file body, bounded AS IT STREAMS (the Onshape `_read_export`
+        pattern): the declared length is checked first, then the running total,
+        so an oversized committed file is never held in memory (CLAUDE.md §7)."""
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise ConnectorError("gitlab_error", f"GitLab request failed ({response.status_code}).")
+        too_large = ConnectorError("too_large", f"{SOLUS_CONFIG_PATH}: exceeds size cap")
+        declared = response.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_PROJECT_TOML_BYTES:
+            raise too_large
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_PROJECT_TOML_BYTES:
+                raise too_large
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8")
+
     def _build_graph(
-        self, repo: str, branch: str, sha: str, tree: list[dict[str, Any]]
+        self,
+        repo: str,
+        branch: str,
+        sha: str,
+        tree: list[dict[str, Any]],
+        solus_text: str | None = None,
     ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
         errors: list[SyncError] = []
         entities_by_key: dict[str, EntityOut] = {
@@ -265,6 +310,11 @@ class GitLabConnector(OAuthConnector):
         }
         for item in tree:
             self._land_item(item, entities_by_key, errors)
+        if solus_text is not None:
+            config, problems = solus_config_entity(solus_text)
+            errors.extend(SyncError(item=SOLUS_CONFIG_PATH, message=p) for p in problems)
+            if config is not None:
+                entities_by_key[SOLUS_CONFIG_PATH] = config
 
         known_dirs = {key for key, ent in entities_by_key.items() if ent.type == "code_module"}
         relations = [
