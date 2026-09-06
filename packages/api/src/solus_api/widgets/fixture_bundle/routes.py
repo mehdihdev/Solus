@@ -7,23 +7,32 @@ under `require_bundle("fixture-bundle")`; the handler receives the resolved
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import select
 
 from solus_api.core.responses import envelope
 from solus_api.deps import SessionDep
 from solus_api.models import GraphEntity
-from solus_api.widgets.fixture_bundle.tools import NOTE_KIND, SLUG
-from solus_api.widgets.guard import BundleDep
+from solus_api.widgets.fixture_bundle.tools import NOTE_KIND, NOTE_MAX_LEN, SLUG, write_note
+from solus_api.widgets.guard import BundleContext, require_bundle
 
 router = APIRouter()
 NOTES_LIMIT = 200
+#: The resolved install this router's handlers run against — the SAME dependency
+#: object the mount applies, so it resolves once per request.
+FixtureBundle = Annotated[BundleContext, Depends(require_bundle(SLUG))]
+
+
+class NoteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    text: Annotated[str, StringConstraints(min_length=1, max_length=NOTE_MAX_LEN)]
 
 
 @router.get("/notes")
-async def list_notes(bundle: BundleDep(SLUG), session: SessionDep) -> dict[str, Any]:  # type: ignore[valid-type]
+async def list_notes(bundle: FixtureBundle, session: SessionDep) -> dict[str, Any]:
     rows = await session.scalars(
         select(GraphEntity)
         .where(
@@ -39,3 +48,18 @@ async def list_notes(bundle: BundleDep(SLUG), session: SessionDep) -> dict[str, 
         for row in rows
     ]
     return envelope({"slug": SLUG, "notes": notes})
+
+
+@router.post("/notes", status_code=201)
+async def create_note(body: NoteBody, bundle: FixtureBundle, session: SessionDep) -> dict[str, Any]:
+    """A capability WRITE: the guard already applied the member floor and the
+    install-write budget before this handler ran (widget-bundles.md §3)."""
+    note = await write_note(
+        session,
+        project_id=bundle.ctx.project.id,
+        user_id=bundle.ctx.user.id,
+        text=body.text,
+        manifest=bundle.manifest,
+    )
+    await session.commit()
+    return envelope({"id": str(note.id), "name": note.name, "kind": NOTE_KIND})

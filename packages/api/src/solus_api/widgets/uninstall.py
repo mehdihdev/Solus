@@ -28,29 +28,32 @@ class BundleSweep:
 async def _soft_delete_kinds(session: AsyncSession, project_id: uuid.UUID, kinds: list[str]) -> int:
     if not kinds:
         return 0
-    ids = list(
-        await session.scalars(
-            select(GraphEntity.id).where(
-                GraphEntity.project_id == project_id,
-                GraphEntity.kind.in_(kinds),
-                GraphEntity.deleted_at.is_(None),
-            )
-        )
-    )
-    if not ids:
-        return 0
     now = utcnow()
-    await session.execute(update(GraphEntity).where(GraphEntity.id.in_(ids)).values(deleted_at=now))
+    live = (
+        GraphEntity.project_id == project_id,
+        GraphEntity.kind.in_(kinds),
+        GraphEntity.deleted_at.is_(None),
+    )
+    # Edges first (they select on the still-live entities), by subquery — no
+    # id list is ever materialised, however many notes a project holds.
+    doomed = select(GraphEntity.id).where(*live).scalar_subquery()
     await session.execute(
         update(GraphEdge)
         .where(
             GraphEdge.project_id == project_id,
-            or_(GraphEdge.src_id.in_(ids), GraphEdge.dst_id.in_(ids)),
+            or_(GraphEdge.src_id.in_(doomed), GraphEdge.dst_id.in_(doomed)),
             GraphEdge.deleted_at.is_(None),
         )
         .values(deleted_at=now)
+        .execution_options(synchronize_session=False)
     )
-    return len(ids)
+    result = await session.execute(
+        update(GraphEntity)
+        .where(*live)
+        .values(deleted_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def _prune_layouts(session: AsyncSession, project_id: uuid.UUID, slug: str) -> int:

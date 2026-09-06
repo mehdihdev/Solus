@@ -89,26 +89,28 @@ def solus_config_blob(tree: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def solus_config_too_large(item: dict[str, Any]) -> bool:
-    """Decided from the tree's declared size, so an oversized file is never fetched."""
+    """Decided from the tree's declared size, so an oversized file is never
+    fetched. A missing or non-integer size fails CLOSED — the tree is untrusted
+    input and "unknown" is not "small enough"."""
     size = item.get("size")
-    return isinstance(size, int) and size > MAX_PROJECT_TOML_BYTES
+    return not isinstance(size, int) or isinstance(size, bool) or size > MAX_PROJECT_TOML_BYTES
 
 
 def solus_config_entity(text: str) -> tuple[EntityOut | None, list[str]]:
     """Parse the committed `.solus/project.toml` into ONE `solus_config` entity
     (ADR-035 §4 as amended; widget-bundles.md §6). Invalid TOML → no entity and
     the problem; a valid file always lands, even with no `[ext]` table."""
-    tables, problems = parse_project_toml_ext(text)
-    if problems and not tables and any("invalid TOML" in p or "exceeds" in p for p in problems):
-        return None, problems
+    parsed = parse_project_toml_ext(text)
+    if parsed.fatal:
+        return None, parsed.problems
     entity = EntityOut(
         source_key=SOLUS_CONFIG_PATH,
         type=SOLUS_CONFIG_KIND,
         domain=Domain.CODE,
         name="project.toml",
-        properties={"path": SOLUS_CONFIG_PATH, "ext": tables},
+        properties={"path": SOLUS_CONFIG_PATH, "ext": parsed.tables},
     )
-    return entity, problems
+    return entity, parsed.problems
 
 
 def module_entity(path: str) -> EntityOut:

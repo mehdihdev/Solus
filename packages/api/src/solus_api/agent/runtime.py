@@ -182,10 +182,17 @@ def _register_bundle_tools(
     decided which bundles are installed, enabled and unblocked; this is pure
     assembly. Wrapped per bundle like the hosted path: a capability that fails
     to build is logged and skipped — never a 500 for every SOL request."""
+    from solus_contracts.extension_manifest import composed_tool_name
+
     from solus_api.widgets.capability import BundleScope
 
-    scope = BundleScope(session_factory=session_factory, project_id=project_id, user_id=user_id)
     for capability, manifest in bundles:
+        scope = BundleScope(
+            session_factory=session_factory,
+            project_id=project_id,
+            user_id=user_id,
+            manifest=manifest,
+        )
         try:
             for name in manifest.tools.names:
                 builder = capability.tools.get(name)
@@ -194,7 +201,11 @@ def _register_bundle_tools(
                         "bundle %s declares tool %s it does not provide", capability.id, name
                     )
                     continue
-                registry.register(builder(scope))
+                tool = builder(scope)
+                expected = composed_tool_name(capability.id, name)
+                if tool.descriptor.name != expected:
+                    raise ValueError(f"tool {tool.descriptor.name!r} must be named {expected!r}")
+                registry.register(tool)
         except Exception:
             logger.exception(
                 "bundle %s tools unavailable for project %s", capability.id, project_id

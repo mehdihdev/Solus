@@ -13,14 +13,19 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from solus_contracts.extension_manifest import composed_tool_name, graph_kind_name
+from solus_contracts.extension_manifest import (
+    ExtensionManifest,
+    composed_tool_name,
+    graph_kind_name,
+)
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.agent.tools.shapes import ToolDescriptor
-from solus_api.agent.tools.tool import InProcessTool, Tool
+from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
+from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.models import Domain, GraphEntity, utcnow
 from solus_api.widgets.capability import BundleScope
+from solus_api.widgets.solus_config import effective_bundle_config
 
 SLUG = "fixture-bundle"
 NOTE_KIND = graph_kind_name(SLUG, "note")
@@ -83,24 +88,53 @@ async def _count(session: AsyncSession, project_id: uuid.UUID) -> int:
     return int(total or 0)
 
 
+async def write_note(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    text: str,
+    manifest: ExtensionManifest | None,
+) -> GraphEntity:
+    """The one write path both the tool and the route use. Honours the bundle's
+    effective config: `prefix` is prepended, `max_notes` caps the live count
+    (manifest default ← repo `[ext.fixture-bundle]` ← install settings).
+    Raises ToolException when the cap is reached; the caller decides the wire
+    shape. Does NOT commit."""
+    config = await effective_bundle_config(session, project_id, SLUG, manifest) if manifest else {}
+    limit = config.get("max_notes")
+    if isinstance(limit, int | float) and await _count(session, project_id) >= int(limit):
+        raise ToolException(
+            f"this project already holds {int(limit)} notes (max_notes)",
+            code=ToolErrorCode.TOOL_ERROR,
+        )
+    prefix = config.get("prefix")
+    name = f"{prefix}{text}" if isinstance(prefix, str) and prefix else text
+    row = GraphEntity(
+        project_id=project_id,
+        kind=NOTE_KIND,
+        domain=Domain.CODE,
+        name=name[:512],
+        origin=ORIGIN,
+        attrs={"text": text, "created_by": str(user_id) if user_id else None},
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
 def build_add_note(scope: BundleScope) -> Tool:
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
-        text = str(args["text"])
         async with scope.session_factory() as session:
-            row = GraphEntity(
+            row = await write_note(
+                session,
                 project_id=scope.project_id,
-                kind=NOTE_KIND,
-                domain=Domain.CODE,
-                name=text,
-                origin=ORIGIN,
-                attrs={
-                    "text": text,
-                    "created_by": str(scope.user_id) if scope.user_id else None,
-                },
+                user_id=scope.user_id,
+                text=str(args["text"]),
+                manifest=scope.manifest,
             )
-            session.add(row)
             await session.commit()
-            return {"id": str(row.id), "name": text, "kind": NOTE_KIND}
+            return {"id": str(row.id), "name": row.name, "kind": NOTE_KIND}
 
     return InProcessTool(ADD_NOTE, handler)
 

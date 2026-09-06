@@ -16,6 +16,7 @@ from solus_contracts.extension_manifest import ExtensionManifest, declares_first
 from solus_api.widgets.capability import WidgetCapability
 
 NOT_STAFF = "backend: first-party only (publisher is not Solus staff)"
+RESERVED_ID = "extension.id: reserved for a Solus first-party bundle"
 
 
 def first_party_problems(
@@ -24,11 +25,13 @@ def first_party_problems(
     is_staff: bool,
     capabilities: Mapping[str, WidgetCapability],
 ) -> list[str]:
+    slug = manifest.extension.id
     if not declares_first_party(manifest):
-        return []
+        # A plain bundle may not squat an in-repo capability's id: slugs are
+        # claimed forever, and Solus must be able to publish that bundle later.
+        return [RESERVED_ID] if slug in capabilities and not is_staff else []
     if not is_staff:
         return [NOT_STAFF]
-    slug = manifest.extension.id
     capability = capabilities.get(slug)
     if capability is None:
         return [f"backend.capability: no in-repo capability named {slug}"]

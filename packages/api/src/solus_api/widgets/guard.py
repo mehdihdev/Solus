@@ -15,9 +15,9 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Any
 
-from fastapi import Depends
+from fastapi import Request
 from solus_contracts.extension_manifest import (
     ExtensionManifest,
     declares_first_party,
@@ -27,12 +27,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
-from solus_api.deps import ProjectContext, ProjectCtx, SessionDep
+from solus_api.deps import ProjectContext, ProjectCtx, SessionDep, SettingsDep, require_role
 from solus_api.extensions import installs as svc
+from solus_api.extensions.ratelimit import (
+    INSTALL_WRITE_MESSAGE,
+    WRITE_WINDOW_SECONDS,
+    install_write_exceeded,
+)
 from solus_api.models import (
     Extension,
     ExtensionInstall,
     ExtensionVersion,
+    Role,
     TeamExtensionPolicy,
 )
 from solus_api.services.events import emit_event
@@ -56,12 +62,20 @@ class BundleContext:
     manifest: ExtensionManifest
 
 
-def _pinned_manifest(pinned: ExtensionVersion | None) -> ExtensionManifest | None:
+#: Methods that never change state; everything else takes the member floor and
+#: the install-write budget (widget-bundles.md §3).
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def pinned_manifest_or_none(pinned: ExtensionVersion | None) -> ExtensionManifest | None:
+    """The pinned manifest, or None when the stored object no longer parses (a
+    later contract tightening). Callers treat None as "declares nothing" so a
+    stale row can never strand an install or 500 a route."""
     if pinned is None:
         return None
     try:
         return parse_extension_manifest(pinned.manifest)
-    except ValueError:  # a stored manifest that no longer parses: treat as absent
+    except ValueError:
         logger.warning("pinned manifest for version %s does not parse", pinned.id)
         return None
 
@@ -79,7 +93,7 @@ async def _resolve(
         return None, "disabled"
     if await svc.is_blocked(session, ctx.team.id, extension.id):
         return None, "blocked"
-    manifest = _pinned_manifest(await session.get(ExtensionVersion, install.version_id))
+    manifest = pinned_manifest_or_none(await session.get(ExtensionVersion, install.version_id))
     if manifest is None or manifest.backend is None or not manifest.backend.routes:
         return None, "no_routes"
     return BundleContext(ctx, extension, install, manifest), ""
@@ -98,12 +112,32 @@ async def _refuse(session: AsyncSession, ctx: ProjectContext, slug: str, reason:
     raise APIError(404, "not_found", "No such bundle in this project")
 
 
+def _enforce_write_floor(request: Request, ctx: ProjectContext, settings: Any) -> None:
+    """Every capability write: `member` floor (viewers and share-only users →
+    403) and the shared install-write budget (→ 429 + Retry-After) — enforced
+    here, once, so no capability handler ever hand-rolls auth (CLAUDE.md §7)."""
+    require_role(ctx, Role.MEMBER)
+    if install_write_exceeded(
+        request.app.state, ctx.user.id, settings.extension_install_writes_per_minute_per_user
+    ):
+        raise APIError(
+            429,
+            "rate_limited",
+            INSTALL_WRITE_MESSAGE,
+            headers={"Retry-After": str(WRITE_WINDOW_SECONDS)},
+        )
+
+
 @functools.cache
 def require_bundle(slug: str) -> Callable[..., Awaitable[BundleContext]]:
     """One dependency object per slug (cached, so the router-level dependency
     and a handler's `BundleDep(slug)` resolve ONCE per request)."""
 
-    async def dependency(ctx: ProjectCtx, session: SessionDep) -> BundleContext:
+    async def dependency(
+        request: Request, ctx: ProjectCtx, session: SessionDep, settings: SettingsDep
+    ) -> BundleContext:
+        if request.method.upper() not in SAFE_METHODS:
+            _enforce_write_floor(request, ctx, settings)
         bundle, reason = await _resolve(session, ctx, slug)
         if bundle is None:
             await _refuse(session, ctx, slug, reason)
@@ -112,11 +146,6 @@ def require_bundle(slug: str) -> Callable[..., Awaitable[BundleContext]]:
 
     dependency.__name__ = f"require_bundle_{slug.replace('-', '_')}"
     return dependency
-
-
-def BundleDep(slug: str) -> type[BundleContext]:  # noqa: N802 — a type alias factory
-    """`bundle: BundleDep("fixture-bundle")` in a capability handler."""
-    return Annotated[BundleContext, Depends(require_bundle(slug))]  # type: ignore[return-value]
 
 
 async def load_bundle_capabilities(
@@ -145,7 +174,7 @@ async def load_bundle_capabilities(
     live: BundleCapabilities = []
     for slug, pinned, blocked in rows:
         capability = capabilities.get(slug)
-        manifest = _pinned_manifest(pinned)
+        manifest = pinned_manifest_or_none(pinned)
         if blocked or capability is None or manifest is None:
             continue
         if declares_first_party(manifest):

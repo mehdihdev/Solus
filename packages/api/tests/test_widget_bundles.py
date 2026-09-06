@@ -18,6 +18,8 @@ from typing import Any
 import pytest
 from conftest import API_DIR
 from fastapi import APIRouter
+from fixtures.injection_corpus import PAYLOADS, Surface
+from solus_api.agent.prompt import tool_specs
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools.shapes import ToolCall
 from solus_api.models import (
@@ -32,9 +34,14 @@ from solus_api.models import (
 )
 from solus_api.widgets.capability import BundleScope, DeclaredKind, WidgetCapability
 from solus_api.widgets.fixture_bundle import CAPABILITY as FIXTURE
-from solus_api.widgets.publish_gate import first_party_problems
+from solus_api.widgets.publish_gate import RESERVED_ID, first_party_problems
 from solus_api.widgets.registry import collect_capabilities, discover_capabilities
-from solus_api.widgets.solus_config import SOLUS_CONFIG_KIND, read_bundle_config
+from solus_api.widgets.solus_config import (
+    SOLUS_CONFIG_KIND,
+    merge_bundle_config,
+    read_bundle_config,
+    typed_subset,
+)
 from solus_api.widgets.uninstall import remove_bundle_traces
 from solus_contracts.extension_manifest import ExtensionManifest, parse_extension_manifest
 from sqlalchemy import select
@@ -156,6 +163,22 @@ def test_publish_gate_requires_the_package_to_provide_every_declared_kind_tool_a
 
 def test_publish_gate_passes_the_fixture_for_staff() -> None:
     assert first_party_problems(_manifest(), is_staff=True, capabilities=_caps(FIXTURE)) == []
+
+
+def test_a_capability_id_is_reserved_for_staff_even_on_a_plain_manifest() -> None:
+    # M4: a community publisher must not squat "fixture-bundle" with a v1 manifest.
+    data = json.loads(Path(FIXTURES / "manifest-minimal.json").read_text())
+    data["extension"]["id"] = SLUG
+    squat = parse_extension_manifest(data)
+    assert first_party_problems(squat, is_staff=False, capabilities=_caps(FIXTURE)) == [RESERVED_ID]
+    assert first_party_problems(squat, is_staff=True, capabilities=_caps(FIXTURE)) == []
+    data["extension"]["id"] = "hello-widget"
+    assert (
+        first_party_problems(
+            parse_extension_manifest(data), is_staff=False, capabilities=_caps(FIXTURE)
+        )
+        == []
+    )
 
 
 def test_graph_or_tools_alone_are_still_first_party() -> None:
@@ -335,12 +358,26 @@ async def test_read_bundle_config_returns_the_typed_ext_table_or_nothing(
         }
     )
     assert await read_bundle_config(db, project_id, SLUG, manifest) == {}
+    # A same-kind row a bundle or a user wrote is NOT the repo config.
+    db.add(
+        GraphEntity(
+            project_id=project_id,
+            kind=SOLUS_CONFIG_KIND,
+            domain=Domain.CODE,
+            name="impostor",
+            origin="extension",
+            attrs={"ext": {SLUG: {"max_notes": 1}}},
+        )
+    )
+    await db.commit()
+    assert await read_bundle_config(db, project_id, SLUG, manifest) == {}
     db.add(
         GraphEntity(
             project_id=project_id,
             kind=SOLUS_CONFIG_KIND,
             domain=Domain.CODE,
             name=".solus/project.toml",
+            origin="connector",
             attrs={
                 "ext": {
                     SLUG: {"max_notes": 3, "prefix": 7, "unknown": True},
@@ -353,6 +390,114 @@ async def test_read_bundle_config_returns_the_typed_ext_table_or_nothing(
     # Typed against the bundle's own settings schema: wrong types and unknown
     # keys are dropped, other bundles' tables never leak.
     assert await read_bundle_config(db, project_id, SLUG, manifest) == {"max_notes": 3}
+
+
+def test_effective_config_precedence_is_manifest_then_repo_then_install() -> None:
+    manifest = _manifest(
+        settings={
+            "fields": [
+                {"key": "max_notes", "type": "number", "label": "Max", "default": 100},
+                {"key": "prefix", "type": "string", "label": "Prefix"},
+                {"key": "flag", "type": "boolean", "label": "Flag", "default": False},
+            ]
+        }
+    )
+    merged = merge_bundle_config(
+        manifest,
+        repo_defaults={"max_notes": 5, "prefix": "team: ", "flag": "yes", "unknown": 1},
+        install_settings={"max_notes": 2, "bogus": True},
+    )
+    assert merged == {"max_notes": 2, "prefix": "team: ", "flag": False}
+
+
+async def test_add_note_honours_the_repo_config_prefix_and_cap(
+    db: AsyncSession, engine: AsyncEngine
+) -> None:
+    project_id, user_id, _ = await _seed_project(db)
+    db.add(
+        GraphEntity(
+            project_id=project_id,
+            kind=SOLUS_CONFIG_KIND,
+            domain=Domain.CODE,
+            name=".solus/project.toml",
+            origin="connector",
+            attrs={"ext": {SLUG: {"prefix": "fx: ", "max_notes": 1}}},
+        )
+    )
+    await db.commit()
+    manifest = _manifest(
+        settings={
+            "fields": [
+                {"key": "max_notes", "type": "number", "label": "Max", "default": 100},
+                {"key": "prefix", "type": "string", "label": "Prefix"},
+            ]
+        }
+    )
+    registry = build_sol_registry(
+        _factory(engine), project_id, user_id=user_id, bundle_capabilities=[(FIXTURE, manifest)]
+    )
+    first = await registry.invoke(ToolCall(tool=f"{SLUG}.add_note", args={"text": "one"}))
+    assert first.ok and first.value is not None and first.value["name"] == "fx: one"
+    second = await registry.invoke(ToolCall(tool=f"{SLUG}.add_note", args={"text": "two"}))
+    assert not second.ok and second.error is not None
+    assert "max_notes" in second.error.message  # structured, never a raise
+
+
+# ---------------------------------------------------------------- red team
+
+
+def _solus_payload_text() -> str:
+    return next(p.text for p in PAYLOADS if p.surface is Surface.SOLUS_CONFIG)
+
+
+async def test_a_hostile_solus_config_value_is_data_and_widens_nothing(
+    db: AsyncSession, engine: AsyncEngine
+) -> None:
+    """CLAUDE.md §7 red team for the new ingestion channel: an adversarial
+    `[ext.fixture-bundle].prefix` reaches the graph as a typed string, changes
+    no tool spec, and is applied only as the inert prefix it is."""
+    project_id, user_id, _ = await _seed_project(db)
+    manifest = _manifest(
+        settings={"fields": [{"key": "prefix", "type": "string", "label": "Prefix"}]}
+    )
+    baseline = tool_specs(
+        tuple(
+            build_sol_registry(
+                _factory(engine),
+                project_id,
+                user_id=user_id,
+                bundle_capabilities=[(FIXTURE, manifest)],
+            ).list()
+        )
+    )
+    hostile = _solus_payload_text()
+    db.add(
+        GraphEntity(
+            project_id=project_id,
+            kind=SOLUS_CONFIG_KIND,
+            domain=Domain.CODE,
+            name=".solus/project.toml",
+            origin="connector",
+            attrs={"ext": {SLUG: {"prefix": hostile}}},
+        )
+    )
+    await db.commit()
+    registry = build_sol_registry(
+        _factory(engine), project_id, user_id=user_id, bundle_capabilities=[(FIXTURE, manifest)]
+    )
+    assert tool_specs(tuple(registry.list())) == baseline
+    assert typed_subset(manifest, {"prefix": hostile}) == {
+        "prefix": hostile
+    }  # a string, nothing more
+    # Nothing was cleared and no confirmation was parked: the only effect is a
+    # note whose NAME carries the text as inert data.
+    result = await registry.invoke(ToolCall(tool=f"{SLUG}.add_note", args={"text": "hello"}))
+    assert result.ok and result.value is not None
+    assert result.value["name"].startswith(hostile)
+    live = await db.scalars(
+        select(GraphEntity).where(GraphEntity.kind == NOTE_KIND, GraphEntity.deleted_at.is_(None))
+    )
+    assert len(live.all()) == 1
 
 
 # ---------------------------------------------------------------- uninstall

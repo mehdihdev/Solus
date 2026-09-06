@@ -486,6 +486,23 @@ async def test_oversized_solus_project_toml_is_never_fetched() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_a_tree_item_without_a_size_is_not_fetched() -> None:
+    """The size is the only pre-fetch bound; an untrusted tree that omits it
+    fails CLOSED rather than letting an unbounded blob through."""
+    _mock_with_solus()
+    body = _tree_with_solus()
+    for item in body["tree"]:
+        item.pop("size", None)
+    respx.get(f"{API}/repos/{REPO_FULL_NAME}/git/trees/{HEAD_SHA}").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await GitHubConnector().sync(_ctx())
+    assert not any("git/blobs" in str(call.request.url) for call in respx.calls)
+    assert any("exceeds" in err.message for err in result.errors)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_blob_fetch_failure_degrades_to_a_sync_error() -> None:
     _mock_with_solus(status=500)
     result = await GitHubConnector().sync(_ctx())

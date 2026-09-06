@@ -16,7 +16,7 @@ import json
 import re
 import tomllib
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
 from solus_contracts.extension_manifest import (
     EXTENSION_ID_PATTERN,
@@ -75,26 +75,39 @@ def _table(slug: str, raw: Any, problems: list[str]) -> dict[str, Scalar] | None
     return table
 
 
-def parse_project_toml_ext(text: str) -> tuple[dict[str, dict[str, Scalar]], list[str]]:
-    """``[ext.<slug>]`` tables of a ``.solus/project.toml`` → ``({slug: table}, problems)``.
+class ParsedExt(NamedTuple):
+    """``[ext.<slug>]`` tables plus every problem; ``fatal`` means the FILE was
+    unusable (not TOML / over the cap), as opposed to a dropped table or key."""
 
-    Never raises. A file-level failure yields no tables and one problem; a bad
+    tables: dict[str, dict[str, Scalar]]
+    problems: list[str]
+    fatal: bool = False
+
+
+def _fatal(problem: str) -> ParsedExt:
+    return ParsedExt({}, [problem], fatal=True)
+
+
+def parse_project_toml_ext(text: str) -> ParsedExt:
+    """``[ext.<slug>]`` tables of a ``.solus/project.toml``.
+
+    Never raises. A file-level failure is ``fatal`` with one problem; a bad
     table or key is dropped and named. Only ``[ext]`` is read (Ticket B's other
     tables are out of scope here)."""
     problems: list[str] = []
     if len(text.encode("utf-8")) > MAX_PROJECT_TOML_BYTES:
-        return {}, [f"{SOLUS_CONFIG_PATH}: exceeds {MAX_PROJECT_TOML_BYTES} bytes"]
+        return _fatal(f"{SOLUS_CONFIG_PATH}: exceeds {MAX_PROJECT_TOML_BYTES} bytes")
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
-        return {}, [f"{SOLUS_CONFIG_PATH}: invalid TOML — {exc}"]
+        return _fatal(f"{SOLUS_CONFIG_PATH}: invalid TOML — {exc}")
     ext = data.get("ext")
     if ext is None:
-        return {}, []
+        return ParsedExt({}, [])
     if not isinstance(ext, dict):
-        return {}, [f"{SOLUS_CONFIG_PATH}: [ext] must be a table"]
+        return _fatal(f"{SOLUS_CONFIG_PATH}: [ext] must be a table")
     if len(ext) > MAX_EXT_TABLES:
-        return {}, [f"{SOLUS_CONFIG_PATH}: [ext] has more than {MAX_EXT_TABLES} bundle tables"]
+        return _fatal(f"{SOLUS_CONFIG_PATH}: [ext] has more than {MAX_EXT_TABLES} bundle tables")
     tables: dict[str, dict[str, Scalar]] = {}
     for slug, raw in ext.items():
         if not isinstance(slug, str) or not _SLUG_RE.match(slug):
@@ -103,7 +116,7 @@ def parse_project_toml_ext(text: str) -> tuple[dict[str, dict[str, Scalar]], lis
         table = _table(slug, raw, problems)
         if table is not None:
             tables[slug] = table
-    return tables, problems
+    return ParsedExt(tables, problems)
 
 
 def _typed(field: SettingField, value: Any) -> bool:
@@ -138,6 +151,9 @@ async def read_bundle_config(
         .where(
             GraphEntity.project_id == project_id,
             GraphEntity.kind == SOLUS_CONFIG_KIND,
+            # Only a CONNECTOR may land the repo's config; a bundle-written or
+            # manual row of the same kind is never mistaken for it.
+            GraphEntity.origin == "connector",
             GraphEntity.deleted_at.is_(None),
         )
         .order_by(GraphEntity.updated_at.desc())
@@ -148,3 +164,35 @@ async def read_bundle_config(
     ext = row.attrs.get("ext")
     table = ext.get(slug) if isinstance(ext, dict) else None
     return typed_subset(manifest, table) if isinstance(table, dict) else {}
+
+
+async def effective_bundle_config(
+    session: AsyncSession, project_id: uuid.UUID, slug: str, manifest: ExtensionManifest
+) -> dict[str, Scalar]:
+    """What a bundle's backend should act on for this project (see
+    :func:`merge_bundle_config` for the precedence)."""
+    from solus_api.extensions import installs as svc  # function-local: no import cycle
+
+    repo_defaults = await read_bundle_config(session, project_id, slug, manifest)
+    extension = await svc.find_live_extension(session, slug)
+    install = (
+        await svc.get_install(session, project_id, extension.id) if extension is not None else None
+    )
+    settings = dict(install.settings) if install is not None else {}
+    return merge_bundle_config(manifest, repo_defaults, settings)
+
+
+def merge_bundle_config(
+    manifest: ExtensionManifest,
+    repo_defaults: dict[str, Any],
+    install_settings: dict[str, Any],
+) -> dict[str, Scalar]:
+    """Effective per-project values: manifest defaults ← repo ``[ext.<slug>]``
+    team defaults ← the install row's settings. Every layer is typed against
+    the manifest; unknown keys never survive."""
+    defaults = {f.key: f.default for f in manifest.settings.fields if f.default is not None}
+    return {
+        **typed_subset(manifest, defaults),
+        **typed_subset(manifest, repo_defaults),
+        **typed_subset(manifest, install_settings),
+    }

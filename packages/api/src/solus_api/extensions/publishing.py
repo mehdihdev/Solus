@@ -153,14 +153,17 @@ async def get_or_create_publisher(
             ExtensionPublisher.user_id == user_id, ExtensionPublisher.deleted_at.is_(None)
         )
     )
+    reserved = APIError(409, "publisher_name_reserved", "This publisher name is reserved for Solus")
     if publisher is None:
         if is_reserved_publisher_name(display_name) and not is_staff:
-            raise APIError(
-                409, "publisher_name_reserved", "This publisher name is reserved for Solus"
-            )
+            raise reserved
         publisher = ExtensionPublisher(user_id=user_id, display_name=display_name)
         session.add(publisher)
         await session.flush()
+    elif is_reserved_publisher_name(publisher.display_name) and not is_staff:
+        # A publisher seeded under a reserved name while on staff stops
+        # publishing as "Solus" the moment the account leaves the staff list.
+        raise reserved
     return publisher
 
 

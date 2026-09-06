@@ -309,7 +309,8 @@ class GitHubConnector(OAuthConnector):
                 SyncError(item=SOLUS_CONFIG_PATH, message=f"{SOLUS_CONFIG_PATH}: exceeds size cap")
             ]
         try:
-            response = await client.get(f"{GITHUB_API}/repos/{repo}/git/blobs/{item['sha']}")
+            blob_sha = quote(str(item["sha"]), safe="")
+            response = await client.get(f"{GITHUB_API}/repos/{repo}/git/blobs/{blob_sha}")
             body = self._repo_json(response)
             raw = base64.b64decode(str(body.get("content", "")), validate=False)
             return raw.decode("utf-8"), []

@@ -16,7 +16,16 @@ from typing import Any
 
 from conftest import API_DIR, add_member, me
 from fastapi import FastAPI
-from fixtures.extensions import CLEAN_HTML, CLEAN_JS, CLEAN_MD, VALID_ICON_SVG, build_zip
+from fixtures.extensions import (
+    CLEAN_HTML,
+    CLEAN_JS,
+    CLEAN_MD,
+    MINIMAL_MANIFEST_TOML,
+    VALID_ICON_SVG,
+    build_zip,
+    minimal_files,
+    with_manifest,
+)
 from fixtures.extensions.routes import (
     consent,
     events_of,
@@ -29,10 +38,10 @@ from fixtures.extensions.routes import (
 from httpx import AsyncClient
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools.shapes import ToolCall
-from solus_api.models import GraphEntity, WidgetLayout
+from solus_api.models import ExtensionVersion, GraphEntity, WidgetLayout
 from solus_api.widgets.fixture_bundle import CAPABILITY as FIXTURE
 from solus_contracts.extension_manifest import parse_extension_manifest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 FIXTURES = API_DIR.parent / "shared-types" / "fixtures" / "extension-manifest"
@@ -365,3 +374,104 @@ async def test_a_v2_community_manifest_publishes_for_anyone(
     )
     accepted = await _publish(client, alice_headers, _v2_zip(toml), "k-4")
     assert accepted.status_code == 202, accepted.text
+
+
+# ------------------------------------------------- Phase 4 security fixes (SOLUSDEV-246)
+
+
+async def test_capability_writes_take_the_member_floor_and_the_install_budget(
+    client: AsyncClient,
+    db: AsyncSession,
+    app: FastAPI,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """H1: every non-safe method on a mounted capability router is gated by the
+    guard itself — viewers get 403, members 201, and the install-write budget
+    answers 429 with Retry-After — with no auth code in the handler."""
+    team_id, project_id, _ = await _seed_and_install(client, db, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, bob, team_id, role="viewer")
+
+    viewer = await client.post(_widgets(project_id), json={"text": "nope"}, headers=bob_headers)
+    assert viewer.status_code == 403, viewer.text
+    assert viewer.json()["error"]["code"] == "forbidden"
+    # A refused write never reaches the guard's lookup, let alone the handler.
+    listed = await client.get(_widgets(project_id), headers=alice_headers)
+    assert listed.json()["data"]["notes"] == []
+
+    member = await client.post(
+        _widgets(project_id), json={"text": "by route"}, headers=alice_headers
+    )
+    assert member.status_code == 201, member.text
+    assert member.json()["data"]["name"] == "by route"
+    listed = await client.get(_widgets(project_id), headers=alice_headers)
+    assert [n["name"] for n in listed.json()["data"]["notes"]] == ["by route"]
+
+    bad = await client.post(
+        _widgets(project_id), json={"text": "x", "project_id": project_id}, headers=alice_headers
+    )
+    assert bad.status_code == 422
+
+    # The budget is the SHARED install-writes group: the install PUT, the member
+    # POST and the 422'd POST (its dependency ran) already used three.
+    app.state.settings.extension_install_writes_per_minute_per_user = 4
+    limited = await client.post(_widgets(project_id), json={"text": "3"}, headers=alice_headers)
+    assert limited.status_code == 201
+    over = await client.post(_widgets(project_id), json={"text": "4"}, headers=alice_headers)
+    assert over.status_code == 429, over.text
+    assert over.json()["error"]["code"] == "rate_limited"
+    assert over.headers.get("retry-after") == "60"
+
+
+async def test_uninstall_survives_a_pinned_manifest_that_no_longer_parses(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    """M2: a stale stored manifest must never strand an install."""
+    _, project_id, extension_id = await _seed_and_install(client, db, alice_headers)
+    await db.execute(
+        update(ExtensionVersion)
+        .where(ExtensionVersion.extension_id == extension_id)
+        .values(manifest={"schema_version": 2, "extension": {"id": SLUG}, "garbage": True})
+    )
+    await db.commit()
+    gone = await client.delete(ext_url(project_id, SLUG), headers=alice_headers)
+    assert gone.status_code == 204, gone.text
+    assert (await client.get(_widgets(project_id), headers=alice_headers)).status_code == 404
+
+
+async def test_a_reserved_publisher_name_stops_working_when_staff_status_is_removed(
+    client: AsyncClient, app: FastAPI, alice_headers: dict[str, str]
+) -> None:
+    """M3: the staff bypass is re-asserted on every publish, not only at seeding."""
+    alice = await me(client, alice_headers)
+    app.state.settings.staff_user_ids = alice["id"]
+    first = await _publish(client, alice_headers, _v2_zip(), "m3-1")
+    assert first.status_code == 202, first.text
+
+    app.state.settings.staff_user_ids = ""
+    community_shape = "\n".join(
+        line
+        for line in V2_TOML.splitlines()
+        if not line.startswith(
+            ("[backend]", "capability", "routes", "[graph]", "kinds", "[tools]", "names")
+        )
+    ).replace('id = "fixture-bundle"', 'id = "another-one"')
+    refused = await _publish(client, alice_headers, _v2_zip(community_shape), "m3-2")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "publisher_name_reserved"
+
+
+async def test_a_community_publisher_cannot_squat_a_capability_id(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """M4: a plain v1 manifest whose id is an in-repo capability is refused, so
+    the slug stays claimable by Solus."""
+    toml = MINIMAL_MANIFEST_TOML.replace('id = "bom"', 'id = "fixture-bundle"')
+    refused = await _publish(
+        client, alice_headers, build_zip(with_manifest(minimal_files(), toml)), "m4-1"
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["error"]["details"] == [
+        "extension.id: reserved for a Solus first-party bundle"
+    ]

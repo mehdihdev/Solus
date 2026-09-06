@@ -13,7 +13,7 @@ from solus_api.widgets.solus_config import (
 
 
 def test_reads_only_ext_tables_with_scalar_values() -> None:
-    tables, problems = parse_project_toml_ext(
+    parsed = parse_project_toml_ext(
         """
 [project]
 name = "ignored for now"
@@ -25,25 +25,25 @@ flag = true
 ratio = 0.5
 """
     )
-    assert problems == []
-    assert tables == {
+    assert parsed.problems == []
+    assert parsed.tables == {
         "fixture-bundle": {"max_notes": 3, "prefix": "fx", "flag": True, "ratio": 0.5}
     }
 
 
 def test_a_file_without_ext_is_empty_and_clean() -> None:
-    assert parse_project_toml_ext('[project]\nname = "x"\n') == ({}, [])
-    assert parse_project_toml_ext("") == ({}, [])
+    assert parse_project_toml_ext('[project]\nname = "x"\n') == ({}, [], False)
+    assert parse_project_toml_ext("") == ({}, [], False)
 
 
 def test_invalid_toml_is_one_problem() -> None:
-    tables, problems = parse_project_toml_ext("[ext.x\n")
-    assert tables == {}
-    assert len(problems) == 1 and "invalid TOML" in problems[0]
+    parsed = parse_project_toml_ext("[ext.x\n")
+    assert parsed.tables == {} and parsed.fatal
+    assert len(parsed.problems) == 1 and "invalid TOML" in parsed.problems[0]
 
 
 def test_bad_slugs_keys_and_values_are_dropped_and_named() -> None:
-    tables, problems = parse_project_toml_ext(
+    parsed = parse_project_toml_ext(
         """
 [ext.Bad_Slug]
 a = 1
@@ -55,27 +55,30 @@ list = [1, 2]
 ok = "yes"
 """
     )
-    assert tables == {"good-bundle": {"ok": "yes"}}
-    assert any("Bad_Slug" in p for p in problems)
-    assert any("Bad Key" in p for p in problems)
-    assert any("nested" in p for p in problems)
-    assert any("list" in p for p in problems)
+    assert parsed.tables == {"good-bundle": {"ok": "yes"}}
+    assert not parsed.fatal  # dropped tables/keys are not a file-level failure
+    assert any("Bad_Slug" in p for p in parsed.problems)
+    assert any("Bad Key" in p for p in parsed.problems)
+    assert any("nested" in p for p in parsed.problems)
+    assert any("list" in p for p in parsed.problems)
 
 
 def test_caps_hold() -> None:
     too_big = "x" * (MAX_PROJECT_TOML_BYTES + 1)
-    tables, problems = parse_project_toml_ext(too_big)
-    assert tables == {} and "exceeds" in problems[0]
+    parsed = parse_project_toml_ext(too_big)
+    assert parsed.tables == {} and parsed.fatal and "exceeds" in parsed.problems[0]
 
     many = "\n".join(f"[ext.b{i}]\nk = 1" for i in range(MAX_EXT_TABLES + 1))
-    tables, problems = parse_project_toml_ext(many)
-    assert tables == {} and "more than" in problems[0]
+    parsed = parse_project_toml_ext(many)
+    assert parsed.tables == {} and parsed.fatal and "more than" in parsed.problems[0]
 
     keys = "[ext.bb]\n" + "\n".join(f"k{i} = 1" for i in range(MAX_KEYS_PER_TABLE + 1))
-    tables, problems = parse_project_toml_ext(keys)
-    assert tables == {} and any("more than" in p for p in problems)
+    parsed = parse_project_toml_ext(keys)
+    assert (
+        parsed.tables == {} and not parsed.fatal and any("more than" in p for p in parsed.problems)
+    )
 
     long_string = '[ext.bb]\ns = "' + "y" * 5000 + '"\n'
-    tables, problems = parse_project_toml_ext(long_string)
-    assert tables == {"bb": {}}
-    assert any("bounded scalar" in p for p in problems)
+    parsed = parse_project_toml_ext(long_string)
+    assert parsed.tables == {"bb": {}}
+    assert any("bounded scalar" in p for p in parsed.problems)

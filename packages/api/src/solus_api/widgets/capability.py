@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from fastapi import APIRouter
-from solus_contracts.extension_manifest import graph_kind_name
+from solus_contracts.extension_manifest import ExtensionManifest, graph_kind_name
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.tools.tool import Tool
@@ -30,6 +30,9 @@ class BundleScope:
     session_factory: async_sessionmaker[AsyncSession]
     project_id: uuid.UUID
     user_id: uuid.UUID | None
+    #: The PINNED manifest the tools were registered from (settings schema,
+    #: declared kinds). None only in ad-hoc construction.
+    manifest: ExtensionManifest | None = None
 
 
 #: Builds ONE tool bound to a scope. The returned descriptor's ``name`` must be
