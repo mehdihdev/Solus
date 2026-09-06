@@ -62,12 +62,11 @@ from solus_api.schemas import (
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
-    bind_source,
+    bind_to_account,
     delete_legacy_family_if_retired,
     is_connection_owned,
     list_documents,
     owned_connection,
-    retire_legacy_family,
     reusable_source,
     sweep_after_commit,
 )
@@ -187,16 +186,6 @@ async def list_sources(
     return envelope(out, meta=meta)
 
 
-def _bind_to_account(source: Source, connection: AccountConnection) -> None:
-    """Attach the project source to the caller's account grant. A REUSED source
-    holding its OWN token (pre-I1 or PAT) mirrors the grant from here on: its
-    old family is unreferenced and is swept after the commit — never left live
-    in the store (SOLUSDEV-242)."""
-    if source.secret_ref and not is_connection_owned(source.secret_ref):
-        retire_legacy_family(source)
-    bind_source(source, connection)
-
-
 @router.post("", status_code=201)
 async def connect_source(
     body: SourceCreate,
@@ -232,7 +221,7 @@ async def connect_source(
     await session.flush()
 
     if connection is not None:
-        _bind_to_account(source, connection)
+        bind_to_account(source, connection)
     elif body.token:
         if not connector.supports_token_connect:
             raise APIError(

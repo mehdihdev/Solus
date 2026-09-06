@@ -148,6 +148,30 @@ describe('useAccountConnections — batches (SOLUSDEV-242 / H2)', () => {
     expect(mockedAdopt.mock.calls[0][0].source_ids).toHaveLength(MOVE_BATCH)
     expect(mockedAdopt.mock.calls[1][0].source_ids).toEqual(['s50', 's51', 's52'])
   })
+
+  it('re-reads the rows when a later batch fails after an earlier one moved', async () => {
+    mockedList.mockResolvedValue([ONSHAPE])
+    const ids = Array.from({ length: MOVE_BATCH + 1 }, (_, i) => `s${i}`)
+    const legacy = {
+      provider: 'onshape',
+      account_login: null,
+      projects: [],
+      source_ids: ids,
+      claimable_connection_id: 'c1'
+    }
+    const { result } = renderHook(() => useAccountConnections())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    mockedAdopt
+      .mockResolvedValueOnce({
+        adopted: [{ connection_id: 'c1', provider: 'onshape', source_id: 's0', project_id: 'p' }],
+        skipped: []
+      })
+      .mockRejectedValueOnce(new Error('500'))
+    await act(async () => {
+      expect(await result.current.move(legacy, ONSHAPE)).toBe(false)
+    })
+    expect(mockedList).toHaveBeenCalledTimes(2) // the partial move is on screen
+  })
 })
 
 describe('useAccountConnections', () => {

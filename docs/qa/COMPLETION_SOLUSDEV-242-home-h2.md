@@ -134,6 +134,12 @@ page-load/handshake side effect (H-NEW-1); an unrecorded access was widened onto
   batches of 50 (test); LOW-4 (showing whose account a source rides) is a W2 follow-up.
 - Code review MEDIUM: every named source id is accounted for in the response even when its grant is
   revoked in the same instant (test); LOW: the confirmation pluralises for multi-project rows.
+- Final confirmation pass (fourth round) found the same token leak on the OAuth-completion
+  sibling path (a project-started sign-in that lands on a reused legacy row): fixed by the shared
+  `bind_to_account` helper plus the post-commit sweep in `_complete_oauth`, with a test that also
+  proves project teardown finds nothing left. The sweep after a Sources-page connect covers every
+  retired source in the caller's live teams, not only that project — correct by design (refs derive
+  from source ids; only already-unreferenced families are deleted).
 - Noted by the security reviewer for the record: `deps.live_membership` checks neither
   `Membership.status` nor `Team.deleted_at` (nothing sets the latter today); the adopt path is
   stricter than the central middleware. If soft-deleted teams are introduced, the middleware needs

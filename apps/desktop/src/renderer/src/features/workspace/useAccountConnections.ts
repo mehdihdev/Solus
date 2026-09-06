@@ -114,6 +114,9 @@ export function useAccountConnections(): AccountConnectionsData {
         await load().catch(() => undefined)
         return moved > 0
       } catch {
+        // A later batch may have failed after an earlier one moved: re-read so
+        // the rows on screen are the truth, then report the failure.
+        await load().catch(() => undefined)
         return false
       }
     },

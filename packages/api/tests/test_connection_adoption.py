@@ -19,8 +19,10 @@ from conftest import BOB, FakeGitHub, add_member, bearer, create_project, create
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.connectors.contracts import AccountInfo, ConnectorError, Credentials
+from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.onshape import OnshapeConnector
 from solus_api.connectors.registry import ConnectorRegistry
+from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import SecretNotFoundError
 from solus_api.models import AccountConnection, Membership, Role, Source
 from solus_api.services.connections import connection_secret_ref
@@ -877,3 +879,44 @@ async def test_a_move_drops_the_hosted_add_on_state_that_rode_the_old_token(
     await _adopt(client, alice_headers, [source["id"]])
     _, _, config = await _source_row(db, source["id"])
     assert "hosted" not in config and "_hosted" not in config
+
+
+async def test_reconnecting_a_legacy_source_through_the_oauth_wizard_retires_its_own_token(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
+) -> None:
+    """Security review (final pass): the project-started OAuth handshake lands
+    on the reused legacy row too — its family must go the same way."""
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    old_ref, _, _ = await _source_row(db, source["id"])
+    assert old_ref
+    store = app.state.secret_store
+    for ref in (refresh_secret_ref(old_ref), *hosted_refs(old_ref)):
+        await store.put(ref, "riding-the-old-token")
+    start = await client.post(
+        "/api/v1/integrations/onshape/oauth/start",
+        json={"project_id": project_id, "access": "read"},
+        headers=alice_headers,
+    )
+    assert start.status_code == 201, start.text
+    assert start.json()["data"]["source_id"] == source["id"]  # the reused row
+    exchange = await client.post(
+        "/api/v1/integrations/onshape/oauth/exchange",
+        json={"state": start.json()["data"]["state"], "code": "alice"},
+        headers=alice_headers,
+    )
+    assert exchange.status_code == 200, exchange.text
+    connection_id = exchange.json()["data"]["connection"]["id"]
+    ref, bound_to, config = await _source_row(db, source["id"])
+    assert bound_to == connection_id and ref == connection_secret_ref(connection_id, "onshape")
+    assert "_legacy_secrets_retire" not in config
+    for ref in (old_ref, refresh_secret_ref(old_ref), *hosted_refs(old_ref)):
+        with pytest.raises(SecretNotFoundError):
+            await store.get(ref)
+    # And nothing is left for teardown to find either.
+    deleted = await client.delete(
+        f"/api/v1/projects/{project_id}?confirm=true", headers=alice_headers
+    )
+    assert deleted.status_code in (200, 204), deleted.text
+    with pytest.raises(SecretNotFoundError):
+        await store.get(old_ref)

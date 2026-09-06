@@ -117,6 +117,12 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
 22. Desktop loopback: the OAuth redirect to `http://127.0.0.1:<port>/...` and `http://localhost:<port>/...`
     both complete; a redirect to any other host is refused (400 `invalid_redirect_uri`). ☐
 
+## Operator notes
+
+- If the secret store is unreachable, disconnecting a source or deleting a project that still owes
+  a retired token family fails loudly (HTTP 500) rather than leaking the family; retry once the
+  store is back. Nothing is lost: the marker stays on the row.
+
 ## Cross-feature checks
 
 - Home's project cards and the Team feed show `connection.adopted` / `connection.revoked` events. ☐
