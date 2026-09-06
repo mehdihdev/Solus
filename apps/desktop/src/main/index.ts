@@ -29,6 +29,7 @@ import {
 import { isAllowedAppStoreUrl } from './appStoreUrl'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
+import { preferencesIpc, realPreferencesStoreDeps } from './preferencesStore'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { externalOpenHandler } from './externalUrl'
@@ -125,6 +126,18 @@ function registerSolChatCacheHandlers(): void {
   )
   ipcMain.handle('solchat:clear', (event) =>
     solChatCacheIpc.clear(isMainRendererSender(event), deps)
+  )
+}
+
+/** The user's engineering preferences, ~/.solus/preferences.json (ADR-034 as
+ *  amended 2026-09-06 — SOLUSDEV-244 / HOME H3). Shape, caps and the
+ *  newer-schema rule are enforced inside preferencesStore; the renderer's copy
+ *  is re-parsed there, never trusted. */
+function registerPreferencesHandlers(): void {
+  const deps = realPreferencesStoreDeps
+  ipcMain.handle('prefs:read', (event) => preferencesIpc.read(isMainRendererSender(event), deps))
+  ipcMain.handle('prefs:write', (event, document: unknown) =>
+    preferencesIpc.write(isMainRendererSender(event), document, deps)
   )
 }
 
@@ -264,6 +277,7 @@ if (!app.requestSingleInstanceLock()) {
 
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
+    registerPreferencesHandlers()
 
     registerExtensionHandlers()
 

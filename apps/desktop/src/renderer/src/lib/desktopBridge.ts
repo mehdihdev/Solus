@@ -3,6 +3,7 @@
 // callers can degrade gracefully instead of crashing.
 import type { OAuthBridge } from '../features/auth/githubOAuth'
 import type { ExtensionsBridge } from '../../../preload/index'
+import type { EngineeringPreferences } from '@solus/shared-types'
 
 export type { ExtensionsBridge }
 
@@ -41,9 +42,19 @@ export interface HostedBridge {
   openStore: (url: string) => Promise<{ ok: boolean }>
 }
 
+/** The user's engineering preferences file, ~/.solus/preferences.json
+ *  (SOLUSDEV-244 / ADR-034 amendment 2026-09-06). `readOnly` means a newer app
+ *  wrote the file: it is shown but never overwritten by this one. Null outside
+ *  Electron — Home then shows the editor as unavailable. */
+export interface PreferencesBridge {
+  read: () => Promise<{ preferences: EngineeringPreferences; readOnly: boolean } | null>
+  write: (document: EngineeringPreferences) => Promise<{ ok: boolean }>
+}
+
 interface SolusWindow {
   solus?: {
     oauth?: OAuthBridge
+    preferences?: PreferencesBridge
     bridge?: CompanionBridge
     folder?: FolderBridge
     /** `process.platform` of the host, so the renderer can inset for native window controls. */
@@ -84,4 +95,9 @@ export function getDesktopPlatform(): string | null {
 export function getDesktopHostedBridge(): HostedBridge | null {
   const w = window as unknown as SolusWindow
   return w.solus?.hosted ?? null
+}
+
+export function getDesktopPreferencesBridge(): PreferencesBridge | null {
+  const w = window as unknown as SolusWindow
+  return w.solus?.preferences ?? null
 }
