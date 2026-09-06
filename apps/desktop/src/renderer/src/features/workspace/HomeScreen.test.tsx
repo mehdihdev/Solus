@@ -9,6 +9,7 @@ import { HomeScreen } from './HomeScreen'
 import * as homeData from './useHomeData'
 import * as meHook from './useMe'
 import * as projectActivity from './useProjectActivity'
+import * as homeTeam from './useHomeTeam'
 import { useShellStore } from './shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { ActivityApi, Project, TeamSummary } from '../../lib/api/resources'
@@ -22,6 +23,7 @@ vi.mock('./useMe', async (importOriginal) => {
   return { ...actual, useMe: vi.fn() }
 })
 vi.mock('./useProjectActivity', () => ({ useProjectActivity: vi.fn() }))
+vi.mock('./useHomeTeam', () => ({ useHomeTeam: vi.fn() }))
 // The preferences document is its own feature (SOLUSDEV-244); Home only hosts the card.
 vi.mock('../preferences/PreferencesCard', () => ({
   PreferencesCard: () => <div data-testid="preferences-card" />
@@ -100,10 +102,51 @@ function mockHome(overrides: Partial<homeData.HomeData> = {}): homeData.HomeData
 
 const card = (id: string): HTMLElement => screen.getByTestId(`project-card-${id}`)
 
+function mockTeam(overrides: Partial<homeTeam.HomeTeam> = {}): homeTeam.HomeTeam {
+  const value: homeTeam.HomeTeam = {
+    status: 'ready',
+    detail: {
+      id: 't1',
+      name: 'Strider',
+      is_personal: false,
+      plan_status: 'trial',
+      settings: { notify_project_created: true },
+      created_at: '',
+      member_count: 2,
+      role: 'owner'
+    },
+    members: [
+      { user_id: 'u1', email: 'maya@strider.dev', name: 'Maya', role: 'owner', joined_at: '' },
+      { user_id: 'u2', email: 'bob@strider.dev', name: 'Bob', role: 'member', joined_at: '' }
+    ],
+    invites: [],
+    activity: [ROW],
+    activityTotal: 1,
+    activityHasMore: false,
+    myRole: 'owner',
+    teamLimit: { current: 1, max: 2, atLimit: false },
+    actions: {
+      invite: vi.fn(),
+      revoke: vi.fn(),
+      changeRole: vi.fn(async () => true),
+      remove: vi.fn(async () => true),
+      leave: vi.fn(),
+      rename: vi.fn(),
+      deleteTeam: vi.fn(),
+      loadMoreActivity: vi.fn(),
+      refresh: vi.fn()
+    },
+    ...overrides
+  }
+  vi.mocked(homeTeam.useHomeTeam).mockReturnValue(value)
+  return value
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   useShellStore.getState().reset()
   useWorkspaceStore.getState().reset()
+  mockTeam()
   vi.mocked(meHook.useMe).mockReturnValue(READY_ME)
   vi.mocked(projectActivity.useProjectActivity).mockReturnValue({
     status: 'ready',
@@ -119,7 +162,7 @@ describe('HomeScreen — the active team’s project grid', () => {
     mockHome()
     render(<HomeScreen onOpenProject={vi.fn()} />)
     expect(screen.getByText('Welcome back, Maya')).toBeInTheDocument()
-    expect(screen.getByText('Projects in Strider')).toBeInTheDocument()
+    expect(screen.getByTestId('team-name')).toHaveTextContent('Strider')
     const grid = screen.getByTestId('project-grid')
     expect(within(grid).getByText('Rover MK2')).toBeInTheDocument()
     expect(within(grid).getByText('Arm')).toBeInTheDocument()
@@ -356,3 +399,110 @@ describe('how you engineer (HOME H3)', () => {
     expect(screen.getByTestId('preferences-card')).toBeInTheDocument()
   })
 })
+
+describe('HomeScreen — the team layer (SOLUSDEV-244 / HOME H5)', () => {
+  it('shows the active team with its member count, roster with roles, and the team feed', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByTestId('team-name')).toHaveTextContent('Strider')
+    expect(screen.getByText('2 members')).toBeInTheDocument()
+    expect(screen.getByText('bob@strider.dev')).toBeInTheDocument()
+    // Owner manages roles; the owner row itself is never manageable.
+    expect(screen.getByLabelText('Role for bob@strider.dev')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Role for maya@strider.dev')).toBeNull()
+    expect(screen.getByText('TEAM ACTIVITY')).toBeInTheDocument()
+    expect(screen.getByTestId('team-limit')).toHaveTextContent('1 of 2 collaborative teams')
+  })
+
+  it('a member sees no role controls, no invite, and can leave', async () => {
+    mockHome()
+    const team = mockTeam({ myRole: 'member' })
+    vi.mocked(team.actions.leave).mockResolvedValue({ ok: true })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.queryByLabelText('Role for bob@strider.dev')).toBeNull()
+    expect(screen.queryByRole('button', { name: /invite/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Team menu' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Leave team' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Leave team' }))
+    expect(team.actions.leave).toHaveBeenCalled()
+  })
+
+  it('creates a one-time invite from the members card and shows the token once', async () => {
+    mockHome()
+    const team = mockTeam()
+    vi.mocked(team.actions.invite).mockResolvedValue({
+      ok: true,
+      token: 'tok-once',
+      movedToTeamId: null
+    })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
+    await userEvent.type(screen.getByLabelText('Teammate email'), 'eve@strider.dev')
+    await userEvent.click(screen.getByRole('button', { name: 'Send invite' }))
+    expect(await screen.findByTestId('invite-token')).toHaveTextContent('tok-once')
+    expect(team.actions.invite).toHaveBeenCalledWith('eve@strider.dev')
+  })
+
+  it('a BASIC user at two collaborative teams sees the limit and the upgrade path', async () => {
+    const onNavigate = vi.fn()
+    const home = mockHome()
+    mockTeam({ teamLimit: { current: 2, max: 2, atLimit: true } })
+    vi.mocked(home.actions.createTeam).mockResolvedValue({
+      ok: false,
+      reason: 'plan_limit',
+      limit: {
+        limit: 'max_teams',
+        current: 2,
+        max: 2,
+        message: "You're at your collaborative-team limit."
+      }
+    })
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={onNavigate} />)
+    expect(screen.getByTestId('team-limit')).toHaveTextContent('2 of 2 collaborative teams')
+    await userEvent.click(screen.getByRole('button', { name: 'Upgrade' }))
+    expect(onNavigate).toHaveBeenCalledWith('billing')
+    await userEvent.click(screen.getByRole('button', { name: /new team/i }))
+    await userEvent.type(screen.getByLabelText('Team name'), 'Third')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText("You're at your collaborative-team limit.")).toBeInTheDocument()
+  })
+
+  it('only the owner is offered Delete team, never on the personal team', async () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Team menu' }))
+    expect(screen.getByRole('menuitem', { name: 'Delete team' })).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    cleanupMenus()
+    mockHome({ team: PERSONAL })
+    mockTeam({ detail: null, myRole: 'owner' })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(
+      screen.getAllByRole('button', { name: 'Team menu' }).at(-1) as HTMLElement
+    )
+    expect(screen.queryByRole('menuitem', { name: 'Delete team' })).toBeNull()
+  })
+
+  it('a gone team says so and offers the personal workspace — never "restart the backend"', async () => {
+    const home = mockHome({
+      status: 'gone',
+      me: {
+        id: 'u1',
+        email: 'm@x',
+        name: null,
+        avatar_url: null,
+        created_at: '',
+        teams: [PERSONAL, TEAM]
+      }
+    })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByText(/no longer available/)).toBeInTheDocument()
+    expect(screen.queryByText(/reach its API/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /personal workspace/i }))
+    expect(home.actions.switchTeam).toHaveBeenCalledWith('t-me')
+  })
+})
+
+function cleanupMenus(): void {
+  for (const menu of document.querySelectorAll('[role="menu"]')) menu.remove()
+}

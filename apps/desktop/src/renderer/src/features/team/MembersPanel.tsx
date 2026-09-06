@@ -1,6 +1,8 @@
-// Reusable member-management surface (roster, roles, invite/revoke/remove),
-// extracted from TeamScreen so both the Team screen and the Settings > Members
-// section render one implementation (DRY). Driven by useTeamData actions.
+// Member-management surface (roster, roles, invite/revoke/remove) — hosted by
+// Home since SOLUSDEV-244 / HOME H5 (the Team screen and Settings > Members
+// were retired; this is the one implementation). Callback types are its own,
+// so any hook can drive it. The invite modal shows the one-time token ONCE,
+// offers Copy, and guards Done so the token is not lost by a reflex click.
 import { useState } from 'react'
 import { Avatar } from '../../components/ui/Avatar'
 import { Button } from '../../components/ui/Button'
@@ -10,7 +12,13 @@ import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
 import { ModalShell } from '../workspace/modals'
-import type { TeamData } from './useTeamData'
+import { PlanLimitNotice } from '../workspace/PlanLimitNotice'
+import type { InviteOutcome } from '../workspace/useHomeTeam'
+
+export type ChangeRoleFn = (userId: string, role: TeamRole) => Promise<boolean>
+export type RemoveMemberFn = (userId: string) => Promise<boolean>
+export type RevokeInviteFn = (inviteId: string) => Promise<boolean>
+export type InviteFn = (email: string) => Promise<InviteOutcome>
 
 export const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 export const MANAGER_ROLES: readonly TeamRole[] = ['owner', 'admin']
@@ -44,8 +52,8 @@ function MemberRow({
 }: {
   member: TeamMemberApi
   canManage: boolean
-  onChangeRole: TeamData['actions']['changeRole']
-  onRemove: TeamData['actions']['remove']
+  onChangeRole: ChangeRoleFn
+  onRemove: RemoveMemberFn
 }): React.JSX.Element {
   return (
     <div
@@ -101,7 +109,7 @@ function PendingInviteRow({
 }: {
   invite: InviteApi
   canManage: boolean
-  onRevoke: TeamData['actions']['revoke']
+  onRevoke: RevokeInviteFn
 }): React.JSX.Element {
   return (
     <div
@@ -153,9 +161,11 @@ export interface LiveMembersProps {
   invites: readonly InviteApi[]
   myRole: TeamRole | null
   canManage: boolean
-  onChangeRole: TeamData['actions']['changeRole']
-  onRemove: TeamData['actions']['remove']
-  onRevoke: TeamData['actions']['revoke']
+  onChangeRole: ChangeRoleFn
+  onRemove: RemoveMemberFn
+  onRevoke: RevokeInviteFn
+  /** Header action (Home's Invite teammate lives here for managers). */
+  onInvite?: () => void
 }
 
 /** The MEMBERS card: roster + pending invites, with inline role/remove/revoke. */
@@ -166,12 +176,29 @@ export function LiveMembers({
   canManage,
   onChangeRole,
   onRemove,
-  onRevoke
+  onRevoke,
+  onInvite
 }: LiveMembersProps): React.JSX.Element {
   return (
     <Card pad={0}>
-      <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--bd)' }}>
-        <Mono size={9.5}>MEMBERS</Mono>
+      <div
+        style={{
+          padding: '10px 16px',
+          borderBottom: '1px solid var(--bd)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}
+      >
+        <Mono size={9.5}>
+          MEMBERS · {members.length}
+          {invites.length > 0 ? ` · ${invites.length} PENDING` : ''}
+        </Mono>
+        {canManage && onInvite && (
+          <Button kind="bare" size="sm" onClick={onInvite}>
+            <Icons.plus size={12} /> Invite
+          </Button>
+        )}
       </div>
       {members.map((m) => (
         <MemberRow
@@ -194,70 +221,139 @@ export function LiveMembers({
   )
 }
 
-/** Invite-a-teammate modal. Validates the email, shows the one-time join token. */
+const INVITE_FAILURE: Record<Exclude<InviteOutcome, { ok: true }>['reason'], string> = {
+  plan_limit: '',
+  already_member: 'That person is already on this team.',
+  invite_pending: 'An invite for that email is already pending — revoke it to send a new one.',
+  invalid_email: 'Enter a valid email address.',
+  failed: 'Could not send the invite. Check your role and try again.'
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The one-time token, shown ONCE: Copy, and a Done that asks twice while the
+ *  token has not been copied (a reflex click must not lose it). Never logged. */
+function TokenReveal({
+  token,
+  movedToTeamId,
+  onClose
+}: {
+  token: string | null
+  movedToTeamId: string | null
+  onClose: () => void
+}): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const [armed, setArmed] = useState(false)
+  const done = (): void => {
+    if (copied || armed || !token) {
+      onClose()
+      return
+    }
+    setArmed(true)
+  }
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
+        {movedToTeamId
+          ? 'Invite sent from your new team — Home has switched to it. '
+          : 'Invite sent. '}
+        Share this one-time join token — it&apos;s shown only now:
+      </div>
+      <div
+        data-testid="invite-token"
+        style={{
+          marginTop: 10,
+          padding: '9px 11px',
+          background: 'var(--bg)',
+          border: '1px solid var(--bd)',
+          borderRadius: 3,
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          wordBreak: 'break-all'
+        }}
+      >
+        {token ?? 'The token was not returned. Revoke this invite and send a new one.'}
+      </div>
+      {armed && (
+        <div role="alert" style={{ marginTop: 8, fontSize: 11.5, color: 'var(--warn)' }}>
+          You won&apos;t see this token again. Copy it, or click Done once more to close anyway.
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+        {token && (
+          <Button
+            kind="ghost"
+            size="sm"
+            onClick={() => void copyToClipboard(token).then((ok) => setCopied(ok))}
+          >
+            {copied ? 'Copied' : 'Copy token'}
+          </Button>
+        )}
+        <Button kind="primary" size="sm" onClick={done}>
+          Done
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Invite-a-teammate modal. Validates the email, names a refusal (a plan limit
+ *  with the upgrade path), then shows the one-time join token. */
 export function InviteModal({
   onClose,
-  onInvite
+  onInvite,
+  onUpgrade
 }: {
   onClose: () => void
-  onInvite: TeamData['actions']['invite']
+  onInvite: InviteFn
+  onUpgrade?: () => void
 }): React.JSX.Element {
   const [email, setEmail] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [token, setToken] = useState<string | null>(null)
+  const [limit, setLimit] = useState<string | null>(null)
+  const [sent, setSent] = useState<{ token: string | null; movedToTeamId: string | null } | null>(
+    null
+  )
 
   const send = async (): Promise<void> => {
     if (!EMAIL_PATTERN.test(email)) {
-      setError('Enter a valid email address.')
+      setError(INVITE_FAILURE.invalid_email)
       return
     }
     setSending(true)
     setError(null)
-    const invite = await onInvite(email)
+    setLimit(null)
+    const outcome = await onInvite(email)
     setSending(false)
-    if (!invite) {
-      setError('Could not send the invite. Check your role and try again.')
+    if (!outcome.ok) {
+      if (outcome.reason === 'plan_limit') setLimit(outcome.limit.message)
+      else setError(INVITE_FAILURE[outcome.reason])
       return
     }
-    setToken(invite.token ?? null)
+    setSent({ token: outcome.token, movedToTeamId: outcome.movedToTeamId })
     setEmail('')
   }
 
   return (
     <ModalShell onClose={onClose} width={380}>
       <div style={{ fontSize: 16, fontWeight: 600 }}>Invite a teammate</div>
-      {token ? (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-            Invite sent. Share this one-time join link — it&apos;s shown only now:
-          </div>
-          <div
-            style={{
-              marginTop: 10,
-              padding: '9px 11px',
-              background: 'var(--bg)',
-              border: '1px solid var(--bd)',
-              borderRadius: 3,
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              wordBreak: 'break-all'
-            }}
-          >
-            {token}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-            <Button kind="primary" size="sm" onClick={onClose}>
-              Done
-            </Button>
-          </div>
-        </div>
+      {sent ? (
+        <TokenReveal token={sent.token} movedToTeamId={sent.movedToTeamId} onClose={onClose} />
       ) : (
         <>
           <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 4, lineHeight: 1.5 }}>
             They&apos;ll join with access to this team&apos;s projects.
           </div>
           <input
+            aria-label="Teammate email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="teammate@team.dev"
@@ -280,6 +376,7 @@ export function InviteModal({
           {error && (
             <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>
           )}
+          {limit && <PlanLimitNotice message={limit} onUpgrade={onUpgrade} />}
           <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
             <Button kind="ghost" size="sm" onClick={onClose}>
               Cancel
@@ -297,46 +394,5 @@ export function InviteModal({
         </>
       )}
     </ModalShell>
-  )
-}
-
-/** Self-contained members manager for the Settings > Members section: a header
- *  with the count + invite affordance, the roster card, and the invite modal. */
-export function MembersManager({ data }: { data: TeamData }): React.JSX.Element {
-  const { members, invites, myRole, actions } = data
-  const canManage = myRole !== null && MANAGER_ROLES.includes(myRole)
-  const [inviteOpen, setInviteOpen] = useState(false)
-
-  return (
-    <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 12
-        }}
-      >
-        <span style={{ fontSize: 12.5, color: 'var(--mut)' }}>
-          {members.length} {members.length === 1 ? 'member' : 'members'}
-          {invites.length > 0 ? ` · ${invites.length} pending` : ''}
-        </span>
-        {canManage && (
-          <Button kind="ghost" size="sm" onClick={() => setInviteOpen(true)}>
-            <Icons.plus size={13} /> Invite teammate
-          </Button>
-        )}
-      </div>
-      <LiveMembers
-        members={members}
-        invites={invites}
-        myRole={myRole}
-        canManage={canManage}
-        onChangeRole={actions.changeRole}
-        onRemove={actions.remove}
-        onRevoke={actions.revoke}
-      />
-      {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} onInvite={actions.invite} />}
-    </div>
   )
 }

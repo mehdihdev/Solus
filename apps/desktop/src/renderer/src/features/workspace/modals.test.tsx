@@ -1,6 +1,7 @@
 // Shared workspace modals: submit round-trips, error surfacing, close behavior.
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { NameModal, JoinTeamModal, DeleteConfirmModal, ModalShell } from './modals'
 
 describe('ModalShell', () => {
@@ -54,7 +55,7 @@ describe('NameModal', () => {
 
 describe('JoinTeamModal', () => {
   it('joins with the trimmed token and closes on success', async () => {
-    const onJoin = vi.fn().mockResolvedValue({ team_id: 't1', role: 'member' })
+    const onJoin = vi.fn().mockResolvedValue(true)
     const onClose = vi.fn()
     render(<JoinTeamModal onClose={onClose} onJoin={onJoin} />)
     fireEvent.change(screen.getByLabelText('Invite token'), { target: { value: ' tok ' } })
@@ -64,7 +65,7 @@ describe('JoinTeamModal', () => {
   })
 
   it('surfaces an error when the token is rejected', async () => {
-    const onJoin = vi.fn().mockResolvedValue(null)
+    const onJoin = vi.fn().mockResolvedValue(false)
     render(<JoinTeamModal onClose={vi.fn()} onJoin={onJoin} />)
     fireEvent.change(screen.getByLabelText('Invite token'), { target: { value: 'bad' } })
     fireEvent.click(screen.getByText('Join'))
@@ -80,5 +81,37 @@ describe('DeleteConfirmModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
     await waitFor(() => expect(onConfirm).toHaveBeenCalled())
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+})
+
+describe('named refusals (SOLUSDEV-244 / HOME H5)', () => {
+  it('NameModal shows a plan limit with the upgrade path instead of "try again"', async () => {
+    const onUpgrade = vi.fn()
+    const onSubmit = vi
+      .fn()
+      .mockResolvedValue({ message: "You're at your collaborative-team limit.", upgrade: true })
+    render(
+      <NameModal
+        title="New team"
+        label="Team name"
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        onUpgrade={onUpgrade}
+      />
+    )
+    await userEvent.type(screen.getByLabelText('Team name'), 'Rockets')
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByTestId('plan-limit')).toHaveTextContent('collaborative-team limit')
+    await userEvent.click(screen.getByRole('button', { name: 'Upgrade' }))
+    expect(onUpgrade).toHaveBeenCalled()
+  })
+
+  it('JoinTeamModal names why a token was refused', async () => {
+    const onJoin = vi.fn().mockResolvedValue({ message: 'This invite has expired.' })
+    render(<JoinTeamModal onClose={vi.fn()} onJoin={onJoin} />)
+    await userEvent.type(screen.getByLabelText('Invite token'), 'tok')
+    await userEvent.click(screen.getByRole('button', { name: 'Join' }))
+    expect(await screen.findByText('This invite has expired.')).toBeInTheDocument()
+    expect(screen.queryByTestId('plan-limit')).toBeNull()
   })
 })

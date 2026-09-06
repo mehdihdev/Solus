@@ -1,32 +1,38 @@
-// Home (SOLUSDEV-242 / HOME H1): the cross-project surface. Manages ACROSS the
-// active team's projects — a grid with create / open / switch / archive and
-// recent activity per project — and connects WHOLE accounts (the account-scoped
-// OAuth grants, SOLUSDEV-241). Everything project-specific lives in the
-// workspace screens. Offline (dev bypass / unreachable API) shows an honest
-// sign-in state — never a demo project (SOLUSDEV-152).
+// Home (SOLUSDEV-242 / HOME H1 → H5): the cross-project AND cross-team surface.
+// The active team is always visible (the strip), with the switcher only when
+// the user belongs to more than one team; its projects as a grid; its members
+// with roles, one-time invites, join-by-token; the humanised team feed; and
+// the account-level cards (connected accounts, how you engineer). Everything
+// project-specific lives in the workspace screens. Offline (dev bypass /
+// unreachable API) shows an honest sign-in state — never a demo project
+// (SOLUSDEV-152); a team that is gone says so — never "restart the backend".
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
-import { Icons } from '../../components/ui/icons.constants'
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
+import { personalTeam } from '../../lib/api/resources'
+import { MANAGER_ROLES, LiveMembers } from '../team/MembersPanel'
+import { PreferencesCard } from '../preferences/PreferencesCard'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
+import { useHomeTeam } from './useHomeTeam'
 import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
-import { NameModal, JoinTeamModal } from './modals'
+import { NameModal } from './modals'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
-import { PreferencesCard } from '../preferences/PreferencesCard'
+import { HomeTeamModals, type HomeTeamModal } from './HomeTeamModals'
 import { ProjectGrid } from './ProjectGrid'
-import { TeamSelect } from './TeamSelect'
+import { TeamActivityPanel } from './TeamActivityPanel'
+import { TeamStrip } from './TeamStrip'
 
 export interface HomeScreenProps {
   onOpenProject: (project: WorkspaceProject) => void
-  /** Rail navigation (the connected-accounts card jumps to the open project's Sources page). */
+  /** Rail navigation (Sources from the accounts card; Billing from a plan limit). */
   onNavigate?: (screen: MainScreen) => void
 }
 
-const OFFLINE_GRID_STYLE: React.CSSProperties = {
+const GRID_STYLE: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0,1fr) 340px',
   gap: 16,
@@ -58,9 +64,9 @@ export function HomeScreen({ onOpenProject, onNavigate }: HomeScreenProps): Reac
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
           {greeting}
         </h1>
-        {home.status === 'offline' ? (
-          <OfflineHome />
-        ) : (
+        {home.status === 'offline' && <OfflineHome />}
+        {home.status === 'gone' && <GoneHome home={home} />}
+        {home.status === 'ready' && (
           <LiveHome home={home} onOpenProject={onOpenProject} onNavigate={onNavigate} />
         )}
       </div>
@@ -79,66 +85,74 @@ function LiveHome({
 }): React.JSX.Element {
   const currentProject = useWorkspaceStore((s) => s.project)
   const currentProjectId = currentProject?.id ?? null
+  const team = useHomeTeam(home.team, home.me, home.actions.refresh)
   const [creatingProject, setCreatingProject] = useState(false)
-  const [creatingTeam, setCreatingTeam] = useState(false)
-  const [joining, setJoining] = useState(false)
+  const [modal, setModal] = useState<HomeTeamModal>(null)
+  const canManage = team.myRole !== null && MANAGER_ROLES.includes(team.myRole)
+  const onUpgrade = onNavigate ? () => onNavigate('billing') : undefined
+  const teamReady = home.team !== null && team.status === 'ready'
 
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          marginTop: 6,
-          flexWrap: 'wrap'
-        }}
-      >
-        <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>
-          {home.team ? `Projects in ${home.team.name}` : 'Your robots, one team at a time.'}
-        </div>
-        <TeamSelect
-          teams={home.teams}
-          currentId={home.team?.team_id}
-          onSwitch={home.actions.switchTeam}
-        />
-        <div style={{ flex: 1 }} />
-        <Button kind="ghost" size="sm" onClick={() => setJoining(true)}>
-          <Icons.mail size={13} /> Join team
-        </Button>
-        <Button kind="ghost" size="sm" onClick={() => setCreatingTeam(true)}>
-          <Icons.team size={13} /> New team
-        </Button>
-      </div>
+      <TeamStrip
+        team={home.team}
+        teams={home.teams}
+        memberCount={team.detail?.member_count ?? null}
+        myRole={team.myRole}
+        teamLimit={team.teamLimit}
+        onSwitch={home.actions.switchTeam}
+        onJoin={() => setModal('join')}
+        onNewTeam={() => setModal('newTeam')}
+        onInvite={() => setModal('invite')}
+        onRename={() => setModal('rename')}
+        onLeave={() => setModal('leave')}
+        onDelete={() => setModal('delete')}
+        onUpgrade={onUpgrade}
+      />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0,1fr) 340px',
-          gap: 16,
-          marginTop: 16,
-          alignItems: 'start'
-        }}
-      >
-        {home.team ? (
-          <ProjectGrid
-            team={home.team}
-            projects={home.projects}
-            activityByProject={home.activityByProject}
-            currentProjectId={currentProjectId}
-            actions={home.actions}
-            onOpenProject={onOpenProject}
-            onNewProject={() => setCreatingProject(true)}
-            onActionFailed={toastActionFailed}
-          />
-        ) : (
-          <Card pad={20}>
-            <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>
-              You&apos;re not on any teams yet. Create one, or join with an invite token.
-            </div>
-          </Card>
-        )}
+      <div style={GRID_STYLE}>
+        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
+          {home.team ? (
+            <ProjectGrid
+              team={home.team}
+              projects={home.projects}
+              activityByProject={home.activityByProject}
+              currentProjectId={currentProjectId}
+              actions={home.actions}
+              onOpenProject={onOpenProject}
+              onNewProject={() => setCreatingProject(true)}
+              onActionFailed={toastActionFailed}
+            />
+          ) : (
+            <Card pad={20}>
+              <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>
+                You&apos;re not on any teams yet. Create one, or join with an invite token.
+              </div>
+            </Card>
+          )}
+          {teamReady && (
+            <TeamActivityPanel
+              activity={team.activity}
+              members={team.members}
+              total={team.activityTotal}
+              hasMore={team.activityHasMore}
+              onLoadMore={team.actions.loadMoreActivity}
+            />
+          )}
+        </div>
         <div style={{ display: 'grid', gap: 16 }}>
+          {teamReady && (
+            <LiveMembers
+              members={team.members}
+              invites={team.invites}
+              myRole={team.myRole}
+              canManage={canManage}
+              onChangeRole={team.actions.changeRole}
+              onRemove={team.actions.remove}
+              onRevoke={team.actions.revoke}
+              onInvite={() => setModal('invite')}
+            />
+          )}
           {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
               once; each project picks what it tracks on its Sources page. */}
           <ConnectedAccountsCard
@@ -166,26 +180,37 @@ function LiveHome({
           }}
         />
       )}
-      {creatingTeam && (
-        <NameModal
-          title="New team"
-          label="Team name"
-          submitLabel="Create"
-          errorText="Couldn't create the team. Please try again."
-          onClose={() => setCreatingTeam(false)}
-          onSubmit={async (name) => (await home.actions.createTeam(name)).ok}
-        />
-      )}
-      {joining && (
-        <JoinTeamModal
-          onClose={() => setJoining(false)}
-          onJoin={async (token) => {
-            const joined = await home.actions.joinTeam(token)
-            return joined.ok ? joined : null
-          }}
-        />
-      )}
+      <HomeTeamModals
+        modal={modal}
+        teamName={home.team?.name ?? null}
+        home={home.actions}
+        team={team}
+        onClose={() => setModal(null)}
+        onUpgrade={onUpgrade}
+      />
     </>
+  )
+}
+
+/** The stored team no longer exists (deleted, or I was removed) — the API is
+ *  answering, so this is not an outage. One click lands on the personal team. */
+function GoneHome({ home }: { home: HomeData }): React.JSX.Element {
+  const personal = home.me ? personalTeam(home.me) : undefined
+  return (
+    <Card pad={20} style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+        This team is no longer available — it was deleted, or you were removed from it.
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <Button
+          kind="soft"
+          size="sm"
+          onClick={() => personal && home.actions.switchTeam(personal.team_id)}
+        >
+          Go to my personal workspace
+        </Button>
+      </div>
+    </Card>
   )
 }
 
@@ -194,7 +219,7 @@ function OfflineHome(): React.JSX.Element {
   // The preferences card still works here: it is machine-local (HOME H3).
   const reason = useOfflineReason()
   return (
-    <div style={OFFLINE_GRID_STYLE}>
+    <div style={GRID_STYLE}>
       <Card pad={20}>
         <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
           {reason === 'api_unreachable'

@@ -6,6 +6,29 @@ import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
+import { PlanLimitNotice } from './PlanLimitNotice'
+
+/** A refusal the modal shows in place of its generic error (SOLUSDEV-244 /
+ *  HOME H5). `upgrade` marks a plan limit: the Upgrade button appears beside
+ *  the sentence when the modal was given an `onUpgrade`. */
+export interface ModalFailure {
+  message: string
+  upgrade?: boolean
+}
+
+/** A modal callback's verdict: success, a plain failure, or a named refusal. */
+export type ModalResult = boolean | ModalFailure
+
+function FailureLine({
+  failure,
+  onUpgrade
+}: {
+  failure: ModalFailure
+  onUpgrade?: () => void
+}): React.JSX.Element {
+  if (failure.upgrade) return <PlanLimitNotice message={failure.message} onUpgrade={onUpgrade} />
+  return <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{failure.message}</div>
+}
 
 /** Shared modal chrome: dim backdrop, centered card, click-out to close.
  *  Entrance motion via .modal-backdrop-in/.modal-card-in (main.css). */
@@ -64,7 +87,8 @@ export function NameModal({
   errorText = 'Something went wrong. Please try again.',
   maxLength,
   onClose,
-  onSubmit
+  onSubmit,
+  onUpgrade
 }: {
   title: string
   label: string
@@ -74,23 +98,25 @@ export function NameModal({
   /** Client-side mirror of the server's length cap, when the field has one. */
   maxLength?: number
   onClose: () => void
-  /** Resolve true on success (modal closes) or false to keep it open with an error. */
-  onSubmit: (name: string) => Promise<boolean>
+  /** Resolve true on success (modal closes), false for the generic error, or a
+   *  ModalFailure to keep it open with a NAMED refusal (a plan limit shows Upgrade). */
+  onSubmit: (name: string) => Promise<ModalResult>
+  onUpgrade?: () => void
 }): React.JSX.Element {
   const [name, setName] = useState(initial)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ModalFailure | null>(null)
   const submit = async (): Promise<void> => {
     if (!name.trim()) return
     setBusy(true)
     setError(null)
-    const ok = await onSubmit(name.trim())
-    if (ok) {
+    const result = await onSubmit(name.trim())
+    if (result === true) {
       onClose()
       return
     }
     setBusy(false)
-    setError(errorText)
+    setError(result === false ? { message: errorText } : result)
   }
   return (
     <ModalShell onClose={onClose}>
@@ -105,7 +131,7 @@ export function NameModal({
         onKeyDown={(e) => e.key === 'Enter' && void submit()}
         style={MODAL_INPUT_STYLE}
       />
-      {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
+      {error && <FailureLine failure={error} onUpgrade={onUpgrade} />}
       <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
         <Button kind="ghost" size="sm" onClick={onClose}>
           Cancel
@@ -120,27 +146,34 @@ export function NameModal({
 
 export function JoinTeamModal({
   onClose,
-  onJoin
+  onJoin,
+  onUpgrade
 }: {
   onClose: () => void
-  /** Resolve truthy on success (modal closes) or falsy to show the error. */
-  onJoin: (token: string) => Promise<unknown>
+  /** Resolve true on success (modal closes), false for the generic error, or a
+   *  ModalFailure naming why the token was refused (a plan limit shows Upgrade). */
+  onJoin: (token: string) => Promise<ModalResult>
+  onUpgrade?: () => void
 }): React.JSX.Element {
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ModalFailure | null>(null)
 
   const submit = async (): Promise<void> => {
     if (!token.trim()) return
     setBusy(true)
     setError(null)
-    const joined = await onJoin(token.trim())
+    const result = await onJoin(token.trim())
     setBusy(false)
-    if (!joined) {
-      setError("Couldn't join with that token. It may be invalid, expired, or for another email.")
+    if (result === true) {
+      onClose()
       return
     }
-    onClose()
+    setError(
+      result === false
+        ? { message: "Couldn't join with that token. It may be invalid, expired, or for another email." }
+        : result
+    )
   }
 
   return (
@@ -158,7 +191,7 @@ export function JoinTeamModal({
         onKeyDown={(e) => e.key === 'Enter' && void submit()}
         style={{ ...MODAL_INPUT_STYLE, fontFamily: 'var(--font-mono)' }}
       />
-      {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
+      {error && <FailureLine failure={error} onUpgrade={onUpgrade} />}
       <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
         <Button kind="ghost" size="sm" onClick={onClose}>
           Cancel
