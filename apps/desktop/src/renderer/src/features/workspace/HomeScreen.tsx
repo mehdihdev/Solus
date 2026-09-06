@@ -16,6 +16,7 @@ import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal, JoinTeamModal } from './modals'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
+import { PreferencesCard } from '../preferences/PreferencesCard'
 import { ProjectGrid } from './ProjectGrid'
 import { TeamSelect } from './TeamSelect'
 
@@ -23,6 +24,14 @@ export interface HomeScreenProps {
   onOpenProject: (project: WorkspaceProject) => void
   /** Rail navigation (the connected-accounts card jumps to the open project's Sources page). */
   onNavigate?: (screen: MainScreen) => void
+}
+
+const OFFLINE_GRID_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0,1fr) 340px',
+  gap: 16,
+  marginTop: 16,
+  alignItems: 'start'
 }
 
 /** Surface a failed background mutation (archive/unarchive) via the shell toast. */
@@ -129,12 +138,17 @@ function LiveHome({
             </div>
           </Card>
         )}
-        {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
-            once; each project picks what it tracks on its Sources page. */}
-        <ConnectedAccountsCard
-          currentProject={currentProject}
-          onOpenSources={onNavigate ? () => onNavigate('sources') : undefined}
-        />
+        <div style={{ display: 'grid', gap: 16 }}>
+          {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
+              once; each project picks what it tracks on its Sources page. */}
+          <ConnectedAccountsCard
+            currentProject={currentProject}
+            onOpenSources={onNavigate ? () => onNavigate('sources') : undefined}
+          />
+          {/* HOME H3 (SOLUSDEV-244): the one part of ~/.solus the user owns —
+              how they engineer. Machine-local, read by SOL on every turn. */}
+          <PreferencesCard />
+        </div>
       </div>
 
       {creatingProject && (
@@ -171,14 +185,18 @@ function LiveHome({
 
 /** Honest offline state (dev bypass / unreachable API) — never a demo project. */
 function OfflineHome(): React.JSX.Element {
+  // The preferences card still works here: it is machine-local (HOME H3).
   const reason = useOfflineReason()
   return (
-    <Card pad={20} style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-        {reason === 'api_unreachable'
-          ? "You're signed in, but Solus can't reach its API. Make sure the backend is running, then reload — your teams, projects, and recent activity will appear here."
-          : 'Sign in to Solus to see your teams, projects, and recent activity here.'}
-      </div>
-    </Card>
+    <div style={OFFLINE_GRID_STYLE}>
+      <Card pad={20}>
+        <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+          {reason === 'api_unreachable'
+            ? "You're signed in, but Solus can't reach its API. Make sure the backend is running, then reload — your teams, projects, and recent activity will appear here."
+            : 'Sign in to Solus to see your teams, projects, and recent activity here.'}
+        </div>
+      </Card>
+      <PreferencesCard />
+    </div>
   )
 }

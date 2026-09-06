@@ -4,6 +4,7 @@
 // endpoint the envelope client cannot carry (SSE arrives on a POST), so it
 // uses fetch + ReadableStream here — in this module, never raw fetch in
 // components — and feeds the pure solStream parser.
+import type { EngineeringPreferences } from '@solus/shared-types'
 import { api, joinUrl, type ApiClient } from '../../lib/api/client'
 import { resolveApiBaseUrl } from '../../lib/cspConnect'
 import { ApiError } from '../../lib/api/envelope.types'
@@ -116,6 +117,13 @@ export interface StreamSolMessageInput {
    * the prose cannot invalidate an offset.
    */
   mentions?: readonly string[]
+  /**
+   * SOLUSDEV-244: the user's engineering conventions from their own
+   * `~/.solus/preferences.json`. Sent with the turn (the server keeps no copy)
+   * and fenced into the system prompt above the shipped references. Omitted
+   * when there is nothing written, so the body shape stays minimal.
+   */
+  preferences?: EngineeringPreferences | null
   /** Receives each validated stream event in arrival order. */
   onEvent: (event: SolStreamEvent) => void
   signal?: AbortSignal
@@ -139,7 +147,8 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
     body: JSON.stringify({
       content: input.content,
       action_mode: input.actionMode,
-      mentions: input.mentions ?? []
+      mentions: input.mentions ?? [],
+      ...(input.preferences ? { preferences: input.preferences } : {})
     }),
     signal: input.signal
   }

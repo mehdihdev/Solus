@@ -95,6 +95,49 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **Revoke** is confirmed and names the projects it disconnects (unchanged).
 - Hidden while offline (honest empty state elsewhere on Home).
 
+## How you engineer (SOLUSDEV-244 / HOME H3)
+
+```
+| HOW YOU ENGINEER                                              [Edit] |
+| ELECTRICAL                                                           |
+| Prefer 0.1 mm clearance minimum on all boards. JST-GH for signal.    |
+| UNITS AND STANDARDS                                                  |
+| SI units. ISO 2768-m general tolerances.                             |
+|                                                                      |
+| (editing:)                                                           |
+| CODE STYLE                                                  0 / 800  |
+| [                                                                  ] |
+| MECHANICAL … ELECTRICAL … DOCUMENTATION … UNITS AND STANDARDS        |
+| ANYTHING ELSE                                              0 / 2400  |
+| [                                                                  ] |
+|                                            [Cancel]   [Save]         |
+```
+
+- The card sits in Home's right column under CONNECTED ACCOUNTS, and stays on
+  the offline Home too: it is **machine-local**, the one part of `~/.solus` the
+  user owns (`~/.solus/preferences.json`, ADR-034 amendment 2026-09-06). It is
+  the Solus equivalent of a `claude.md` — a **document the user writes**, not a
+  settings screen. No toggles.
+- View: the sections that have text, labelled (Code style · Mechanical ·
+  Electrical · Documentation · Units and standards · Anything else); empty ones
+  are hidden. Nothing written yet → the intro line and a **Write** button
+  ("SOL follows these on every turn and says when one changed its answer").
+- Edit: one textarea per section with a `n / cap` counter (800 chars per
+  section, 2 400 for Anything else — the caps are what bound the prompt), Save /
+  Cancel. Save is optimistic through the desktop main process (atomic write,
+  0600); a failed save keeps the editor open with "Couldn't save your
+  conventions — try again." Cancel discards the draft.
+- **Read-only** when the file was written by a newer Solus (shown, no Edit).
+  **Unavailable** outside the desktop app ("Your conventions live in ~/.solus and
+  are edited in the Solus desktop app.").
+- **Effect**: the document rides along with every SOL turn
+  (`POST …/sol/conversations/{id}/messages` body `preferences`) and enters the
+  system prompt as one fenced data block, layered above the shipped engineering
+  references and below a project's own `.solus` (reserved). SOL is told to apply
+  the conventions and to say which one changed its answer. Nothing is stored
+  server-side; the Custom instruction card on the SOL page (SOLUSDEV-233) stays
+  a separate, server-stored answer-styling note.
+
 ## Project grid
 
 - One card per live project of the active team: accent graph glyph, name

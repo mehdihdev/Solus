@@ -22,6 +22,10 @@ vi.mock('./useMe', async (importOriginal) => {
   return { ...actual, useMe: vi.fn() }
 })
 vi.mock('./useProjectActivity', () => ({ useProjectActivity: vi.fn() }))
+// The preferences document is its own feature (SOLUSDEV-244); Home only hosts the card.
+vi.mock('../preferences/PreferencesCard', () => ({
+  PreferencesCard: () => <div data-testid="preferences-card" />
+}))
 // Account connections are their own feature (SOLUSDEV-241); Home only hosts the card.
 vi.mock('./ConnectedAccountsCard', () => ({
   ConnectedAccountsCard: (props: {
@@ -338,5 +342,17 @@ describe('HomeScreen — teams and states', () => {
     const { container } = render(<HomeScreen onOpenProject={vi.fn()} />)
     expect(container.querySelector('[data-spinner]') ?? container.firstChild).toBeTruthy()
     expect(screen.queryByTestId('project-grid')).toBeNull()
+  })
+})
+
+describe('how you engineer (HOME H3)', () => {
+  it('hosts the preferences card beside the project grid and when offline', () => {
+    mockHome()
+    const { unmount } = render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByTestId('preferences-card')).toBeInTheDocument()
+    unmount()
+    mockHome({ status: 'offline' })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByTestId('preferences-card')).toBeInTheDocument()
   })
 })

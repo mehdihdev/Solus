@@ -23,6 +23,7 @@ import {
   type SolActionMode,
   type SolTurn
 } from './solApi'
+import { preferencesForTurn } from '../preferences/preferencesStore'
 import type { ContextUsedInfo, SolStreamEvent } from './solStream'
 import type { PendingConfirmation } from '../../lib/api/solStream'
 import {
@@ -388,6 +389,9 @@ export async function sendMessage(
       content: text,
       actionMode,
       mentions,
+      // SOLUSDEV-244: the user's engineering conventions ride along with every
+      // turn (null when nothing is written or outside the desktop app).
+      preferences: await preferencesForTurn(),
       signal: controller.signal,
       onEvent: (event) => {
         if (event.type === 'context_used') {
