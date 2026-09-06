@@ -28,6 +28,13 @@
 // Anything new that holds project data belongs in this table and, unless it is
 // keyed by project id, in the clear list below. `projectSwitch.test.ts` drives
 // every store through a switch.
+//
+// TEAM scope (SOLUSDEV-244 / HOME H5): a team switch is broader — it goes
+// through `teamSwitch.ts`, which closes a project of the previous team THROUGH
+// this choke point (so the table above is cleared) and then moves `teamId`;
+// `useHomeData` reloads the project list and blanks the grid while the new team
+// loads. The Home team hook (`useHomeTeam`) is keyed on the team id with a
+// stale-response guard, like the per-screen hooks.
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
 import { devBypassActive } from '../../lib/supabase'

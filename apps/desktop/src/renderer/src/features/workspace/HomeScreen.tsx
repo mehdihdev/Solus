@@ -173,11 +173,17 @@ function LiveHome({
           submitLabel="Create"
           errorText="Couldn't create the team. Please try again."
           onClose={() => setCreatingTeam(false)}
-          onSubmit={(name) => home.actions.createTeam(name)}
+          onSubmit={async (name) => (await home.actions.createTeam(name)).ok}
         />
       )}
       {joining && (
-        <JoinTeamModal onClose={() => setJoining(false)} onJoin={home.actions.joinTeam} />
+        <JoinTeamModal
+          onClose={() => setJoining(false)}
+          onJoin={async (token) => {
+            const joined = await home.actions.joinTeam(token)
+            return joined.ok ? joined : null
+          }}
+        />
       )}
     </>
   )

@@ -299,7 +299,7 @@ describe('HomeScreen — untrusted text is text', () => {
 describe('HomeScreen — teams and states', () => {
   it('joins a team by pasting an invite token', async () => {
     const home = mockHome()
-    vi.mocked(home.actions.joinTeam).mockResolvedValue({ team_id: 't7', role: 'member' })
+    vi.mocked(home.actions.joinTeam).mockResolvedValue({ ok: true, teamId: 't7', role: 'member' })
     render(<HomeScreen onOpenProject={vi.fn()} />)
     await userEvent.click(screen.getByRole('button', { name: /join team/i }))
     await userEvent.type(screen.getByLabelText('Invite token'), 'tok-123')
@@ -309,7 +309,7 @@ describe('HomeScreen — teams and states', () => {
 
   it('creates a team', async () => {
     const home = mockHome()
-    vi.mocked(home.actions.createTeam).mockResolvedValue(true)
+    vi.mocked(home.actions.createTeam).mockResolvedValue({ ok: true, teamId: 't-new' })
     render(<HomeScreen onOpenProject={vi.fn()} />)
     await userEvent.click(screen.getByRole('button', { name: /new team/i }))
     await userEvent.type(screen.getByLabelText('Team name'), 'Rocket Lab')
