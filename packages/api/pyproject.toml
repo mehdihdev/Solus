@@ -65,6 +65,9 @@ dev = [
     # (tests/test_contracts_package.py, SOLUSDEV-100).
     "solus-contracts",
     "pytest-xdist>=3.6",
+    # A hung test must fail with a stack trace inside the CI hour, never eat it
+    # (SOLUSDEV-246: a test:python job stalled at 63% until the 1 h job timeout).
+    "pytest-timeout>=2.3",
 ]
 
 [tool.uv.sources]

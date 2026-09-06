@@ -103,6 +103,12 @@ typecheck:node:
 test:python:
   extends: [.python-base, .python-rules]
   stage: test
+  # SOLUSDEV-246: the full suite on the 2 GB ARM runner outgrew the 1 h default
+  # (a run was killed at 63 %). The effective limit is min(this, the runner's
+  # "Maximum job timeout" in Settings → CI/CD → Runners), so that setting must be
+  # ≥ 3h too. A genuinely hung test no longer eats the budget: pytest-timeout
+  # (pyproject `timeout = 300`) fails it with every thread's stack after 5 min.
+  timeout: 3h
   services:
     - name: pgvector/pgvector:pg16
       alias: postgres
@@ -125,7 +131,7 @@ test:python:
     # wait-bound (DB round trips, 3 s timeout tests), so oversubscription still
     # pays — 631 s serial → 272 s at -n 8 on a dev box. Each worker builds its own
     # database (conftest appends the worker id), so they never share tables.
-    - uv run pytest -q -n 2
+    - uv run pytest -q -n 2 -rfE
 
 test:node:
   extends: [.node-base, .node-rules]
