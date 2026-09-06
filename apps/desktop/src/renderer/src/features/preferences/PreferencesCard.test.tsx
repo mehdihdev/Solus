@@ -44,6 +44,7 @@ describe('PreferencesCard', () => {
     expect(screen.getByText('Units and standards')).toBeInTheDocument()
     expect(screen.queryByText('Mechanical')).toBeNull()
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByText(/shared by everyone who signs in here/)).toBeInTheDocument()
   })
 
   it('invites the first write when nothing is saved yet', async () => {

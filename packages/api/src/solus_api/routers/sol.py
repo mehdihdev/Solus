@@ -586,7 +586,17 @@ async def post_message(
         event_type="sol.message",
         team_id=ctx.team.id,
         project_id=ctx.project.id,
-        payload={"conversation_id": str(conversation_id), "chars": len(content)},
+        payload={
+            "conversation_id": str(conversation_id),
+            "chars": len(content),
+            # SOLUSDEV-244: how much the person's conventions add to the system
+            # prompt this turn — a COUNT for cost attribution, never the text.
+            "preference_chars": (
+                sum(len(v) for v in body.preferences.prompt_payload().values())
+                if body.preferences is not None
+                else 0
+            ),
+        },
     )
     await session.commit()
 

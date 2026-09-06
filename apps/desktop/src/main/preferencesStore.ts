@@ -120,7 +120,10 @@ export const preferencesIpc = {
 export const realPreferencesStoreDeps: PreferencesStoreDeps = {
   homedir,
   readFile: (path) => readFileSync(path, 'utf8'),
-  writeFile: (path, content, mode) => writeFileSync(path, content, { encoding: 'utf8', mode }),
+  // 'wx': create exclusively — never write through a symlink planted at the
+  // temp path, never inherit a pre-existing file's mode (SEC review L6).
+  writeFile: (path, content, mode) =>
+    writeFileSync(path, content, { encoding: 'utf8', mode, flag: 'wx' }),
   replaceFile: (from, to) => renameSync(from, to),
   mkdir: (path, mode) => void mkdirSync(path, { recursive: true, mode }),
   chmod: (path, mode) => chmodSync(path, mode),

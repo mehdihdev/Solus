@@ -20,8 +20,10 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 #: Caps mirror `PREFERENCES_FIELD_CAP` / `PREFERENCES_FREE_TEXT_CAP` in shared-types.
-#: The whole document at cap (2 400 + 5 × 800 = 6 400 chars) stays under the
-#: prompt's 8 000-char block cap, so one fenced block always carries it intact.
+#: They are CHARACTER caps (6 400 at most); the fence measures the JSON-encoded
+#: body, which non-ASCII text inflates — `prompt.bounded_payload` fits whole
+#: sections into the block cap, dropping trailing ones, so the block is always
+#: well-formed. An ASCII document at cap fits intact.
 PREFERENCE_FIELD_CAP: Final = 800
 PREFERENCE_FREE_TEXT_CAP: Final = 2_400
 

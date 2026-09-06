@@ -9,10 +9,14 @@ import {
   emptyEngineeringPreferences,
   type EngineeringPreferences
 } from '@solus/shared-types'
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   preferencesIpc,
   readPreferences,
+  realPreferencesStoreDeps,
   writePreferences,
   type PreferencesStoreDeps
 } from './preferencesStore'
@@ -166,5 +170,27 @@ describe('preferencesIpc (the gate itself is tested)', () => {
     expect(preferencesIpc.write(true, 'not a document', m.deps)).toEqual({ ok: false })
     expect(preferencesIpc.write(true, DOC, m.deps)).toEqual({ ok: true })
     expect(preferencesIpc.read(true, m.deps)?.preferences.electrical).toBe(DOC.electrical)
+  })
+})
+
+describe('realPreferencesStoreDeps (SEC review L7 — the symlink refusal is real code)', () => {
+  it('sizes only a regular file; a symlink or a directory reads as absent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'solus-prefs-'))
+    try {
+      const regular = join(dir, 'regular.json')
+      writeFileSync(regular, '{"schema_version":1}')
+      const link = join(dir, 'link.json')
+      symlinkSync(regular, link)
+      const folder = join(dir, 'folder.json')
+      mkdirSync(folder)
+      expect(realPreferencesStoreDeps.fileSize(regular)).toBe(20)
+      expect(realPreferencesStoreDeps.fileSize(link)).toBeNull()
+      expect(realPreferencesStoreDeps.fileSize(folder)).toBeNull()
+      expect(realPreferencesStoreDeps.fileSize(join(dir, 'missing.json'))).toBeNull()
+      // And the temp write is exclusive: a planted file at the temp path is refused.
+      expect(() => realPreferencesStoreDeps.writeFile(regular, 'x', 0o600)).toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

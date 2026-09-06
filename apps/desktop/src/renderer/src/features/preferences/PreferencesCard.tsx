@@ -21,6 +21,9 @@ import { usePreferencesStore } from './preferencesStore'
 const INTRO =
   'Your conventions — code style, mechanical and electrical design, documentation, units. ' +
   'SOL follows these on every turn and says when one changed its answer.'
+/** Stated on the card, always: the file is one per machine (ADR-034), so a
+ *  person cannot consent to sharing they were never told about. */
+const SHARED_NOTE = 'Stored on this computer and shared by everyone who signs in here.'
 
 function SectionView({ label, text }: { label: string; text: string }): React.JSX.Element {
   return (
@@ -116,6 +119,9 @@ export function PreferencesCard(): React.JSX.Element {
       </div>
       <StatusNotice status={status} readOnly={readOnly} />
       {status === 'ready' && !editing && <DocumentView preferences={preferences} />}
+      {status === 'ready' && (
+        <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 8 }}>{SHARED_NOTE}</div>
+      )}
       {editing && (
         <PreferencesEditor
           initial={preferences}

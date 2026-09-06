@@ -251,11 +251,14 @@ async def test_a_hostile_engineering_convention_cannot_escalate(
     )
     ctx = await _funded_ctx(engine, registry)
     ctx = dataclasses.replace(ctx, engineering_preferences={"Electrical": payload.text})
+    mode_before = ctx.sol_mode
 
     events = await _collect(LlmRunner(adapters={"anthropic": model}), ctx)
 
     assert tool_specs(tuple(registry.list())) == baseline
     assert ctx.action_mode is ActionMode.GUIDE
+    # The answer mode is a server-side user setting; no convention flips it.
+    assert ctx.sol_mode is mode_before
     assert executed == []
     result = next(e for e in events if e.type is AgentEventType.TOOL_RESULT)
     assert result.data["ok"] is False

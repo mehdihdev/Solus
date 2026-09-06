@@ -27,6 +27,7 @@ from solus_api.agent.runtime import MAX_TOOL_CALLS
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools import ToolCall
 from solus_api.models import Domain, GraphEntity, TurnRole
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -384,6 +385,40 @@ async def test_preferences_reach_the_runner_as_labelled_sections(
         "Electrical": "Prefer 0.1 mm clearance minimum on all boards.",
         "Units and standards": "SI units.",
     }
+
+
+async def test_preferences_are_never_persisted_server_side(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """ADR-034 (2026-09-06): the server keeps NO copy. The transcript stores the
+    message; the `sol.message` event records a count of preference chars, never
+    the text (SEC review M4 / L9)."""
+    from solus_api.models import ConversationTurn, DataEvent
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _RecordingRunner()
+    await client.patch(
+        "/api/v1/users/me/settings", json={"data_collection_consent": True}, headers=alice_headers
+    )
+    sentinel = "SENTINEL-ZQX-0.1mm-clearance"
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "what clearance?", "preferences": {"electrical": sentinel}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+
+    turns = (await db.scalars(select(ConversationTurn))).all()
+    assert turns and all(sentinel not in (t.content or "") for t in turns)
+    assert all(sentinel not in json.dumps(t.attrs or {}) for t in turns)
+    events = (
+        await db.scalars(select(DataEvent).where(DataEvent.event_type == "sol.message"))
+    ).all()
+    assert events
+    for event in events:
+        assert sentinel not in json.dumps(event.payload)
+    assert events[-1].payload["preference_chars"] == len(sentinel)
 
 
 async def test_empty_or_absent_preferences_reach_the_runner_as_none(

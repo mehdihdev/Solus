@@ -42,8 +42,9 @@ EMPTY = {
 def test_caps_match_the_shared_contract() -> None:
     assert PREFERENCE_FIELD_CAP == 800
     assert PREFERENCE_FREE_TEXT_CAP == 2_400
-    # The whole document at cap fits under the prompt's 8 000-char block cap.
-    assert PREFERENCE_FREE_TEXT_CAP + 5 * PREFERENCE_FIELD_CAP < 8_000
+    # An ASCII document at cap survives the fence intact; a CJK one is
+    # bounded by ENCODED length (see test_prompt for the round-trip).
+    assert PREFERENCE_FREE_TEXT_CAP + 5 * PREFERENCE_FIELD_CAP == 6_400
 
 
 def test_the_desktop_document_validates_verbatim() -> None:

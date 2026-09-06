@@ -12,6 +12,7 @@ import {
 } from '@solus/shared-types'
 import { create } from 'zustand'
 import { getDesktopPreferencesBridge } from '../../lib/desktopBridge'
+import { useAuthStore } from '../../store/authStore'
 
 export type PreferencesStatus = 'idle' | 'loading' | 'ready' | 'unavailable'
 
@@ -94,3 +95,15 @@ export async function preferencesForTurn(): Promise<EngineeringPreferences | nul
   if (status !== 'ready' || isEmptyPreferences(preferences)) return null
   return preferences
 }
+
+// SEC review H1 (H3): the document is machine-local and shared by every
+// account that signs in here, so the STORE must not carry one account's copy
+// into the next account's turns — any identity change (sign-out or an in-place
+// session swap) drops it; the next turn re-reads the file under the new
+// identity. Same lane-owned subscription the SOL chat store uses.
+useAuthStore.subscribe((state, prev) => {
+  if (prev.status !== 'authenticated') return
+  const signedOut = state.status === 'unauthenticated'
+  const identitySwapped = state.status === 'authenticated' && state.user?.email !== prev.user?.email
+  if (signedOut || identitySwapped) usePreferencesStore.getState().reset()
+})
