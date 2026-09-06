@@ -401,10 +401,11 @@ is an in-repo capability package, so these routes exist only for bundles Solus s
 capability, guarded by `ProjectCtx` plus the install row (installed, enabled, not team-blocked,
 `backend.routes = true`; else `404`). **Unmetered.**
 
-| Method | Path                                                         | Description                                                          |
-| ------ | ------------------------------------------------------------ | -------------------------------------------------------------------- |
-| ANY    | `/api/v1/projects/{project_id}/widgets/{slug}/…`             | The capability's own router, under the bundle guard                  |
-| GET    | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes` | Fixture capability: the project's `ext:fixture-bundle:note` entities |
+| Method | Path                                                         | Description                                                                                                                                       |
+| ------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ANY    | `/api/v1/projects/{project_id}/widgets/{slug}/…`             | The capability's own router, under the bundle guard                                                                                               |
+| GET    | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes` | Fixture capability: the project's `ext:fixture-bundle:note` entities                                                                              |
+| GET    | `/api/v1/projects/{project_id}/widgets/graph`                | STORE ST2: the workspace layer — `solus:workspace` root, `solus:live_bench`, one `solus:widget` per install, `contains` edges; reconciled on read |
 
 Amends §2.17: `DELETE …/extensions/{slug}` also soft-deletes the bundle's declared kinds and
 prunes its canvas slots (widget-bundles.md §5). Data events: `widget_bundle.route_refused`,

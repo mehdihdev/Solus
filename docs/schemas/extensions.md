@@ -412,6 +412,12 @@ No new table. What changes around the existing ones (`docs/api/widget-bundles.md
   `widget_layouts.layout` in the project, in the same transaction as the install/storage deletes.
 - **`data_events`**: `extension.uninstall.payload` gains `entities_soft_deleted` and
   `layout_slots_pruned`; new types `widget_bundle.route_refused { slug, reason }`.
+- **STORE ST2 — widgets in the graph** (`widget-bundles.md` §10): `graph_entity.domain` gains
+  `workspace` (migration `b3f1c2d4e5a6` recreates the `domain` CHECK on `graph_entity` and
+  `error_solution`); rows of kinds `solus:workspace`, `solus:live_bench`, `solus:widget` carry
+  `origin = 'system'`, `source_id`/`external_ref` NULL, `attrs.slug` on widget nodes; `graph_edge`
+  rows between them are `contains`, `domain_pair = 'workspace<->workspace'`, `origin = 'system'`.
+  `extension.install` / `extension.uninstall` payloads carry `graph_node_id`.
 
 ## 5. `review_status` state machine
 

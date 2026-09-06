@@ -526,7 +526,11 @@ matching package. Routes mount at `/api/v1/projects/{project_id}/widgets/<id>/â€
 install row; tools register per request through the W0-04 registry as `<id>.<name>`; kinds land as
 `ext:<id>:<name>` with `origin="extension"`. The desktop needs nothing new: the frame, protocol,
 bridge and Store are exactly as documented here, and the v2 tables are simply parsed and ignored
-by the renderer. Design and routes: `docs/api/widget-bundles.md`.
+by the renderer. Design and routes: `docs/api/widget-bundles.md`. **STORE ST2** adds every
+install to the project graph as a `solus:widget` node beside a `solus:live_bench` node under a
+per-project `solus:workspace` root (domain `workspace`, origin `system`), registered and removed
+by the install lifecycle and readable at `GET /projects/{id}/widgets/graph` for the workspace
+tree a later ticket renders; SOL, checkers and fingerprinting never see that layer.
 
 ## 11. Open questions
 
