@@ -46,7 +46,8 @@ packages/api/src/solus_api/widgets/
 ├── __init__.py            # nothing but the docstring
 ├── capability.py          # WidgetCapability (frozen dataclass) + ToolBuilder protocol
 ├── registry.py            # discover_capabilities(): pkgutil over solus_api.widgets, loud on dups
-├── guard.py               # require_bundle(slug): the installed+enabled+unblocked dependency
+├── publish_gate.py        # first_party_problems(): staff + matching capability, or 422
+├── guard.py               # require_bundle(slug) + load_bundle_capabilities(): live installs only
 ├── solus_config.py        # read_bundle_config(session, project_id, slug, manifest) → dict
 ├── uninstall.py           # remove_bundle_traces(): kinds soft-delete, layout prune
 └── fixture_bundle/        # the ST1 fixture capability (id "fixture-bundle")
@@ -56,8 +57,9 @@ packages/api/src/solus_api/widgets/
 ```
 
 `WidgetCapability` fields: `id` (equals the manifest `extension.id`), `kinds`
-(`tuple[GraphKind, ...]`), `tools` (`tuple[ToolBuilder, ...]`, each `(session_factory,
-project_id, user_id) -> Tool`), `router: APIRouter | None`. Discovery mirrors CTR-01: adding a
+(`tuple[DeclaredKind, ...]`), `tools` (`Mapping[name, ToolBuilder]`, each
+`(BundleScope) -> Tool` where the scope carries `session_factory`, `project_id`, `user_id`),
+`router: APIRouter | None`. Discovery mirrors CTR-01: adding a
 capability is a _create_ (a new package), never an _edit_ of a shared list; a duplicate id or a
 package without `CAPABILITY` raises at import time, naming both modules.
 
@@ -81,13 +83,14 @@ Conventions:
   shows a member). Writes additionally take the `member` floor (`403 forbidden` for viewers) and
   the install-writes budget (60/min/user, `429 rate_limited`).
 - Responses use the standard envelope; capability routers never build their own auth. The guard
-  resolves `BundleContext { ctx, install, manifest, settings }` and hands it to handlers.
+  resolves `BundleContext { ctx, extension, install, manifest }` and hands it to handlers
+  (`bundle: BundleDep("<slug>")`); the install row's `settings` ride on `install`.
 - Every guard refusal emits `widget_bundle.route_refused { slug, reason }` (ADR-011).
 
 ## 4. SOL tools and graph kinds
 
 - `deps.get_sol_registry` loads the project's enabled, unblocked first-party installs
-  (`load_bundle_capabilities(session, project_id)`) and `build_sol_registry` registers each
+  (`load_bundle_capabilities(session, project_id, team_id)`) and `build_sol_registry` registers each
   capability's tools with the request's `project_id` and `user_id`. Registration is wrapped like
   the hosted-server path: a capability that fails to build logs and is skipped, never a 500.
 - Tool descriptors are Solus-authored (`description_trusted=True`); a destructive tool sets
