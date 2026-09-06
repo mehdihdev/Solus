@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { Entity } from '../../../lib/api/resources'
 import { useAuthStore } from '../../../store/authStore'
-import { useSettingsStore, type SolMode } from '../../../store/settingsStore'
+import { useSettingsStore } from '../../../store/settingsStore'
 import { useWorkspaceStore } from '../../../store/workspaceStore'
 import { DeleteConfirmModal } from '../../workspace/modals'
 import { useWorkspaceSessionGeneration, workspaceSessionGeneration } from '../workspaceSession'
+import { RobotHardware } from './RobotHardware'
 import { RobotNodeContent } from './RobotNodeContent'
 import { RobotOrphans } from './RobotOrphans'
-import { RobotSession, type RobotView } from './robotSession'
+import { RobotSession } from './robotSession'
 import './robots.css'
 
 export function usePhysicalRobots(
@@ -64,7 +65,7 @@ function useRobotSession(
   projectId: string | null,
   onChanged: (removedId?: string) => void,
   onReveal: (entityId: string) => void
-) {
+): { session: RobotSession; online: boolean; generation: number } {
   const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
   const authenticated = useAuthStore((state) => state.status === 'authenticated')
   const generation = useWorkspaceSessionGeneration()
@@ -90,37 +91,4 @@ function useRobotSession(
     [projectId, generation, identity, online, onChanged, onReveal]
   )
   return { session, online, generation }
-}
-function RobotHardware({
-  session,
-  state,
-  online,
-  mode
-}: {
-  session: RobotSession
-  state: RobotView
-  online: boolean
-  mode: SolMode
-}): React.JSX.Element {
-  const error = state.error?.key === 'create' ? state.error.message : null
-  return (
-    <div className="robot-hardware">
-      <p>
-        {mode === 'Guide'
-          ? 'Create a robot to organize its physical parts. Each robot starts with seven hardware categories and uses the project name until you rename it.'
-          : 'Create a robot with seven hardware categories. Rename it on the canvas.'}
-      </p>
-      <button
-        type="button"
-        disabled={!online || state.busy !== null}
-        onClick={() => {
-          void session.create()
-        }}
-      >
-        {state.busy === 'create' ? 'Adding Physical Robot…' : 'Add Physical Robot'}
-      </button>
-      {!online && <p>Connect this project to add hardware.</p>}
-      {error && <p role="alert">{error}</p>}
-    </div>
-  )
 }

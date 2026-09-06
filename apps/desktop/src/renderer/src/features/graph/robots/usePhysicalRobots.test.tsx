@@ -10,6 +10,11 @@ import { useWorkspaceStore } from '../../../store/workspaceStore'
 import { useSettingsStore } from '../../../store/settingsStore'
 import { usePhysicalRobots } from './usePhysicalRobots'
 
+vi.mock('../../sourcing/SourcingModal', () => ({
+  SourcingModal: ({ door, projectId }: { door: string; projectId: string }): React.JSX.Element => (
+    <div role="dialog" aria-label={`sourcing:${door}:${projectId}`} />
+  )
+}))
 vi.mock('../../../lib/api/physicalRobots', () => ({
   createPhysicalRobot: vi.fn(),
   renamePhysicalRobot: vi.fn(),
@@ -61,7 +66,7 @@ function Harness({
     </>
   )
 }
-function deferred<T>() {
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => {
     resolve = done
@@ -412,4 +417,16 @@ it('offers honest category guidance and Escape cancels only the inline editor', 
   expect(api.renamePhysicalRobot).not.toHaveBeenCalled()
   act(() => useSettingsStore.setState({ solMode: 'Expert' }))
   expect(screen.getByText('Assigned parts inside.')).toBeInTheDocument()
+})
+
+it('offers a sourced part through the same panel as the BOM, only when online', async () => {
+  render(<Harness entities={[]} />)
+  await userEvent.click(screen.getByRole('button', { name: 'Find a sourced part' }))
+  expect(screen.getByRole('dialog', { name: 'sourcing:workspace:p1' })).toBeInTheDocument()
+})
+
+it('cannot source a part while the project is offline', () => {
+  useAuthStore.setState({ status: 'unauthenticated', user: null })
+  render(<Harness entities={[]} />)
+  expect(screen.getByRole('button', { name: 'Find a sourced part' })).toBeDisabled()
 })

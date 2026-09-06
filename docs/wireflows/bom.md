@@ -24,7 +24,9 @@ any extension (`store.md`), suggested in context when the first EDA/CAD tool con
 ## Header
 
 - The shared page header (`PageHeader`): `← Back` · name `BOM` · verified mark · `by Solus`.
-- Right: `Export CSV` (ghost) and `+ Add row` (primary). Both only while the view is `ready`.
+- Right: `Export CSV` (ghost), `Find compatible parts` (ghost — STORE ST5, opens the sourcing
+  panel with `door: bom`, see `sourcing.md`; a selected candidate appears as a PLANNED row after
+  the refresh) and `+ Add row` (primary). All only while the view is `ready`.
 - `Export CSV` reads `GET …/widgets/bom/export.csv` with the session and hands the bytes to the
   platform as `bom-<project name slug>.csv` (a blob download; Electron shows the OS save dialog).
   A failure shows inline next to the buttons; nothing is invented.

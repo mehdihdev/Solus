@@ -455,6 +455,25 @@ not who reads it); the only write path is the deploy step `python -m solus_api.c
 | GET    | `/api/v1/corpus/search`            | Full-text search with `domain`/`topic` WHERE filters, `limit` ≤ 20 |
 | GET    | `/api/v1/corpus/chunks/{chunk_id}` | Served view of one active or withdrawn chunk; drafts are `404`     |
 
+
+### 2.21 Sourcing — one engine for two doors (SOLUSDEV-246, STORE ST5) — full plan in [sourcing.md](sourcing.md)
+
+Workspace › Add › Hardware › Sourced and BOM › Find compatible parts share one core service + ARQ
+job. Torque is arithmetic (route and SOL tool `sourcing.derive_torque`), candidates are `cited` or
+`unverified` (no price/stock when unverified), exclusions carry the rule text, the selection
+becomes a manual `part` with lifecycle `planned`. `ProjectCtx`; writes need `member`.
+
+| Method | Path                                                          | Description                                                                              | Metering                                   |
+| ------ | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------ |
+| GET    | `/api/v1/projects/{project_id}/sourcing/rules`                | Effective rules: repo `[ext.sourcing]` ← the project's `sourcing_rules` entity           | none                                       |
+| PUT    | `/api/v1/projects/{project_id}/sourcing/rules`                | Save the project layer; returns the effective set                                        | none                                       |
+| POST   | `/api/v1/projects/{project_id}/sourcing/torque`               | Derive torque from an assembly (placements + masses) or a load at an arm; `422` neither  | none                                       |
+| POST   | `/api/v1/projects/{project_id}/sourcing/requests`             | `202` + `SOURCING` Job; 10/min/user                                                      | one `COMPATIBILITY_RESEARCH` completion    |
+| GET    | `/api/v1/projects/{project_id}/sourcing/requests`             | Newest first, `limit` ≤ 100                                                              | none                                       |
+| GET    | `/api/v1/projects/{project_id}/sourcing/requests/{id}`        | One request (poll target)                                                                | none                                       |
+| POST   | `/api/v1/projects/{project_id}/sourcing/requests/{id}/select` | `201` — planned `part` (+ `contains` edge from a `robot_category` for the workspace door) | none                                       |
+
+Data events: `sourcing.requested`, `sourcing.rules_updated`, `sourcing.selected`.
 ## 3. Realtime — WebSocket & SSE
 
 WebSocket implementations live behind the isolated telemetry service boundary (ADR-005) so the Rust rewrite (ADR-004) swaps the implementation, not the interface. All connections authenticate at connect time and are scoped to one team's project (§7). Device-originated telemetry is parsed defensively: bounded message sizes, malformed packets dropped and logged, never crash the service.

@@ -16,6 +16,7 @@ import { ModalShell } from '../workspace/modals'
 import { PageHeader } from '../extensions/pageview/PageHeader'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import type { FirstPartyPageProps } from '../extensions/firstParty'
+import { SourcingModal } from '../sourcing/SourcingModal'
 import { AddRowModal } from './AddRowModal'
 import { BomTable } from './BomTable'
 import { csvFilename, formatMoney, totalsLine, viewNote } from './bomLogic'
@@ -42,7 +43,7 @@ export function BomScreen({
         version={null}
         publisher={publisher}
         onBack={onBack}
-        actions={<HeaderActions data={data} projectName={projectName} />}
+        actions={<HeaderActions data={data} projectId={projectId} projectName={projectName} />}
       />
       <Body data={data} onOpenStore={onOpenStore} />
     </div>
@@ -51,13 +52,16 @@ export function BomScreen({
 
 function HeaderActions({
   data,
+  projectId,
   projectName
 }: {
   data: BomData
+  projectId: string
   projectName: string
 }): React.JSX.Element | null {
   const [note, setNote] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [sourcing, setSourcing] = useState(false)
   if (data.status !== 'ready') return null
   const exportCsv = async (): Promise<void> => {
     const outcome = await data.actions.exportCsv(csvFilename(projectName))
@@ -73,10 +77,21 @@ function HeaderActions({
       <Button size="sm" kind="ghost" onClick={() => void exportCsv()}>
         <Icons.file size={12} /> Export CSV
       </Button>
+      <Button size="sm" kind="ghost" onClick={() => setSourcing(true)}>
+        <Icons.search size={12} /> Find compatible parts
+      </Button>
       <Button size="sm" kind="primary" onClick={() => setAdding(true)}>
         <Icons.plus size={12} /> Add row
       </Button>
       {adding && <AddRowModal onAdd={data.actions.addRow} onClose={() => setAdding(false)} />}
+      {sourcing && (
+        <SourcingModal
+          projectId={projectId}
+          door="bom"
+          onClose={() => setSourcing(false)}
+          onSelected={() => void data.actions.refresh()}
+        />
+      )}
     </div>
   )
 }

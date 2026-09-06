@@ -9,6 +9,26 @@ import * as hook from './useBom'
 import { BomScreen } from './BomScreen'
 import { bomView, designRow, purchaseRow } from './testing/fixtures'
 
+vi.mock('../sourcing/SourcingModal', () => ({
+  SourcingModal: ({
+    door,
+    onSelected,
+    onClose
+  }: {
+    door: string
+    onSelected?: (entity: { id: string }) => void
+    onClose: () => void
+  }) => (
+    <div role="dialog" aria-label={`sourcing:${door}`}>
+      <button type="button" onClick={() => onSelected?.({ id: 'planned-1' })}>
+        pick
+      </button>
+      <button type="button" onClick={onClose}>
+        close
+      </button>
+    </div>
+  )
+}))
 vi.mock('./useBom', async (importOriginal) => ({
   ...(await importOriginal<typeof hook>()),
   useBom: vi.fn()
@@ -185,5 +205,16 @@ describe('BomScreen', () => {
     renderScreen()
     expect(screen.getByText(/bounded subset/)).toBeInTheDocument()
     expect(screen.getByText(designRow().name)).toBeInTheDocument()
+  })
+
+  it('opens the sourcing panel from Find compatible parts and refreshes when a part is planned', async () => {
+    const a = mockBom({})
+    renderScreen()
+    await userEvent.click(screen.getByRole('button', { name: 'Find compatible parts' }))
+    expect(screen.getByRole('dialog', { name: 'sourcing:bom' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'pick' }))
+    expect(a.refresh).toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'close' }))
+    expect(screen.queryByRole('dialog', { name: 'sourcing:bom' })).toBeNull()
   })
 })
