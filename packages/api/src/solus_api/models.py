@@ -430,6 +430,24 @@ class ProjectMembership(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
 
 
+class WorkspaceLayout(TimestampMixin, Base):
+    """Project-shared graph coordinates, separate from entity/connector properties."""
+
+    __tablename__ = "workspace_layouts"
+    __table_args__ = (
+        CheckConstraint("version >= 0", name="ck_workspace_layouts_version_nonnegative"),
+        CheckConstraint(
+            "jsonb_typeof(positions) = 'object'", name="ck_workspace_layouts_positions_object"
+        ),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    positions: Mapped[dict[str, dict[str, float]]] = mapped_column(JSONB, default=dict)
+
+
 # --------------------------------------------------------------------- billing
 class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     """Per-USER billing (ADR-023/032, SOLUSDEV-72 Decisions C-E). Each user has their own
@@ -823,8 +841,9 @@ class SolusEntryKind(enum.StrEnum):
 
 class SolusEntry(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     """One row under a `.solus` section. Configuration, not graph facts: parts live
-    in the graph, their configs live here. An ARTIFACT entry references the
-    `document` graph node (`entity_id`) and the retained `artifacts` row."""
+    in the graph, their configs live here. Every live entry has a selectable graph
+    identity (`entity_id`); full text remains here. ARTIFACT entries retain their
+    `document` graph identity and the retained `artifacts` row."""
 
     __tablename__ = "solus_entries"
     __table_args__ = (Index("ix_solus_entries_project_section", "project_id", "section"),)

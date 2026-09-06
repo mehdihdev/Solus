@@ -253,12 +253,13 @@ async def test_detect_changes_matches_and_differs() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_detect_changes_on_error_returns_true() -> None:
+async def test_detect_changes_on_error_propagates() -> None:
     respx.get(f"{API}/repos/{REPO_FULL_NAME}/commits/{DEFAULT_BRANCH}").mock(
         return_value=httpx.Response(500, json={"message": "boom"})
     )
     connector = GitHubConnector()
-    assert await connector.detect_changes(_ctx(cursor={"sha": HEAD_SHA})) is True
+    with pytest.raises(ConnectorError):
+        await connector.detect_changes(_ctx(cursor={"sha": HEAD_SHA}))
 
 
 def test_authorize_url_contains_required_params() -> None:

@@ -55,7 +55,9 @@ CONFIG = {"document_id": DID, "workspace_id": WID, "element_id": EID}
 #: many documents.
 SCOPE = f"{DID}:{EID}"
 
-from conftest import requires_occt  # noqa: E402  (single definition)
+from conftest import requires_occt as _requires_occt  # noqa: E402  (single definition)
+
+requires_occt: pytest.MarkDecorator = _requires_occt
 
 
 def _connector() -> OnshapeConnector:
@@ -353,15 +355,14 @@ async def test_detect_changes_reraises_a_transport_error_as_no_signal() -> None:
 
 
 @respx.mock
-async def test_detect_changes_still_fails_safe_on_an_ambiguous_error() -> None:
-    """The fail-safe survives for errors that are NOT no-signal: a 500 could
-    genuinely mean anything, so it still schedules a sync rather than risk
-    missing a change."""
+async def test_detect_changes_defers_on_an_ambiguous_error() -> None:
+    """An ambiguous failure cannot spend quota on an export without change evidence."""
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").mock(
         return_value=httpx.Response(500)
     )
 
-    assert await _connector().detect_changes(_ctx({"microversion": "x"})) is True
+    with pytest.raises(ConnectorError):
+        await _connector().detect_changes(_ctx({"microversion": "x"}))
 
 
 async def test_an_empty_selection_is_a_connected_idle_source_not_an_error() -> None:
@@ -426,6 +427,7 @@ async def test_sync_lands_the_assembly_tree_in_the_graph() -> None:
     result = await _connector().sync(_ctx())
 
     assert {e.source_key for e in result.entities} == {
+        f"{DID}:document",
         f"{SCOPE}:Bracket",
         f"{SCOPE}:Bracket/BasePlate",
         f"{SCOPE}:Bracket/PegPair",
@@ -433,7 +435,9 @@ async def test_sync_lands_the_assembly_tree_in_the_graph() -> None:
         f"{SCOPE}:Bracket/PegPair/Peg[1]",
     }
     assert all(e.domain is Domain.MECHANICAL for e in result.entities)
-    assert {r.type for r in result.relations} == {"part_of"}
+    assert {r.type for r in result.relations} == {"part_of", "contains"}
+    wrappers = [r for r in result.relations if r.type == "contains"]
+    assert [(r.from_key, r.to_key) for r in wrappers] == [(f"{DID}:document", f"{SCOPE}:Bracket")]
 
 
 @requires_occt
@@ -666,7 +670,8 @@ async def test_metadata_failure_degrades_rather_than_failing_the_sync() -> None:
 
     result = await _connector().sync(_ctx())
 
-    assert len(result.entities) == 5
+    assert len([e for e in result.entities if e.type == "part"]) == 5
+    assert len([e for e in result.entities if e.type == "cad_document"]) == 1
     assert any("metadata" in e.message for e in result.errors)
 
 
@@ -984,7 +989,7 @@ async def test_part_studios_are_ingested_alongside_assemblies() -> None:
 
     result = await _connector().sync(_selection_ctx(["docA"]))
 
-    scopes = {e.source_key.rsplit(":", 1)[0] for e in result.entities}
+    scopes = {e.source_key.rsplit(":", 1)[0] for e in result.entities if e.type == "part"}
     assert scopes == {"docA:elemA", "docA:psA"}
 
 

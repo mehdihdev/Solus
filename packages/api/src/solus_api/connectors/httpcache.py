@@ -14,20 +14,12 @@ worker's callers and let the other N-1 through.
 `graph/buffer.py`): a narrow Protocol, an in-memory backend for dev and tests, a
 Redis backend when one is configured, chosen once at app assembly.
 
-**If a RESPONSE cache is ever added here** (it is not needed for sync — the
-freshness gate and single-flight already collapse that path — but the SOL agent's
-Onshape tools are still uncached), its keys must carry BOTH identity segments,
-and neither is optional:
+The account/version payload cache lives in `integration_cache.py`. Account
+identity must be in every resource key: project and source IDs alone cannot
+identify the provider grant, and project-independent keys let the same account
+reuse its exports across projects. Source attachment never silently changes
+an existing source to a different account.
 
-  * `team_id` alone would be wrong: one team can hold two projects with two
-    Onshape sources connected by two DIFFERENT accounts.
-  * `source_id` alone would also be wrong: a reconnect deliberately reuses the
-    same Source row to switch account (`routers/integrations.py::_reusable_source`
-    — "which doubles as switch account"), so one row carries different provider
-    identities over time.
-
-Put the resource's change token in the key too, and a change makes every derived
-key unreachable by construction — partial invalidation with no invalidation code.
 """
 
 from __future__ import annotations
@@ -35,17 +27,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
+
+from solus_api.connectors.contracts import ConnectorError
 
 logger = logging.getLogger("solus.connectors.httpcache")
 
 _KEY_PREFIX = "solus:ic"
 
-#: How long a losing single-flight caller waits for the winner's value before
-#: giving up and fetching itself. Bounded so a winner that dies mid-flight
-#: cannot park every other caller until its claim expires.
+#: Waiters must acquire their own lease after the winner. A bounded wait
+#: defers work rather than authorizing an unclaimed concurrent fetch.
 _FLIGHT_POLL_SECONDS = 0.05
 _FLIGHT_WAIT_SECONDS = 30.0
+_FLIGHT_RELEASE_SECONDS = 1.0
 
 
 class CacheStore(Protocol):
@@ -58,7 +54,11 @@ class CacheStore(Protocol):
 
     async def delete(self, key: str) -> None: ...
 
-    async def claim(self, key: str, ttl_seconds: int) -> bool:
+    async def release(self, key: str, owner: str) -> None: ...
+
+    async def renew(self, key: str, owner: str, ttl_seconds: int) -> bool: ...
+
+    async def claim(self, key: str, ttl_seconds: int, owner: str = "1") -> bool:
         """Atomically take `key` if free. True = you own it (SET NX EX)."""
         ...
 
@@ -91,7 +91,7 @@ class InMemoryCacheStore:
     async def delete(self, key: str) -> None:
         self._values.pop(key, None)
 
-    async def claim(self, key: str, ttl_seconds: int) -> bool:
+    async def claim(self, key: str, ttl_seconds: int, owner: str = "1") -> bool:
         # The lock is what makes this atomic. Without it two coroutines can both
         # observe "free" between the read and the write, and single-flight
         # silently becomes double-flight — the exact bug this class exists to
@@ -99,7 +99,19 @@ class InMemoryCacheStore:
         async with self._lock:
             if self._live(key) is not None:
                 return False
-            self._values[key] = (self._clock() + ttl_seconds, "1")
+            self._values[key] = (self._clock() + ttl_seconds, owner)
+            return True
+
+    async def release(self, key: str, owner: str) -> None:
+        async with self._lock:
+            if self._live(key) == owner:
+                self._values.pop(key, None)
+
+    async def renew(self, key: str, owner: str, ttl_seconds: int) -> bool:
+        async with self._lock:
+            if self._live(key) != owner:
+                return False
+            self._values[key] = (self._clock() + ttl_seconds, owner)
             return True
 
 
@@ -122,8 +134,31 @@ class RedisCacheStore:
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
 
-    async def claim(self, key: str, ttl_seconds: int) -> bool:
-        return bool(await self._redis.set(key, "1", nx=True, ex=ttl_seconds))
+    async def claim(self, key: str, ttl_seconds: int, owner: str = "1") -> bool:
+        return bool(await self._redis.set(key, owner, nx=True, ex=ttl_seconds))
+
+    async def release(self, key: str, owner: str) -> None:
+        # Compare/delete is atomic: an expired owner's cleanup cannot remove a
+        # successor's lease. This fixed script never executes provider input.
+        await self._redis.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) else return 0 end",
+            1,
+            key,
+            owner,
+        )
+
+    async def renew(self, key: str, owner: str, ttl_seconds: int) -> bool:
+        return bool(
+            await self._redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                1,
+                key,
+                owner,
+                ttl_seconds,
+            )
+        )
 
 
 async def single_flight(
@@ -131,40 +166,83 @@ async def single_flight(
     key: str,
     *,
     ttl_seconds: int,
-    wait_seconds: float = _FLIGHT_WAIT_SECONDS,
-) -> bool:
-    """Take the flight for `key`, or wait for whoever has it.
+    wait_seconds: float | None = _FLIGHT_WAIT_SECONDS,
+) -> str:
+    """Acquire an owned lease before proceeding; unavailable/busy fails closed.
 
-    Returns True if the caller should do the work. A loser waits for the winner
-    to finish and then returns True as well — it does NOT return a value, because
-    what the winner produced (a graph write, an export) is not always something
-    that can be handed over. The point is that the losers do their (now cheap)
-    pass AFTER the expensive one has landed, not simultaneously with it.
-
-    Falls through to True on a store error: a broken cache must never stop work
-    happening (the same fail-open policy the rate limiter documents).
+    Every waiter must atomically claim the released key itself. A timeout or
+    cache outage is not permission to export concurrently.
     """
-    try:
-        if await store.claim(key, ttl_seconds):
-            return True
-    except Exception:  # noqa: BLE001 — a broken store must not block the caller
-        logger.warning("single-flight claim failed for %s; proceeding unclaimed", key)
-        return True
-
-    waited = 0.0
-    while waited < wait_seconds:
-        await asyncio.sleep(_FLIGHT_POLL_SECONDS)
-        waited += _FLIGHT_POLL_SECONDS
+    owner = uuid.uuid4().hex
+    deadline = time.monotonic() + wait_seconds if wait_seconds is not None else None
+    while True:
         try:
-            if await store.get(key) is None:
-                return True  # the winner finished (or died); carry on
-        except Exception:  # noqa: BLE001
-            return True
-    return True
+            if await store.claim(key, ttl_seconds, owner):
+                return owner
+        except Exception as exc:
+            logger.warning("single-flight claim unavailable")
+            raise ConnectorError(
+                "single_flight_unavailable",
+                "Synchronization is temporarily unavailable; retry later",
+            ) from exc
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ConnectorError(
+                "single_flight_busy", "Synchronization is already running; retry later"
+            )
+        await asyncio.sleep(_FLIGHT_POLL_SECONDS)
 
 
-async def release_flight(store: CacheStore, key: str) -> None:
+async def release_flight(store: CacheStore, key: str, owner: str) -> None:
     try:
-        await store.delete(key)
+        async with asyncio.timeout(_FLIGHT_RELEASE_SECONDS):
+            await store.release(key, owner)
     except Exception:  # noqa: BLE001 — the TTL is the backstop
-        logger.warning("could not release single-flight claim %s", key)
+        logger.warning("could not release single-flight claim")
+
+
+async def run_in_flight[T](
+    store: CacheStore,
+    key: str,
+    owner: str,
+    *,
+    ttl_seconds: int,
+    run: Callable[[], Awaitable[T]],
+) -> T:
+    """Renew ownership during work; cancel and await the work if ownership is lost.
+
+    Renewal itself is bounded to TTL/3. An unavailable store therefore cancels
+    work before the last confirmed lease expires, instead of silently leaving
+    a still-running provider request behind an expired lock.
+    """
+    interval = ttl_seconds / 3
+
+    async def renew() -> None:
+        try:
+            async with asyncio.timeout(interval):
+                if await store.renew(key, owner, ttl_seconds):
+                    return
+        except Exception as exc:
+            raise ConnectorError(
+                "single_flight_lost", "Synchronization ownership was lost; retry later"
+            ) from exc
+        raise ConnectorError(
+            "single_flight_lost", "Synchronization ownership was lost; retry later"
+        )
+
+    async def maintain() -> None:
+        while True:
+            await asyncio.sleep(interval)
+            await renew()
+
+    await renew()
+    work = asyncio.ensure_future(run())
+    renewal = asyncio.create_task(maintain())
+    try:
+        done, _ = await asyncio.wait((work, renewal), return_when=asyncio.FIRST_COMPLETED)
+        if renewal in done:
+            await renewal  # raises before the work's result can be used
+        return await work
+    finally:
+        work.cancel()
+        renewal.cancel()
+        await asyncio.gather(work, renewal, return_exceptions=True)

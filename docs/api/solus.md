@@ -25,7 +25,33 @@ The `.solus` is **configuration, not a second store for graph facts** — parts 
 their configs live here. An imported file is an `artifacts` row marked `retained` (exempt from the
 TTL sweep) wrapped in a `document` graph node (`domain="project"`) that hangs off the `.solus`
 node through a `references` edge, so Impact and the focus engine reach it through the one
-traversal. Typed text is deliberately **not** a graph node.
+traversal.
+
+### SOLUSDEV-242 Phase 2 amendment
+
+The approved Workspace spec replaces the separate panel with real navigation nodes.
+Each project has five `solus_section` entities (`domain="project"`, `origin="manual"`),
+with `properties.section` equal to the stable key above and a `.solus → section`
+`contains` edge. Every live entry has an `entity_id`: imported artifacts retain their
+existing `document` identities; text/SOL entries use `solus_note`, or `solus_error` in
+the errors section. Entry-node properties carry `solus_entry_id` and `section`;
+the complete text remains in `solus_entries`. A short text-derived display name is
+allowed, but the node is not a second authoritative text store. Editing updates that
+display name and preserves entity identity.
+
+Every entry has a `section → entry` `contains` edge. Existing `.solus → document`
+`references` edges remain so Impact retains its direct traversal. Root, section and
+entry creation is serialized per project and idempotent. Project creation installs
+the hierarchy. A data migration backfills existing projects and live entries without
+replacing their IDs, artifact retention, or bytes; GET self-healing remains a fallback.
+No additional HTTP route or shared contract is introduced. GET's shape is unchanged;
+text/SOL entries now return their real `entity_id` instead of null. Existing limits,
+authorization, events and SOL never-raises/confirmation behavior remain authoritative.
+
+Delete removes the entry's graph identity and edges for every entry kind; only an
+artifact entry deletes stored bytes. Deleting any entry cannot remove its section or
+another entry. The renderer reuses W1 handlers on section/entry context menus, refreshes
+the graph after all mutations, and removes the panel implementation completely.
 
 All routes resolve through `ProjectCtx` (non-member → **404**, no existence leak). Reads need a
 resolvable project; writes need the `member` role (viewer/share-only → `403`).
@@ -71,7 +97,7 @@ Also **self-heals**: a project created before this ticket has no node; the first
           "text": "48 V bus",
           "name": null,
           "artifact_id": null,
-          "entity_id": null,
+          "entity_id": "019f9a04-…",
           "media_type": null,
           "size_bytes": null,
           "created_by": "…",
@@ -127,9 +153,9 @@ Text and SOL entries only. An artifact entry → `409 conflict` (remove and re-i
 
 ## 5. DELETE `/entries/{entry_id}` — remove (member+)
 
-Soft-deletes the entry. For an artifact entry it also soft-deletes the document node, every edge
-touching it, and the artifact row, and removes the bytes from the store. `204`; a second delete
-→ `404`.
+Soft-deletes the entry, its graph node and every edge touching it. For an artifact entry,
+it also soft-deletes the artifact row and removes the bytes from the store. `204`; a second
+delete → `404`.
 
 ## 6. The SOL tool — `add_solus_entry`
 

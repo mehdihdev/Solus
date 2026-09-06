@@ -14,7 +14,7 @@
 // deriving from the CACHED entity (whose key includes the project id) makes a
 // project switch an automatic cache miss → null, never a stale cross-project poll.
 import { useMemo } from 'react'
-import { DOMAINS, type Domain, type Focus } from '@solus/shared-types'
+import { DOMAINS, type Domain, type Focus, type FocusStep } from '@solus/shared-types'
 import type { Entity } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { selectFocusedEntity, useFocusStore } from './focusStore'
@@ -48,5 +48,10 @@ export function toSharedFocus(
 export function useSharedFocus(): Focus | null {
   const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
   const entity = useFocusStore(selectFocusedEntity)
-  return useMemo(() => toSharedFocus(entity, projectId), [entity, projectId])
+  const path = useFocusStore((s) => s.path)
+  return useMemo(() => {
+    const focus = toSharedFocus(entity, projectId)
+    if (!focus || path.some((step: FocusStep) => step.entity.projectId !== projectId)) return null
+    return { ...focus, path }
+  }, [entity, projectId, path])
 }

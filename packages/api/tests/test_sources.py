@@ -69,8 +69,8 @@ async def test_sync_lands_entities_and_relations(
     entities = (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=alice_headers)
     ).json()["data"]
-    # 3 synced entities + the project's own `.solus` node (SOLUSDEV-240).
-    assert len(entities) == 4
+    # 3 synced entities + `.solus` and five sections (SOLUSDEV-242).
+    assert len(entities) == 9
     kinds = {e["type"] for e in entities}
     assert "design_export" in kinds  # W0-08 committed export surfaced
 
@@ -134,8 +134,15 @@ async def test_disconnect_cascades_entities_by_default(
     entities = (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=alice_headers)
     ).json()["data"]
-    # Only the project's own `.solus` node survives a source cascade (SOLUSDEV-240).
-    assert [e["name"] for e in entities] == [".solus"]
+    # The entire manual `.solus` hierarchy survives a source cascade.
+    assert sorted(e["name"] for e in entities) == [
+        ".solus",
+        "Code environment",
+        "Documentation",
+        "Error logging",
+        "Hardware configs",
+        "Project details",
+    ]
 
 
 async def test_disconnect_can_retain_entities(
@@ -154,8 +161,8 @@ async def test_disconnect_can_retain_entities(
     entities = (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=alice_headers)
     ).json()["data"]
-    # 3 retained (orphaned to manual) + the `.solus` node, itself manual (SOLUSDEV-240).
-    assert len(entities) == 4
+    # 3 retained (orphaned to manual) + the six manual `.solus` nodes.
+    assert len(entities) == 9
     assert all(e["origin"] == "manual" and e["source_id"] is None for e in entities)
 
 

@@ -97,6 +97,7 @@ def test_reconcile_job_is_registered_on_the_worker() -> None:
     row is retried even when no caller enqueues an immediate sweep."""
     from typing import Any
 
+    from arq import func
     from solus_api.connectors.worker import build_worker_settings
     from solus_api.core.config import Settings
 
@@ -109,7 +110,10 @@ def test_reconcile_job_is_registered_on_the_worker() -> None:
             redis_url="redis://localhost:6379",
         )
     )
-    names = {fn.__name__ for fn in worker_settings.functions}
+    names = {func(fn).name for fn in worker_settings.functions}
     assert "reconcile_credit_debits" in names
-    cron_names = {job.coroutine.__name__ for job in worker_settings.cron_jobs}
-    assert "reconcile_credit_debits" in cron_names
+    cron_jobs = {job.coroutine.__name__: job for job in worker_settings.cron_jobs}
+    assert cron_jobs["reconcile_credit_debits"].minute is None
+    assert cron_jobs["scheduled_change_detection"].minute == {0}
+    assert cron_jobs["scheduled_change_detection"].second == 0
+    assert cron_jobs["scheduled_change_detection"].run_at_startup is False

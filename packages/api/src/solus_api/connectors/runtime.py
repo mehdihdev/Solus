@@ -13,6 +13,7 @@ the API enqueues this; the ARQ worker (and a dev inline fallback) invokes it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -22,7 +23,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.connectors.contracts import (
-    NO_SIGNAL_CODES,
     AuthKind,
     Connector,
     ConnectorError,
@@ -402,7 +402,7 @@ async def run_sync(
     reaches `run_sync`.
     """
     try:
-        sync_id, config, cursor, secret_ref = await _begin_sync(
+        sync_id, config, cursor, secret_ref = await _begin_sync_cancellable(
             sessionmaker, source_id, trigger, job_id
         )
     except Exception:
@@ -415,6 +415,7 @@ async def run_sync(
         sync_id,
     )
 
+    probing = False
     try:
         if connector.auth_kind is AuthKind.NONE:
             # Committed-export connectors (EDA family) carry no tool credential
@@ -424,11 +425,20 @@ async def run_sync(
             raise ConnectorError("no_credentials", "Source has no stored credentials")
         else:
             credentials = await _resolve_credentials(secret_store, secret_ref)
-        if not force and await _unchanged(
-            connector=connector, credentials=credentials, config=config, cursor=cursor
-        ):
-            await _commit_skipped(sessionmaker, source_id, sync_id, job_id)
-            return sync_id
+        if not force and cursor and connector.auth_kind is not AuthKind.NONE:
+            probing = True
+            changed, credentials = await detect_changes_with_refresh(
+                connector=connector,
+                credentials=credentials,
+                config=config,
+                cursor=cursor,
+                secret_store=secret_store,
+                secret_ref=secret_ref,
+            )
+            probing = False
+            if not changed:
+                await _commit_skipped(sessionmaker, source_id, sync_id, job_id)
+                return sync_id
         result = await _sync_with_refresh(
             connector=connector,
             credentials=credentials,
@@ -437,12 +447,18 @@ async def run_sync(
             secret_store=secret_store,
             secret_ref=secret_ref,
         )
+    except asyncio.CancelledError:
+        await _record_cancelled_sync(sessionmaker, source_id, sync_id, job_id)
+        raise
     except Exception as exc:
-        await _record_failure(sessionmaker, source_id, sync_id, job_id, exc)
+        await _record_failure(sessionmaker, source_id, sync_id, job_id, exc, probe=probing)
         return sync_id
 
     try:
         await _commit_success(sessionmaker, source_id, sync_id, job_id, result, hub)
+    except asyncio.CancelledError:
+        await _record_cancelled_sync(sessionmaker, source_id, sync_id, job_id)
+        raise
     except Exception as exc:  # graph-write failure is still a sync failure
         logger.exception("sync apply failed for source=%s", source_id)
         await _record_failure(sessionmaker, source_id, sync_id, job_id, exc)
@@ -456,21 +472,7 @@ async def _unchanged(
     config: dict[str, object],
     cursor: dict[str, object],
 ) -> bool:
-    """The quota gate: ask the CHEAP question before paying the expensive one.
-
-    Every connector already ships a `detect_changes(ctx) -> bool` probe and a
-    JSON cursor, and until now nothing on the sync path consulted either — so a
-    triggered sync re-exported an unchanged document in full. For Onshape that
-    is a translation job plus a poll loop plus a download per assembly, against
-    a quota of 2,500 calls per YEAR (SOLUSDEV-167).
-
-    One guard here rather than one in each connector: all five providers funnel
-    through `run_sync`, and so does every producer that will ever trigger it.
-
-    Fails SAFE in the direction that costs money but never loses data — any
-    error means "go sync". A probe that cannot answer must not silently
-    tombstone a source's graph by being believed.
-    """
+    """Read the cheap signal; errors propagate without authorizing an export."""
     if not cursor:
         return False  # never synced: there is nothing to compare against
     if connector.auth_kind is AuthKind.NONE:
@@ -484,24 +486,61 @@ async def _unchanged(
         # argument — then this branch becomes the same one-call probe as the rest.
         return False
     ctx = SyncContext(credentials=credentials, config=config, cursor=cursor)
-    try:
-        return not await connector.detect_changes(ctx)
-    except ConnectorError as exc:
-        if exc.code in NO_SIGNAL_CODES:
-            # "We could not ask" is not "it changed" — and it matters MORE here
-            # than on the sweep, because falling through means paying for a full
-            # export while already rate-limited or out of quota. The sweep
-            # honoured this from the start; `run_sync` caught the re-raise and
-            # spent anyway, so the amplifier survived on exactly the two NEW
-            # producer paths (webhook, bridge frame). Re-raised: the caller
-            # records a failed sync rather than buying a translation job, a poll
-            # loop and a download it cannot afford.
-            raise
-        logger.warning("freshness probe failed (%s); syncing anyway", exc.code)
-        return False
-    except Exception:  # noqa: BLE001 — a broken probe must never stall a source
-        logger.exception("freshness probe failed; syncing anyway")
-        return False
+    return not await connector.detect_changes(ctx)
+
+
+async def detect_changes_with_refresh(
+    *,
+    connector: Connector,
+    credentials: Credentials,
+    config: dict[str, Any],
+    cursor: dict[str, Any],
+    secret_store: SecretStore,
+    secret_ref: str | None,
+) -> tuple[bool, Credentials]:
+    """Refresh around the cheap probe and return the credentials it actually used.
+
+    In particular, the following sync must not retry with an already-rotated
+    refresh token. All probe errors propagate; absence of evidence never buys
+    an export.
+    """
+    used = credentials
+
+    async def probe(creds: Credentials) -> bool:
+        nonlocal used
+        used = creds
+        return await connector.detect_changes(
+            SyncContext(credentials=creds, config=config, cursor=cursor)
+        )
+
+    changed = await call_with_refresh(
+        connector=connector,
+        credentials=credentials,
+        secret_store=secret_store,
+        secret_ref=secret_ref,
+        run=probe,
+    )
+    return changed, used
+
+
+def retryable_probe_error(exc: Exception) -> bool:
+    """Authentication failures require user action; transport/cache failures defer."""
+    return not isinstance(exc, SecretNotFoundError) and not (
+        isinstance(exc, ConnectorError)
+        and exc.code
+        in {
+            "invalid_credentials",
+            "oauth_refresh_failed",
+            "no_credentials",
+            "missing_credentials",
+            "invalid_config",
+            "config_invalid",
+            "invalid_repo",
+            "invalid_branch",
+            "oauth_not_configured",
+            "forbidden",
+        }
+    )
 
 
 async def _commit_skipped(
@@ -534,6 +573,27 @@ async def _commit_skipped(
     logger.info("sync skipped (unchanged) source=%s sync=%s", source_id, sync_id)
 
 
+async def _begin_sync_cancellable(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    source_id: uuid.UUID,
+    trigger: SyncTrigger,
+    job_id: uuid.UUID | None,
+) -> tuple[uuid.UUID, dict[str, object], dict[str, object], str | None]:
+    setup = asyncio.create_task(_begin_sync(sessionmaker, source_id, trigger, job_id))
+    try:
+        return await asyncio.shield(setup)
+    except asyncio.CancelledError:
+        # Finish setup before closing its own records: cancellation at commit
+        # must not leave an accepted Job/Sync permanently RUNNING.
+        try:
+            interrupted_id, _, _, _ = await setup
+        except Exception:
+            logger.exception("sync setup failed during cancellation source=%s", source_id)
+        else:
+            await _record_cancelled_sync(sessionmaker, source_id, interrupted_id, job_id)
+        raise
+
+
 async def _begin_sync(
     sessionmaker: async_sessionmaker[AsyncSession],
     source_id: uuid.UUID,
@@ -541,7 +601,7 @@ async def _begin_sync(
     job_id: uuid.UUID | None,
 ) -> tuple[uuid.UUID, dict[str, object], dict[str, object], str | None]:
     async with sessionmaker() as session:
-        source = await session.get(Source, source_id)
+        source = await session.get(Source, source_id, with_for_update=True)
         if source is None:
             raise ValueError(f"source {source_id} not found")
         sync = Sync(
@@ -625,12 +685,43 @@ async def _commit_success(
             logger.exception("graph fan-out failed source=%s (sync stands)", source_id)
 
 
+async def _record_cancelled_sync(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    source_id: uuid.UUID,
+    sync_id: uuid.UUID,
+    job_id: uuid.UUID | None,
+) -> None:
+    """Close only this canceled run; never overwrite a successor's source state."""
+    error = {"code": "sync_cancelled", "message": "Synchronization was interrupted; retry later"}
+    async with sessionmaker() as session:
+        source = await session.get(Source, source_id, with_for_update=True)
+        sync = await session.get(Sync, sync_id)
+        if sync is None or sync.status is not JobStatus.RUNNING:
+            return  # a committed successful result remains successful
+        sync.status = JobStatus.FAILED
+        sync.errors = [*sync.errors, {"item": "sync", "message": error["message"]}]
+        sync.finished_at = utcnow()
+        await _mark_job(session, job_id, JobStatus.FAILED, error=dict(error))
+        latest = await session.scalar(
+            select(Sync.id)
+            .where(Sync.source_id == source_id)
+            .order_by(Sync.created_at.desc(), Sync.id.desc())
+            .limit(1)
+        )
+        if source is not None and latest == sync_id and source.status is SourceStatus.SYNCING:
+            source.status = SourceStatus.CONNECTED
+            source.last_error = dict(error)
+        await session.commit()
+
+
 async def _record_failure(
     sessionmaker: async_sessionmaker[AsyncSession],
     source_id: uuid.UUID,
     sync_id: uuid.UUID,
     job_id: uuid.UUID | None,
     exc: Exception,
+    *,
+    probe: bool = False,
 ) -> None:
     payload = connector_error_payload(exc)
     # Log the FULL exception text — only the sanitized payload is persisted.
@@ -647,7 +738,11 @@ async def _record_failure(
                 "could not record sync failure: source=%s sync=%s missing", source_id, sync_id
             )
         if source is not None:
-            source.status = SourceStatus.ERROR
+            source.status = (
+                SourceStatus.CONNECTED
+                if probe and retryable_probe_error(exc)
+                else SourceStatus.ERROR
+            )
             source.last_error = dict(payload)
         if sync is not None:
             sync.status = JobStatus.FAILED

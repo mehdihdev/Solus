@@ -17,6 +17,7 @@
 //
 // Not persisted — a focus is where you are right now, not a preference. Mirrors `shellStore`.
 import { create } from 'zustand'
+import type { FocusStep } from '@solus/shared-types'
 import { getGraphNeighborhood, type Entity, type Neighborhood } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { FocusStatus, WidgetFocus } from './widget.contract'
@@ -29,12 +30,13 @@ export interface FocusState {
   status: FocusStatus
   error: string | null
   depth: number
+  path: readonly FocusStep[]
   /** Neighbourhoods already fetched, keyed by `${projectId}:${entityId}@${depth}`. */
   cache: Record<string, Neighborhood>
   /** In-flight cache keys, so a double-click does not become two uncapped traversals. */
   inFlight: Record<string, Promise<void>>
 
-  focus: (entityId: string) => Promise<void>
+  focus: (entityId: string, path?: readonly FocusStep[]) => Promise<void>
   setDepth: (depth: number) => void
   clearProject: () => void
   reset: () => void
@@ -45,6 +47,7 @@ const INITIAL = {
   status: 'idle' as FocusStatus,
   error: null as string | null,
   depth: 1,
+  path: [] as readonly FocusStep[],
   cache: {} as Record<string, Neighborhood>,
   inFlight: {} as Record<string, Promise<void>>
 }
@@ -58,15 +61,20 @@ const cacheKey = (projectId: string, entityId: string, depth: number): string =>
   `${projectId}:${entityId}@${depth}`
 
 const currentProjectId = (): string | undefined => useWorkspaceStore.getState().project?.id
+let projectGeneration = 0
 
 export const useFocusStore = create<FocusState>((set, get) => ({
   ...INITIAL,
 
-  focus: async (entityId) => {
+  focus: async (entityId, path = INITIAL.path) => {
     const projectId = currentProjectId()
     // An entity id means nothing without a project scope, and guessing one would be a
     // cross-tenant read waiting to happen.
     if (!projectId) return
+    if (path.some((step) => step.entity.projectId !== projectId)) {
+      throw new Error('Focus path must stay in the current project')
+    }
+    const generation = projectGeneration
 
     const { depth, cache, inFlight } = get()
     const key = cacheKey(projectId, entityId, depth)
@@ -74,43 +82,17 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     if (cache[key]) {
       // The cheap path: no request, and deliberately no `loading` — widgets re-render, never
       // remount, so a back-and-forth across domains costs nothing.
-      set({ focusedEntityId: entityId, status: 'ready', error: null })
+      set({ focusedEntityId: entityId, path, status: 'ready', error: null })
       return
     }
 
-    set({ focusedEntityId: entityId, status: 'loading', error: null })
+    set({ focusedEntityId: entityId, path, status: 'loading', error: null })
     // Dedupe: dragging through a neighbour list would otherwise fire one bounded-but-real
     // traversal per click, and this endpoint is the expensive one.
     const pending: Promise<void> | undefined = inFlight[key]
     if (pending) return pending
 
-    const request = (async (): Promise<void> => {
-      try {
-        const neighborhood = await getGraphNeighborhood(projectId, entityId, { depth })
-        set((s) => ({
-          cache: { ...s.cache, [key]: neighborhood },
-          // Guarded: a fast second selection must not be overwritten by a slower earlier
-          // response landing after it.
-          status: s.focusedEntityId === entityId ? 'ready' : s.status,
-          error: s.focusedEntityId === entityId ? null : s.error
-        }))
-      } catch (error: unknown) {
-        // Guarded the same way. Without this, a slow rejection for A lands after a successful
-        // focus on B and paints an error over B's perfectly good neighbourhood.
-        // Deliberately NOT cached — a transient failure must not become a permanent empty view.
-        if (get().focusedEntityId !== entityId) return
-        set({
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Could not load the neighbourhood'
-        })
-      } finally {
-        set((s) => {
-          const rest = { ...s.inFlight }
-          delete rest[key]
-          return { inFlight: rest }
-        })
-      }
-    })()
+    const request = loadFocus({ projectId, entityId, depth, generation })
 
     set((s) => ({ inFlight: { ...s.inFlight, [key]: request } }))
     return request
@@ -126,16 +108,63 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     // the new depth and the widgets render "0 entities" while `status` still says `ready` — an
     // empty graph presented as the whole truth.
     const focused = get().focusedEntityId
-    if (focused) void get().focus(focused)
+    if (focused) void get().focus(focused, get().path)
   },
 
   // Entity ids are project-scoped, so a project switch must drop the CACHE too — otherwise the
   // next project (or the next USER, after a sign-out) could render the previous one's entities
   // straight from memory, with no request and no authorization check.
-  clearProject: () => set({ ...INITIAL, depth: get().depth }),
+  clearProject: () => {
+    projectGeneration += 1
+    set({ ...INITIAL, depth: get().depth })
+  },
 
-  reset: () => set({ ...INITIAL })
+  reset: () => {
+    projectGeneration += 1
+    set({ ...INITIAL })
+  }
 }))
+
+interface FocusRequest {
+  projectId: string
+  entityId: string
+  depth: number
+  generation: number
+}
+
+async function loadFocus({ projectId, entityId, depth, generation }: FocusRequest): Promise<void> {
+  const { setState: set, getState: get } = useFocusStore
+  const key = cacheKey(projectId, entityId, depth)
+  const isCurrentProject = (): boolean =>
+    generation === projectGeneration && currentProjectId() === projectId
+  try {
+    const neighborhood = await getGraphNeighborhood(projectId, entityId, { depth })
+    if (!isCurrentProject()) return
+    set((s) => ({
+      cache: { ...s.cache, [key]: neighborhood },
+      // Guarded: a fast second selection must not be overwritten by a slower earlier
+      // response landing after it.
+      status: s.focusedEntityId === entityId ? 'ready' : s.status,
+      error: s.focusedEntityId === entityId ? null : s.error
+    }))
+  } catch (error: unknown) {
+    // Guarded the same way. Without this, a slow rejection for A lands after a successful
+    // focus on B and paints an error over B's perfectly good neighbourhood.
+    // Deliberately NOT cached — a transient failure must not become a permanent empty view.
+    if (!isCurrentProject() || get().focusedEntityId !== entityId) return
+    set({
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Could not load the neighbourhood'
+    })
+  } finally {
+    if (isCurrentProject())
+      set((s) => {
+        const rest = { ...s.inFlight }
+        delete rest[key]
+        return { inFlight: rest }
+      })
+  }
+}
 
 /** The current neighbourhood, or null while it is still loading. */
 export function selectNeighborhood(state: FocusState): Neighborhood | null {

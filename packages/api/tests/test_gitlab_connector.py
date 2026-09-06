@@ -215,11 +215,12 @@ async def test_detect_changes_compares_head_sha() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_detect_changes_true_on_probe_failure() -> None:
+async def test_detect_changes_propagates_probe_failure() -> None:
     respx.get(f"{API}/projects/{ENC}/repository/commits/{DEFAULT_BRANCH}").mock(
         return_value=httpx.Response(500, json={"message": "boom"})
     )
-    assert await GitLabConnector().detect_changes(_ctx(cursor={"sha": HEAD_SHA})) is True
+    with pytest.raises(ConnectorError):
+        await GitLabConnector().detect_changes(_ctx(cursor={"sha": HEAD_SHA}))
 
 
 @pytest.mark.asyncio

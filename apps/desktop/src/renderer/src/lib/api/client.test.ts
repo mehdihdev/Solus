@@ -51,6 +51,17 @@ describe('unwrapEnvelopePage', () => {
 })
 
 describe('createApiClient', () => {
+  it('sends an optimistic version header only when requested', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }))
+    const client = createApiClient({ baseUrl: 'http://api/v1', fetchImpl })
+    await client.request('/entities/r1', { method: 'PATCH', body: { name: 'Leader' }, ifMatch: 4 })
+    expect(fetchImpl.mock.calls[0][1]?.headers).toMatchObject({ 'If-Match': '4' })
+    await client.request('/entities/r1')
+    expect(fetchImpl.mock.calls[1][1]?.headers).not.toHaveProperty('If-Match')
+  })
+
   it('injects the bearer token and parses the envelope', async () => {
     const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
       Promise.resolve(new Response(JSON.stringify({ data: { ok: true } }), { status: 200 }))

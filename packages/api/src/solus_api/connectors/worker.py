@@ -15,17 +15,16 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.connectors.contracts import (
-    NO_SIGNAL_CODES,
     AuthKind,
     ConnectorError,
     Credentials,
-    SyncContext,
 )
 from solus_api.connectors.httpcache import (
     _KEY_PREFIX,
@@ -33,6 +32,7 @@ from solus_api.connectors.httpcache import (
     InMemoryCacheStore,
     RedisCacheStore,
     release_flight,
+    run_in_flight,
     single_flight,
 )
 from solus_api.connectors.registry import (
@@ -42,11 +42,17 @@ from solus_api.connectors.registry import (
     build_integration_cache,
     build_registry,
 )
-from solus_api.connectors.runtime import _resolve_credentials, run_sync
-from solus_api.connectors.secrets import SecretNotFoundError, SecretStore, build_secret_store
+from solus_api.connectors.runtime import (
+    _resolve_credentials,
+    connector_error_payload,
+    detect_changes_with_refresh,
+    retryable_probe_error,
+    run_sync,
+)
+from solus_api.connectors.secrets import SecretStore, build_secret_store
 from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.graph.live import LiveHub
-from solus_api.models import Source, SourceStatus, SyncTrigger
+from solus_api.models import Job, JobStatus, Source, SourceStatus, SyncTrigger, ensure_utc, utcnow
 from solus_api.services.connections import account_ref_for
 
 if TYPE_CHECKING:
@@ -60,6 +66,12 @@ EnqueueFn = Callable[[uuid.UUID], Awaitable[None]]
 #: than a slow Onshape export (translation + poll + download), short enough that
 #: a killed worker does not park the source for an operator's coffee break.
 _SYNC_FLIGHT_TTL_SECONDS = 300
+#: Supported bounds: one hour of acquired sync work, up to two hours queued.
+#: ARQ retries a busy accepted job every 30s; unrelated jobs keep their defaults.
+_SYNC_OPERATION_SECONDS = 3600
+_SYNC_QUEUE_SECONDS = 7200
+_SYNC_DEFER_SECONDS = 30
+_SYNC_MAX_TRIES = _SYNC_QUEUE_SECONDS // _SYNC_DEFER_SECONDS + 1
 
 
 #: Sync trigger → scoped-connector purpose (see `registry.Purpose`).
@@ -82,6 +94,7 @@ async def execute_source_sync(
     store: CacheStore | None = None,
     force: bool = False,
     hub: Any | None = None,
+    defer_on_busy: bool = False,
 ) -> uuid.UUID | None:
     """Resolve the source's connector and run one sync. Returns the Sync id (or
     None if the source vanished before the run started).
@@ -94,8 +107,8 @@ async def execute_source_sync(
 
     This is the SYNC-level collapse, distinct from the read cache: an export is a
     POST-then-poll dance with no cacheable response, so only coalescing can
-    prevent N of them. Fails open — without a store, behaviour is exactly as
-    before.
+    prevent N of them. A supplied store fails closed when its claim cannot
+    be acquired; no caller may proceed unclaimed.
 
     `acting_user_id` (SOLUSDEV-100 T4b, F3) is the caller-resolved acting user
     for THIS run — the manual `sources.py` trigger endpoint passes the
@@ -127,20 +140,52 @@ async def execute_source_sync(
     )
     connector = registry.create_scoped(provider, ctx)
     if store is None:
-        return await _run(
-            connector,
-            source_id,
-            sessionmaker,
-            secret_store,
-            trigger,
-            job_id,
-            resolved_acting_user_id,
-            force,
-            hub,
-        )
+        try:
+            async with asyncio.timeout(_SYNC_OPERATION_SECONDS):
+                return await _run(
+                    connector,
+                    source_id,
+                    sessionmaker,
+                    secret_store,
+                    trigger,
+                    job_id,
+                    resolved_acting_user_id,
+                    force,
+                    hub,
+                )
+        except TimeoutError as exc:
+            await _fail_accepted_job(sessionmaker, project_id, job_id, connector_error_payload(exc))
+            return None
     flight = f"{_KEY_PREFIX}:sync:{source_id}"
-    await single_flight(store, flight, ttl_seconds=_SYNC_FLIGHT_TTL_SECONDS)
     try:
+        async with asyncio.timeout(_SYNC_QUEUE_SECONDS):
+            owner = await single_flight(
+                store,
+                flight,
+                ttl_seconds=_SYNC_FLIGHT_TTL_SECONDS,
+                wait_seconds=None
+                if job_id is not None and not defer_on_busy
+                else 0
+                if defer_on_busy
+                else 30,
+            )
+    except (ConnectorError, TimeoutError) as exc:
+        if defer_on_busy and isinstance(exc, ConnectorError) and exc.code == "single_flight_busy":
+            raise
+        # No lease means no probe or export. Resolve a caller's accepted Job
+        # honestly without modifying a different worker's active Source state.
+        await _fail_accepted_job(sessionmaker, project_id, job_id, connector_error_payload(exc))
+        return None
+    except asyncio.CancelledError:
+        await _fail_accepted_job(
+            sessionmaker,
+            project_id,
+            job_id,
+            {"code": "sync_cancelled", "message": "Synchronization was interrupted; retry later"},
+        )
+        raise
+
+    async def run_owned() -> uuid.UUID | None:
         return await _run(
             connector,
             source_id,
@@ -152,8 +197,50 @@ async def execute_source_sync(
             force,
             hub,
         )
+
+    try:
+        async with asyncio.timeout(_SYNC_OPERATION_SECONDS):
+            return await run_in_flight(
+                store, flight, owner, ttl_seconds=_SYNC_FLIGHT_TTL_SECONDS, run=run_owned
+            )
+    except (ConnectorError, TimeoutError) as exc:
+        # Initial renewal can fail before run_sync even starts. Finish that
+        # scoped accepted Job too; runtime cancellation closes started runs.
+        await _fail_accepted_job(sessionmaker, project_id, job_id, connector_error_payload(exc))
+        return None
+    except asyncio.CancelledError:
+        await _fail_accepted_job(
+            sessionmaker,
+            project_id,
+            job_id,
+            {
+                "code": "sync_cancelled",
+                "message": "Synchronization was interrupted; retry later",
+            },
+        )
+        raise
     finally:
-        await release_flight(store, flight)
+        await release_flight(store, flight, owner)
+
+
+async def _fail_accepted_job(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    job_id: uuid.UUID | None,
+    error: dict[str, str],
+) -> None:
+    if job_id is None:
+        return
+    async with sessionmaker() as session:
+        job = await session.get(Job, job_id, with_for_update=True)
+        if (
+            job is not None
+            and job.project_id == project_id
+            and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+        ):
+            job.status = JobStatus.FAILED
+            job.error = dict(error)
+            await session.commit()
 
 
 async def _run(
@@ -235,14 +322,10 @@ async def run_change_detection(
 ) -> int:
     """Probe every connected source; enqueue a sync for each that changed.
 
-    Returns the number enqueued. A probe failure is logged and treated as
-    "needs sync" so a transient error never silently stalls a source.
-
-    Phase 4 L4: each `detect_changes` probe runs under its own timeout
-    (reusing the C1 `bridge_tool_timeout_seconds` bound by convention — a
-    connector's `detect_changes` may itself dispatch a live bridge call) so a
-    single stalled probe can never stall the entire sweep; a timeout is
-    treated identically to any other probe failure — logged, "needs sync"."""
+    Returns the number enqueued. Each probe has a timeout, refreshes expired
+    OAuth credentials once, and must return change evidence before enqueueing.
+    Retryable failures record an error and remain eligible for the next sweep;
+    authentication failures stay visible for reconnection."""
     async with sessionmaker() as session:
         sources = (await session.scalars(_fair_sweep_query())).all()
         snapshot = [
@@ -298,27 +381,29 @@ async def run_change_detection(
                 # fail-safe reports "changed", and the sweep enqueues a full export
                 # +parse every hour for a document nobody touched.
                 credentials = await _resolve_credentials(secret_store, secret_ref)
-            ctx = SyncContext(credentials=credentials, config=config, cursor=cursor)
             async with asyncio.timeout(probe_timeout_seconds):
-                changed = await connector.detect_changes(ctx)
-        except SecretNotFoundError:
-            logger.warning("change-detection: no credentials for source=%s", source_id)
+                changed, _ = await detect_changes_with_refresh(
+                    connector=connector,
+                    credentials=credentials,
+                    config=config,
+                    cursor=cursor,
+                    secret_store=secret_store,
+                    secret_ref=secret_ref,
+                )
+        except Exception as exc:  # noqa: BLE001 — isolate one source's failed probe
+            logger.warning(
+                "change-detection: no signal source=%s code=%s",
+                source_id,
+                connector_error_payload(exc)["code"],
+            )
+            async with sessionmaker() as session:
+                source = await session.get(Source, source_id, with_for_update=True)
+                if source is not None and source.status is SourceStatus.CONNECTED:
+                    source.last_error = connector_error_payload(exc)
+                    if not retryable_probe_error(exc):
+                        source.status = SourceStatus.ERROR
+                    await session.commit()
             continue
-        except (ConnectorError, TimeoutError) as exc:
-            # SOLUSDEV-167: "we could not ask" is not "it changed". A rate-limit,
-            # an exhausted quota or a stalled probe used to fall into the generic
-            # handler below and enqueue a FULL sync — so being throttled bought
-            # more upstream traffic, which is the loop that empties an annual
-            # allowance. Skip instead; the next sweep asks again.
-            code = "probe_timeout" if isinstance(exc, TimeoutError) else exc.code
-            if isinstance(exc, TimeoutError) or code in NO_SIGNAL_CODES:
-                logger.warning("change-detection: no signal source=%s reason=%s", source_id, code)
-                continue
-            logger.warning("change-detection probe failed source=%s code=%s", source_id, code)
-            changed = True
-        except Exception:  # noqa: BLE001 — probe failure must not stall the sweep
-            logger.exception("change-detection probe failed source=%s", source_id)
-            changed = True
         if changed:
             await enqueue(source_id)
             enqueued += 1
@@ -327,6 +412,32 @@ async def run_change_detection(
 
 
 # --- ARQ wiring (only used when Redis is configured) ---
+
+
+async def _queue_expired(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    source_id: uuid.UUID,
+    job_id: uuid.UUID,
+) -> bool:
+    async with sessionmaker() as session:
+        job = await session.scalar(
+            select(Job)
+            .join(Source, Source.project_id == Job.project_id)
+            .where(Source.id == source_id, Job.id == job_id)
+            .with_for_update(of=Job)
+        )
+        if job is None or utcnow() - ensure_utc(job.created_at) <= timedelta(
+            seconds=_SYNC_QUEUE_SECONDS
+        ):
+            return False
+        if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
+            job.status = JobStatus.FAILED
+            job.error = {
+                "code": "sync_queue_timeout",
+                "message": "Synchronization waited too long; retry the selection",
+            }
+            await session.commit()
+        return True
 
 
 async def sync_source(
@@ -339,17 +450,46 @@ async def sync_source(
     F3) is the MANUAL trigger's requesting user id, forwarded by
     `routers/sources.py`; the scheduled path (no `job_id`) leaves it unset and
     `execute_source_sync` falls back to `source.created_by`."""
-    sync_id = await execute_source_sync(
-        sessionmaker=ctx["sessionmaker"],
-        registry=ctx["registry"],
-        secret_store=ctx["secret_store"],
-        source_id=uuid.UUID(source_id),
-        job_id=uuid.UUID(job_id) if job_id else None,
-        trigger=SyncTrigger.SCHEDULED if job_id is None else SyncTrigger.MANUAL,
-        acting_user_id=uuid.UUID(acting_user_id) if acting_user_id else None,
-        store=ctx.get("integration_store"),
-        hub=ctx.get("graph_hub"),
-    )
+    from arq import Retry
+
+    if job_id is not None and await _queue_expired(
+        ctx["sessionmaker"], uuid.UUID(source_id), uuid.UUID(job_id)
+    ):
+        return ""
+    try:
+        sync_id = await execute_source_sync(
+            sessionmaker=ctx["sessionmaker"],
+            registry=ctx["registry"],
+            secret_store=ctx["secret_store"],
+            source_id=uuid.UUID(source_id),
+            job_id=uuid.UUID(job_id) if job_id else None,
+            trigger=SyncTrigger.SCHEDULED if job_id is None else SyncTrigger.MANUAL,
+            acting_user_id=uuid.UUID(acting_user_id) if acting_user_id else None,
+            store=ctx.get("integration_store"),
+            hub=ctx.get("graph_hub"),
+            defer_on_busy=True,
+        )
+    except ConnectorError as exc:
+        if exc.code != "single_flight_busy":
+            raise
+        # Keep the persisted Job queued and free this worker slot. The function
+        # retry envelope is bounded independently of its acquired work timeout.
+        if int(ctx.get("job_try", 1)) >= _SYNC_MAX_TRIES:
+            async with ctx["sessionmaker"]() as session:
+                source = await session.get(Source, uuid.UUID(source_id))
+                project_id = source.project_id if source is not None else None
+            if project_id is not None:
+                await _fail_accepted_job(
+                    ctx["sessionmaker"],
+                    project_id,
+                    uuid.UUID(job_id) if job_id is not None else None,
+                    {
+                        "code": "sync_queue_timeout",
+                        "message": "Synchronization waited too long; retry the selection",
+                    },
+                )
+            return ""
+        raise Retry(defer=_SYNC_DEFER_SECONDS) from exc
     return str(sync_id) if sync_id is not None else ""
 
 
@@ -432,7 +572,7 @@ async def _on_shutdown(ctx: dict[str, Any]) -> None:
 def build_worker_settings(settings: Settings) -> type:
     """Construct the ARQ WorkerSettings class. Imported lazily so the API runs
     without arq/redis present in environments that don't run the worker."""
-    from arq import cron
+    from arq import cron, func
     from arq.connections import RedisSettings
 
     from solus_api.billing.reconciliation import reconcile_credit_debits
@@ -446,7 +586,11 @@ def build_worker_settings(settings: Settings) -> type:
         # (cost.track_cost enqueues it by name after recording the dead-letter row).
         # extension_review (SOLUSDEV-235 / ADR-035 §5) is enqueued by name from the
         # publish route; it reviews one published bundle and never raises.
-        functions = [sync_source, reconcile_credit_debits, extension_review]
+        functions = [
+            func(sync_source, timeout=_SYNC_OPERATION_SECONDS + 60, max_tries=_SYNC_MAX_TRIES),
+            reconcile_credit_debits,
+            extension_review,
+        ]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —
             # with the default `second=0` that fired once a MINUTE, sweeping

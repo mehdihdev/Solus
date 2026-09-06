@@ -161,11 +161,25 @@ async def _project_detail(ctx: ProjectCtx, session: SessionDep) -> dict[str, Any
             .order_by(Source.created_at.desc())
         )
     ).all()
-    return serialize_project(
+    graph_updated_at = await session.scalar(
+        select(
+            func.greatest(
+                select(func.max(GraphEntity.updated_at))
+                .where(GraphEntity.project_id == ctx.project.id)
+                .scalar_subquery(),
+                select(func.max(GraphEdge.updated_at))
+                .where(GraphEdge.project_id == ctx.project.id)
+                .scalar_subquery(),
+            )
+        )
+    )
+    detail = serialize_project(
         ctx.project,
         stats={"entities": int(entity_count or 0), "relations": int(relation_count or 0)},
         sources=[serialize_source(s) for s in sources],
     )
+    detail["graph_updated_at"] = graph_updated_at
+    return detail
 
 
 @project_router.get("/{project_id}")

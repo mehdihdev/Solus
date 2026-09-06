@@ -1,11 +1,7 @@
-// Workspace screen (SOLUSDEV-240; was the Context Model screen). The full
-// canvas view (spatial nodes, edges) is still a future ticket; what ships here
-// is the WIRED slice: the project `.solus` panel on the left, the project's
-// entities as a selectable list over the dotted canvas, real counts in the
-// corner, and selection driving the shared focus store — which re-scopes the
-// inspector rail's widgets and Live Bench. SOLUSDEV-152's honesty rule stands: every
-// empty state says what is actually true, never placeholder robot data.
-import { useMemo, useState } from 'react'
+// Workspace navigator. Graph reads, layout persistence and shared focus meet here;
+// node types and rendering stay independent of provider synchronization.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { FocusStep } from '@solus/shared-types'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
@@ -14,43 +10,22 @@ import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useFocusStore } from '../workspace/focusStore'
 import { useOfflineReason, type OfflineReason } from '../workspace/workspaceOnline'
 import { GraphInspector } from './GraphInspector'
-import { SolusPanel } from './SolusPanel'
-import { useGraphSummary, type GraphSummary } from './useGraphSummary'
+import { useSolusNodes } from './useSolusNodes'
+import { usePhysicalRobots } from './robots/usePhysicalRobots'
+import { WorkspaceAdd } from './WorkspaceAdd'
+import { useWorkspaceEvents } from './useWorkspaceEvents'
+import { serviceRoot, type ServiceSelection } from './serviceAttachments'
+import { reconcileWorkspaceFocus } from './workspaceFocus'
+import { useAuthStore } from '../../store/authStore'
+import { useWorkspaceGraph, type GraphSummary } from './useWorkspaceGraph'
+import { useWorkspaceLayout } from './useWorkspaceLayout'
+import { GraphNavigator } from './navigation/GraphNavigator'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import { toSharedFocus } from '../workspace/useSharedFocus'
 
 interface EmptyCopy {
   title: string
   body: string
-}
-
-/** True when every loaded entity is project configuration (the `.solus` node
- *  and its documents) — a fresh project has exactly one entity, and pretending
- *  that is "a graph" would be a lie. Pure. */
-export function onlyConfigEntities(summary: GraphSummary): boolean {
-  return (
-    summary.entities !== null &&
-    summary.entities.length > 0 &&
-    summary.entities.every((e) => e.domain === 'project')
-  )
-}
-
-/** The copy for a project whose only entities are `.solus` and its imported
- *  files: honest about what is drawn, and about what would draw more. Pure. */
-function onPurposeCopy(summary: GraphSummary): EmptyCopy {
-  const documents = (summary.entities ?? []).length - 1
-  const drawn =
-    documents === 0
-      ? 'Only the .solus node is here'
-      : documents === 1
-        ? 'Only the .solus node and its imported file are here'
-        : `Only the .solus node and its ${documents} imported files are here`
-  const next =
-    summary.sourceCount === 0
-      ? 'Connect a source, or right-click a .solus section to import a file.'
-      : 'Run a sync and the graph starts building itself.'
-  return {
-    title: 'An empty project — on purpose',
-    body: `${drawn} — nothing from a connected source is drawn until one syncs. ${next}`
-  }
 }
 
 /** Empty-state copy for the current graph state. Pure. */
@@ -76,7 +51,6 @@ export function graphEmptyCopy(
           : "appear on this canvas. Sign in and connect a source to start building your robot's graph.")
     }
   }
-  if (onlyConfigEntities(summary)) return onPurposeCopy(summary)
   if (summary.sourceCount === 0) {
     return {
       title: "Connect a source to start building your robot's graph",
@@ -135,108 +109,239 @@ function LoadingOverlay(): React.JSX.Element {
   )
 }
 
-/** The project's entities as selectable rows; selection drives the shared focus. */
-function EntityList({ entities }: { entities: Entity[] }): React.JSX.Element {
-  const focusedId = useFocusStore((s) => s.focusedEntityId)
-  const sorted = useMemo(
-    () => [...entities].sort((a, b) => a.name.localeCompare(b.name)),
-    [entities]
+type WorkspaceLayout = ReturnType<typeof useWorkspaceLayout>
+type SelectionPath = readonly { entity: Entity; relation: string }[]
+
+function useWorkspaceSelection(projectId: string | null) {
+  return useCallback(
+    (entity: Entity, ancestors: SelectionPath): void => {
+      if (!projectId || useWorkspaceStore.getState().project?.id !== projectId) return
+      const path: FocusStep[] = ancestors.flatMap((ancestor) => {
+        const focus = toSharedFocus(ancestor.entity, projectId)
+        return focus
+          ? [
+              {
+                entity: focus.entity,
+                domain: focus.domain,
+                label: focus.label,
+                relation: ancestor.relation
+              }
+            ]
+          : []
+      })
+      void useFocusStore.getState().focus(entity.id, path)
+    },
+    [projectId]
   )
+}
+
+function LayoutStatus({ layout }: { layout: WorkspaceLayout }): React.JSX.Element {
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '18px 16px 44px' }}>
-      <ul
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2
-        }}
-      >
-        {sorted.map((entity) => {
-          const focused = entity.id === focusedId
-          return (
-            <li key={entity.id}>
-              <button
-                type="button"
-                onClick={() => void useFocusStore.getState().focus(entity.id)}
-                aria-current={focused}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '7px 10px',
-                  borderRadius: 6,
-                  border: `1px solid ${focused ? 'var(--acc)' : 'transparent'}`,
-                  background: focused ? 'var(--sur)' : 'transparent',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 10
-                }}
-              >
-                <span style={{ fontSize: 13, color: 'var(--tx)' }}>{entity.name}</span>
-                <Mono size={10} style={{ color: 'var(--mut)' }}>
-                  {entity.type} · {entity.domain}
-                </Mono>
-              </button>
-            </li>
-          )
-        })}
-      </ul>
+    <>
+      {layout.status === 'saving' && <span role="status">Saving positions…</span>}
+      {layout.error && (
+        <span role="alert">
+          {layout.error}{' '}
+          <button type="button" onClick={layout.retry}>
+            Retry
+          </button>
+        </span>
+      )}
+    </>
+  )
+}
+
+interface GraphBodyProps {
+  summary: ReturnType<typeof useWorkspaceGraph>
+  projectId: string | null
+  focusedId: string | null
+  layout: WorkspaceLayout
+  copy: EmptyCopy
+  onSelect: (entity: Entity, ancestors: SelectionPath) => void
+  nodes: ReturnType<typeof useSolusNodes>
+  robots: ReturnType<typeof usePhysicalRobots>
+  liveError: string | null
+  onServiceSelected: (selection: ServiceSelection, documentId: string) => void
+  reveal?: { entityId: string; sequence: number }
+}
+
+function WorkspaceGraphBody({
+  summary,
+  projectId,
+  focusedId,
+  layout,
+  copy,
+  onSelect,
+  nodes,
+  robots,
+  onServiceSelected,
+  liveError,
+  reveal
+}: GraphBodyProps): React.JSX.Element {
+  if (summary.status === 'loading') return <LoadingOverlay />
+  const canRender =
+    summary.status === 'ready' && summary.entityCount > 0 && summary.entities !== null
+  if (!canRender || !projectId)
+    return (
+      <ScreenEmptyState
+        icon={<Icons.graph size={30} />}
+        title={copy.title}
+        body={summary.errorMessage ?? copy.body}
+      />
+    )
+  if (layout.status === 'loading') return <LoadingOverlay />
+  return (
+    <GraphNavigator
+      projectId={projectId}
+      entities={summary.entities ?? []}
+      relations={summary.relations}
+      positions={layout.positions}
+      focusedId={focusedId}
+      reveal={reveal}
+      onSelect={onSelect}
+      onMove={layout.move}
+      onContextMenu={nodes.onContextMenu}
+      renderContent={(entity) =>
+        entity.type === 'physical_robot' || entity.type === 'robot_category'
+          ? robots.renderContent(entity)
+          : nodes.renderContent(entity)
+      }
+      toolbar={
+        <>
+          <WorkspaceAdd
+            projectId={projectId}
+            onSelected={onServiceSelected}
+            hardware={robots.hardware}
+          />
+          <LayoutStatus layout={layout} />
+          {liveError && <span role="status">{liveError}</span>}
+        </>
+      }
+    />
+  )
+}
+
+function GraphCounts({ summary }: { summary: GraphSummary }): React.JSX.Element | null {
+  if (summary.status !== 'ready') return null
+  return (
+    <div style={{ padding: '9px 16px', flexShrink: 0, borderTop: '1px solid var(--bd)' }}>
+      <Mono size={10} style={{ letterSpacing: '0.08em' }}>
+        {graphCountsLine(summary)}
+      </Mono>
     </div>
   )
 }
 
 export function WorkspaceScreen(): React.JSX.Element {
-  // Bumped by the .solus panel when it adds/removes a document node, so the
-  // cached entity list re-walks instead of showing a graph that predates it.
+  const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
+  const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
+  return <ProjectWorkspace key={`${identity}:${projectId ?? ''}`} />
+}
+
+function useWorkspaceReveal(entities: readonly Entity[], onGraphChanged: () => void) {
+  const [requested, setRequested] = useState<{
+    target: { sourceId: string; documentId: string } | { entityId: string }
+    sequence: number
+  } | null>(null)
+  const onServiceSelected = useCallback(
+    (selection: ServiceSelection, documentId: string): void => {
+      if (selection.jobId) onGraphChanged()
+      setRequested((previous) => ({
+        target: { sourceId: selection.source.id, documentId },
+        sequence: (previous?.sequence ?? 0) + 1
+      }))
+    },
+    [onGraphChanged]
+  )
+  const onReveal = useCallback((entityId: string) => {
+    setRequested((previous) => ({
+      target: { entityId },
+      sequence: (previous?.sequence ?? 0) + 1
+    }))
+  }, [])
+  const target = requested?.target
+  const requestedEntity =
+    target &&
+    ('entityId' in target
+      ? entities.find((entity) => entity.id === target.entityId)
+      : serviceRoot(entities, target.sourceId, target.documentId))
+  const reveal =
+    requestedEntity && requested
+      ? { entityId: requestedEntity.id, sequence: requested.sequence }
+      : undefined
+  return { reveal, onReveal, onServiceSelected }
+}
+
+function ProjectWorkspace(): React.JSX.Element {
   const [graphRevision, setGraphRevision] = useState(0)
-  const summary = useGraphSummary(graphRevision)
+  const [validation, setValidation] = useState(0)
+  const validateGraph = useCallback(() => setValidation((value) => value + 1), [])
+  const summary = useWorkspaceGraph(graphRevision, validation)
+  const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
+  useGraphFocusReconciliation(projectId, summary)
+  const focusedId = useFocusStore((state) => state.focusedEntityId)
+  const liveEntityIds = useMemo(
+    () => summary.entities?.map((entity) => entity.id),
+    [summary.entities]
+  )
+  const layout = useWorkspaceLayout(projectId, summary.status === 'ready', liveEntityIds)
   const copy = graphEmptyCopy(summary, useOfflineReason())
-  const showList =
-    summary.status === 'ready' && summary.entityCount > 0 && summary.entities !== null
-
-  const onlyConfig = onlyConfigEntities(summary)
-
+  const select = useWorkspaceSelection(projectId)
+  const onGraphChanged = useCallback((removedId?: string) => {
+    setGraphRevision((revision) => revision + 1)
+    const focus = useFocusStore.getState()
+    if (removedId && focus.focusedEntityId === removedId) focus.clearProject()
+  }, [])
+  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph)
+  const { reveal, onReveal, onServiceSelected } = useWorkspaceReveal(
+    summary.entities ?? [],
+    onGraphChanged
+  )
+  const robots = usePhysicalRobots(projectId, graphRevision, onGraphChanged, onReveal)
+  const nodes = useSolusNodes(projectId, () => setGraphRevision((revision) => revision + 1))
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
-      <SolusPanel onGraphChanged={() => setGraphRevision((r) => r + 1)} />
+      {nodes.overlays}
+      {robots.overlays}
       <div
         style={{
           flex: 1,
-          position: 'relative',
           overflow: 'hidden',
           minWidth: 0,
           display: 'flex',
-          flexDirection: 'column',
-          backgroundImage: 'radial-gradient(var(--bd) 1px, transparent 1px)',
-          backgroundSize: '26px 26px'
+          flexDirection: 'column'
         }}
       >
-        {summary.status === 'loading' ? (
-          <LoadingOverlay />
-        ) : (
-          <>
-            {showList && <EntityList entities={summary.entities ?? []} />}
-            {(!showList || onlyConfig) && (
-              <ScreenEmptyState
-                icon={<Icons.graph size={30} />}
-                title={copy.title}
-                body={copy.body}
-              />
-            )}
-          </>
-        )}
-        {summary.status === 'ready' && (
-          <div style={{ position: 'absolute', left: 16, bottom: 14, pointerEvents: 'none' }}>
-            <Mono size={10} style={{ letterSpacing: '0.08em' }}>
-              {graphCountsLine(summary)}
-            </Mono>
-          </div>
-        )}
+        {summary.status === 'ready' && robots.prompt}
+        <WorkspaceGraphBody
+          summary={summary}
+          projectId={projectId}
+          focusedId={focusedId}
+          reveal={reveal}
+          layout={layout}
+          copy={copy}
+          onSelect={select}
+          nodes={nodes}
+          robots={robots}
+          liveError={liveError}
+          onServiceSelected={onServiceSelected}
+        />
+        <GraphCounts summary={summary} />
       </div>
       <GraphInspector />
     </div>
   )
+}
+
+function useGraphFocusReconciliation(
+  projectId: string | null,
+  summary: ReturnType<typeof useWorkspaceGraph>
+): void {
+  const previous = useRef<typeof summary.entities>(null)
+  useEffect(() => {
+    if (!projectId || summary.status !== 'ready' || !summary.entities) return
+    const changed = previous.current !== null && previous.current !== summary.entities
+    previous.current = summary.entities
+    if (changed) void reconcileWorkspaceFocus(projectId, summary.entities, summary.relations)
+  }, [projectId, summary.status, summary.entities, summary.relations])
 }

@@ -236,18 +236,16 @@ class GitLabConnector(OAuthConnector):
         )
 
     async def detect_changes(self, ctx: SyncContext) -> bool:
-        try:
-            repo = _safe_repo(str(ctx.config["repo"]))
-            configured = ctx.config.get("branch")
-            async with self._http(ctx.credentials) as client:
-                resolved = (
-                    _safe_branch(str(configured))
-                    if configured
-                    else await self._default_branch(client, repo)
-                )
-                sha = await self._head_sha(client, repo, resolved)
-        except ConnectorError:
-            return True  # On any probe failure, be safe and let a full sync decide.
+        repo = _safe_repo(str(ctx.config["repo"]))
+        configured = ctx.config.get("branch")
+        async with self._http(ctx.credentials) as client:
+            resolved = (
+                _safe_branch(str(configured))
+                if configured
+                else await self._default_branch(client, repo)
+            )
+            sha = await self._head_sha(client, repo, resolved)
+
         return sha != ctx.cursor.get("sha")
 
     # -------------------------------------------------------- graph building

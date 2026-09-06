@@ -1,30 +1,33 @@
-"""§2.4 Graph — entity & relation reads.
-
-Connector-owned entities/relations are read-only here (the connector is the
-source of truth; edits happen in the tool and arrive via sync). This ships the
-read surface the graph view and onboarding "files indexed" count need; manual
-entity/relation mutation lands with the graph-core ticket. Reads are scoped to
-live (not soft-deleted) rows.
-"""
+"""§2.4 Graph reads and the bounded Physical Robot manual mutation subtype."""
 
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query, Request
 from sqlalchemy import or_, select
 
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
-from solus_api.deps import ProjectCtx, SessionDep
+from solus_api.deps import ProjectCtx, SessionDep, require_role
+from solus_api.graph.live import graph_changed_frame
 from solus_api.graph.neighborhood import MAX_DEPTH, load_neighborhood
-from solus_api.models import Domain, GraphEdge, GraphEntity
+from solus_api.models import Domain, GraphEdge, GraphEntity, Role, utcnow
 from solus_api.schemas import serialize_entity, serialize_relation
+from solus_api.services.events import emit_event
+from solus_api.services.physical_robots import (
+    GraphChangeCounts,
+    PhysicalRobotCreate,
+    PhysicalRobotRename,
+    PhysicalRobotService,
+    orphaned_robot_part_filter,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}")
 
 MAX_LIMIT = 500
 MAX_FILTER_VALUES = 32  # a focus filter, not a query language
+IfMatch = Annotated[str, Header(pattern=r"^[0-9]+$", max_length=10)]
 
 
 async def _scoped_entity(session: SessionDep, ctx: ProjectCtx, entity_id: uuid.UUID) -> GraphEntity:
@@ -61,6 +64,7 @@ async def list_entities(
     domain: Annotated[str | None, Query()] = None,
     q: Annotated[str | None, Query(max_length=255)] = None,
     external_ref_prefix: Annotated[str | None, Query(max_length=255)] = None,
+    orphaned_from_robot: Annotated[bool, Query()] = False,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 200,
 ) -> dict[str, Any]:
@@ -71,6 +75,8 @@ async def list_entities(
         stmt = stmt.where(GraphEntity.kind == type)
     if source_id is not None:
         stmt = stmt.where(GraphEntity.source_id == source_id)
+    if orphaned_from_robot:
+        stmt = stmt.where(orphaned_robot_part_filter(ctx.project.id))
     if domain is not None:
         stmt = stmt.where(GraphEntity.domain == _domain(domain))
     if q:
@@ -97,6 +103,83 @@ async def list_entities(
     rows = list((await session.scalars(stmt)).all())
     visible, meta = page_meta(rows, limit)
     return envelope([serialize_entity(e) for e in visible], meta=meta)
+
+
+async def _commit_robot_change(
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    root: GraphEntity,
+    action: str,
+    counts: GraphChangeCounts,
+) -> None:
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type=f"workspace.robot_{action}",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={"entity_id": str(root.id), "version": root.version},
+    )
+    await session.commit()
+    await request.app.state.graph_hub.publish(
+        ctx.project.id,
+        graph_changed_frame(
+            project_id=ctx.project.id,
+            source_id=None,
+            sync_id=None,
+            counts=counts,
+            at=utcnow().isoformat(),
+        ),
+    )
+
+
+@router.post("/entities", status_code=201)
+async def create_entity(
+    body: PhysicalRobotCreate, request: Request, ctx: ProjectCtx, session: SessionDep
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    root = await PhysicalRobotService(session).create(ctx.project.id, body.name)
+    await _commit_robot_change(
+        request,
+        ctx,
+        session,
+        root,
+        "created",
+        GraphChangeCounts(entities_created=8, relations_created=7),
+    )
+    return envelope(serialize_entity(root))
+
+
+@router.patch("/entities/{entity_id}")
+async def rename_entity(
+    entity_id: uuid.UUID,
+    body: PhysicalRobotRename,
+    if_match: IfMatch,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    root = await PhysicalRobotService(session).rename(
+        ctx.project.id, entity_id, int(if_match), body.name
+    )
+    await _commit_robot_change(
+        request, ctx, session, root, "renamed", GraphChangeCounts(entities_updated=1)
+    )
+    return envelope(serialize_entity(root))
+
+
+@router.delete("/entities/{entity_id}")
+async def delete_entity(
+    entity_id: uuid.UUID, if_match: IfMatch, request: Request, ctx: ProjectCtx, session: SessionDep
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    removal = await PhysicalRobotService(session).delete(ctx.project.id, entity_id, int(if_match))
+    await _commit_robot_change(request, ctx, session, removal.root, "removed", removal.counts)
+    return envelope(
+        {"deleted_entity_id": entity_id, "retained_part_ids": removal.retained_part_ids}
+    )
 
 
 @router.get("/entities/{entity_id}")

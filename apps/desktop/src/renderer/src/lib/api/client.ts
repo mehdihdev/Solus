@@ -20,6 +20,8 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
+  /** Optimistic concurrency version for graph mutations. */
+  ifMatch?: number
 }
 
 /** Join a base URL and a path without double slashes. Pure + testable. */
@@ -142,6 +144,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (req.body !== undefined) headers['Content-Type'] = 'application/json'
     if (token) headers.Authorization = `Bearer ${token}`
+    if (req.ifMatch !== undefined) headers['If-Match'] = String(req.ifMatch)
 
     const res = await fetchImpl(joinUrl(options.baseUrl, path), {
       method: req.method ?? 'GET',

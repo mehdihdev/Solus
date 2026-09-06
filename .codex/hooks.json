@@ -1,0 +1,89 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/pre_edit_guard.sh'"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/pre_write_recreation_guard.sh'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/pre_bash_guard.sh'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/post_edit_quality.sh'"
+          },
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/post_edit_tests.sh'"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/pre_compact_save.sh'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/session_start_context.sh'"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/subagent_ownership_check.sh'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/beeboss/Solus/.codex/hooks/stop_validation_gate.sh'",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

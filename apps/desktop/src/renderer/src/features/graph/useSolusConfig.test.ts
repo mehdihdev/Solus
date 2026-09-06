@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import * as resources from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSolusConfig, emptySections, SECTION_LABELS } from './useSolusConfig'
@@ -37,8 +37,10 @@ describe('useSolusConfig', () => {
     expect(result.current.status).toBe('loading')
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.entityId).toBe('solus-1')
-    const again = await result.current.refetch()
-    expect(again?.entity_id).toBe('solus-1')
+    await act(async () => {
+      const again = await result.current.refetch()
+      expect(again?.entity_id).toBe('solus-1')
+    })
     expect(vi.mocked(resources.getSolus)).toHaveBeenCalledTimes(2)
   })
 
@@ -48,4 +50,28 @@ describe('useSolusConfig', () => {
     const { result } = renderHook(() => useSolusConfig('p1'))
     await waitFor(() => expect(result.current.status).toBe('offline'))
   })
+})
+
+it('ignores an old refetch after changing project', async () => {
+  useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'First' } })
+  vi.mocked(resources.getSolus).mockResolvedValue({ entity_id: 's1', sections: emptySections() })
+  const { result, rerender } = renderHook(({ id }) => useSolusConfig(id), {
+    initialProps: { id: 'p1' }
+  })
+  await waitFor(() => expect(result.current.entityId).toBe('s1'))
+  let finish!: (value: resources.SolusConfig) => void
+  vi.mocked(resources.getSolus).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve
+    })
+  )
+  const pending = result.current.refetch()
+  vi.mocked(resources.getSolus).mockResolvedValue({ entity_id: 's2', sections: emptySections() })
+  rerender({ id: 'p2' })
+  await waitFor(() => expect(result.current.entityId).toBe('s2'))
+  await act(async () => {
+    finish({ entity_id: 's1', sections: emptySections() })
+    await pending
+  })
+  expect(result.current.entityId).toBe('s2')
 })

@@ -42,7 +42,6 @@ from urllib.parse import urlencode
 import httpx
 
 from solus_api.connectors.contracts import (
-    NO_SIGNAL_CODES,
     AccountInfo,
     ConnectorError,
     Credentials,
@@ -51,6 +50,7 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.connectors.document_graph import document_contains, document_root
 from solus_api.connectors.export_common import ErrorRecorder, label
 from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.mechanical import (
@@ -481,28 +481,20 @@ class OnshapeConnector(OAuthConnector):
         A change to the SELECTION itself counts as changed, so newly picked
         documents are ingested and deselected ones are reconciled away.
 
-        Fails SAFE on a transient outage — an unreachable API counts as changed,
-        so a blip schedules a sync rather than silently skipping one.
-
-        But "we could not ask" is NOT "it changed" (SOLUSDEV-167). A rate-limit
-        or quota error swallowed into `True` enqueues a FULL sync — turning being
-        throttled into more traffic, which is precisely the loop that empties an
-        annual allowance. Those codes are re-raised so the caller can back off.
+        Probe errors propagate to the shared refresh/defer policy. An
+        unreachable provider supplies no change evidence and must not trigger
+        a full export.
         """
-        try:
-            document_ids = self._selected_document_ids(ctx)
-            stored = self._stored_microversions(ctx, document_ids)
-            if set(stored) != set(document_ids):
-                return True
-            async with self.http(ctx.credentials) as client:
-                for document_id in document_ids:
-                    current = await self._probe(client, ctx, document_id)
-                    if current != stored.get(document_id):
-                        return True
-        except ConnectorError as exc:
-            if exc.code in NO_SIGNAL_CODES:
-                raise
+        document_ids = self._selected_document_ids(ctx)
+        stored = self._stored_microversions(ctx, document_ids)
+        if set(stored) != set(document_ids):
             return True
+        async with self.http(ctx.credentials) as client:
+            for document_id in document_ids:
+                current = await self._probe(client, ctx, document_id)
+                if current != stored.get(document_id):
+                    return True
+
         return False
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
@@ -527,6 +519,12 @@ class OnshapeConnector(OAuthConnector):
         microversions: dict[str, str] = {}
         resolved_workspaces: dict[str, str] = {}
 
+        listing = (
+            await self._cache.cached_listing(self.provider, self._account_ref)
+            if self._cache
+            else None
+        )
+        names = {item["id"]: item["name"] for item in listing.value} if listing else {}
         async with self.http(ctx.credentials) as client:
             for plan in await self._plan(client, ctx, recorder):
                 # A cursor entry for EVERY selected document, including ones
@@ -537,12 +535,17 @@ class OnshapeConnector(OAuthConnector):
                 microversions[plan.document_id] = plan.microversion
                 if plan.workspace_id is not None:
                     resolved_workspaces[plan.document_id] = plan.workspace_id
+                if plan.microversion == _GONE:
+                    continue
+                root = document_root(plan.document_id, names.get(plan.document_id))
+                entities.append(root)
                 for target in plan.targets:
                     target_entities, target_relations = await self._ingest(
                         client, target, recorder, version=plan.microversion
                     )
                     entities.extend(target_entities)
                     relations.extend(target_relations)
+                    relations.extend(document_contains(root, target_entities, target_relations))
 
         return SyncResult(
             entities=entities,
@@ -581,7 +584,7 @@ class OnshapeConnector(OAuthConnector):
             recorder,
             version=version,
         )
-        model = self._enrich(parse_step(export), metadata)
+        model = self._enrich(await asyncio.to_thread(parse_step, export), metadata)
         # ONE recorder across every stage and every document, so the
         # MAX_SYNC_ERRORS bound is the documented per-sync cap rather than one
         # cap per document silently multiplied by the selection size.

@@ -10,7 +10,7 @@ from solus_api.agent.tools.solus_entry import (
     ADD_SOLUS_ENTRY_DESCRIPTOR,
     build_add_solus_entry_tool,
 )
-from solus_api.models import SolusEntry
+from solus_api.models import GraphEntity, SolusEntry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -59,6 +59,10 @@ async def test_sol_files_an_entry_and_bad_input_never_raises(
     assert row is not None
     assert row.author == "sol"
     assert row.created_by == uuid.UUID(user["id"])
+    assert row.entity_id is not None
+    node = await db.get(GraphEntity, row.entity_id)
+    assert node is not None and node.kind == "solus_error"
+    assert node.attrs == {"solus_entry_id": str(row.id), "section": "errors"}
 
     bad = await registry.invoke(
         ToolCall(call_id="c2", tool="add_solus_entry", args={"section": "secrets", "text": "x"})

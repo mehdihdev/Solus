@@ -186,6 +186,46 @@ describe('failure and scope changes', () => {
 })
 
 describe('project scope is a cache boundary, not just a fetch parameter', () => {
+  it('does not repopulate the cache when an old project response finishes after reset', async () => {
+    let finish!: (value: resources.Neighborhood) => void
+    vi.mocked(resources.getGraphNeighborhood).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    const pending = useFocusStore.getState().focus('e-root')
+    useFocusStore.getState().clearProject()
+    finish({ entities: [], edges: [], truncated: false })
+    await pending
+    expect(useFocusStore.getState().cache).toEqual({})
+    expect(useFocusStore.getState().status).toBe('idle')
+  })
+
+  it('preserves a navigation trail on cached selection and refuses foreign project trails', async () => {
+    const path = [
+      {
+        entity: { projectId: 'p1', entityId: 'assembly' },
+        domain: 'mechanical' as const,
+        label: 'Assembly',
+        relation: 'contains'
+      }
+    ]
+    await useFocusStore.getState().focus('e-root', path)
+    expect(useFocusStore.getState().path).toEqual(path)
+    await useFocusStore.getState().focus('e-root', [])
+    expect(useFocusStore.getState().path).toEqual([])
+    expect(resources.getGraphNeighborhood).toHaveBeenCalledTimes(1)
+    await expect(
+      useFocusStore.getState().focus('e-root', [
+        {
+          ...path[0],
+          entity: { projectId: 'foreign', entityId: 'other' }
+        }
+      ])
+    ).rejects.toThrow(/project/i)
+    expect(useFocusStore.getState().path).toEqual([])
+  })
+
   it('does not serve one project cached neighbourhood to another', async () => {
     // Security: entity ids are project-scoped. A cache that outlives the switch would render
     // project A's entity names and properties under project B with no request at all.

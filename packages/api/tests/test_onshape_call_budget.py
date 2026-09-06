@@ -562,3 +562,72 @@ async def test_listing_the_accounts_documents_costs_zero_calls_after_the_first(
     third = await listing(refresh=True)
     assert third.cached is False
     assert meter.by_route["document_list"] >= 1, "an explicit refresh asks again"
+
+
+async def test_one_changed_version_ingests_once_across_repeated_concurrent_hints(
+    onshape: Any,
+    maker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Count full connector invocations and exports, not merely HTTP success.
+
+    One document has several exportable elements: one ingestion may require
+    one translation per element, but the same version is never ingested twice.
+    """
+    fake, meter = onshape
+    secrets = InMemorySecretStore()
+    cache = IntegrationCache(InMemoryCacheStore())
+    registry = _cached_registry(cache)
+    flights = InMemoryCacheStore()
+    source_id = await _seed_shared(maker, secrets)
+    ingestions = 0
+    original_sync = OnshapeConnector.sync
+
+    async def counted_sync(self: OnshapeConnector, ctx: Any) -> Any:
+        nonlocal ingestions
+        ingestions += 1
+        return await original_sync(self, ctx)
+
+    monkeypatch.setattr(OnshapeConnector, "sync", counted_sync)
+
+    async def hint() -> None:
+        await execute_source_sync(
+            source_id=source_id,
+            sessionmaker=maker,
+            registry=registry,
+            secret_store=secrets,
+            store=flights,
+            trigger=SyncTrigger.WEBHOOK,
+        )
+
+    await hint()
+    exports_per_ingestion = meter.by_route["translations_start"]
+    assert ingestions == 1 and exports_per_ingestion > 0
+    fake.bump_microversion()
+    meter.reset()
+    await asyncio.gather(*(hint() for _ in range(8)))
+    await hint()
+    assert ingestions == 2, "one changed version must cause exactly one further ingestion"
+    assert meter.by_route["translations_start"] == exports_per_ingestion
+    meter.reset()
+    await asyncio.gather(*(hint() for _ in range(3)))
+    assert ingestions == 2
+    assert meter.by_route["translations_start"] == 0
+    async with maker() as db:
+        statuses = (await db.scalars(select(Sync.status).where(Sync.source_id == source_id))).all()
+        assert all(status is JobStatus.SUCCEEDED for status in statuses)
+
+
+async def test_expired_payload_cache_does_not_trigger_ingestion(onshape: Any, maker: Any) -> None:
+    fake, meter = onshape
+    secrets = InMemorySecretStore()
+    clock = _Clock()
+    cache = IntegrationCache(InMemoryCacheStore(clock=clock), clock=clock, payload_ttl_seconds=1)
+    registry = _cached_registry(cache)
+    source_id = await _seed_shared(maker, secrets)
+    await _sync_cached(maker, registry, source_id, secrets)
+    clock.now += 2
+    meter.reset()
+    await _sync_cached(maker, registry, source_id, secrets)
+    assert meter.counted == 0
+    assert meter.by_route["translations_start"] == 0

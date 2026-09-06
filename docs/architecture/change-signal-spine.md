@@ -197,3 +197,34 @@ durable, cross-process, and free — and it halves the probe's cost permanently.
   is tracked separately.
 - It does not meter provider quota in credits. Provider quota is a separate budget in a unit Solus
   neither buys nor can convert (ADR-019, amended).
+
+## SOLUSDEV-242 Phase 3 correction — change evidence is mandatory
+
+The previously described `run_sync` gate is now required on every established cloud cursor.
+An ambiguous/failed probe does not mean changed and cannot fall through to an export. Refresh
+expired credentials around the cheap probe, preserving refreshed credentials for any ensuing
+sync. Retryable probe failures retain a source's eligibility for the next change sweep; permanent
+auth failures remain visible. First ingestion and changes to the selected document set are
+legitimate changes. Evicted payload cache entries alone never trigger ingestion.
+
+Account payload/listing and per-source synchronization flights must fail closed if the claim
+cannot be acquired. A waiter cannot proceed unclaimed or release another caller's lease.
+Concurrent duplicate hints are coalesced; once a new version is persisted, later hints skip it.
+The independent worker remains the change producer; no timer or request from canvas zoom,
+selection, dropdown opening, or layout saving probes providers.
+
+I1's cache-only read and exact account/selection binding semantics are specified in the Phase 3
+amendment to `docs/api/API.md`. The historical text above about automatic account rebinding is
+superseded: Add must never switch an existing source to a different grant silently. Provider
+webhook registration is not assumed from OAuth connection; live verification must identify the
+actual configured worker/change-delivery path and count successful ingestions explicitly.
+
+### Phase 3 lease and queue bounds
+
+Payload and source flights renew only while their owner token still matches. Failed, timed-out,
+or lost renewal cancels protected work; bounded release cannot hang cleanup or delete a successor's
+lease. Acquired sync work has a one-hour deadline. An accepted job waiting on another source flight
+stays queued; ARQ defers that specific job by 30 seconds, with a two-hour wall-clock queue bound.
+Cancellation/expiry marks only the matching project's unfinished job, preserves completed work,
+and does not reset a newer synchronization. Other worker jobs retain their existing timeouts.
+A failed change probe never advances the last successful sync timestamp.

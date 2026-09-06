@@ -45,6 +45,8 @@ export interface Project {
 export interface ProjectDetail extends Project {
   stats: { entities: number; relations: number }
   sources: unknown[]
+  /** Authoritative graph modification stamp, including manual writes/deletions. */
+  graph_updated_at?: string | null
 }
 
 export type SourceStatus = 'pending' | 'connected' | 'syncing' | 'error' | 'disconnected'
@@ -124,6 +126,11 @@ export interface Entity {
   domain: string
   name: string
   source_key: string
+  project_id?: string
+  source_id?: string | null
+  origin?: string
+  version?: number
+  properties?: Record<string, unknown>
 }
 
 /** A graph edge between two entities. Public keys mirror `serialize_relation` (API.md §2.4). */
@@ -586,6 +593,26 @@ export function listSources(projectId: string, client: ApiClient = api): Promise
   return client.request<Source[]>(`/projects/${projectId}/sources`)
 }
 
+/** Complete project bindings, including those beyond the source list's first page. */
+export async function listAllSources(
+  projectId: string,
+  client: ApiClient = api
+): Promise<Source[]> {
+  const sources: Source[] = []
+  let cursor: string | null = null
+  const seen = new Set<string>()
+  do {
+    const params = new URLSearchParams({ limit: '200' })
+    if (cursor) params.set('cursor', cursor)
+    const page = await client.requestPage<Source[]>(`/projects/${projectId}/sources?${params}`)
+    sources.push(...page.data)
+    cursor = page.meta.has_next ? (page.meta.next_cursor ?? null) : null
+    if (cursor && seen.has(cursor)) throw new Error('Could not finish reading project sources.')
+    if (cursor) seen.add(cursor)
+  } while (cursor)
+  return sources
+}
+
 /** A single source (used to read entity_count after a sync). */
 export function getSource(
   projectId: string,
@@ -672,10 +699,13 @@ export function revokeConnection(
  *  cache — zero provider calls after the first. `refresh` asks again. */
 export async function listConnectionDocuments(
   connectionId: string,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; cacheOnly?: boolean } = {},
   client: ApiClient = api
 ): Promise<CachedListing<SelectableItem>> {
-  const query = options.refresh ? '?refresh=true' : ''
+  const params = new URLSearchParams()
+  if (options.refresh) params.set('refresh', 'true')
+  if (options.cacheOnly) params.set('cache_only', 'true')
+  const query = params.size ? `?${params}` : ''
   const page = await client.requestPage<SelectableItem[]>(
     `/users/me/connections/${connectionId}/documents${query}`
   )
@@ -1549,4 +1579,15 @@ export async function uploadArtifact(
     body = null
   }
   return unwrapEnvelope<ArtifactRef>(res.status, body)
+}
+
+/** The precise accepted job, scoped by team on the existing jobs API. */
+export interface SyncJob {
+  id: string
+  project_id: string
+  status: SyncStatus | 'cancelled'
+  error: { code?: string; message?: string } | null
+}
+export function getJob(jobId: string, client: ApiClient = api): Promise<SyncJob> {
+  return client.request<SyncJob>(`/jobs/${jobId}`)
 }
