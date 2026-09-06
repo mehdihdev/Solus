@@ -1,5 +1,5 @@
 // One project in the Home grid (SOLUSDEV-242 / HOME H1): name, description,
-// the CURRENT mark when it is the open project, a preview of its own recent
+// a preview of its own recent
 // activity, and the row menu (rename / archive / delete). The card opens the
 // project; when another project is open the footer reads "Switch to" so the
 // user knows they are leaving one and entering another.
@@ -20,7 +20,7 @@ import type { HomeActions } from './useHomeData'
 export interface ProjectCardProps {
   project: Project
   activity: readonly ActivityApi[]
-  /** The open project's id, or null — drives the CURRENT mark and the footer label. */
+  /** The open project's id, or null — drives the footer label (Open / Switch to). */
   currentProjectId: string | null
   canManage: boolean
   canDelete: boolean
@@ -48,22 +48,14 @@ export function ProjectCard({
     <Card
       pad={0}
       data-testid={`project-card-${project.id}`}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        minWidth: 0,
-        borderColor: isCurrent ? 'color-mix(in srgb, var(--acc) 55%, var(--bd))' : undefined
-      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`${footerLabel} ${project.name}`}
+      onClick={open}
+      onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && open()}
+      style={{ display: 'flex', flexDirection: 'column', minWidth: 0, cursor: 'pointer' }}
     >
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={`${footerLabel} ${project.name}`}
-        onClick={open}
-        onKeyDown={(e) => e.key === 'Enter' && open()}
-        className="interactive"
-        style={{ padding: '14px 16px 10px', cursor: 'pointer', flex: 1 }}
-      >
+      <div style={{ padding: '14px 16px 10px', flex: 1 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
           <span style={{ color: 'var(--acc)', marginTop: 1 }}>
             <Icons.graph size={15} />
@@ -86,11 +78,6 @@ export function ProjectCard({
               </div>
             )}
           </div>
-          {isCurrent && (
-            <Mono size={8.5} color="var(--acc)">
-              CURRENT
-            </Mono>
-          )}
           {canManage && (
             <ProjectMenu
               project={project}
@@ -114,7 +101,10 @@ export function ProjectCard({
         <button
           type="button"
           className="interactive"
-          onClick={() => setShowActivity(true)}
+          onClick={(e) => {
+            e.stopPropagation()
+            setShowActivity(true)
+          }}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -131,16 +121,26 @@ export function ProjectCard({
         >
           All activity <Icons.arrowR size={11} />
         </button>
-        <Button kind={isCurrent ? 'ghost' : 'primary'} size="sm" onClick={open}>
+        <Button
+          kind={isCurrent ? 'ghost' : 'primary'}
+          size="sm"
+          onClick={(e) => {
+            e.stopPropagation()
+            open()
+          }}
+        >
           {footerLabel}
         </Button>
       </div>
       {showActivity && (
-        <ProjectActivityModal
-          teamId={project.team_id}
-          project={project}
-          onClose={() => setShowActivity(false)}
-        />
+        // Rendered inside the clickable card: its clicks must not open the project.
+        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <ProjectActivityModal
+            teamId={project.team_id}
+            project={project}
+            onClose={() => setShowActivity(false)}
+          />
+        </div>
       )}
     </Card>
   )

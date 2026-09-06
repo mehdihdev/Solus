@@ -17,12 +17,14 @@
 // offers the move as an explicit, confirmed action naming the projects and the
 // grant — never a side effect of loading Home.
 // Every catalog tool appears: file-export and local tools have no account to
-// link, and the row says where they connect instead.
+// link, so their row offers the open project's Sources page — where such a
+// source is attached — instead of pretending to connect here.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import type { Connection, LegacyConnection } from '../../lib/api/resources'
+import type { WorkspaceProject } from '../../store/workspaceStore'
 import { ConnectWizardModal } from '../onboarding/ConnectWizardModal'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import { integrationLogo } from '../onboarding/integrationLogos'
@@ -293,23 +295,39 @@ function LegacyRow({
   )
 }
 
-/** A tool with no account to link: it connects per project (a committed export
- *  or the local companion), so the row says so instead of pretending. */
-function NoAccountRow({ entry }: { entry: CatalogEntry }): React.JSX.Element {
-  const where =
-    entry.mode === 'local-bridge'
-      ? "Connects on this computer from a project's Sources page — no account to link"
-      : "Connects from a project's Sources page as a committed export — no account to link"
+/** A tool with no account to link: it is attached per project (a committed
+ *  export or the local companion) from that project's Sources page. */
+function NoAccountRow({
+  entry,
+  currentProject,
+  onOpenSources
+}: {
+  entry: CatalogEntry
+  currentProject: WorkspaceProject | null
+  onOpenSources: (() => void) | undefined
+}): React.JSX.Element {
+  const how = entry.mode === 'local-bridge' ? 'Connects on this computer' : 'Committed export'
+  const canAttach = currentProject !== null && onOpenSources !== undefined
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
       <ProviderMark entry={entry} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
-        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{where}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+          {how} · attached per project
+          {!canAttach && ' — open a project to attach it from its Sources page'}
+        </div>
       </div>
-      <Mono size={8.5} color="var(--mut)">
-        PER PROJECT
-      </Mono>
+      {canAttach && (
+        <Button
+          kind="ghost"
+          size="sm"
+          aria-label={`Attach ${entry.name} in ${currentProject.name}`}
+          onClick={onOpenSources}
+        >
+          Attach in {currentProject.name}
+        </Button>
+      )}
     </div>
   )
 }
@@ -335,7 +353,16 @@ function ConnectRow({
   )
 }
 
-export function ConnectedAccountsCard(): React.JSX.Element | null {
+export interface ConnectedAccountsCardProps {
+  /** The open project, whose Sources page attaches per-project tools. */
+  currentProject?: WorkspaceProject | null
+  onOpenSources?: () => void
+}
+
+export function ConnectedAccountsCard({
+  currentProject = null,
+  onOpenSources
+}: ConnectedAccountsCardProps = {}): React.JSX.Element | null {
   const catalog = useIntegrationCatalog()
   const accounts = useAccountConnections()
   const states = useOnboardingStore((s) => s.connections)
@@ -369,7 +396,11 @@ export function ConnectedAccountsCard(): React.JSX.Element | null {
               style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
             >
               {entry.mode !== 'oauth' ? (
-                <NoAccountRow entry={entry} />
+                <NoAccountRow
+                  entry={entry}
+                  currentProject={currentProject}
+                  onOpenSources={onOpenSources}
+                />
               ) : (
                 <>
                   {linked.map((connection) => (

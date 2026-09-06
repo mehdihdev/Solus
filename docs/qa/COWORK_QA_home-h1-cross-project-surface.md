@@ -36,12 +36,12 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
 6. Open the Team screen (rail). Expected: it shows the SAME team you selected on Home. Switch teams on
    the Team screen, go back Home: Home follows. ☐
 
-## Flow 2 — Open, CURRENT, and Switch to
+## Flow 2 — Open and Switch to
 
 1. With no project open (pill reads "No project"), every card's footer reads **Open**. Click Rover's
    footer button. Expected: lands on Rover's Overview; pill reads "Rover". ☐
-2. Return Home. Expected: Rover's card carries a mono **CURRENT** mark and reads **Open**; Arm's card
-   reads **Switch to**. ☐
+2. Return Home. Expected: Rover's card reads **Open**; Arm's card reads **Switch to**. Cards share
+   one subtle border; no card is highlighted. ☐
 3. Click anywhere on Arm's card body (not the ⋯ menu). Expected: Arm's Overview; pill reads "Arm". ☐
 4. Open the Sources screen. Expected: Arm's source only (the GitLab one), never Rover's. ☐
 5. Use the project pill → Rover (stay on Sources). Expected: the list becomes Rover's source only;
@@ -91,13 +91,13 @@ Requires SOL to work. If it cannot, record "SOL unavailable" and skip to Flow 4.
    Expected: it is gone from the grid, ARCHIVED, and the pill. ☐
 7. Sign in as a **viewer** of Team A (or change your role). Expected: no ⋯ menus, no New project tile;
    cards still open. As a **member** or **admin**: ⋯ shows Rename/Archive but not Delete. ☐
-9. Open Rover (pill reads "Rover"), go Home, ⋯ on Rover → Archive. Expected: Rover leaves the grid AND
+8. Open Rover (pill reads "Rover"), go Home, ⋯ on Rover → Archive. Expected: Rover leaves the grid AND
    the pill reads "No project" — the shell never stays scoped to a hidden project. Unarchive it. ☐
-10. Open Rover again, go Home, archive it, expand ARCHIVED, ✕ → Delete project. Expected: the pill
-    reads "No project"; Overview/Sources/Context Model show their no-project state, never Rover's old
-    entities. (Recreate Rover with its source if you still need it for other flows.) ☐
-8. Force a failure (e.g. disconnect the API, then Archive). Expected: toast "That didn't work —
-   Couldn't archive "<name>"."; the card stays. ☐
+9. Open Rover again, go Home, archive it, expand ARCHIVED, ✕ → Delete project. Expected: the pill
+   reads "No project"; Overview/Sources/Context Model show their no-project state, never Rover's old
+   entities. (Recreate Rover with its source if you still need it for other flows.) ☐
+10. Force a failure (e.g. disconnect the API, then Archive). Expected: toast "That didn't work —
+    Couldn't archive "<name>"."; the card stays. ☐
 
 ## Flow 6 — Per-project activity dialog
 

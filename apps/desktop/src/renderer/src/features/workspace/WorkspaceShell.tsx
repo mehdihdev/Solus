@@ -316,7 +316,7 @@ function ScreenView({
   const screen = ((): React.JSX.Element | null => {
     switch (route.name) {
       case 'home':
-        return <HomeScreen onOpenProject={openProject} />
+        return <HomeScreen onOpenProject={openProject} onNavigate={navigate} />
       case 'overview':
         return <ProjectOverview onNavigate={navigate} />
       case 'bench':

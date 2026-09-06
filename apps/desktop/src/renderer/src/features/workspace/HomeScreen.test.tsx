@@ -24,7 +24,14 @@ vi.mock('./useMe', async (importOriginal) => {
 vi.mock('./useProjectActivity', () => ({ useProjectActivity: vi.fn() }))
 // Account connections are their own feature (SOLUSDEV-241); Home only hosts the card.
 vi.mock('./ConnectedAccountsCard', () => ({
-  ConnectedAccountsCard: () => <div data-testid="connected-accounts" />
+  ConnectedAccountsCard: (props: {
+    currentProject?: { name: string } | null
+    onOpenSources?: () => void
+  }) => (
+    <div data-testid="connected-accounts" data-project={props.currentProject?.name ?? ''}>
+      {props.onOpenSources && <button onClick={props.onOpenSources}>sources-link</button>}
+    </div>
+  )
 }))
 
 const READY_ME = { status: 'ready' as const, me: null, name: 'Maya', email: 'maya@example.dev' }
@@ -128,19 +135,18 @@ describe('HomeScreen — the active team’s project grid', () => {
     mockHome()
     const onOpenProject = vi.fn()
     render(<HomeScreen onOpenProject={onOpenProject} />)
-    await userEvent.click(within(card('p1')).getByRole('button', { name: 'Open Rover MK2' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Open Rover MK2' }))
     expect(onOpenProject).toHaveBeenCalledWith({ id: 'p1', name: 'Rover MK2', teamId: 't1' })
   })
 
-  it('marks the open project CURRENT and offers "Switch to" on the others', async () => {
+  it('offers "Open" on the open project and "Switch to" on the others', async () => {
     mockHome()
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
     const onOpenProject = vi.fn()
     render(<HomeScreen onOpenProject={onOpenProject} />)
-    expect(within(card('p1')).getByText('CURRENT')).toBeInTheDocument()
-    expect(within(card('p2')).queryByText('CURRENT')).toBeNull()
     expect(within(card('p1')).getByRole('button', { name: 'Open' })).toBeInTheDocument()
     await userEvent.click(within(card('p2')).getByRole('button', { name: 'Switch to' }))
+    expect(onOpenProject).toHaveBeenCalledTimes(1) // the footer button does not double-fire the card
     expect(onOpenProject).toHaveBeenCalledWith({ id: 'p2', name: 'Arm', teamId: 't1' })
   })
 
@@ -178,6 +184,18 @@ describe('HomeScreen — the active team’s project grid', () => {
     expect(within(dialog).getByText(/created the project/)).toBeInTheDocument()
     await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+describe('HomeScreen — connected accounts wiring', () => {
+  it('hands the card the open project and a way to its Sources page', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
+    const onNavigate = vi.fn()
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={onNavigate} />)
+    expect(screen.getByTestId('connected-accounts')).toHaveAttribute('data-project', 'Rover MK2')
+    await userEvent.click(screen.getByText('sources-link'))
+    expect(onNavigate).toHaveBeenCalledWith('sources')
   })
 })
 

@@ -236,14 +236,29 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByText(/Couldn't move this Onshape connection/)).toBeInTheDocument()
   })
 
-  it('lists every catalog tool — file-export and local tools say where they connect instead, after the account tools', () => {
+  it('lists every catalog tool after the account tools; a per-project tool attaches from the open project', async () => {
     mockAccounts()
-    render(<ConnectedAccountsCard />)
-    expect(screen.getByText('KiCad')).toBeInTheDocument()
+    const onOpenSources = vi.fn()
+    render(
+      <ConnectedAccountsCard
+        currentProject={{ id: 'p1', name: 'Rover', teamId: 't1' }}
+        onOpenSources={onOpenSources}
+      />
+    )
     const names = screen.getAllByText(/^(Onshape|KiCad)$/).map((n) => n.textContent)
     expect(names).toEqual(['Onshape', 'KiCad'])
-    expect(screen.getByText(/committed export — no account to link/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Connect KiCad' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Attach KiCad in Rover' }))
+    expect(onOpenSources).toHaveBeenCalled()
+  })
+
+  it('without an open project a per-project tool says so and offers no button', () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    expect(
+      screen.getByText(/open a project to attach it from its Sources page/)
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /attach kicad/i })).toBeNull()
   })
 
   it('offers Re-authorize for a grant whose last sign-in failed', () => {

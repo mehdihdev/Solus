@@ -35,9 +35,10 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
    that row, no separate Connect for Onshape. ☐
 3. Reload Home. Expected: the same single row (nothing moved, no duplicates). ☐
 4. **Rover → Sources → Sync now**. Expected: the sync runs on the project's own token as before. ☐
-5. The card also lists **KiCad** and **Altium** with "Connects from a project's Sources page as a
-   committed export — no account to link" and a PER PROJECT mark, and any local companion tool with
-   "Connects on this computer…" — no Connect button on those rows. ☐
+5. The card also lists **KiCad** and **Altium** ("Committed export · attached per project") and any
+   local companion tool ("Connects on this computer · attached per project"). With Rover open each
+   has an **Attach in Rover** button that lands on Rover's Sources page; with no project open the
+   row reads "open a project to attach it from its Sources page" and has no button. ☐
 
 ## Flow 2 — One sign-in moves it; a second project needs no OAuth
 

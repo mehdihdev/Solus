@@ -13,7 +13,7 @@ import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceS
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
 import { useOfflineReason } from './workspaceOnline'
-import { useShellStore } from './shellStore'
+import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal, JoinTeamModal } from './modals'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
 import { ProjectGrid } from './ProjectGrid'
@@ -21,6 +21,8 @@ import { TeamSelect } from './TeamSelect'
 
 export interface HomeScreenProps {
   onOpenProject: (project: WorkspaceProject) => void
+  /** Rail navigation (the connected-accounts card jumps to the open project's Sources page). */
+  onNavigate?: (screen: MainScreen) => void
 }
 
 /** Surface a failed background mutation (archive/unarchive) via the shell toast. */
@@ -28,7 +30,7 @@ function toastActionFailed(body: string): void {
   useShellStore.getState().setToast({ kind: 'warn', title: "That didn't work", body })
 }
 
-export function HomeScreen({ onOpenProject }: HomeScreenProps): React.JSX.Element {
+export function HomeScreen({ onOpenProject, onNavigate }: HomeScreenProps): React.JSX.Element {
   const me = useMe()
   const home = useHomeData()
   const greeting = `Welcome back, ${displayName(me.name, me.email)}`
@@ -50,7 +52,7 @@ export function HomeScreen({ onOpenProject }: HomeScreenProps): React.JSX.Elemen
         {home.status === 'offline' ? (
           <OfflineHome />
         ) : (
-          <LiveHome home={home} onOpenProject={onOpenProject} />
+          <LiveHome home={home} onOpenProject={onOpenProject} onNavigate={onNavigate} />
         )}
       </div>
     </div>
@@ -59,12 +61,15 @@ export function HomeScreen({ onOpenProject }: HomeScreenProps): React.JSX.Elemen
 
 function LiveHome({
   home,
-  onOpenProject
+  onOpenProject,
+  onNavigate
 }: {
   home: HomeData
   onOpenProject: HomeScreenProps['onOpenProject']
+  onNavigate: HomeScreenProps['onNavigate']
 }): React.JSX.Element {
-  const currentProjectId = useWorkspaceStore((s) => s.project?.id ?? null)
+  const currentProject = useWorkspaceStore((s) => s.project)
+  const currentProjectId = currentProject?.id ?? null
   const [creatingProject, setCreatingProject] = useState(false)
   const [creatingTeam, setCreatingTeam] = useState(false)
   const [joining, setJoining] = useState(false)
@@ -126,7 +131,10 @@ function LiveHome({
         )}
         {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
             once; each project picks what it tracks on its Sources page. */}
-        <ConnectedAccountsCard />
+        <ConnectedAccountsCard
+          currentProject={currentProject}
+          onOpenSources={onNavigate ? () => onNavigate('sources') : undefined}
+        />
       </div>
 
       {creatingProject && (

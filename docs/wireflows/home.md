@@ -10,7 +10,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 | Welcome back, Maya                                                                    |
 | Projects in Strider  [Strider ▾]                              [✉ Join team] [👥 New team] |
 |                                                                                       |
-| ┌─ Rover MK2 ──────── CURRENT ⋯ ┐ ┌─ Arm ───────────────── ⋯ ┐ ┌ ┄┄┄┄┄┄┄┄┄┄┄┄┄ ┐  ┌ CONNECTED ACCOUNTS ┐ |
+| ┌─ Rover MK2 ──────────────── ⋯ ┐ ┌─ Arm ───────────────── ⋯ ┐ ┌ ┄┄┄┄┄┄┄┄┄┄┄┄┄ ┐  ┌ CONNECTED ACCOUNTS ┐ |
 | │ six-wheel rover                │ │                          │ ┆   + New project  ┆  │ GitHub   Connect  │ |
 | │ RECENT ACTIVITY                │ │ RECENT ACTIVITY          │ ┆                  ┆  │ GitLab   Connect  │ |
 | │ connected github "…" · 2h ago  │ │ created the project · 1d │ └ ┄┄┄┄┄┄┄┄┄┄┄┄┄ ┘  │ Onshape  Connect  │ |
@@ -53,16 +53,17 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 | [Gl] GitLab                                                                 |
 |      Not connected                                            [Connect]     |
 | [Ki] KiCad                                                                  |
-|      Connects from a project's Sources page as a committed     PER PROJECT  |
-|      export — no account to link                                            |
+|      Committed export · attached per project           [Attach in Rover]    |
 | [Fu] Fusion 360 (local)                                                     |
-|      Connects on this computer from a project's Sources page   PER PROJECT  |
+|      Connects on this computer · attached per project  [Attach in Rover]    |
 ```
 
 - **Every tool the registry knows is listed** — a missing row reads as
   "unsupported". OAuth tools link an account here; committed-export tools
-  (KiCad, Altium) and local-companion tools connect per project from the
-  project's Sources page, and their row says so instead of offering a Connect.
+  (KiCad, Altium) and local-companion tools are attached per project, so their
+  row offers **Attach in <open project>**, which opens that project's Sources
+  page (where the source is added). With no project open the row says "open a
+  project to attach it from its Sources page" and has no button.
 - **Connect** opens the connect wizard in account mode (rail
   `Choose access → Sign in`; no document picking here — that is the project's
   Sources page, W2).
@@ -97,7 +98,10 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 ## Project grid
 
 - One card per live project of the active team: accent graph glyph, name
-  (bold, ellipsised), description, `CURRENT` mono mark on the open project.
+  (bold, ellipsised), description. The open project is told apart only by its
+  footer (`Open` vs `Switch to`) — no mark, no accent border: cards share the
+  standard card border, and the whole card is the click target (hover tint and
+  focus ring on the card's own edge).
 - **Recent activity per project**: up to 2 rows (`PROJECT_CARD_ACTIVITY_COUNT`)
   of that project's own events, humanised (`activityText`) with relative time.
   Rows come from ONE fetch of the team feed (`GET /teams/{id}/activity?limit=50`)
