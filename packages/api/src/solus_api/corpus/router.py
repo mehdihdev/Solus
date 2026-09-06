@@ -1,6 +1,8 @@
 """`/api/v1/corpus` — the served view of the shipped corpus (docs/api/corpus.md).
 
-Read-only by design: the only write path is `corpus.ingest`. Cross-tenant on
+Read-only by design: the only write path is `corpus.ingest`. Search is full-text
+only here — embedding a caller-supplied string per request would expose the
+unmetered embed seam to every authenticated user. Cross-tenant on
 purpose — every authenticated user reads the same chunks; the boundary is what
 a row cannot contain. Only `status = active` rows exist over HTTP (a draft is a
 404, not a leak of unreviewed text); a `withdrawn` chunk resolves with an empty
@@ -12,14 +14,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.corpus.enums import Status
-from solus_api.corpus.retrieval import EmbedFn, corpus_hits
+from solus_api.corpus.retrieval import corpus_hits
 from solus_api.corpus.schema import (
     CitationRole,
     CorpusChunkRow,
@@ -33,11 +35,6 @@ router = APIRouter(prefix="/api/v1/corpus", tags=["corpus"])
 MAX_QUERY_CHARS = 500
 MAX_LIMIT = 20
 EXCERPT_CHARS = 280
-
-
-def _embed_fn(request: Request) -> EmbedFn | None:
-    fn: EmbedFn | None = getattr(request.app.state, "corpus_embed", None)
-    return fn
 
 
 @router.get("/manifest")
@@ -65,15 +62,15 @@ async def get_manifest(_: CurrentUser, session: SessionDep) -> dict[str, Any]:
 async def search(
     _: CurrentUser,
     session: SessionDep,
-    request: Request,
     q: Annotated[str, Query(min_length=1, max_length=MAX_QUERY_CHARS)],
     domain: Annotated[list[str] | None, Query()] = None,
     topic: Annotated[list[str] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 5,
 ) -> dict[str, Any]:
-    hits = await corpus_hits(
-        session, text=q, k=limit, domains=domain, topics=topic, embed=_embed_fn(request)
-    )
+    # Full-text only over HTTP (§7 cost control): the embed seam is unmetered and
+    # Solus-paid, so it serves SOL turns — which are admission-capped — and never
+    # an arbitrary authenticated request. 100-odd curated chunks rank well on text.
+    hits = await corpus_hits(session, text=q, k=limit, domains=domain, topics=topic)
     return envelope(
         [
             {

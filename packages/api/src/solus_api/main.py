@@ -314,17 +314,15 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # decision (ADR-018 ambient posture; volume is bounded by the metered,
     # frequency-capped turn admission) and degrade loudly to full-text retrieval
     # while `openai_api_key` is unseeded.
-    sol_embed = build_embed_fn(app.state.secret_store, allow_unmetered=True)
     app.state.sol_systems = DbSolSystems(
         app.state.sessionmaker,
         app.state.telemetry_plumbing,
-        embed=sol_embed,
+        embed=build_embed_fn(app.state.secret_store, allow_unmetered=True),
         # SYS-05: TTL'd semantic cache over the retrieval feeds (hit-rate logged).
         cache=SemanticCache(),
     )
-    # CORPUS C2 (ADR-036): the same unmetered embed seam serves corpus search;
-    # keyless environments degrade to full-text exactly as SOL's own pull does.
-    app.state.corpus_embed = sol_embed
+    # CORPUS C2 (ADR-036): the corpus is pulled through this same DbSolSystems
+    # (rag_query source_type "corpus"); the HTTP search route is full-text only.
     # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
     # + the §4.5 upload-route budgets (separate from the global rate limiter).
     app.state.artifact_store = build_artifact_store(resolved_settings)

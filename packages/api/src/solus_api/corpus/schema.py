@@ -20,7 +20,6 @@ including after withdrawal.
 from __future__ import annotations
 
 import enum
-import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -36,7 +35,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    Uuid,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
@@ -154,7 +152,3 @@ class CorpusRelease(UuidPkMixin, Base):
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     chunk_count: Mapped[int] = mapped_column(Integer)
     manifest_hash: Mapped[str] = mapped_column(String(72))
-
-
-#: Referenced so linters keep the import the tripwire test greps for.
-_ = (uuid, Uuid)

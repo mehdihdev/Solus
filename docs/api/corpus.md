@@ -1,4 +1,4 @@
-# §2.18 Engineering corpus (`/api/v1/corpus`) — CORPUS C2 (SOLUSDEV-241)
+# §2.20 Engineering corpus (`/api/v1/corpus`) — CORPUS C2 (SOLUSDEV-241)
 
 > **Tier-1 amendment** (ADR-032): docs/api had no corpus plan; this file was added with the
 > implementation and is called out in the completion report. Authority: ADR-036,
@@ -40,9 +40,10 @@ Query: `q` (1–500 chars, required), `domain` (repeatable, `mechanical|electric
 `topic` (repeatable, a `SCOPE.md` §4 topic value), `limit` (1–20, default 5).
 
 Filters are WHERE clauses (a `domain` filter can never return another domain's chunk); an unknown
-`domain`/`topic` value yields an empty list, never a widened search. Ranking is ANN when the
-server has an embedding key and English full-text otherwise; scores are comparable within one
-response only.
+`domain`/`topic` value yields an empty list, never a widened search. Ranking over HTTP is English
+full-text only (CLAUDE.md §7 cost control: the unmetered embed seam serves admission-capped SOL
+turns, never an arbitrary request); SOL's own corpus pull uses ANN when a key is configured.
+Scores are comparable within one response only.
 
 `200`:
 

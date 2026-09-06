@@ -45,7 +45,16 @@ MIGRATE_TIMEOUT="${SOLUS_MIGRATE_TIMEOUT_SECONDS:-120}"
 echo "[solus-api] applying migrations (alembic upgrade head, timeout ${MIGRATE_TIMEOUT}s)"
 cd /app/packages/api
 timeout "$MIGRATE_TIMEOUT" uv run --no-sync --package solus-api alembic upgrade head
-echo "[solus-api] migrations at head — starting uvicorn"
+echo "[solus-api] migrations at head"
+# CORPUS C2 (ADR-036): apply the shipped engineering corpus. Idempotent — an
+# unchanged tree is a no-op, a new corpus_version upserts/withdraws by id, and
+# vectors backfill only where missing. Never blocks serving: a failed ingest
+# leaves the previous corpus in place and is reported in the log.
+CORPUS_TIMEOUT="${SOLUS_CORPUS_INGEST_TIMEOUT_SECONDS:-300}"
+echo "[solus-api] applying the engineering corpus (timeout ${CORPUS_TIMEOUT}s)"
+timeout "$CORPUS_TIMEOUT" uv run --no-sync --package solus-api python -m solus_api.corpus ingest \
+    || echo "[solus-api] corpus ingest FAILED — serving the previously applied corpus"
+echo "[solus-api] starting uvicorn"
 cd /app
 exec uv run --no-sync --package solus-api uvicorn --factory solus_api.main:create_app \
     --host 0.0.0.0 --port 8000

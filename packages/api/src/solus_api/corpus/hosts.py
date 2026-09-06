@@ -8,6 +8,14 @@ forbids exactly that. Citations in `further_reading`/`checked_against` may use
 any host from any class (the union) — they are pointers, not provenance.
 
 Entries starting with "." match any subdomain; others match exactly.
+
+Deliberately broad entries — `github.com`, `gitlab.com`, `.readthedocs.io`,
+`.mil` — admit any repository, docs site, or service host. That is correct for
+their classes: LICENSING.md §4.8 classifies open-source documentation by the
+LICENSE file in the repository, not by the host, and §4.2 by the document's
+own copyright line. The allowlist is the net under the reviewer (it stops
+mirrors, aggregators, and community hosts); the licence recorded on the chunk,
+signed by the reviewer, is the gate.
 """
 
 from __future__ import annotations
@@ -168,7 +176,6 @@ _STANDARDS: Final = frozenset(
         ".jisc.go.jp",
         "ros.org",
         ".ros.org",
-        "iso20022.org",
     }
 )
 _PROJECT_DOCS: Final = frozenset(

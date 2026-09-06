@@ -132,17 +132,17 @@ the `credit_ledger` row for attribution, and still meters the **invoking user** 
 
 ### 2.3 Projects
 
-| Method | Path                                      | Description                                                                                                   |
-| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/teams/{team_id}/projects`        | List projects with dashboard summary counts; `?include_archived=true` to include archived (added SOLUSDEV-84) |
-| POST   | `/api/v1/teams/{team_id}/projects`        | Create project (notifies other team members)                                                                  |
-| GET    | `/api/v1/projects/{project_id}`           | Project detail (incl. connected-source summary, graph stats)                                                  |
-| PATCH  | `/api/v1/projects/{project_id}`           | Update name/description/settings                                                                              |
-| POST   | `/api/v1/projects/{project_id}/archive`   | Archive (soft delete; leaves default listing, keeps graph) — added SOLUSDEV-84                                |
-| POST   | `/api/v1/projects/{project_id}/unarchive` | Restore an archived project — added SOLUSDEV-84                                                               |
-| —      | `/api/v1/projects/{project_id}/solus…`    | The project-level `.solus` (SOLUSDEV-240) — full plan in [solus.md](solus.md)                                 |
-| GET/PUT | `/api/v1/projects/{project_id}/workspace-layout` | Project-shared, versioned graph coordinates (SOLUSDEV-242); [workspace.md](workspace.md) |
-| DELETE | `/api/v1/projects/{project_id}`           | Delete (admin, confirmation required)                                                                         |
+| Method  | Path                                             | Description                                                                                                   |
+| ------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| GET     | `/api/v1/teams/{team_id}/projects`               | List projects with dashboard summary counts; `?include_archived=true` to include archived (added SOLUSDEV-84) |
+| POST    | `/api/v1/teams/{team_id}/projects`               | Create project (notifies other team members)                                                                  |
+| GET     | `/api/v1/projects/{project_id}`                  | Project detail (incl. connected-source summary, graph stats)                                                  |
+| PATCH   | `/api/v1/projects/{project_id}`                  | Update name/description/settings                                                                              |
+| POST    | `/api/v1/projects/{project_id}/archive`          | Archive (soft delete; leaves default listing, keeps graph) — added SOLUSDEV-84                                |
+| POST    | `/api/v1/projects/{project_id}/unarchive`        | Restore an archived project — added SOLUSDEV-84                                                               |
+| —       | `/api/v1/projects/{project_id}/solus…`           | The project-level `.solus` (SOLUSDEV-240) — full plan in [solus.md](solus.md)                                 |
+| GET/PUT | `/api/v1/projects/{project_id}/workspace-layout` | Project-shared, versioned graph coordinates (SOLUSDEV-242); [workspace.md](workspace.md)                      |
+| DELETE  | `/api/v1/projects/{project_id}`                  | Delete (admin, confirmation required)                                                                         |
 
 ### 2.4 Graph — entities & relations (ADR-001, the core)
 
@@ -242,17 +242,17 @@ Warnings are the durable output of checker runs and change-triggered ambient che
 
 All agent endpoints are **metered**, rate-limited, and budget-guarded (ADR-018/019). Tool calls proposed by the model are validated server-side; any real-world action requires explicit user approval (§7) via the actions sub-resource. Context is assembled fresh per request, team-scoped only.
 
-| Method | Path                                                                                              | Description                                                                                                                                           |
-| ------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/api/v1/projects/{project_id}/agent/conversations`                                               | Start conversation: `{ message, context?: { entity_ids?, warning_id?, anomaly_id?, error_id? } }` → returns conversation; first response streams (§3) |
-| GET    | `/api/v1/projects/{project_id}/agent/conversations`                                               | List conversations                                                                                                                                    |
-| GET    | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}`                             | Full transcript: messages, tool invocations, diagnoses, proposed fixes                                                                                |
-| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/messages`                    | Send message. Response: `text/event-stream` (SSE) of tokens, tool-call status, final diagnosis. Respects SOL mode; body may carry the desktop's `preferences` (the user's `~/.solus/preferences.json`, SOLUSDEV-244) — fenced into the system prompt, never stored                                     |
-| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/cancel`                      | Cancel in-flight run (loop-guard surface)                                                                                                             |
-| GET    | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions`                     | Pending proposed actions awaiting approval                                                                                                            |
-| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions/{action_id}/approve` | Approve a concrete shown action (deploy, modify external system, delete graph data). **No silent execution**                                          |
-| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions/{action_id}/reject`  | Reject proposed action                                                                                                                                |
-| DELETE | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}`                             | Delete conversation                                                                                                                                   |
+| Method | Path                                                                                              | Description                                                                                                                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST   | `/api/v1/projects/{project_id}/agent/conversations`                                               | Start conversation: `{ message, context?: { entity_ids?, warning_id?, anomaly_id?, error_id? } }` → returns conversation; first response streams (§3)                                                                                                              |
+| GET    | `/api/v1/projects/{project_id}/agent/conversations`                                               | List conversations                                                                                                                                                                                                                                                 |
+| GET    | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}`                             | Full transcript: messages, tool invocations, diagnoses, proposed fixes                                                                                                                                                                                             |
+| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/messages`                    | Send message. Response: `text/event-stream` (SSE) of tokens, tool-call status, final diagnosis. Respects SOL mode; body may carry the desktop's `preferences` (the user's `~/.solus/preferences.json`, SOLUSDEV-244) — fenced into the system prompt, never stored |
+| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/cancel`                      | Cancel in-flight run (loop-guard surface)                                                                                                                                                                                                                          |
+| GET    | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions`                     | Pending proposed actions awaiting approval                                                                                                                                                                                                                         |
+| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions/{action_id}/approve` | Approve a concrete shown action (deploy, modify external system, delete graph data). **No silent execution**                                                                                                                                                       |
+| POST   | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions/{action_id}/reject`  | Reject proposed action                                                                                                                                                                                                                                             |
+| DELETE | `/api/v1/projects/{project_id}/agent/conversations/{conversation_id}`                             | Delete conversation                                                                                                                                                                                                                                                |
 
 ### 2.10 Live Bench (feature area 6, ADR-014)
 
@@ -422,6 +422,18 @@ prunes its canvas slots (widget-bundles.md §5). Data events: `widget_bundle.rou
 `widget_bundle.tool_registered`; `extension.uninstall` payload widened.
 
 ---
+
+### 2.20 Engineering corpus (SOLUSDEV-241, CORPUS C2 / ADR-036) — full plan in [corpus.md](corpus.md)
+
+Read-only, authenticated, **cross-tenant by design** (the boundary is what a row cannot contain,
+not who reads it); the only write path is the deploy step `python -m solus_api.corpus ingest`.
+§2.19 is reserved for extension pins (STORE ST3/ST4).
+
+| Method | Path                               | Purpose                                                            |
+| ------ | ---------------------------------- | ------------------------------------------------------------------ |
+| GET    | `/api/v1/corpus/manifest`          | The applied corpus version, chunk count, manifest hash             |
+| GET    | `/api/v1/corpus/search`            | Full-text search with `domain`/`topic` WHERE filters, `limit` ≤ 20 |
+| GET    | `/api/v1/corpus/chunks/{chunk_id}` | Served view of one active or withdrawn chunk; drafts are `404`     |
 
 ## 3. Realtime — WebSocket & SSE
 
