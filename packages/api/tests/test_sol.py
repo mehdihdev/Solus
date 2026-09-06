@@ -351,6 +351,80 @@ async def test_a_mention_from_another_team_is_inert_not_an_error(
     assert "Bob Secret Part" not in foreign.text
 
 
+async def test_preferences_reach_the_runner_as_labelled_sections(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """SOLUSDEV-244: the desktop's `~/.solus/preferences.json` rides along with
+    the turn; the runner receives only the labelled, non-empty sections."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={
+            "content": "what clearance for the 48 V rail?",
+            "preferences": {
+                "schema_version": 1,
+                "updatedAt": "2026-09-06T12:00:00Z",
+                "freeText": "",
+                "codeStyle": "",
+                "mechanical": "",
+                "electrical": "Prefer 0.1 mm clearance minimum on all boards.",
+                "documentation": "",
+                "unitsStandards": "SI units.",
+            },
+        },
+        headers=alice_headers,
+    )
+
+    assert resp.status_code == 200
+    assert runner.ctx.engineering_preferences == {
+        "Electrical": "Prefer 0.1 mm clearance minimum on all boards.",
+        "Units and standards": "SI units.",
+    }
+
+
+async def test_empty_or_absent_preferences_reach_the_runner_as_none(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    resp = await client.post(url, json={"content": "hi"}, headers=alice_headers)
+    assert resp.status_code == 200
+    assert runner.ctx.engineering_preferences is None
+
+    resp = await client.post(
+        url, json={"content": "hi", "preferences": {"freeText": "   "}}, headers=alice_headers
+    )
+    assert resp.status_code == 200
+    assert runner.ctx.engineering_preferences is None
+
+
+async def test_oversized_or_malformed_preferences_are_rejected_at_the_boundary(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """A non-desktop caller cannot smuggle an unbounded or unknown-field
+    document into the system prompt: the caps and strict shape hold here too."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    too_long = await client.post(
+        url, json={"content": "hi", "preferences": {"electrical": "e" * 801}}, headers=alice_headers
+    )
+    assert too_long.status_code == 422
+    unknown = await client.post(
+        url, json={"content": "hi", "preferences": {"toggles": {}}}, headers=alice_headers
+    )
+    assert unknown.status_code == 422
+
+
 async def test_more_mentions_than_the_anchor_cap_is_rejected(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:

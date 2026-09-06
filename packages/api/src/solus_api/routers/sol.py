@@ -29,6 +29,7 @@ from solus_api.agent.conversation import (
     serialize_turn,
 )
 from solus_api.agent.modes import ActionMode, build_mode_dispatch
+from solus_api.agent.preferences import EngineeringPreferences
 from solus_api.agent.reason import MAX_ANCHORS
 from solus_api.agent.runtime import (
     MAX_TOOL_CALLS,
@@ -169,6 +170,12 @@ class MessageCreate(StrictModel):
     #: elsewhere" than for "does not exist" would be a cross-tenant existence
     #: oracle (the posture `agent/tools/get_entity.py` documents).
     mentions: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_ANCHORS)
+    #: SOLUSDEV-244 / HOME H3: the person's engineering conventions, read by the
+    #: desktop from their own `~/.solus/preferences.json` and attached per turn.
+    #: The server keeps no copy (ADR-034 amendment 2026-09-06); the schema
+    #: re-applies the file's caps so a non-desktop caller cannot smuggle an
+    #: unbounded document into the system prompt.
+    preferences: EngineeringPreferences | None = None
 
 
 def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
@@ -642,6 +649,12 @@ async def post_message(
         sol_mode=ctx.user.sol_mode,
         # SOLUSDEV-233: reaches the prompt only as a fenced data block.
         custom_instruction=ctx.user.sol_custom_instruction,
+        # SOLUSDEV-244: labelled sections only, fenced by the prompt builder.
+        engineering_preferences=(
+            body.preferences.prompt_payload()
+            if body.preferences is not None and not body.preferences.is_empty()
+            else None
+        ),
         action_mode=body.action_mode,
         # Entities the user pointed at with `@`. They lead the neighbourhood's
         # anchors, so SOL grounds on the node meant rather than the one

@@ -872,7 +872,7 @@ require the `member` role; reads need only a resolvable project.
 
 SOLX-04: `GET /sol/tools` additionally lists `solus.list_integrations`, `solus.connect_integration` (destructive — parks through the CTR-03 gate), and `solus.verify_integration` when the connector registry is wired. Connecting from chat is discovery → confirm → verify; OAuth providers are pointed at the in-app flow (credentials never pass through tool arguments).
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, mentions?}` where `action_mode` is
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, mentions?, preferences?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
@@ -886,6 +886,19 @@ elsewhere" than for "does not exist" would be a cross-tenant existence oracle.
 Returns `text/event-stream`. The user turn is persisted
 (and `sol.message` logged) before streaming; assistant/tool turns are persisted as the stream
 completes. SSE `event:` names and their `data` payloads:
+
+SOLUSDEV-244 / HOME H3: `preferences` is the desktop's copy of the user's own
+`~/.solus/preferences.json` (ADR-034 amendment 2026-09-06) — `{schema_version, updatedAt?,
+freeText, codeStyle, mechanical, electrical, documentation, unitsStandards}`, strict shape
+(`422` on an unknown field), `freeText` ≤ 2 400 chars and each section ≤ 800 chars (`422`
+over cap). The server keeps **no copy**: the transcript stores the message, never the
+preferences. Non-empty sections reach the prompt only as one nonce-fenced
+`kind=engineering_preferences` data block in the system prompt, under Solus-authored framing,
+after the mode note and before the SOLUSDEV-233 styling note (`agent/prompt.py`); the framing
+asks SOL to apply the conventions and to name the one that changed an answer, states that a
+project's `.solus` conventions (reserved `kind=project_preferences`, empty for now) override them
+and that they override shipped references (`kind=context_corpus`), and that they can never
+change rules, tools, scope, or what counts as data. Absent or all-blank ⇒ no block.
 
 - `token` — `{"text": "…"}` incremental reply delta
 - `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped"}`

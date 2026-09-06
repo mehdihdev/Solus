@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     ParkFn = Callable[[_ToolCallHint], Awaitable[ParkedCall | None]]
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -368,6 +368,11 @@ class AgentRunContext:
     #: SOLUSDEV-233: the user's saved preference note. Reaches the prompt only
     #: through prompt.system_prompt's fenced data block, never as raw text.
     custom_instruction: str | None = None
+    #: SOLUSDEV-244: the person's engineering conventions (from their own
+    #: `~/.solus/preferences.json`, attached to the turn and validated by
+    #: `agent/preferences.py`), already labelled. Reaches the prompt only through
+    #: prompt.system_prompt's fenced data block, never as raw text.
+    engineering_preferences: Mapping[str, str] | None = None
     history: tuple[TurnView, ...] = ()
     #: SOLUSDEV-168: graph entities the user pointed at explicitly (the
     #: composer's `@`). They become the neighbourhood's anchors, so SOL is
@@ -625,7 +630,9 @@ class LlmRunner:
             # generic error event, and it is obvious in dev.
             raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
 
-        system = prompt.system_prompt(ctx.sol_mode, ctx.custom_instruction)
+        system = prompt.system_prompt(
+            ctx.sol_mode, ctx.custom_instruction, ctx.engineering_preferences
+        )
         tools = prompt.tool_specs(ctx.tools)
         nonce = prompt.new_nonce()
         # SOL-02: plan what to pull (deterministic, no model call), assemble
