@@ -1584,3 +1584,24 @@ class WidgetLayout(UuidPkMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     layout: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+
+class UserExtensionPin(UuidPkMixin, TimestampMixin, Base):
+    """SOLUSDEV-246 (STORE ST3) — "Pin for all projects". One row per (user,
+    extension): the extension's tab shows in EVERY project this user opens,
+    installed there or not. Account state, not project state: a pin carries no
+    grants, installs nothing and is never visible to teammates. Reads filter
+    `user_id = current_user.id`; the catalog row's soft delete hides the pin.
+    Hard-deleted on unpin; the history is in `data_events`."""
+
+    __tablename__ = "user_extension_pins"
+    __table_args__ = (
+        UniqueConstraint("user_id", "extension_id", name="uq_user_extension_pins_user_extension"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    extension_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("extensions.id", ondelete="CASCADE"), index=True
+    )

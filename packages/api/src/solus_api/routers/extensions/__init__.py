@@ -10,7 +10,15 @@ this module itself defines no routes.
 
 from fastapi import APIRouter
 
-from solus_api.routers.extensions import bundle, catalog, installs, policy, publish, review
+from solus_api.routers.extensions import (
+    bundle,
+    catalog,
+    installs,
+    pins,
+    policy,
+    publish,
+    review,
+)
 
 router = APIRouter()
 # Order matters under the shared `/api/v1/extensions` prefix: the literal paths
@@ -21,6 +29,7 @@ for sub in (
     bundle.router,
     catalog.router,
     installs.router,
+    pins.router,
     policy.router,
 ):
     router.include_router(sub)
