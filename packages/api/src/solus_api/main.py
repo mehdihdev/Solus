@@ -65,6 +65,7 @@ from solus_api.routers import (
     sol,
     solus_config,
     sources,
+    sourcing,
     teams,
     users,
     webhooks,
@@ -401,4 +402,5 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(extensions.router)
     # SOLUSDEV-246: first-party bundle capability routes (widget-bundles.md §3).
     app.include_router(widgets.router)
+    app.include_router(sourcing.router)
     return app

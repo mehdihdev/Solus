@@ -178,6 +178,8 @@ class JobKind(enum.StrEnum):
     SIM_REBUILD = "sim_rebuild"
     # SOLUSDEV-235 / ADR-035 §5: validates a published extension bundle.
     EXTENSION_REVIEW = "extension_review"
+    # SOLUSDEV-246 (STORE ST5): one sourcing request → candidate parts (metered model call).
+    SOURCING = "sourcing"
 
 
 class ExtensionReviewStatus(enum.StrEnum):
@@ -1605,3 +1607,35 @@ class UserExtensionPin(UuidPkMixin, TimestampMixin, Base):
     extension_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("extensions.id", ondelete="CASCADE"), index=True
     )
+
+
+class SourcingRequest(UuidPkMixin, TimestampMixin, Base):
+    """SOLUSDEV-246 (STORE ST5) — one sourcing request: the requirement (typed
+    or CAD-derived), the torque Solus derived, the job that ran the metered
+    model call, and its outcome — candidates with trade-offs, exclusions with
+    the rule text — plus the selection that entered the graph as PLANNED.
+    Project-scoped (`ProjectCtx`); the model's answer is stored as DATA."""
+
+    __tablename__ = "sourcing_requests"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None, index=True
+    )
+    status: Mapped[JobStatus] = mapped_column(_enum_column(JobStatus), default=JobStatus.QUEUED)
+    #: "workspace" | "bom" — which door asked (events + copy), never authorization.
+    door: Mapped[str] = mapped_column(String(16), default="bom")
+    spec: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    torque: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    assembly_entity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
+    candidates: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    excluded: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    rules: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    model: Mapped[str | None] = mapped_column(String(128), default=None)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
+    selected_candidate_id: Mapped[str | None] = mapped_column(String(32), default=None)
+    selected_entity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

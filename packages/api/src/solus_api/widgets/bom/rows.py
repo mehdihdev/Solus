@@ -74,7 +74,9 @@ _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 @dataclass(frozen=True)
 class Observation:
-    """A connector-owned part as the BOM reads it."""
+    """A connector-owned part as the BOM reads it — or a MANUAL planned part
+    (STORE ST5 sourcing), which additionally carries its own lifecycle,
+    supplier, unit cost and quantity."""
 
     id: uuid.UUID
     kind: str
@@ -85,6 +87,10 @@ class Observation:
     manufacturer: str | None
     canonical_part_id: uuid.UUID | None
     is_assembly: bool = False
+    lifecycle: str | None = None
+    supplier: str | None = None
+    unit_cost: float | None = None
+    quantity: int | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +203,26 @@ def _manufacturer(attrs: dict[str, Any]) -> str | None:
     return None
 
 
+def _manual_fields(entity: GraphEntity) -> dict[str, Any]:
+    """A manual part's own BOM facts (a sourced part enters as `planned` with
+    its supplier and cost); connector rows never carry these."""
+    if entity.origin != "manual":
+        return {}
+    attrs = entity.attrs or {}
+    lifecycle = attrs.get("lifecycle")
+    quantity = attrs.get("quantity")
+    return {
+        "lifecycle": lifecycle if lifecycle in LIFECYCLE_STATES else None,
+        "supplier": _str(attrs.get("supplier"), TEXT_MAX),
+        "unit_cost": _number(attrs.get("unit_cost")),
+        "quantity": (
+            min(int(quantity), QUANTITY_MAX)
+            if isinstance(quantity, int) and not isinstance(quantity, bool) and quantity >= 1
+            else None
+        ),
+    }
+
+
 def observation_from_entity(entity: GraphEntity) -> Observation:
     hints = entity.modality_hints or {}
     attrs = entity.attrs or {}
@@ -210,6 +236,7 @@ def observation_from_entity(entity: GraphEntity) -> Observation:
         manufacturer=_manufacturer(attrs),
         canonical_part_id=entity.canonical_part_id,
         is_assembly=attrs.get("is_assembly") is True,
+        **_manual_fields(entity),
     )
 
 
@@ -321,16 +348,24 @@ def _design_row(
     electrical = sum(1 for m in members if m.domain == "electrical")
     mechanical = sum(1 for m in members if m.domain == "mechanical")
     overlay = overlays.get(key)
+    # A manual (sourced) part carries its own lifecycle, supplier, cost and
+    # quantity; an overlay still wins so the BOM's edits apply to it too.
+    own_state = _first([m.lifecycle for m in members])
+    own_quantity = next((m.quantity for m in members if m.quantity), None)
     return BomRow(
         key=key,
         kind=DESIGN,
         name=name[:NAME_MAX],
         part_number=part_number,
         manufacturer=manufacturer,
-        quantity=electrical or mechanical or 1,
-        state=overlay.state if overlay else DEFAULT_DESIGN_STATE,
-        supplier=overlay.supplier if overlay else None,
-        unit_cost=overlay.unit_cost if overlay else None,
+        quantity=own_quantity or electrical or mechanical or 1,
+        state=overlay.state if overlay else (own_state or DEFAULT_DESIGN_STATE),
+        supplier=overlay.supplier if overlay else _first([m.supplier for m in members]),
+        unit_cost=(
+            overlay.unit_cost
+            if overlay
+            else next((m.unit_cost for m in members if m.unit_cost is not None), None)
+        ),
         notes=overlay.notes if overlay else None,
         sources=tuple(BomSource(m.id, m.kind, m.domain, m.name) for m in members),
         item_id=overlay.id if overlay else None,

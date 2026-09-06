@@ -13,6 +13,7 @@ import uuid
 from typing import Any
 
 from conftest import add_member, me
+from fixtures.extensions.bom_manifest import BOM_MANIFEST
 from fixtures.extensions.routes import (
     consent,
     events_of,
@@ -33,44 +34,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 NO_GRANTS: dict[str, list[str]] = {"scopes": [], "network": []}
-
-BOM_MANIFEST: dict[str, Any] = {
-    "schema_version": 2,
-    "extension": {
-        "id": "bom",
-        "name": "BOM",
-        "version": "0.1.0",
-        "publisher": "Solus",
-        "summary": "Every part in the robot, raw materials and purchases — one row per part.",
-        "requires": [["eda", "cad"]],
-    },
-    "views": {"page": {"entry": "page.html", "icon": "icon.svg", "label": "BOM"}},
-    "backend": {"capability": "bom", "routes": True},
-    "graph": {"kinds": [{"name": "item", "domain": "project"}]},
-    "tools": {"names": ["add_item"]},
-    "settings": {
-        "fields": [
-            {"key": "preferred_suppliers", "type": "string", "label": "Preferred suppliers"},
-            {"key": "cost_target", "type": "number", "label": "Cost target", "min": 0},
-            {
-                "key": "max_items",
-                "type": "number",
-                "label": "Hand-added rows to keep",
-                "min": 1,
-                "max": 20000,
-                "default": 2000,
-            },
-            {
-                "key": "currency",
-                "type": "select",
-                "label": "Currency",
-                "options": ["USD", "EUR", "GBP"],
-                "default": "USD",
-            },
-        ]
-    },
-    "store": {"overview": "OVERVIEW.md"},
-}
 
 
 def _bom(project_id: str, path: str = "rows") -> str:

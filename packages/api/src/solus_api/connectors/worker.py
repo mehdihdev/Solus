@@ -577,6 +577,7 @@ def build_worker_settings(settings: Settings) -> type:
 
     from solus_api.billing.reconciliation import reconcile_credit_debits
     from solus_api.extensions.review import extension_review
+    from solus_api.sourcing.worker import sourcing_request
 
     redis_url = settings.redis_url or "redis://localhost:6379"
 
@@ -590,6 +591,8 @@ def build_worker_settings(settings: Settings) -> type:
             func(sync_source, timeout=_SYNC_OPERATION_SECONDS + 60, max_tries=_SYNC_MAX_TRIES),
             reconcile_credit_debits,
             extension_review,
+            # SOLUSDEV-246 (STORE ST5): one sourcing request → candidates, metered.
+            sourcing_request,
         ]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —

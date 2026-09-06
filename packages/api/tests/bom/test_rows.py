@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from solus_api.models import Domain
 from solus_api.widgets.bom.rows import (
     DEFAULT_DESIGN_STATE,
     DEFAULT_ITEM_STATE,
@@ -392,3 +393,58 @@ def test_item_from_entity_drops_bad_costs(raw: object) -> None:
     )
     parsed = item_from_entity(entity)
     assert parsed is not None and parsed.unit_cost is None
+
+
+def test_a_sourced_manual_part_enters_as_planned_with_its_own_facts() -> None:
+    """STORE ST5: a selected candidate is a manual `part` carrying lifecycle,
+    supplier, cost and quantity; the BOM shows it as PLANNED, not installed."""
+    planned = Observation(
+        id=_id(1),
+        kind="part",
+        domain=Domain.MECHANICAL,
+        name="NEMA 17 17HS4401",
+        value=None,
+        part_number="17HS4401",
+        manufacturer="StepperOnline",
+        canonical_part_id=None,
+        lifecycle="planned",
+        supplier="StepperOnline",
+        unit_cost=14.5,
+        quantity=2,
+    )
+    [row] = build_rows([planned], [], [], [])
+    assert row.kind == "design" and row.state == "planned"
+    assert row.supplier == "StepperOnline" and row.unit_cost == 14.5 and row.quantity == 2
+    assert row.line_cost == 29.0
+    # An overlay (a BOM edit) still wins over the part's own facts.
+    overlay = item(5, "x", "overlay", row_key=row.key, state="ordered", supplier="Mouser")
+    [edited] = build_rows([planned], [], [], [overlay])
+    assert edited.state == "ordered" and edited.supplier == "Mouser"
+
+
+def test_manual_fields_are_read_only_from_manual_rows() -> None:
+    from solus_api.models import GraphEntity
+    from solus_api.widgets.bom.rows import observation_from_entity
+
+    connector = GraphEntity(
+        id=_id(1),
+        project_id=_id(2),
+        kind="part",
+        domain=Domain.MECHANICAL,
+        name="Servo",
+        origin="connector",
+        attrs={"lifecycle": "planned", "supplier": "X", "unit_cost": 5},
+    )
+    manual = GraphEntity(
+        id=_id(3),
+        project_id=_id(2),
+        kind="part",
+        domain=Domain.MECHANICAL,
+        name="Motor",
+        origin="manual",
+        attrs={"lifecycle": "bogus", "supplier": "Y", "unit_cost": 5, "quantity": 3},
+    )
+    assert observation_from_entity(connector).lifecycle is None
+    assert observation_from_entity(connector).supplier is None
+    parsed = observation_from_entity(manual)
+    assert parsed.lifecycle is None and parsed.supplier == "Y" and parsed.quantity == 3
