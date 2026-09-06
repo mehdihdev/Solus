@@ -11,8 +11,9 @@ isolation holds under ANY plan the database picks — an ANN scan that retrieved
 across projects and filtered afterwards would be a cross-tenant leak with a
 latency problem attached. Both tenant source types (`entity`, `error`) REQUIRE
 `filter.project_id`; an unscoped tenant query is rejected loudly, never served.
-# ponytail: no global corpora exist yet — when shared datasheets land, relax
-# unscoped calls to global-only scope per sol-interface §5.
+The one GLOBAL corpus (`corpus`, the engineering corpus — ADR-036) needs no
+`project_id` and accepts none: `rag_query` requires a tenant scope only when a
+tenant source type is requested, exactly the shape sol-interface §5 reserved.
 
 Keyless degradation: no embedder (or an embedder that fails / returns the wrong
 dimension — FP-02's exact tolerance) downgrades to project-scoped Postgres
@@ -33,6 +34,7 @@ from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute
 
 from solus_api.agent.interfaces import ErrorHit, RagHit, RetrievalFilter
+from solus_api.corpus import retrieval as corpus_retrieval
 from solus_api.fingerprint.contract import SourceRef
 from solus_api.models import EMBEDDING_DIM, Domain, ErrorSolution, GraphEntity
 
@@ -235,17 +237,31 @@ async def rag_query(
     a debug log. ANN when a query embedding is available, project-scoped
     full-text otherwise (keyless degradation — same shapes, never an exception).
     """
-    project_id = _require_project_id(filter)
     k = max(1, min(k, MAX_K))  # LIMIT is caller-influenced: bound it (sec review M4)
-    domains = _domain_values(filter)
     requested = filter.source_types if filter is not None and filter.source_types else None
-    vector = await _safe_embed(embed, text)
-
-    hits: list[RagHit] = []
-    known = {"entity", "error"}
-    types = requested if requested is not None else sorted(known)
-    for unknown in set(types) - known:
+    # The default (no source_types) is the two TENANT corpora, unchanged. The
+    # global engineering corpus (ADR-036) is served only when asked for by name.
+    tenant_types = {"entity", "error"}
+    types = requested if requested is not None else sorted(tenant_types)
+    for unknown in set(types) - tenant_types - {corpus_retrieval.CORPUS_CONNECTOR}:
         logger.debug("ignoring unknown retrieval source_type %.32r", unknown)
+    vector = await _safe_embed(embed, text)
+    hits: list[RagHit] = []
+    if corpus_retrieval.CORPUS_CONNECTOR in types:
+        hits.extend(
+            await corpus_retrieval.corpus_hits(
+                session,
+                text=text,
+                k=k,
+                domains=filter.domains if filter is not None else None,
+                vector=vector,
+            )
+        )
+    if not tenant_types & set(types):
+        hits.sort(key=lambda hit: hit.score, reverse=True)
+        return hits[:k]
+    project_id = _require_project_id(filter)  # tenant data: in-query scope, always
+    domains = _domain_values(filter)
     if "entity" in types:
         hits.extend(
             await _entity_hits(

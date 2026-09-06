@@ -211,7 +211,13 @@ async def test_runner_scopes_the_context_pull_to_the_request_project(
             return await super().get_graph_context(project_id, scope, budget)
 
         async def rag_query(self, text, k, filter=None):  # type: ignore[no-untyped-def]
-            assert isinstance(filter, RetrievalFilter) and filter.project_id is not None
+            assert isinstance(filter, RetrievalFilter)
+            if filter.source_types == ["corpus"]:
+                # CORPUS C2 / ADR-036: the shipped corpus is the one GLOBAL source —
+                # no tenant scope exists for it, and none may be attached.
+                assert filter.project_id is None
+                return await super().rag_query(text, k, filter)
+            assert filter.project_id is not None
             seen_projects.append(filter.project_id)
             hits = await super().rag_query(text, k, filter)
             return [hits[0].model_copy(update={"chunk": hostile})]

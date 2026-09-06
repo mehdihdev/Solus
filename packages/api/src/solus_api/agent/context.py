@@ -25,6 +25,13 @@
 # - REDACTED: entity attrs, chunks, fixes, and summaries pass the same
 #   redaction gate as every other path into model context (bridge/frames).
 #
+# - LAYERED (CORPUS C2, ADR-036): the shipped engineering corpus is its own
+#   section kind, retrieved through the same `rag_query` seam as a GLOBAL source
+#   type (no tenant scope exists for it), domain-routed deterministically, and
+#   packed AFTER every tenant hit — the team's own graph, errors, and documents
+#   always outrank general knowledge, and the user's preferences sit above all
+#   of it in the system prompt. Low-confidence chunks are marked, never dropped.
+#
 # The model-facing surface is `Context.fenced(nonce)`: each section rendered
 # as its own nonce-fenced data block via agent/prompt.py. `render()` is the
 # human/debugging view — a ratchet in the hardening tests keeps production
@@ -33,6 +40,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Literal
 from uuid import UUID
 
@@ -51,7 +59,11 @@ from solus_api.agent.interfaces import (
     TelemetryWindow,
 )
 from solus_api.agent.tools.untrusted import redact_text, redact_value
+from solus_api.corpus.domains import route_domains
+from solus_api.corpus.enums import Audience
+from solus_api.corpus.retrieval import CORPUS_CONNECTOR, CorpusHit
 from solus_api.fingerprint.contract import SourceRef
+from solus_api.models import SolMode
 
 #: Cheap deterministic token estimate, same heuristic as the gateway's
 #: type_estimator (len // chars_per_token). Kept local so context packing does
@@ -68,6 +80,10 @@ MAX_K = 20
 #: retrieval-sized; names/attrs/summaries are labels and stats.
 _CHUNK_CAP = 2000
 _FIELD_CAP = 500
+#: A corpus chunk is Solus-curated prose up to 6,000 chars; it gets more room
+#: than an ingested snippet but still packs under the same budget.
+_CORPUS_CAP = 4000
+_LOW_CONFIDENCE_NOTE = "LOW CONFIDENCE — a rule of thumb; verify before relying on it"
 
 #: Citation components are charset-restricted and capped (SEC-C1) — mirrors
 #: tools/untrusted.SAFE_REMOTE_NAME. No `]`, whitespace, or newline can
@@ -75,7 +91,7 @@ _FIELD_CAP = 500
 _CITE_UNSAFE = re.compile(r"[^A-Za-z0-9._/#:-]")
 _CITE_CAP = 128
 
-SectionKind = Literal["graph", "telemetry", "error", "document"]
+SectionKind = Literal["graph", "telemetry", "error", "document", "corpus"]
 
 
 class ContextSection(BaseModel):
@@ -210,6 +226,41 @@ def _hit_section(kind: SectionKind, hit: RagHit) -> ContextSection:
     )
 
 
+def _corpus_section(hit: CorpusHit) -> ContextSection:
+    """A shipped reference chunk: title, body, its confidence stated in words the
+    model can repeat, and the attribution the licence asks for. Still DATA — it
+    is fenced like every other section, and cited by chunk id."""
+    lines = [_clip(hit.chunk, _CORPUS_CAP), f"Confidence: {hit.confidence:.2f}"]
+    if hit.low_confidence:
+        lines.append(_LOW_CONFIDENCE_NOTE)
+    if hit.attribution:
+        lines.append(f"Source: {_clip(hit.attribution, _FIELD_CAP)}")
+    text = redact_text("\n".join(lines))
+    return ContextSection(
+        kind="corpus",
+        text=text,
+        tokens=_estimate(text),
+        score=hit.score,
+        citation=_citation(hit.source_ref),
+    )
+
+
+def _corpus_order(mode: SolMode | None) -> Callable[[CorpusHit], tuple[float, int, str]]:
+    """Relevance first; SOL mode breaks ties — Guide prefers `fundamentals`,
+    Expert prefers `reference` (ADR-016: mode ranks, never filters)."""
+    preferred = (
+        None
+        if mode is None
+        else (Audience.FUNDAMENTALS if mode is SolMode.GUIDE else Audience.REFERENCE)
+    )
+
+    def key(hit: CorpusHit) -> tuple[float, int, str]:
+        tie = 0 if preferred is None or hit.audience == preferred.value else 1
+        return (-hit.score, tie, hit.chunk_id)
+
+    return key
+
+
 def _clipped_floor(section: ContextSection, limit: int) -> ContextSection:
     """The graph floor, forced under the budget: ingested content must never
     set the token bill, so an oversized graph section is clipped, recorded,
@@ -228,18 +279,34 @@ async def build_context(
     window: TelemetryWindow | None = None,
     budget: ContextBudget | None = None,
     k: int = DEFAULT_K,
+    mode: SolMode | None = None,
 ) -> Context:
     """Assemble the reasoning context for `query` through W0-07 only.
 
     `project_id` is the tenant scope: it is forwarded to the graph pull and
-    into every RetrievalFilter, and callers derive it from ProjectCtx — never
-    from model output or ingested content (CLAUDE.md §7)."""
+    into every tenant RetrievalFilter, and callers derive it from ProjectCtx —
+    never from model output or ingested content (CLAUDE.md §7). The engineering
+    corpus is the one GLOBAL source (ADR-036): its filter carries no project_id
+    and a deterministic domain route, so an electrical question never loads
+    machining chunks. `mode` only orders corpus ties (ADR-016)."""
     k = min(k, MAX_K)
     graph = await systems.get_graph_context(project_id, scope, budget)
     telemetry = await systems.get_telemetry(project_id, window) if window is not None else None
     tenant_filter = RetrievalFilter(project_id=project_id)
     errors = await systems.get_error_history(query, k, tenant_filter)
     documents = await systems.rag_query(query, k, tenant_filter)
+    routed = route_domains(query)
+    corpus_filter = RetrievalFilter(
+        source_types=[CORPUS_CONNECTOR],
+        domains=None if routed is None else [d.value for d in routed],
+    )
+    # Only real corpus hits render as corpus: a double that ignores source_types
+    # cannot smuggle tenant text into the shipped-reference block.
+    corpus = sorted(
+        (h for h in await systems.rag_query(query, k, corpus_filter) if isinstance(h, CorpusHit)),
+        key=_corpus_order(mode),
+    )
+    reference = [_corpus_section(hit) for hit in corpus]
 
     # Dedupe across feeds by chunk identity; errors first, so the copy that
     # carries a recorded fix wins over a bare retrieval of the same text.
@@ -265,7 +332,7 @@ async def build_context(
 
     limit = budget.max_tokens if budget is not None and budget.max_tokens is not None else None
     if limit is None:
-        sections = [floor, *telemetry_sections, *ranked]
+        sections = [floor, *telemetry_sections, *ranked, *reference]
     else:
         if floor.tokens > limit:
             dropped.append("graph:clipped")
@@ -280,13 +347,14 @@ async def build_context(
             truncated = True
         used += sum(s.tokens for s in kept_telemetry)
         sections += kept_telemetry
-        for index, section in enumerate(ranked):
-            if used + section.tokens > limit:
-                dropped += [s.citation or s.kind for s in ranked[index:]]
-                truncated = True
-                break
-            sections.append(section)
-            used += section.tokens
+        for group in (ranked, reference):
+            for index, section in enumerate(group):
+                if used + section.tokens > limit:
+                    dropped += [s.citation or s.kind for s in group[index:]]
+                    truncated = True
+                    break
+                sections.append(section)
+                used += section.tokens
 
     return Context(
         query=query,

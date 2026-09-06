@@ -112,7 +112,9 @@ async def test_budget_drops_the_least_relevant_hit_first() -> None:
     unbudgeted = await _built()
     hit_sections = [s for s in unbudgeted.sections if s.kind in ("error", "document")]
     lowest = hit_sections[-1]
-    limit = unbudgeted.tokens() - lowest.tokens
+    # The shipped corpus packs AFTER every tenant hit, so budget the tenant part.
+    tenant_tokens = sum(s.tokens for s in unbudgeted.sections if s.kind != "corpus")
+    limit = tenant_tokens - lowest.tokens
     budget = ContextBudget(max_tokens=limit)
 
     packed = await _built(budget)
@@ -307,6 +309,11 @@ async def test_tenant_scope_reaches_every_feed() -> None:
             return await super().get_error_history(query, k, filter)
 
         async def rag_query(self, text, k, filter=None):  # type: ignore[no-untyped-def]
+            if filter is not None and filter.source_types == ["corpus"]:
+                # CORPUS C2 / ADR-036: the shipped corpus is GLOBAL — the one pull
+                # with no tenant, and it must carry none.
+                assert filter.project_id is None
+                return await super().rag_query(text, k, filter)
             calls.append(("rag", filter.project_id if filter else None))
             return await super().rag_query(text, k, filter)
 
@@ -360,7 +367,8 @@ class _PoisonedSystems(FakeSolSystems):
 
     async def rag_query(self, text, k, filter=None):  # type: ignore[no-untyped-def]
         hits = await super().rag_query(text, k, filter)
-        return [hits[0].model_copy(update={"chunk": self._hostile})]
+        # The corpus pull (CORPUS C2) may legitimately be empty for this query.
+        return [hits[0].model_copy(update={"chunk": self._hostile})] if hits else hits
 
 
 @pytest.mark.parametrize("payload", PAYLOADS, ids=lambda p: p.case_id)
