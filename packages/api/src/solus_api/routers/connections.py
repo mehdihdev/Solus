@@ -216,6 +216,7 @@ async def documents(
     cache: IntegrationCacheDep,
     _verified: RequireVerified,
     refresh: Annotated[bool, Query()] = False,
+    cache_only: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     """What the account can reach: documents for a CAD tool, repositories for a
     code host. Served from the cache; `refresh=true` asks the provider again."""
@@ -238,6 +239,7 @@ async def documents(
         provider=provider,
         account_ref=account_ref,
         refresh=refresh,
+        cache_only=cache_only,
     )
     return envelope(
         fetched.value, meta={"cached": fetched.cached, "fetched_at": fetched.fetched_at}

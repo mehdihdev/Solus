@@ -62,7 +62,7 @@ from solus_api.schemas import (
 from solus_api.services.activity import record_activity
 from solus_api.services.connections import (
     account_ref_for,
-    bind_to_account,
+    bind_source,
     delete_legacy_family_if_retired,
     is_connection_owned,
     list_documents,
@@ -81,8 +81,13 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}/sources")
 SYNC_HISTORY_LIMIT = 50
 
 
-async def _scoped_source(session: SessionDep, ctx: ProjectCtx, source_id: uuid.UUID) -> Source:
-    source = await session.get(Source, source_id)
+async def _scoped_source(
+    session: SessionDep, ctx: ProjectCtx, source_id: uuid.UUID, *, lock: bool = False
+) -> Source:
+    stmt = select(Source).where(Source.id == source_id, Source.project_id == ctx.project.id)
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    source = await session.scalar(stmt)
     if source is None or source.project_id != ctx.project.id:
         raise APIError(404, "not_found", "Source not found")
     return source
@@ -196,7 +201,6 @@ async def connect_source(
     _verified: RequireVerified,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
-    await check_can_add_integration(session, ctx.user)
     provider = body.type
     connector = _resolve_connector(registry, provider)
     if body.connection_id and body.token:
@@ -206,8 +210,19 @@ async def connect_source(
     connection: AccountConnection | None = None
     if body.connection_id:
         connection = await _bindable_connection(session, ctx, provider, body.connection_id)
-        source = await reusable_source(session, ctx.project, SourceType(provider), connector)
+        source = await reusable_source(
+            session,
+            ctx.project,
+            SourceType(provider),
+            connector,
+            connection=connection,
+            config=body.config,
+        )
+        if source is not None and source.connection_id == connection.id:
+            return envelope(serialize_source(source))
+    reused = source is not None
     if source is None:
+        await check_can_add_integration(session, ctx.user)
         source = Source(
             project_id=ctx.project.id,
             team_id=ctx.team.id,
@@ -221,7 +236,7 @@ async def connect_source(
     await session.flush()
 
     if connection is not None:
-        bind_to_account(source, connection)
+        bind_source(source, connection, preserve_state=reused)
     elif body.token:
         if not connector.supports_token_connect:
             raise APIError(
@@ -266,10 +281,18 @@ async def connect_source(
         payload={"type": provider},
     )
     await session.commit()
-    if connection is not None:
-        await sweep_after_commit(session, secret_store, ctx.user)
+    await _sweep_if_bound(connection, session, secret_store, ctx.user)
     await session.refresh(source)
     return envelope(serialize_source(source))
+
+
+async def _sweep_if_bound(
+    connection: object | None, session: SessionDep, secret_store: SecretStoreDep, user: Any
+) -> None:
+    """SOLUSDEV-242 H2: after a connection-bound connect commits, retire the
+    legacy token family the bind superseded (no-op for token connects)."""
+    if connection is not None:
+        await sweep_after_commit(session, secret_store, user)
 
 
 async def _bindable_connection(
@@ -300,7 +323,7 @@ async def update_source(
     body: SourceUpdate, source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
-    source = await _scoped_source(session, ctx, source_id)
+    source = await _scoped_source(session, ctx, source_id, lock=True)
     data = body.model_dump(exclude_unset=True)
     if data.get("name"):
         source.name = data["name"]
@@ -399,7 +422,9 @@ async def trigger_sync(
     return envelope({"job_id": job_id, "status": JobStatus.QUEUED.value})
 
 
-def _require_syncable(source: Source, registry: RegistryDep) -> None:
+def _require_syncable(
+    source: Source, registry: RegistryDep, *, allow_in_progress: bool = False
+) -> None:
     # auth-NONE connectors (committed exports) never hold a secret_ref — only
     # credentialed connectors must prove one before a sync (SOLUSDEV-100).
     needs_credentials = (
@@ -412,7 +437,7 @@ def _require_syncable(source: Source, registry: RegistryDep) -> None:
     # Debounce: don't stack a second sync while one is in flight (a cheap
     # per-source guard; per-team budget/concurrency is ADR-019). The scheduled
     # sweep only selects CONNECTED sources, so SYNCING ones are skipped there too.
-    if source.status == SourceStatus.SYNCING:
+    if source.status == SourceStatus.SYNCING and not allow_in_progress:
         raise APIError(409, "sync_in_progress", "A sync is already running for this source")
 
 
@@ -503,6 +528,7 @@ async def list_selectable(
     secret_store: SecretStoreDep,
     cache: IntegrationCacheDep,
     refresh: Annotated[bool, Query()] = False,
+    cache_only: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     """What this connected source can be pointed at: repositories, CAD documents,
     …. One generic picker route, so a new connector becomes pickable by
@@ -529,6 +555,7 @@ async def list_selectable(
         provider=source.type.value,
         account_ref=account_ref_for(source),
         refresh=refresh,
+        cache_only=cache_only,
     )
     return envelope(
         fetched.value, meta={"cached": fetched.cached, "fetched_at": fetched.fetched_at}
@@ -590,7 +617,7 @@ async def add_document(
     it is ingested. 202 with the job when the selection moved; 200 `unchanged`
     when it was already tracked — nothing to spend on."""
     require_role(ctx, Role.MEMBER)
-    source = await _scoped_source(session, ctx, source_id)
+    source = await _scoped_source(session, ctx, source_id, lock=True)
     key = _tracked_key(registry, source)
     current = _tracked_ids(source, key)
     if body.id in current:
@@ -598,7 +625,7 @@ async def add_document(
         return envelope({"job_id": None, "status": "unchanged", "source": serialize_source(source)})
     wanted = [*current, body.id]
     _validate_tracked(registry, source, wanted)
-    _require_syncable(source, registry)
+    _require_syncable(source, registry, allow_in_progress=True)
     source.config = {**source.config, key: wanted}
     record_activity(
         session,
@@ -634,12 +661,12 @@ async def remove_document(
     """Stop tracking a document in THIS project. The sync that follows reconciles
     its entities away (soft-delete); other projects tracking it are untouched."""
     require_role(ctx, Role.MEMBER)
-    source = await _scoped_source(session, ctx, source_id)
+    source = await _scoped_source(session, ctx, source_id, lock=True)
     key = _tracked_key(registry, source)
     current = _tracked_ids(source, key)
     if document_id not in current:
         raise APIError(404, "not_found", "That document is not tracked by this project")
-    _require_syncable(source, registry)
+    _require_syncable(source, registry, allow_in_progress=True)
     source.config = {**source.config, key: [d for d in current if d != document_id]}
     record_activity(
         session,

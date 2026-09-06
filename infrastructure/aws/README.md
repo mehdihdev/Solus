@@ -5,6 +5,11 @@ what "degraded mode" (no ARQ worker) means. Written for SOLUSDEV-152 (WS-B).
 
 ## Deploy path
 
+Validation runs before merge. Protected `main` requires a successful MR pipeline;
+its pipeline runs only the image build and staging deployment below. Pipeline
+selection, performance evidence and QA are documented in
+[`infrastructure/ci/README.md`](../ci/README.md).
+
 1. `.gitlab-ci.yml` `build:api-image` builds `infrastructure/docker/api.Dockerfile`
    on the `aws-arm` runners and pushes `$ECR_URI:$CI_COMMIT_SHORT_SHA` and
    `$ECR_URI:arm-latest`. Because the runners are ARM, the image is

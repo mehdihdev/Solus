@@ -127,12 +127,13 @@ settings are removed too." (`docs/wireflows/store.md`).
 - The GitHub connector, when the synced tree contains `.solus/project.toml`, fetches that one
   blob (≤ 64 KiB), decodes it with `tomllib`, keeps **only** `[ext.<slug>]` tables (≤ 16 slugs
   matching the id regex, ≤ 16 keys each, scalar values only, ≤ 4 KiB per table) and lands one
-  entity: `type="solus_config"`, `domain=code`, `source_key=".solus/project.toml"`,
+  entity: `type="solus_project_toml"`, `domain=code`, `source_key=".solus/project.toml"` (not
+  `solus_config` — that kind is the project's `.solus` root node from SOLUSDEV-242),
   `properties={"ext": {...}}`. A malformed or oversized file is a `SyncError`, never a raise;
   the entity is simply absent.
 - `read_bundle_config(session, project_id, slug, manifest)` returns that table filtered and
   type-checked against the bundle's `[[settings.fields]]` (unknown keys dropped, wrong types
-  dropped), read only from a `solus_config` row with `origin = "connector"` — a same-kind row a
+  dropped), read only from a `solus_project_toml` row with `origin = "connector"` — a same-kind row a
   bundle or user wrote is never mistaken for the repo config. `effective_bundle_config` layers
   manifest defaults ← repo table ← the install row's `settings`; the fixture's `add_note` honours
   `prefix` and `max_notes` from it. Nothing here is ever a secret (CLAUDE.md §7; ADR-034 §5).
@@ -231,5 +232,6 @@ entity scope on both the ANN and the full-text path (red-team fixture: an extens
 instruction never surfaces). Checkers run on that feed; fingerprinting keys on connector refs the
 layer does not have; connector reconciliation is `source_id`-scoped and the sync landing path
 refuses any connector entity claiming the workspace domain. The generic entity routes list the
-layer (the Context Model screen shows `solus:widget · workspace`) but have no mutating route; when
-one lands it must refuse `origin != manual` (ADR-027).
+layer (the Context Model screen shows `solus:widget · workspace`); the mutating entity routes
+SOLUSDEV-242 added accept only manual Physical Robot roots and answer `409 conflict` for a
+`system`-origin node (tested).

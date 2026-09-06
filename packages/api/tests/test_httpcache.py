@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+from solus_api.connectors.contracts import ConnectorError
 from solus_api.connectors.httpcache import (
     InMemoryCacheStore,
     release_flight,
@@ -57,15 +59,16 @@ async def test_losers_wait_for_the_winner_then_proceed() -> None:
     order: list[str] = []
 
     async def winner() -> None:
-        assert await single_flight(store, "f", ttl_seconds=10) is True
+        owner = await single_flight(store, "f", ttl_seconds=10)
         order.append("winner-start")
         await asyncio.sleep(0.15)
         order.append("winner-done")
-        await release_flight(store, "f")
+        await release_flight(store, "f", owner)
 
     async def loser() -> None:
         await asyncio.sleep(0.02)  # arrive second
-        assert await single_flight(store, "f", ttl_seconds=10, wait_seconds=2.0) is True
+        owner = await single_flight(store, "f", ttl_seconds=10, wait_seconds=2.0)
+        await release_flight(store, "f", owner)
         order.append("loser")
 
     await asyncio.gather(winner(), loser())
@@ -73,9 +76,8 @@ async def test_losers_wait_for_the_winner_then_proceed() -> None:
     assert order.index("winner-done") < order.index("loser"), order
 
 
-async def test_single_flight_fails_open_when_the_store_is_broken() -> None:
-    """A broken cache must never stop work happening — the same fail-open policy
-    the model-call rate limiter documents."""
+async def test_single_flight_fails_closed_when_the_store_is_broken() -> None:
+    """An unavailable claim cannot authorize a concurrent provider call."""
 
     class Broken:
         async def get(self, key: str) -> str | None:
@@ -87,7 +89,15 @@ async def test_single_flight_fails_open_when_the_store_is_broken() -> None:
         async def delete(self, key: str) -> None:
             raise RuntimeError("down")
 
-        async def claim(self, key: str, ttl_seconds: int) -> bool:
+        async def claim(self, key: str, ttl_seconds: int, owner: str = "1") -> bool:
             raise RuntimeError("down")
 
-    assert await single_flight(Broken(), "f", ttl_seconds=10) is True
+        async def release(self, key: str, owner: str) -> None:
+            raise RuntimeError("down")
+
+        async def renew(self, key: str, owner: str, ttl_seconds: int) -> bool:
+            raise RuntimeError("down")
+
+    with pytest.raises(ConnectorError) as caught:
+        await single_flight(Broken(), "f", ttl_seconds=10)
+    assert caught.value.code == "single_flight_unavailable"

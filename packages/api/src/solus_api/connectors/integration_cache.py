@@ -40,14 +40,14 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from solus_api.connectors.httpcache import CacheStore, release_flight, single_flight
+from solus_api.connectors.httpcache import CacheStore, release_flight, run_in_flight, single_flight
 
 logger = logging.getLogger("solus.connectors.integration_cache")
 
 #: Its OWN prefix — `httpcache.py` owns `solus:ic:sync:…` for sync single-flight,
 #: and a provider literally named `sync` must not collide with it.
 _PREFIX = "solus:icache"
-#: How long one fetch may hold the flight for a key before losers fetch too.
+#: Lease lifetime; waiters must still acquire their own claim before fetching.
 _FETCH_FLIGHT_SECONDS = 60
 #: Per-account key index (for `invalidate_account`), bounded so a runaway
 #: producer cannot grow one JSON list without limit.
@@ -217,6 +217,24 @@ class IntegrationCache:
         except Exception:  # noqa: BLE001
             logger.warning("integration cache invalidate failed for %s", _describe(key))
 
+    async def cached_listing(
+        self, provider: str, account_ref: str
+    ) -> Fetched[list[dict[str, Any]]] | None:
+        """Read a validated I1 listing without invoking a fetch or credentials."""
+        hit = await self._stored(self.listing_key(provider, account_ref), float("inf"))
+        if hit is None or not isinstance(hit.value, list):
+            return None
+        for item in hit.value:
+            if (
+                not isinstance(item, dict)
+                or not all(
+                    isinstance(item.get(field), str) and item[field] for field in ("id", "name")
+                )
+                or ("config" in item and not isinstance(item["config"], dict))
+            ):
+                return None
+        return hit
+
     # ------------------------------------------------------------- fetch-through
 
     async def fetch[T](
@@ -245,8 +263,9 @@ class IntegrationCache:
         if hit is not None:
             return hit
         flight = f"{key}:flight"
-        await single_flight(self._store, flight, ttl_seconds=_FETCH_FLIGHT_SECONDS)
-        try:
+        owner = await single_flight(self._store, flight, ttl_seconds=_FETCH_FLIGHT_SECONDS)
+
+        async def fetch_owned() -> Fetched[T]:
             hit = await self._stored(key, window)
             if hit is not None:
                 return hit
@@ -259,8 +278,13 @@ class IntegrationCache:
                 ttl_seconds,
             )
             return Fetched(value, False, fetched_at)
+
+        try:
+            return await run_in_flight(
+                self._store, flight, owner, ttl_seconds=_FETCH_FLIGHT_SECONDS, run=fetch_owned
+            )
         finally:
-            await release_flight(self._store, flight)
+            await release_flight(self._store, flight, owner)
 
     async def _stored(self, key: str, max_age_seconds: float) -> Fetched[Any] | None:
         """The stored entry when it exists and is no older than `max_age_seconds`
@@ -269,6 +293,13 @@ class IntegrationCache:
             return None
         entry = await self.get(key)
         if not (isinstance(entry, dict) and "value" in entry and "fetched_at" in entry):
+            return None
+        fetched_at = entry["fetched_at"]
+        if not isinstance(fetched_at, str):
+            return None
+        try:
+            datetime.fromisoformat(fetched_at)
+        except ValueError:
             return None
         fetched_ts = entry.get("fetched_ts")
         if max_age_seconds != float("inf"):

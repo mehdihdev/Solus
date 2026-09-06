@@ -718,7 +718,8 @@ review beyond static checks.
 2. **§4 amended — the repo `.solus/` layer gains one extension-related occupant.**
    `.solus/project.toml` may carry `[ext.<id>]` tables, one per installed first-party bundle,
    holding non-secret team defaults validated against that bundle's declared settings schema
-   at read time. The git connector lands the file as a single `solus_config` entity; nothing
+   at read time. The git connector lands the file as a single `solus_project_toml` entity (the
+   `solus_config` kind is the project's `.solus` root node, SOLUSDEV-242); nothing
    else extension-related lives in `.solus/`, and an `extensions/` folder there is still
    ignored.
 3. **Uninstall leaves no trace.** Removing a bundle soft-deletes the graph entities of its

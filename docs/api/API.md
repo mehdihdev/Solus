@@ -141,11 +141,19 @@ the `credit_ledger` row for attribution, and still meters the **invoking user** 
 | POST   | `/api/v1/projects/{project_id}/archive`   | Archive (soft delete; leaves default listing, keeps graph) — added SOLUSDEV-84                                |
 | POST   | `/api/v1/projects/{project_id}/unarchive` | Restore an archived project — added SOLUSDEV-84                                                               |
 | —      | `/api/v1/projects/{project_id}/solus…`    | The project-level `.solus` (SOLUSDEV-240) — full plan in [solus.md](solus.md)                                 |
+| GET/PUT | `/api/v1/projects/{project_id}/workspace-layout` | Project-shared, versioned graph coordinates (SOLUSDEV-242); [workspace.md](workspace.md) |
 | DELETE | `/api/v1/projects/{project_id}`           | Delete (admin, confirmation required)                                                                         |
 
 ### 2.4 Graph — entities & relations (ADR-001, the core)
 
 Connector-owned entities/relations are **read-only** through this API (the connector is the source of truth; edits happen in the source tool and arrive via sync). Manually created entities (`origin: "manual"`) are user-editable. Concurrency uses optimistic versioning: writes carry `If-Match: <version>`; a stale version returns `409` with the conflicting change summary (feature area 10's graph-informed conflict detection).
+
+**SOLUSDEV-242:** entity creation/rename/removal currently supports only manual,
+source-null `physical_robot` roots; other mutation kinds remain deferred. The
+exact payloads, seven owned categories, preserved-part deletion, paginated
+`orphaned_from_robot` read and `graph_updated_at` validator are specified in
+[`workspace.md`](workspace.md#phase-4--physical-robot-instances). Manual mutations
+publish committed `graph.changed` hints with null `source_id` and `sync_id`.
 
 | Method | Path                                                           | Description                                                                                                                                                                         |
 | ------ | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -577,3 +585,32 @@ Two caveats for readers:
   what exists today. `docs/api/API-implementation.md` is the record of what is actually built.
 - §5's frontend route map predates the workspace shell (which navigates by `useState` inside
   `WorkspaceShell`, not by URL). Treat it as intent, not as current structure.
+
+### SOLUSDEV-242 Phase 3 — Workspace service selection amendment
+
+This amendment tightens I1 reads and source reuse without adding a new route.
+
+- Account `/users/me/connections/{connection_id}/documents` and project source
+  `/projects/{project_id}/sources/{source_id}/selectable` accept `cache_only=false`.
+  `cache_only=true` returns the existing `{data,meta:{cached,fetched_at}}` on a hit,
+  or **409 `listing_not_cached`** on a missing, expired, malformed or unavailable cache.
+  It must not resolve credentials or invoke any provider callback. Combining
+  `cache_only=true` with `refresh=true` is **422 `validation_error`**.
+  Explicit `refresh=true` remains the existing cooldown-limited I1 listing operation.
+- The Workspace Add surface retains both results and cache-miss states by authenticated
+  identity/account. Opening/reopening a loaded dropdown or panel issues zero new listing
+  requests; “Load documents”/“Refresh documents” is the deliberate refresh action.
+- `POST /projects/{project_id}/sources` with `connection_id` reuses only a source for that
+  account and selection (a Git repository is its own source; Onshape tracks multiple
+  documents per account/source). Exact reuse preserves status/errors and does not consume
+  another integration slot. A different account never silently rebinds a source. A legacy
+  unbound source may be adopted only when its known provider identity matches the grant.
+- Concurrent document additions serialize source selection changes. Duplicate selection
+  remains the existing 200 `unchanged` with null job ID; a newly tracked document is 202
+  with one accepted job. First selection ingests once. Existing selection/node navigation
+  never enqueues another job from Workspace.
+- Onshape graph output includes one `cad_document` root per selected document, with
+  `properties.document_id`, source/project identity and `contains` edges to assembly roots.
+  Existing part keys, IDs and `part_of` edges remain. Names use I1's cached metadata or the
+  actual document ID; missing listing data is never a reason to list the provider implicitly.
+  Existing graphs receive wrapper roots through a local backfill, without provider ingestion.

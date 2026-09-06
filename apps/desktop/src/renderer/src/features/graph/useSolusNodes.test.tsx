@@ -1,14 +1,15 @@
-// The `.solus` panel (SOLUSDEV-240): five honest sections, one right-click menu
-// with the same three actions everywhere, and the three flows behind it.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as resources from '../../lib/api/resources'
+import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useShellStore } from '../workspace/shellStore'
 import { useSolChatStore } from '../sol/solChatStore'
 import * as chat from '../sol/solChatStore'
-import { SolusPanel, askSolMessage, sectionCountLabel, formatSize } from './SolusPanel'
+import { useSolusNodes } from './useSolusNodes'
+import { askSolMessage, sectionCountLabel, formatSize } from './solusActions'
+import { SECTION_LABELS } from './useSolusConfig'
 import { emptySections } from './useSolusConfig'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
@@ -37,7 +38,7 @@ function entry(over: Partial<resources.SolusEntry>): resources.SolusEntry {
     text: 'Spec: 48 V bus',
     name: null,
     artifact_id: null,
-    entity_id: null,
+    entity_id: `${over.id ?? 'e1'}-node`,
     media_type: null,
     size_bytes: null,
     created_by: 'u1',
@@ -49,6 +50,40 @@ function entry(over: Partial<resources.SolusEntry>): resources.SolusEntry {
 
 function config(details: resources.SolusEntry[] = []): resources.SolusConfig {
   return { entity_id: 'solus-1', sections: { ...emptySections(), details } }
+}
+
+const graphChanged = vi.fn()
+function SolusNodesHarness(): React.JSX.Element {
+  const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
+  const nodes = useSolusNodes(projectId, graphChanged)
+  const entities: resources.Entity[] = resources.SOLUS_SECTIONS.flatMap((section) => [
+    {
+      id: `section-${section}`,
+      name: SECTION_LABELS[section],
+      type: 'solus_section',
+      domain: 'project',
+      source_key: '',
+      properties: { section }
+    },
+    ...nodes.state.sections[section].map((item) => ({
+      id: item.entity_id!,
+      name: item.name ?? 'Note',
+      type: item.kind === 'artifact' ? 'document' : 'solus_note',
+      domain: 'project',
+      source_key: ''
+    }))
+  ])
+  return (
+    <>
+      {entities.map((entity) => (
+        <article key={entity.id} onContextMenu={(event) => nodes.onContextMenu(event, entity)}>
+          <h2>{entity.name}</h2>
+          {nodes.renderContent(entity)}
+        </article>
+      ))}
+      {nodes.overlays}
+    </>
+  )
 }
 
 function link(): void {
@@ -75,10 +110,10 @@ describe('pure helpers', () => {
   })
 })
 
-describe('SolusPanel', () => {
+describe('SolusNodesHarness — rendering and writes', () => {
   it('shows five EMPTY sections and no invented entries', async () => {
     link()
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     for (const label of [
       'Hardware configs',
       'Project details',
@@ -110,7 +145,7 @@ describe('SolusPanel', () => {
         entry({ id: 'e3', kind: 'sol', author: 'sol', text: 'SOL found: EV.7.2' })
       ])
     )
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     expect(await screen.findByText('Spec: 48 V bus')).toBeInTheDocument()
     expect(screen.getByText('FSAE Rules 2027.pdf')).toBeInTheDocument()
     expect(screen.getByText('application/pdf · 1.0 KB')).toBeInTheDocument()
@@ -120,17 +155,19 @@ describe('SolusPanel', () => {
 
   it('offers the same three actions on every section', async () => {
     link()
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Code environment'))
     expect(screen.getByText('CODE ENVIRONMENT')).toBeInTheDocument()
     const items = screen.getAllByRole('menuitem').map((el) => el.textContent)
     expect(items).toEqual(['Import files…', 'Ask SOL to find…', 'Type it'])
   })
+})
 
+describe('SolusNodesHarness — type and import', () => {
   it('Type it posts a text entry and refetches', async () => {
     link()
     vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({}))
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Project details'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
     const box = screen.getByPlaceholderText('Type it — plain text')
@@ -158,7 +195,7 @@ describe('SolusPanel', () => {
       summary: null
     })
     vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({ kind: 'artifact' }))
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Project details'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
     const input = screen.getByLabelText('Import a file into .solus') as HTMLInputElement
@@ -176,7 +213,7 @@ describe('SolusPanel', () => {
 
   it('Import files refuses an oversized file before uploading', async () => {
     link()
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Documentation'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
     const input = screen.getByLabelText('Import a file into .solus') as HTMLInputElement
@@ -186,11 +223,13 @@ describe('SolusPanel', () => {
     await waitFor(() => expect(useShellStore.getState().toast?.title).toBe('File too large'))
     expect(vi.mocked(resources.uploadArtifact)).not.toHaveBeenCalled()
   })
+})
 
+describe('SolusNodesHarness — SOL and editing', () => {
   it('Ask SOL sends a turn through the chat store and reports what was filed', async () => {
     link()
     vi.mocked(chat.sendMessage).mockResolvedValue(undefined)
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Documentation'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Ask SOL to find…' }))
     await userEvent.type(
@@ -221,7 +260,7 @@ describe('SolusPanel', () => {
   it('Ask SOL says so when SOL filed nothing', async () => {
     link()
     vi.mocked(chat.sendMessage).mockResolvedValue(undefined)
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Documentation'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Ask SOL to find…' }))
     await userEvent.type(screen.getByPlaceholderText(/What should SOL find/), 'nothing')
@@ -236,20 +275,22 @@ describe('SolusPanel', () => {
     useSolChatStore.setState({
       sessions: { p1: { ...chat.EMPTY_SESSION, streaming: true } }
     })
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Documentation'))
     expect(screen.getByRole('menuitem', { name: /Ask SOL to find/ })).toHaveAttribute(
       'aria-disabled',
       'true'
     )
   })
+})
 
+describe('SolusNodesHarness — deletion', () => {
   it('edits and deletes entries from the entry menu', async () => {
     link()
     vi.mocked(resources.getSolus).mockResolvedValue(config([entry({})]))
     vi.mocked(resources.updateSolusEntry).mockResolvedValue(entry({ text: 'new' }))
     vi.mocked(resources.deleteSolusEntry).mockResolvedValue(undefined)
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Spec: 48 V bus'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     const box = screen.getByDisplayValue('Spec: 48 V bus')
@@ -261,6 +302,8 @@ describe('SolusPanel', () => {
     )
     fireEvent.contextMenu(await screen.findByText('Spec: 48 V bus'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    expect(resources.deleteSolusEntry).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Delete note' }))
     await waitFor(() =>
       expect(vi.mocked(resources.deleteSolusEntry)).toHaveBeenCalledWith('p1', 'e1')
     )
@@ -283,7 +326,7 @@ describe('SolusPanel', () => {
       ])
     )
     vi.mocked(resources.deleteSolusEntry).mockResolvedValue(undefined)
-    render(<SolusPanel />)
+    render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('rules.pdf'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     expect(vi.mocked(resources.deleteSolusEntry)).not.toHaveBeenCalled()
@@ -295,9 +338,85 @@ describe('SolusPanel', () => {
   })
 
   it('is honest when offline: no mutations offered', () => {
-    render(<SolusPanel />)
-    expect(screen.getByText(/Sign in and open a project/)).toBeInTheDocument()
+    render(<SolusNodesHarness />)
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
     fireEvent.contextMenu(screen.getByText('Project details'))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
+})
+
+describe('canvas mutation regressions', () => {
+  it('refreshes the graph after adding and removing text nodes', async () => {
+    link()
+    vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({}))
+    vi.mocked(resources.deleteSolusEntry).mockResolvedValue(undefined)
+    render(<SolusNodesHarness />)
+    fireEvent.contextMenu(await screen.findByText('Project details'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
+    await userEvent.type(screen.getByRole('textbox'), 'Spec: 48 V bus')
+    vi.mocked(resources.getSolus).mockResolvedValue(config([entry({})]))
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(graphChanged).toHaveBeenCalledTimes(1))
+    fireEvent.contextMenu(await screen.findByText('Spec: 48 V bus'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    expect(resources.deleteSolusEntry).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Delete note' }))
+    await waitFor(() => expect(graphChanged).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps a failed edit open with its draft', async () => {
+    link()
+    vi.mocked(resources.getSolus).mockResolvedValue(config([entry({})]))
+    vi.mocked(resources.updateSolusEntry).mockRejectedValue(new Error('Try again'))
+    render(<SolusNodesHarness />)
+    fireEvent.contextMenu(await screen.findByText('Spec: 48 V bus'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    await userEvent.clear(screen.getByRole('textbox'))
+    await userEvent.type(screen.getByRole('textbox'), 'Keep my draft')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(useShellStore.getState().toast?.title).toBe("That didn't work"))
+    expect(screen.getByRole('textbox')).toHaveValue('Keep my draft')
+    expect(graphChanged).not.toHaveBeenCalled()
+  })
+})
+
+describe('pending file import scope', () => {
+  it.each(['project', 'account'])(
+    'does not file a delayed upload after changing %s',
+    async (boundary) => {
+      link()
+      const previousAuth = useAuthStore.getState()
+      let finish!: (value: Awaited<ReturnType<typeof resources.uploadArtifact>>) => void
+      vi.mocked(resources.uploadArtifact).mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        })
+      )
+      const { unmount } = render(<SolusNodesHarness />)
+      fireEvent.contextMenu(await screen.findByText('Documentation'))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
+      await userEvent.upload(
+        screen.getByLabelText('Import a file into .solus'),
+        new File(['%PDF'], 'private.pdf', { type: 'application/pdf' })
+      )
+      await waitFor(() => expect(resources.uploadArtifact).toHaveBeenCalledTimes(1))
+      await act(async () => {
+        if (boundary === 'project')
+          useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } })
+        else useAuthStore.setState({ user: { email: 'new-account@example.invalid' } })
+        finish({
+          artifact_id: 'old-artifact',
+          uri: '/x',
+          media_type: 'application/pdf',
+          storage: 'local',
+          size_bytes: 4,
+          summary: null
+        })
+      })
+      expect(resources.addSolusEntry).not.toHaveBeenCalled()
+      expect(graphChanged).not.toHaveBeenCalled()
+      unmount()
+      useAuthStore.setState(previousAuth)
+    }
+  )
 })

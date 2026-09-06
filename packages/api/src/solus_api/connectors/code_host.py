@@ -97,7 +97,7 @@ def solus_config_too_large(item: dict[str, Any]) -> bool:
 
 
 def solus_config_entity(text: str) -> tuple[EntityOut | None, list[str]]:
-    """Parse the committed `.solus/project.toml` into ONE `solus_config` entity
+    """Parse the committed `.solus/project.toml` into ONE `solus_project_toml` entity
     (ADR-035 §4 as amended; widget-bundles.md §6). Invalid TOML → no entity and
     the problem; a valid file always lands, even with no `[ext]` table."""
     parsed = parse_project_toml_ext(text)

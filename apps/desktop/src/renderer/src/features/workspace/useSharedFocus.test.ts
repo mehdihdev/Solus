@@ -53,6 +53,20 @@ describe('toSharedFocus', () => {
 })
 
 describe('useSharedFocus', () => {
+  it('passes the navigator ancestry through to Live Bench without a new fetch', () => {
+    seedReadyFocus()
+    const path = [
+      {
+        entity: { projectId: 'p1', entityId: 'robot' },
+        domain: 'runtime' as const,
+        label: 'Rover',
+        relation: 'contains'
+      }
+    ]
+    useFocusStore.setState({ path })
+    const { result } = renderHook(() => useSharedFocus())
+    expect(result.current?.path).toEqual(path)
+  })
   it('is null when nothing is focused', () => {
     useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover MK2' } })
     const { result } = renderHook(() => useSharedFocus())

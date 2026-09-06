@@ -1,7 +1,7 @@
-// The project `.solus` for the Workspace panel (SOLUSDEV-240): one GET, five
+// The project `.solus` for the Workspace nodes (SOLUSDEV-240): one GET, five
 // sections, refetched after every mutation. Degrades honestly — `offline` when
 // no project is linked or the API cannot answer; never a fabricated section.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getSolus,
   SOLUS_SECTIONS,
@@ -9,6 +9,7 @@ import {
   type SolusEntry,
   type SolusSection
 } from '../../lib/api/resources'
+import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 export const SECTION_LABELS: Readonly<Record<SolusSection, string>> = {
@@ -40,6 +41,7 @@ const EMPTY = emptySections()
 
 interface Snapshot {
   projectId: string
+  identity: string
   status: 'ready' | 'offline'
   entityId: string | null
   sections: Record<SolusSection, SolusEntry[]>
@@ -48,7 +50,8 @@ interface Snapshot {
 /** One read, shaped for the hook. Module-level so the effect only ever sets
  *  state from a promise callback (react-hooks/set-state-in-effect). */
 async function loadSnapshot(
-  projectId: string
+  projectId: string,
+  identity: string
 ): Promise<{ snapshot: Snapshot; config: SolusConfig | null }> {
   try {
     const config = await getSolus(projectId)
@@ -56,6 +59,7 @@ async function loadSnapshot(
       config,
       snapshot: {
         projectId,
+        identity,
         status: 'ready',
         entityId: config.entity_id,
         sections: config.sections
@@ -64,39 +68,43 @@ async function loadSnapshot(
   } catch {
     return {
       config: null,
-      snapshot: { projectId, status: 'offline', entityId: null, sections: EMPTY }
+      snapshot: { projectId, identity, status: 'offline', entityId: null, sections: EMPTY }
     }
   }
 }
 
 export function useSolusConfig(projectId: string | null): SolusState {
+  const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
+  const generation = useRef(0)
   const fetchEnabled = useWorkspaceFetchEnabled()
   const enabled = fetchEnabled && projectId !== null
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
 
   const refetch = useCallback(async (): Promise<SolusConfig | null> => {
     if (!enabled || projectId === null) return null
-    const loaded = await loadSnapshot(projectId)
+    const epoch = generation.current
+    const loaded = await loadSnapshot(projectId, identity)
+    if (epoch !== generation.current) return null
     setSnapshot(loaded.snapshot)
     return loaded.config
-  }, [enabled, projectId])
+  }, [enabled, projectId, identity])
 
   useEffect(() => {
+    const epoch = ++generation.current
     if (!enabled || projectId === null) return
-    let cancelled = false
-    void loadSnapshot(projectId).then((loaded) => {
-      if (!cancelled) setSnapshot(loaded.snapshot)
+    void loadSnapshot(projectId, identity).then((loaded) => {
+      if (epoch === generation.current) setSnapshot(loaded.snapshot)
     })
     return () => {
-      cancelled = true
+      generation.current += 1
     }
-  }, [enabled, projectId])
+  }, [enabled, projectId, identity])
 
   if (!enabled || projectId === null) {
     return { status: 'offline', entityId: null, sections: EMPTY, refetch }
   }
   // A snapshot for another project is stale, not "loaded": loading until ours lands.
-  if (snapshot === null || snapshot.projectId !== projectId) {
+  if (snapshot === null || snapshot.projectId !== projectId || snapshot.identity !== identity) {
     return { status: 'loading', entityId: null, sections: EMPTY, refetch }
   }
   return { ...snapshot, refetch }

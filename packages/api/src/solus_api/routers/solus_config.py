@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
+from sqlalchemy import select
 
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
@@ -69,7 +70,13 @@ async def add_entry(
             name=body.name.strip(),
             created_by=ctx.user.id,
         )
-        artifact = await session.get(Artifact, entry.artifact_id)
+        artifact = await session.scalar(
+            select(Artifact).where(
+                Artifact.id == entry.artifact_id,
+                Artifact.project_id == ctx.project.id,
+                Artifact.deleted_at.is_(None),
+            )
+        )
     else:
         assert body.text is not None  # SolusEntryIn validator
         entry = await add_text_entry(
@@ -90,7 +97,9 @@ async def patch_entry(
     entry_id: uuid.UUID, body: SolusEntryPatch, ctx: ProjectCtx, session: SessionDep
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
-    entry = update_text(await get_entry(session, ctx.project.id, entry_id), body.text)
+    entry = await update_text(
+        session, await get_entry(session, ctx.project.id, entry_id), body.text
+    )
     _emit_solus_event(ctx, session, "solus.entry_updated", {"entry_id": str(entry.id)})
     await session.commit()
     return envelope(serialize_entry(entry))

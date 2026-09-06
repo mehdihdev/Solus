@@ -1,0 +1,22 @@
+# docker build uses the repository root as its context, even with -f.
+.git
+.claude
+.Codex
+.codex
+.agents
+**/.env
+**/.env.*
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.uv-cache
+**/.pnpm-store
+**/dist
+**/out
+**/.next
+**/node-compile-cache
+apps
+docs

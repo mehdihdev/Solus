@@ -35,7 +35,6 @@ from solus_api.connectors.code_host import (
     solus_config_too_large,
 )
 from solus_api.connectors.contracts import (
-    NO_SIGNAL_CODES,
     AccountInfo,
     ConnectorError,
     Credentials,
@@ -261,26 +260,21 @@ class GitHubConnector(OAuthConnector):
         needs no cache. Losing it is harmless: the next probe is simply a normal
         (counted) request that re-earns one.
         """
-        try:
-            repo = _safe_repo(str(ctx.config["repo"]))
-            configured = ctx.config.get("branch")
-            async with self._http(ctx.credentials) as client:
-                resolved = (
-                    _safe_branch(str(configured))
-                    if configured
-                    else await self._default_branch(client, repo)
-                )
-                etag = ctx.cursor.get(ETAG_KEY)
-                if isinstance(etag, str) and etag and ctx.cursor.get("branch") == resolved:
-                    unchanged = await self._head_unmodified(client, repo, resolved, etag)
-                    if unchanged:
-                        return False
-                sha = await self._head_sha(client, repo, resolved)
-        except ConnectorError as exc:
-            if exc.code in NO_SIGNAL_CODES:
-                # "We could not ask" is not "it changed" (SOLUSDEV-167).
-                raise
-            return True  # On any other probe failure, let a full sync decide.
+        repo = _safe_repo(str(ctx.config["repo"]))
+        configured = ctx.config.get("branch")
+        async with self._http(ctx.credentials) as client:
+            resolved = (
+                _safe_branch(str(configured))
+                if configured
+                else await self._default_branch(client, repo)
+            )
+            etag = ctx.cursor.get(ETAG_KEY)
+            if isinstance(etag, str) and etag and ctx.cursor.get("branch") == resolved:
+                unchanged = await self._head_unmodified(client, repo, resolved, etag)
+                if unchanged:
+                    return False
+            sha = await self._head_sha(client, repo, resolved)
+
         return sha != ctx.cursor.get("sha")
 
     async def _head_unmodified(

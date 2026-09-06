@@ -68,6 +68,7 @@ from solus_api.routers import (
     users,
     webhooks,
     widgets,
+    workspace_layout,
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
@@ -381,6 +382,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(hosted.router)
     app.include_router(artifacts.router)
     app.include_router(solus_config.router)
+    app.include_router(workspace_layout.router)
     app.include_router(entities.router)
     app.include_router(sol.router)
     app.include_router(bench_router)

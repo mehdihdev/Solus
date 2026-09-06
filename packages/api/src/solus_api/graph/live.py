@@ -59,7 +59,7 @@ def channel(project_id: uuid.UUID) -> str:
 def graph_changed_frame(
     *,
     project_id: uuid.UUID,
-    source_id: uuid.UUID,
+    source_id: uuid.UUID | None,
     sync_id: uuid.UUID | None,
     counts: Any,
     at: str,
@@ -69,7 +69,7 @@ def graph_changed_frame(
     return {
         "type": "graph.changed",
         "project_id": str(project_id),
-        "source_id": str(source_id),
+        "source_id": str(source_id) if source_id else None,
         "sync_id": str(sync_id) if sync_id else None,
         "counts": {
             "entities_created": counts.entities_created,

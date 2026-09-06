@@ -315,7 +315,6 @@ async def test_missing_content_length_is_refused(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-
 class TapConn:
     """Tappable LiveConnection double for route tests."""
 
@@ -424,9 +423,7 @@ async def test_sources_reports_honest_availability(
     client: AsyncClient, alice_headers: dict[str, str], fake_local: FakeLocal
 ) -> None:
     project_id = await _member_project(client, alice_headers)
-    resp = await client.get(
-        f"/api/v1/projects/{project_id}/bench/sources", headers=alice_headers
-    )
+    resp = await client.get(f"/api/v1/projects/{project_id}/bench/sources", headers=alice_headers)
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     assert data["runner"] == {"available": True, "reason": None}
@@ -626,9 +623,7 @@ async def test_mcap_requires_configured_root_and_refuses_escapes(
 
     app.state.settings.bench_data_root = str(tmp_path)
     (tmp_path / "run.mcap").write_bytes(b"\x89MCAP0\r\n")
-    escape = await client.post(
-        url, json=mcap_body("../../etc/passwd"), headers=alice_headers
-    )
+    escape = await client.post(url, json=mcap_body("../../etc/passwd"), headers=alice_headers)
     assert escape.status_code == 422
     missing = await client.post(url, json=mcap_body("ghost.mcap"), headers=alice_headers)
     assert missing.status_code == 422

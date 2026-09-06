@@ -25,6 +25,7 @@ import {
   disconnectSource,
   triggerSync,
   getSyncs,
+  getJob,
   listEntities,
   getGraphNeighborhood,
   type Me
@@ -598,4 +599,28 @@ describe('settings surfaces (SOLUSDEV-86)', () => {
     expect(sub.plan).toBe('pro')
     expect(sub.limits.max_projects).toBeNull()
   })
+})
+
+describe('workspace service requests', () => {
+  it('requests cache-only documents without an implicit refresh', async () => {
+    const { client, calls } = stubClient([])
+    await listConnectionDocuments('c1', { cacheOnly: true }, client)
+    expect(calls[0].path).toBe('/users/me/connections/c1/documents?cache_only=true')
+  })
+  it('reads the specific accepted job rather than older source sync history', async () => {
+    const job = { id: 'j1', project_id: 'p1', status: 'succeeded', error: null }
+    const { client, calls } = stubClient(job)
+    expect(await getJob('j1', client)).toEqual(job)
+    expect(calls[0].path).toBe('/jobs/j1')
+  })
+})
+
+it('listAllSources follows every source page so existing document bindings are retained', async () => {
+  const { listAllSources } = await import('./resources')
+  const { client } = stubClient([])
+  vi.mocked(client.requestPage)
+    .mockResolvedValueOnce({ data: [{ id: 'first' }], meta: { has_next: true, next_cursor: 'c2' } })
+    .mockResolvedValueOnce({ data: [{ id: 'last' }], meta: { has_next: false } })
+  expect(await listAllSources('p1', client)).toEqual([{ id: 'first' }, { id: 'last' }])
+  expect(client.requestPage).toHaveBeenNthCalledWith(2, '/projects/p1/sources?limit=200&cursor=c2')
 })

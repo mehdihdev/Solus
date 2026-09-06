@@ -185,9 +185,8 @@ async def test_a_no_signal_probe_does_not_buy_a_full_sync(maker: Any) -> None:
     assert caught.value.code == "quota_exhausted"
 
 
-async def test_an_ordinary_probe_failure_still_falls_through_to_a_sync(maker: Any) -> None:
-    """The fail-safe survives for genuinely ambiguous errors — a 500 could mean
-    anything, so it must not silently skip a sync and risk missing a change."""
+async def test_an_ordinary_probe_failure_defers_without_sync(maker: Any) -> None:
+    """A failed probe supplies no change evidence; the producer retries later."""
     from solus_api.connectors.contracts import AuthKind, ConnectorError, SyncContext
     from solus_api.connectors.runtime import _unchanged
 
@@ -197,12 +196,10 @@ async def test_an_ordinary_probe_failure_still_falls_through_to_a_sync(maker: An
         async def detect_changes(self, ctx: SyncContext) -> bool:
             raise ConnectorError("api_error", "upstream 500")
 
-    assert (
+    with pytest.raises(ConnectorError):
         await _unchanged(
             connector=cast(Connector, _Broken()),
             credentials=Credentials(token="t"),
             config={},
             cursor={"v": "1"},
         )
-        is False
-    )

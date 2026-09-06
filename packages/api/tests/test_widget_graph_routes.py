@@ -309,12 +309,12 @@ async def test_team_b_cannot_read_team_a_layer_and_a_viewer_can(
     assert await _graph(client, bob_headers, bobs_project) == ABSENT
 
 
-async def test_the_layer_has_no_mutating_generic_entity_route_today(
+async def test_the_layer_is_read_only_through_the_generic_entity_routes(
     client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
 ) -> None:
-    """`routers/entities.py` is read-only by design, so PATCH/DELETE are 405. When
-    the graph-core ticket adds a mutating route it MUST refuse `origin != manual`
-    (ADR-027) — tighten this to 403/409 then."""
+    """SOLUSDEV-242 added PATCH/DELETE on `/entities/{id}` for the manual Physical
+    Robot subtype only; a `system`-origin workspace node must be refused (ADR-027:
+    edit rights are an `origin == manual` allowlist), and the row must not move."""
     _, project_id = await project_for(client, alice_headers)
     await seed_extension(db, "bom")
     await _installed(client, alice_headers, project_id)
@@ -323,8 +323,10 @@ async def test_the_layer_has_no_mutating_generic_entity_route_today(
     patched = await client.patch(
         url, json={"name": "Renamed"}, headers={**alice_headers, "If-Match": "1"}
     )
-    assert patched.status_code == 405, patched.text
-    assert (await client.delete(url, headers=alice_headers)).status_code == 405
+    assert patched.status_code == 409, patched.text
+    assert patched.json()["error"]["code"] == "conflict"
+    deleted = await client.delete(url, headers={**alice_headers, "If-Match": "1"})
+    assert deleted.status_code == 409, deleted.text
     still = await db.get(GraphEntity, uuid.UUID(root_id))
     assert still is not None and still.deleted_at is None and still.name == "Workspace"
 

@@ -253,7 +253,9 @@ async def _project_source_for_start(
     config: dict[str, Any] = {"repo": body.repo} if body.repo else {}
     if body.access:
         config["access"] = body.access
-    source = await reusable_source(session, project, source_type, connector)
+    source = await reusable_source(
+        session, project, source_type, connector, pending_user_id=user.id
+    )
     if source is None:
         source = Source(
             project_id=project.id,

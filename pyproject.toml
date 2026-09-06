@@ -130,7 +130,7 @@ asyncio_mode = "auto"
 # hang, which then fails with every thread's stack instead of stalling CI.
 timeout = 300
 timeout_method = "thread"
-testpaths = ["packages", "integrations", "reasoning", "livebench"]
+testpaths = ["packages", "integrations", "reasoning", "livebench", "infrastructure/ci/tests"]
 addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros"
 # Setting norecursedirs REPLACES pytest's defaults, so the defaults we rely on
 # are restated alongside the vendored MCP fork trees (upstream/, vendor/).

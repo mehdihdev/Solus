@@ -405,7 +405,7 @@ No new table. What changes around the existing ones (`docs/api/widget-bundles.md
   refusal is unchanged for everyone else.
 - **`graph_entity`**: rows written by a bundle's backend carry `kind = 'ext:<slug>:<name>'`,
   `origin = 'extension'` (ADR-027 amendment 2026-09-05), `source_id`/`external_ref` NULL. The
-  `.solus/project.toml` file a code connector syncs lands as `kind = 'solus_config'`,
+  `.solus/project.toml` file a code connector syncs lands as `kind = 'solus_project_toml'`,
   `origin = 'connector'`, `attrs = { path, ext: { <slug>: {…} } }` (one live row per source).
 - **Uninstall** (`DELETE …/extensions/{slug}`) soft-deletes the pinned manifest's kinds (and
   touching `graph_edge`s) in the project and prunes `ext:<slug>` entries from every

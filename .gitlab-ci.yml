@@ -15,31 +15,30 @@ variables:
   UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
   IMAGE_TAG: "arm-latest" # the tag your ECS task definition references
 
-# Change-scoped jobs (SOLUSDEV-240 CI speedup). On MR pipelines a job runs only
-# when files in its half of the monorepo changed; main always runs everything so
-# a JS-only merge can never hide a Python break. `needs: []` makes every job a
-# DAG root: nothing waits for the lint/typecheck STAGES to finish first.
+# Validate relevant changes before merge; protected main requires a successful
+# MR pipeline and only builds/deploys afterward. `needs: []` avoids stage waits.
 .python-rules:
   needs: []
   rules:
-    - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - .gitlab-ci.yml
         - pyproject.toml
         - uv.lock
+        - .dockerignore
+        - infrastructure/**/*
         - packages/api/**/*
         - packages/companion/**/*
         - packages/contracts/python/**/*
         - livebench/**/*
         - integrations/**/*
         - reasoning/**/*
+        - scripts/**/*.py
 
 .node-rules:
   needs: []
   rules:
-    - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
@@ -51,6 +50,7 @@ variables:
         - tsconfig.base.json
         - eslint.config.mjs
         - .prettierrc.json
+        - vitest.config.ts
         - apps/**/*
         - packages/shared-types/**/*
         - packages/contracts/**/*
@@ -66,38 +66,47 @@ variables:
   cache:
     key: { files: [pnpm-lock.yaml] }
     paths: [.pnpm-store]
+    policy: pull
 
 .python-base:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
   tags: [aws-arm]
   before_script:
-    - uv sync --all-packages --frozen || uv sync --all-packages
+    - uv sync --all-packages --locked
   cache:
     key: { files: [uv.lock] }
     paths: [.uv-cache]
+    policy: pull
 
 lint:python:
-  extends: [.python-base, .python-rules]
+  extends: .python-rules
   stage: lint
-  script: uv run ruff check .
+  # Match uv.lock without installing the API, CAD kernel, or simulator for lint.
+  image: { name: "ghcr.io/astral-sh/ruff:0.15.17-alpine", entrypoint: [""] }
+  tags: [aws-arm]
+  script: ruff check .
 
 lint:node:
   extends: [.node-base, .node-rules]
   stage: lint
+  cache:
+    policy: pull-push
   script: pnpm lint
 
 typecheck:python:
   extends: [.python-base, .python-rules]
   stage: typecheck
-  script: uv run mypy packages/api/src packages/companion/src
+  # One writer per dependency cache; later jobs only extract it.
+  cache:
+    policy: pull-push
+  script: uv run --no-sync mypy packages/api/src packages/companion/src
 
 typecheck:node:
   extends: [.node-base, .node-rules]
   resource_group: arm-runner-heavy
   stage: typecheck
   variables:
-    # The renderer's `tsc` needs ~500 MB of V8 heap; the ARM runner's default
-    # cap (~470 MB on a 2 GB box) OOM-kills it (pipeline #2819426716).
+    # The renderer's `tsc` needs ~500 MB of V8 heap; retain the established cap.
     NODE_OPTIONS: "--max-old-space-size=1536"
   script: pnpm typecheck
 
@@ -117,6 +126,18 @@ test:python:
   services:
     - name: pgvector/pgvector:pg16
       alias: postgres
+      # Disposable job database: avoid durable disk flushing on every fixture
+      # TRUNCATE. Never apply these settings to a persistent database.
+      command:
+        [
+          "postgres",
+          "-c",
+          "fsync=off",
+          "-c",
+          "synchronous_commit=off",
+          "-c",
+          "full_page_writes=off",
+        ]
   variables:
     FF_NETWORK_PER_BUILD: "true"
     POSTGRES_USER: solus
@@ -128,16 +149,19 @@ test:python:
     # path (packages/api/pyproject.toml), but it dlopens libGL and bookworm-slim
     # ships no OpenGL runtime — so it imported nowhere and ~40 CAD tests SKIPPED
     # silently while the rest failed on unrelated-looking assertions.
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1
+    # Git is also needed by the scanner's temporary-repository regression tests.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 git
     # Fail LOUDLY if that ever regresses. A silent skip is the failure mode that
     # hid this: the suite stays green while the CAD path goes entirely untested.
-    - uv run python -c 'from solus_api.connectors.step_parser import step_reader_available as ok; assert ok(), "OCCT unavailable — CAD tests would silently skip"'
-    # SERIAL on purpose. `-n 2` on the 2 GB ARM runner OOM-killed nine xdist
-    # workers in one run ("node down: Not properly terminated"); each restart
-    # re-imports OCCT + MuJoCo, which is how a 10-minute suite took 95 minutes.
-    # One worker (~700 MB) fits. Restore `-n 2` (conftest already gives every
-    # xdist worker its own database) once the runner has ≥ 4 GB.
-    - uv run pytest -q -rfE
+    - uv run --no-sync python -c 'from solus_api.connectors.step_parser import step_reader_available as ok; assert ok(), "OCCT unavailable — CAD tests would silently skip"'
+    # The aws-arm t4g.micro has 1 GiB RAM. Two workers regressed the real suite
+    # from 27 min to 48 min; use serial execution and expose slow-test timings.
+    - uv run --no-sync pytest -q -rfE -m 'not live' --durations=20 --junitxml=reports/pytest.xml
+  artifacts:
+    when: always
+    expire_in: 7 days
+    reports:
+      junit: reports/pytest.xml
 
 test:node:
   extends: [.node-base, .node-rules]
@@ -149,8 +173,13 @@ security:gitleaks:
   stage: security
   needs: []
   tags: [aws-arm]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+  variables:
+    GIT_DEPTH: "0" # The MR base must exist; scan every introduced commit.
   image: { name: "zricethezav/gitleaks:latest", entrypoint: [""] }
-  script: gitleaks detect --source . --config .gitleaks.toml --no-banner --redact
+  script: sh infrastructure/ci/scan-secrets.sh
 
 build:api-image:
   stage: build
@@ -167,6 +196,8 @@ build:api-image:
 
 deploy:staging:
   stage: deploy
+  needs: ["build:api-image"]
+  interruptible: false
   tags: [aws-arm]
   image: { name: "amazon/aws-cli:latest", entrypoint: [""] }
   rules:

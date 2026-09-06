@@ -296,35 +296,71 @@ def record_connection_failure(connection: AccountConnection, exc: ConnectorError
 # --------------------------------------------------------------- binding
 
 
-def bind_source(source: Source, connection: AccountConnection) -> None:
+def bind_source(
+    source: Source, connection: AccountConnection, *, preserve_state: bool = False
+) -> None:
     """Attach a project source to an account. The source MIRRORS the connection's
     ref and identity so every existing credential path is unchanged."""
     source.connection_id = connection.id
     source.secret_ref = connection.secret_ref
     source.account_login = connection.account_login
     source.account_external_id = connection.account_external_id
-    source.status = SourceStatus.CONNECTED
-    source.last_error = None
+    if not preserve_state:
+        source.status = SourceStatus.CONNECTED
+        source.last_error = None
     access = connection.config.get("access") if isinstance(connection.config, dict) else None
     if access:
         source.config = {**source.config, "access": access}
 
 
 async def reusable_source(
-    session: AsyncSession, project: Project, source_type: SourceType, connector: Connector
+    session: AsyncSession,
+    project: Project,
+    source_type: SourceType,
+    connector: Connector,
+    *,
+    connection: AccountConnection | None = None,
+    config: dict[str, Any] | None = None,
+    pending_user_id: uuid.UUID | None = None,
 ) -> Source | None:
-    """The source a (re)connect should REUSE in this project, or None for a new one.
+    """Reuse only the same grant and repository selection; never switch accounts.
 
-    Whether a second source is meaningful is the CONNECTOR's business, read from
-    the `selection` it declares: account-level (`multi` — Onshape and every CAD
-    tool after it) means one source per provider per project, so reuse it —
-    which doubles as "switch account". Item-level (`single` — a code host names
-    ONE repository) legitimately has several. No selection: create every time.
+    A legacy unbound source may be adopted when its known provider identity
+    matches. Before an OAuth exchange the account is unknown, so nothing is
+    safely reusable. Project locking serializes concurrent first attachments.
     """
     selection = getattr(connector, "selection", None)
-    if not isinstance(selection, dict) or selection.get("mode") != "multi":
+    if connection is None:
+        # An unfinished handshake has proved no account and carries no grant.
+        # Reusing only that same user's empty scaffolding is safe; a completed
+        # source is never a "switch account" target at OAuth start.
+        if (
+            pending_user_id is None
+            or not isinstance(selection, dict)
+            or selection.get("mode") != "multi"
+        ):
+            return None
+        await session.execute(select(Project.id).where(Project.id == project.id).with_for_update())
+        pending: Source | None = await session.scalar(
+            select(Source)
+            .where(
+                Source.project_id == project.id,
+                Source.type == source_type,
+                Source.created_by == pending_user_id,
+                Source.status == SourceStatus.PENDING,
+                Source.connection_id.is_(None),
+                Source.account_external_id.is_(None),
+                Source.secret_ref.is_(None),
+            )
+            .order_by(Source.created_at, Source.id)
+            .limit(1)
+            .with_for_update()
+        )
+        return pending
+    if not isinstance(selection, dict) or selection.get("mode") not in ("multi", "single"):
         return None
-    return (
+    await session.execute(select(Project.id).where(Project.id == project.id).with_for_update())
+    candidates = (
         await session.scalars(
             select(Source)
             .where(
@@ -332,10 +368,28 @@ async def reusable_source(
                 Source.type == source_type,
                 Source.status != SourceStatus.DISCONNECTED,
             )
-            .order_by(Source.created_at)
-            .limit(1)
+            .order_by(Source.created_at, Source.id)
+            .with_for_update()
         )
-    ).first()
+    ).all()
+    for source in candidates:
+        same_account = source.connection_id == connection.id or (
+            source.connection_id is None
+            and bool(connection.account_external_id)
+            and source.account_external_id == connection.account_external_id
+        )
+        if not same_account:
+            continue
+        if selection.get("mode") == "single":
+            key = str(selection["config_key"])
+            desired = config or {}
+            if not desired.get(key) or source.config.get(key) != desired.get(key):
+                continue
+            # A configured branch is part of repository identity too.
+            if source.config.get("branch") != desired.get("branch"):
+                continue
+        return source
+    return None
 
 
 # --------------------------------------------------------------- revocation
@@ -677,6 +731,7 @@ async def list_documents(
     provider: str,
     account_ref: str,
     refresh: bool = False,
+    cache_only: bool = False,
 ) -> Fetched[list[dict[str, Any]]]:
     """An account's selectable documents/repositories, from the cache.
 
@@ -685,6 +740,16 @@ async def list_documents(
     a timer. The fetch goes through the credential-refresh path, so an expired
     access token refreshes rather than 502s.
     """
+    if cache_only:
+        if refresh:
+            raise APIError(422, "validation_error", "cache_only and refresh cannot be combined")
+        hit = await cache.cached_listing(provider, account_ref)
+        if hit is None:
+            raise APIError(
+                409, "listing_not_cached", "Load documents to populate the account listing"
+            )
+        return hit
+
     lister: Callable[[Credentials], Awaitable[list[dict[str, Any]]]] | None = getattr(
         connector, "list_selectable", None
     )

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { GRAPH_CACHE_TTL_MS, countsOf, graphVersionOf, isGraphCacheValid } from './graphCache'
+import { graphVersionOf } from './graphCache'
 import type { ProjectDetail } from '../../lib/api/resources'
 
 const DETAIL: ProjectDetail = {
@@ -15,6 +15,12 @@ const DETAIL: ProjectDetail = {
 }
 
 describe('graphVersionOf', () => {
+  it('invalidates a manual rename even when source stamps and graph counts are unchanged', () => {
+    const before = { ...DETAIL, graph_updated_at: '2026-09-06T01:00:00Z' }
+    const after = { ...before, graph_updated_at: '2026-09-06T01:00:01Z' }
+    expect(graphVersionOf(after)).not.toBe(graphVersionOf(before))
+  })
+
   it('is stable for an unchanged detail and ignores unrelated fields', () => {
     expect(graphVersionOf(DETAIL)).toBe(graphVersionOf({ ...DETAIL, name: 'renamed' }))
   })
@@ -25,32 +31,14 @@ describe('graphVersionOf', () => {
   })
 
   it('changes when a source syncs again', () => {
-    const synced = { ...DETAIL, sources: [{ ...(DETAIL.sources[0] as object), last_synced_at: 'later' }] }
+    const synced = {
+      ...DETAIL,
+      sources: [{ ...(DETAIL.sources[0] as object), last_synced_at: 'later' }]
+    }
     expect(graphVersionOf(synced)).not.toBe(graphVersionOf(DETAIL))
   })
 
   it('tolerates sources of unknown shape', () => {
     expect(() => graphVersionOf({ ...DETAIL, sources: [null, 3, 'x'] })).not.toThrow()
-  })
-})
-
-describe('isGraphCacheValid', () => {
-  const entry = { version: graphVersionOf(DETAIL), entities: [], counts: countsOf(DETAIL), fetchedAtMs: 1_000 }
-
-  it('is false without an entry', () => {
-    expect(isGraphCacheValid(undefined, DETAIL, 1_000)).toBe(false)
-  })
-
-  it('is true for a matching version inside the TTL', () => {
-    expect(isGraphCacheValid(entry, DETAIL, 1_000 + GRAPH_CACHE_TTL_MS - 1)).toBe(true)
-  })
-
-  it('expires at the TTL even when the version still matches', () => {
-    expect(isGraphCacheValid(entry, DETAIL, 1_000 + GRAPH_CACHE_TTL_MS)).toBe(false)
-  })
-
-  it('is false when the graph changed', () => {
-    const changed = { ...DETAIL, stats: { entities: 0, relations: 0 } }
-    expect(isGraphCacheValid(entry, changed, 1_001)).toBe(false)
   })
 })

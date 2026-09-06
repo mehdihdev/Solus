@@ -3,7 +3,7 @@ ADR-034 Layer 2 + ADR-035 §4 as amended, widget-bundles.md §6).
 
 Two pure-ish halves: :func:`parse_project_toml_ext` turns the file's TEXT into
 the bounded ``{slug: {key: scalar}}`` map a connector lands as ONE
-``solus_config`` graph entity (everything else in the file is ignored for now);
+``solus_project_toml`` graph entity (everything else in the file is ignored for now);
 :func:`read_bundle_config` reads that entity back for one bundle and types the
 values against the bundle's declared settings schema. The file is untrusted
 input (CLAUDE.md §7; ADR-034 §5): strict caps, scalars only, never a secret,
@@ -29,7 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.models import GraphEntity
 
-SOLUS_CONFIG_KIND = "solus_config"
+# NOT "solus_config": that kind is the project's `.solus` root node (SOLUSDEV-242,
+# services/solus_graph.py). This is the repo-committed file a code connector lands.
+SOLUS_CONFIG_KIND = "solus_project_toml"
 SOLUS_CONFIG_PATH = ".solus/project.toml"
 MAX_PROJECT_TOML_BYTES = 64 * 1024
 MAX_EXT_TABLES = 16

@@ -216,11 +216,12 @@ async def test_detect_changes_compares_head_sha() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_detect_changes_true_on_probe_failure() -> None:
+async def test_detect_changes_propagates_probe_failure() -> None:
     respx.get(f"{API}/projects/{ENC}/repository/commits/{DEFAULT_BRANCH}").mock(
         return_value=httpx.Response(500, json={"message": "boom"})
     )
-    assert await GitLabConnector().detect_changes(_ctx(cursor={"sha": HEAD_SHA})) is True
+    with pytest.raises(ConnectorError):
+        await GitLabConnector().detect_changes(_ctx(cursor={"sha": HEAD_SHA}))
 
 
 @pytest.mark.asyncio
@@ -252,7 +253,7 @@ async def test_tree_pagination_bounded_against_stuck_next_page() -> None:
 
 
 # --------------------------------------------------------------------------
-# SOLUSDEV-246 (STORE ST1): `.solus/project.toml` `[ext.<id>]` → one `solus_config` entity.
+# SOLUSDEV-246 (STORE ST1): `.solus/project.toml` `[ext.<id>]` → one `solus_project_toml` entity.
 
 SOLUS_TOML = b"[ext.fixture-bundle]\nmax_notes = 3\n"
 RAW_URL = f"{API}/projects/{ENC}/repository/files/{quote('.solus/project.toml', safe='')}/raw"
@@ -287,7 +288,7 @@ async def test_solus_project_toml_lands_as_one_solus_config_entity() -> None:
     result = await GitLabConnector().sync(_ctx())
     by_key = {e.source_key: e for e in result.entities}
     config = by_key[".solus/project.toml"]
-    assert config.type == "solus_config"
+    assert config.type == "solus_project_toml"
     assert config.domain == Domain.CODE
     assert config.properties["ext"] == {"fixture-bundle": {"max_notes": 3}}
     assert result.errors == []
