@@ -40,7 +40,7 @@ repo; the documents above were used instead.
 - **API:** new suites `test_widget_bundles.py` (23), `test_widget_bundle_routes.py` (14),
   `test_fixture_bundle_folder.py` (2), `test_solus_config_parse.py` (5); additions to the GitHub,
   GitLab, publish, installs and red-team suites. Isolation tests: team B → 404 on routes, tools bound
-  to their project, sweep never crosses projects. Full API suite: see the final line of this section.
+  to their project, sweep never crosses projects. Full API suite: **3651 passed, 4 skipped** (15 min 46 s, 2026-09-06).
 - **Desktop:** 2608 tests, typecheck clean. Pre-existing lint errors remain in files this ticket
   did not touch (`useExtensions.ts:126`, `GraphScreen.tsx`, `useGraphSummary.ts`, `useGuide.ts`,
   onboarding, overlay, project) — on the branch before this work.
