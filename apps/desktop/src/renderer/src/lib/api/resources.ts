@@ -1003,8 +1003,13 @@ export function updateTeam(
 }
 
 /** Delete a team (owner only; API.md §2.2). Irreversible — confirm in the UI first. */
+/** Owner-only, and the API demands `?confirm=true` (API.md §2.2) — the UI's
+ *  confirm dialog IS that confirmation. Found in the HOME H5 live run: without
+ *  the flag every desktop delete answered 400 `confirmation_required`. */
 export function deleteTeam(teamId: string, client: ApiClient = api): Promise<void> {
-  return client.request<void>(`/teams/${teamId}`, { method: 'DELETE' })
+  return client.request<void>(`/teams/${encodeURIComponent(teamId)}?confirm=true`, {
+    method: 'DELETE'
+  })
 }
 
 export function listMembers(teamId: string, client: ApiClient = api): Promise<TeamMemberApi[]> {

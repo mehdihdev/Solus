@@ -411,7 +411,8 @@ describe('team resources', () => {
     const { deleteTeam } = await import('./resources')
     const { client, calls } = stubClient(undefined)
     await deleteTeam('t1', client)
-    expect(calls[0].path).toBe('/teams/t1')
+    // The API demands ?confirm=true (found in the HOME H5 live run).
+    expect(calls[0].path).toBe('/teams/t1?confirm=true')
     expect(calls[0].options).toMatchObject({ method: 'DELETE' })
   })
 
