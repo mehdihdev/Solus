@@ -97,7 +97,11 @@ function LiveHome({
       <TeamStrip
         team={home.team}
         teams={home.teams}
-        memberCount={team.detail?.member_count ?? null}
+        // The live roster once loaded (a removal updates it at once); the
+        // detail's count only until then.
+        memberCount={
+          team.status === 'ready' ? team.members.length : (team.detail?.member_count ?? null)
+        }
         myRole={team.myRole}
         teamLimit={team.teamLimit}
         onSwitch={home.actions.switchTeam}
