@@ -88,6 +88,9 @@ async def record_quota_transition(
     whether an event was queued. Never raises — accounting must not fail a read."""
     try:
         seen = await redis.get(_seen_key(connection))
+        # A real client answers in bytes (no decode_responses); the fake in str.
+        if isinstance(seen, bytes):
+            seen = seen.decode("utf-8", "replace")
         if seen == quota.status:
             return False
         await redis.set(_seen_key(connection), quota.status, ex=_SEEN_TTL_SECONDS)

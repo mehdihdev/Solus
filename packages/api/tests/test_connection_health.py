@@ -229,3 +229,26 @@ async def test_health_and_quota_are_owner_only(
     bob = bearer(BOB["sub"], BOB["email"])
     await me(client, bob)
     assert await _connections(client, bob) == []
+
+
+class _BytesRedis(FakeRedis):
+    """The real redis client answers `get` in bytes — caught in the live run,
+    where every Home load recorded a fresh event because b"degraded" != "degraded"."""
+
+    async def get(self, key: str) -> bytes | None:  # type: ignore[override]
+        value = self.values.get(key)
+        return None if value is None else value.encode()
+
+
+async def test_the_transition_marker_survives_a_bytes_answering_redis(
+    app: FastAPI, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    redis = _BytesRedis()
+    app.state.redis = redis
+    await _consent(client, alice_headers)
+    await _connect_account(client, alice_headers)
+    redis.values[LEDGER] = str(int(ALLOWANCE * 0.8))
+    await _connections(client, alice_headers)
+    await _connections(client, alice_headers)
+    await _connections(client, alice_headers)
+    assert len(await _events(db, "integration.quota_degraded")) == 1
