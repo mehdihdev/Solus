@@ -30,8 +30,8 @@ async def test_project_detail_includes_summaries(
     resp = await client.get(f"/api/v1/projects/{project['id']}", headers=alice_headers)
     assert resp.status_code == 200
     data = resp.json()["data"]
-    # Graph/sources land in Phases 2–3; the detail shape ships now with empty summaries.
-    assert data["stats"] == {"entities": 0, "relations": 0}
+    # A fresh project holds exactly one entity — its own `.solus` node (SOLUSDEV-240).
+    assert data["stats"] == {"entities": 1, "relations": 0}
     assert data["sources"] == []
 
 
@@ -248,12 +248,13 @@ async def test_dashboard_list_and_detail_have_real_stats(
         await client.get(f"/api/v1/teams/{team['id']}/projects", headers=alice_headers)
     ).json()["data"]
     row = next(p for p in listing if p["id"] == project["id"])
-    assert row["stats"] == {"entities": 2, "sources": 1}
+    # 2 synced entities + the project's `.solus` node (SOLUSDEV-240).
+    assert row["stats"] == {"entities": 3, "sources": 1}
 
     detail = (await client.get(f"/api/v1/projects/{project['id']}", headers=alice_headers)).json()[
         "data"
     ]
-    assert detail["stats"] == {"entities": 2, "relations": 1}
+    assert detail["stats"] == {"entities": 3, "relations": 1}
     assert len(detail["sources"]) == 1
     assert detail["sources"][0]["name"] == "octo/r"
     assert detail["sources"][0]["status"] == "connected"
@@ -380,7 +381,9 @@ async def test_delete_project_leaves_sibling_graph_intact(
                 .select_from(model)
                 .where(model.project_id == _uuid.UUID(survivor["id"]))
             )
-            assert count == 1, f"sibling {model.__name__} rows were destroyed"
+            # GraphEntity: the seeded row + the sibling's own `.solus` node (SOLUSDEV-240).
+            expected = 2 if model is GraphEntity else 1
+            assert count == expected, f"sibling {model.__name__} rows were destroyed"
     # Sibling's credential survives; the deleted project's is gone.
     assert await store.get("source/survivor/github") == "survivor-token"
     import pytest as _pytest

@@ -43,7 +43,7 @@ interface FocusStep {
   readonly relation: string; // graph_edge.relation_type traversed FROM this step
 }
 
-type Domain = "code" | "electrical" | "mechanical" | "simulation" | "runtime";
+type Domain = "code" | "electrical" | "mechanical" | "simulation" | "runtime" | "project";
 ```
 
 ### Three decisions worth knowing
@@ -62,8 +62,9 @@ which is a normal state, not a missing one.
 `path[i+1]` (or toward the focus, for the last step). Defining it forward rather than
 backward means every step has one; there is no null-origin case for consumers to handle.
 
-**`Domain` mirrors `solus_api.models.Domain`** (ADR-027) — exactly those five spellings.
-Adding a domain is a graph-wide decision, not a frontend one.
+**`Domain` mirrors `solus_api.models.Domain`** (ADR-027) — exactly those six spellings
+(`project` added by the ADR-027 amendment of 2026-09-05 for the `.solus` node and imported
+documents). Adding a domain is a graph-wide decision, not a frontend one.
 
 ---
 

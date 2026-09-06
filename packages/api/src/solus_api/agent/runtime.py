@@ -96,6 +96,14 @@ def build_sol_registry(
     package relays JSON only, so the reasoning import graph stays MCP-free."""
     registry = ToolRegistry()
     registry.register(build_get_entity_tool(session_factory, project_id))
+    if user_id is not None:
+        # SOLUSDEV-240: SOL may file a note into the project `.solus` as the
+        # requesting user. Function-local import (house pattern).
+        from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
+
+        registry.register(
+            build_add_solus_entry_tool(session_factory, project_id, user_id=user_id)
+        )
     if systems is not None:
         # SYS-03: the four builtin reads (query_graph / get_telemetry /
         # retrieve_errors / run_checkers) as thin closures over the real

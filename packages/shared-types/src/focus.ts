@@ -11,7 +11,7 @@
 
 /**
  * The domains the graph spans. Mirrors `solus_api.models.Domain` (ADR-027) —
- * exactly these five, in these spellings. Adding one is a graph-wide decision,
+ * exactly these six, in these spellings. Adding one is a graph-wide decision,
  * not a frontend one.
  */
 export const DOMAINS = [
@@ -20,6 +20,7 @@ export const DOMAINS = [
   "mechanical",
   "simulation",
   "runtime",
+  "project",
 ] as const;
 export type Domain = (typeof DOMAINS)[number];
 

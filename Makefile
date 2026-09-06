@@ -32,7 +32,7 @@ typecheck:
 	uv run mypy packages/api/src && pnpm typecheck
 
 test:
-	uv run pytest -q && pnpm test
+	uv run pytest -q -n auto && pnpm test
 
 mcp-forks: ## materialize the vendored MCP forks' private virtualenvs (hash-verified; ADR-031)
 	bash scripts/install-mcp-forks.sh

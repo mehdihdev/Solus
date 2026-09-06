@@ -66,12 +66,12 @@ describe('ProjectOverview', () => {
     expect(screen.getByText('30')).toBeInTheDocument()
   })
 
-  it('navigates into the Context Model domain', async () => {
+  it('navigates into the Workspace domain', async () => {
     mockOverview({})
     const onNavigate = vi.fn()
     render(<ProjectOverview onNavigate={onNavigate} />)
-    await userEvent.click(screen.getByRole('button', { name: /context model/i }))
-    expect(onNavigate).toHaveBeenCalledWith('graph')
+    await userEvent.click(screen.getByRole('button', { name: /workspace/i }))
+    expect(onNavigate).toHaveBeenCalledWith('workspace')
   })
 
   it('navigates to Sources to manage integrations', async () => {

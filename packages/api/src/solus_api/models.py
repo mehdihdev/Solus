@@ -152,6 +152,9 @@ class Domain(enum.StrEnum):
     MECHANICAL = "mechanical"
     SIMULATION = "simulation"
     RUNTIME = "runtime"
+    # Project-level configuration and documents (the `.solus` node and imported
+    # files) — cross-domain by nature, so they carry their own domain (SOLUSDEV-240).
+    PROJECT = "project"
 
 
 class JobStatus(enum.StrEnum):
@@ -780,6 +783,9 @@ class Artifact(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # bridge acquirer's §4.3 consumption check (SOLUSDEV-100 T4c). Nullable:
     # pre-existing/non-tool-fulfilling artifacts have none.
     tool_call_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+    # SOLUSDEV-240: an artifact filed into the project `.solus` is a kept document,
+    # not a hand-off buffer — exempt from the TTL sweep and one-shot consumption.
+    retained: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
 
 def artifact_is_accessible(
@@ -796,6 +802,50 @@ def artifact_is_accessible(
     if scope == ArtifactScope.PRIVATE:
         return requester_id == created_by
     return requester_has_project_access
+
+
+# ------------------------------------------------------------------ .solus
+class SolusSection(enum.StrEnum):
+    """The five sections of a project's `.solus` (SOLUSDEV-240)."""
+
+    HARDWARE = "hardware"
+    DETAILS = "details"
+    ERRORS = "errors"
+    DOCS = "docs"
+    CODE = "code"
+
+
+class SolusEntryKind(enum.StrEnum):
+    TEXT = "text"  # typed by a person
+    ARTIFACT = "artifact"  # an imported file — a `document` graph node
+    SOL = "sol"  # filed by SOL via `add_solus_entry`
+
+
+class SolusEntry(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """One row under a `.solus` section. Configuration, not graph facts: parts live
+    in the graph, their configs live here. An ARTIFACT entry references the
+    `document` graph node (`entity_id`) and the retained `artifacts` row."""
+
+    __tablename__ = "solus_entries"
+    __table_args__ = (Index("ix_solus_entries_project_section", "project_id", "section"),)
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    section: Mapped[SolusSection] = mapped_column(_enum_column(SolusSection))
+    kind: Mapped[SolusEntryKind] = mapped_column(_enum_column(SolusEntryKind))
+    # TEXT/SOL: the note. ARTIFACT: the display name of the file.
+    text: Mapped[str | None] = mapped_column(Text, default=None)
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="SET NULL"), default=None
+    )
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("graph_entity.id", ondelete="SET NULL"), default=None
+    )
+    author: Mapped[str] = mapped_column(String(16), default="user")  # "user" | "sol"
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
 
 
 # ------------------------------------------------------------------ operational

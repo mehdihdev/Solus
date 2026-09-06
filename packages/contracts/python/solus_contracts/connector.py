@@ -33,6 +33,7 @@ class Domain(enum.StrEnum):
     MECHANICAL = "mechanical"
     SIMULATION = "simulation"
     RUNTIME = "runtime"
+    PROJECT = "project"  # project-level config + documents (ADR-027 amendment, SOLUSDEV-240)
 
 
 class AuthKind(enum.StrEnum):

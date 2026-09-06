@@ -33,6 +33,7 @@ from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_create_project
 from solus_api.services.notifications import notify_team
+from solus_api.services.solus_config import ensure_solus_node
 
 team_router = APIRouter(prefix="/api/v1/teams/{team_id}/projects")
 project_router = APIRouter(prefix="/api/v1/projects")
@@ -97,6 +98,8 @@ async def create_project(body: ProjectCreate, ctx: TeamCtx, session: SessionDep)
     )
     session.add(project)
     await session.flush()
+    # SOLUSDEV-240: every project gets its `.solus` node, in the same transaction.
+    await ensure_solus_node(session, project.id)
     # ADR-025 dual-source access: auto-grant every current team member a ProjectMembership
     # (the creator included). Later joiners are seeded on accept_invite.
     member_ids = (

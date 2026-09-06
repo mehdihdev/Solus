@@ -18,7 +18,7 @@ export interface ShellToast {
 export type MainScreen =
   | 'home'
   | 'overview'
-  | 'graph'
+  | 'workspace'
   | 'sources'
   | 'bench'
   | 'sol'

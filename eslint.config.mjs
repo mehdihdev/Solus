@@ -21,7 +21,9 @@ export default tseslint.config(
       // CI sets PNPM_STORE/UV_CACHE_DIR inside the project dir; never lint the
       // package stores (they contain third-party require()-style sources).
       "**/.pnpm-store/**",
-      "**/.uv-cache/**"
+      "**/.uv-cache/**",
+      // Design mockups (prototype HTML + inline JS), not shipped code.
+      "docs/ui-reference/**"
     ]
   },
   js.configs.recommended,

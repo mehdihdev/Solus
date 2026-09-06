@@ -15,6 +15,47 @@ variables:
   UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
   IMAGE_TAG: "arm-latest" # the tag your ECS task definition references
 
+# Change-scoped jobs (SOLUSDEV-240 CI speedup). On MR pipelines a job runs only
+# when files in its half of the monorepo changed; main always runs everything so
+# a JS-only merge can never hide a Python break. `needs: []` makes every job a
+# DAG root: nothing waits for the lint/typecheck STAGES to finish first.
+.python-rules:
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab-ci.yml
+        - pyproject.toml
+        - uv.lock
+        - packages/api/**/*
+        - packages/companion/**/*
+        - packages/contracts/python/**/*
+        - livebench/**/*
+        - integrations/**/*
+        - reasoning/**/*
+
+.node-rules:
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab-ci.yml
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
+        - .npmrc
+        - tsconfig.base.json
+        - eslint.config.mjs
+        - .prettierrc.json
+        - apps/**/*
+        - packages/shared-types/**/*
+        - packages/contracts/**/*
+        - scripts/**/*
+
 .node-base:
   image: node:22
   tags: [aws-arm]
@@ -36,22 +77,22 @@ variables:
     paths: [.uv-cache]
 
 lint:python:
-  extends: .python-base
+  extends: [.python-base, .python-rules]
   stage: lint
   script: uv run ruff check .
 
 lint:node:
-  extends: .node-base
+  extends: [.node-base, .node-rules]
   stage: lint
   script: pnpm lint
 
 typecheck:python:
-  extends: .python-base
+  extends: [.python-base, .python-rules]
   stage: typecheck
   script: uv run mypy packages/api/src packages/companion/src
 
 typecheck:node:
-  extends: .node-base
+  extends: [.node-base, .node-rules]
   stage: typecheck
   variables:
     # The renderer's `tsc` needs ~500 MB of V8 heap; the ARM runner's default
@@ -60,7 +101,7 @@ typecheck:node:
   script: pnpm typecheck
 
 test:python:
-  extends: .python-base
+  extends: [.python-base, .python-rules]
   stage: test
   services:
     - name: pgvector/pgvector:pg16
@@ -80,15 +121,20 @@ test:python:
     # Fail LOUDLY if that ever regresses. A silent skip is the failure mode that
     # hid this: the suite stays green while the CAD path goes entirely untested.
     - uv run python -c 'from solus_api.connectors.step_parser import step_reader_available as ok; assert ok(), "OCCT unavailable — CAD tests would silently skip"'
-    - uv run pytest -q
+    # 8 workers on purpose even though the runner has few cores: the suite is
+    # wait-bound (DB round trips, 3 s timeout tests), so oversubscription still
+    # pays — 631 s serial → 272 s at -n 8 on a dev box. Each worker builds its own
+    # database (conftest appends the worker id), so they never share tables.
+    - uv run pytest -q -n 2
 
 test:node:
-  extends: .node-base
+  extends: [.node-base, .node-rules]
   stage: test
   script: pnpm test
 
 security:gitleaks:
   stage: security
+  needs: []
   tags: [aws-arm]
   image: { name: "zricethezav/gitleaks:latest", entrypoint: [""] }
   script: gitleaks detect --source . --config .gitleaks.toml --no-banner --redact

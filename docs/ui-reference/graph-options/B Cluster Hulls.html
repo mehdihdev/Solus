@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Graph B — Cluster Hulls</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A0C0F;--sur:#10131A;--sur2:#161B23;--bd:#222834;--tx:#E6E9EE;--mut:#828B99;--acc:#E5A43B;--sw:#62A9FF;--ee:#E3C25B;--me:#E87FAE;--rt:#5BCD8C}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:"IBM Plex Sans",sans-serif;overflow:hidden}
+.top{height:40px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;padding:0 16px;font-size:12.5px}
+.mono{font-family:"IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.stage{position:relative;height:calc(100vh - 41px);background:radial-gradient(var(--bd) 1px,transparent 1px);background-size:26px 26px}
+@keyframes flow{to{stroke-dashoffset:-24}}.hot{animation:flow 1.6s linear infinite}
+</style></head><body>
+<div class="top"><b style="font-size:13px">lerobot-act-cube</b><span style="color:var(--mut)">/</span><span style="color:var(--mut)">Graph</span><span class="mono" style="margin-left:auto;font-size:9.5px">OPTION B · V1 HULLS, COLLAPSED TO CLUSTER CHIPS — CLICK A HULL TO OPEN</span></div>
+<div class="stage">
+<svg width="100%" height="100%" viewBox="0 0 1300 760" preserveAspectRatio="xMidYMid meet">
+  <!-- SW hull collapsed -->
+  <g>
+    <rect x="60" y="80" width="300" height="200" rx="14" fill="var(--sw)" opacity=".045"></rect>
+    <rect x="60" y="80" width="300" height="200" rx="14" fill="none" stroke="var(--sw)" opacity=".22" stroke-dasharray="3 4"></rect>
+    <text x="76" y="104" font-family="IBM Plex Mono" font-size="9.5" letter-spacing="2" fill="var(--sw)" opacity=".85">SOFTWARE</text>
+    <rect x="110" y="150" width="200" height="66" rx="8" fill="var(--sur2)" stroke="color-mix(in srgb,var(--sw) 45%,transparent)" stroke-width="1.4"></rect>
+    <circle cx="136" cy="174" r="5.5" fill="var(--sw)"></circle>
+    <text x="150" y="179" font-size="13" font-weight="600" fill="var(--tx)">GitHub</text>
+    <text x="128" y="202" font-family="IBM Plex Mono" font-size="10" fill="var(--mut)">214 files · 1 alert ▸</text>
+  </g>
+  <!-- RT hull collapsed -->
+  <g>
+    <rect x="60" y="460" width="300" height="200" rx="14" fill="var(--rt)" opacity=".045"></rect>
+    <rect x="60" y="460" width="300" height="200" rx="14" fill="none" stroke="var(--rt)" opacity=".22" stroke-dasharray="3 4"></rect>
+    <text x="76" y="484" font-family="IBM Plex Mono" font-size="9.5" letter-spacing="2" fill="var(--rt)" opacity=".85">RUNTIME</text>
+    <rect x="92" y="520" width="115" height="60" rx="8" fill="var(--sur2)" stroke="color-mix(in srgb,var(--rt) 45%,transparent)" stroke-width="1.4"></rect>
+    <circle cx="112" cy="542" r="5" fill="var(--rt)"></circle><text x="124" y="546" font-size="12" font-weight="600" fill="var(--tx)">MuJoCo</text>
+    <text x="108" y="566" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)">1 scene ▸</text>
+    <rect x="222" y="520" width="115" height="60" rx="8" fill="var(--sur2)" stroke="color-mix(in srgb,var(--rt) 40%,transparent)" stroke-width="1.4"></rect>
+    <circle cx="242" cy="542" r="5" fill="var(--rt)"></circle><text x="254" y="546" font-size="12" font-weight="600" fill="var(--tx)">Wrist cam</text>
+    <text x="238" y="566" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)">30 fps ▸</text>
+  </g>
+  <!-- EE hull OPEN with v1-style pills -->
+  <g>
+    <rect x="470" y="150" width="480" height="440" rx="14" fill="var(--ee)" opacity=".05"></rect>
+    <rect x="470" y="150" width="480" height="440" rx="14" fill="none" stroke="var(--ee)" opacity=".3" stroke-dasharray="3 4"></rect>
+    <text x="486" y="174" font-family="IBM Plex Mono" font-size="9.5" letter-spacing="2" fill="var(--ee)" opacity=".95">ELECTRICAL — SO-101 FOLLOWER · OPEN</text>
+    <text x="866" y="174" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)" style="cursor:pointer">collapse ▴</text>
+    <g font-family="IBM Plex Mono" font-size="10.5">
+      <line x1="600" y1="250" x2="700" y2="320" stroke="var(--tx)" opacity=".12"></line>
+      <line x1="800" y1="250" x2="700" y2="320" stroke="var(--tx)" opacity=".12"></line>
+      <line x1="700" y1="346" x2="700" y2="420" stroke="var(--acc)" stroke-width="1.5" stroke-dasharray="6 5" class="hot"></line>
+      <line x1="700" y1="446" x2="640" y2="510" stroke="var(--acc)" stroke-width="1.5" stroke-dasharray="6 5" class="hot"></line>
+      <rect x="540" y="224" width="112" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="553" cy="237" r="3.2" fill="var(--ee)"></circle><text x="562" y="241" fill="var(--tx)">M1 · base_pan</text>
+      <rect x="742" y="224" width="122" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="755" cy="237" r="3.2" fill="var(--ee)"></circle><text x="764" y="241" fill="var(--tx)">M3 · elbow_flex</text>
+      <rect x="616" y="320" width="168" height="26" rx="5" fill="var(--sur2)" stroke="var(--acc)" stroke-width="1.5"></rect><circle cx="629" cy="333" r="3.2" fill="var(--ee)"></circle><text x="638" y="337" fill="var(--tx)">M2 · shoulder_lift ●</text>
+      <rect x="628" y="420" width="144" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="641" cy="433" r="3.2" fill="var(--ee)"></circle><text x="650" y="437" fill="var(--tx)">servo bus · 5 V</text>
+      <rect x="560" y="510" width="160" height="26" rx="5" fill="var(--sur2)" stroke="var(--acc)" stroke-width="1.5"></rect><circle cx="573" cy="523" r="3.2" fill="var(--ee)"></circle><text x="582" y="527" fill="var(--tx)">supply · 5 V / 2 A ●</text>
+      <text x="790" y="560" fill="var(--mut)" font-size="9.5">+ 2 more</text>
+    </g>
+  </g>
+  <!-- ME hull collapsed, empty-honest -->
+  <g opacity=".55">
+    <rect x="1030" y="80" width="220" height="160" rx="14" fill="none" stroke="var(--bd)" stroke-dasharray="5 5"></rect>
+    <text x="1046" y="104" font-family="IBM Plex Mono" font-size="9.5" letter-spacing="2" fill="var(--mut)">MECHANICAL</text>
+    <text x="1046" y="150" font-size="11.5" fill="var(--mut)">Nothing connected.</text>
+    <text x="1046" y="170" font-size="11.5" fill="var(--mut)">Connect Onshape or a URDF</text>
+    <text x="1046" y="190" font-size="11.5" fill="var(--mut)">and this domain appears.</text>
+  </g>
+  <!-- cross-domain edges between clusters -->
+  <path d="M310 216 C 420 250, 460 280, 616 333" fill="none" stroke="var(--acc)" stroke-width="4" opacity=".5" stroke-dasharray="10 7" class="hot"></path>
+  <text x="384" y="272" font-family="IBM Plex Mono" font-size="10" fill="var(--acc)">12 links</text>
+  <path d="M207 550 C 340 560, 420 480, 560 523" fill="none" stroke="var(--acc)" stroke-width="2.5" opacity=".4" stroke-dasharray="8 7"></path>
+  <text x="356" y="536" font-family="IBM Plex Mono" font-size="10" fill="var(--acc)" opacity=".85">6</text>
+</svg>
+<div style="position:absolute;left:16px;bottom:14px" class="mono"><span style="font-size:9.5px">DOMAIN HULLS · CLUSTERS OPEN IN PLACE · EMPTY DOMAIN = HONEST GAP</span></div>
+</div>
+</body></html>

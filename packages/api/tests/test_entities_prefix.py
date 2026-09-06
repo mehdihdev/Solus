@@ -161,4 +161,6 @@ async def test_a_blank_prefix_is_ignored_rather_than_matching_everything(
 
     rows = await _list(client, alice_headers, project, external_ref_prefix=prefix)
 
-    assert len(rows) == 1
+    # The seeded entity + the project's own `.solus` node (SOLUSDEV-240): a blank
+    # prefix behaves like no filter, so both are listed — a real prefix would not.
+    assert sorted(e["name"] for e in rows) == [".solus", "Rover/Bracket"]

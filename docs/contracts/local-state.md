@@ -10,7 +10,9 @@
 ## What this contract covers
 
 The machine-local, private, never-synced layer of ADR-034: files under `~/.solus/` on the user's
-computer. The team-shared repo `.solus/` layer (TOML) is a separate, later contract.
+computer. The team-shared repo `.solus/` layer (TOML) is a separate, later contract. The
+**project-level `.solus`** (SOLUSDEV-240) is server-stored — see `docs/api/solus.md`; it never
+touches this directory.
 
 | Path                                  | Contents                                                                                                                                                                                                                                                                                                                                                                            | Writer               | Readers                               |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------- |
