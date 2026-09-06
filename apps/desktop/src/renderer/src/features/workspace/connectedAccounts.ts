@@ -46,13 +46,14 @@ export function legacyText(legacy: LegacyConnection): string {
 export function moveDetail(
   providerName: string,
   legacy: LegacyConnection,
-  grant: Connection | null
+  grant: Connection
 ): string {
   const { where } = projectWords(legacy)
-  const scope = grant ? scopeText(grant).toLowerCase() : 'its'
+  const scope = scopeText(grant).toLowerCase()
+  const own = legacy.projects.length > 1 ? "Each project's own" : "The project's own"
   return (
     `${where} will use your linked ${providerName} account (${scope} access). ` +
-    `The project's own ${providerName} token — and any add-on grant on it — is removed; ` +
+    `${own} ${providerName} token — and any add-on grant on it — is removed; ` +
     `syncing continues on your account.`
   )
 }

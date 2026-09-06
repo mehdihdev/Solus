@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import * as resources from '../../lib/api/resources'
 import * as online from './workspaceOnline'
-import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
+import { MOVE_BATCH, linkedAccountFor, useAccountConnections } from './useAccountConnections'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -62,11 +62,16 @@ describe('useAccountConnections — adoption first (SOLUSDEV-242 / H2)', () => {
     })
     let moved = false
     await act(async () => {
-      moved = await result.current.move(legacy)
+      moved = await result.current.move(legacy, ONSHAPE)
     })
     expect(moved).toBe(true)
-    expect(mockedAdopt).toHaveBeenCalledWith({ source_ids: ['s1'], confirm_access: true })
+    // A read grant is no acceptance of widening: confirm_access stays false.
+    expect(mockedAdopt).toHaveBeenCalledWith({ source_ids: ['s1'], confirm_access: false })
     expect(mockedList).toHaveBeenCalledTimes(2) // re-read after the move
+    await act(async () => {
+      await result.current.move(legacy, { ...ONSHAPE, access: 'write' })
+    })
+    expect(mockedAdopt).toHaveBeenLastCalledWith({ source_ids: ['s1'], confirm_access: true })
   })
 
   it('reports a move that moved nothing or failed as false', async () => {
@@ -85,11 +90,11 @@ describe('useAccountConnections — adoption first (SOLUSDEV-242 / H2)', () => {
       skipped: [{ source_id: 's1', project_id: 'p1', reason: 'access_mismatch' }]
     })
     await act(async () => {
-      expect(await result.current.move(legacy)).toBe(false)
+      expect(await result.current.move(legacy, ONSHAPE)).toBe(false)
     })
     mockedAdopt.mockRejectedValue(new Error('500'))
     await act(async () => {
-      expect(await result.current.move(legacy)).toBe(false)
+      expect(await result.current.move(legacy, ONSHAPE)).toBe(false)
     })
   })
 
@@ -111,6 +116,37 @@ describe('useAccountConnections — adoption first (SOLUSDEV-242 / H2)', () => {
     await act(() => result.current.refresh())
     expect(result.current.legacy).toEqual([])
     expect(result.current.connections).toEqual([ONSHAPE])
+  })
+})
+
+describe('useAccountConnections — batches (SOLUSDEV-242 / H2)', () => {
+  it('moves more ids than the server cap in batches', async () => {
+    mockedList.mockResolvedValue([ONSHAPE])
+    const ids = Array.from({ length: MOVE_BATCH + 3 }, (_, i) => `s${i}`)
+    const legacy = {
+      provider: 'onshape',
+      account_login: null,
+      projects: [],
+      source_ids: ids,
+      claimable_connection_id: 'c1'
+    }
+    const { result } = renderHook(() => useAccountConnections())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    mockedAdopt.mockImplementation(async ({ source_ids }) => ({
+      adopted: source_ids.map((id) => ({
+        connection_id: 'c1',
+        provider: 'onshape',
+        source_id: id,
+        project_id: 'p'
+      })),
+      skipped: []
+    }))
+    await act(async () => {
+      expect(await result.current.move(legacy, ONSHAPE)).toBe(true)
+    })
+    expect(mockedAdopt).toHaveBeenCalledTimes(2)
+    expect(mockedAdopt.mock.calls[0][0].source_ids).toHaveLength(MOVE_BATCH)
+    expect(mockedAdopt.mock.calls[1][0].source_ids).toEqual(['s50', 's51', 's52'])
   })
 })
 

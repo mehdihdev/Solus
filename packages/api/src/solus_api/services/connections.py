@@ -76,6 +76,13 @@ PENDING_CONNECTION_TTL = timedelta(minutes=10)
 #: ref: the family is derived from the source's own id, so nothing a member
 #: writes can ever point the sweep at another secret (security review C-NEW-1).
 RETIRE_MARKER_KEY = "_legacy_secrets_retire"
+#: Sources swept per call: the remainder is the next call's work (documented
+#: retry semantics), so an outage spanning many claims never makes one
+#: request pay for all of them.
+SWEEP_BATCH = 200
+#: Hosted add-on state the source recorded for a grant that the sweep deletes
+#: (agent/tools/hosted_tools.py STATE_KEY / INVENTORY_KEY): stale after a move.
+_HOSTED_STATE_KEYS = ("hosted", "_hosted")
 
 
 def connection_secret_ref(connection_id: uuid.UUID, provider: str) -> str:
@@ -501,6 +508,14 @@ def legacy_secret_family(source: Source) -> list[str]:
     return [ref, refresh_secret_ref(ref), *hosted_refs(ref)]
 
 
+def retire_legacy_family(source: Source) -> None:
+    """Mark a source whose OWN token family is now unreferenced (it mirrors a
+    grant from here on) for the post-commit sweep, and drop the hosted add-on
+    state that rode that family — those grants go with it."""
+    config = {k: v for k, v in source.config.items() if k not in _HOSTED_STATE_KEYS}
+    source.config = {**config, RETIRE_MARKER_KEY: True}
+
+
 def _claim_rejection(source: Source, grant_access: str | None, confirm_access: bool) -> str | None:
     """Why a source must NOT bind to this grant, or None. Nothing widens
     silently: a recorded mismatch is refused outright; a grant wider than the
@@ -576,11 +591,21 @@ async def claim_legacy_sources(
             )
             continue
         bind_source(source, locked)
-        source.config = {**source.config, RETIRE_MARKER_KEY: True}
+        retire_legacy_family(source)
         claimed.append(source)
     if claimed:
         await session.flush()
     return claimed, skipped
+
+
+async def delete_legacy_family_if_retired(secret_store: SecretStore, source: Source) -> None:
+    """A source torn down (disconnect, project teardown) while its retired
+    family was still owed: delete the family now, or it is orphaned live with
+    nothing left to derive it from (security review M-NEW-2)."""
+    if not (isinstance(source.config, dict) and source.config.get(RETIRE_MARKER_KEY)):
+        return
+    for ref in legacy_secret_family(source):
+        await secret_store.delete(ref)
 
 
 async def sweep_retired_secrets(
@@ -595,10 +620,13 @@ async def sweep_retired_secrets(
     caller commits."""
     rows = (
         await session.scalars(
-            select(Source).where(
+            select(Source)
+            .where(
                 Source.id.in_(_live_member_projects().where(Membership.user_id == user.id)),
                 Source.config[RETIRE_MARKER_KEY].as_boolean().is_(True),
             )
+            .order_by(Source.updated_at, Source.id)
+            .limit(SWEEP_BATCH)
         )
     ).all()
     swept = 0
@@ -614,6 +642,17 @@ async def sweep_retired_secrets(
     if swept:
         await session.flush()
     return swept
+
+
+async def sweep_after_commit(session: AsyncSession, secret_store: SecretStore, user: User) -> None:
+    """Run the retirement sweep AFTER the caller's commit — best effort, never a
+    500 on top of a committed claim: a failed sweep is the next call's work."""
+    try:
+        if await sweep_retired_secrets(session, secret_store, user):
+            await session.commit()
+    except Exception:  # noqa: BLE001 - logged, retried next time
+        logger.warning("retired-secret sweep deferred user=%s", user.id, exc_info=True)
+        await session.rollback()
 
 
 # --------------------------------------------------------------- the listing

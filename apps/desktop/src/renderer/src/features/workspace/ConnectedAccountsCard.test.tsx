@@ -193,7 +193,34 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     ).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Move' }))
     expect(accounts.move).toHaveBeenCalledWith(
-      expect.objectContaining({ source_ids: ['s-legacy'] })
+      expect.objectContaining({ source_ids: ['s-legacy'] }),
+      expect.objectContaining({ id: 'c1', access: 'read' })
+    )
+  })
+
+  it('never offers a blanket Move when the proving grant cannot be named', () => {
+    // The id says claimable, but the list has no such grant (stale refresh):
+    // no confirmation could state the scope, so no move is offered.
+    mockAccounts({ connections: [], legacy: [{ ...LEGACY, claimable_connection_id: 'c-gone' }] })
+    render(<ConnectedAccountsCard />)
+    expect(screen.queryByRole('button', { name: 'Move Onshape to your account' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Sign in to move Onshape' })).toBeInTheDocument()
+  })
+
+  it('a write grant is named as read and edit in the confirmation before anything moves', async () => {
+    const write = { ...LINKED, access: 'write' as const }
+    const accounts = mockAccounts({
+      connections: [write],
+      legacy: [{ ...LEGACY, claimable_connection_id: write.id }]
+    })
+    render(<ConnectedAccountsCard />)
+    await userEvent.click(screen.getByRole('button', { name: 'Move Onshape to your account' }))
+    expect(screen.getByText(/\(read and edit access\)/)).toBeInTheDocument()
+    expect(accounts.move).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Move' }))
+    expect(accounts.move).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ access: 'write' })
     )
   })
 
@@ -261,7 +288,16 @@ describe('copy helpers', () => {
     expect(moveDetail('Onshape', LEGACY, LINKED)).toMatch(
       /Rover will use your linked Onshape account \(read only access\)/
     )
-    expect(moveDetail('Onshape', LEGACY, null)).toMatch(/\(its access\)/)
+    expect(moveDetail('Onshape', LEGACY, { ...LINKED, access: 'write' })).toMatch(
+      /\(read and edit access\)/
+    )
+    expect(
+      moveDetail(
+        'Onshape',
+        { ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] },
+        LINKED
+      )
+    ).toMatch(/Rover and Arm will use.*Each project's own Onshape token/)
     expect(reauthText({ ...LINKED, status: 'error', needs_reauth: 'token_error' })).toMatch(
       /last sign-in failed/
     )

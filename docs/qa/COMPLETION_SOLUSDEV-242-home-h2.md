@@ -107,11 +107,38 @@ route and the two new row fields), `docs/wireflows/home.md` (new "Connected acco
 
 ## Phase 4 reviews
 
-The first H2 commit (`004b703`) received a **FAIL** from the security review: adoption trusted
-`Source.created_by` as proof of the token's owner (C1, cross-user grant theft) and mutated team
-rows with no membership check (C2), plus H1 (silent widening on the "Home account wins" rule),
-M1–M6 and the code review's ERROR-masking, dead-branch, concurrency and rollback findings. The
-follow-up commit replaces the design as described above; every finding is either fixed with a
-test (C1, C2, H1, M1 — no copies at all, M2, M3, M4, M6, ERROR/SYNCING, concurrency) or moot
-(dead `existing`-without-ref branch, hosted-ref copy — nothing is copied). The reviews were re-run
-on the follow-up; see the final section of this report.
+Three rounds. The first H2 commit (`004b703`) received a **FAIL** from the security review:
+adoption trusted `Source.created_by` as proof of the token's owner (C1, cross-user grant theft) and
+mutated team rows with no membership check (C2), plus H1 (silent widening), M1–M6, and the code
+review's ERROR-masking, dead-branch, concurrency and rollback findings. The second commit
+(`73e419c`) replaced blind adoption with proof-based claiming and received a second **FAIL**: the
+durable retirement list was stored in a member-writable, member-readable config blob, so any
+verified user could aim the sweep at arbitrary secrets (C-NEW-1); claiming ran as a silent
+page-load/handshake side effect (H-NEW-1); an unrecorded access was widened onto a write grant
+(H-NEW-2); plus M-NEW-1..5 and LOWs. The third commit (`fdf0ef8`) answered every item and received
+**PASS with fixes required** (1 HIGH, 3 MEDIUM, 4 LOW) from security and **APPROVE** (1 MEDIUM,
+1 LOW) from code review; the final commit closes those too:
+
+- HIGH-1 the client blanket-sent `confirm_access: true`: now the confirmation names the resolved
+  grant's scope and sends acceptance only for a read-and-edit grant; no move is offered when the
+  grant cannot be named. Tests on the hook and the card.
+- MEDIUM-1 the Sources-page reuse path (`POST /projects/{id}/sources {connection_id}` on a legacy
+  row) left the row's own token live forever: it now retires the family and sweeps after commit
+  (pre-existing on main, fixed here with the new helper). Test added.
+- MEDIUM-2 an owed retirement was lost when the row was torn down: source disconnect and project
+  teardown delete the derived family when the marker is present. Test added.
+- MEDIUM-3 the sweep is bounded (`SWEEP_BATCH = 200`; the remainder is the next call's work).
+  Test added with the batch monkeypatched to 1.
+- LOW-1 stale hosted add-on state after a move is dropped with the marker (test); LOW-2 API.md now
+  states that a proving live member may move a row they did not create; LOW-3 the client moves in
+  batches of 50 (test); LOW-4 (showing whose account a source rides) is a W2 follow-up.
+- Code review MEDIUM: every named source id is accounted for in the response even when its grant is
+  revoked in the same instant (test); LOW: the confirmation pluralises for multi-project rows.
+- Noted by the security reviewer for the record: `deps.live_membership` checks neither
+  `Membership.status` nor `Team.deleted_at` (nothing sets the latter today); the adopt path is
+  stricter than the central middleware. If soft-deleted teams are introduced, the middleware needs
+  the filter first.
+
+Standing invariants confirmed untouched by every round: the SOL confirmation gate, the never-raises
+tool invariant, the tool-knowledge tenancy boundary, connector scope sets, and the redirect
+allowlist (now pinned by test).

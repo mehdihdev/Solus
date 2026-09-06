@@ -71,7 +71,13 @@ Mark each step ☐ pass / ✗ fail. Note the screen and the exact text on failur
     browser); nothing moves until you confirm the dialog. Reload Home twice: still unmoved. ☐
     11b. If the linked account is **Read and edit** and the legacy source never recorded an access
     mode, the dialog says "(read and edit access)" — confirming is the user's explicit acceptance
-    of the wider grant for that project. ☐
+    of the wider grant for that project. With a **Read only** linked account the dialog says
+    "(read only access)". ☐
+    11c. With more than one project on the legacy row, the dialog names them ("Rover and Arm will
+    use…") and reads "Each project's own Onshape token…". ☐
+    11d. Rover → Sources → Onshape tile with a legacy source present and a linked account: the wizard's
+    "Using your linked account" connect reuses the legacy source; afterwards the project rides the
+    account grant and the legacy row is gone from Home. ☐
 12. A legacy source whose recorded access mode differs from the account grant (e.g. the project
     recorded read-only, the account is read and edit) is **not** moved: it stays listed as legacy
     and keeps its own token; nothing on Home widens or narrows it. ☐

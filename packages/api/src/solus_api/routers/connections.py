@@ -13,7 +13,6 @@ picker and gated on a verified user.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from typing import Annotated, Any
 
@@ -45,11 +44,9 @@ from solus_api.services.connections import (
     named_legacy_sources,
     owned_connection,
     revoke_connection,
-    sweep_retired_secrets,
+    sweep_after_commit,
 )
 from solus_api.services.events import emit_event
-
-logger = logging.getLogger("solus.connections")
 
 router = APIRouter(prefix="/api/v1/users/me/connections")
 
@@ -93,17 +90,6 @@ async def list_legacy(
             for (provider, _), sources in groups.items()
         ]
     )
-
-
-async def _sweep_after_commit(session: SessionDep, secret_store: SecretStoreDep, user: Any) -> None:
-    """Best effort, never a 500 on top of a committed claim: the marker makes
-    a failed sweep the next call's work (security/code review follow-ups)."""
-    try:
-        if await sweep_retired_secrets(session, secret_store, user):
-            await session.commit()
-    except Exception:  # noqa: BLE001 - logged, retried next time
-        logger.warning("retired-secret sweep deferred user=%s", user.id, exc_info=True)
-        await session.rollback()
 
 
 @router.post("/adopt")
@@ -157,9 +143,12 @@ async def adopt(
                     "project_id": source.project_id,
                 }
             )
-    unproved = wanted - {s.id for s in legacy if s.id in proving}
+    # Every requested id is accounted for — including one whose grant was
+    # revoked between the listing and the locked claim (code review).
+    accounted = {a["source_id"] for a in adopted} | {x["source_id"] for x in skipped}
     skipped.extend(
-        {"source_id": sid, "project_id": None, "reason": "not_claimable"} for sid in unproved
+        {"source_id": sid, "project_id": None, "reason": "not_claimable"}
+        for sid in sorted(wanted - accounted, key=str)
     )
     if adopted:
         emit_event(
@@ -169,7 +158,7 @@ async def adopt(
             payload={"sources": len(adopted), "skipped": len(skipped)},
         )
     await session.commit()
-    await _sweep_after_commit(session, secret_store, user)
+    await sweep_after_commit(session, secret_store, user)
     return envelope({"adopted": adopted, "skipped": skipped})
 
 

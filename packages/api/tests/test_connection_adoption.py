@@ -709,3 +709,171 @@ async def test_adopt_requires_a_verified_signed_in_user_and_named_sources(
     ):
         resp = await client.post("/api/v1/users/me/connections/adopt", json=bad, headers=verified)
         assert resp.status_code == 422, (bad, resp.text)
+
+
+async def test_every_named_source_is_accounted_for_even_when_the_grant_dies_mid_request(
+    client: AsyncClient, alice_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Code review: a revoke racing the locked claim must not make a named id
+    vanish from the response — the caller can still see it did not move."""
+    import solus_api.routers.connections as route
+
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    await _connect_on_home(client, alice_headers, who="alice")
+
+    async def grant_died(*_args: Any, **_kwargs: Any) -> tuple[list[Source], list[dict[str, Any]]]:
+        return [], []
+
+    monkeypatch.setattr(route, "claim_legacy_sources", grant_died)
+    result = await _adopt(client, alice_headers, [source["id"]])
+    assert result["adopted"] == []
+    assert [(x["source_id"], x["reason"]) for x in result["skipped"]] == [
+        (source["id"], "not_claimable")
+    ]
+
+
+async def test_the_retire_marker_is_stripped_on_create_too(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project_id = await _team_and_project(client, alice_headers)
+    home = await _connect_on_home(client, alice_headers, who="alice")
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={
+            "type": "onshape",
+            "name": "cad",
+            "connection_id": home["id"],
+            "config": {"_legacy_secrets_retire": True, "documents": []},
+        },
+        headers=alice_headers,
+    )
+    assert created.status_code == 201, created.text
+    assert "_legacy_secrets_retire" not in created.text
+
+
+async def test_reusing_a_legacy_source_through_the_wizard_retires_its_own_token(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
+) -> None:
+    """Security review MEDIUM-1: the Sources-page reuse path re-points a legacy
+    row at the account grant; its own token family must not stay live."""
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    old_ref, _, _ = await _source_row(db, source["id"])
+    assert old_ref
+    home = await _connect_on_home(client, alice_headers, who="alice")
+    reused = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={"type": "onshape", "name": "cad", "connection_id": home["id"]},
+        headers=alice_headers,
+    )
+    assert reused.status_code == 201, reused.text
+    assert reused.json()["data"]["id"] == source["id"]
+    ref, connection_id, config = await _source_row(db, source["id"])
+    assert connection_id == home["id"] and ref == connection_secret_ref(home["id"], "onshape")
+    assert "_legacy_secrets_retire" not in config  # swept after the commit
+    with pytest.raises(SecretNotFoundError):
+        await app.state.secret_store.get(old_ref)
+
+
+async def test_an_owed_family_is_deleted_when_the_source_or_project_is_torn_down(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Security review MEDIUM-2: a deferred retirement must not be lost with the row."""
+    await me(client, alice_headers)
+    team = (await create_team(client, alice_headers))["id"]
+    rover = (await create_project(client, alice_headers, team, name="Rover"))["id"]
+    arm = (await create_project(client, alice_headers, team, name="Arm"))["id"]
+    a = await _legacy_source(client, alice_headers, rover)
+    b = await _legacy_source(client, alice_headers, arm)
+    ref_a, _, _ = await _source_row(db, a["id"])
+    ref_b, _, _ = await _source_row(db, b["id"])
+    assert ref_a and ref_b
+    store = app.state.secret_store
+    real_delete = store.delete
+
+    async def failing_delete(ref: str) -> None:
+        raise RuntimeError("store outage")
+
+    monkeypatch.setattr(store, "delete", failing_delete)
+    await _connect_on_home(client, alice_headers, who="alice")
+    result = await _adopt(client, alice_headers, [a["id"], b["id"]])
+    assert len(result["adopted"]) == 2
+    monkeypatch.setattr(store, "delete", real_delete)
+    # Teardown paths, not a sweep: disconnect one, delete the other's project.
+    gone = await client.request(
+        "DELETE",
+        f"/api/v1/projects/{rover}/sources/{a['id']}",
+        json={"retain_entities": False},
+        headers=alice_headers,
+    )
+    assert gone.status_code in (200, 204), gone.text
+    deleted = await client.delete(f"/api/v1/projects/{arm}?confirm=true", headers=alice_headers)
+    assert deleted.status_code in (200, 204), deleted.text
+    for ref in (ref_a, ref_b):
+        with pytest.raises(SecretNotFoundError):
+            await store.get(ref)
+
+
+async def test_the_sweep_is_bounded_and_the_remainder_is_the_next_calls_work(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Security review MEDIUM-3."""
+    import solus_api.services.connections as svc
+
+    monkeypatch.setattr(svc, "SWEEP_BATCH", 1)
+    await me(client, alice_headers)
+    team = (await create_team(client, alice_headers))["id"]
+    rover = (await create_project(client, alice_headers, team, name="Rover"))["id"]
+    arm = (await create_project(client, alice_headers, team, name="Arm"))["id"]
+    a = await _legacy_source(client, alice_headers, rover)
+    b = await _legacy_source(client, alice_headers, arm)
+    store = app.state.secret_store
+    real_delete = store.delete
+
+    async def failing_delete(ref: str) -> None:
+        raise RuntimeError("store outage")
+
+    monkeypatch.setattr(store, "delete", failing_delete)
+    await _connect_on_home(client, alice_headers, who="alice")
+    await _adopt(client, alice_headers, [a["id"], b["id"]])
+    monkeypatch.setattr(store, "delete", real_delete)
+    await _adopt(client, alice_headers, [a["id"]])  # one sweep of one
+    _, _, ca = await _source_row(db, a["id"])
+    _, _, cb = await _source_row(db, b["id"])
+    assert [ca.get("_legacy_secrets_retire"), cb.get("_legacy_secrets_retire")].count(True) == 1
+    await _adopt(client, alice_headers, [a["id"]])  # the remainder
+    _, _, ca = await _source_row(db, a["id"])
+    _, _, cb = await _source_row(db, b["id"])
+    assert "_legacy_secrets_retire" not in ca and "_legacy_secrets_retire" not in cb
+
+
+async def test_a_move_drops_the_hosted_add_on_state_that_rode_the_old_token(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """Security review LOW-1: the agent must not advertise tools that no longer authenticate."""
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    await db.execute(
+        update(Source)
+        .where(Source.id == source["id"])
+        .values(
+            config={
+                "hosted": {"featurescript": {"state": "ready"}},
+                "_hosted": {"featurescript": ["x"]},
+            }
+        )
+    )
+    await db.commit()
+    await _connect_on_home(client, alice_headers, who="alice")
+    await _adopt(client, alice_headers, [source["id"]])
+    _, _, config = await _source_row(db, source["id"])
+    assert "hosted" not in config and "_hosted" not in config

@@ -231,10 +231,12 @@ function LegacyRow({
   legacy: LegacyConnection
   grant: Connection | null
   onSignIn: () => void
-  onMove: () => Promise<boolean>
+  onMove: (grant: Connection) => Promise<boolean>
 }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
-  const claimable = legacy.claimable_connection_id !== null
+  // The move is offered only against a grant this card can NAME in the
+  // confirmation — never on an id alone, so the scope shown is the scope sent.
+  const claimable = grant !== null
   return (
     <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -276,7 +278,7 @@ function LegacyRow({
       <div role="note" style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}>
         {legacyText(legacy)}
       </div>
-      {confirming && (
+      {confirming && grant && (
         <ConfirmModal
           title={`Move ${entry.name} to your account?`}
           detail={moveDetail(entry.name, legacy, grant)}
@@ -284,7 +286,7 @@ function LegacyRow({
           busyLabel="Moving…"
           failure={`Couldn't move this ${entry.name} connection. Check your connection and try again.`}
           onClose={() => setConfirming(false)}
-          onConfirm={onMove}
+          onConfirm={() => onMove(grant)}
         />
       )}
     </div>
@@ -391,7 +393,7 @@ export function ConnectedAccountsCard(): React.JSX.Element | null {
                       // The sign-in proves the account; the move is then offered
                       // and confirmed on this row — never automatic.
                       onSignIn={() => wizard.open(entry)}
-                      onMove={() => accounts.move(legacy)}
+                      onMove={(grant) => accounts.move(legacy, grant)}
                     />
                   ))}
                   {linked.length === 0 && unclaimed.length === 0 && (

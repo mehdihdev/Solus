@@ -16,6 +16,15 @@ import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 export type AccountConnectionsStatus = 'loading' | 'ready' | 'offline'
 
+/** The server caps one move at 50 source ids (API.md §2.1). */
+export const MOVE_BATCH = 50
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
 export interface AccountConnectionsData {
   status: AccountConnectionsStatus
   connections: Connection[]
@@ -24,9 +33,9 @@ export interface AccountConnectionsData {
   refresh: () => Promise<void>
   /** Revoke a grant. Resolves false on failure so the caller can say so. */
   revoke: (connectionId: string) => Promise<boolean>
-  /** Move a legacy grant's sources to the proved account (confirmed by the
-   *  user). Resolves false on failure or when nothing moved. */
-  move: (legacy: LegacyConnection) => Promise<boolean>
+  /** Move a legacy grant's sources onto `grant` (the proving connection the
+   *  confirmation named). Resolves false on failure or when nothing moved. */
+  move: (legacy: LegacyConnection, grant: Connection) => Promise<boolean>
 }
 
 /** The linked, usable account for a provider, if the user has one. */
@@ -91,14 +100,19 @@ export function useAccountConnections(): AccountConnectionsData {
   )
 
   const move = useCallback(
-    async (legacy: LegacyConnection): Promise<boolean> => {
+    async (legacy: LegacyConnection, grant: Connection): Promise<boolean> => {
+      // The user confirmed THIS grant's scope. Only a "read and edit" grant is
+      // an acceptance of widening; anything else sends no acceptance, and the
+      // server refuses to widen a project that never recorded its access.
+      const confirmAccess = grant.access === 'write'
       try {
-        const result = await adoptConnections({
-          source_ids: legacy.source_ids,
-          confirm_access: true
-        })
+        let moved = 0
+        for (const source_ids of chunk(legacy.source_ids, MOVE_BATCH)) {
+          const result = await adoptConnections({ source_ids, confirm_access: confirmAccess })
+          moved += result.adopted.length
+        }
         await load().catch(() => undefined)
-        return result.adopted.length > 0
+        return moved > 0
       } catch {
         return false
       }
