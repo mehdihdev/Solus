@@ -1,6 +1,6 @@
 # The corpus release this content tree ships as (docs/schemas/corpus-chunk.md §8).
 # Bumping corpus_version is how a change ships; chunks record the version they were
 # introduced in (corpus_version) and last changed in (revised_in).
-corpus_version = "0.1.0"
+corpus_version = "0.2.0"
 policy_revision = "docs/corpus/LICENSING.md@43e8a06"
 released_at = 2026-09-06

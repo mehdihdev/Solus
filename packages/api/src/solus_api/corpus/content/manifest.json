@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "corpus_version": "0.1.0",
+  "corpus_version": "0.2.0",
   "released_at": "2026-09-06",
   "policy_revision": "docs/corpus/LICENSING.md@43e8a06",
   "chunks": [
@@ -45,6 +45,16 @@
       "status": "active"
     },
     {
+      "id": "corpus:electrical/clearance_creepage/ti-sluaar5-iec-60664-method-for-a-drive-board",
+      "content_hash": "sha256:fcd18d0e3cb977dfc0f509132bc463c7e19eded109b86d23028c813ae6e8597e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/clearance_creepage/ti-slup419-creepage-clearance-and-a-48v-bus",
+      "content_hash": "sha256:0a34ed5203b5380ef71cc09f24b819bba5444044d74330305ea415ad6aaa4b67",
+      "status": "active"
+    },
+    {
       "id": "corpus:electrical/clearance_creepage/why-48v-still-matters",
       "content_hash": "sha256:0d053a9175fd76c46eaa2439c5b9dfde1080a38bdeb9b6f4924a7e06ccf67f1c",
       "status": "active"
@@ -80,6 +90,11 @@
       "status": "active"
     },
     {
+      "id": "corpus:electrical/emi_basics/microchip-an2587-emc-layout-checklist",
+      "content_hash": "sha256:b0eb146a9671a150bbe3b9fda72f05a10753ab13e50d3d9d1f00a363e3489430",
+      "status": "active"
+    },
+    {
       "id": "corpus:electrical/emi_basics/motor-drive-noise-next-to-a-sensor",
       "content_hash": "sha256:c20a25f566826c0711a688537b966e7d070c5645f24abd057acc01ac1bbd00fe",
       "status": "active"
@@ -95,13 +110,38 @@
       "status": "active"
     },
     {
+      "id": "corpus:electrical/grounding/ti-slyt499-agnd-dgnd-and-the-star-ground",
+      "content_hash": "sha256:8350ae1dd62f0619357614208e07a78723e961e1acef97f83096701efe087870",
+      "status": "active"
+    },
+    {
       "id": "corpus:electrical/grounding/where-return-current-flows",
       "content_hash": "sha256:86382357595275d5cdea59a788ff4a64ecf894320ee458474cf7f64a89033b9e",
       "status": "active"
     },
     {
+      "id": "corpus:electrical/motor_drive_electrical/infineon-bts7960-half-bridge-limits",
+      "content_hash": "sha256:07d228811e75c9ed6f8f998da1a661a8da58bb0a233a3cf3b3d0208eb6fe6b0e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/motor_drive_electrical/microchip-current-sensing-high-side-vs-low-side",
+      "content_hash": "sha256:ae8769053ed7d2879bf1d195ad8268d71b639c3e35c618d3709620b7cac56c41",
+      "status": "active"
+    },
+    {
       "id": "corpus:electrical/motor_drive_electrical/regen-into-a-supply-that-cannot-sink",
       "content_hash": "sha256:084a19b6436221976419ddc5e07cbeacc5be6ddf45856827c883968b888ee6ef",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/motor_drive_electrical/ti-slvaf66-bulk-capacitors-and-the-48v-ceramic-rule",
+      "content_hash": "sha256:0f7d70b1b1d44f1402656428911040abe2f6b31cb87e2dd27a223bdb9e1bd093",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/motor_drive_electrical/ti-slvaf66-coast-versus-brake-and-kelvin-sensing",
+      "content_hash": "sha256:ebc56b110584230771641cb4f7b069a3b191f5e23beb1ca0443a1cda5e7e51df",
       "status": "active"
     },
     {
@@ -115,6 +155,11 @@
       "status": "active"
     },
     {
+      "id": "corpus:electrical/power_design/espressif-esp32-supply-and-io-limits",
+      "content_hash": "sha256:4494e19dbf03e0ed2b6c4ed4012c0a7b40add8235124573f42740c70a57a55be",
+      "status": "active"
+    },
+    {
       "id": "corpus:electrical/power_design/inrush-brownout-reverse-polarity-hotplug",
       "content_hash": "sha256:9cf7126c243e265cecc746f07d72e6079054dd014e47aadf92bc22e1f861ac42",
       "status": "active"
@@ -122,6 +167,11 @@
     {
       "id": "corpus:electrical/power_design/ldo-vs-buck-vs-boost",
       "content_hash": "sha256:0b52abdce37a20ff95f08542b3b72ebabd75f59507b892446918cb283b056ca8",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/power_design/ti-snva054-buck-layout-rules",
+      "content_hash": "sha256:bdfe3f384fd12a522e76f1c5142d3ebda1e9f1edb668d967bb3a3d2b9db22d02",
       "status": "active"
     },
     {
@@ -147,6 +197,16 @@
     {
       "id": "corpus:electrical/trace_width_current/calculator-defaults-and-voltage-drop",
       "content_hash": "sha256:206bcdb3e63ceec0cdc2754af2aa3c29f10dd30eae3589cb099663dc5093354b",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/trace_width_current/ti-slua366-design-etch-for-the-maximum-current",
+      "content_hash": "sha256:18a6e302457ca8a2ae98b5843bc919368b0dd722b26076d63d96e1afbb4139a2",
+      "status": "active"
+    },
+    {
+      "id": "corpus:electrical/trace_width_current/ti-slua366-etch-current-for-1oz-copper",
+      "content_hash": "sha256:41b0bf540d4e2d1964f2fa267874396c6d8b8dd586c70234dcba13748097725b",
       "status": "active"
     },
     {
@@ -192,6 +252,26 @@
     {
       "id": "corpus:mechanical/fasteners/locking-methods",
       "content_hash": "sha256:6b50ec78a218bd03e477826e3f1cb6b6baa7a95f7d55280ed2d612048d2f5b30",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/nasa-rp-1228-locking-methods-and-lockwashers",
+      "content_hash": "sha256:f4a274376c7255e9b2da7fb277ed24acc34f2a4da3e672b704df6d5c2afd53ef",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/nasa-rp-1228-threaded-inserts-in-soft-materials",
+      "content_hash": "sha256:75a7767dbaa7f39e671075208ba614992d010122d993268075dbfc3427d350df",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/nasa-rp-1228-torque-coefficient-and-why-torque-is-a-poor-proxy",
+      "content_hash": "sha256:849b143ebfbdc87666cfd65714e734e8e1afc35641e4a0acaa8b1b8eccd7c30f",
+      "status": "active"
+    },
+    {
+      "id": "corpus:mechanical/fasteners/nasa-std-5020a-preload-variation-by-installation-method",
+      "content_hash": "sha256:e1dbeb574d1560f649c563efc7b11d5665bbefd26a86c55f2770934a7ca653f9",
       "status": "active"
     },
     {
@@ -287,6 +367,11 @@
     {
       "id": "corpus:mechanical/mechanisms/gear-ratio-backlash-efficiency",
       "content_hash": "sha256:35fa6279e99b48078f4b42c09148063bbbc2f51ddbf0dca4b1129a307941cdc9",
+      "status": "active"
+    },
+    {
+      "id": "corpus:robotics/actuator_selection/feetech-sts3215-specification-7v4-edition",
+      "content_hash": "sha256:0eb69fae2af99f2289065921700451c83f8b62a3983672bf7850ca03503ad041",
       "status": "active"
     },
     {
@@ -507,6 +592,16 @@
     {
       "id": "corpus:systems/thermal_budget/junction-to-ambient-chain",
       "content_hash": "sha256:b532935e786cbe30f3ca69d7b8c65cb7563e4f3d952b690273b9e71dda39be15",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/thermal_budget/nasa-thermal-guidebook-contact-conductance-and-interface-materials",
+      "content_hash": "sha256:bc7edcbc914333aad7e00f13fee91660f52c0d69cc3b5ae8a4043b868baa453e",
+      "status": "active"
+    },
+    {
+      "id": "corpus:systems/thermal_budget/nasa-thermal-guidebook-limits-margins-and-the-living-document",
+      "content_hash": "sha256:7f3670c94d73617acf0326f496b1b8fc39896480549d26d15237e628f274c5a6",
       "status": "active"
     },
     {

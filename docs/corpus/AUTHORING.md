@@ -141,3 +141,22 @@ domain; every entry:
   appear in the gold chunk and would be absent from an off-topic one.
 - `answer` is the known-good answer in prose, for the model-judged `-m live` run.
 - Two questions per P0 topic minimum, in the domain's file.
+
+## 8. Sourced chunks (vendor notes, government reports, datasheets) — the C3 recipe
+
+1. Fetch the document from the rights-holder's own host (the `hosts.py` allowlist decides which
+   hosts count). Record the exact URL, document number, revision or date, and the licence or
+   distribution line you saw (for NTRS records: "Work of the US Gov. Public Use Permitted"; for
+   NASA standards: "Approved for public release – distribution is unlimited").
+2. Read the whole document, not a search snippet. Write the chunk with the book closed
+   (`summary`), or list individual values with their page/table/section (`facts_extracted`).
+   Never a table, never a run of the source's sentences.
+3. Fill `[provenance]` with `source_url` (the fetched URL), `source_locator` (revision plus the
+   pages or sections used), and `attribution` in the form "publisher, document, locator";
+   `source_license` per LICENSING.md §5 (`vendor-terms`, `public-domain-us-gov`,
+   `datasheet-terms`).
+4. `drafting = "llm_assisted"` when a model drafted it; `reviewer` is the human who signs at
+   the MR. Add two eval questions per chunk and run `make corpus-eval` and
+   `python -m solus_api.corpus licenses`.
+5. If the document cannot be fetched from a rights-holder host in your session, do not write
+   the chunk. Say so in the completion report.

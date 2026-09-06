@@ -111,6 +111,17 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "heat-set",
             "tapped",
             "tap",
+            "locknut",
+            "locknuts",
+            "nylon-insert",
+            "nyloc",
+            "threadlocker",
+            "loctite",
+            "lockwasher",
+            "lockwashers",
+            "rotates",
+            "nut",
+            "nuts",
         }
     ),
     CorpusDomain.ELECTRICAL: frozenset(
@@ -401,6 +412,11 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "mid-motion",
             "strain",
             "relief",
+            "conductance",
+            "contact",
+            "tim",
+            "pad",
+            "grease",
         }
     ),
     CorpusDomain.ROBOTICS: frozenset(
@@ -469,6 +485,13 @@ _LEXICON: Final[Mapping[CorpusDomain, frozenset[str]]] = {
             "oscillates",
             "oscillation",
             "homing",
+            "sts3215",
+            "st3215",
+            "feetech",
+            "so-101",
+            "so101",
+            "dynamixel",
+            "resolution",
         }
     ),
 }

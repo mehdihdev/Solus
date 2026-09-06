@@ -9,7 +9,6 @@ EVERY tenant, so the boundary is the SHAPE of a chunk, not a convention.
 from __future__ import annotations
 
 import re
-import uuid
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -506,7 +505,7 @@ def test_rule_7_and_14_urls_must_be_https_on_an_allowed_rights_holder_host() -> 
     "reviewer",
     [
         "",
-        str(uuid.uuid4()),
+        "0192a7f1-6c2e-7a3b-9d4e-5f6a7b8c9d0e",  # a literal uuid: xdist must collect one id set
         "abcdef12-3456-7890-abcd-ef1234567890",
         "mehdi@solus.example",
         "claude",

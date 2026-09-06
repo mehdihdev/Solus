@@ -3,6 +3,7 @@
 validate   load the content tree, run every contract and cross-chunk rule, report counts
 manifest   write content/manifest.json from the tree (fails CI when stale — see tests)
 ingest     the ONLY write path into corpus_chunk (ADR-036 rule 3); deploy/admin step
+licenses   per-class / per-licence report of what ships, with findings (CORPUS C3)
 """
 
 from __future__ import annotations
@@ -61,6 +62,14 @@ def cmd_manifest(root: Path, *, check: bool) -> int:
     return 0
 
 
+def cmd_licenses(root: Path) -> int:
+    from solus_api.corpus.licenses import license_findings, license_report
+
+    _, chunks = _load(root)
+    print(license_report(chunks))
+    return 1 if license_findings(chunks) else 0
+
+
 def cmd_ingest(root: Path, *, database_url: str | None, embed: bool) -> int:
     from solus_api.corpus.ingest import run_ingest_cli
 
@@ -77,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--check", action="store_true", help="fail if the manifest is stale")
+    sub.add_parser("licenses")
     ingest = sub.add_parser("ingest")
     ingest.add_argument("--database-url", default=None, help="defaults to SOLUS_DATABASE_URL")
     ingest.add_argument("--no-embed", action="store_true", help="skip embeddings (keyless)")
@@ -86,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_validate(args.root, args.domain)
         if args.command == "manifest":
             return cmd_manifest(args.root, check=args.check)
+        if args.command == "licenses":
+            return cmd_licenses(args.root)
         return cmd_ingest(args.root, database_url=args.database_url, embed=not args.no_embed)
     except ChunkingError as exc:
         print(f"corpus invalid — {exc}", file=sys.stderr)

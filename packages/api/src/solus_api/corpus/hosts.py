@@ -142,6 +142,12 @@ _VENDORS: Final = frozenset(
         ".igus.com",
         "harmonicdrive.net",
         ".harmonicdrive.net",
+        # Feetech (STS/ST serial servos) publishes its own product specifications
+        # on two domains; both are the rights-holder (CORPUS C3).
+        "feetechrc.com",
+        ".feetechrc.com",
+        "feetech.cn",
+        ".feetech.cn",
     }
 )
 _STANDARDS: Final = frozenset(
