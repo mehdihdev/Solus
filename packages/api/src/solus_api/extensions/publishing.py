@@ -140,19 +140,21 @@ async def find_extension_by_slug(session: AsyncSession, slug: str) -> Extension 
 
 
 async def get_or_create_publisher(
-    session: AsyncSession, *, user_id: uuid.UUID, display_name: str
+    session: AsyncSession, *, user_id: uuid.UUID, display_name: str, is_staff: bool = False
 ) -> ExtensionPublisher:
     """§5.1 step 3: the row is created on the user's first publish; `display_name`
     is seeded from the manifest then and not rewritten by later publishes. A
     reserved (vendor-impersonating) name is refused at that seeding moment only
-    — `409 publisher_name_reserved` — so existing publishers are unaffected."""
+    — `409 publisher_name_reserved` — so existing publishers are unaffected.
+    Solus staff (SOLUSDEV-246) may seed a reserved name: a first-party bundle
+    really is published by Solus, and the check exists to stop impersonation."""
     publisher = await session.scalar(
         select(ExtensionPublisher).where(
             ExtensionPublisher.user_id == user_id, ExtensionPublisher.deleted_at.is_(None)
         )
     )
     if publisher is None:
-        if is_reserved_publisher_name(display_name):
+        if is_reserved_publisher_name(display_name) and not is_staff:
             raise APIError(
                 409, "publisher_name_reserved", "This publisher name is reserved for Solus"
             )

@@ -46,6 +46,7 @@ from solus_api.models import (
     WidgetLayout,
 )
 from solus_api.services.events import emit_event
+from solus_api.widgets.uninstall import remove_bundle_traces
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}")
 
@@ -396,13 +397,24 @@ async def uninstall_extension(
     extension, install = await _installed(session, ctx, slug)
     pinned = await _pinned(session, install)
     deleted = await svc.delete_storage(session, ctx.project.id, extension.id)
+    # SOLUSDEV-246 "no orphans": the bundle's declared kinds are soft-deleted and
+    # its canvas slots pruned in the same transaction (widget-bundles.md §5).
+    swept = await remove_bundle_traces(
+        session, ctx.project.id, extension.slug, parse_extension_manifest(pinned.manifest)
+    )
     await session.delete(install)
     extension.install_count = max(0, extension.install_count - 1)
     _emit(
         session,
         ctx,
         "extension.uninstall",
-        {"slug": extension.slug, "version": pinned.version, "storage_rows_deleted": deleted},
+        {
+            "slug": extension.slug,
+            "version": pinned.version,
+            "storage_rows_deleted": deleted,
+            "entities_soft_deleted": swept.entities_soft_deleted,
+            "layout_slots_pruned": swept.layout_slots_pruned,
+        },
     )
     await session.commit()
     return Response(status_code=204)

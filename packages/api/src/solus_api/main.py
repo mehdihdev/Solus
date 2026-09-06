@@ -66,6 +66,7 @@ from solus_api.routers import (
     teams,
     users,
     webhooks,
+    widgets,
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
@@ -390,4 +391,6 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,
     # storage, layout, policy sub-routers mount onto it as the EXT tasks land).
     app.include_router(extensions.router)
+    # SOLUSDEV-246: first-party bundle capability routes (widget-bundles.md §3).
+    app.include_router(widgets.router)
     return app

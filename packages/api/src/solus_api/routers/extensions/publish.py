@@ -44,6 +44,8 @@ from solus_api.models import utcnow
 from solus_api.services.artifacts import read_bounded
 from solus_api.services.events import emit_event
 from solus_api.storage.extension_bundle_store import ExtensionBundleStore
+from solus_api.widgets.publish_gate import first_party_problems
+from solus_api.widgets.registry import discover_capabilities
 
 logger = logging.getLogger("solus.extensions.publish")
 
@@ -161,9 +163,16 @@ async def publish_extension(
     if not report.ok or report.manifest is None:
         raise APIError(422, "bundle_invalid", "Bundle failed validation", details=report.problems)
     manifest = report.manifest
+    # SOLUSDEV-246: the first-party tables are a CLAIM — staff publisher plus a
+    # matching in-repo capability, or nothing is stored (widget-bundles.md §7).
+    is_staff = user.id in settings.staff_user_id_set
+    if gate := first_party_problems(
+        manifest, is_staff=is_staff, capabilities=discover_capabilities()
+    ):
+        raise APIError(422, "bundle_invalid", "Bundle failed validation", details=gate)
 
     publisher = await get_or_create_publisher(
-        session, user_id=user.id, display_name=manifest.extension.publisher
+        session, user_id=user.id, display_name=manifest.extension.publisher, is_staff=is_staff
     )
     extension = await claim_extension(session, publisher=publisher, manifest=manifest)
     await ensure_version_unused(

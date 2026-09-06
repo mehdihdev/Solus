@@ -491,8 +491,15 @@ async def test_uninstall_deletes_the_install_and_its_storage_and_decrements(
     await db.refresh(extension)
     assert extension.install_count == 0
     events = await events_of(db, "extension.uninstall")
+    # SOLUSDEV-246 widened the payload with the "no orphans" sweep counts.
     assert [e.payload for e in events] == [
-        {"slug": "bom", "version": "1.2.0", "storage_rows_deleted": 2}
+        {
+            "slug": "bom",
+            "version": "1.2.0",
+            "storage_rows_deleted": 2,
+            "entities_soft_deleted": 0,
+            "layout_slots_pruned": 0,
+        }
     ]
     again = await client.delete(ext_url(project_id, "bom"), headers=alice_headers)
     assert again.status_code == 404

@@ -20,13 +20,16 @@ This is the wiring the reasoning loop runs on, NOT the reasoning itself. It ship
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
+
+    from solus_contracts.extension_manifest import ExtensionManifest
 
     from solus_api.agent.confirmations import ParkedCall
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
+    from solus_api.widgets.capability import WidgetCapability
 
     #: Parks a gated call for approval; None when the call is not gated.
     ParkFn = Callable[[_ToolCallHint], Awaitable[ParkedCall | None]]
@@ -84,6 +87,7 @@ def build_sol_registry(
     systems: SolSystems | None = None,
     hosted_inventory: "Mapping[str, Any] | None" = None,
     redis: Any | None = None,
+    bundle_capabilities: "Sequence[tuple[WidgetCapability, ExtensionManifest]] | None" = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -157,7 +161,44 @@ def build_sol_registry(
             bridge_call_cap_bytes=bridge_call_cap_bytes,
             secret_store=secret_store,
         )
+    if bundle_capabilities:
+        _register_bundle_tools(
+            registry, session_factory, project_id, user_id=user_id, bundles=bundle_capabilities
+        )
     return registry
+
+
+def _register_bundle_tools(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None,
+    bundles: "Sequence[tuple[WidgetCapability, ExtensionManifest]]",
+) -> None:
+    """SOLUSDEV-246 (STORE ST1): first-party bundle tools, one `InProcessTool`
+    per name the PINNED manifest declares, built by the in-repo capability and
+    bound to this request's project/user. The caller (`deps.get_sol_registry`)
+    decided which bundles are installed, enabled and unblocked; this is pure
+    assembly. Wrapped per bundle like the hosted path: a capability that fails
+    to build is logged and skipped — never a 500 for every SOL request."""
+    from solus_api.widgets.capability import BundleScope
+
+    scope = BundleScope(session_factory=session_factory, project_id=project_id, user_id=user_id)
+    for capability, manifest in bundles:
+        try:
+            for name in manifest.tools.names:
+                builder = capability.tools.get(name)
+                if builder is None:
+                    logger.warning(
+                        "bundle %s declares tool %s it does not provide", capability.id, name
+                    )
+                    continue
+                registry.register(builder(scope))
+        except Exception:
+            logger.exception(
+                "bundle %s tools unavailable for project %s", capability.id, project_id
+            )
 
 
 def _register_hosted_tools(
