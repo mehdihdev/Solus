@@ -920,3 +920,30 @@ async def test_reconnecting_a_legacy_source_through_the_oauth_wizard_retires_its
     assert deleted.status_code in (200, 204), deleted.text
     with pytest.raises(SecretNotFoundError):
         await store.get(old_ref)
+
+
+async def test_the_web_callback_leg_retires_a_reused_legacy_row_too(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI, db: AsyncSession
+) -> None:
+    """The unauthenticated redirect completion reaches the same `_complete_oauth`."""
+    _, project_id = await _team_and_project(client, alice_headers)
+    source = await _legacy_source(client, alice_headers, project_id)
+    old_ref, _, _ = await _source_row(db, source["id"])
+    assert old_ref
+    start = await client.post(
+        "/api/v1/integrations/onshape/oauth/start",
+        json={"project_id": project_id},
+        headers=alice_headers,
+    )
+    assert start.status_code == 201, start.text
+    state = start.json()["data"]["state"]
+    callback = await client.get(
+        f"/api/v1/integrations/onshape/oauth/callback?code=alice&state={state}",
+        follow_redirects=False,
+    )
+    assert callback.status_code in (302, 303, 307), callback.text
+    ref, bound_to, config = await _source_row(db, source["id"])
+    assert bound_to is not None and ref == connection_secret_ref(bound_to, "onshape")
+    assert "_legacy_secrets_retire" not in config
+    with pytest.raises(SecretNotFoundError):
+        await app.state.secret_store.get(old_ref)

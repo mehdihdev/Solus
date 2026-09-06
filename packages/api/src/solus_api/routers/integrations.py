@@ -351,6 +351,7 @@ async def _complete_oauth(
         await session.commit()
         return connection, source, "oauth_failed"
 
+    owner_id = record.user_id  # read before the row is deleted
     # The state row is consumed FIRST: it cascades from the pending connection,
     # which `complete_connection` may discard in favour of an existing row for
     # the same account, and a delete racing that cascade matches nothing.
@@ -379,9 +380,14 @@ async def _complete_oauth(
         if not source.name or source.name == provider:
             source.name = account.login
     await session.commit()
-    owner = await session.get(User, record.user_id)
+    owner = await session.get(User, owner_id)
     if owner is not None:
         await sweep_after_commit(session, secret_store, owner)
+        # The sweep's own rollback (a DB blip) expires what the callers are
+        # about to serialize; the rows are committed, so re-read them.
+        await session.refresh(connection)
+        if source is not None:
+            await session.refresh(source)
     return connection, source, None
 
 

@@ -62,7 +62,8 @@ route and the two new row fields), `docs/wireflows/home.md` (new "Connected acco
 
 ## Verification
 
-- API: `tests/test_connection_adoption.py` (17 cases: listing without moving; the Home sign-in
+- Full API suite on an isolated test database after the third-round fixes: 3576 passed, 4 skipped, 0 failed (15 min 55 s); the final OAuth-path fix afterwards was covered by the connection, integration, source and user suites (100 passed).
+- API: `tests/test_connection_adoption.py` (29 cases at handoff — the list below names the original 17; listing without moving; the Home sign-in
   claim; claim on load for an already-connected account; two projects one connection; a second
   project with no OAuth; an errored source healed by the proved grant; **C1** creator ≠ token
   owner never claimed by the creator, claimed by the owner; **C2** removed member, viewer and
@@ -140,6 +141,10 @@ page-load/handshake side effect (H-NEW-1); an unrecorded access was widened onto
   proves project teardown finds nothing left. The sweep after a Sources-page connect covers every
   retired source in the caller's live teams, not only that project — correct by design (refs derive
   from source ids; only already-unreferenced families are deleted).
+- The scoped confirmation of that fix passed; its one medium (the sweep's rollback after a DB
+  blip expiring the rows the OAuth callers serialize) is fixed by refreshing them, with a test
+  for the web callback leg. Pre-existing and left for a follow-up ticket: the token-refresh write
+  in `connectors/runtime.py` can race a sweep of the same family.
 - Noted by the security reviewer for the record: `deps.live_membership` checks neither
   `Membership.status` nor `Team.deleted_at` (nothing sets the latter today); the adopt path is
   stricter than the central middleware. If soft-deleted teams are introduced, the middleware needs
