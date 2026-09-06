@@ -592,11 +592,14 @@ Body (`extra="forbid"`; at least one key): `{ "enabled"?: bool, "settings"?: obj
 ### 6.4 DELETE /api/v1/projects/{project_id}/extensions/{slug} — uninstall
 
 Deletes the `extension_installs` row and every `extension_storage` row for
-`(project_id, extension_id)` in one transaction; decrements `extensions.install_count`. Graph data
-the extension produced (e.g. findings raised via `findings.write`) **stays** — it is the team's
-data. The caller's `widget_layouts` entries referencing `ext:<slug>` are left as-is (the canvas
-skips refs with no install; the user's arrangement survives a reinstall). `204 No Content`; emits
-`extension.uninstall`. Unknown slug for this project → `404`.
+`(project_id, extension_id)` in one transaction; decrements `extensions.install_count`.
+**Amended SOLUSDEV-246 (STORE ST1, "no orphans"):** the same transaction soft-deletes every live
+`graph_entity` (and its edges) in this project whose `kind` is one of the pinned manifest's
+`ext:<slug>:<name>` kinds, and prunes `ext:<slug>` refs from every user's `widget_layouts` row in
+the project — see [widget-bundles.md](widget-bundles.md) §5. Findings raised via
+`findings.write` are not the bundle's kinds and stay (they are the team's data). `204 No
+Content`; emits `extension.uninstall` with `{ slug, version, storage_rows_deleted,
+entities_soft_deleted, layout_slots_pruned }`. Unknown slug for this project → `404`.
 
 ---
 

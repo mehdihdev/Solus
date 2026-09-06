@@ -35,7 +35,16 @@ from pydantic import (
 )
 
 EXTENSION_MANIFEST_FILENAME = "extension.toml"
-EXTENSION_MANIFEST_SCHEMA_VERSION = 1
+#: The LATEST schema this Solus writes and validates. SOLUSDEV-246 (STORE ST1)
+#: added version 2 — the first-party ``[backend]`` / ``[graph]`` / ``[tools]``
+#: tables — and every version 1 manifest published before it parses unchanged.
+EXTENSION_MANIFEST_SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS: tuple[int, ...] = (1, 2)
+#: The tables only a first-party bundle may declare (SOLUSDEV-246). Unknown at
+#: schema_version 1; at 2 the publish validator additionally requires a staff
+#: publisher and an in-repo capability package — the manifest CLAIMS, Solus
+#: code decides (CLAUDE.md §7).
+FIRST_PARTY_TABLES = ("backend", "graph", "tools")
 
 #: The id doubles as the bundle folder name on every OS the desktop ships on
 #: (case-insensitive file systems included), so it is a lowercase slug and
@@ -51,6 +60,9 @@ NETWORK_ORIGIN_PATTERN = (
 )
 HTTPS_URL_PATTERN = r"^https://\S+$"
 SETTING_KEY_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
+#: Graph-kind and SOL-tool names inside a first-party bundle: snake_case, ≤ 32,
+#: so ``<id>.<name>`` (≤ 64 + 1 + 32) stays under the provider's 128-char cap.
+CAPABILITY_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 
 SOURCE_KINDS = ("code", "eda", "cad", "canbus", "runtime")
 SLOT_SIZES = ("compact", "standard", "wide", "full")
@@ -67,7 +79,11 @@ PERMISSION_SCOPES = (
     "focus.write",
 )
 
+#: The graph's Domain vocabulary (ADR-027) — a declared kind names one of these.
+GRAPH_DOMAINS = ("code", "electrical", "mechanical", "simulation", "runtime")
+
 SourceKind = Literal["code", "eda", "cad", "canbus", "runtime"]
+GraphDomain = Literal["code", "electrical", "mechanical", "simulation", "runtime"]
 SlotSize = Literal["compact", "standard", "wide", "full"]
 SettingType = Literal["boolean", "number", "string", "select"]
 PermissionScope = Literal[
@@ -103,6 +119,8 @@ class ManifestLimits:
     section_title: int = 40
     sections: int = 4
     screenshots: int = 6
+    graph_kinds: int = 8
+    tool_names: int = 16
     path_len: int = 200
     icon_bytes: int = 16 * 1024
     overview_bytes: int = 32 * 1024
@@ -318,15 +336,72 @@ class Store(_Strict):
         return values
 
 
+CapabilityName = Annotated[str, StringConstraints(pattern=CAPABILITY_NAME_PATTERN)]
+
+
+class Backend(_Strict):
+    """``[backend]`` — the in-repo capability package this bundle is backed by
+    (SOLUSDEV-246). ``capability`` must equal ``extension.id``; the zip never
+    carries server code, it only names the package Solus ships and reviewed."""
+
+    capability: Annotated[str, StringConstraints(pattern=EXTENSION_ID_PATTERN)]
+    routes: bool = False
+
+
+class GraphKind(_Strict):
+    """One declared node type; lands as ``ext:<id>:<name>`` (see :func:`graph_kind_name`)."""
+
+    name: CapabilityName
+    domain: GraphDomain
+
+
+class Graph(_Strict):
+    kinds: list[GraphKind] = Field(default_factory=list, max_length=LIMITS.graph_kinds)
+
+    @field_validator("kinds")
+    @classmethod
+    def _distinct_names(cls, kinds: list[GraphKind]) -> list[GraphKind]:
+        names = [k.name for k in kinds]
+        if len(set(names)) != len(names):
+            raise ValueError("kind names must be distinct")
+        return kinds
+
+
+class Tools(_Strict):
+    """SOL tools the capability package registers, as ``<id>.<name>``."""
+
+    names: list[CapabilityName] = Field(default_factory=list, max_length=LIMITS.tool_names)
+
+    @field_validator("names")
+    @classmethod
+    def _distinct(cls, names: list[str]) -> list[str]:
+        if len(set(names)) != len(names):
+            raise ValueError("entries must be distinct")
+        return names
+
+
 class ExtensionManifest(_Strict):
     """The whole of ``extension.toml`` (decoded), with the optional blocks defaulted."""
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     extension: ExtensionMeta
     views: Views
     permissions: Permissions = Field(default_factory=Permissions)
     settings: Settings = Field(default_factory=Settings)
     store: Store
+    # SOLUSDEV-246 — schema_version 2 only; unknown fields at 1.
+    backend: Backend | None = None
+    graph: Graph = Field(default_factory=Graph)
+    tools: Tools = Field(default_factory=Tools)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _first_party_tables_need_v2(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("schema_version") == 1:
+            for key in FIRST_PARTY_TABLES:
+                if key in data:
+                    raise ValueError(f"{key}: unknown field (requires schema_version 2)")
+        return data
 
     @model_validator(mode="after")
     def _privacy_when_permissioned(self) -> ExtensionManifest:
@@ -336,6 +411,29 @@ class ExtensionManifest(_Strict):
                 "permissions.network is non-empty"
             )
         return self
+
+    @model_validator(mode="after")
+    def _backend_names_this_bundle(self) -> ExtensionManifest:
+        if self.backend is not None and self.backend.capability != self.extension.id:
+            raise ValueError("backend.capability: must equal extension.id")
+        return self
+
+
+def declares_first_party(manifest: ExtensionManifest) -> bool:
+    """True when the manifest uses any first-party table — the publish validator
+    then demands a staff publisher and a matching in-repo capability."""
+    return manifest.backend is not None or bool(manifest.graph.kinds) or bool(manifest.tools.names)
+
+
+def graph_kind_name(extension_id: str, name: str) -> str:
+    """The ``graph_entity.kind`` a declared kind lands as."""
+    return f"ext:{extension_id}:{name}"
+
+
+def composed_tool_name(extension_id: str, name: str) -> str:
+    """The ``ToolDescriptor.name`` a declared tool registers as (dotted, like
+    ``solus.*`` and ``{server}.{tool}``; the prompt layer translates it)."""
+    return f"{extension_id}.{name}"
 
 
 def parse_extension_manifest(data: Any) -> ExtensionManifest:

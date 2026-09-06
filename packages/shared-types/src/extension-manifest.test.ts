@@ -13,14 +13,28 @@ import missingPrivacy from "../fixtures/extension-manifest/missing-privacy.inval
 import unknownField from "../fixtures/extension-manifest/unknown-field.invalid.json";
 import traversal from "../fixtures/extension-manifest/traversal.invalid.json";
 import newer from "../fixtures/extension-manifest/newer-schema.json";
+import v2FirstParty from "../fixtures/extension-manifest/manifest-v2-first-party.json";
+import v2Community from "../fixtures/extension-manifest/manifest-v2-community.json";
+import v2BadToolName from "../fixtures/extension-manifest/v2-bad-tool-name.invalid.json";
+import v2CapabilityMismatch from "../fixtures/extension-manifest/v2-capability-mismatch.invalid.json";
+import v1WithBackend from "../fixtures/extension-manifest/v1-with-backend.invalid.json";
+import v2TooManyKinds from "../fixtures/extension-manifest/v2-too-many-kinds.invalid.json";
 import type { JsonShapeOf } from "./json";
 import {
+  BACKEND_FIELDS,
   EXTENSION_FIELDS,
   EXTENSION_ID_RE,
   EXTENSION_MANIFEST_FIELDS,
   EXTENSION_MANIFEST_FILENAME,
   EXTENSION_MANIFEST_SCHEMA_VERSION,
+  GRAPH_FIELDS,
+  GRAPH_KIND_FIELDS,
   MANIFEST_LIMITS,
+  SUPPORTED_SCHEMA_VERSIONS,
+  TOOLS_FIELDS,
+  composedToolName,
+  declaresFirstParty,
+  graphKindName,
   PAGE_VIEW_FIELDS,
   PERMISSIONS_FIELDS,
   PERMISSION_SCOPES,
@@ -40,6 +54,10 @@ import {
 
 const FULL = full satisfies JsonShapeOf<ExtensionManifestDocument>;
 const MINIMAL = minimal satisfies JsonShapeOf<ExtensionManifestDocument>;
+const V2_FIRST_PARTY =
+  v2FirstParty satisfies JsonShapeOf<ExtensionManifestDocument>;
+const V2_COMMUNITY =
+  v2Community satisfies JsonShapeOf<ExtensionManifestDocument>;
 
 function parsed(value: unknown): ExtensionManifest {
   const result = parseExtensionManifest(value);
@@ -69,7 +87,44 @@ describe("the shared fixtures parse", () => {
 
   test("the manifest file has one fixed name", () => {
     expect(EXTENSION_MANIFEST_FILENAME).toBe("extension.toml");
-    expect(EXTENSION_MANIFEST_SCHEMA_VERSION).toBe(1);
+    // SOLUSDEV-246 (STORE ST1): v2 adds the first-party tables; v1 stays valid.
+    expect(EXTENSION_MANIFEST_SCHEMA_VERSION).toBe(2);
+    expect(SUPPORTED_SCHEMA_VERSIONS).toEqual([1, 2]);
+  });
+
+  test("v1 manifests default the first-party tables to nothing", () => {
+    const m = parsed(MINIMAL);
+    expect(m.schema_version).toBe(1);
+    expect(m.backend).toBeUndefined();
+    expect(m.graph).toEqual({ kinds: [] });
+    expect(m.tools).toEqual({ names: [] });
+    expect(declaresFirstParty(m)).toBe(false);
+  });
+
+  test("a v2 community manifest declares nothing first-party", () => {
+    const m = parsed(V2_COMMUNITY);
+    expect(m.schema_version).toBe(2);
+    expect(declaresFirstParty(m)).toBe(false);
+  });
+
+  test("a v2 first-party manifest carries backend, graph and tools", () => {
+    const m = parsed(V2_FIRST_PARTY);
+    expect(m.backend).toEqual({ capability: "fixture-bundle", routes: true });
+    expect(m.graph.kinds).toEqual([{ name: "note", domain: "code" }]);
+    expect(m.tools.names).toEqual(["add_note", "clear_notes"]);
+    expect(declaresFirstParty(m)).toBe(true);
+  });
+
+  test("namespacing helpers match the Python side", () => {
+    expect(graphKindName("fixture-bundle", "note")).toBe(
+      "ext:fixture-bundle:note",
+    );
+    expect(composedToolName("fixture-bundle", "add_note")).toBe(
+      "fixture-bundle.add_note",
+    );
+    expect(
+      composedToolName("a".repeat(64), "b".repeat(32)).length,
+    ).toBeLessThanOrEqual(128);
   });
 });
 
@@ -87,6 +142,10 @@ describe("field lists match the Python-emitted manifest", () => {
     ["Store", STORE_FIELDS],
     ["StoreLinks", STORE_LINKS_FIELDS],
     ["StoreSection", STORE_SECTION_FIELDS],
+    ["Backend", BACKEND_FIELDS],
+    ["Graph", GRAPH_FIELDS],
+    ["GraphKind", GRAPH_KIND_FIELDS],
+    ["Tools", TOOLS_FIELDS],
   ] as const)("%s", (name, fields) => {
     expect([...fields].sort()).toEqual(
       (manifest as Record<string, string[]>)[name],
@@ -100,6 +159,14 @@ describe("strict rejection (parity with the Python model)", () => {
     ["missing privacy policy", missingPrivacy, /privacy_policy/],
     ["unknown field", unknownField, /postinstall/],
     ["path traversal", traversal, /views\.page\.entry/],
+    ["v2 bad tool name", v2BadToolName, /tools\.names\.0/],
+    ["v2 capability mismatch", v2CapabilityMismatch, /backend\.capability/],
+    [
+      "v1 carrying a backend table",
+      v1WithBackend,
+      /manifest\.backend: unknown field/,
+    ],
+    ["v2 too many kinds", v2TooManyKinds, /graph\.kinds/],
   ])("%s is invalid and names the field", (_label, fixture, pattern) => {
     const result = parseExtensionManifest(fixture);
     expect(result.ok).toBe(false);

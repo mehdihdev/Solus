@@ -15,6 +15,8 @@ import type { ExtensionActionResult, ExtensionActions } from '../extensionAction
 export function manifest(over: Partial<ExtensionManifest> = {}): ExtensionManifest {
   return {
     schema_version: 1,
+    graph: { kinds: [] },
+    tools: { names: [] },
     extension: {
       id: 'bom',
       name: 'BOM',

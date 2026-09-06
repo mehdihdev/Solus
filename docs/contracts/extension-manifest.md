@@ -2,6 +2,8 @@
 
 **Ticket:** SOLUSDEV-235 · **ADR:** ADR-035 (with the ADR-034 amendment) · **Ratified:** in-session
 2026-09-03 (Mehdi), second-founder check at the MR (ADR-032 tier-2).
+**Amended:** SOLUSDEV-246 (STORE ST1) — `schema_version = 2` adds the first-party tables
+`[backend]`, `[graph]`, `[tools]` (§ "Schema version 2"); ratified in-session 2026-09-05 (Mehdi).
 **Shapes:** `packages/shared-types/src/extension-manifest.ts` (TypeScript) ·
 `packages/contracts/python/solus_contracts/extension_manifest.py` (Python).
 **Fixtures:** `packages/shared-types/fixtures/extension-manifest/` — validated by BOTH suites; the
@@ -24,7 +26,7 @@ nothing in the manifest can name a command or trigger execution.
 ## The file
 
 ```toml
-schema_version = 1
+schema_version = 1               # or 2 — see "Schema version 2" below; 1 stays valid forever
 
 [extension]
 id = "bom"                      # ^[a-z][a-z0-9-]{1,63}$ — also the folder name; unique case-insensitively
@@ -63,6 +65,39 @@ title = "How it works"                                # ≤ 40
 body = "docs/HOW.md"
 ```
 
+## Schema version 2 — the first-party tables (SOLUSDEV-246)
+
+Three optional tables, **unknown fields at schema_version 1**, valid only at 2. They are a CLAIM:
+the publish validator additionally requires the publisher to be Solus staff and an in-repo
+capability package (`packages/api/src/solus_api/widgets/<id>/`) that provides at least what is
+declared — see `docs/api/widget-bundles.md`. A bundle zip never carries server code. Community
+bundles keep writing `schema_version = 1` or a v2 manifest without these tables.
+
+```toml
+schema_version = 2
+
+[backend]
+capability = "fixture-bundle"   # MUST equal extension.id; names the in-repo package
+routes = true                   # default false; mounts the package's router at
+                                # /api/v1/projects/{project_id}/widgets/<id>/…
+
+[graph]
+kinds = [{ name = "note", domain = "code" }]   # ≤ 8, distinct names ^[a-z][a-z0-9_]{0,31}$,
+                                               # domain ∈ code|electrical|mechanical|simulation|runtime
+                                               # lands as graph_entity.kind "ext:<id>:<name>"
+
+[tools]
+names = ["add_note", "clear_notes"]            # ≤ 16, distinct, same name rule;
+                                               # registered with SOL as "<id>.<name>"
+```
+
+Helpers on both sides: `declares_first_party(manifest)` / `declaresFirstParty(m)` (true when any
+table is in use), `graph_kind_name(id, name)` / `graphKindName` → `ext:<id>:<name>`,
+`composed_tool_name(id, name)` / `composedToolName` → `<id>.<name>` (≤ 97 chars by construction,
+under the provider's 128-char cap the prompt layer enforces). Parsed shape gains
+`backend?: Backend`, `graph: Graph` (default `{ kinds: [] }`), `tools: Tools` (default
+`{ names: [] }`); `schema_version` is `1 | 2`.
+
 ## Closed permission scopes (v1)
 
 | scope            | what the host bridge lets the extension do                                    |
@@ -81,9 +116,11 @@ lists the https origins the bridge's fetch proxy may reach; anything else is ref
 
 ## Validation rules (identical on both sides; the fixtures prove it)
 
-- `schema_version` must be `1`. A newer version is reported as `newer` by the TS parser (the
-  desktop treats such a bundle as read-only) and rejected by the Python validator (the server
-  never partially accepts a manifest it does not understand).
+- `schema_version` must be `1` or `2` (`SUPPORTED_SCHEMA_VERSIONS`; the latest is
+  `EXTENSION_MANIFEST_SCHEMA_VERSION = 2`). A newer version is reported as `newer` by the TS
+  parser (the desktop treats such a bundle as read-only) and rejected by the Python validator
+  (the server never partially accepts a manifest it does not understand). At `1`, `backend`,
+  `graph` and `tools` are unknown fields.
 - Unknown fields reject at every level, including inside `[store]`; custom content goes in
   `[[store.sections]]` bodies, which are file references, never inline markup.
 - File references: relative, no leading `/`, no backslash, no `.`/`..` segments, segment chars
@@ -115,12 +152,18 @@ validator show identical messages.
 
 ## Fixtures
 
-| file                           | expectation                                                |
-| ------------------------------ | ---------------------------------------------------------- |
-| `manifest-full.json`           | valid; every block populated                               |
-| `manifest-minimal.json`        | valid; optional blocks absent → defaulted                  |
-| `bad-id.invalid.json`          | id with a space and a capital → `extension.id`             |
-| `missing-privacy.invalid.json` | scope declared, no privacy policy → `store.privacy_policy` |
-| `unknown-field.invalid.json`   | `postinstall` command field → `extension.postinstall`      |
-| `traversal.invalid.json`       | `../../index.html` entry → `views.page.entry`              |
-| `newer-schema.json`            | `schema_version: 2` → TS `newer`, Python reject            |
+| file                                  | expectation                                                   |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `manifest-full.json`                  | valid; every block populated                                  |
+| `manifest-minimal.json`               | valid; optional blocks absent → defaulted                     |
+| `bad-id.invalid.json`                 | id with a space and a capital → `extension.id`                |
+| `missing-privacy.invalid.json`        | scope declared, no privacy policy → `store.privacy_policy`    |
+| `unknown-field.invalid.json`          | `postinstall` command field → `extension.postinstall`         |
+| `traversal.invalid.json`              | `../../index.html` entry → `views.page.entry`                 |
+| `newer-schema.json`                   | `schema_version: 3` → TS `newer`, Python reject               |
+| `manifest-v2-first-party.json`        | valid v2; `[backend]`, `[graph]`, `[tools]` all declared      |
+| `manifest-v2-community.json`          | valid v2; no first-party table → `declares_first_party` false |
+| `v2-bad-tool-name.invalid.json`       | `"Add Note"` → `tools.names.0`                                |
+| `v2-capability-mismatch.invalid.json` | `backend.capability` ≠ `extension.id`                         |
+| `v1-with-backend.invalid.json`        | first-party tables at `schema_version: 1` → unknown field     |
+| `v2-too-many-kinds.invalid.json`      | 9 kinds → `graph.kinds`                                       |

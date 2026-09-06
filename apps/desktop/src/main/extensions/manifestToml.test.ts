@@ -32,7 +32,7 @@ describe('loadManifestFromBytes', () => {
 
   test('reports a newer schema as newer (read-only for this build)', () => {
     const result = loadManifestFromBytes(
-      enc(manifestToml().replace('schema_version = 1', 'schema_version = 2'))
+      enc(manifestToml().replace('schema_version = 1', 'schema_version = 3'))
     )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toBe('newer')

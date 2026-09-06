@@ -11,6 +11,8 @@ import type { InstalledBundleDeps } from '../installedBundle'
 export function fakeManifest(overrides: Partial<ExtensionManifest> = {}): ExtensionManifest {
   return {
     schema_version: 1,
+    graph: { kinds: [] },
+    tools: { names: [] },
     extension: {
       id: 'bom',
       name: 'BOM',
