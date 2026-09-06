@@ -152,6 +152,13 @@ async def apply_sync_result(
     seen: set[str] = set()
 
     for out in result.entities:
+        if out.domain.value == "workspace":  # the connector contract's own Domain enum
+            # SOLUSDEV-246 ST2 (ADR-027): the workspace layer is Solus-written
+            # only; a connector claiming it is refused per item, never landed.
+            errors.append(
+                {"item": out.source_key, "message": "connectors may not emit the workspace domain"}
+            )
+            continue
         seen.add(out.source_key)
         row = by_key.get(out.source_key)
         props = dict(out.properties)

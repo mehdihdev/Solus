@@ -417,7 +417,11 @@ No new table. What changes around the existing ones (`docs/api/widget-bundles.md
   `error_solution`); rows of kinds `solus:workspace`, `solus:live_bench`, `solus:widget` carry
   `origin = 'system'`, `source_id`/`external_ref` NULL, `attrs.slug` on widget nodes; `graph_edge`
   rows between them are `contains`, `domain_pair = 'workspace<->workspace'`, `origin = 'system'`.
-  `extension.install` / `extension.uninstall` payloads carry `graph_node_id`.
+  `extension.install` / `extension.uninstall` payloads carry `graph_node_id`. Migration
+  `d5e6f7a8b9c0` adds the partial unique indexes `uq_graph_entity_workspace_singleton`
+  `(project_id, kind)` for `solus:workspace` / `solus:live_bench` and
+  `uq_graph_entity_workspace_widget_slug` `(project_id, attrs->>'slug')` for `solus:widget`, both
+  restricted to `domain='workspace' AND origin='system' AND deleted_at IS NULL`.
 
 ## 5. `review_status` state machine
 

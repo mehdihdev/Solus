@@ -45,6 +45,11 @@ def first_party_problems(
         if (kind.name, kind.domain) not in provided
     )
     problems.extend(
+        f"graph.kinds.{i}.domain: the workspace domain is Solus-written only"
+        for i, kind in enumerate(manifest.graph.kinds)
+        if kind.domain == "workspace"
+    )
+    problems.extend(
         f"tools.names.{i}: not provided by capability {slug}"
         for i, name in enumerate(manifest.tools.names)
         if name not in capability.tools

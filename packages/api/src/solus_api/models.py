@@ -632,6 +632,28 @@ class GraphEntity(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
             unique=True,
             postgresql_where=text("canonical_key IS NOT NULL AND deleted_at IS NULL"),
         ),
+        # SOLUSDEV-246 ST2: the workspace layer's singletons and one widget node
+        # per (project, slug) — see widgets/graph_nodes.py; migration d5e6f7a8b9c0.
+        Index(
+            "uq_graph_entity_workspace_singleton",
+            "project_id",
+            "kind",
+            unique=True,
+            postgresql_where=text(
+                "kind IN ('solus:workspace', 'solus:live_bench') AND domain = 'workspace' "
+                "AND origin = 'system' AND deleted_at IS NULL"
+            ),
+        ),
+        Index(
+            "uq_graph_entity_workspace_widget_slug",
+            "project_id",
+            text("(attrs->>'slug')"),
+            unique=True,
+            postgresql_where=text(
+                "kind = 'solus:widget' AND domain = 'workspace' AND origin = 'system' "
+                "AND deleted_at IS NULL"
+            ),
+        ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(

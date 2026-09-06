@@ -204,12 +204,32 @@ Edges: `solus:workspace -[contains]-> solus:live_bench` and `-[contains]-> solus
 - Registration is idempotent per `(project, slug)`; a stale pinned manifest skips registration
   rather than failing the install.
 
-| Method | Path                                          | Description                                                                                                                                                                                                                                                              |
-| ------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| GET    | `/api/v1/projects/{project_id}/widgets/graph` | `{ root, live_bench, widgets[], edges[] }` (standard entity/relation shapes). Runs `reconcile_workspace_graph` first: heals installs that predate the layer, prunes orphan nodes. `ProjectCtx`; reads exempt from the member floor. `graph` is a reserved capability id. |
+| Method | Path                                                    | Description                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------ | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/projects/{project_id}/widgets/graph`           | **Pure read** of the layer: `{ root, live_bench, widgets[], edges[] }` (standard entity/relation shapes). `root`/`live_bench` are `null` until the layer exists — nothing is written on a GET, so a viewer may call it. `ProjectCtx`.                                                                                                                                                                |
+| POST   | `/api/v1/projects/{project_id}/widgets/graph/reconcile` | **Heal** the layer from the install rows: backfill installs that predate ST2, refresh attrs (version, enabled, blocked), retire orphan nodes. `member` floor + the shared install-write budget (`429` + `Retry-After`). Returns the graph plus `reconciled { created, refreshed, pruned }`; emits `widget_bundle.graph_reconciled` only when something changed. `graph` is a reserved capability id. |
 
-**What never sees the layer:** SOL's graph feed reads `NON_WORKSPACE_DOMAINS` unless a scope
-names `workspace` explicitly; checkers run on that feed; fingerprinting keys on connector refs the
-layer does not have; connector reconciliation is `source_id`-scoped. The generic entity routes
-list the layer (the Context Model screen shows `solus:widget · workspace`) but cannot edit it
-(`origin != manual`).
+Rules the service (`widgets/graph_nodes.py`) enforces:
+
+- **Only its own rows.** Every read, adopt and retire matches `kind` AND `domain = workspace` AND
+  `origin = system`; a connector or manual row that happens to carry a `solus:` kind is never
+  touched. Strays are retired by row (never by a slug re-lookup), including nodes with a missing
+  or non-string slug.
+- **Singletons are the database's.** Partial unique indexes (`uq_graph_entity_workspace_singleton`
+  on `(project_id, kind)` for the root and Live Bench, `uq_graph_entity_workspace_widget_slug` on
+  `(project_id, attrs->>'slug')`) make concurrent installs converge: the loser rolls back its
+  savepoint and adopts the winner.
+- **An install whose pinned manifest no longer parses keeps its node** — reconcile treats every
+  install row as wanted, whether or not its facts can be rebuilt.
+- A team block shows as `attrs.blocked = true` and forces `attrs.enabled = false`; the node stays.
+
+**What never sees the layer — and cannot be steered into it:** SOL's graph feed INTERSECTS any
+requested domains with `NON_WORKSPACE_DOMAINS` and drops workspace entities (and edges touching
+them) even when one is the anchor; `query_graph`'s `domains` is a closed enum without `workspace`;
+`get_entity` answers `NOT_FOUND` for a workspace node; RAG retrieval excludes the domain in its
+entity scope on both the ANN and the full-text path (red-team fixture: an extension named as an
+instruction never surfaces). Checkers run on that feed; fingerprinting keys on connector refs the
+layer does not have; connector reconciliation is `source_id`-scoped and the sync landing path
+refuses any connector entity claiming the workspace domain. The generic entity routes list the
+layer (the Context Model screen shows `solus:widget · workspace`) but have no mutating route; when
+one lands it must refuse `origin != manual` (ADR-027).

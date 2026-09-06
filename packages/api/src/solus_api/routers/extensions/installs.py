@@ -288,7 +288,7 @@ async def _create_install(
     )
     session.add(install)
     extension.install_count = extension.install_count + 1
-    node = await _register_node(session, extension, install, target)
+    node = await _register_node(session, ctx, extension, install, target)
     _emit(
         session,
         ctx,
@@ -307,6 +307,7 @@ async def _create_install(
 
 async def _register_node(
     session: AsyncSession,
+    ctx: ProjectContext,
     extension: Extension,
     install: ExtensionInstall,
     pinned: ExtensionVersion,
@@ -315,7 +316,10 @@ async def _register_node(
     Registration is Solus code inside the install transaction — never a bundle's
     own call. None only when the pinned manifest no longer parses."""
     publisher = await session.get(ExtensionPublisher, extension.publisher_id)
-    facts = facts_from_install(extension, install, pinned, publisher)
+    policy = await svc.get_policy(session, ctx.team.id, extension.id)
+    facts = facts_from_install(
+        extension, install, pinned, publisher, blocked=bool(policy and policy.blocked)
+    )
     if facts is None:
         return None
     return await register_widget_node(session, install.project_id, facts)
@@ -343,7 +347,7 @@ async def _update_install(
         # Re-pin: settings the new manifest no longer declares are dropped.
         new_settings = coerce_settings(parse_extension_manifest(target.manifest), install.settings)
         install.version_id = target.id
-        await _register_node(session, extension, install, target)  # name/version/views follow
+        await _register_node(session, ctx, extension, install, target)  # name/version/views follow
     changed_keys = _changed_keys(install.settings, new_settings)
     added, removed = requested - current, current - requested
     if added or removed or changed_keys:

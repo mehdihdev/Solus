@@ -406,6 +406,7 @@ capability, guarded by `ProjectCtx` plus the install row (installed, enabled, no
 | ANY    | `/api/v1/projects/{project_id}/widgets/{slug}/…`             | The capability's own router, under the bundle guard                                                                                               |
 | GET    | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes` | Fixture capability: the project's `ext:fixture-bundle:note` entities                                                                              |
 | GET    | `/api/v1/projects/{project_id}/widgets/graph`                | STORE ST2: the workspace layer — `solus:workspace` root, `solus:live_bench`, one `solus:widget` per install, `contains` edges; reconciled on read |
+| POST   | `/api/v1/projects/{project_id}/widgets/graph/reconcile`      | STORE ST2: heal the workspace layer from the install rows (member floor + install-write budget); the GET above is a pure read                     |
 
 Amends §2.17: `DELETE …/extensions/{slug}` also soft-deletes the bundle's declared kinds and
 prunes its canvas slots (widget-bundles.md §5). Data events: `widget_bundle.route_refused`,

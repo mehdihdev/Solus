@@ -33,6 +33,7 @@ from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.checkers.core import run_all
 from solus_api.fingerprint.contract import FingerprintOutput
+from solus_api.widgets.graph_nodes import NON_WORKSPACE_DOMAINS
 
 if TYPE_CHECKING:
     from solus_api.agent.interfaces import SolSystems
@@ -80,7 +81,9 @@ QUERY_GRAPH_DESCRIPTOR = ToolDescriptor(
             },
             "domains": {
                 "type": "array",
-                "items": {"type": "string", "maxLength": 64},
+                # SOLUSDEV-246 ST2: a closed enum — the model cannot name the
+                # `workspace` layer, so it cannot be steered into reading it.
+                "items": {"type": "string", "enum": [d.value for d in NON_WORKSPACE_DOMAINS]},
                 "maxItems": 16,
                 "description": (
                     "Narrow to these domains (code/electrical/mechanical/simulation/runtime)."

@@ -35,6 +35,8 @@ def collect_capabilities(
             raise ValueError(f"{name}: must export CAPABILITY = WidgetCapability(...)")
         if not is_safe_extension_id(capability.id) or capability.id in RESERVED_CAPABILITY_IDS:
             raise ValueError(f"{name}: capability id {capability.id!r} is not a valid slug")
+        if any(kind.domain == "workspace" for kind in capability.kinds):
+            raise ValueError(f"{name}: capability kinds may not use the workspace domain")
         if capability.id in found:
             raise ValueError(
                 f"duplicate capability id {capability.id!r}: {found[capability.id][0]} and {name}"
