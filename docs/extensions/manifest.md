@@ -214,12 +214,12 @@ capability package with the same id; anyone else gets `422 bundle_invalid` with
 `backend: first-party only (publisher is not Solus staff)`. At `schema_version = 1` they are
 unknown fields. Community bundles do not need them: the bridge is the whole API.
 
-| Table / field        | Type            | Rule                                                                                                                                                                         |
-| -------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backend.capability` | string          | Must equal `extension.id`                                                                                                                                                    |
-| `backend.routes`     | boolean         | Default `false`. `true` mounts the package's router at `/api/v1/projects/{project_id}/widgets/<id>/`                                                                         |
-| `graph.kinds`        | array of tables | ≤ 8 of `{ name, domain }`; `name` `^[a-z][a-z0-9_]{0,31}$` and distinct; `domain` ∈ `code \| electrical \| mechanical \| simulation \| runtime`. Stored as `ext:<id>:<name>` |
-| `tools.names`        | array of string | ≤ 16, distinct, same name rule. Registered with SOL as `<id>.<name>`                                                                                                         |
+| Table / field        | Type            | Rule                                                                                                                                                                                      |
+| -------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend.capability` | string          | Must equal `extension.id`                                                                                                                                                                 |
+| `backend.routes`     | boolean         | Default `false`. `true` mounts the package's router at `/api/v1/projects/{project_id}/widgets/<id>/`                                                                                      |
+| `graph.kinds`        | array of tables | ≤ 8 of `{ name, domain }`; `name` `^[a-z][a-z0-9_]{0,31}$` and distinct; `domain` ∈ `code \| electrical \| mechanical \| simulation \| runtime \| workspace`. Stored as `ext:<id>:<name>` |
+| `tools.names`        | array of string | ≤ 16, distinct, same name rule. Registered with SOL as `<id>.<name>`                                                                                                                      |
 
 ```toml
 schema_version = 2

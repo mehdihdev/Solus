@@ -80,10 +80,10 @@ PERMISSION_SCOPES = (
 )
 
 #: The graph's Domain vocabulary (ADR-027) — a declared kind names one of these.
-GRAPH_DOMAINS = ("code", "electrical", "mechanical", "simulation", "runtime")
+GRAPH_DOMAINS = ("code", "electrical", "mechanical", "simulation", "runtime", "workspace")
 
 SourceKind = Literal["code", "eda", "cad", "canbus", "runtime"]
-GraphDomain = Literal["code", "electrical", "mechanical", "simulation", "runtime"]
+GraphDomain = Literal["code", "electrical", "mechanical", "simulation", "runtime", "workspace"]
 SlotSize = Literal["compact", "standard", "wide", "full"]
 SettingType = Literal["boolean", "number", "string", "select"]
 PermissionScope = Literal[

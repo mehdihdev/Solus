@@ -33,6 +33,9 @@ class Domain(enum.StrEnum):
     MECHANICAL = "mechanical"
     SIMULATION = "simulation"
     RUNTIME = "runtime"
+    #: SOLUSDEV-246 ST2 — the workspace layer (ADR-027 amendment). A connector
+    #: never emits it; it is here so the contract mirrors `models.Domain` exactly.
+    WORKSPACE = "workspace"
 
 
 class AuthKind(enum.StrEnum):

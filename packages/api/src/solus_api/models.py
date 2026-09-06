@@ -152,6 +152,11 @@ class Domain(enum.StrEnum):
     MECHANICAL = "mechanical"
     SIMULATION = "simulation"
     RUNTIME = "runtime"
+    #: SOLUSDEV-246 ST2 (ADR-027 amendment 2026-09-06): the layer describing the
+    #: workspace itself — `solus:workspace`, `solus:live_bench`, `solus:widget`.
+    #: Never emitted by a connector; excluded from SOL context, checkers and
+    #: fingerprinting.
+    WORKSPACE = "workspace"
 
 
 class JobStatus(enum.StrEnum):

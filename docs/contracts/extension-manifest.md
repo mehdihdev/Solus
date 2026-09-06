@@ -83,7 +83,7 @@ routes = true                   # default false; mounts the package's router at
 
 [graph]
 kinds = [{ name = "note", domain = "code" }]   # ≤ 8, distinct names ^[a-z][a-z0-9_]{0,31}$,
-                                               # domain ∈ code|electrical|mechanical|simulation|runtime
+                                               # domain ∈ code|electrical|mechanical|simulation|runtime|workspace
                                                # lands as graph_entity.kind "ext:<id>:<name>"
 
 [tools]
