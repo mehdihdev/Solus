@@ -636,6 +636,27 @@ graph facts — parts stay in the graph; imported files are retained `artifacts`
 remains the later feeder for connector-ingested declarations; `~/.solus` is unchanged. Routes:
 `docs/api/solus.md`.
 
+
+**Amended 2026-09-06 (SOLUSDEV-244 / HOME H3, human-approved in-chat):** Layer 1 gains
+`~/.solus/preferences.json` (schema_version 1) — the user's **engineering preferences**, the one
+Layer-1 file the user authors rather than the machine: `freeText` (≤ 2,400 chars) plus five
+structured fields `codeStyle`, `mechanical`, `electrical`, `documentation`, `unitsStandards`
+(≤ 800 chars each), and `updatedAt`. It is a document, not settings: no toggles, no server-owned
+values. It is not a server-owned setting, so the Layer-1 ban on `sol_mode`/consent/onboarding does
+not apply; the "never synced" rule holds — the server keeps **no copy**. The desktop attaches the
+document to each SOL turn (`MessageCreate.preferences`), where it is validated against a strict
+schema with the same caps and enters the prompt only as a nonce-fenced data block
+(`kind=engineering_preferences`) under Solus-authored framing, after the mode note and before the
+SOLUSDEV-233 styling note, with a Solus-authored trailer. Layering is explicit: project-level
+`.solus` overrides root preferences, which override shipped corpus defaults (CORPUS C2+); the
+project slot is reserved empty by this ticket. The framing instructs SOL to apply the conventions to
+engineering recommendations and to say when one changed its answer from the default; they can never
+change rules, tools, scope, or what counts as data. Red-team fixtures cover the new surface. File
+rules per this ADR: JSON with schema_version, atomic temp+rename, 0600 under the 0700 home, 64 KiB
+byte cap treated as corrupt, newer schema_version read-only, one file per machine. The TypeScript
+shape lands in `packages/shared-types`; no Python twin is added because no Python process reads the
+file (the API validates the request body with its own schema). This supersedes the solus-folder.md
+§6 deferral for ROOT-level preferences only; team/project instructions remain deferred.
 ---
 
 ## ADR-035: Extensions — sandboxed views, a permission-checked host bridge, and an open registry

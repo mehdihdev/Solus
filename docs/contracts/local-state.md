@@ -20,6 +20,7 @@ touches this directory.
 | `~/.solus/projects.json`              | `ProjectRegistry` — project→working-copy                                                                                                                                                                                                                                                                                                                                            | desktop MAIN process | desktop main, companion               |
 | `~/.solus/config.json`                | machine prefs — **reserved**, schema TBD                                                                                                                                                                                                                                                                                                                                            | —                    | —                                     |
 | `~/.solus/projects/<id>/`             | `sol/<conversationId>.json` — SOL chat cache (`{schema_version: 1, items: [{role, content}]}`, 0600, atomic writes, 2 MB byte cap; ADR-034 amendment 2026-09-01). Other content **reserved**                                                                                                                                                                                        | desktop MAIN process | desktop main/renderer                 |
+| `~/.solus/preferences.json`           | `EngineeringPreferences` — the user's engineering conventions (`schema_version` 1; `freeText` ≤ 2,400 chars, `codeStyle`/`mechanical`/`electrical`/`documentation`/`unitsStandards` ≤ 800 chars each, `updatedAt`); the one Layer-1 file the USER authors. 0600, atomic writes, 64 KiB byte cap; attached to each SOL turn by the desktop, never stored server-side (ADR-034 amendment 2026-09-06 / SOLUSDEV-244) | desktop MAIN process | desktop main/renderer                 |
 | `~/.solus/logs/`                      | log files — **reserved** (Ticket E)                                                                                                                                                                                                                                                                                                                                                 | —                    | —                                     |
 | `~/.solus/extensions/<id>/<version>/` | extracted extension bundle — `extension.toml`, assets, entry HTML/JS (a machine-local CACHE of an installed version; the registry is the source of truth). 0600 files under 0700 dirs; content-hash verified before first use; **never executed by main** — served read-only to sandboxed frames via `solus-ext://`; deletable at any time (ADR-034 amendment 2026-09-03 / ADR-035) | desktop MAIN process | desktop main (`solus-ext://` handler) |
 | `~/.solus/extensions/index.json`      | `ExtensionIndex` — installed extension id → `{ version, contentHash, installedAt, source, devPath? }` (`schema_version` 1, 1 MiB cap, atomic writes)                                                                                                                                                                                                                                | desktop MAIN process | desktop main                          |
@@ -111,6 +112,43 @@ packages) before the first byte is written to them.
 `packages/shared-types/fixtures/local-state/` land with task **EXT-05**. Until EXT-05 lands, this
 section is the contract; the ADR-034 amendment of 2026-09-03 governs the file's existence and
 rules, and any format change amends ADR-034 and ADR-035 together.
+
+## `preferences.json` — the user's engineering preferences (HOME H3)
+
+```json
+{
+  "schema_version": 1,
+  "updatedAt": "2026-09-06T12:00:00Z",
+  "freeText": "Prefer 0.1 mm clearance minimum on all boards.",
+  "codeStyle": "C++17, no dynamic allocation in ISRs.",
+  "mechanical": "Metric fasteners only; 6061-T6 unless stated.",
+  "electrical": "JST-GH for signal, XT30 for power.",
+  "documentation": "Every board ships with a one-page bring-up note.",
+  "unitsStandards": "SI units; ISO 2768-m general tolerances."
+}
+```
+
+- `schema_version` (required, integer ≥ 1). Currently `1`.
+- `freeText` (required, string, ≤ `PREFERENCES_FREE_TEXT_CAP` = 2,400 chars) and the five structured
+  fields `codeStyle`, `mechanical`, `electrical`, `documentation`, `unitsStandards` (required,
+  strings, ≤ `PREFERENCES_FIELD_CAP` = 800 chars each). Empty strings are the empty document.
+- `updatedAt` (optional, RFC 3339 UTC, informational).
+- Unknown fields reject (strict TS parse). Byte cap **64 KiB** (`PREFERENCES_MAX_BYTES`); a larger
+  file is treated as corrupt. **Corrupt → empty document**; **newer `schema_version` → read-only**
+  (ground rule 6). Over-cap strings are truncated on read, never rejected — the user's text is
+  theirs; the cap bounds what reaches a prompt.
+- This is a **document the user writes**, not settings — no toggles, no server-owned values, no
+  secrets. It is the Solus equivalent of a `claude.md`: how this person engineers.
+- **Transport.** The server never reads `~/.solus`. The desktop renderer loads the document through
+  a sender-gated IPC and attaches it to each SOL turn as `MessageCreate.preferences`; the API
+  validates it against a strict schema with the same caps and hands it to the prompt only as a
+  nonce-fenced `engineering_preferences` data block (`agent/prompt.py`). Nothing is stored
+  server-side; the transcript keeps the message, not the preferences.
+- **Contract twin.** TypeScript only (`EngineeringPreferences`, `parseEngineeringPreferences`,
+  `emptyEngineeringPreferences` in `packages/shared-types/src/local-state.ts`). No Python twin: no
+  Python process reads this file — the companion never consumes it and the API validates the
+  request body with its own Pydantic schema (ADR-034 amendment 2026-09-06).
+- One file per machine. Two accounts on one machine share it by design.
 
 ## Ground rules (all `~/.solus` files)
 
