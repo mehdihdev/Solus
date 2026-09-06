@@ -74,11 +74,14 @@ or `View → Store`) return to the catalog.
 - **Header actions**:
   - installed → `Update to <latest>` (primary, only when an update exists),
     `Disable` / `Enable` (toggles enablement here) and `Uninstall` (danger).
-    Uninstall opens a confirm: "Uninstall <name>? Its widgets and checks leave
-    this project. Graph data it already added stays. Your settings are kept if
-    you reinstall." → `Uninstall extension` DELETEs the install, removes the
-    cached bundle from this machine, and returns to the catalog; a refusal
-    (`403 forbidden` for a viewer) keeps the page with the reason.
+    Uninstall opens a confirm: "Uninstall <name>? Its widgets, tools and the
+    graph data it added leave this project. Its settings are removed too."
+    (SOLUSDEV-246 "no orphans": the server soft-deletes the bundle's declared
+    graph kinds, drops its settings, storage and canvas slots —
+    `docs/api/widget-bundles.md` §5.) → `Uninstall extension` DELETEs the
+    install, removes the cached bundle from this machine, and returns to the
+    catalog; a refusal (`403 forbidden` for a viewer) keeps the page with the
+    reason.
   - not installed → `Install` (primary), which opens the **permissions step**
     (`extensions-runtime.md` §1). Disabled with a `NEEDS <KIND>` label while a
     required source is missing, with "Blocked by your team" when the team

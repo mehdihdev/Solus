@@ -7,6 +7,7 @@ and a paginated recursive tree. httpx is mocked with respx; no network.
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -248,3 +249,64 @@ async def test_tree_pagination_bounded_against_stuck_next_page() -> None:
     result = await GitLabConnector().sync(_ctx())
     # Terminates, and surfaces the truncation instead of hanging.
     assert any("not indexed" in e.message for e in result.errors)
+
+
+# --------------------------------------------------------------------------
+# SOLUSDEV-246 (STORE ST1): `.solus/project.toml` `[ext.<id>]` → one `solus_config` entity.
+
+SOLUS_TOML = b"[ext.fixture-bundle]\nmax_notes = 3\n"
+RAW_URL = f"{API}/projects/{ENC}/repository/files/{quote('.solus/project.toml', safe='')}/raw"
+
+
+def _mock_with_solus(blob: bytes = SOLUS_TOML, *, status: int = 200) -> None:
+    respx.get(f"{API}/projects/{ENC}").mock(return_value=httpx.Response(200, json=PROJECT_BODY))
+    respx.get(f"{API}/projects/{ENC}/repository/commits/{DEFAULT_BRANCH}").mock(
+        return_value=httpx.Response(200, json=COMMIT_BODY)
+    )
+    page: list[dict[str, Any]] = [
+        *TREE_PAGE_1,
+        {"path": ".solus", "type": "tree", "id": "ff00", "name": ".solus", "mode": "040000"},
+        {
+            "path": ".solus/project.toml",
+            "type": "blob",
+            "id": "ff01",
+            "name": "project.toml",
+            "mode": "100644",
+        },
+    ]
+    respx.get(f"{API}/projects/{ENC}/repository/tree").mock(
+        return_value=httpx.Response(200, json=page, headers={"x-next-page": ""})
+    )
+    respx.get(RAW_URL).mock(return_value=httpx.Response(status, content=blob))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_solus_project_toml_lands_as_one_solus_config_entity() -> None:
+    _mock_with_solus()
+    result = await GitLabConnector().sync(_ctx())
+    by_key = {e.source_key: e for e in result.entities}
+    config = by_key[".solus/project.toml"]
+    assert config.type == "solus_config"
+    assert config.domain == Domain.CODE
+    assert config.properties["ext"] == {"fixture-bundle": {"max_notes": 3}}
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_solus_project_toml_faults_are_sync_errors() -> None:
+    _mock_with_solus(b"[ext.broken\n")
+    result = await GitLabConnector().sync(_ctx())
+    assert {e.source_key for e in result.entities} >= {".solus/project.toml"}
+    assert any("project.toml" in err.message for err in result.errors)
+
+    respx.reset()
+    _mock_with_solus(b"x" * 70_000)
+    result = await GitLabConnector().sync(_ctx())
+    assert any("exceeds" in err.message for err in result.errors)
+
+    respx.reset()
+    _mock_with_solus(status=500)
+    result = await GitLabConnector().sync(_ctx())
+    assert any(err.item == ".solus/project.toml" for err in result.errors)

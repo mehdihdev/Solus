@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; }
+body { margin: 0; font: 13px/1.5 system-ui, sans-serif; color: var(--tx, #222); background: var(--bg, #fff); }
+main { padding: 20px 24px; max-width: 640px; }
+h1 { font-size: 18px; margin: 0 0 6px; }
+.muted { color: var(--mut, #777); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 16px 0; }
+dt { color: var(--mut, #777); }
+dd { margin: 0; font-family: ui-monospace, monospace; }
+code { font-family: ui-monospace, monospace; }

@@ -26,6 +26,8 @@ from solus_api.connectors.code_host import (
     file_entity,
     module_entity,
     parent_key,
+    solus_config_blob,
+    solus_config_entity,
 )
 from solus_api.connectors.contracts import (
     AccountInfo,
@@ -39,6 +41,7 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.widgets.solus_config import MAX_PROJECT_TOML_BYTES, SOLUS_CONFIG_PATH
 
 DEFAULT_BASE_URL: Final = "https://gitlab.com"
 REQUEST_TIMEOUT: Final = 30.0
@@ -216,8 +219,10 @@ class GitLabConnector(OAuthConnector):
             )
             sha = await self._head_sha(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
+            solus_text, solus_errors = await self._solus_config_text(client, repo, sha, tree)
 
-        entities, relations, errors = self._build_graph(repo, branch, sha, tree)
+        entities, relations, errors = self._build_graph(repo, branch, sha, tree, solus_text)
+        errors = [*solus_errors, *errors]
         if truncated:
             errors.append(
                 SyncError(
@@ -252,8 +257,38 @@ class GitLabConnector(OAuthConnector):
 
     # -------------------------------------------------------- graph building
 
+    async def _solus_config_text(
+        self, client: httpx.AsyncClient, repo: str, sha: str, tree: list[dict[str, Any]]
+    ) -> tuple[str | None, list[SyncError]]:
+        """SOLUSDEV-246: the one blob the connector reads — `.solus/project.toml`.
+        GitLab's tree carries no size, so the raw read is bounded by bytes
+        received; a fault is a SyncError on that path, never a failed sync."""
+        if solus_config_blob(tree) is None:
+            return None, []
+        url = f"{self._project_url(repo)}/repository/files/{quote(SOLUS_CONFIG_PATH, safe='')}/raw"
+        try:
+            response = await client.get(url, params={"ref": sha})
+            if response.status_code >= httpx.codes.BAD_REQUEST:
+                raise ConnectorError(
+                    "gitlab_error", f"GitLab request failed ({response.status_code})."
+                )
+            if len(response.content) > MAX_PROJECT_TOML_BYTES:
+                return None, [
+                    SyncError(
+                        item=SOLUS_CONFIG_PATH, message=f"{SOLUS_CONFIG_PATH}: exceeds size cap"
+                    )
+                ]
+            return response.content.decode("utf-8"), []
+        except (ConnectorError, ValueError) as exc:
+            return None, [SyncError(item=SOLUS_CONFIG_PATH, message=str(exc))]
+
     def _build_graph(
-        self, repo: str, branch: str, sha: str, tree: list[dict[str, Any]]
+        self,
+        repo: str,
+        branch: str,
+        sha: str,
+        tree: list[dict[str, Any]],
+        solus_text: str | None = None,
     ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
         errors: list[SyncError] = []
         entities_by_key: dict[str, EntityOut] = {
@@ -267,6 +302,11 @@ class GitLabConnector(OAuthConnector):
         }
         for item in tree:
             self._land_item(item, entities_by_key, errors)
+        if solus_text is not None:
+            config, problems = solus_config_entity(solus_text)
+            errors.extend(SyncError(item=SOLUS_CONFIG_PATH, message=p) for p in problems)
+            if config is not None:
+                entities_by_key[SOLUS_CONFIG_PATH] = config
 
         known_dirs = {key for key, ent in entities_by_key.items() if ent.type == "code_module"}
         relations = [

@@ -38,7 +38,8 @@ describe('ExtensionDetail — header', () => {
     expect(a.setEnabled).toHaveBeenCalledWith('bom', false)
     await userEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
     expect(screen.getByText(/Uninstall BOM\?/)).toBeInTheDocument()
-    expect(screen.getByText(/Graph data it already added stays/)).toBeInTheDocument()
+    // SOLUSDEV-246: uninstall leaves no trace — the copy says so.
+    expect(screen.getByText(/the graph data it added leave this project/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Uninstall extension' }))
     expect(a.uninstall).toHaveBeenCalledWith('bom')
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce())

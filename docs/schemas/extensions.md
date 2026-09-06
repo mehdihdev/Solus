@@ -393,6 +393,26 @@ constraint name is the lower-cased enum class name. Live-row uniqueness uses `_p
   (the one whose `ProjectCtx` accepted the upload — see the artifact note in §8); the job's
   `result_ref` is `extension_versions/<version_id>`.
 
+### 4.11 Amendments — SOLUSDEV-246 (STORE ST1)
+
+No new table. What changes around the existing ones (`docs/api/widget-bundles.md`):
+
+- **`extension_versions.manifest`** may now be a `schema_version: 2` object carrying `backend`,
+  `graph` and `tools` (contract `extension-manifest.md` § "Schema version 2"). Publish stores such
+  a version only for a staff publisher with a matching in-repo capability.
+- **`extension_publishers.display_name`** may be a reserved vendor name when seeded by a staff
+  account (`publishing.get_or_create_publisher(is_staff=True)`); the `409 publisher_name_reserved`
+  refusal is unchanged for everyone else.
+- **`graph_entity`**: rows written by a bundle's backend carry `kind = 'ext:<slug>:<name>'`,
+  `origin = 'extension'` (ADR-027 amendment 2026-09-05), `source_id`/`external_ref` NULL. The
+  `.solus/project.toml` file a code connector syncs lands as `kind = 'solus_config'`,
+  `origin = 'connector'`, `attrs = { path, ext: { <slug>: {…} } }` (one live row per source).
+- **Uninstall** (`DELETE …/extensions/{slug}`) soft-deletes the pinned manifest's kinds (and
+  touching `graph_edge`s) in the project and prunes `ext:<slug>` entries from every
+  `widget_layouts.layout` in the project, in the same transaction as the install/storage deletes.
+- **`data_events`**: `extension.uninstall.payload` gains `entities_soft_deleted` and
+  `layout_slots_pruned`; new types `widget_bundle.route_refused { slug, reason }`.
+
 ## 5. `review_status` state machine
 
 ```mermaid

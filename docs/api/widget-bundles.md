@@ -125,8 +125,8 @@ settings are removed too." (`docs/wireflows/store.md`).
   type-checked against the bundle's `[[settings.fields]]` (unknown keys dropped, wrong types
   dropped). Values are **team defaults**: the install row's `settings` win when set. Nothing here
   is ever a secret (CLAUDE.md §7; ADR-034 §5).
-- GitLab: same shape via the shared `code_host` helper when trivially applicable; otherwise a
-  named follow-up in the completion report.
+- GitLab: same shape (`code_host.solus_config_entity`), read through the raw-file endpoint and
+  bounded by bytes received since GitLab's tree carries no size.
 
 ## 7. Publish validator additions (extensions.md §5.1)
 
