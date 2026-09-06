@@ -41,9 +41,9 @@ interface Domain {
 
 const DOMAINS: readonly Domain[] = [
   {
-    screen: 'graph',
-    title: 'Context Model',
-    body: 'The unified graph across code, electronics, CAD, and runtime.',
+    screen: 'workspace',
+    title: 'Workspace',
+    body: 'The unified graph across code, electronics, CAD, and runtime, plus the project .solus.',
     icon: <Icons.graph size={17} />
   },
   {

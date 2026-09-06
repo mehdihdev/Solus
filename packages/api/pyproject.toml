@@ -64,6 +64,7 @@ dev = [
     # Parity tests pin the human-owned contracts package to the in-tree draft
     # (tests/test_contracts_package.py, SOLUSDEV-100).
     "solus-contracts",
+    "pytest-xdist>=3.6",
 ]
 
 [tool.uv.sources]

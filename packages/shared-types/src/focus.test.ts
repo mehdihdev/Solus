@@ -212,13 +212,14 @@ describe("isSameEntity", () => {
 });
 
 describe("the Domain vocabulary (ADR-027)", () => {
-  test("carries the six canonical spellings including the workspace layer (SOLUSDEV-246 ST2)", () => {
+  test("carries the seven canonical spellings including the project and workspace layers (SOLUSDEV-246 ST2)", () => {
     expect([...DOMAINS]).toEqual([
       "code",
       "electrical",
       "mechanical",
       "simulation",
       "runtime",
+      "project",
       "workspace",
     ]);
   });

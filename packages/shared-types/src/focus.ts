@@ -12,8 +12,9 @@
 /**
  * The domains the graph spans. Mirrors `solus_api.models.Domain` (ADR-027) —
  * exactly these six, in these spellings. Adding one is a graph-wide decision,
- * not a frontend one (SOLUSDEV-246 ST2 added `workspace`: the layer describing
- * the workspace itself — the root, Live Bench and installed widgets).
+ * not a frontend one. `project` (SOLUSDEV-240: the `.solus` node and imported documents)
+ * and `workspace` (SOLUSDEV-246 ST2: the root, Live Bench and installed widgets) are the
+ * two layers beyond the four robot domains and runtime.
  */
 export const DOMAINS = [
   "code",
@@ -21,6 +22,7 @@ export const DOMAINS = [
   "mechanical",
   "simulation",
   "runtime",
+  "project",
   "workspace",
 ] as const;
 export type Domain = (typeof DOMAINS)[number];

@@ -17,7 +17,8 @@ own via the env override, e.g.:
     SOLUS_TEST_DATABASE_URL=postgresql+asyncpg://solus:solus@localhost:5432/solus_test_b \\
         uv run pytest -q
 
-The SOLUS_TEST_DATABASE_URL override is always respected verbatim (CI sets it).
+The SOLUS_TEST_DATABASE_URL override is respected (CI sets it); under `pytest -n`
+each xdist worker appends its worker id so workers never share a database.
 """
 
 import asyncio
@@ -96,15 +97,23 @@ _strip_ambient_solus_env()
 
 
 def _default_test_db_url() -> str:
-    """Per-checkout (path hash) + per-xdist-worker database name — see the
-    module docstring's concurrent-suite isolation notes."""
+    """Per-checkout (path hash) database name — see the module docstring's
+    concurrent-suite isolation notes."""
     checkout = hashlib.sha1(str(API_DIR).encode()).hexdigest()[:8]
+    return f"postgresql+asyncpg://solus:solus@localhost:5432/solus_test_{checkout}"
+
+
+def _xdist_worker_suffix() -> str:
+    """Under `pytest -n`, every worker gets its own database (`..._gw0`, `..._gw1`)
+    — applied to the env override too, or CI's single URL would be shared by all
+    workers and their per-test TRUNCATEs would wipe each other's rows."""
     worker = os.environ.get("PYTEST_XDIST_WORKER")
-    name = f"solus_test_{checkout}" + (f"_{worker}" if worker else "")
-    return f"postgresql+asyncpg://solus:solus@localhost:5432/{name}"
+    return f"_{worker}" if worker else ""
 
 
-TEST_DATABASE_URL = os.environ.get("SOLUS_TEST_DATABASE_URL", _default_test_db_url())
+TEST_DATABASE_URL = (
+    os.environ.get("SOLUS_TEST_DATABASE_URL", _default_test_db_url()) + _xdist_worker_suffix()
+)
 _ALL_TABLES = ", ".join(t.name for t in Base.metadata.sorted_tables)
 
 TEST_JWT_SECRET = "dummy-jwt-signing-value-tests-only"  # placeholder, not a real secret

@@ -448,7 +448,7 @@ describe('WorkspaceShell — no scripted magic-moment toast', () => {
     vi.useFakeTimers()
     try {
       renderShell()
-      fireEvent.click(screen.getByText('Context Model'))
+      fireEvent.click(screen.getByText('Workspace'))
       await act(async () => {
         vi.advanceTimersByTime(6000)
       })

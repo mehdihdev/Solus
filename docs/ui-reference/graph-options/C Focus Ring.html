@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Graph C — Focus + Satellites</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A0C0F;--sur:#10131A;--sur2:#161B23;--bd:#222834;--tx:#E6E9EE;--mut:#828B99;--acc:#E5A43B;--sw:#62A9FF;--ee:#E3C25B;--me:#E87FAE;--rt:#5BCD8C}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:"IBM Plex Sans",sans-serif;overflow:hidden}
+.top{height:40px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:12px;padding:0 16px;font-size:12.5px}
+.mono{font-family:"IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.stage{position:relative;height:calc(100vh - 41px);background:radial-gradient(var(--bd) 1px,transparent 1px);background-size:26px 26px}
+@keyframes flow{to{stroke-dashoffset:-24}}.hot{animation:flow 1.6s linear infinite}
+.crumb{position:absolute;top:12px;left:16px;font-family:"IBM Plex Mono";font-size:10.5px;color:var(--mut)}
+.crumb b{color:var(--tx);font-weight:500}
+</style></head><body>
+<div class="top"><b style="font-size:13px">lerobot-act-cube</b><span style="color:var(--mut)">/</span><span style="color:var(--mut)">Graph</span><span class="mono" style="margin-left:auto;font-size:9.5px">OPTION C · FOCUS RING — ONE INTEGRATION CENTERED, OTHERS ORBIT AS SATELLITES</span></div>
+<div class="stage">
+<div class="crumb">All integrations ▸ <b>SO-101 Follower</b> <span style="opacity:.6">(esc to zoom out)</span></div>
+<svg width="100%" height="100%" viewBox="0 0 1100 740" preserveAspectRatio="xMidYMid meet">
+  <!-- focus ring -->
+  <circle cx="550" cy="380" r="235" fill="var(--ee)" opacity=".04"></circle>
+  <circle cx="550" cy="380" r="235" fill="none" stroke="var(--ee)" opacity=".28" stroke-dasharray="3 5"></circle>
+  <text x="550" y="132" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" letter-spacing="2" fill="var(--ee)">SO-101 FOLLOWER · ELECTRICAL · 6 SERVOS + POWER</text>
+  <!-- internal radial nodes -->
+  <g font-family="IBM Plex Mono" font-size="10.5">
+    <line x1="550" y1="380" x2="550" y2="255" stroke="var(--tx)" opacity=".1"></line>
+    <line x1="550" y1="380" x2="662" y2="318" stroke="var(--acc)" stroke-width="1.5" stroke-dasharray="6 5" class="hot"></line>
+    <line x1="550" y1="380" x2="672" y2="442" stroke="var(--tx)" opacity=".1"></line>
+    <line x1="550" y1="380" x2="550" y2="505" stroke="var(--acc)" stroke-width="1.5" stroke-dasharray="6 5" class="hot"></line>
+    <line x1="550" y1="380" x2="428" y2="442" stroke="var(--tx)" opacity=".1"></line>
+    <line x1="550" y1="380" x2="438" y2="318" stroke="var(--tx)" opacity=".1"></line>
+    <circle cx="550" cy="380" r="26" fill="var(--sur2)" stroke="var(--ee)" stroke-width="1.5"></circle>
+    <text x="550" y="385" text-anchor="middle" fill="var(--tx)" font-size="9.5">bus 5V</text>
+    <rect x="496" y="232" width="108" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="509" cy="245" r="3.2" fill="var(--ee)"></circle><text x="518" y="249" fill="var(--tx)">M1 base_pan</text>
+    <rect x="614" y="298" width="150" height="26" rx="5" fill="var(--sur2)" stroke="var(--acc)" stroke-width="1.5"></rect><circle cx="627" cy="311" r="3.2" fill="var(--ee)"></circle><text x="636" y="315" fill="var(--tx)">M2 shoulder_lift ●</text>
+    <rect x="628" y="428" width="112" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="641" cy="441" r="3.2" fill="var(--ee)"></circle><text x="650" y="445" fill="var(--tx)">M3 elbow_flex</text>
+    <rect x="484" y="490" width="132" height="26" rx="5" fill="var(--sur2)" stroke="var(--acc)" stroke-width="1.5"></rect><circle cx="497" cy="503" r="3.2" fill="var(--ee)"></circle><text x="506" y="507" fill="var(--tx)">supply 5V/2A ●</text>
+    <rect x="356" y="428" width="98" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="369" cy="441" r="3.2" fill="var(--ee)"></circle><text x="378" y="445" fill="var(--tx)">M4–M6</text>
+    <rect x="352" y="298" width="102" height="26" rx="5" fill="var(--sur2)" stroke="color-mix(in srgb,var(--ee) 40%,transparent)"></rect><circle cx="365" cy="311" r="3.2" fill="var(--ee)"></circle><text x="374" y="315" fill="var(--tx)">wrist pair</text>
+  </g>
+  <!-- satellites -->
+  <g>
+    <path d="M180 170 C 300 220, 420 270, 614 311" fill="none" stroke="var(--acc)" stroke-width="4" opacity=".5" stroke-dasharray="10 7" class="hot"></path>
+    <text x="330" y="240" font-family="IBM Plex Mono" font-size="10" fill="var(--acc)">12 links</text>
+    <rect x="90" y="120" width="120" height="58" rx="9" fill="var(--sur2)" stroke="color-mix(in srgb,var(--sw) 45%,transparent)" stroke-width="1.4"></rect>
+    <circle cx="112" cy="142" r="5" fill="var(--sw)"></circle><text x="126" y="146" font-size="12" font-weight="600" fill="var(--tx)">GitHub</text>
+    <text x="108" y="166" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)">214 files</text>
+    <path d="M958 180 C 880 240, 800 280, 740 311" fill="none" stroke="var(--acc)" stroke-width="2.5" opacity=".45" stroke-dasharray="8 7"></path>
+    <text x="852" y="244" font-family="IBM Plex Mono" font-size="10" fill="var(--acc)" opacity=".9">6</text>
+    <rect x="900" y="128" width="118" height="58" rx="9" fill="var(--sur2)" stroke="color-mix(in srgb,var(--rt) 45%,transparent)" stroke-width="1.4"></rect>
+    <circle cx="922" cy="150" r="5" fill="var(--rt)"></circle><text x="936" y="154" font-size="12" font-weight="600" fill="var(--tx)">MuJoCo</text>
+    <text x="918" y="174" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)">RT ×1.0</text>
+    <path d="M950 600 C 860 560, 760 520, 616 503" fill="none" stroke="var(--tx)" stroke-width="1.5" opacity=".12"></path>
+    <rect x="898" y="576" width="122" height="56" rx="9" fill="var(--sur2)" stroke="color-mix(in srgb,var(--rt) 40%,transparent)" stroke-width="1.4"></rect>
+    <circle cx="920" cy="598" r="5" fill="var(--rt)"></circle><text x="934" y="602" font-size="12" font-weight="600" fill="var(--tx)">Wrist cam</text>
+    <text x="916" y="620" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)">30 fps</text>
+    <rect x="96" y="560" width="128" height="56" rx="9" fill="none" stroke="var(--bd)" stroke-dasharray="5 5" opacity=".6"></rect>
+    <text x="118" y="584" font-size="11.5" fill="var(--mut)">Onshape</text>
+    <text x="118" y="602" font-family="IBM Plex Mono" font-size="9" fill="var(--mut)">not connected</text>
+  </g>
+</svg>
+<div style="position:absolute;left:16px;bottom:14px" class="mono"><span style="font-size:9.5px">FOCUS + SATELLITES · CLICK A SATELLITE TO REFOCUS · BREADCRUMB ZOOMS OUT</span></div>
+</div>
+</body></html>

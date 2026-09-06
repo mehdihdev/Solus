@@ -115,6 +115,8 @@ async def create_artifact(
 
 
 def _is_expired(artifact: Artifact, ttl_seconds: int, *, now: datetime | None = None) -> bool:
+    if artifact.retained:  # a `.solus` document is kept, not a hand-off buffer (SOLUSDEV-240)
+        return False
     return ensure_utc(artifact.created_at) + timedelta(seconds=ttl_seconds) <= (now or utcnow())
 
 
@@ -280,7 +282,11 @@ async def sweep_expired_artifacts(
     cutoff = (now or utcnow()) - timedelta(seconds=ttl_seconds)
     candidates = (
         await session.scalars(
-            select(Artifact).where(Artifact.deleted_at.is_(None), Artifact.created_at <= cutoff)
+            select(Artifact).where(
+                Artifact.deleted_at.is_(None),
+                Artifact.retained.is_(False),
+                Artifact.created_at <= cutoff,
+            )
         )
     ).all()
     for artifact in candidates:

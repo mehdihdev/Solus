@@ -319,7 +319,8 @@ stance, so they are read-only through the generic entity routes. No enum is adde
 
 **Amended — 2026-09-06, SOLUSDEV-246 (STORE ST2, human-approved in-chat per ADR-032):**
 
-1. **`workspace` is the sixth `Domain` value** — the layer describing the workspace itself: the
+1. **`workspace` is a `Domain` value** (the seventh, beside SOLUSDEV-240's `project` — merged the
+   same day) — the layer describing the workspace itself: the
    per-project `solus:workspace` root, the `solus:live_bench` node, and one `solus:widget` node
    per installed extension (peers under the root, `contains` edges from it). It is a graph-wide
    change: `models.Domain`, `solus_contracts.connector.Domain`, the manifest's `GRAPH_DOMAINS`,
@@ -353,6 +354,17 @@ switch happens now, within the entrypoint migration budget. pgvector ≥0.8 (dep
 0.8.2) additionally offers iterative index scans (`hnsw.iterative_scan`) that repair
 filtered-ANN recall for project-scoped queries if the planner ever prefers the vector
 index over per-project exact KNN. Everything else in this ADR stands.
+
+**Amended — 2026-09-05, SOLUSDEV-240 (WORKSPACE W1; human-approved in-chat per ADR-032):**
+
+`Domain` gains a sixth canonical value, **`project`**, for entities that belong to the project as
+a whole rather than to one engineering world: the project `.solus` node (`kind="solus_config"`)
+and imported documents (`kind="document"`, e.g. a rules PDF). They are real graph nodes so Impact
+and the focus engine reach them through the one traversal, and forcing them into `code` would
+mislabel them. The VARCHAR CHECKs on `graph_entity.domain` and `error_solution.domain` are
+recreated with the new value; `solus_contracts.connector.Domain`, `@solus/shared-types` `DOMAINS`,
+and `docs/contracts/focus.md` mirror it in the same commit. No connector emits `project`; both
+`.solus`-owned kinds carry `origin="manual"` (the existing user-editable value).
 
 **Rejected:** Auto-increment integer PKs (leak counts, poor for distributed/merge); hard deletes as default (loses history/undo, breaks the graph-as-living-documentation value); a dedicated graph DB now (premature; Postgres handles current scale — mirrors ADR-003).
 **Revisit when:** A measured deep-traversal bottleneck justifies a graph engine behind the graph-access seam.
@@ -611,6 +623,18 @@ verified by hash before use and may be deleted at any time. Bundles are static a
 never executed by the main process. Ids are validated main-process-side with the contract's
 slug rule; files are 0600 under the 0700 home; per-bundle size cap 25 MiB. No secrets, per
 Layer-1 rules.
+
+**Amended 2026-09-05 (SOLUSDEV-240 / WORKSPACE W1, human-approved in-chat):** a third layer —
+the **project-level `.solus`, server-stored**. Every project gets one at creation: a
+`solus_config` graph node (domain `project`, origin `manual`) plus `solus_entries` rows under
+five sections (Hardware configs, Project details, Error logging, Documentation, Code
+environment). It is UI-edited in Workspace (import a file · ask SOL to find · type it) and
+SOL-writable through the `add_solus_entry` tool, so it cannot be a repo file: no repo exists at
+creation and the server cannot write a working copy. It is configuration, not a second store for
+graph facts — parts stay in the graph; imported files are retained `artifacts` rows wrapped in
+`document` nodes edged from `.solus`, never blobs in a JSON field. Layer 2's repo-committed TOML
+remains the later feeder for connector-ingested declarations; `~/.solus` is unchanged. Routes:
+`docs/api/solus.md`.
 
 ---
 

@@ -152,7 +152,11 @@ as `404`.
 
 ### 4.2 Retention — TTL sweep + one-shot consumption
 
-Bridge-upload artifacts are a **hand-off buffer, not a document store**:
+Bridge-upload artifacts are a **hand-off buffer, not a document store** — with one exception:
+an artifact filed into the project `.solus` (`POST …/solus/{section}/entries`, `kind:
+"artifact"`, [solus.md](solus.md)) is marked **`retained`** and is exempt from both the TTL
+sweep and one-shot consumption until its entry is deleted (SOLUSDEV-240). Everything below
+applies to non-retained artifacts:
 
 - `artifact_ttl_seconds` (config, default **3600**): an ARQ sweep job soft-deletes expired
   rows and deletes the backing bytes. Post-TTL fetches → `404` on both the metadata and content

@@ -47,7 +47,8 @@ async def test_filter_entities_by_type_and_domain(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     project_id = await _project_with_graph(client, alice_headers)
-    assert len(await _entities(client, alice_headers, project_id)) == 3
+    # 3 synced entities + the project's own `.solus` node (SOLUSDEV-240).
+    assert len(await _entities(client, alice_headers, project_id)) == 4
     exports = await _entities(client, alice_headers, project_id, type="design_export")
     assert len(exports) == 1
     assert exports[0]["domain"] == "electrical"

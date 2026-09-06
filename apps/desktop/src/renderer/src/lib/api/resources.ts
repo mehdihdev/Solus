@@ -2,7 +2,15 @@
 // (API.md §2.1/§2.3). Each takes an injectable client (defaults to the app
 // singleton) so callers and tests stay decoupled from transport. Field names
 // are snake_case to match the backend envelope (API.md §1.4).
-import { api, type ApiClient, type Page } from './client'
+import {
+  api,
+  apiBaseUrl,
+  apiToken,
+  joinUrl,
+  unwrapEnvelope,
+  type ApiClient,
+  type Page
+} from './client'
 import type { SolMode } from '../../store/settingsStore'
 
 export interface TeamSummary {
@@ -1471,4 +1479,125 @@ export interface LocalTool {
 
 export function listLocalTools(client: ApiClient = api): Promise<LocalTool[]> {
   return client.request<LocalTool[]>('/integrations/local-tools')
+}
+
+/* ---------------- .solus (SOLUSDEV-240, docs/api/solus.md) ---------------- */
+
+export const SOLUS_SECTIONS = ['hardware', 'details', 'errors', 'docs', 'code'] as const
+export type SolusSection = (typeof SOLUS_SECTIONS)[number]
+export type SolusEntryKind = 'text' | 'artifact' | 'sol'
+
+/** One row under a `.solus` section. `name`/`media_type`/`size_bytes` are set for
+ *  imported files; `text` for typed and SOL-filed notes. */
+export interface SolusEntry {
+  id: string
+  section: SolusSection
+  kind: SolusEntryKind
+  author: 'user' | 'sol'
+  text: string | null
+  name: string | null
+  artifact_id: string | null
+  entity_id: string | null
+  media_type: string | null
+  size_bytes: number | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SolusConfig {
+  /** The `.solus` graph node — focus it to see the imported documents. */
+  entity_id: string
+  sections: Record<SolusSection, SolusEntry[]>
+}
+
+export type SolusEntryInput =
+  | { kind: 'text'; text: string }
+  | { kind: 'artifact'; artifact_id: string; name: string }
+
+export function getSolus(projectId: string, client: ApiClient = api): Promise<SolusConfig> {
+  return client.request<SolusConfig>(`/projects/${projectId}/solus`)
+}
+
+export function addSolusEntry(
+  projectId: string,
+  section: SolusSection,
+  input: SolusEntryInput,
+  client: ApiClient = api
+): Promise<SolusEntry> {
+  return client.request<SolusEntry>(`/projects/${projectId}/solus/${section}/entries`, {
+    method: 'POST',
+    body: input
+  })
+}
+
+export function updateSolusEntry(
+  projectId: string,
+  entryId: string,
+  text: string,
+  client: ApiClient = api
+): Promise<SolusEntry> {
+  return client.request<SolusEntry>(`/projects/${projectId}/solus/entries/${entryId}`, {
+    method: 'PATCH',
+    body: { text }
+  })
+}
+
+export function deleteSolusEntry(
+  projectId: string,
+  entryId: string,
+  client: ApiClient = api
+): Promise<void> {
+  return client.request<void>(`/projects/${projectId}/solus/entries/${entryId}`, {
+    method: 'DELETE'
+  })
+}
+
+/* ---------------- artifacts (docs/api/artifacts.md §2) ---------------- */
+
+/** The W0-04 `ArtifactRef` the upload route answers with. */
+export interface ArtifactRef {
+  artifact_id: string
+  uri: string
+  media_type: string
+  storage: string
+  size_bytes: number | null
+  summary: string | null
+}
+
+/** Server-side hard cap (`artifact_max_bytes`); checked client-side first so the
+ *  user hears it before the bytes leave the machine. */
+export const ARTIFACT_MAX_BYTES = 8 * 1024 * 1024
+
+export interface UploadTransport {
+  fetchImpl?: typeof fetch
+  getToken?: () => Promise<string | null>
+  baseUrl?: string
+}
+
+/** POST /projects/{id}/artifacts — multipart, so it bypasses the JSON client.
+ *  No Content-Type header: fetch sets the multipart boundary itself. */
+export async function uploadArtifact(
+  projectId: string,
+  file: File,
+  transport: UploadTransport = {}
+): Promise<ArtifactRef> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  form.append('media_type', file.type || 'application/octet-stream')
+  const token = await (transport.getToken ?? apiToken)()
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await (transport.fetchImpl ?? globalThis.fetch)(
+    joinUrl(transport.baseUrl ?? apiBaseUrl, `/projects/${projectId}/artifacts`),
+    { method: 'POST', headers, body: form }
+  )
+  const text = await res.text()
+  let body: unknown = null
+  try {
+    body = text ? JSON.parse(text) : null
+  } catch {
+    body = null
+  }
+  return unwrapEnvelope<ArtifactRef>(res.status, body)
 }

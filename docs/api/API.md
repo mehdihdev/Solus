@@ -140,7 +140,8 @@ the `credit_ledger` row for attribution, and still meters the **invoking user** 
 | PATCH  | `/api/v1/projects/{project_id}`           | Update name/description/settings                                                                              |
 | POST   | `/api/v1/projects/{project_id}/archive`   | Archive (soft delete; leaves default listing, keeps graph) — added SOLUSDEV-84                                |
 | POST   | `/api/v1/projects/{project_id}/unarchive` | Restore an archived project — added SOLUSDEV-84                                                               |
-| DELETE | `/api/v1/projects/{project_id}`           | Delete (OWNER only per ADR-025, confirmation required)                                                        |
+| —      | `/api/v1/projects/{project_id}/solus…`    | The project-level `.solus` (SOLUSDEV-240) — full plan in [solus.md](solus.md)                                 |
+| DELETE | `/api/v1/projects/{project_id}`           | Delete (admin, confirmation required)                                                                         |
 
 ### 2.4 Graph — entities & relations (ADR-001, the core)
 
@@ -471,8 +472,8 @@ React Router (memory/hash history in Electron). The persistent SOL "ball of ener
 
 /                                       Home (SOLUSDEV-242): the ACTIVE team's project grid — create / open / switch / archive, recent activity per project — team selector, account-scoped connections
 /projects/:projectId                    Project overview: graph stats, source health, open warnings, recent jobs
-/projects/:projectId/graph              Graph explorer (subgraph view, entity inspector panel)
-/projects/:projectId/graph/:entityId    Entity detail (relations, provenance, warnings, identity links)
+/projects/:projectId/workspace          Workspace (SOLUSDEV-240): graph explorer + the project `.solus` panel (was /graph)
+/projects/:projectId/workspace/:entityId Entity detail (relations, provenance, warnings, identity links)
 /projects/:projectId/sources            Connected sources, sync status/history
 /projects/:projectId/sources/connect    Connector catalog + connect flow (incl. OAuth handoff)
 /projects/:projectId/checks             Check runs, checker registry, run-selected UI

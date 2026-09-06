@@ -3,6 +3,7 @@
 // menu (rename / delete). Selection and "new chat" are the chat hook's
 // transitions; rename/delete round-trip the owner-private endpoints and a
 // deleted chat's ~/.solus cache file goes with it.
+import { clampMenuPosition } from '../../components/ui/ContextMenu'
 import { useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
@@ -17,16 +18,7 @@ const UNTITLED = 'New chat'
 
 //: Approximate rendered menu box, used to clamp the context menu inside the
 //: viewport (a row near the bottom edge must not push Delete off-screen).
-const MENU_WIDTH = 150
-const MENU_HEIGHT = 90
-
-/** Pointer coordinates clamped so the menu box stays fully visible. */
-export function clampMenuPosition(x: number, y: number): { x: number; y: number } {
-  return {
-    x: Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH)),
-    y: Math.max(0, Math.min(y, window.innerHeight - MENU_HEIGHT))
-  }
-}
+const MENU_BOX = { width: 150, height: 90 }
 
 /** Right-click menu state: which chat, and where the pointer was. */
 interface MenuState {
@@ -119,7 +111,7 @@ function ChatRow({
       onKeyDown={(e) => e.key === 'Enter' && onSelect(conversation.id)}
       onContextMenu={(e) => {
         e.preventDefault()
-        onMenu({ conversation, ...clampMenuPosition(e.clientX, e.clientY) })
+        onMenu({ conversation, ...clampMenuPosition(e.clientX, e.clientY, MENU_BOX) })
       }}
       className="interactive sol-row-in"
       style={{

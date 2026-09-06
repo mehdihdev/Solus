@@ -23,6 +23,7 @@ export const GRAPH_DOMAINS = [
   "mechanical",
   "simulation",
   "runtime",
+  "project",
   "workspace",
 ] as const;
 export type GraphDomain = (typeof GRAPH_DOMAINS)[number];

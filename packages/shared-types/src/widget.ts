@@ -20,6 +20,7 @@ const DOMAINS: readonly Domain[] = [
   "mechanical",
   "simulation",
   "runtime",
+  "project",
   "workspace",
 ];
 const SLOT_SIZES = ["compact", "standard", "wide", "full"] as const;

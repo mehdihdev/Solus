@@ -8,7 +8,7 @@ Nothing pushed; no MR opened.
 
 Every installed extension — community or first-party — now has a node in the project's graph: a
 `solus:widget` peer of a `solus:live_bench` node under a per-project `solus:workspace` root, all
-in the new sixth domain `workspace` with origin `system`, joined by `contains` edges. Registration
+in the new domain `workspace` (beside main's `project`, added by SOLUSDEV-240 the same day) with origin `system`, joined by `contains` edges. Registration
 is Solus code inside the install lifecycle; uninstall removes the node and every edge touching it.
 
 | Part                 | Where                                                                                                                                                                                                                                                |

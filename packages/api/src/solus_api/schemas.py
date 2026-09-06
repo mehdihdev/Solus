@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
@@ -141,6 +141,34 @@ class ProjectUpdate(StrictModel):
     description: str | None = Field(default=None, max_length=4000)
 
     _name_not_blank = field_validator("name")(_not_blank)
+
+
+class SolusEntryIn(StrictModel):
+    """POST /solus/{section}/entries (docs/api/solus.md): typed text, or an
+    already-uploaded artifact to file as a document node."""
+
+    kind: Literal["text", "artifact"]
+    text: str | None = Field(default=None, max_length=4000)
+    artifact_id: UUID | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _shape(self) -> "SolusEntryIn":
+        if self.kind == "text":
+            if self.text is None or not self.text.strip():
+                raise ValueError("text is required for a text entry")
+            if self.artifact_id is not None or self.name is not None:
+                raise ValueError("artifact_id/name are not allowed on a text entry")
+        else:
+            if self.artifact_id is None or self.name is None or not self.name.strip():
+                raise ValueError("artifact_id and name are required for an artifact entry")
+            if self.text is not None:
+                raise ValueError("text is not allowed on an artifact entry")
+        return self
+
+
+class SolusEntryPatch(StrictModel):
+    text: str = Field(min_length=1, max_length=4000)
 
 
 SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros", "altium"]

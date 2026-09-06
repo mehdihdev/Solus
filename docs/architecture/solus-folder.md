@@ -14,7 +14,11 @@
 > `docs/contracts/local-state.md`, shapes in `packages/shared-types` + `solus_contracts`), the
 > desktop write-through and hydration, `SOLUS_COMPANION_WORKSPACE` derivation at companion spawn,
 > and the 0700 tightening. `config.json`, `projects/<id>/`, `logs/`, and the whole repo-committed
-> `.solus/` layer (Tickets B–E) remain design only.
+> `.solus/` layer (Tickets B–E) remain design only. **SOLUSDEV-240 (WORKSPACE W1) adds a
+> third, server-stored layer: the project-level `.solus`** — a `solus_config` graph node per
+> project plus `solus_entries` under five sections, edited in Workspace and written by SOL
+> (`add_solus_entry`). Route plan: `docs/api/solus.md`; ADR-034 amendment 2026-09-05. Layer 2's
+> repo TOML remains the later connector-ingested feeder.
 >
 > Governing docs: DECISIONS.md ADR-034 (this design), ADR-021 (branch discipline), ADR-027 (graph
 > schema conventions), ADR-030 (parse committed Git exports, not live plugins), ADR-032 (two-tier

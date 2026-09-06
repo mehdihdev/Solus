@@ -96,7 +96,9 @@ async function loadSummary(projectId: string): Promise<GraphSummary> {
   return { status: 'ready', ...countsOf(detail), entities }
 }
 
-export function useGraphSummary(): GraphSummary {
+/** `revision` > 0 forces a fresh walk (the caller knows the graph changed —
+ *  e.g. a `.solus` import just created a document node the cache predates). */
+export function useGraphSummary(revision = 0): GraphSummary {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
   const [summary, setSummary] = useState<GraphSummary>(() => {
@@ -111,6 +113,7 @@ export function useGraphSummary(): GraphSummary {
       return
     }
     let cancelled = false
+    if (revision > 0) graphCache.delete(projectId)
     const retained = graphCache.get(projectId)
     setSummary(retained ? fromRetained(retained) : LOADING)
     void loadSummary(projectId).then((next) => {
@@ -119,7 +122,7 @@ export function useGraphSummary(): GraphSummary {
     return () => {
       cancelled = true
     }
-  }, [fetchEnabled, projectId])
+  }, [fetchEnabled, projectId, revision])
 
   return summary
 }

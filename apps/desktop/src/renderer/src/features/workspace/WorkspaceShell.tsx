@@ -11,7 +11,7 @@ import { Icons } from '../../components/ui/icons.constants'
 import { Mono } from '../../components/ui/Mono'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
-import { GraphScreen } from '../graph/GraphScreen'
+import { WorkspaceScreen } from '../graph/WorkspaceScreen'
 import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
 import { SolScreen } from '../sol/SolScreen'
@@ -45,7 +45,7 @@ import type { RailExtensionEntry } from './extensionRail'
 const SCREEN_TITLES: Readonly<Record<string, string>> = {
   home: 'Home',
   overview: 'Overview',
-  graph: 'Context Model',
+  workspace: 'Workspace',
   sources: 'Sources',
   bench: 'Live Bench',
   sol: 'SOL',
@@ -294,7 +294,7 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 
 /** Screens that take no props, keyed by name (keeps ScreenView's branching low). */
 const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
-  graph: GraphScreen,
+  workspace: WorkspaceScreen,
   sources: SourcesScreen,
   store: StoreScreen,
   sol: SolScreen,
@@ -367,7 +367,7 @@ interface RailItem {
 const RAIL_TOP: readonly RailItem[] = [
   { screen: 'home', icon: <Icons.box size={17} />, label: 'Home' },
   { screen: 'overview', icon: <Icons.spark size={17} />, label: 'Overview' },
-  { screen: 'graph', icon: <Icons.graph size={17} />, label: 'Context Model' },
+  { screen: 'workspace', icon: <Icons.graph size={17} />, label: 'Workspace' },
   { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
   { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
   { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
@@ -389,9 +389,9 @@ const RAIL_BOTTOM: readonly RailItem[] = [
   { screen: 'settings', icon: <Icons.gear size={17} />, label: 'Settings' }
 ]
 
-/** Whether a rail item is the active screen (Context Model also owns Alert). */
+/** Whether a rail item is the active screen (Workspace also owns Alert). */
 function isRailActive(item: RailItem, name: string): boolean {
-  return name === item.screen || (item.screen === 'graph' && name === 'alert')
+  return name === item.screen || (item.screen === 'workspace' && name === 'alert')
 }
 
 /** The rail's `DEV` corner mark (wireflow extensions-runtime.md §2): mono,

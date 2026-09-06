@@ -1,11 +1,11 @@
-// Context Model screen: honest empty states (SOLUSDEV-152) plus the entity
+// Workspace screen: honest empty states (SOLUSDEV-152) plus the entity
 // list (SOLUSDEV-70) — the project's entities render as selectable rows, and
 // selecting one drives the shared focus store (one bounded neighbourhood
 // fetch re-scopes every mounted widget).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { GraphScreen } from './GraphScreen'
+import { WorkspaceScreen } from './WorkspaceScreen'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useFocusStore } from '../workspace/focusStore'
 import { ApiError } from '../../lib/api/envelope.types'
@@ -18,7 +18,8 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     ...actual,
     getProject: vi.fn(),
     listAllEntities: vi.fn(),
-    getGraphNeighborhood: vi.fn()
+    getGraphNeighborhood: vi.fn(),
+    getSolus: vi.fn()
   }
 })
 
@@ -50,14 +51,18 @@ function linkProject(): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(resources.getSolus).mockResolvedValue({
+    entity_id: 'solus-1',
+    sections: { hardware: [], details: [], errors: [], docs: [], code: [] }
+  })
   graphCache.clear()
   useWorkspaceStore.getState().reset()
   useFocusStore.getState().reset()
 })
 
-describe('GraphScreen — unlinked (dev bypass)', () => {
+describe('WorkspaceScreen — unlinked (dev bypass)', () => {
   it('shows the honest sign-in/connect empty state', () => {
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     expect(screen.getByText('Your context model will live here')).toBeInTheDocument()
     expect(
       screen.getByText(/connect a source to start building your robot's graph/i)
@@ -65,7 +70,7 @@ describe('GraphScreen — unlinked (dev bypass)', () => {
   })
 
   it('contains no fabricated nodes, alerts, or counts', () => {
-    const { container } = render(<GraphScreen />)
+    const { container } = render(<WorkspaceScreen />)
     const text = container.textContent ?? ''
     expect(text).not.toMatch(/247 NODES/)
     expect(text).not.toMatch(/leg_ik\.c|DRV8316C|motor_driver\.c/)
@@ -74,22 +79,57 @@ describe('GraphScreen — unlinked (dev bypass)', () => {
   })
 })
 
-describe('GraphScreen — linked', () => {
+describe('WorkspaceScreen — linked', () => {
   it('prompts to connect a source when none are connected', async () => {
     linkProject()
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0))
     vi.mocked(resources.listAllEntities).mockResolvedValue([])
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     expect(
       await screen.findByText("Connect a source to start building your robot's graph")
     ).toBeInTheDocument()
+  })
+
+  it('renders the .solus panel beside the canvas', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([])
+    render(<WorkspaceScreen />)
+    expect(await screen.findByText('Hardware configs')).toBeInTheDocument()
+    expect(screen.getByTestId('solus-panel')).toBeInTheDocument()
+  })
+
+  it('calls a project with only the .solus node empty — on purpose — and still lists it', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([
+      { id: 'solus-1', type: 'solus_config', domain: 'project', name: '.solus', source_key: '' }
+    ])
+    render(<WorkspaceScreen />)
+    expect(await screen.findByText('An empty project — on purpose')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /\.solus/ })).toBeInTheDocument()
+    expect(screen.getByText(/right-click a \.solus section to import/)).toBeInTheDocument()
+  })
+
+  it('counts imported files honestly in the on-purpose copy', async () => {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([
+      { id: 'solus-1', type: 'solus_config', domain: 'project', name: '.solus', source_key: '' },
+      { id: 'd1', type: 'document', domain: 'project', name: 'rules.pdf', source_key: '' }
+    ])
+    render(<WorkspaceScreen />)
+    expect(
+      await screen.findByText(/Only the \.solus node and its imported file are here/)
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /rules\.pdf/ })).toBeInTheDocument()
   })
 
   it('prompts to sync when sources exist but no entities do', async () => {
     linkProject()
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(0, 0, [{ id: 's1' }]))
     vi.mocked(resources.listAllEntities).mockResolvedValue([])
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     expect(await screen.findByText('Waiting for your first sync')).toBeInTheDocument()
   })
 
@@ -100,7 +140,7 @@ describe('GraphScreen — linked', () => {
       entity('e2', 'wrist servo'),
       entity('e1', 'elbow motor')
     ])
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     await waitFor(() =>
       expect(screen.getByText('2 ENTITIES · 5 RELATIONS · 1 SOURCE')).toBeInTheDocument()
     )
@@ -121,7 +161,7 @@ describe('GraphScreen — linked', () => {
       edges: [],
       truncated: false
     })
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     await userEvent.click(await screen.findByRole('button', { name: /elbow motor/ }))
     await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('e1'))
     expect(vi.mocked(resources.getGraphNeighborhood)).toHaveBeenCalledWith('p1', 'e1', {
@@ -133,7 +173,7 @@ describe('GraphScreen — linked', () => {
     linkProject()
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(3, 5, [{ id: 's1' }]))
     vi.mocked(resources.listAllEntities).mockRejectedValue(new Error('boom'))
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     expect(await screen.findByText("Couldn't load this project's entities")).toBeInTheDocument()
     expect(screen.getByText('3 ENTITIES · 5 RELATIONS · 1 SOURCE')).toBeInTheDocument()
   })
@@ -142,7 +182,7 @@ describe('GraphScreen — linked', () => {
     linkProject()
     vi.mocked(resources.getProject).mockRejectedValue(new ApiError(403, 'forbidden', 'nope'))
     vi.mocked(resources.listAllEntities).mockResolvedValue([])
-    render(<GraphScreen />)
+    render(<WorkspaceScreen />)
     expect(await screen.findByText("You don't have access to this project")).toBeInTheDocument()
     expect(screen.queryByText(/can't reach its API/)).not.toBeInTheDocument()
   })
@@ -151,7 +191,7 @@ describe('GraphScreen — linked', () => {
     linkProject()
     vi.mocked(resources.getProject).mockReturnValue(new Promise(() => undefined))
     vi.mocked(resources.listAllEntities).mockReturnValue(new Promise(() => undefined))
-    render(<GraphScreen />)
-    expect(screen.getByText(/LOADING CONTEXT MODEL/)).toBeInTheDocument()
+    render(<WorkspaceScreen />)
+    expect(screen.getByText(/LOADING WORKSPACE/)).toBeInTheDocument()
   })
 })

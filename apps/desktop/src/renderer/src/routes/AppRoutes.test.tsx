@@ -53,7 +53,7 @@ describe('AppRoutes guards', () => {
   it('redirects already-onboarded users away from /onboarding', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/onboarding')
-    expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Workspace').length).toBeGreaterThan(0)
   })
 
   it('lets a not-yet-onboarded user reach /onboarding', async () => {
@@ -67,7 +67,7 @@ describe('AppRoutes guards', () => {
   it('redirects signed-in users away from /login', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
     renderAt('/login')
-    expect(screen.getAllByText('Context Model').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Workspace').length).toBeGreaterThan(0)
   })
 
   it('serves the extension window root at /ext-window/:extensionId, which guards its own auth', () => {
