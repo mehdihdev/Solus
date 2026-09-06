@@ -78,6 +78,19 @@ export interface Source {
 
 export type ConnectionStatus = 'pending' | 'connected' | 'error' | 'revoked'
 
+/** SOLUSDEV-244 (HOME H4): derived server-side from stored state, never a probe. */
+export type ConnectionHealth = 'healthy' | 'token_expired' | 'degraded'
+
+/** The provider-quota meter's position for a metered account (SOLUSDEV-167 /
+ *  ADR-019). `estimated` is always true: a floor on Solus's own calls since the
+ *  counter started, never a remaining balance — the UI must say so. */
+export interface ConnectionQuota {
+  status: 'ok' | 'degraded' | 'exhausted'
+  used: number
+  allowance: number
+  estimated: boolean
+}
+
 /** A project that uses an account grant (SOLUSDEV-241). */
 export interface ConnectionProject {
   project_id: string
@@ -98,6 +111,10 @@ export interface Connection {
    *  failed (`token_error`). Null when nothing is needed. */
   needs_reauth: 'token_error' | null
   last_error: SourceError | null
+  /** SOLUSDEV-244 (H4): what Home badges. `token_expired` outranks `degraded`. */
+  health: ConnectionHealth
+  /** Present only for a metered provider with a reachable ledger (H4). */
+  quota?: ConnectionQuota
   projects: ConnectionProject[]
   created_at: string
   updated_at: string

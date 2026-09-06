@@ -7,8 +7,11 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
 import {
+  healthLabel,
   legacyText,
   moveDetail,
+  quotaNote,
+  quotaText,
   reauthText,
   revokeDetail,
   scopeText,
@@ -56,6 +59,7 @@ const LINKED: Connection = {
   access: 'read',
   needs_reauth: null,
   last_error: null,
+  health: 'healthy',
   projects: [
     { project_id: 'p1', name: 'Rover' },
     { project_id: 'p2', name: 'Arm' }
@@ -321,5 +325,94 @@ describe('copy helpers', () => {
   it('revokeDetail is honest about what is lost', () => {
     expect(revokeDetail('Onshape', { ...LINKED, projects: [] })).toContain('No project uses it')
     expect(revokeDetail('Onshape', LINKED)).toContain('disconnects Onshape in Rover, Arm')
+  })
+})
+
+describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () => {
+  it('a healthy metered account states its estimated position, quietly', () => {
+    mockAccounts({
+      connections: [
+        { ...LINKED, quota: { status: 'ok', used: 120, allowance: 1800, estimated: true } }
+      ]
+    })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByRole('status')).toHaveTextContent('Healthy')
+    expect(
+      screen.getByText('At least 120 of 1,800 Onshape calls this year (estimate)')
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('quota-note')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Re-authorize Onshape' })).toBeNull()
+  })
+
+  it('an unmetered account says nothing about quota', () => {
+    mockAccounts({ connections: [LINKED] })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByRole('status')).toHaveTextContent('Healthy')
+    expect(screen.queryByText(/calls this year/)).toBeNull()
+    expect(screen.queryByTestId('quota-bar')).toBeNull()
+  })
+
+  it('flags an account at 80% BEFORE the wall and says what degrades', () => {
+    mockAccounts({
+      connections: [
+        {
+          ...LINKED,
+          health: 'degraded',
+          quota: { status: 'degraded', used: 1440, allowance: 1800, estimated: true }
+        }
+      ]
+    })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByRole('status')).toHaveTextContent('Degraded')
+    expect(screen.getByText(/At least 1,440 of 1,800 .* \(estimate\)/)).toBeInTheDocument()
+    const note = screen.getByTestId('quota-note')
+    expect(note).toHaveTextContent("Approaching Onshape's call limit")
+    expect(note).toHaveTextContent('Automatic syncs and SOL')
+    expect(note).toHaveTextContent('your own Sync now still reaches Onshape')
+    expect(note).toHaveTextContent('cache-only reads and starts no new syncs')
+    expect(screen.getByTestId('quota-bar')).toHaveStyle({ width: '80%' })
+    expect(screen.queryByRole('button', { name: 'Re-authorize Onshape' })).toBeNull()
+  })
+
+  it('at the wall it explains cache-only mode rather than showing an error', () => {
+    mockAccounts({
+      connections: [
+        {
+          ...LINKED,
+          health: 'degraded',
+          quota: { status: 'exhausted', used: 1800, allowance: 1800, estimated: true }
+        }
+      ]
+    })
+    render(<ConnectedAccountsCard />)
+    const note = screen.getByTestId('quota-note')
+    expect(note).toHaveTextContent('cache-only mode')
+    expect(note).toHaveTextContent('documents already synced stay readable')
+    expect(note).toHaveTextContent('not an error')
+    // No error framing anywhere: no sign-in prompt, no failure wording.
+    expect(screen.queryByText(/sign-in failed|rejected|re-authorize/i)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Re-authorize Onshape' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Revoke Onshape' })).toBeInTheDocument()
+  })
+
+  it('an expired token offers reconnect in place even when the grant row is still connected', async () => {
+    const accounts = mockAccounts({ connections: [{ ...LINKED, health: 'token_expired' }] })
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByRole('status')).toHaveTextContent('Token expired')
+    expect(screen.getByRole('note')).toHaveTextContent('rejected this account')
+    await userEvent.click(screen.getByRole('button', { name: 'Re-authorize Onshape' }))
+    expect(accounts.refresh).not.toHaveBeenCalled() // the wizard opens; nothing moves yet
+  })
+
+  it('copy helpers are honest about what is an estimate and what is unknown', () => {
+    expect(healthLabel(LINKED)).toBe('Healthy')
+    expect(quotaText(LINKED, 'Onshape')).toBeNull()
+    expect(quotaNote(LINKED, 'Onshape')).toBeNull()
+    const degraded = {
+      ...LINKED,
+      quota: { status: 'degraded' as const, used: 1440, allowance: 1800, estimated: true }
+    }
+    expect(quotaText(degraded, 'Onshape')).toMatch(/\(estimate\)$/)
+    expect(quotaText(degraded, 'Onshape')).not.toMatch(/remaining|left/)
   })
 })

@@ -50,6 +50,7 @@ const LINKED_GITHUB: resources.Connection = {
   access: null,
   needs_reauth: null,
   last_error: null,
+  health: 'healthy',
   projects: [],
   created_at: '',
   updated_at: ''

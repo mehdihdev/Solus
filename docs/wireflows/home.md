@@ -95,6 +95,48 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **Revoke** is confirmed and names the projects it disconnects (unchanged).
 - Hidden while offline (honest empty state elsewhere on Home).
 
+### Health and quota per account (SOLUSDEV-244 / HOME H4)
+
+```
+| [On] Onshape · ada@example.com                                DEGRADED     |
+|      Used in Rover and Arm · Read only                        [Revoke]     |
+|      At least 1,440 of 1,800 Onshape calls this year (estimate)            |
+|      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░                                                  |
+|      ⚠ Approaching Onshape's call limit. Automatic syncs and SOL's Onshape |
+|        calls are paused; your own Sync now still reaches Onshape. At the   |
+|        limit Solus switches to cache-only reads and starts no new syncs.   |
+| [On] Onshape · ada@example.com                              TOKEN EXPIRED  |
+|      ⚠ The provider rejected this account's token. Re-authorize to        |
+|        reconnect.                                          [Re-authorize]  |
+```
+
+- Every linked row carries a **health badge** — `HEALTHY` (quiet, muted) ·
+  `TOKEN EXPIRED` · `DEGRADED` (warn colour) — from the server's `health`,
+  which is DERIVED from stored state and never probed: a probe would spend the
+  allowance the card protects. `token_expired` outranks `degraded`.
+- **Quota position** (metered providers only, today Onshape): "At least N of A
+  <Provider> calls this year (estimate)" over a thin bar. Always an estimate
+  (ADR-019): a floor on Solus's own calls since the counter started, never a
+  remaining balance — the words "remaining" and "left" never appear. Unmetered
+  providers (GitHub, GitLab) and an unreachable ledger say nothing about quota:
+  empty beats invented.
+- **Approaching the limit** (the meter's degraded band, 70% of the allowance;
+  an account at 80% is flagged): the badge reads DEGRADED and a warn note says
+  what already degrades — automatic syncs and SOL's provider calls pause, the
+  user's own Sync now still reaches the provider — and what happens at the
+  wall.
+- **At the wall** (allowance used, or the provider's 402 latched): the note
+  explains cache-only mode — documents already synced stay readable, nothing
+  new is fetched, no syncs run until the allowance resets — and says it is not
+  an error and needs no sign-in. The grant stays CONNECTED; no Re-authorize.
+- **Token expired** — the grant's last handshake failed, or a bound source's
+  sync was refused with `invalid_credentials` — offers **Re-authorize** in
+  place (the existing account-mode wizard; the row is replaced only once the
+  new consent succeeds), even when the grant row itself still reads connected.
+- Each transition INTO the degraded band or the wall is recorded once per
+  account as an `integration.quota_degraded` / `integration.quota_exhausted`
+  data event; loading Home again records nothing new.
+
 ## How you engineer (SOLUSDEV-244 / HOME H3)
 
 ```
@@ -127,6 +169,10 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   Cancel. Save is optimistic through the desktop main process (atomic write,
   0600); a failed save keeps the editor open with "Couldn't save your
   conventions — try again." Cancel discards the draft.
+- The card always carries the line "Stored on this computer and shared by everyone who
+  signs in here." — the file is one per machine (ADR-034), so the sharing is stated, never
+  silent. An identity change (sign-out, in-place session swap) drops the loaded copy; the next
+  turn re-reads the file under the new identity.
 - **Read-only** when the file was written by a newer Solus (shown, no Edit).
   **Unavailable** outside the desktop app ("Your conventions live in ~/.solus and
   are edited in the Solus desktop app.").

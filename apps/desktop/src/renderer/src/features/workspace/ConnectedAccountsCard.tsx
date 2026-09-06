@@ -36,6 +36,10 @@ import {
   moveDetail,
   reauthText,
   revokeDetail,
+  healthLabel,
+  quotaFraction,
+  quotaNote,
+  quotaText,
   scopeText,
   usageText
 } from './connectedAccounts'
@@ -176,10 +180,12 @@ function AccountRow({
                 · {connection.account_login}
               </span>
             )}
+            <HealthBadge connection={connection} />
           </div>
           <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
             {usageText(connection)} · {scopeText(connection)}
           </div>
+          <QuotaLine entry={entry} connection={connection} />
         </div>
         <Button
           kind="ghost"
@@ -208,6 +214,15 @@ function AccountRow({
           </Button>
         </div>
       )}
+      {quotaNote(connection, entry.name) && (
+        <div
+          role="note"
+          style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}
+          data-testid="quota-note"
+        >
+          {quotaNote(connection, entry.name)}
+        </div>
+      )}
       {confirming && (
         <RevokeModal
           providerName={entry.name}
@@ -216,6 +231,63 @@ function AccountRow({
           onConfirm={onRevoke}
         />
       )}
+    </div>
+  )
+}
+
+/** The derived health, as a word (SOLUSDEV-244 / H4). Healthy stays quiet. */
+function HealthBadge({ connection }: { connection: Connection }): React.JSX.Element {
+  const label = healthLabel(connection)
+  const color = label === 'Healthy' ? 'var(--mut)' : 'var(--warn)'
+  return (
+    <span
+      role="status"
+      aria-label={`${label}`}
+      style={{
+        marginLeft: 8,
+        fontSize: 9.5,
+        fontWeight: 500,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        color,
+        fontFamily: 'var(--font-mono)'
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
+/** The meter's position: a labelled estimate and a thin bar. Absent when the
+ *  provider is unmetered or the ledger was unreachable — empty beats invented. */
+function QuotaLine({
+  entry,
+  connection
+}: {
+  entry: CatalogEntry
+  connection: Connection
+}): React.JSX.Element | null {
+  const text = quotaText(connection, entry.name)
+  if (!text) return null
+  const fraction = quotaFraction(connection)
+  const tint = connection.quota?.status === 'ok' ? 'var(--acc)' : 'var(--warn)'
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{text}</div>
+      <div
+        aria-hidden="true"
+        style={{ height: 3, background: 'var(--bd)', borderRadius: 2, marginTop: 3, maxWidth: 220 }}
+      >
+        <div
+          data-testid="quota-bar"
+          style={{
+            height: 3,
+            width: `${Math.round(fraction * 100)}%`,
+            background: tint,
+            borderRadius: 2
+          }}
+        />
+      </div>
     </div>
   )
 }
