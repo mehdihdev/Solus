@@ -225,12 +225,13 @@ requires that you publish from a **Solus staff** account and that an in-repo cap
 with your `extension.id` provides everything you declared. Otherwise nothing is stored and the
 `422 bundle_invalid` details name the reason:
 
-| problem                                                            | meaning                                                |
-| ------------------------------------------------------------------ | ------------------------------------------------------ |
-| `backend: first-party only (publisher is not Solus staff)`         | community accounts cannot use these tables — drop them |
-| `backend.capability: no in-repo capability named <id>`             | staff, but Solus ships no package for that id          |
-| `backend.routes: capability <id> has no router`                    | `routes = true` but the package exports no router      |
-| `graph.kinds.N` / `tools.names.N: not provided by capability <id>` | the package does not define that kind / tool           |
+| problem                                                            | meaning                                                                       |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `backend: first-party only (publisher is not Solus staff)`         | community accounts cannot use these tables — drop them                        |
+| `backend.capability: no in-repo capability named <id>`             | staff, but Solus ships no package for that id                                 |
+| `backend.routes: capability <id> has no router`                    | `routes = true` but the package exports no router                             |
+| `graph.kinds.N` / `tools.names.N: not provided by capability <id>` | the package does not define that kind / tool                                  |
+| `extension.id: reserved for a Solus first-party bundle`            | that id belongs to a Solus capability; pick another (even without the tables) |
 
 Community bundles do not need these tables; the bridge is the whole API. A `schema_version = 2`
 manifest WITHOUT them publishes exactly like a v1 one.
@@ -242,7 +243,8 @@ manifest WITHOUT them publishes exactly like a v1 one.
 review, and is never derived from the publisher display name — naming yourself "Solus" in
 `extension.publisher` produces no badge and is likely to get the listing removed (and, on a first
 publish, is refused outright — `409 publisher_name_reserved` — unless the account is Solus staff,
-which is how first-party bundles are published under the Solus name). There is no
+which is how first-party bundles are published under the Solus name; such a publisher row keeps
+publishing only while its account stays on the staff list). There is no
 application form in this build; staff reach out. Everything else on the listing (`name`, `summary`,
 `publisher`) comes from the manifest and changes only through a new version.
 

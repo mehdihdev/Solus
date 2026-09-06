@@ -65,10 +65,11 @@ package without `CAPABILITY` raises at import time, naming both modules.
 
 ## 3. Routes — `/api/v1/projects/{project_id}/widgets/{slug}/...`
 
-| Method | Path                                                              | Description                                                                     |
-| ------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| ANY    | `/api/v1/projects/{project_id}/widgets/{slug}/{capability path…}` | Whatever the capability's router declares, mounted under the guard below        |
-| GET    | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes`      | Fixture: the project's `ext:fixture-bundle:note` entities, newest first (≤ 200) |
+| Method | Path                                                              | Description                                                                               |
+| ------ | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| ANY    | `/api/v1/projects/{project_id}/widgets/{slug}/{capability path…}` | Whatever the capability's router declares, mounted under the guard below                  |
+| GET    | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes`      | Fixture: the project's `ext:fixture-bundle:note` entities, newest first (≤ 200)           |
+| POST   | `/api/v1/projects/{project_id}/widgets/fixture-bundle/notes`      | Fixture write `{ text ≤ 200 }` → `201 { id, name, kind }`; proves the guard's write floor |
 
 Conventions:
 
@@ -80,11 +81,16 @@ Conventions:
   `(project, slug)` must exist, be `enabled`, not be team-blocked, and its **pinned** manifest
   must declare `backend.routes = true`. Any miss → `404 not_found` — the bundle simply is not
   there for this project (no oracle for install state beyond what `GET …/extensions` already
-  shows a member). Writes additionally take the `member` floor (`403 forbidden` for viewers) and
-  the install-writes budget (60/min/user, `429 rate_limited`).
+  shows a member). **Writes** (any method outside GET/HEAD/OPTIONS) additionally take the
+  `member` floor (`403 forbidden` for viewers and share-only users) and the install-writes
+  budget shared with the install routes (60/min/user, `429 rate_limited` + `Retry-After`) —
+  enforced by the guard dependency itself, before the install lookup, so no capability handler
+  ever carries auth code.
 - Responses use the standard envelope; capability routers never build their own auth. The guard
   resolves `BundleContext { ctx, extension, install, manifest }` and hands it to handlers
-  (`bundle: BundleDep("<slug>")`); the install row's `settings` ride on `install`.
+  through an `Annotated[BundleContext, Depends(require_bundle("<slug>"))]` alias — the same cached
+  dependency object the mount applies, so it resolves once per request; the install row's
+  `settings` ride on `install`.
 - Every guard refusal emits `widget_bundle.route_refused { slug, reason }` (ADR-011).
 
 ## 4. SOL tools and graph kinds
@@ -126,8 +132,12 @@ settings are removed too." (`docs/wireflows/store.md`).
   the entity is simply absent.
 - `read_bundle_config(session, project_id, slug, manifest)` returns that table filtered and
   type-checked against the bundle's `[[settings.fields]]` (unknown keys dropped, wrong types
-  dropped). Values are **team defaults**: the install row's `settings` win when set. Nothing here
-  is ever a secret (CLAUDE.md §7; ADR-034 §5).
+  dropped), read only from a `solus_config` row with `origin = "connector"` — a same-kind row a
+  bundle or user wrote is never mistaken for the repo config. `effective_bundle_config` layers
+  manifest defaults ← repo table ← the install row's `settings`; the fixture's `add_note` honours
+  `prefix` and `max_notes` from it. Nothing here is ever a secret (CLAUDE.md §7; ADR-034 §5).
+  Red-team fixture: `injection_corpus` surface `solus_config` — a hostile value is typed data,
+  changes no tool spec, and lands only as an inert prefix.
 - GitLab: same shape (`code_host.solus_config_entity`), read through the raw-file endpoint and
   bounded by bytes received since GitLab's tree carries no size.
 
@@ -135,15 +145,19 @@ settings are removed too." (`docs/wireflows/store.md`).
 
 New `422 bundle_invalid` problem strings, all produced in the request path so nothing is stored:
 
-| problem                                                    | when                                                       |
-| ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `backend: first-party only (publisher is not Solus staff)` | any first-party table and the caller is not `RequireStaff` |
-| `backend.capability: no in-repo capability named <slug>`   | staff, but `solus_api.widgets` has no package with that id |
-| `graph.kinds.N: not provided by capability <slug>`         | a declared kind the package does not define                |
-| `tools.names.N: not provided by capability <slug>`         | a declared tool the package does not build                 |
-| `backend.routes: capability <slug> has no router`          | `routes = true` but the package exports none               |
+| problem                                                    | when                                                                                                                                            |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend: first-party only (publisher is not Solus staff)` | any first-party table and the caller is not `RequireStaff`                                                                                      |
+| `backend.capability: no in-repo capability named <slug>`   | staff, but `solus_api.widgets` has no package with that id                                                                                      |
+| `graph.kinds.N: not provided by capability <slug>`         | a declared kind the package does not define                                                                                                     |
+| `tools.names.N: not provided by capability <slug>`         | a declared tool the package does not build                                                                                                      |
+| `backend.routes: capability <slug> has no router`          | `routes = true` but the package exports none                                                                                                    |
+| `extension.id: reserved for a Solus first-party bundle`    | a NON-first-party manifest whose id is an in-repo capability, from a non-staff publisher (slugs are claimed forever, so Solus must keep the id) |
 
 `graph`/`tools` declared without `[backend]` are still first-party (staff + package required).
+A publisher row carrying a reserved vendor name (seeded by staff) publishes only while the
+account is still on `SOLUS_STAFF_USER_IDS`; afterwards every publish is `409
+publisher_name_reserved` (security review M3).
 
 ## 8. Data events (ADR-011)
 
