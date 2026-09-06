@@ -225,13 +225,19 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **MEMBERS card** (right column, above CONNECTED ACCOUNTS): roster with roles;
   owners and admins change roles (admin / member / viewer — ownership is
   transferred, not picked) and remove members, never on an owner row; pending
-  invites with `Revoke`; `+ Invite` in the header for managers.
+  invites with `Revoke`; `+ Invite` in the header for managers. **Remove and
+  Revoke are confirmed** in a dialog naming the person and the consequence
+  ("They lose access to every project in it" / "Its token stops working"). A
+  refused mutation (403, last owner, failure) is shown inline under the roster,
+  never swallowed.
 - **Invite** (`InviteModal`): email in, then the **one-time join token shown
   once** with `Copy token`; `Done` while the token is uncopied asks a second
   time ("You won't see this token again"). The token is never logged or listed
   again (the server returns it only at creation). Inviting from the PERSONAL
   team spins up a new collaborative team server-side (ADR-025 keeps the
-  personal team solo): Home follows it and the modal says so.
+  personal team solo): the invite dialog says so BEFORE Send ("creates a new
+  collaborative team (it counts against your plan) and Home switches to it"),
+  and Home follows it.
 - **Later joiners** get the team's existing projects automatically (the
   ADR-025 auto-grant on accept, `invites.py`); the joined team becomes active
   and its grid shows those projects without any per-project sharing.

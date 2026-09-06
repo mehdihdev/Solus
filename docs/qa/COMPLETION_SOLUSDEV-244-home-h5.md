@@ -102,8 +102,27 @@ auto-grant), ADR-032; `docs/wireflows/home.md`, `docs/wireflows/activity-feed.md
 
 ## Deviations / open concerns
 
-- Phase 4 `code-reviewer` and `security-reviewer` were launched on the H5 commits; their findings
-  and fixes are recorded in the addendum at the end of this file once they returned.
+- **Phase 4 reviews completed and were remediated (commit after 9ab573e).** Security review
+  verdict was FAIL on three HIGHs, all fixed: H1 member removal and invite revoke ran on one click —
+  both now confirm with the person named and the consequence ("They lose access to every project
+  in it"); H2 the `?confirm=true` fix had reawakened Settings' inline two-step delete that named
+  nothing — it now renders the shared delete dialog naming the team and the cascade; H3
+  authorization failures on role/remove/revoke were swallowed — they now return named outcomes
+  (`forbidden`, `last_owner`, `failed`) shown inline. MEDIUMs: M1 the invite listing's catch is
+  narrowed to 403/404 (a 500 is a failure, not "no invites"); M2 the at-limit sentence is the
+  server's own, no client claim about what an upgrade buys; M3 inviting from the personal team
+  now says BEFORE Send that a counted collaborative team will be created; M5 the hostile-text test
+  covers member names/emails, the team name and feed payloads. LOWs: L1 a failed clipboard write is
+  said and the token is not marked copied; L2 the server sentence is length-bounded; L3
+  `useTeamData` is slimmed to what Settings renders (detail, role, rename, notify, delete — four
+  fewer calls per Settings visit). Code review HIGHs: `deleteProject` also lacked the API's
+  `?confirm=true` (every desktop project delete answered 400 — fixed, test pinned); the hook's
+  refreshers and load-more had no stale guard (a late refresh from the team you left could land
+  under the new team) — fixed with a team-id ref and a test. Dead `listActivity` removed.
+- **Not fixed (pre-existing, reported): security M4** — the invite token travels in the accept
+  URL path, and the API's unhandled-error logger records `request.url.path`, so a 500 on that route
+  would write a live token to logs. Fix needs an `API.md` §2.2 amendment (token in the body) or
+  path redaction in `core/errors.py`; worth its own ticket.
 - **Not built**: ownership transfer UI (API-only), pagination of the members list (the API is
   unpaginated), invite-token hashing at rest (pre-existing; the token is stored plaintext in
   `invites.token` and also placed in the invitee's notification — both pre-date H5 and are worth a
