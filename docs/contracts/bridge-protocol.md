@@ -213,9 +213,12 @@ already enforces.
   `tool_result.data` must parse as the W0-04 `ToolResult` (frozen, `extra="forbid"`, invariant
   validator). Validation failure → frame dropped, structured log (`call_id` + reason only),
   counted against abuse limits; repeated failures → close.
-- **Size caps** (contract defaults, config-tunable): control frames (`hello`/`status`/`ping`/
-  `pong`/`error`) ≤ **16 KiB** · `tool_call` ≤ **256 KiB** · `tool_result` ≤ **1 MiB**. Oversize →
-  close `4413`. Bulk CAD/EDA output rides an `ArtifactRef`, never inline.
+- **Size caps** (contract defaults, config-tunable): control frames (`status`/`ping`/
+  `pong`/`error`) ≤ **16 KiB** · `hello` ≤ **128 KiB** (SOLUSDEV-249 amendment: the hello carries
+  every advertised tool's schema; Altium + KiCad + `local` already exceed 16 KiB, which closed
+  every companion with a linked workspace as `4400 update required`) · `tool_call` ≤ **256 KiB** ·
+  `tool_result` ≤ **1 MiB**. Oversize → close `4413`. Bulk CAD/EDA output rides an `ArtifactRef`,
+  never inline.
 - **No-secrets rules (AC-4):**
   (a) the companion MUST NOT transmit local credentials, env values, or key material — stated, but
   defense-in-depth only, since the companion is untrusted;

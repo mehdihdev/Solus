@@ -9,6 +9,7 @@ import { ConnectedAccountsCard } from './ConnectedAccountsCard'
 import { ACCOUNT_DOMAINS, accountDomain, emptyDomainText } from './accountDomains'
 import {
   healthLabel,
+  localFolderLabel,
   legacyText,
   moveDetail,
   quotaNote,
@@ -123,6 +124,55 @@ function mockSources(sources: Source[] = []): sourcesHook.ProjectSourcesData {
 beforeEach(() => {
   vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([ONSHAPE, KICAD])
   mockSources()
+})
+
+const LOCAL_SOURCE: Source = {
+  id: 's-local',
+  project_id: 'p1',
+  type: 'local',
+  name: 'mehdi-mbp',
+  status: 'connected',
+  config: { machine_id: '0123456789abcdef0123456789abcdef', machine_name: 'mehdi-mbp', folder_name: 'rover-fw' },
+  account_login: null,
+  last_synced_at: '2026-09-07T00:00:00Z',
+  last_error: null,
+  entity_count: 4,
+  created_at: '',
+  updated_at: ''
+}
+
+describe('ConnectedAccountsCard — local folder source (SOLUSDEV-249)', () => {
+  it('lists a local source under Software as "Local folder · <machine>" with mark LF', async () => {
+    mockAccounts()
+    const sources = mockSources([LOCAL_SOURCE])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(screen.getByText('Local folder · mehdi-mbp')).toBeInTheDocument()
+    expect(screen.getByText('LF')).toBeInTheDocument()
+    expect(screen.getByText(/Linked from Home/)).toBeInTheDocument()
+    // The source beneath it keeps the standard actions; there is no Connect.
+    expect(screen.queryByRole('button', { name: /for Local folder/ })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Sync mehdi-mbp now' }))
+    expect(sources.actions.syncNow).toHaveBeenCalledWith('s-local')
+    expect(screen.getByRole('button', { name: 'Disconnect mehdi-mbp' })).toBeInTheDocument()
+  })
+
+  it('does not put the local source under any other domain', async () => {
+    mockAccounts()
+    mockSources([LOCAL_SOURCE])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    expect(screen.queryByText(/Local folder ·/)).toBeNull()
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
+    expect(screen.queryByText(/Local folder ·/)).toBeNull()
+  })
+
+  it('names the machine from config, falling back to the source name', () => {
+    expect(localFolderLabel(LOCAL_SOURCE)).toBe('Local folder · mehdi-mbp')
+    expect(localFolderLabel({ name: 'lab-01', config: {} })).toBe('Local folder · lab-01')
+    expect(localFolderLabel({ name: 'lab-01', config: { machine_name: '  ' } })).toBe(
+      'Local folder · lab-01'
+    )
+  })
 })
 
 describe('ConnectedAccountsCard', () => {

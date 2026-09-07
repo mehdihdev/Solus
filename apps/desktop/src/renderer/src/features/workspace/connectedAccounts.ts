@@ -1,7 +1,19 @@
 // Copy helpers for Home's connected-accounts card (SOLUSDEV-241). Pure, so the
 // card file exports only components (fast refresh) and the words are testable
 // without rendering.
-import type { Connection, LegacyConnection } from '../../lib/api/resources'
+import type { Connection, LegacyConnection, Source } from '../../lib/api/resources'
+
+/** A `local` source (SOLUSDEV-249) is a working copy on ONE machine: the row
+ *  names that machine. Falls back to the source name (which the API also sets
+ *  to the machine name) when the config carries none. */
+export function localFolderLabel(source: Pick<Source, 'name' | 'config'>): string {
+  const machine = source.config.machine_name
+  const name = typeof machine === 'string' && machine.trim() ? machine : source.name
+  return `Local folder · ${name}`
+}
+
+export const LOCAL_SOURCE_TYPE = 'local'
+export const LOCAL_FOLDER_MARK = 'LF'
 
 /** "Used in Rover and Arm" / "Used in 3 projects" / "Not used by any project yet". */
 export function usageText(connection: Connection): string {

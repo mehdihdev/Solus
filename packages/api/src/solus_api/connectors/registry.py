@@ -18,6 +18,7 @@ from solus_api.connectors.acquisition import ExportAcquirer
 from solus_api.connectors.contracts import Connector
 from solus_api.connectors.httpcache import CacheStore
 from solus_api.connectors.integration_cache import IntegrationCache
+from solus_api.connectors.local_folder import FolderAcquirer
 
 if TYPE_CHECKING:
     from solus_api.core.config import Settings
@@ -138,6 +139,12 @@ class ConnectorRegistry:
 #: (T4b F2 wiring).
 AcquirerFactory = Callable[[ConnectorContext, str], ExportAcquirer]
 
+#: Builds the local-folder acquirer (`connectors/local_acquire.py`) for one sync
+#: run's scope (SOLUSDEV-249). Same rule as `AcquirerFactory`: `None` where
+#: there is no bridge registry (the ARQ worker) — the plain, acquirer-less
+#: `local` connector then declines every sync with a no-signal error.
+LocalAcquirerFactory = Callable[[ConnectorContext], FolderAcquirer]
+
 
 def _onshape_meter(
     settings: Settings, redis: object | None, ctx: ConnectorContext
@@ -202,10 +209,20 @@ def _cache_account_ref(ctx: ConnectorContext) -> str | None:
     return ctx.account_ref or None
 
 
+def _gitlab_host(base_url: str | None) -> str | None:
+    """The self-hosted GitLab host a clone's remote may name (SOLUSDEV-249)."""
+    if not base_url:
+        return None
+    from urllib.parse import urlsplit
+
+    return urlsplit(base_url).hostname
+
+
 def build_registry(
     settings: Settings,
     *,
     acquirer_factory: AcquirerFactory | None = None,
+    local_acquirer_factory: LocalAcquirerFactory | None = None,
     redis: object | None = None,
     cache: IntegrationCache | None = None,
 ) -> ConnectorRegistry:
@@ -215,6 +232,7 @@ def build_registry(
     from solus_api.connectors.github import GitHubConnector
     from solus_api.connectors.gitlab import GitLabConnector
     from solus_api.connectors.kicad import KicadConnector
+    from solus_api.connectors.local_folder import LocalFolderConnector
     from solus_api.connectors.onshape import OnshapeConnector
 
     registry = ConnectorRegistry()
@@ -265,6 +283,18 @@ def build_registry(
             signal_max_age_seconds=_signal_window(settings, ctx.purpose),
         ),
     )
+    # Local folders (SOLUSDEV-249): a working copy on one machine, scanned over
+    # the bridge. The plain factory is what the catalog and the ARQ worker see;
+    # only the API process (a bridge registry) gets the scoped, acquiring one.
+    gitlab_host = _gitlab_host(settings.gitlab_base_url)
+    registry.register("local", lambda: LocalFolderConnector(gitlab_host=gitlab_host))
+    if local_acquirer_factory is not None:
+        registry.register_scoped(
+            "local",
+            lambda ctx: LocalFolderConnector(
+                acquirer=local_acquirer_factory(ctx), gitlab_host=gitlab_host
+            ),
+        )
     if acquirer_factory is not None:
         # T4b (MCP-04): the EDA family's live bridge acquisition. Only
         # registered when the caller (the API process, via main.py) actually

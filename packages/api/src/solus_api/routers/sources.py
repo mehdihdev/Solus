@@ -202,6 +202,7 @@ async def connect_source(
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     provider = body.type
+    _refuse_local(provider)
     connector = _resolve_connector(registry, provider)
     if body.connection_id and body.token:
         raise APIError(400, "validation_error", "Pass a connection_id or a token, not both")
@@ -287,6 +288,15 @@ async def connect_source(
     return envelope(serialize_source(source))
 
 
+def _refuse_local(provider: str) -> None:
+    """SOLUSDEV-249: `/local-folder` is the ONE creator of `local` sources, so
+    one-source-per-(project, machine) holds."""
+    if provider == SourceType.LOCAL.value:
+        raise APIError(
+            400, "use_local_folder_route", "Link a local folder via /local-folder instead"
+        )
+
+
 async def _sweep_if_bound(
     connection: object | None, session: SessionDep, secret_store: SecretStoreDep, user: Any
 ) -> None:
@@ -329,6 +339,9 @@ async def update_source(
     if data.get("name"):
         source.name = data["name"]
     if data.get("config") is not None:
+        # A `local` source's config is its machine/user binding (SOLUSDEV-249):
+        # only /local-folder writes it (security review M3).
+        _refuse_local(source.type.value)
         merged = {**source.config}
         # `access` is a GRANT fact, mirrored from the connection at bind time —
         # never a setting a member may patch in (security review M4).
@@ -417,8 +430,15 @@ async def trigger_sync(
     require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id)
     _require_syncable(source, registry)
-    job_id = await _enqueue_sync(
-        session, ctx, source, request, background_tasks, settings, response
+    job_id = await enqueue_sync(
+        session,
+        ctx,
+        source,
+        request,
+        background_tasks,
+        settings,
+        response,
+        inline_only=source.type is SourceType.LOCAL,
     )
     return envelope({"job_id": job_id, "status": JobStatus.QUEUED.value})
 
@@ -442,7 +462,7 @@ def _require_syncable(
         raise APIError(409, "sync_in_progress", "A sync is already running for this source")
 
 
-async def _enqueue_sync(
+async def enqueue_sync(
     session: SessionDep,
     ctx: ProjectCtx,
     source: Source,
@@ -450,8 +470,13 @@ async def _enqueue_sync(
     background_tasks: BackgroundTasks,
     settings: Settings,
     response: Response,
+    *,
+    inline_only: bool = False,
 ) -> uuid.UUID:
-    """Record the job + activity, commit, dispatch (ADR-005), set Location."""
+    """Record the job + activity, commit, dispatch (ADR-005), set Location.
+
+    `inline_only` (SOLUSDEV-249): a `local` source is scanned over the bridge,
+    which lives in THIS process — never hand it to ARQ."""
     job = Job(
         project_id=ctx.project.id,
         team_id=ctx.team.id,
@@ -482,7 +507,13 @@ async def _enqueue_sync(
     await session.commit()
 
     await _dispatch_sync(
-        request.app, settings, background_tasks, source.id, job_id, acting_user_id=ctx.user.id
+        request.app,
+        settings,
+        background_tasks,
+        source.id,
+        job_id,
+        acting_user_id=ctx.user.id,
+        inline_only=inline_only,
     )
     response.headers["Location"] = f"/api/v1/jobs/{job_id}"
     return job_id
@@ -637,9 +668,7 @@ async def add_document(
         domain="integrations",
         payload={"source_id": str(source.id), "document_id": body.id},
     )
-    job_id = await _enqueue_sync(
-        session, ctx, source, request, background_tasks, settings, response
-    )
+    job_id = await enqueue_sync(session, ctx, source, request, background_tasks, settings, response)
     await session.refresh(source)
     response.status_code = 202
     return envelope(
@@ -678,9 +707,7 @@ async def remove_document(
         domain="integrations",
         payload={"source_id": str(source.id), "document_id": document_id},
     )
-    job_id = await _enqueue_sync(
-        session, ctx, source, request, background_tasks, settings, response
-    )
+    job_id = await enqueue_sync(session, ctx, source, request, background_tasks, settings, response)
     await session.refresh(source)
     response.status_code = 202
     return envelope(
@@ -699,12 +726,18 @@ async def _dispatch_sync(
     job_id: uuid.UUID,
     *,
     acting_user_id: uuid.UUID,
+    inline_only: bool = False,
 ) -> None:
     # F3 (SOLUSDEV-100 T4b): the manual trigger's requesting user threads
     # through to `execute_source_sync` — the ONE call-site edit the EDA
     # family's live-bridge acquirer needs to resolve its scope.
     if settings.sync_inline:
         await _run_inline(app, source_id, job_id, acting_user_id=acting_user_id)
+        return
+    if inline_only:
+        background_tasks.add_task(
+            _run_inline, app, source_id, job_id, acting_user_id=acting_user_id
+        )
         return
     if settings.redis_url:
         pool = await _arq_pool(app)

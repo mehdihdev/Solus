@@ -1,0 +1,42 @@
+#!/bin/sh
+# integrations/mcp/local/bin/launch — Solus-authored ADR-031 entrypoint for the
+# Solus-authored `local` MCP server (SOLUSDEV-249). This is the ONLY way the
+# companion may start this server (integrations/mcp/README.md).
+#
+# Guarantees (locked by ../tests/test_launch_entrypoint.py):
+#   * fixed argv — no caller-argument passthrough;
+#   * scrubbed child environment — env -i plus the declared allowlist below;
+#   * zero network I/O and zero installs at launch (ADR-031). Dependencies are
+#     materialized at companion install/update time from requirements.lock.txt
+#     (hash-verified) into the fork-private virtualenv referenced below.
+#     Nothing here resolves from PATH.
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+
+# Fixed private interpreter (install-time materialization creates it).
+PYTHON="$FORK_DIR/.venv/bin/python3"
+
+# The companion passes the linked folder via SOLUS_MCP_WORKSPACE — the one
+# documented cwd knob. cwd falls back to the fork dir for stable relative I/O,
+# but the child variable is passed through EMPTY when the companion did not
+# provide it: solus/workspace.py fails closed on empty, so every tool refuses
+# instead of silently scanning the install dir.
+WORKSPACE="${SOLUS_MCP_WORKSPACE:-$FORK_DIR}"
+cd -- "$WORKSPACE"
+
+# Declared child-environment allowlist — everything else is dropped by env -i.
+# The written declaration lives in ../solus/env_allowlist.py; this block must
+# match it exactly (pinned by ../tests/test_launch_entrypoint.py). PATH is a
+# fixed constant (never inherited); the server calls binaries by ABSOLUTE
+# path regardless. Changing this set is a PROVENANCE re-review trigger.
+exec /usr/bin/env -i \
+  HOME="${HOME:-}" \
+  USER="${USER:-}" \
+  LANG="${LANG:-}" \
+  LC_ALL="${LC_ALL:-}" \
+  TMPDIR="${TMPDIR:-}" \
+  PATH="/usr/bin:/bin" \
+  SOLUS_MCP_WORKSPACE="${SOLUS_MCP_WORKSPACE:-}" \
+  "$PYTHON" "$FORK_DIR/solus/server.py"

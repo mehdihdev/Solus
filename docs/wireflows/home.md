@@ -261,10 +261,26 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **LOCAL FOLDER card** (right column, between MEMBERS and CONNECTED ACCOUNTS;
   moved here from the retired Project Overview hub): the CURRENT project's working
   copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
-  then the path (one line, clipped with "…", full path in the title), Open
-  with VSCode / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
+  then the path (one line, clipped with "…", full path in the title), **Open in
+  editor** / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
   current project → "Open or switch to a project to link a working copy on
   this computer." Not under the desktop bridge → its honest note.
+  **SOLUSDEV-249 (INTEGRATIONS I2):** linking also files the folder as a `local`
+  source for THIS machine (`POST /local-folder`; unlink disconnects it). Under
+  the path: the scan state — "Scanning…" (shimmer), "Scanned <ago>", or the
+  sync's `last_error.message` verbatim. Then the **detected list**, one row per
+  tool project the scan derived (KiCad, Altium, CAD folder, Arduino sketch,
+  Python) with mark, name, relative path and its Open buttons built from the
+  API's `open_targets` ("Open in KiCad" / "Open in Altium" / "Open in editor" /
+  "Open"); rows fade in staggered, reduced-motion respected. Every Open control
+  launches through the companion (`POST …/open`) — bridge offline → disabled
+  with "Solus companion is offline on this machine", never hidden; a tool's
+  refusal (`launched: false`) shows its reason inline. Nothing detected → "Nothing
+  Solus recognises in this folder yet (KiCad, Altium, CAD, Arduino, Python)."
+  The same Open buttons appear in the Workspace inspector for a focused
+  `local_*` node that belongs to this machine's folder (`LocalOpenPanel`), and
+  the source itself is listed under Connected accounts › Software as
+  "Local folder · <machine>".
 - **MEMBERS card** (right column, above LOCAL FOLDER): roster with roles;
   owners and admins change roles (admin / member / viewer — ownership is
   transferred, not picked) and remove members, never on an owner row; pending

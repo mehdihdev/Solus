@@ -134,7 +134,7 @@ class BridgeToolSpec:
 
 def _skip_advertised(server: str, name: str, reason: str) -> None:
     # %.64r bounds the companion-authored name inside our own log lines.
-    logger.warning("bridge server %r tool %.64r %s; skipping", server, name, reason)
+    logger.warning("bridge server %.64r tool %.64r %s; skipping", server, name, reason)
 
 
 def _gate_tool(server: str, tool: HelloTool, allowed: AllowedTool | None) -> str | None:

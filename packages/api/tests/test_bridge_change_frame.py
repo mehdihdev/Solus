@@ -284,7 +284,7 @@ async def test_frames_arriving_during_a_resync_do_not_stack(maker: Any, monkeypa
     release = asyncio.Event()
     started = 0
 
-    async def _slow(state: Any, sess: Any) -> None:
+    async def _slow(state: Any, sess: Any, **_: Any) -> None:
         nonlocal started
         started += 1
         await release.wait()

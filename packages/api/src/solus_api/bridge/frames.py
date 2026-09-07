@@ -67,8 +67,10 @@ class HelloData(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     protocol_version: int
-    companion_version: str
-    companion_instance_id: str
+    # Bounded (security review M2): both are companion-supplied free text that
+    # reaches a DB row (supersede events) and an API response (bridge status).
+    companion_version: str = Field(min_length=1, max_length=64)
+    companion_instance_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     servers: tuple[HelloServer, ...] = ()
 
 
@@ -266,9 +268,17 @@ def parse_frame(
     *,
     control_cap: int,
     tool_result_cap: int,
+    hello_cap: int | None = None,
 ) -> InboundFrame | FrameViolation | UnknownFrame:
     """Validate one inbound message: size caps first (pre-parse), then the
-    envelope, then the per-type strict payload. Never raises."""
+    envelope, then the per-type strict payload. Never raises.
+
+    `hello_cap` (SOLUSDEV-249): the hello carries every advertised tool's
+    schema, so three vendored servers (Altium + KiCad + local ≈ 19 KB) already
+    overflow the 16 KiB control cap — the companion was then closed with
+    `4400 update required` on any machine with a linked workspace. The first
+    frame gets its own bounded cap (default: the tool_call bound); every other
+    control frame keeps the small one."""
     size = len(raw.encode() if isinstance(raw, str) else raw)
     if size > tool_result_cap:
         return FrameViolation(kind="oversize", reason=f"frame of {size} bytes exceeds the cap")
@@ -280,7 +290,8 @@ def parse_frame(
         return FrameViolation(kind="invalid", reason=f"{frame_type!r} is not an inbound frame")
     if frame_type not in INBOUND_TYPES:
         return UnknownFrame(type=frame_type)
-    if frame_type != "tool_result" and size > control_cap:
+    cap = hello_cap if (frame_type == "hello" and hello_cap is not None) else control_cap
+    if frame_type != "tool_result" and size > cap:
         return FrameViolation(
             kind="oversize", reason=f"control frame of {size} bytes exceeds the cap"
         )

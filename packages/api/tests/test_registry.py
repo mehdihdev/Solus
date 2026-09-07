@@ -81,7 +81,7 @@ def test_build_registry_ships_the_roster() -> None:
     from solus_api.connectors.registry import build_registry
 
     registry = build_registry(settings)
-    assert registry.providers() == ["altium", "github", "gitlab", "kicad", "onshape"]
+    assert registry.providers() == ["altium", "github", "gitlab", "kicad", "local", "onshape"]
     assert isinstance(registry.create("github"), GitHubConnector)
     gitlab = registry.create("gitlab")
     assert isinstance(gitlab, GitLabConnector)

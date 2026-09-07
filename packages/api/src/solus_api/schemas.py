@@ -1,6 +1,7 @@
 """Request schemas (Pydantic v2). Unknown fields are rejected on every
 mutating endpoint (CLAUDE.md §7 input handling)."""
 
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
@@ -171,7 +172,7 @@ class SolusEntryPatch(StrictModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
-SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros", "altium"]
+SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros", "altium", "local"]
 
 
 class SourceCreate(StrictModel):
@@ -190,6 +191,26 @@ class SourceCreate(StrictModel):
     connection_id: str | None = Field(default=None, max_length=64)
 
     _name_not_blank = field_validator("name")(_not_blank)
+
+
+class LocalFolderLink(StrictModel):
+    """Link THIS machine's working copy to the project (SOLUSDEV-249). The path
+    never travels: the companion scans its own workspace. `machine_id` is the
+    companion instance id (`~/.solus/companion_id`)."""
+
+    machine_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    machine_name: str = Field(min_length=1, max_length=255)
+    folder_name: str = Field(min_length=1, max_length=255)
+
+    _machine_name_not_blank = field_validator("machine_name")(_not_blank)
+    _folder_name_not_blank = field_validator("folder_name")(_not_blank)
+
+
+class LocalFolderOpen(StrictModel):
+    """Open one detected project in a tool on the source's machine (SOLUSDEV-249)."""
+
+    entity_id: uuid.UUID
+    tool: Literal["kicad", "altium", "vscode", "system"]
 
 
 class SourceUpdate(StrictModel):

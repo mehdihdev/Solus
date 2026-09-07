@@ -5,6 +5,11 @@
 // user's own git, so private repos use their local credentials — no Solus token
 // touches disk). The path lives in a machine-local store, never the API. When
 // not running under the desktop app the card degrades to an honest note.
+//
+// SOLUSDEV-249 (I2): the linked folder is also a `local` graph source for
+// THIS machine — linking tells the API the machine id + folder name (never
+// the path), the companion scans it, and the card shows the scan state, what
+// was recognised, and Open-in-tool for each project, via useLocalFolder.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -13,7 +18,16 @@ import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import { getDesktopFolderBridge } from '../../lib/desktopBridge'
 import { ModalShell, MODAL_INPUT_STYLE } from '../workspace/modals'
+import { DetectedProjectList, ScanStateLine } from './LocalFolderDetails'
+import {
+  COMPANION_OFFLINE_NOTE,
+  MACHINE_UNAVAILABLE_NOTE,
+  OPEN_LABEL,
+  detectedProjects,
+  linkedFolderPresentation
+} from './localFolder.constants'
 import { useProjectFolderStore } from './projectFolderStore'
+import { useLocalFolder, type LocalFolderController } from './useLocalFolder'
 
 export interface ProjectFolderCardProps {
   projectId: string
@@ -30,10 +44,13 @@ export function ProjectFolderCard({
   const setFolder = useProjectFolderStore((s) => s.setFolder)
   const clearFolder = useProjectFolderStore((s) => s.clearFolder)
   const [cloning, setCloning] = useState(false)
+  const folder = useLocalFolder(projectId, link !== undefined)
 
   const selectFolder = async (): Promise<void> => {
     const path = await bridge?.pick()
-    if (path) setFolder(projectId, { path })
+    if (!path) return
+    setFolder(projectId, { path })
+    await folder.link(path)
   }
 
   const runClone = async (repoUrl: string): Promise<{ ok: boolean; error?: string }> => {
@@ -43,6 +60,7 @@ export function ProjectFolderCard({
     const result = await bridge.clone({ repoUrl, parentDir })
     if (result.path) {
       setFolder(projectId, { path: result.path, repoUrl })
+      void folder.link(result.path)
       return { ok: true }
     }
     return { ok: false, error: result.error ?? 'Clone failed.' }
@@ -57,9 +75,14 @@ export function ProjectFolderCard({
       ) : link ? (
         <LinkedFolder
           link={link}
-          onOpenVscode={() => void bridge.openInVscode(link.path)}
+          folder={folder}
           onOpenFolder={() => void bridge.reveal(link.path)}
-          onUnlink={() => clearFolder(projectId)}
+          onUnlink={() => {
+            // The machine-local link goes first (instant, never blocked on the
+            // API); the graph source is then disconnected best-effort.
+            clearFolder(projectId)
+            void folder.unlink()
+          }}
         />
       ) : (
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -89,17 +112,30 @@ export function ProjectFolderCard({
 
 function LinkedFolder({
   link,
-  onOpenVscode,
+  folder,
   onOpenFolder,
   onUnlink
 }: {
   link: { path: string; repoUrl?: string }
-  onOpenVscode: () => void
+  folder: LocalFolderController
   onOpenFolder: () => void
   onUnlink: () => void
 }): React.JSX.Element {
+  const { view, status } = folder
+  const { editorReason, rootEntityId, bridgeOffline, rowsReason, scanned } =
+    linkedFolderPresentation(view, status)
   return (
-    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div
+      data-testid="linked-folder"
+      style={{
+        padding: '14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        minWidth: 0,
+        overflow: 'hidden'
+      }}
+    >
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0 }}>
         <span style={{ color: 'var(--acc)', flexShrink: 0, display: 'inline-flex' }}>
           <Icons.box size={16} />
@@ -119,11 +155,19 @@ function LinkedFolder({
               cloned from {link.repoUrl}
             </div>
           )}
+          <ScanStateLine source={view?.source ?? null} />
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button kind="ghost" size="sm" onClick={onOpenVscode}>
-          Open with VSCode
+        <Button
+          kind="ghost"
+          size="sm"
+          data-testid="open-root-editor"
+          disabled={editorReason !== null}
+          title={editorReason ?? undefined}
+          onClick={() => rootEntityId && void folder.open(rootEntityId, 'vscode')}
+        >
+          {OPEN_LABEL.vscode}
         </Button>
         <Button kind="ghost" size="sm" onClick={onOpenFolder}>
           Open Folder
@@ -132,6 +176,23 @@ function LinkedFolder({
           Unlink
         </Button>
       </div>
+      {!folder.machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
+      {bridgeOffline && <Note>{COMPANION_OFFLINE_NOTE}</Note>}
+      <DetectedProjectList
+        projects={detectedProjects(view)}
+        scanned={scanned}
+        disabledReason={rowsReason}
+        onOpen={folder.open}
+      />
+    </div>
+  )
+}
+
+/** A quiet, honest line beneath the controls — never a hidden control. */
+function Note({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div role="note" style={{ fontSize: 10.5, color: 'var(--mut)', lineHeight: 1.5 }}>
+      {children}
     </div>
   )
 }

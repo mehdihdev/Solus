@@ -176,7 +176,9 @@ function LocalFolderSection({
   currentProject: WorkspaceProject | null
 }): React.JSX.Element {
   return (
-    <div>
+    // A grid item defaults to min-width:auto; without this the card's rows
+    // could widen the fixed right column and give the page a horizontal scroll.
+    <div style={{ minWidth: 0 }}>
       <div style={{ margin: '0 0 10px' }}>
         <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
           LOCAL FOLDER

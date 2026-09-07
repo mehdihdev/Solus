@@ -31,6 +31,7 @@ import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
 import { toolStatusText } from '../project/localconnections/presentation'
 import { useProjectSources } from '../project/useProjectSources'
 import { AccountRow, LegacyRow, SourceItem } from './AccountRows'
+import { LOCAL_FOLDER_MARK, LOCAL_SOURCE_TYPE, localFolderLabel } from './connectedAccounts'
 import {
   ACCOUNT_DOMAINS,
   ACCOUNT_DOMAIN_LABEL,
@@ -230,6 +231,64 @@ function ToolRow({
   )
 }
 
+/** The catalog shape SourceItem needs for a local source. There is no tile to
+ *  connect it from — linking happens on Home's LOCAL FOLDER card — so no
+ *  selection, no access modes, no hosted add-on. */
+const LOCAL_FOLDER_ENTRY: CatalogEntry = {
+  id: LOCAL_SOURCE_TYPE,
+  name: 'Local folder',
+  kind: 'Working copy on this machine',
+  mark: LOCAL_FOLDER_MARK,
+  mode: 'local-bridge',
+  configFields: [],
+  selection: null,
+  accessModes: null,
+  hosted: null
+}
+
+/** Software › the project's `local` sources (SOLUSDEV-249): one head per
+ *  machine — "Local folder · <machine>" — then the source beneath it with its
+ *  status, Sync now and a confirmed Disconnect. No next step: the folder is
+ *  linked from Home's LOCAL FOLDER card, and the head says so. */
+function LocalFolderRows({
+  sources,
+  first
+}: {
+  sources: ReturnType<typeof useProjectSources>
+  first: boolean
+}): React.JSX.Element | null {
+  const local = sources.sources.filter((s) => s.type === LOCAL_SOURCE_TYPE)
+  if (local.length === 0) return null
+  return (
+    <>
+      {local.map((source, i) => (
+        <div
+          key={source.id}
+          style={{ borderTop: first && i === 0 ? 'none' : '1px solid var(--bd)' }}
+        >
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '13px 16px' }}>
+            <ProviderMark entry={LOCAL_FOLDER_ENTRY} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{localFolderLabel(source)}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+                Linked from Home › Local folder
+              </div>
+            </div>
+          </div>
+          <SourceItem
+            source={source}
+            entry={LOCAL_FOLDER_ENTRY}
+            projectId={source.project_id}
+            onSync={() => void sources.actions.syncNow(source.id)}
+            onDisconnect={() => sources.actions.disconnect(source.id)}
+            onChanged={() => void sources.actions.refresh()}
+          />
+        </div>
+      ))}
+    </>
+  )
+}
+
 /** The domain pills above the card: one selected, the rest quiet. */
 function DomainTabs({
   value,
@@ -335,7 +394,9 @@ function DomainPanel({
   providers: readonly CatalogEntry[]
 } & Omit<ToolRowProps, 'entry'>): React.JSX.Element {
   if (domain === 'simulation') return <SimulationPanel currentProject={currentProject} />
-  if (providers.length === 0) {
+  const hasLocal =
+    domain === 'software' && sources.sources.some((s) => s.type === LOCAL_SOURCE_TYPE)
+  if (providers.length === 0 && !hasLocal) {
     return (
       <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
         {emptyDomainText(domain)}
@@ -359,6 +420,7 @@ function DomainPanel({
           />
         </div>
       ))}
+      {hasLocal && <LocalFolderRows sources={sources} first={providers.length === 0} />}
     </>
   )
 }

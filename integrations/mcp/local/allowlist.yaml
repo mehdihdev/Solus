@@ -1,0 +1,20 @@
+# integrations/mcp/local/allowlist.yaml — the Solus-owned tool allowlist for
+# the Solus-authored `local` server (SOLUSDEV-249 DRAFT; the WHOLE file is
+# human-ratified at the MR — integrations/mcp/CLAUDE.md rule 2).
+#
+# Single source of truth (../README.md): companion discovery, the cloud bridge
+# ingress gate (validate_inventory), and the server's own roster
+# (solus/roster.py) all agree with THIS list (tests/test_allowlist_shape.py).
+# Validates against packages/api/src/solus_api/bridge/allowlist.py::
+# ServerAllowlist (extra fields forbidden). Tool contract: docs/api/local-folder.md §4.
+server: local
+tools:
+  - name: scan_folder
+    requires_confirmation: false
+    reason: read-only listing of tool-relevant files, git identity, digest, and installed-tool probe over the linked folder
+  - name: folder_digest
+    requires_confirmation: false
+    reason: read-only content digest over the linked folder's tool-relevant files (the change-signal evidence)
+  - name: open_in_tool
+    requires_confirmation: true
+    reason: launches a desktop application (KiCad, Altium, VS Code, or the OS default) on a file of the linked folder — a real-world action on the customer machine
