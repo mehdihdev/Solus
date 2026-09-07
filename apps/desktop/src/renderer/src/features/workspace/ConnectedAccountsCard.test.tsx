@@ -320,7 +320,9 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
     expect(screen.getByText(/1 connected in Rover/)).toBeInTheDocument()
     expect(screen.getByText('rover.xml')).toBeInTheDocument()
-    expect(screen.getByText(/connected · 42 entities/)).toBeInTheDocument()
+    expect(screen.getByText(/connected · never synced · 42 entities/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Sync rover.xml now' }))
+    expect(sources.actions.syncNow).toHaveBeenCalledWith('s1')
     // The next step stays: a second export is one click away.
     expect(screen.getByRole('button', { name: 'Choose file for KiCad' })).toBeEnabled()
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect rover.xml' }))

@@ -6,20 +6,26 @@ flow; visual polish within it is implementer judgment (CLAUDE.md §3). Companion
 
 ## Where it lives
 
-A **section of the Sources screen** (`features/project/SourcesScreen.tsx` →
-`features/project/localconnections/LocalConnectionsSection.tsx`), below the integration tile
-grid. Machine-local streams are a sources concern, but they are NOT connector tiles: the section
-renders what is on THIS machine, from live backend claims only. Offline / runner-absent degrades
-to honest copy with disabled controls — never fabricated availability.
+The Sources screen is retired (SOLUSDEV-244). Machine-local streams now live in two places, both
+rendering what is on THIS machine from live backend claims only — offline / runner-absent degrades
+to honest copy with disabled controls, never fabricated availability:
+
+- **Simulators** → Home › Connected accounts › **Simulation** tab
+  (`features/workspace/SimulationPanel.tsx`): one row per simulator, `Start` opens
+  `SimulatorStartModal` (see `home.md`).
+- **Devices** → Live Bench › **Connect a device** (`features/bench/ConnectDeviceModal.tsx`): the
+  header's button opens a dialog with the device rows (`DeviceRow`) and the unmatched sessions.
+- **Local tools** (Fusion) → Home › Connected accounts (their row's status line is the live bridge
+  word; `Connect` opens the wizard's "Connect on this computer" step).
 
 ## Flow 1 — start a simulator
 
-1. Sources screen → **LOCAL CONNECTIONS → SIMULATORS**. One row per simulator from
+1. Home › Connected accounts › **Simulation**. One row per simulator from
    `GET /bench/sources`: MuJoCo, Gazebo, Isaac, MCAP replay.
-2. An available simulator shows a **Start** control (MuJoCo: one click starts the built-in demo
-   scene; Gazebo: topics input; MCAP: path input relative to the server's data root). An
-   unavailable one shows its reason verbatim ("Gazebo is not installed (no `gz` CLI on PATH)")
-   and **cannot be started** — the control is disabled, not hidden.
+2. An available simulator's **Start** opens `SimulatorStartModal` (MuJoCo: one click starts the
+   built-in demo scene; Gazebo: topics input; MCAP: path input relative to the server's data
+   root). An unavailable one shows its reason verbatim ("Gazebo is not installed (no `gz` CLI on
+   PATH)") and **cannot be started** — Start is disabled, not hidden.
 3. Start → `POST /bench/sessions` → an active **session chip** appears inline on the row: status,
    live link state (`connected`/`streaming`/`disconnected` — derived, never asserted), packet
    counts, Stop.
@@ -31,7 +37,8 @@ to honest copy with disabled controls — never fabricated availability.
 
 ## Flow 2 — connect a robot (the identity-safety flow)
 
-1. **DEVICES** lists every enumerated USB-serial device with exactly what recognition claims:
+1. Live Bench › **Connect a device** lists every enumerated USB-serial device with exactly what
+   recognition claims:
    board name or "unknown", `usb_bridge` renders as "USB-serial bridge — MCU unknown" with its
    confidence (the CH343 case), never a guessed board.
 2. The **USB serial number is the identity discriminator** and is always shown. User labels
@@ -55,18 +62,19 @@ to honest copy with disabled controls — never fabricated availability.
    graph. When the device later resolves to an entity, the entity view is the home for its data
    and the views converge (`device_id == external_ref`).
 3. The empty state stays honest and becomes actionable: "no telemetry yet — connect a device"
-   navigates to the Sources screen's Local Connections section.
+   opens the Connect a device dialog in place.
 
 ## Flow 4 — bridge-hosted tools (Fusion, and every tool after it)
 
-1. **LOCAL TOOLS** rows merge the static `GET /api/v1/integrations/local-tools` catalog with the
-   per-project live bridge status: tool name, companion state, server state, and launch guidance
-   ("Launch Fusion and enable Preferences → General → API → Fusion MCP Server"). A `ready` server
-   with zero allowlisted tools says "connected — no tools callable yet"; connected ≠ callable.
-2. The integrations catalog (onboarding + Sources tile grid) grows a **generic `local-bridge`
-   tile** derived entirely from the same route — clicking opens guidance + bridge state
-   (`LocalBridgeConnectModal`), never a fake OAuth or file-picker flow. The next bridge-hosted
-   tool (SolidWorks, AutoCAD) is a backend catalog entry; zero frontend edits.
+1. A local tool's Home row merges the static `GET /api/v1/integrations/local-tools` catalog with
+   the per-project live bridge status on its status line: companion state, server state
+   (`toolStatusText`). A `ready` server with zero allowlisted tools says "connected — no tools
+   callable yet"; connected ≠ callable. `Connect` opens the wizard's single step with the launch
+   guidance ("Launch Fusion and enable Preferences → General → API → Fusion MCP Server").
+2. The onboarding catalog grows the same **generic `local-bridge` tile** derived entirely from
+   the same route — clicking opens guidance + bridge state (`LocalBridgeConnectModal`), never a
+   fake OAuth or file-picker flow. The next bridge-hosted tool (SolidWorks, AutoCAD) is a backend
+   catalog entry; zero frontend edits.
 
 ## Empty/failure states (all honest)
 

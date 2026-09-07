@@ -10,8 +10,11 @@ import { Spinner } from '../../components/ui/Spinner'
 import type { BenchSimulator } from '../../lib/api/resources'
 import { LinkHeader } from '../onboarding/ConnectWizardModal'
 import { PICKER_FIELD_STYLE } from '../onboarding/SelectionPicker'
-import type { SimStartConfig } from '../project/localconnections/SimulatorRow'
-import { simulatorMark, simulatorName } from '../project/localconnections/presentation'
+import {
+  simulatorMark,
+  simulatorName,
+  type SimStartConfig
+} from '../project/localconnections/presentation'
 import { ModalShell } from './modals'
 
 const INSTRUCTION: Readonly<Record<BenchSimulator['kind'], (project: string) => string>> = {

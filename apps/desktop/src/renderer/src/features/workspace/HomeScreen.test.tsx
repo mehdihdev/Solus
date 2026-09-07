@@ -73,6 +73,7 @@ function homeActions(): homeData.HomeActions {
     createTeam: vi.fn(),
     joinTeam: vi.fn(),
     renameProject: vi.fn(),
+    editProject: vi.fn(),
     archiveProject: vi.fn(),
     unarchiveProject: vi.fn(),
     deleteProject: vi.fn(),
@@ -269,17 +270,22 @@ describe('HomeScreen — connected accounts wiring', () => {
 })
 
 describe('HomeScreen — manage', () => {
-  it('renames a project through the card menu', async () => {
+  it('edits a project’s name and description through the card menu', async () => {
     const home = mockHome()
-    vi.mocked(home.actions.renameProject).mockResolvedValue(true)
+    vi.mocked(home.actions.editProject).mockResolvedValue(true)
     render(<HomeScreen onOpenProject={vi.fn()} />)
     await userEvent.click(screen.getByRole('button', { name: 'Project actions for Rover MK2' }))
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
-    const input = screen.getByLabelText('Project name')
-    await userEvent.clear(input)
-    await userEvent.type(input, 'Rover MK3')
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Edit details' }))
+    const name = screen.getByRole('textbox', { name: 'Project name' })
+    await userEvent.clear(name)
+    await userEvent.type(name, 'Rover MK3')
+    await userEvent.type(screen.getByRole('textbox', { name: 'Description' }), ' with a lidar')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(home.actions.renameProject).toHaveBeenCalledWith('p1', 'Rover MK3')
+    expect(home.actions.editProject).toHaveBeenCalledWith(
+      'p1',
+      'Rover MK3',
+      'six-wheel rover with a lidar'
+    )
   })
 
   it('archives a project through the card menu — the menu never opens the project', async () => {

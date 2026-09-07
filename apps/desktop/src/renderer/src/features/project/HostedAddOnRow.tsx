@@ -7,7 +7,7 @@
 //  * the wizard CANCELS its attempt on close (`useConnectWizard.close`), and
 //    subscribing is an external browser purchase that can wait on a company
 //    administrator — no in-wizard state would survive it;
-//  * `SourcesScreen` resets the onboarding store on mount, so wizard-resident
+//  * Home resets nothing, but the wizard is modal: wizard-resident
 //    state is lost the moment the user navigates;
 //  * a teammate who joins a project where Onshape is already connected never
 //    opens the wizard at all (the backend REUSES the project's existing source),

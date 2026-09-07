@@ -86,6 +86,10 @@ function seedFocusedProject(): void {
 function routeApi(options: { sessions?: BenchSession[] } = {}): void {
   requestMock.mockImplementation(async (path: string) => {
     if (path.includes('/bench/sessions')) return (options.sessions ?? []) as never
+    // The Connect-a-device dialog's inventory: an honest, empty machine.
+    if (path.includes('/bench/sources')) {
+      return { runner: { available: true, reason: null }, simulators: [], devices: [] } as never
+    }
     if (path.includes('/bench/device-recent')) {
       // The batched route: {devices: [...]}, one entry per requested id.
       return {
@@ -151,7 +155,10 @@ describe('BenchScreen — empty states', () => {
     )
     expect(await screen.findByText('NOTHING STREAMING')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Connect a device' }))
-    expect(onNavigate).toHaveBeenCalledWith('sources')
+    // The device dialog opens here (the Sources page is retired) — no navigation.
+    expect(screen.getByRole('dialog', { name: 'Connect a device' })).toBeInTheDocument()
+    expect(await screen.findByText('No serial devices detected.')).toBeInTheDocument()
+    expect(onNavigate).not.toHaveBeenCalled()
     // The canvas is still there underneath: the default Live Bench slot, unfocused.
     expect(await screen.findByText('Focus a part to watch its telemetry.')).toBeInTheDocument()
   })

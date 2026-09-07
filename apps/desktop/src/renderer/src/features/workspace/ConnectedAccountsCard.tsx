@@ -219,7 +219,11 @@ function ToolRow({
         <SourceItem
           key={source.id}
           source={source}
+          entry={entry}
+          projectId={source.project_id}
+          onSync={() => void sources.actions.syncNow(source.id)}
           onDisconnect={() => sources.actions.disconnect(source.id)}
+          onChanged={() => void sources.actions.refresh()}
         />
       ))}
     </div>

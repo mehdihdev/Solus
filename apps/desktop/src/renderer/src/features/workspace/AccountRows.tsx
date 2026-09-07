@@ -6,10 +6,15 @@
 // lives in ConnectedAccountsCard; these are what already exists beneath it.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
+import { Icons } from '../../components/ui/icons.constants'
 import type { Connection, LegacyConnection, Source } from '../../lib/api/resources'
+import { relativeTime } from '../../lib/relativeTime'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
+import { plural } from '../onboarding/selectionConfigureStep'
 import { DisconnectSourceModal } from '../project/DisconnectSourceModal'
-import { sourceStatusColor } from '../project/sourcePresentation'
+import { EditSelectionModal } from '../project/EditSelectionModal'
+import { HostedAddOnRow } from '../project/HostedAddOnRow'
+import { sourceErrorText, sourceStatusColor, trackedIds } from '../project/sourcePresentation'
 import {
   legacyText,
   moveDetail,
@@ -324,21 +329,75 @@ export function LegacyRow({
   )
 }
 
-/** One source the current project holds for this tool (a committed export, a
- *  picked document set, …): its status, and a confirmed Disconnect. */
-export function SourceItem({
+/** "Choose documents…" — only when the CONNECTOR declares a selection, per the
+ *  live registry; a new connector gains the action for free. */
+function SelectionAction({
   source,
-  onDisconnect
+  entry,
+  projectId,
+  onSaved
 }: {
   source: Source
+  entry: CatalogEntry
+  projectId: string
+  onSaved: () => void
+}): React.JSX.Element | null {
+  const [editing, setEditing] = useState(false)
+  const selection = entry.selection
+  if (!selection) return null
+  return (
+    <>
+      <Button
+        kind="ghost"
+        size="sm"
+        aria-label={`Choose ${plural(selection.label)} for ${source.name}`}
+        onClick={() => setEditing(true)}
+      >
+        {plural(selection.label)}
+      </Button>
+      {editing && (
+        <EditSelectionModal
+          projectId={projectId}
+          sourceId={source.id}
+          sourceName={source.name}
+          selection={selection}
+          current={trackedIds(source, selection.config_key)}
+          onClose={() => setEditing(false)}
+          onSaved={onSaved}
+        />
+      )}
+    </>
+  )
+}
+
+/** One source the current project holds for this tool (a committed export, a
+ *  picked document set, …): status, last sync, Sync now, its selection, its
+ *  hosted add-on when the connector carries one, and a confirmed Disconnect. */
+export function SourceItem({
+  source,
+  entry,
+  projectId,
+  onSync,
+  onDisconnect,
+  onChanged
+}: {
+  source: Source
+  entry: CatalogEntry
+  projectId: string
+  onSync: () => void
   onDisconnect: () => Promise<boolean>
+  onChanged: () => void
 }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
   const count = source.entity_count
+  const synced = source.last_synced_at
+    ? `synced ${relativeTime(source.last_synced_at)}`
+    : 'never synced'
+  const errorText = sourceErrorText(source.last_error)
   return (
     <div style={SUB_ROW_STYLE}>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
           <div style={{ fontSize: 12, fontWeight: 500, ...LOGIN_STYLE }} title={source.name}>
             {source.name}
           </div>
@@ -355,11 +414,18 @@ export function SourceItem({
               }}
             />
             <span>
-              {source.status}
+              {source.status} · {synced}
               {typeof count === 'number' && ` · ${count} entities`}
             </span>
           </div>
+          {errorText && (
+            <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>{errorText}</div>
+          )}
         </div>
+        <Button kind="ghost" size="sm" aria-label={`Sync ${source.name} now`} onClick={onSync}>
+          <Icons.play size={11} /> Sync now
+        </Button>
+        <SelectionAction source={source} entry={entry} projectId={projectId} onSaved={onChanged} />
         <Button
           kind="ghost"
           size="sm"
@@ -369,6 +435,16 @@ export function SourceItem({
           Disconnect
         </Button>
       </div>
+      {/* An add-on rides an existing grant: offered only on a CONNECTED source. */}
+      {entry.hosted && source.status === 'connected' && (
+        <HostedAddOnRow
+          source={source}
+          projectId={projectId}
+          hosted={entry.hosted}
+          providerName={entry.name}
+          onChanged={onChanged}
+        />
+      )}
       {confirming && (
         <DisconnectSourceModal
           name={source.name}

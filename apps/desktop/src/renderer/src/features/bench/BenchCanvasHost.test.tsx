@@ -107,12 +107,13 @@ describe('BenchCanvasHost', () => {
     expect(screen.queryByText('NOTHING STREAMING')).toBeNull()
   })
 
-  it('offers Connect a device only once nothing is known to be streaming', () => {
+  it('offers Connect a device only once nothing is known to be streaming — as a dialog here', () => {
     sources('ready')
     const onNavigate = mount({ sessions: [] })
     expect(screen.getByText('NOTHING STREAMING')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Connect a device' }))
-    expect(onNavigate).toHaveBeenCalledWith('sources')
+    expect(screen.getByRole('dialog', { name: 'Connect a device' })).toBeInTheDocument()
+    expect(onNavigate).not.toHaveBeenCalled()
   })
 
   it('says only that no part is focused while sessions are unknown', () => {

@@ -8,7 +8,10 @@ import type {
   BenchSession,
   BenchSimulatorKind,
   BridgeStatus,
-  LocalTool
+  GazeboSimConfig,
+  LocalTool,
+  McapReplayConfig,
+  MujocoSimConfig
 } from '../../../lib/api/resources'
 
 const SIMULATOR_NAMES: Record<BenchSimulatorKind, string> = {
@@ -28,6 +31,9 @@ const SIMULATOR_MARKS: Record<BenchSimulatorKind, string> = {
   isaac: 'Is',
   'mcap-replay': 'MC'
 }
+
+/** The config a simulator start sends (`POST /bench/sessions`, mode sim). */
+export type SimStartConfig = MujocoSimConfig | GazeboSimConfig | McapReplayConfig
 
 /** The two-letter mark a simulator row leads with (no vendor logo shipped). */
 export function simulatorMark(kind: BenchSimulatorKind): string {

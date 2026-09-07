@@ -14,6 +14,7 @@ function homeActions(): HomeActions {
     createTeam: vi.fn(),
     joinTeam: vi.fn(),
     renameProject: vi.fn(),
+  editProject: vi.fn(),
     archiveProject: vi.fn(),
     unarchiveProject: vi.fn(),
     deleteProject: vi.fn(),

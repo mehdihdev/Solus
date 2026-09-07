@@ -44,7 +44,7 @@ import { useFocusStore } from './focusStore'
 import { useShellStore } from './shellStore'
 
 /** Where the switch came from — recorded on the data event (ADR-011). */
-export type SwitchSurface = 'home' | 'topbar' | 'team' | 'validation' | 'onboarding' | 'overview'
+export type SwitchSurface = 'home' | 'topbar' | 'team' | 'validation' | 'onboarding'
 
 /** Data-collection event, best effort: consent is gated server-side and a
  *  failed post never disturbs the switch. Skipped for the dev bypass — its
@@ -94,5 +94,5 @@ export function switchWorkspaceProject(
 export function renameWorkspaceProject(name: string): void {
   const current = useWorkspaceStore.getState().project
   if (!current) return
-  switchWorkspaceProject({ ...current, name }, 'overview')
+  switchWorkspaceProject({ ...current, name }, 'home')
 }

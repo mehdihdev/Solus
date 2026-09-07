@@ -20,8 +20,6 @@ import { MiniOrb } from '../sol/MiniOrb'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
-import { ProjectOverview } from '../project/ProjectOverview'
-import { SourcesScreen } from '../project/SourcesScreen'
 import { StoreScreen } from '../extensions/StoreScreen'
 import { useExtensionsStore } from '../extensions/extensionsStore'
 import { ExtensionPageScreen } from '../extensions/pageview/ExtensionPageScreen'
@@ -94,9 +92,9 @@ function useShellNavigation(): ShellNavigation {
   const openProject = (p: WorkspaceProject): void => {
     // Every project-scoped store is swapped in ONE place (SOLUSDEV-242).
     switchWorkspaceProject(p, 'home')
-    // Opening a project from Home lands on the project hub (SOLUSDEV-164)
-    // — an orienting overview — rather than the Context Model canvas.
-    go('overview')
+    // Opening a project from Home lands on its Workspace (SOLUSDEV-244): the
+    // Overview hub and the Sources page are retired — Home carries their tasks.
+    go('workspace')
   }
   const switchProject = (p: WorkspaceProject): void => {
     // Switching from the topbar only re-scopes the CURRENT screen to the new
@@ -104,8 +102,8 @@ function useShellNavigation(): ShellNavigation {
     switchWorkspaceProject(p, 'topbar')
     // A detail route belongs to the project it was opened in: an alert id is
     // project-scoped, and an extension's page view may not be installed in
-    // the new project (its rail entry may be gone) — fall back to Overview.
-    if (route.name === 'ext-page' || route.name === 'alert') go('overview')
+    // the new project (its rail entry may be gone) — fall back to Workspace.
+    if (route.name === 'ext-page' || route.name === 'alert') go('workspace')
     setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {
@@ -312,7 +310,6 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 /** Screens that take no props, keyed by name (keeps ScreenView's branching low). */
 const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
   workspace: WorkspaceScreen,
-  sources: SourcesScreen,
   store: StoreScreen,
   sol: SolScreen,
   billing: BillingScreen,
@@ -390,8 +387,6 @@ function ScreenView({
     switch (route.name) {
       case 'home':
         return <HomeScreen onOpenProject={openProject} onNavigate={navigate} />
-      case 'overview':
-        return <ProjectOverview onNavigate={navigate} />
       case 'bench':
         // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
         return <BenchScreen onNavigate={navigate} />
@@ -436,12 +431,10 @@ interface RailItem {
   emphasis?: boolean
 }
 
-/** Top rail: Home + the project-scoped screens (Overview → Sources) in flow order. */
+/** Top rail: Home + the project-scoped screens in flow order. */
 const RAIL_TOP: readonly RailItem[] = [
   { screen: 'home', icon: <Icons.home size={17} />, label: 'Home' },
-  { screen: 'overview', icon: <Icons.spark size={17} />, label: 'Overview' },
   { screen: 'workspace', icon: <Icons.graph size={17} />, label: 'Workspace' },
-  { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
   { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
   { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' }
 ]

@@ -60,7 +60,7 @@ extension_blocked`);
   linking the manifest docs; the authoring flow itself is not in this build and
   the dialog says so. (Design TBD — see completion report.)
 - **In-context suggestion (STORE ST3)**: when a NEW source kind connects on the
-  Sources page (an EDA tool, a CAD tool, a robot…), the desktop reads the
+  Home › Connected accounts (an EDA tool, a CAD tool, a robot…), the desktop reads the
   catalog once and raises ONE toast for the first extension that just became
   installable — "BOM is now available · You connected an EDA tool. <summary>
   · N more widgets are available too." — whose `View` lands on that
@@ -188,7 +188,7 @@ Two columns: content (flex) and a 260px card stack.
   extensions with an approved version appear; nothing is bundled in the build.
 - Install state: the server's install rows (`GET /projects/{id}/extensions`,
   §6.1) — pin, enablement, settings, grants, update availability, team policy —
-  re-read every 10 s like the Sources page so a teammate's install, a block,
+  re-read every 10 s like the project's sources so a teammate's install, a block,
   or a newly approved version shows up without a click. A single failed
   refresh keeps what is on screen; only a session that cannot fetch at all
   (or an API unreachable from the start) is `offline`. Nothing is persisted

@@ -16,12 +16,12 @@ import {
 } from '../../lib/api/resources'
 import type { WorkspaceProject } from '../../store/workspaceStore'
 import { SessionChip } from '../project/localconnections/SessionChip'
-import type { SimStartConfig } from '../project/localconnections/SimulatorRow'
 import {
   connectErrorText,
   sessionsForSimulator,
   simulatorMark,
-  simulatorName
+  simulatorName,
+  type SimStartConfig
 } from '../project/localconnections/presentation'
 import { useLocalConnections } from '../project/localconnections/useLocalConnections'
 import { ToolRowHead } from './ConnectedAccountsCard'

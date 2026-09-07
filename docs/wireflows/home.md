@@ -37,7 +37,8 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - Account-level actions stay on Home: `Join team` (invite token) and `New team`
   (both make the new team active), and the **CONNECTED ACCOUNTS** card
   (SOLUSDEV-241: OAuth binds at account scope; each project picks what it
-  tracks on its Sources page). See "Connected accounts" below (HOME H2).
+  tracks from the same card — the Sources page is retired, SOLUSDEV-244). See
+  "Connected accounts" below (HOME H2).
 
 ## Connected accounts (SOLUSDEV-242 / HOME H2)
 
@@ -258,7 +259,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   invalid or used token, expired, issued to another email, already a member.
   The invitee's OWN plan is what blocks a join (ADR-023 cross-plan rule).
 - **LOCAL FOLDER card** (right column, between MEMBERS and CONNECTED ACCOUNTS;
-  moved here from the Project Overview hub): the CURRENT project's working
+  moved here from the retired Project Overview hub): the CURRENT project's working
   copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
   then the path (one line, clipped with "…", full path in the title), Open
   with VSCode / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
@@ -315,12 +316,14 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   `meta.total`.
 - Footer button: `Open` (no project open, or this one) / `Switch to` (another
   project is open). `Open` — and a click anywhere on the card body — opens the
-  project, landing on its Overview (SOLUSDEV-164). `Switch to` does NOT leave
+  project, landing on its Workspace (the Overview hub is retired, SOLUSDEV-244).
+  `Switch to` does NOT leave
   Home: it makes that project current through the switch choke point
   (`switchWorkspaceProject`, surface `home`), so the accounts card's
   "Attach in …" and the Simulation tab re-scope in place and the card's footer
   flips to `Open`.
-- `⋯` menu (member+): `Rename` (name dialog) · `Archive` · `Delete` (owner only,
+- `⋯` menu (member+): `Edit details` (name + description, `ProjectEditModal`;
+  the retired Overview hub's edit) · `Archive` · `Delete` (owner only,
   ADR-025, confirmed). The menu never opens the project. A failed archive raises the
   shell toast "That didn't work".
 - **New project** tile (member+): dashed, last in the grid; the name dialog

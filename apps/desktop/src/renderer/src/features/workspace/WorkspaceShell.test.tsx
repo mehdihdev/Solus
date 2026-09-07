@@ -188,14 +188,11 @@ describe('WorkspaceShell — chrome', () => {
     expect(useShellStore.getState().lastMain).toBe('home')
   })
 
-  it('exposes the project hub and sources in the rail (SOLUSDEV-164)', async () => {
+  it('no longer carries the Overview hub or the Sources page in the rail (SOLUSDEV-244)', () => {
     renderShell()
-    await userEvent.click(screen.getByText('Overview'))
-    expect(useShellStore.getState().lastMain).toBe('overview')
-    // With no project open the hub honestly asks the user to pick one.
-    expect(await screen.findByText(/select a project/i)).toBeInTheDocument()
-    await userEvent.click(screen.getByText('Sources'))
-    expect(useShellStore.getState().lastMain).toBe('sources')
+    expect(screen.queryByLabelText('Overview')).toBeNull()
+    expect(screen.queryByLabelText('Sources')).toBeNull()
+    expect(screen.getByLabelText('Workspace')).toBeInTheDocument()
   })
 })
 
@@ -368,7 +365,7 @@ describe('WorkspaceShell — extension rail (SOLUSDEV-235 / EXT-14)', () => {
       installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
     )
     renderShell()
-    await userEvent.click(screen.getByText('Overview'))
+    await userEvent.click(screen.getByText('Workspace'))
     await userEvent.click(await screen.findByLabelText('CAM'))
     expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:cam')
     expect(screen.getByTestId('ext-page-screen').parentElement?.parentElement).toHaveAttribute(
@@ -376,12 +373,12 @@ describe('WorkspaceShell — extension rail (SOLUSDEV-235 / EXT-14)', () => {
       'Extension'
     )
     expect(screen.getByLabelText('CAM')).toHaveAttribute('data-active', 'true')
-    expect(screen.getByLabelText('Overview')).not.toHaveAttribute('data-active')
+    expect(screen.getByLabelText('Workspace')).not.toHaveAttribute('data-active')
     // A detail route: the main-screen memory is untouched, so Back knows where to go.
-    expect(useShellStore.getState().lastMain).toBe('overview')
+    expect(useShellStore.getState().lastMain).toBe('workspace')
     await userEvent.click(screen.getByRole('button', { name: 'Back to shell' }))
     expect(screen.queryByTestId('ext-page-screen')).toBeNull()
-    expect(screen.getByLabelText('Overview')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByLabelText('Workspace')).toHaveAttribute('data-active', 'true')
   })
 
   it('hands the page screen a way into the Store', async () => {
@@ -468,7 +465,7 @@ describe('WorkspaceShell — extension rail limits and project scope (EXT-14)', 
     expect(vi.mocked(ext.listProjectExtensions)).not.toHaveBeenCalled()
   })
 
-  it('switching project from the topbar leaves an open extension page for Overview', async () => {
+  it('switching project from the topbar leaves an open extension page for Workspace', async () => {
     vi.mocked(ext.listProjectExtensions).mockResolvedValue(
       installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
     )
@@ -479,7 +476,7 @@ describe('WorkspaceShell — extension rail limits and project scope (EXT-14)', 
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
     await userEvent.click(await screen.findByText('Rover MK3'))
     expect(screen.queryByTestId('ext-page-screen')).toBeNull()
-    expect(useShellStore.getState().lastMain).toBe('overview')
+    expect(useShellStore.getState().lastMain).toBe('workspace')
     expect(useWorkspaceStore.getState().project).toMatchObject({ id: 'p2', name: 'Rover MK3' })
   })
 })
@@ -700,7 +697,7 @@ describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-2
     expect(screen.queryByText('SOL replied')).toBeNull()
   })
 
-  it('leaves an open alert detail for Overview — the alert id belonged to the previous project', async () => {
+  it('leaves an open alert detail for Workspace — the alert id belonged to the previous project', async () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' }, linked: true })
     renderShell()
     act(() => {
@@ -713,8 +710,8 @@ describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-2
     expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /switch project/i }))
     await userEvent.click(await screen.findByText('Rover MK3'))
-    expect(useShellStore.getState().lastMain).toBe('overview')
-    expect(document.querySelector('[data-screen-label="Overview"]')).not.toBeNull()
+    expect(useShellStore.getState().lastMain).toBe('workspace')
+    expect(document.querySelector('[data-screen-label="Workspace"]')).not.toBeNull()
     expect(screen.queryByRole('button', { name: /back/i })).toBeNull()
   })
 

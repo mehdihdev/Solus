@@ -23,6 +23,7 @@ import {
 import { classifyFetchError } from '../../lib/api/errors'
 import { ApiError } from '../../lib/api/envelope.types'
 import { planLimitFromError, type PlanLimitRefusal } from '../../lib/api/planLimit'
+import { renameWorkspaceProject } from './projectSwitch'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { forgetWorkspaceGraph } from '../graph/useWorkspaceGraph'
 import { resolveTeam } from './activeTeam'
@@ -74,6 +75,8 @@ export interface HomeActions {
   createTeam: (name: string) => Promise<CreateTeamResult>
   joinTeam: (token: string) => Promise<JoinTeamResult>
   renameProject: (projectId: string, name: string) => Promise<boolean>
+  /** Rename and re-describe (the retired Overview hub's edit, now on the card). */
+  editProject: (projectId: string, name: string, description: string) => Promise<boolean>
   archiveProject: (projectId: string) => Promise<boolean>
   unarchiveProject: (projectId: string) => Promise<boolean>
   deleteProject: (projectId: string) => Promise<boolean>
@@ -224,6 +227,12 @@ export function useHomeData(): HomeData {
       }
     },
     renameProject: (projectId, name) => runAction(() => updateProjectApi(projectId, { name })),
+    editProject: (projectId, name, description) =>
+      runAction(async () => {
+        await updateProjectApi(projectId, { name, description })
+        // The open project's pill and switcher follow the new name at once.
+        if (useWorkspaceStore.getState().project?.id === projectId) renameWorkspaceProject(name)
+      }),
     archiveProject: (projectId) =>
       runAction(async () => {
         await archiveProjectApi(projectId)
