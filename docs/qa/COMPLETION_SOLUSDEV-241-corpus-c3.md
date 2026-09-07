@@ -101,3 +101,20 @@ Local API with the dev database ingested to 0.2.0 (`inserted 19, unchanged 102, 
    handbook values, and the chunk says so.
 3. `hosts.py` now admits `feetechrc.com` / `feetech.cn` (rights-holder for the SO-101 servo).
 4. No `.env` values required. `docs/design/SPEC.md` still does not exist (noted once).
+
+## Validation gate (H10) at handoff
+
+- Every item the gate attributed to corpus files was fixed in `5f53e7a` (ruff/mypy clean on
+  `migrations/env.py`, the corpus migration, and the contract test).
+- A full API run on a private test database (`SOLUS_TEST_DATABASE_URL=…/solus_test_corpus65`)
+  completed in 22 min: **3456 passed, 1 failed** — the failure was the ST5 session's new
+  `sourcing.derive_torque` tool registering into the reference registry
+  (`test_registry_lists_only_the_reference_tool`), which that session fixed in `27f8fb3`.
+- The gate's own full-suite run keeps hitting the 300 s per-test timeout inside conftest's
+  per-test `TRUNCATE`. `pg_stat_activity` showed no lock waits; the only active session was
+  another session's suite waiting on `DataFileImmediateSync`. Three concurrent full suites on the
+  single local Postgres (which lacks CI's `fsync=off`) make the TRUNCATE the bottleneck. This is
+  contention between sessions sharing one checkout, not a code defect; flagged per CLAUDE.md §5
+  for the human rather than bypassed.
+- The gate's eslint errors are in the HOME H3/H4 session's `LiveHome` / `HomeTeamModals`
+  (complexity), reported to that session; no corpus commit touches the desktop.
