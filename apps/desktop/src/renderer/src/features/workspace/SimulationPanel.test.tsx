@@ -2,7 +2,7 @@
 // open project's bench inventory, started and stopped through that project's
 // bench routes. No project or no API ⇒ honest copy, never a fabricated row.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SimulationPanel } from './SimulationPanel'
 import * as resources from '../../lib/api/resources'
@@ -78,21 +78,25 @@ describe('SimulationPanel', () => {
     expect(localHook.useLocalConnections).toHaveBeenCalledWith('p1')
   })
 
-  it("lists the project's simulators with the backend's own availability", () => {
+  it("lists the project's simulators as rows with the backend's own availability", () => {
     mockLocal({ sources: sources(), sessions: [] })
     render(<SimulationPanel currentProject={ROVER} />)
-    expect(screen.getByText('Runs in Rover')).toBeInTheDocument()
     expect(screen.getByText('MuJoCo')).toBeInTheDocument()
+    expect(screen.getByText('Ready on this machine · runs in Rover')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start MuJoCo' })).toBeEnabled()
     expect(screen.getByText('Isaac Sim')).toBeInTheDocument()
     expect(screen.getByText('No live adapter for Isaac Sim.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Start MuJoCo demo scene' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Start Isaac Sim' })).toBeDisabled()
   })
 
-  it('starts a MuJoCo session on the open project and refreshes', async () => {
+  it('Start opens the start modal; MuJoCo runs the demo scene on the open project and refreshes', async () => {
     const refresh = mockLocal({ sources: sources(), sessions: [] })
     vi.mocked(resources.createBenchSession).mockResolvedValue(session())
     render(<SimulationPanel currentProject={ROVER} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Start MuJoCo demo scene' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Start MuJoCo' }))
+    const dialog = screen.getByRole('dialog', { name: 'Start MuJoCo' })
+    expect(within(dialog).getByTestId('sim-instruction')).toHaveTextContent("Rover's Live Bench")
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Start' }))
     await waitFor(() =>
       expect(resources.createBenchSession).toHaveBeenCalledWith('p1', {
         mode: 'sim',
@@ -100,25 +104,51 @@ describe('SimulationPanel', () => {
       })
     )
     expect(refresh).toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
-  it("surfaces the backend's refusal in place", async () => {
+  it("keeps the modal open and shows the backend's refusal in place", async () => {
     mockLocal({ sources: sources(), sessions: [] })
     vi.mocked(resources.createBenchSession).mockRejectedValue(
       new ApiError(409, 'too_many_sessions', 'too many')
     )
     render(<SimulationPanel currentProject={ROVER} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Start MuJoCo demo scene' }))
-    expect(await screen.findByText(/Session limit reached/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Start MuJoCo' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Start' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Start MuJoCo' })
+    expect(within(dialog).getByTestId('sim-instruction')).toHaveTextContent('Session limit reached')
   })
 
-  it('disables every start with the runner reason when livebench is missing', () => {
+  it('Gazebo needs its topics before Start is live', async () => {
+    mockLocal({
+      sources: sources({ simulators: [{ kind: 'gazebo', available: true, reason: null }] }),
+      sessions: []
+    })
+    vi.mocked(resources.createBenchSession).mockResolvedValue(session({ provider: 'gazebo' }))
+    render(<SimulationPanel currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Start Gazebo' }))
+    const dialog = screen.getByRole('dialog', { name: 'Start Gazebo' })
+    expect(within(dialog).getByRole('button', { name: 'Start' })).toBeDisabled()
+    await userEvent.type(
+      within(dialog).getByRole('textbox', { name: 'Gazebo topics' }),
+      '/imu, /odom'
+    )
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Start' }))
+    await waitFor(() =>
+      expect(resources.createBenchSession).toHaveBeenCalledWith('p1', {
+        mode: 'sim',
+        config: { provider: 'gazebo', topics: ['/imu', '/odom'] }
+      })
+    )
+  })
+
+  it('disables every Start with the runner reason when livebench is missing', () => {
     mockLocal({
       sources: sources({ runner: { available: false, reason: 'livebench not installed' } }),
       sessions: []
     })
     render(<SimulationPanel currentProject={ROVER} />)
-    expect(screen.getByRole('button', { name: 'Start MuJoCo demo scene' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Start MuJoCo' })).toBeDisabled()
     expect(screen.getAllByText('livebench not installed').length).toBeGreaterThan(0)
   })
 
@@ -126,6 +156,7 @@ describe('SimulationPanel', () => {
     const refresh = mockLocal({ sources: sources(), sessions: [session()] })
     vi.mocked(resources.stopBenchSession).mockResolvedValue(session({ status: 'ended' }))
     render(<SimulationPanel currentProject={ROVER} />)
+    expect(screen.getByText(/1 session running in Rover/)).toBeInTheDocument()
     expect(screen.getByText('STREAMING')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Stop MuJoCo demo' }))
     expect(resources.stopBenchSession).toHaveBeenCalledWith('p1', 's1')

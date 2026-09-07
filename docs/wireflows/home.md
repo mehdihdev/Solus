@@ -44,90 +44,93 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 ```
 | CONNECTED ACCOUNTS                                                          |
 | (Mechanical) ( Electrical ) ( Simulation ) ( Software )     ← domain tabs   |
-| ── Mechanical ──────────────────────────────────────────────────────────── |
-| [On] Onshape · ada@example.com                                              |
-|      Used in Rover and Arm · Read only                        [Revoke]      |
-| [Fu] Fusion 360 (local)                                                     |
-|      Connects on this computer · attached per project  [Attach in Rover]    |
+| ── one shape for every tool ────────────────────────────────────────────── |
+| [On] Onshape                                            [Pick documents]   |
+|      1 account linked · 2 connected in Rover                               |
+|        ada@example.com  HEALTHY                                [Revoke]    |
+|          Used in Rover and Arm · Read only                                 |
+|        Chassis v3                                          [Disconnect]    |
+|          ● connected · 1,204 entities                                      |
+| [Fu] Fusion                                                    [Connect]   |
+|      Server ready                                                          |
 | ── Electrical ──────────────────────────────────────────────────────────── |
-| [Ki] KiCad                                                                  |
-|      Committed export · attached per project           [Attach in Rover]    |
-| [Al] Altium                                                                 |
-|      Committed export · attached per project           [Attach in Rover]    |
+| [Ki] KiCad                                                 [Choose file]   |
+|      Committed export · per project · 1 connected in Rover                 |
+|        rover.xml                                           [Disconnect]    |
+|          ● connected · 42 entities                                         |
 | ── Simulation ──────────────────────────────────────────────────────────── |
-|      Runs in Rover                                                          |
-|      MuJoCo                                          [Start demo scene]     |
-|        STREAMING  MuJoCo demo            12 INGESTED          [Stop]        |
-|      Isaac Sim                                                              |
-|        No live adapter for Isaac Sim. …                                     |
-|      (no open project:) Open a project to run a simulation — sessions       |
-|        stream into that project's Live Bench.                               |
+| [Mu] MuJoCo                                                      [Start]   |
+|      Ready · 1 session running in Rover                                    |
+|        STREAMING  MuJoCo demo                12 INGESTED          [Stop]   |
+| [Is] Isaac Sim                                                  (Start)    |
+|      Unavailable on this machine · No in-app start — use a script or …     |
 | ── Software ────────────────────────────────────────────────────────────── |
-| [Gh] GitHub · octocat                                                       |
-|      Connected in a project, not yet on your account   [Sign in to move]   |
-|      ⚠ Connected in Rover before account-level connections. Sign in once   |
-|        to move it to your account — Rover keeps syncing until then.         |
-|      (once signed in:)                          [Move to your account]      |
-|      ⚠ …Your linked account matches — move it so Rover uses your account   |
-|        grant.  → confirmation names the project, the grant, the removal     |
-| [Gl] GitLab                                                                 |
-|      Not connected                                            [Connect]     |
+| [Gh] GitHub                                                    [Connect]   |
+|      Not connected                                                         |
+| [Gl] GitLab                                          (Pick repositories)   |
+|      1 account linked · Open or switch to a project first.                 |
 ```
 
-- **Domain tabs** (SOLUSDEV-244): the tools are grouped under four pills —
-  Mechanical, Electrical, Simulation, Software — in that order, Mechanical
-  selected on open. One tab is shown at a time (`role="tablist"`/`tab`/
-  `tabpanel`). A tool's domain is classified in the app by provider type
-  (`accountDomains.ts`); a provider the app has no entry for lands under
-  Software rather than disappearing. A domain with nothing to connect yet says
-  so in place of rows. There is no footer line under the card. Each switch
-  remounts the panel with a short fade-and-rise (`accounts-panel-in`; off
-  under `prefers-reduced-motion`).
-- **Simulation tab** (`SimulationPanel`): not account grants but the OPEN
-  project's bench inventory — the same `SimulatorRow`s and the same routes the
-  project Sources page used (`GET /projects/{id}/bench/sources`,
-  `POST …/bench/sessions`, `POST …/bench/sessions/{sid}/stop`), moved here as
-  the Sources page winds down. "Runs in <project>" names where a session lands;
-  an unavailable simulator carries the backend's reason with its controls dead;
-  a missing runner disables every start with that reason. No open project ⇒
-  "Open a project to run a simulation…" and no controls; API unreachable ⇒ says
-  so, never a fabricated inventory.
-- **Every tool the registry knows is listed** — a missing row reads as
-  "unsupported". OAuth tools link an account here; committed-export tools
-  (KiCad, Altium) and local-companion tools are attached per project, so their
-  row offers **Attach in <open project>**, which opens that project's Sources
-  page (where the source is added). With no project open the row says "open a
-  project to attach it from its Sources page" and has no button.
-- **Connect** opens the connect wizard in account mode (rail
-  `Choose access → Sign in`; no document picking here — that is the project's
-  Sources page, W2).
-- **Scope is stated on every linked row**: `Read only`, `Read and edit`, or
+- **Domain tabs** (SOLUSDEV-244): four pills — Mechanical, Electrical,
+  Simulation, Software — in that order, Mechanical selected on open. One tab
+  is shown at a time (`role="tablist"`/`tab`/`tabpanel`), and each switch
+  remounts the panel with a short fade-and-rise (`accounts-panel-in`; off under
+  `prefers-reduced-motion`). A tool's domain is classified in the app by
+  provider type (`accountDomains.ts`); a provider the app has no entry for lands
+  under Software rather than disappearing. A domain with nothing to connect yet
+  says so in place of rows. There is no footer line under the card.
+- **One shape for every tool.** Each row is: mark, name, one status line, and
+  ONE primary button — the **next step** for that tool. Beneath it, what already
+  exists, each item with its own confirmed action. The next step is offered
+  even when something already exists (a second account, a second export, a
+  second session are one click away). Every step runs through the connect
+  wizard modal (`ConnectWizardModal`, W2) — the same rail, header and copy the
+  Onshape sign-in uses:
+  - **OAuth tool, nothing linked** → `Connect` (account scope: rail
+    `Choose access → Sign in`; no picking here).
+  - **OAuth tool, account linked** → the connector's own next step on the
+    CURRENT project, reusing the linked account so the rail skips the sign-in:
+    `Pick documents` / `Pick repositories` (its declared selection), else
+    `Enter details` (its config fields), else `Add to project`. Status line
+    "N accounts linked · M connected in <project>".
+  - **Committed-export tool** (KiCad, Altium) → `Choose file` (project scope:
+    rail `Choose export → Build graph`). Status "Committed export · per project
+    · M connected in <project>".
+  - **Local tool** (Fusion) → `Connect`: the wizard's single step
+    `Connect on this computer` shows the registry's `connect_notice` verbatim and
+    its host, and closes on Got it. Status line is the live bridge word
+    (`toolStatusText`).
+  - **Simulator** (Simulation tab, `SimulationPanel`) → `Start`, which opens
+    `SimulatorStartModal` in the wizard's visual language: MuJoCo starts the
+    builtin demo scene; Gazebo asks for topics; MCAP replay for a path under the
+    server's data root; Isaac has no in-app start and its Start is disabled with
+    that reason. A refused start shows the backend's message in the modal.
+  - A project-bound step with **no current project** stays visible but
+    disabled, with "Open or switch to a project first." under the status line.
+    "Switch to" on a project card re-scopes every row in place.
+- **What already exists, beneath the row** (indented under the mark):
+  - each linked **account grant**: login (one line, clipped), health badge,
+    "Used in … · scope", quota meter (H4), Re-authorize when needed, confirmed
+    **Revoke** naming the projects it disconnects;
+  - each **legacy grant** (`GET /users/me/connections/legacy`): "Connected in a
+    project, not yet on your account", **Sign in to move** → once the matching
+    account is linked, confirmed **Move to your account** (unchanged from H2);
+  - each **source the current project holds** for the tool
+    (`GET /projects/{id}/sources` filtered by type): name, status dot, entity
+    count, confirmed **Disconnect** (retains entities — the shared
+    `DisconnectSourceModal`);
+  - each **running session** for a simulator: link state, label, ingest count,
+    **Stop** (`SessionChip`).
+- **Scope is stated on every linked account**: `Read only`, `Read and edit`, or
   `Access level not recorded`. Scopes are fixed in connector code; nothing on
   this surface widens one.
-- **Legacy grants** (`GET /users/me/connections/legacy`): a project-scoped grant
-  from before account-level connections, made by this user, is listed under its
-  provider as "Connected in a project, not yet on your account" with a note
-  naming the projects. It is not a usable grant here (no Revoke). Two states:
-  - no proving grant yet → note "…Sign in once to move it to your account —
-    Rover keeps syncing until then." and **Sign in to move** (the account-mode
-    wizard; the finished sign-in proves the account, nothing moves yet);
-  - the user holds the matching CONNECTED grant → note "…Your linked account
-    matches — move it so Rover uses your account grant." and **Move to your
-    account**, which opens a confirmation stating exactly what happens: "Rover
-    will use your linked Onshape account (read only access). The project's own
-    Onshape token — and any add-on grant on it — is removed; syncing continues
-    on your account." Confirm → `POST /users/me/connections/adopt` with those
-    source ids and `confirm_access: true` → the row joins the linked account's
-    "Used in". A move is never a side effect of loading Home or of a handshake.
-    A project whose recorded access mode differs from the account grant's is
-    never moved — it keeps its own token (its Sources page is where that changes;
-    W2 follow-up).
-- **Re-authorize** appears on a row whose last sign-in failed, with the
-  provider's message; it runs the same account-mode wizard and lands on the SAME
-  row (I1 dedupes by account), so the old token is replaced only once the new
-  consent succeeded.
-- **Revoke** is confirmed and names the projects it disconnects (unchanged).
-- Hidden while offline (honest empty state elsewhere on Home).
+- **Re-authorize** appears on a grant whose last sign-in failed, with the
+  provider's message; it runs the same account-scope wizard and lands on the
+  SAME grant (I1 dedupes by account), so the old token is replaced only once the
+  new consent succeeded.
+- Hidden while offline (honest empty state elsewhere on Home). The Simulation
+  tab with no project says "Open a project to run a simulation…"; with the API
+  unreachable it says so, never a fabricated inventory.
 
 ### Health and quota per account (SOLUSDEV-244 / HOME H4)
 

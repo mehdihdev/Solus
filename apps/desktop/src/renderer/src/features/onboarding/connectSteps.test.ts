@@ -138,3 +138,21 @@ describe('stepInstruction', () => {
     }
   })
 })
+
+describe('wizardSteps — local-bridge tools', () => {
+  it('is one step: connect on this computer, with the vendor-server instruction', () => {
+    const steps = wizardSteps({
+      mode: 'local-bridge',
+      accessModes: null,
+      selection: null,
+      configFields: []
+    })
+    expect(steps.map((s) => s.id)).toEqual(['bridge'])
+    expect(stepInstruction(steps[0], { name: 'Fusion' }, 'Guide')).toMatch(
+      /Fusion runs its own local server on this computer/
+    )
+    expect(stepInstruction(steps[0], { name: 'Fusion' }, 'Expert')).toBe(
+      'Fusion runs locally; the companion bridges it.'
+    )
+  })
+})

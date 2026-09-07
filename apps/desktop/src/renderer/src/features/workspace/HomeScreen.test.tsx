@@ -30,13 +30,8 @@ vi.mock('../preferences/PreferencesCard', () => ({
 }))
 // Account connections are their own feature (SOLUSDEV-241); Home only hosts the card.
 vi.mock('./ConnectedAccountsCard', () => ({
-  ConnectedAccountsCard: (props: {
-    currentProject?: { name: string } | null
-    onOpenSources?: () => void
-  }) => (
-    <div data-testid="connected-accounts" data-project={props.currentProject?.name ?? ''}>
-      {props.onOpenSources && <button onClick={props.onOpenSources}>sources-link</button>}
-    </div>
+  ConnectedAccountsCard: (props: { currentProject?: { name: string } | null }) => (
+    <div data-testid="connected-accounts" data-project={props.currentProject?.name ?? ''} />
   )
 }))
 
@@ -265,14 +260,11 @@ describe('HomeScreen — the active team’s project grid', () => {
 })
 
 describe('HomeScreen — connected accounts wiring', () => {
-  it('hands the card the open project and a way to its Sources page', async () => {
+  it('hands the card the current project — every project-bound step lands there', () => {
     mockHome()
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
-    const onNavigate = vi.fn()
-    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={onNavigate} />)
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
     expect(screen.getByTestId('connected-accounts')).toHaveAttribute('data-project', 'Rover MK2')
-    await userEvent.click(screen.getByText('sources-link'))
-    expect(onNavigate).toHaveBeenCalledWith('sources')
   })
 })
 

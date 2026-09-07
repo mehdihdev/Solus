@@ -1,24 +1,94 @@
-// The Simulation tab of Home's connected-accounts card (SOLUSDEV-244). The
-// simulators a machine can run are a BENCH inventory, not an account grant:
-// they come from the open project's `GET /projects/{id}/bench/sources`, and a
-// start is `POST …/bench/sessions` on that project — the same rows and the
-// same calls the project's Sources page makes, so nothing here is a second
-// implementation. No open project means nothing can honestly start, and the
-// panel says so; an unreachable API says that, never a fabricated inventory.
+// The Simulation tab of Home's connected-accounts card (SOLUSDEV-244), in the
+// same shape as every other tab: one row per simulator the machine can run —
+// mark, name, the backend's own availability — with Start as the next step
+// (SimulatorStartModal), and the running sessions beneath, each with Stop.
+// The inventory is the OPEN project's `GET /projects/{id}/bench/sources`; a
+// start is `POST …/bench/sessions` on that project — the same calls the
+// Sources page made. No open project means nothing can honestly start, and
+// the panel says so; an unreachable API says that, never a fabricated list.
+import { useState } from 'react'
 import {
   createBenchSession,
   stopBenchSession,
+  type BenchSession,
+  type BenchSimulator,
   type CreateBenchSessionInput
 } from '../../lib/api/resources'
 import type { WorkspaceProject } from '../../store/workspaceStore'
-import { SimulatorRow } from '../project/localconnections/SimulatorRow'
-import { connectErrorText, sessionsForSimulator } from '../project/localconnections/presentation'
+import { SessionChip } from '../project/localconnections/SessionChip'
+import type { SimStartConfig } from '../project/localconnections/SimulatorRow'
+import {
+  connectErrorText,
+  sessionsForSimulator,
+  simulatorMark,
+  simulatorName
+} from '../project/localconnections/presentation'
 import { useLocalConnections } from '../project/localconnections/useLocalConnections'
+import { ToolRowHead } from './ConnectedAccountsCard'
+import { SimulatorStartModal } from './SimulatorStartModal'
 
 function Note({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <div style={{ padding: 14, fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
       {children}
+    </div>
+  )
+}
+
+function SimulatorToolRow({
+  simulator,
+  sessions,
+  projectName,
+  runnerReason,
+  onStart,
+  onStop
+}: {
+  simulator: BenchSimulator
+  sessions: BenchSession[]
+  projectName: string
+  runnerReason: string | null
+  onStart: (config: SimStartConfig) => Promise<string | null>
+  onStop: (sessionId: string) => void
+}): React.JSX.Element {
+  const [starting, setStarting] = useState(false)
+  const name = simulatorName(simulator.kind)
+  // Runner missing beats the simulator's own reason; Isaac has no in-app
+  // start at all — none of these may offer a Start that cannot perform.
+  const reason =
+    runnerReason ??
+    (simulator.available ? null : simulator.reason) ??
+    (simulator.kind === 'isaac' ? 'No in-app start — use a script or an MCAP recording.' : null)
+  const running = sessions.length
+  const status = reason
+    ? 'Unavailable on this machine'
+    : running > 0
+      ? `Ready · ${running} session${running === 1 ? '' : 's'} running in ${projectName}`
+      : `Ready on this machine · runs in ${projectName}`
+  return (
+    <div>
+      <ToolRowHead
+        entry={{ id: simulator.kind, name, mark: simulatorMark(simulator.kind) }}
+        status={status}
+        action="Start"
+        disabledHint={reason}
+        onAction={() => setStarting(true)}
+      />
+      {sessions.map((session) => (
+        <div
+          key={session.id}
+          style={{ padding: '0 16px 10px 56px', borderTop: '1px solid var(--bd)' }}
+        >
+          <SessionChip session={session} onStop={onStop} />
+        </div>
+      ))}
+      {starting && (
+        <SimulatorStartModal
+          simulator={simulator}
+          projectName={projectName}
+          onStart={onStart}
+          onClose={() => setStarting(false)}
+        />
+      )}
     </div>
   )
 }
@@ -65,26 +135,29 @@ export function SimulationPanel({
       </Note>
     )
   }
-  // Runner missing ⇒ livebench isn't installed server-side: every control is
+  // Runner missing ⇒ livebench isn't installed server-side: every Start is
   // disabled with that exact reason.
   const runnerReason = data.sources.runner.available
     ? null
     : (data.sources.runner.reason ?? 'livebench is not available on the server')
+  const simulators = data.sources.simulators
   return (
-    <div style={{ padding: '0 14px' }}>
-      <div style={{ fontSize: 10.5, color: 'var(--mut)', padding: '10px 0 0' }}>
-        Runs in {currentProject.name}
-      </div>
-      {data.sources.simulators.map((sim) => (
-        <SimulatorRow
+    <>
+      {simulators.map((sim, i) => (
+        <div
           key={sim.kind}
-          simulator={sim}
-          sessions={sessionsForSimulator(data.sessions, sim.kind)}
-          disabledReason={runnerReason}
-          onStart={(config) => start({ mode: 'sim', config })}
-          onStop={stop}
-        />
+          style={{ borderBottom: i === simulators.length - 1 ? 'none' : '1px solid var(--bd)' }}
+        >
+          <SimulatorToolRow
+            simulator={sim}
+            sessions={sessionsForSimulator(data.sessions, sim.kind)}
+            projectName={currentProject.name}
+            runnerReason={runnerReason}
+            onStart={(config) => start({ mode: 'sim', config })}
+            onStop={stop}
+          />
+        </div>
       ))}
-    </div>
+    </>
   )
 }

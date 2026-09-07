@@ -22,6 +22,18 @@ export function simulatorName(kind: BenchSimulatorKind): string {
   return SIMULATOR_NAMES[kind]
 }
 
+const SIMULATOR_MARKS: Record<BenchSimulatorKind, string> = {
+  mujoco: 'Mu',
+  gazebo: 'Ga',
+  isaac: 'Is',
+  'mcap-replay': 'MC'
+}
+
+/** The two-letter mark a simulator row leads with (no vendor logo shipped). */
+export function simulatorMark(kind: BenchSimulatorKind): string {
+  return SIMULATOR_MARKS[kind]
+}
+
 /** Row title. A `usb_bridge` device NEVER shows a guessed board — the bridge
  *  chip is all we can see, so say exactly that. */
 export function deviceTitle(device: BenchDevice): string {

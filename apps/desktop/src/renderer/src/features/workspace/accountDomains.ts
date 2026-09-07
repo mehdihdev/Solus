@@ -42,3 +42,7 @@ export function accountDomain(entry: Pick<CatalogEntry, 'id'>): AccountDomain {
 export function emptyDomainText(domain: AccountDomain): string {
   return `No ${ACCOUNT_DOMAIN_LABEL[domain].toLowerCase()} tools are available to connect yet.`
 }
+
+/** Said under a project-bound next step (Choose file, Pick documents, Start)
+ *  while no project is current — the step stays visible, just disabled. */
+export const NEEDS_PROJECT_HINT = 'Open or switch to a project first.'

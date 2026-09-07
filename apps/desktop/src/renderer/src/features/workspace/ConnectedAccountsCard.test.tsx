@@ -19,6 +19,8 @@ import {
   usageText
 } from './connectedAccounts'
 import * as accountsHook from './useAccountConnections'
+import * as sourcesHook from '../project/useProjectSources'
+import type { Source } from '../../lib/api/resources'
 import * as catalogHook from '../onboarding/useIntegrationCatalog'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import type { Connection, LegacyConnection } from '../../lib/api/resources'
@@ -28,6 +30,10 @@ vi.mock('./useAccountConnections', async (importOriginal) => {
   return { ...actual, useAccountConnections: vi.fn() }
 })
 vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: vi.fn() }))
+// The current project's sources and the companion bridge are their own hooks
+// with their own tests; here they are stubbed so the card stays deterministic.
+vi.mock('../project/useProjectSources', () => ({ useProjectSources: vi.fn() }))
+vi.mock('./useBridgeStatus', () => ({ useBridgeStatus: vi.fn(() => null) }))
 // The Simulation tab's bench inventory has its own tests (SimulationPanel);
 // here it is offline so the card never reaches the bench routes.
 vi.mock('../project/localconnections/useLocalConnections', () => ({
@@ -98,8 +104,25 @@ function mockAccounts(
   return value
 }
 
+const ROVER = { id: 'p1', name: 'Rover', teamId: 't1' }
+
+function mockSources(sources: Source[] = []): sourcesHook.ProjectSourcesData {
+  const value: sourcesHook.ProjectSourcesData = {
+    status: 'ready',
+    sources,
+    actions: {
+      refresh: vi.fn(async () => undefined),
+      syncNow: vi.fn(async () => true),
+      disconnect: vi.fn(async () => true)
+    }
+  }
+  vi.mocked(sourcesHook.useProjectSources).mockReturnValue(value)
+  return value
+}
+
 beforeEach(() => {
   vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([ONSHAPE, KICAD])
+  mockSources()
 })
 
 describe('ConnectedAccountsCard', () => {
@@ -107,7 +130,7 @@ describe('ConnectedAccountsCard', () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
     expect(screen.getByText('Onshape')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Connect Onshape' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect for Onshape' })).toBeInTheDocument()
     // A file-export tool is listed too (under its own domain), but has no account to connect.
     await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
     expect(screen.getByText('KiCad')).toBeInTheDocument()
@@ -117,9 +140,9 @@ describe('ConnectedAccountsCard', () => {
   it('shows a linked account with the projects using it', () => {
     mockAccounts({ connections: [LINKED] })
     render(<ConnectedAccountsCard />)
-    expect(screen.getByText('· ada@example.com')).toBeInTheDocument()
+    expect(screen.getByText('ada@example.com')).toBeInTheDocument()
     expect(screen.getByText(/Used in Rover and Arm/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Connect Onshape' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect for Onshape' })).not.toBeInTheDocument()
   })
 
   it('revokes only after a confirmation that names the projects', async () => {
@@ -138,7 +161,7 @@ describe('ConnectedAccountsCard', () => {
   it('opens the wizard in ACCOUNT scope from Connect', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
-    await userEvent.click(screen.getByRole('button', { name: 'Connect Onshape' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect for Onshape' }))
     const dialog = screen.getByRole('dialog', { name: 'Connect Onshape' })
     // Account scope: the rail ends at the sign-in — no picking, no indexing.
     const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
@@ -169,9 +192,10 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByRole('note')).toHaveTextContent(
       'Connected in Rover before account-level connections. Sign in once to move it to your account — Rover keeps syncing until then.'
     )
-    // Not a usable grant: no Revoke, no duplicate Connect.
+    // Not a usable grant: no Revoke. The row's standard next step (Connect,
+    // the account sign-in) stays; the item's own action says what that does.
     expect(screen.queryByRole('button', { name: 'Revoke Onshape' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Connect Onshape' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Connect for Onshape' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Sign in to move Onshape' }))
     const dialog = screen.getByRole('dialog', { name: 'Connect Onshape' })
     const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
@@ -247,33 +271,110 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByText(/Couldn't move this Onshape connection/)).toBeInTheDocument()
   })
 
-  it('lists every catalog tool under its domain; a per-project tool attaches from the open project', async () => {
+  it('a committed-export tool offers Choose file as its next step, into the current project', async () => {
     mockAccounts()
-    const onOpenSources = vi.fn()
-    render(
-      <ConnectedAccountsCard
-        currentProject={{ id: 'p1', name: 'Rover', teamId: 't1' }}
-        onOpenSources={onOpenSources}
-      />
-    )
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
     expect(screen.getByText('Onshape')).toBeInTheDocument()
     expect(screen.queryByText('KiCad')).toBeNull()
     await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
     expect(screen.queryByText('Onshape')).toBeNull()
     expect(screen.getByText('KiCad')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Connect KiCad' })).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: 'Attach KiCad in Rover' }))
-    expect(onOpenSources).toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Choose file for KiCad' }))
+    const dialog = screen.getByRole('dialog', { name: 'Connect KiCad' })
+    const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
+    expect(steps).toEqual(['Choose export', 'Build graph'])
+    expect(within(dialog).getByRole('button', { name: /choose export file/i })).toBeInTheDocument()
   })
 
-  it('without an open project a per-project tool says so and offers no button', async () => {
+  it('without a current project a project-bound step stays visible but disabled, and says why', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
     await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
-    expect(
-      screen.getByText(/open a project to attach it from its Sources page/)
-    ).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /attach kicad/i })).toBeNull()
+    const choose = screen.getByRole('button', { name: 'Choose file for KiCad' })
+    expect(choose).toBeDisabled()
+    expect(screen.getByTestId('needs-project')).toHaveTextContent(
+      'Open or switch to a project first.'
+    )
+  })
+
+  it('lists the sources the current project already holds for a tool, each with a confirmed Disconnect', async () => {
+    mockAccounts()
+    const sources = mockSources([
+      {
+        id: 's1',
+        project_id: 'p1',
+        type: 'kicad',
+        name: 'rover.xml',
+        status: 'connected',
+        config: {},
+        account_login: null,
+        last_synced_at: null,
+        last_error: null,
+        entity_count: 42,
+        created_at: '',
+        updated_at: ''
+      }
+    ])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
+    expect(screen.getByText(/1 connected in Rover/)).toBeInTheDocument()
+    expect(screen.getByText('rover.xml')).toBeInTheDocument()
+    expect(screen.getByText(/connected · 42 entities/)).toBeInTheDocument()
+    // The next step stays: a second export is one click away.
+    expect(screen.getByRole('button', { name: 'Choose file for KiCad' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect rover.xml' }))
+    expect(sources.actions.disconnect).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
+    expect(sources.actions.disconnect).toHaveBeenCalledWith('s1')
+  })
+
+  it('a linked OAuth account moves the next step on to picking, on the current project, without a second sign-in', async () => {
+    mockAccounts({ connections: [LINKED] })
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    expect(screen.getByText('1 account linked')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect for Onshape' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Pick documents for Onshape' }))
+    const dialog = screen.getByRole('dialog', { name: 'Connect Onshape' })
+    const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
+    expect(steps).toEqual(['Pick documents', 'Build graph'])
+    expect(within(dialog).getByTestId('cw-linked-account')).toHaveTextContent('ada@example.com')
+  })
+
+  it('a local tool connects through the same wizard, with the registry guidance verbatim', async () => {
+    vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([
+      {
+        id: 'fusion',
+        name: 'Fusion',
+        kind: 'Local tool — companion bridge',
+        mark: 'Fu',
+        mode: 'local-bridge',
+        configFields: [],
+        selection: null,
+        accessModes: null,
+        hosted: null,
+        localTool: {
+          type: 'fusion',
+          display_name: 'Fusion',
+          hosting: 'vendor-run',
+          url_host: '127.0.0.1:27182',
+          connect_notice: 'Enable the MCP server in Fusion preferences.',
+          requires: 'companion'
+        }
+      }
+    ])
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    expect(screen.getByText('Companion offline')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Connect for Fusion' }))
+    const dialog = screen.getByRole('dialog', { name: 'Connect Fusion' })
+    const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
+    expect(steps).toEqual(['Connect on this computer'])
+    expect(within(dialog).getByTestId('cw-bridge-notice')).toHaveTextContent(
+      'Enable the MCP server in Fusion preferences.'
+    )
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Got it' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('offers Re-authorize for a grant whose last sign-in failed', () => {
@@ -471,7 +572,7 @@ describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
     expect(rows()).toEqual(['GitHub'])
     expect(screen.getByRole('tab', { name: 'Software' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect for GitHub' })).toBeInTheDocument()
   })
 
   it('the Simulation tab is the bench inventory, which needs an open project', async () => {

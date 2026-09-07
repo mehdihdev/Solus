@@ -103,12 +103,16 @@ function EndpointMark({
   )
 }
 
-/** Solus box — travelling dots — integration logo (or letter mark). */
-function LinkHeader({
+/** What the link header needs of an endpoint: enough to find a logo, else a mark. */
+export type LinkEndpoint = Pick<CatalogEntry, 'id' | 'name' | 'mark'>
+
+/** Solus box — travelling dots — integration logo (or letter mark). Exported
+ *  so sibling dialogs (simulator start) share the wizard's visual language. */
+export function LinkHeader({
   entry,
   status
 }: {
-  entry: CatalogEntry
+  entry: LinkEndpoint
   status: 'idle' | 'busy' | 'done' | 'error'
 }): React.JSX.Element {
   const logo = integrationLogo(entry.id)
@@ -278,15 +282,43 @@ function AccessPicker({
   )
 }
 
+/** A local tool's one step: the registry's own guidance, verbatim, and Got it. */
+function BridgeAction({
+  entry,
+  onClose
+}: Pick<ConnectWizardModalProps, 'entry' | 'onClose'>): React.JSX.Element {
+  const tool = entry.localTool
+  return (
+    <div style={{ display: 'grid', gap: 10, textAlign: 'left' }}>
+      {tool && (
+        <div style={{ fontSize: 12, lineHeight: 1.55 }} data-testid="cw-bridge-notice">
+          {tool.connect_notice}
+        </div>
+      )}
+      {tool && (
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mut)' }}>
+          {tool.url_host}
+        </div>
+      )}
+      <div style={{ textAlign: 'center' }}>
+        <Button kind="primary" size="sm" onClick={onClose}>
+          Got it
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 /** The step-zero call to action: pick the export file, or start the OAuth flow. */
 function IdleAction({
   entry,
   linkedAccount,
   onBegin,
-  onPickFile
+  onPickFile,
+  onClose
 }: Pick<
   ConnectWizardModalProps,
-  'entry' | 'linkedAccount' | 'onBegin' | 'onPickFile'
+  'entry' | 'linkedAccount' | 'onBegin' | 'onPickFile' | 'onClose'
 >): React.JSX.Element {
   const fileInput = useRef<HTMLInputElement | null>(null)
 
@@ -296,6 +328,7 @@ function IdleAction({
     if (file) onPickFile(file)
   }
 
+  if (entry.mode === 'local-bridge') return <BridgeAction entry={entry} onClose={onClose} />
   if (entry.mode !== 'export-file') {
     return (
       <>
