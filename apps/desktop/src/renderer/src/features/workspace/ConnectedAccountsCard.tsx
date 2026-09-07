@@ -284,15 +284,17 @@ export interface ConnectedAccountsCardProps {
   currentProject?: WorkspaceProject | null
 }
 
-export function ConnectedAccountsCard({
-  currentProject = null
-}: ConnectedAccountsCardProps = {}): React.JSX.Element | null {
-  const catalog = useIntegrationCatalog()
-  const accounts = useAccountConnections()
-  const sources = useProjectSources()
-  const bridge = useBridgeStatus(currentProject?.id ?? null)
-  const states = useOnboardingStore((s) => s.connections)
-  const [domain, setDomain] = useState<AccountDomain>(ACCOUNT_DOMAINS[0])
+/** The card's one wizard, in whichever scope the clicked step needs, plus the
+ *  refresh both scopes share once a connect settles. */
+function useCardWizard(
+  currentProject: WorkspaceProject | null,
+  accounts: ReturnType<typeof useAccountConnections>,
+  sources: ReturnType<typeof useProjectSources>
+): {
+  wizard: ReturnType<typeof useConnectWizard>
+  scope: WizardScope
+  open: (entry: CatalogEntry, scope: WizardScope) => void
+} {
   // One wizard, two scopes: the account sign-in, or a project-bound step that
   // reuses the linked account (the rail then skips the sign-in).
   const [scope, setScope] = useState<WizardScope>('account')
@@ -309,11 +311,68 @@ export function ConnectedAccountsCard({
     setScope(nextScope)
     wizard.open(entry)
   }
-  // Every tool the registry knows, account or not — a missing row reads as
-  // "unsupported". Within a domain the account tools come first.
-  const providers = catalog
+  return { wizard, scope, open }
+}
+
+/** Every tool the registry knows for a domain, account tools first — a missing
+ *  row would read as "unsupported". */
+function providersFor(catalog: readonly CatalogEntry[], domain: AccountDomain): CatalogEntry[] {
+  return catalog
     .filter((entry) => accountDomain(entry) === domain)
     .sort((a, b) => Number(b.mode === 'oauth') - Number(a.mode === 'oauth'))
+}
+
+function DomainPanel({
+  domain,
+  providers,
+  accounts,
+  sources,
+  currentProject,
+  bridge,
+  onOpen
+}: {
+  domain: AccountDomain
+  providers: readonly CatalogEntry[]
+} & Omit<ToolRowProps, 'entry'>): React.JSX.Element {
+  if (domain === 'simulation') return <SimulationPanel currentProject={currentProject} />
+  if (providers.length === 0) {
+    return (
+      <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
+        {emptyDomainText(domain)}
+      </div>
+    )
+  }
+  return (
+    <>
+      {providers.map((entry, i) => (
+        <div
+          key={entry.id}
+          style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
+        >
+          <ToolRow
+            entry={entry}
+            accounts={accounts}
+            sources={sources}
+            currentProject={currentProject}
+            bridge={bridge}
+            onOpen={onOpen}
+          />
+        </div>
+      ))}
+    </>
+  )
+}
+
+export function ConnectedAccountsCard({
+  currentProject = null
+}: ConnectedAccountsCardProps = {}): React.JSX.Element | null {
+  const catalog = useIntegrationCatalog()
+  const accounts = useAccountConnections()
+  const sources = useProjectSources()
+  const bridge = useBridgeStatus(currentProject?.id ?? null)
+  const states = useOnboardingStore((s) => s.connections)
+  const [domain, setDomain] = useState<AccountDomain>(ACCOUNT_DOMAINS[0])
+  const { wizard, scope, open } = useCardWizard(currentProject, accounts, sources)
   if (accounts.status === 'offline' || catalog.length === 0) return null
 
   return (
@@ -332,27 +391,15 @@ export function ConnectedAccountsCard({
           aria-labelledby={`accounts-tab-${domain}`}
           className="accounts-panel-in"
         >
-          {domain === 'simulation' && <SimulationPanel currentProject={currentProject} />}
-          {domain !== 'simulation' && providers.length === 0 && (
-            <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
-              {emptyDomainText(domain)}
-            </div>
-          )}
-          {providers.map((entry, i) => (
-            <div
-              key={entry.id}
-              style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
-            >
-              <ToolRow
-                entry={entry}
-                accounts={accounts}
-                sources={sources}
-                currentProject={currentProject}
-                bridge={bridge}
-                onOpen={open}
-              />
-            </div>
-          ))}
+          <DomainPanel
+            domain={domain}
+            providers={providersFor(catalog, domain)}
+            accounts={accounts}
+            sources={sources}
+            currentProject={currentProject}
+            bridge={bridge}
+            onOpen={open}
+          />
         </div>
       </Card>
       {wizard.active && (

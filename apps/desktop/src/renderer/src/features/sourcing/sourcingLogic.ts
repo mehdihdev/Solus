@@ -42,11 +42,10 @@ function optionalNumber(raw: string): number | undefined | 'bad' {
   return Number.isFinite(value) && value >= 0 ? value : 'bad'
 }
 
-/** The request body from the form, or a message when it cannot be one. */
-export function requestInputFrom(
-  form: SpecForm,
-  context: RequestContext
-): SourcingRequestInput | { error: string } {
+type Numbers = { load?: number; arm?: number; voltage?: number }
+
+/** The numeric fields, validated together, or the first message that stops them. */
+function numbersFrom(form: SpecForm): Numbers | { error: string } {
   const load = optionalNumber(form.loadKg)
   const arm = optionalNumber(form.armM)
   const voltage = optionalNumber(form.voltageV)
@@ -61,6 +60,28 @@ export function requestInputFrom(
           : 'Give the arm length in metres too.'
     }
   }
+  return { load, arm, voltage }
+}
+
+/** The optional context fields, present only when they carry something. */
+function contextFields(context: RequestContext): Partial<SourcingRequestInput> {
+  const hasMasses = context.masses !== undefined && Object.keys(context.masses).length > 0
+  return {
+    ...(context.assemblyId ? { assembly_entity_id: context.assemblyId } : {}),
+    ...(hasMasses ? { masses: context.masses } : {}),
+    ...(context.safetyFactor !== undefined ? { safety_factor: context.safetyFactor } : {}),
+    ...(context.preferences ? { preferences: context.preferences } : {})
+  }
+}
+
+/** The request body from the form, or a message when it cannot be one. */
+export function requestInputFrom(
+  form: SpecForm,
+  context: RequestContext
+): SourcingRequestInput | { error: string } {
+  const numbers = numbersFrom(form)
+  if ('error' in numbers) return numbers
+  const { load, arm, voltage } = numbers
   const text = form.text.trim()
   if (!text && load === undefined && !context.assemblyId) {
     return { error: 'Describe the requirement, give a load and arm, or pick an assembly.' }
@@ -74,11 +95,8 @@ export function requestInputFrom(
   return {
     door: context.door,
     spec,
-    ...(context.assemblyId ? { assembly_entity_id: context.assemblyId } : {}),
-    ...(context.masses && Object.keys(context.masses).length > 0 ? { masses: context.masses } : {}),
-    ...(load !== undefined && arm !== undefined ? { load_kg: load, arm_m: arm } : {}),
-    ...(context.safetyFactor !== undefined ? { safety_factor: context.safetyFactor } : {}),
-    ...(context.preferences ? { preferences: context.preferences } : {})
+    ...contextFields(context),
+    ...(load !== undefined && arm !== undefined ? { load_kg: load, arm_m: arm } : {})
   }
 }
 
