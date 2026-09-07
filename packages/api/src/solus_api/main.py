@@ -19,10 +19,12 @@ from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.connectors.httpcache import InMemoryCacheStore, RedisCacheStore
+from solus_api.connectors.local_acquire import BridgeFolderAcquirer
 from solus_api.connectors.mcp_acquire import BridgeExportAcquirer
 from solus_api.connectors.registry import (
     AcquirerFactory,
     ConnectorContext,
+    LocalAcquirerFactory,
     build_integration_cache,
     build_registry,
 )
@@ -48,6 +50,7 @@ from solus_api.routers import (
     artifacts,
     billing,
     bridge,
+    code_environment,
     connections,
     entities,
     events,
@@ -57,6 +60,7 @@ from solus_api.routers import (
     invites,
     jobs,
     live,
+    local_folder,
     members,
     meta,
     notifications,
@@ -154,6 +158,25 @@ def _build_bridge_acquirer_factory(app: FastAPI, settings: Settings) -> Acquirer
             call_cap_bytes=settings.bridge_tool_call_max_bytes,
             artifact_ttl_seconds=settings.artifact_ttl_seconds,
             inline_max_bytes=settings.artifact_inline_max_bytes,
+            dispatch_timeout_seconds=settings.bridge_tool_timeout_seconds,
+        )
+
+    return _factory
+
+
+def _build_local_acquirer_factory(app: FastAPI, settings: Settings) -> LocalAcquirerFactory:
+    """The local-folder twin of `_build_bridge_acquirer_factory` (SOLUSDEV-249):
+    reads `app.state.bridge_sessions` lazily, per sync run."""
+
+    def _factory(ctx: ConnectorContext) -> BridgeFolderAcquirer:
+        if ctx.project_id is None or ctx.team_id is None:
+            raise ValueError("local folder acquisition needs a project-scoped context")
+        return BridgeFolderAcquirer(
+            sessions=app.state.bridge_sessions,
+            project_id=ctx.project_id,
+            team_id=ctx.team_id,
+            acting_user_id=ctx.acting_user_id,
+            call_cap_bytes=settings.bridge_tool_call_max_bytes,
             dispatch_timeout_seconds=settings.bridge_tool_timeout_seconds,
         )
 
@@ -264,6 +287,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.connector_registry = build_registry(
         resolved_settings,
         acquirer_factory=_build_bridge_acquirer_factory(app, resolved_settings),
+        local_acquirer_factory=_build_local_acquirer_factory(app, resolved_settings),
         redis=app.state.redis,
         cache=app.state.integration_cache,
     )
@@ -384,6 +408,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(billing.router)
     app.include_router(billing.actions_router)
     app.include_router(sources.router)
+    app.include_router(local_folder.router)
+    app.include_router(code_environment.router)
     app.include_router(hosted.router)
     app.include_router(artifacts.router)
     app.include_router(solus_config.router)

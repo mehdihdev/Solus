@@ -31,6 +31,8 @@ import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
 import { toolStatusText } from '../project/localconnections/presentation'
 import { useProjectSources } from '../project/useProjectSources'
 import { AccountRow, LegacyRow, SourceItem } from './AccountRows'
+import { CodeEnvironmentRow } from './CodeEnvironmentRow'
+import { LOCAL_FOLDER_MARK, LOCAL_SOURCE_TYPE, localFolderLabel } from './connectedAccounts'
 import {
   ACCOUNT_DOMAINS,
   ACCOUNT_DOMAIN_LABEL,
@@ -40,6 +42,7 @@ import {
   type AccountDomain
 } from './accountDomains'
 import { SimulationPanel } from './SimulationPanel'
+import type { MainScreen } from './shellStore'
 import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
 import { useBridgeStatus } from './useBridgeStatus'
 
@@ -230,6 +233,64 @@ function ToolRow({
   )
 }
 
+/** The catalog shape SourceItem needs for a local source. There is no tile to
+ *  connect it from — linking happens on Home's LOCAL FOLDER card — so no
+ *  selection, no access modes, no hosted add-on. */
+const LOCAL_FOLDER_ENTRY: CatalogEntry = {
+  id: LOCAL_SOURCE_TYPE,
+  name: 'Local folder',
+  kind: 'Working copy on this machine',
+  mark: LOCAL_FOLDER_MARK,
+  mode: 'local-bridge',
+  configFields: [],
+  selection: null,
+  accessModes: null,
+  hosted: null
+}
+
+/** Software › the project's `local` sources (SOLUSDEV-249): one head per
+ *  machine — "Local folder · <machine>" — then the source beneath it with its
+ *  status, Sync now and a confirmed Disconnect. No next step: the folder is
+ *  linked from Home's LOCAL FOLDER card, and the head says so. */
+function LocalFolderRows({
+  sources,
+  first
+}: {
+  sources: ReturnType<typeof useProjectSources>
+  first: boolean
+}): React.JSX.Element | null {
+  const local = sources.sources.filter((s) => s.type === LOCAL_SOURCE_TYPE)
+  if (local.length === 0) return null
+  return (
+    <>
+      {local.map((source, i) => (
+        <div
+          key={source.id}
+          style={{ borderTop: first && i === 0 ? 'none' : '1px solid var(--bd)' }}
+        >
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '13px 16px' }}>
+            <ProviderMark entry={LOCAL_FOLDER_ENTRY} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{localFolderLabel(source)}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+                Linked from Home › Local folder
+              </div>
+            </div>
+          </div>
+          <SourceItem
+            source={source}
+            entry={LOCAL_FOLDER_ENTRY}
+            projectId={source.project_id}
+            onSync={() => void sources.actions.syncNow(source.id)}
+            onDisconnect={() => sources.actions.disconnect(source.id)}
+            onChanged={() => void sources.actions.refresh()}
+          />
+        </div>
+      ))}
+    </>
+  )
+}
+
 /** The domain pills above the card: one selected, the rest quiet. */
 function DomainTabs({
   value,
@@ -282,6 +343,8 @@ export interface ConnectedAccountsCardProps {
   /** The current project: where a picked document set, a chosen file, or a
    *  simulation lands. Null ⇒ project-bound steps are offered but disabled. */
   currentProject?: WorkspaceProject | null
+  /** The shell navigator — the Code environment row's "Ask SOL" opens the SOL screen. */
+  onNavigate?: (screen: MainScreen) => void
 }
 
 /** The card's one wizard, in whichever scope the clicked step needs, plus the
@@ -329,13 +392,17 @@ function DomainPanel({
   sources,
   currentProject,
   bridge,
-  onOpen
+  onOpen,
+  onNavigate
 }: {
   domain: AccountDomain
   providers: readonly CatalogEntry[]
+  onNavigate?: (screen: MainScreen) => void
 } & Omit<ToolRowProps, 'entry'>): React.JSX.Element {
   if (domain === 'simulation') return <SimulationPanel currentProject={currentProject} />
-  if (providers.length === 0) {
+  const hasLocal =
+    domain === 'software' && sources.sources.some((s) => s.type === LOCAL_SOURCE_TYPE)
+  if (providers.length === 0 && !hasLocal) {
     return (
       <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
         {emptyDomainText(domain)}
@@ -359,12 +426,23 @@ function DomainPanel({
           />
         </div>
       ))}
+      {hasLocal && <LocalFolderRows sources={sources} first={providers.length === 0} />}
+      {/* The interpreter + venv behind the folder on THIS machine (SOLUSDEV-250 /
+          I3); the row hides itself when the local source lives elsewhere. */}
+      {hasLocal && (
+        <CodeEnvironmentRow
+          projectId={currentProject?.id ?? null}
+          sources={sources.sources}
+          onNavigate={onNavigate}
+        />
+      )}
     </>
   )
 }
 
 export function ConnectedAccountsCard({
-  currentProject = null
+  currentProject = null,
+  onNavigate
 }: ConnectedAccountsCardProps = {}): React.JSX.Element | null {
   const catalog = useIntegrationCatalog()
   const accounts = useAccountConnections()
@@ -399,6 +477,7 @@ export function ConnectedAccountsCard({
             currentProject={currentProject}
             bridge={bridge}
             onOpen={open}
+            onNavigate={onNavigate}
           />
         </div>
       </Card>

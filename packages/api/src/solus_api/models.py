@@ -234,6 +234,7 @@ class SourceType(enum.StrEnum):
     ONSHAPE = "onshape"
     ROS = "ros"
     ALTIUM = "altium"  # committed-export EDA connector (SOLUSDEV-102)
+    LOCAL = "local"  # a working copy on one machine, scanned over the bridge (SOLUSDEV-249)
 
 
 class SourceStatus(enum.StrEnum):

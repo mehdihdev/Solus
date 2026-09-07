@@ -92,7 +92,7 @@ export interface LocalStateDeps {
   warn: (message: string) => void
 }
 
-export function solusHomePath(deps: LocalStateDeps): string {
+export function solusHomePath(deps: Pick<LocalStateDeps, 'homedir'>): string {
   return join(deps.homedir(), SOLUS_HOME_DIRNAME)
 }
 
@@ -154,22 +154,37 @@ export function readRegistry(deps: LocalStateDeps): RegistryRead {
   return { registry: emptyProjectRegistry(), writable: true }
 }
 
-/** Atomic write: temp file in the same directory, then replace. The home dir
- *  is created 0700 — and re-chmodded, tightening a pre-existing dir created
- *  with default umask by older companion builds (ADR-034 consequence). */
-function writeRegistry(registry: ProjectRegistry, deps: LocalStateDeps): void {
-  const home = solusHomePath(deps)
-  deps.mkdir(home, SOLUS_HOME_MODE)
-  deps.chmod(home, SOLUS_HOME_MODE)
-  const target = projectsFilePath(deps)
+export type AtomicWriteDeps = Pick<LocalStateDeps, 'writeFile' | 'replaceFile' | 'remove' | 'tempSuffix'>
+
+/** Atomic write: a fresh temp file beside the target (created with `mode`,
+ *  under an unpredictable name), then replaced over it. The target is never
+ *  opened for writing, so a pre-planted symlink at `target` is replaced, not
+ *  followed. Shared by the registry and the companion id (machineIdentity.ts). */
+export function writeFileAtomically(
+  target: string,
+  content: string,
+  mode: number,
+  deps: AtomicWriteDeps
+): void {
   const temp = `${target}.${deps.tempSuffix()}.tmp`
-  deps.writeFile(temp, `${JSON.stringify(registry, null, 2)}\n`, REGISTRY_FILE_MODE)
+  deps.writeFile(temp, content, mode)
   try {
     deps.replaceFile(temp, target)
   } catch (error) {
     deps.remove(temp) // never leave temp litter behind a failed replace
     throw error
   }
+}
+
+/** Atomic write of the registry. The home dir is created 0700 — and
+ *  re-chmodded, tightening a pre-existing dir created with default umask by
+ *  older companion builds (ADR-034 consequence). */
+function writeRegistry(registry: ProjectRegistry, deps: LocalStateDeps): void {
+  const home = solusHomePath(deps)
+  deps.mkdir(home, SOLUS_HOME_MODE)
+  deps.chmod(home, SOLUS_HOME_MODE)
+  const target = projectsFilePath(deps)
+  writeFileAtomically(target, `${JSON.stringify(registry, null, 2)}\n`, REGISTRY_FILE_MODE, deps)
 }
 
 /** Case-fold for path identity: POSIX is case-sensitive, macOS/Windows are not,

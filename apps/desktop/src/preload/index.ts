@@ -91,7 +91,11 @@ const api = {
     unlink: (projectId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('folder:unlink', projectId),
     links: (): Promise<Record<string, { path: string; repoUrl?: string; lastOpenedAt?: string }>> =>
-      ipcRenderer.invoke('folder:links')
+      ipcRenderer.invoke('folder:links'),
+    // This machine for local-folder sources (SOLUSDEV-249): the companion's
+    // instance id + hostname. Null when the id file cannot be read or created.
+    machine: (): Promise<{ id: string; name: string } | null> =>
+      ipcRenderer.invoke('folder:machine')
   },
   hosted: {
     // Open a hosted MCP add-on's vendor App Store page in the system browser

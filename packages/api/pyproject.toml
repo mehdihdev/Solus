@@ -29,6 +29,7 @@ dependencies = [
     "stripe>=11.0",
     "mcp>=1.28.1,<2.0",
     "sentry-sdk>=2.0",
+    "packaging>=26.2",
 ]
 
 [project.scripts]

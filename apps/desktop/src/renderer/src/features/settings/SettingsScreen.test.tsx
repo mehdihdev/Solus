@@ -10,6 +10,9 @@ const settingsData = vi.fn<() => SettingsData>()
 const teamData = vi.fn<() => TeamData>()
 
 vi.mock('./useSettingsData', () => ({ useSettingsData: () => settingsData() }))
+vi.mock('../preferences/PreferencesCard', () => ({
+  PreferencesCard: () => <div data-testid="preferences-card" />
+}))
 vi.mock('../team/useTeamData', () => ({ useTeamData: () => teamData() }))
 vi.mock('../../lib/desktopBridge', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/desktopBridge')>()
@@ -87,6 +90,11 @@ describe('SettingsScreen', () => {
     settingsData.mockReturnValue(settings({ status: 'loading' }))
     render(<SettingsScreen />)
     expect(screen.getByTestId('settings-loading')).toBeInTheDocument()
+  })
+
+  it('hosts the "How you engineer" document (HOME H3, moved from Home in SOLUSDEV-253)', () => {
+    render(<SettingsScreen />)
+    expect(screen.getByTestId('preferences-card')).toBeInTheDocument()
   })
 
   it('renders every section when online', () => {

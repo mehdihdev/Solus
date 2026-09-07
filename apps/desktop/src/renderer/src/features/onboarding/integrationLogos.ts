@@ -31,7 +31,12 @@ export function logoMapFrom(files: Record<string, string>): Record<string, strin
 
 const LOGOS = logoMapFrom(bundled)
 
+/** Ids whose brand file is named differently from the id the rows use: the
+ *  MCAP recording source is the bench kind `mcap-replay`, its logo is MCAP's. */
+export const LOGO_ALIASES: Readonly<Record<string, string>> = { 'mcap-replay': 'mcap' }
+
 /** The bundled logo url for a provider id, or null for the letter-mark fallback. */
 export function integrationLogo(id: string): string | null {
-  return LOGOS[id.toLowerCase()] ?? null
+  const key = id.toLowerCase()
+  return LOGOS[LOGO_ALIASES[key] ?? key] ?? null
 }

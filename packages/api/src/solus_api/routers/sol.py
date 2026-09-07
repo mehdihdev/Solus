@@ -22,7 +22,12 @@ from pydantic import Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from solus_api.agent.confirmations import ParkedCall, decide_confirmation, request_confirmation
+from solus_api.agent.confirmations import (
+    ParkedCall,
+    command_outcome_text,
+    decide_confirmation,
+    request_confirmation,
+)
 from solus_api.agent.conversation import (
     ConversationService,
     serialize_conversation,
@@ -39,6 +44,7 @@ from solus_api.agent.runtime import (
 )
 from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
 from solus_api.agent.tools import ToolRegistry
+from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import redact_value
 from solus_api.core.errors import APIError
@@ -349,7 +355,8 @@ def _decision_summary(decision: str, result: ToolResult) -> str:
     the one the model most needs to understand before it tries again.
     """
     if result.ok:
-        return "approved by you and applied ok"
+        outcome = command_outcome_text(result.value) if isinstance(result.value, dict) else None
+        return "approved by you and applied ok" + (outcome or "")
     if decision != "approve":
         return "rejected by you; nothing was applied"
     code = result.error.code.value if result.error is not None else "error"
@@ -646,7 +653,9 @@ async def post_message(
             parked_by_action[_action_key(call)] = parked
         return parked
 
-    descriptors = tuple(registry.list())
+    # SOLUSDEV-251: vendor-documented tool knowledge rides each mapped write
+    # tool's description as a fenced note (global table, never project data).
+    descriptors = with_knowledge_notes(tuple(registry.list()), await load_knowledge_notes(session))
     run_ctx = AgentRunContext(
         prompt=content,
         # Descriptors + a gated, MODE-WRAPPED dispatcher, never the registry

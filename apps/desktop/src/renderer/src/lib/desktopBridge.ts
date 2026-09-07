@@ -33,6 +33,10 @@ export interface FolderBridge {
   link: (projectId: string, link: { path: string; repoUrl?: string }) => Promise<{ ok: boolean }>
   unlink: (projectId: string) => Promise<{ ok: boolean }>
   links: () => Promise<Record<string, { path: string; repoUrl?: string; lastOpenedAt?: string }>>
+  /** This machine's identity for local-folder sources (SOLUSDEV-249): the
+   *  companion's instance id and the hostname. Null when the id file can be
+   *  neither read nor created. */
+  machine: () => Promise<{ id: string; name: string } | null>
 }
 
 /** Hosted MCP add-ons (SOLUSDEV-168): open a vendor's App Store page in the

@@ -11,10 +11,13 @@
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import { useFocusStore } from '../workspace/focusStore'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import { isLocalEntityKind } from '../project/localFolder.constants'
+import { selectFocusedEntity, useFocusStore } from '../workspace/focusStore'
 import { FocusSummaryWidget } from '../workspace/widgets/FocusSummaryWidget'
 import { NeighborsWidget } from '../workspace/widgets/NeighborsWidget'
 import { WidgetHost } from '../workspace/widgets/WidgetHost'
+import { LocalOpenPanel } from './LocalOpenPanel'
 
 function Centered({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -38,6 +41,12 @@ function Centered({ children }: { children: React.ReactNode }): React.JSX.Elemen
 export function GraphInspector(): React.JSX.Element {
   const status = useFocusStore((s) => s.status)
   const error = useFocusStore((s) => s.error)
+  // SOLUSDEV-249: an entity a local folder landed gets Open-in-tool here too —
+  // the project scope comes from the workspace store, the same place the
+  // focus store keys its cache by.
+  const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
+  const focused = useFocusStore(selectFocusedEntity)
+  const local = projectId !== null && focused !== null && isLocalEntityKind(focused.type)
 
   return (
     <div
@@ -55,6 +64,7 @@ export function GraphInspector(): React.JSX.Element {
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* ponytail: no onSolAction — SOL routing lands with WS-04; until then the host's documented no-op applies */}
           <WidgetHost widget={FocusSummaryWidget} />
+          {local && <LocalOpenPanel projectId={projectId} entity={focused} />}
           <WidgetHost widget={NeighborsWidget} />
         </div>
       ) : status === 'loading' ? (

@@ -17,6 +17,7 @@ from uuid import UUID
 
 from solus_api.agent.interfaces import EntityRead, GraphContext
 from solus_api.checkers import attributes as av
+from solus_api.checkers.environment import PinConflictChecker
 from solus_api.checkers.interface import Checker, Severity, Warning, run_checkers, severity_rank
 from solus_api.checkers.traversal import GraphView, domains_of
 from solus_api.fingerprint.contract import FingerprintOutput
@@ -321,6 +322,7 @@ DEFAULT_CHECKERS: tuple[Checker, ...] = (
     OpAmpMismatchChecker(),
     SensorFrequencyConflictChecker(),
     PowerCompatibilityChecker(),
+    PinConflictChecker(),
 )
 
 

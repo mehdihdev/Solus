@@ -17,7 +17,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -40,12 +40,17 @@ from solus_api.models import (
     JobStatus,
     Source,
     SourceStatus,
+    SourceType,
     Sync,
     SyncTrigger,
     utcnow,
 )
+from solus_api.services.local_links import reconcile_local_links
 
 logger = logging.getLogger("solus.connectors.runtime")
+
+#: Sources whose sync can move a local clone ↔ code-host repo link (SOLUSDEV-249).
+_LINKABLE_TYPES: Final = frozenset({SourceType.LOCAL, SourceType.GITHUB, SourceType.GITLAB})
 
 #: Bounds for the persisted, API-visible `last_error` payload (§7 — bound
 #: message sizes; a connector/provider error must not round-trip unbounded
@@ -230,10 +235,17 @@ async def _reconcile_relations(
     counts: _Counts,
     errors: list[dict[str, str]],
 ) -> None:
+    # Only CONNECTOR-origin edges are the sync's to reconcile. A `derived` edge
+    # (SOLUSDEV-249: the local clone's `clone_of` link to its code-host repo)
+    # sits under the same source_id but is owned by `services/local_links.py`,
+    # which reconciles it after every relevant sync — tombstoning it here would
+    # churn it on every pass.
     existing_rels = (
         await session.scalars(
             select(GraphEdge).where(
-                GraphEdge.source_id == source.id, GraphEdge.deleted_at.is_(None)
+                GraphEdge.source_id == source.id,
+                GraphEdge.origin == "connector",
+                GraphEdge.deleted_at.is_(None),
             )
         )
     ).all()
@@ -432,7 +444,13 @@ async def run_sync(
             raise ConnectorError("no_credentials", "Source has no stored credentials")
         else:
             credentials = await _resolve_credentials(secret_store, secret_ref)
-        if not force and cursor and connector.auth_kind is not AuthKind.NONE:
+        # An auth-none connector normally has no cheap probe (a committed export
+        # IS the sync); one that declares `cheap_probe` (SOLUSDEV-249: the local
+        # folder's content digest over the bridge) gets the freshness gate too.
+        probes = connector.auth_kind is not AuthKind.NONE or bool(
+            getattr(connector, "cheap_probe", False)
+        )
+        if not force and cursor and probes:
             probing = True
             changed, credentials = await detect_changes_with_refresh(
                 connector=connector,
@@ -643,6 +661,10 @@ async def _commit_success(
             raise ValueError("source/sync vanished mid-run")
         counts, errors = await apply_sync_result(session, source, result)
         source.cursor = dict(result.cursor)
+        # SOLUSDEV-249: a local clone's `clone_of` edge to its code-host repo is
+        # derived from BOTH sides — reconcile it whenever either side moved.
+        if source.type in _LINKABLE_TYPES:
+            await reconcile_local_links(session, source.project_id)
         source.last_synced_at = utcnow()
         source.status = SourceStatus.CONNECTED
         source.last_error = None

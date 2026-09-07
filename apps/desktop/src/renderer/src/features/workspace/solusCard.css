@@ -1,0 +1,125 @@
+/* The .solus card on Home (SOLUSDEV-253): five section rows that open in
+   place. The panel animates its grid row from 0fr to 1fr, so content of any
+   height slides open without measuring it; the chevron turns with it. */
+
+.solus-card-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 4px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--bd);
+  color: var(--tx);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  text-align: left;
+  transition: background-color 0.16s ease;
+}
+
+.solus-card-row:hover {
+  background: color-mix(in srgb, var(--acc) 6%, transparent);
+}
+
+.solus-card-row:focus-visible {
+  outline: 1px solid var(--acc);
+  outline-offset: -1px;
+}
+
+.solus-card-chevron {
+  display: inline-flex;
+  color: var(--mut);
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.solus-card-row[aria-expanded='true'] .solus-card-chevron {
+  transform: rotate(90deg);
+}
+
+.solus-card-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.solus-card-panel[data-open='true'] {
+  grid-template-rows: 1fr;
+}
+
+.solus-card-panel > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.solus-card-entry {
+  padding: 8px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--sur);
+  animation: popover-in 0.18s ease-out;
+}
+
+.solus-card-entry + .solus-card-entry {
+  margin-top: 6px;
+}
+
+.solus-card-entry-text {
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.solus-card-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--mut);
+}
+
+.solus-card-entry-meta .spacer {
+  flex: 1;
+}
+
+.solus-card-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--mut);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  transition: color 0.16s ease;
+}
+
+.solus-card-link:hover:not(:disabled) {
+  color: var(--tx);
+}
+
+.solus-card-link[data-danger='true']:hover:not(:disabled),
+.solus-card-link[data-armed='true'] {
+  color: var(--err);
+}
+
+.solus-card-link:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .solus-card-row,
+  .solus-card-chevron,
+  .solus-card-panel,
+  .solus-card-link {
+    transition: none;
+  }
+  .solus-card-entry {
+    animation: none;
+  }
+}

@@ -45,8 +45,14 @@ class BridgeTool:
         project_id: uuid.UUID,
         call_cap_bytes: int,
         preflight: Callable[[], Awaitable[None]] | None = None,
+        preview: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]] | None = None,
     ) -> None:
         self._descriptor = descriptor
+        if preview is not None:
+            # SOLUSDEV-251: set on the INSTANCE only (as MCPTool does) — the
+            # confirmation gate reads `getattr(tool, "preview", None)` and treats
+            # a present attribute as "this tool can describe its own change".
+            self.preview = preview
         self._sessions = sessions
         self._user_id = user_id
         self._team_id = team_id

@@ -44,7 +44,8 @@ function folderBridge(): NonNullable<ReturnType<typeof bridge.getDesktopFolderBr
     clone: vi.fn(),
     link: vi.fn(),
     unlink: vi.fn(),
-    links: vi.fn()
+    links: vi.fn(),
+    machine: vi.fn()
   }
 }
 

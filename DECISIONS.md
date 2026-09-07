@@ -483,6 +483,15 @@ tighten into mechanism requirements); an MCP-server SDK of our own makes forks t
 fork count makes per-fork review economics untenable (then invest in shared hardening layers, not
 weaker review).
 
+**Amendment (2026-09-07, SOLUSDEV-250 — approved in-session by Mehdi per ADR-032 tier 2):** the
+launch-time rules above (no `npx`/`uvx`/pip at launch, hash-pinned deps) govern a fork's OWN
+runtime. A Solus-authored Pattern-1 server MAY execute package installs, scripts and test runs
+inside the USER's linked workspace and its environment when every command is an argument list
+assembled by Solus code from validated arguments (never a shell string), is confirmation-gated
+with the exact argv shown on the approval card, is confined to the linked workspace and its
+venv/conda environment, and is bounded (timeout, output caps). These act on the user's
+environment, never on Solus's.
+
 ---
 
 ## ADR-032: Agent-editable governance docs (two-tier)

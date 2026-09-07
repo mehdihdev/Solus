@@ -1,0 +1,38 @@
+# integrations/mcp/code/allowlist.yaml — the Solus-owned tool allowlist for
+# the Solus-authored `code` server (SOLUSDEV-250 DRAFT; the WHOLE file is
+# human-ratified at the MR — integrations/mcp/CLAUDE.md rule 2).
+#
+# Single source of truth (../README.md): companion discovery, the cloud bridge
+# ingress gate (validate_inventory), and the server's own roster
+# (solus/roster.py) all agree with THIS list (tests/test_code_allowlist_shape.py).
+# Validates against packages/api/src/solus_api/bridge/allowlist.py::
+# ServerAllowlist (extra fields forbidden). Tool contract:
+# docs/api/code-environment.md §4. The four gated tools act on the USER's
+# workspace environment under the ADR-031 amendment of 2026-09-07: argv-only,
+# confirmation-gated with the exact argv on the card, workspace-confined, bounded.
+# `timeout_seconds` (cloud dispatch bound) exceeds the server's own 600 s cap so the
+# cloud never reports TIMEOUT while a child still runs (security review M5).
+server: code
+tools:
+  - name: probe_environment
+    requires_confirmation: false
+    reason: read-only probe of interpreters, uv, conda and the workspace virtualenv (pip list) on this machine
+  - name: plan
+    requires_confirmation: false
+    reason: pure argv assembly for an action — no execution; what the approval card shows
+  - name: create_environment
+    requires_confirmation: true
+    timeout_seconds: 630
+    reason: creates a virtualenv inside the linked folder (uv venv / python -m venv) — writes to the customer machine
+  - name: install
+    requires_confirmation: true
+    timeout_seconds: 630
+    reason: runs the workspace venv's pip (or uv pip) to install packages — network egress and writes into the user's environment
+  - name: run
+    requires_confirmation: true
+    timeout_seconds: 630
+    reason: executes a workspace script with the workspace venv interpreter — arbitrary code on the customer machine
+  - name: test
+    requires_confirmation: true
+    timeout_seconds: 630
+    reason: executes pytest over a workspace target with the workspace venv interpreter — arbitrary code on the customer machine

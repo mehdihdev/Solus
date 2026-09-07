@@ -25,8 +25,10 @@ vi.mock('./useMe', async (importOriginal) => {
 vi.mock('./useProjectActivity', () => ({ useProjectActivity: vi.fn() }))
 vi.mock('./useHomeTeam', () => ({ useHomeTeam: vi.fn() }))
 // The preferences document is its own feature (SOLUSDEV-244); Home only hosts the card.
-vi.mock('../preferences/PreferencesCard', () => ({
-  PreferencesCard: () => <div data-testid="preferences-card" />
+vi.mock('./SolusCard', () => ({
+  SolusCard: ({ projectId }: { projectId: string | null }) => (
+    <div data-testid="solus-card" data-project={projectId ?? ''} />
+  )
 }))
 // Account connections are their own feature (SOLUSDEV-241); Home only hosts the card.
 vi.mock('./ConnectedAccountsCard', () => ({
@@ -416,15 +418,16 @@ describe('HomeScreen — teams and states', () => {
   })
 })
 
-describe('how you engineer (HOME H3)', () => {
-  it('hosts the preferences card beside the project grid and when offline', () => {
+describe('the .solus card (SOLUSDEV-253)', () => {
+  it("hosts the current project's .solus beside the grid, and nothing offline", () => {
     mockHome()
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
     const { unmount } = render(<HomeScreen onOpenProject={vi.fn()} />)
-    expect(screen.getByTestId('preferences-card')).toBeInTheDocument()
+    expect(screen.getByTestId('solus-card')).toHaveAttribute('data-project', 'p1')
     unmount()
     mockHome({ status: 'offline' })
     render(<HomeScreen onOpenProject={vi.fn()} />)
-    expect(screen.getByTestId('preferences-card')).toBeInTheDocument()
+    expect(screen.queryByTestId('solus-card')).toBeNull()
   })
 })
 

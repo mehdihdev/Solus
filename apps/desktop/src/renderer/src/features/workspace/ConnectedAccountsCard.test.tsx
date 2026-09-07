@@ -9,6 +9,7 @@ import { ConnectedAccountsCard } from './ConnectedAccountsCard'
 import { ACCOUNT_DOMAINS, accountDomain, emptyDomainText } from './accountDomains'
 import {
   healthLabel,
+  localFolderLabel,
   legacyText,
   moveDetail,
   quotaNote,
@@ -34,6 +35,17 @@ vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: v
 // with their own tests; here they are stubbed so the card stays deterministic.
 vi.mock('../project/useProjectSources', () => ({ useProjectSources: vi.fn() }))
 vi.mock('./useBridgeStatus', () => ({ useBridgeStatus: vi.fn(() => null) }))
+// The Code environment row's hook (SOLUSDEV-250) has its own tests; here it
+// answers from the sources it is handed so the row appears only with a local
+// source, without touching the desktop bridge or the route.
+vi.mock('../project/useCodeEnvironment', () => ({
+  useCodeEnvironment: vi.fn((_projectId: string | null, sources: Source[]) => ({
+    view: null,
+    status: 'loading',
+    source: sources.find((s) => s.type === 'local') ?? null,
+    refresh: vi.fn(async () => undefined)
+  }))
+}))
 // The Simulation tab's bench inventory has its own tests (SimulationPanel);
 // here it is offline so the card never reaches the bench routes.
 vi.mock('../project/localconnections/useLocalConnections', () => ({
@@ -123,6 +135,74 @@ function mockSources(sources: Source[] = []): sourcesHook.ProjectSourcesData {
 beforeEach(() => {
   vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([ONSHAPE, KICAD])
   mockSources()
+})
+
+const LOCAL_SOURCE: Source = {
+  id: 's-local',
+  project_id: 'p1',
+  type: 'local',
+  name: 'mehdi-mbp',
+  status: 'connected',
+  config: {
+    machine_id: '0123456789abcdef0123456789abcdef',
+    machine_name: 'mehdi-mbp',
+    folder_name: 'rover-fw'
+  },
+  account_login: null,
+  last_synced_at: '2026-09-07T00:00:00Z',
+  last_error: null,
+  entity_count: 4,
+  created_at: '',
+  updated_at: ''
+}
+
+describe('ConnectedAccountsCard — local folder source (SOLUSDEV-249)', () => {
+  it('lists a local source under Software as "Local folder · <machine>" with mark LF', async () => {
+    mockAccounts()
+    const sources = mockSources([LOCAL_SOURCE])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(screen.getByText('Local folder · mehdi-mbp')).toBeInTheDocument()
+    expect(screen.getByText('LF')).toBeInTheDocument()
+    expect(screen.getByText(/Linked from Home/)).toBeInTheDocument()
+    // The source beneath it keeps the standard actions; there is no Connect.
+    expect(screen.queryByRole('button', { name: /for Local folder/ })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Sync mehdi-mbp now' }))
+    expect(sources.actions.syncNow).toHaveBeenCalledWith('s-local')
+    expect(screen.getByRole('button', { name: 'Disconnect mehdi-mbp' })).toBeInTheDocument()
+  })
+
+  it('shows the Code environment row under Software only with a local source (SOLUSDEV-250)', async () => {
+    mockAccounts()
+    mockSources([LOCAL_SOURCE])
+    const { unmount } = render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(screen.getByText('Code environment')).toBeInTheDocument()
+    expect(screen.getByText('Py')).toBeInTheDocument()
+    unmount()
+
+    mockSources([])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(screen.queryByText('Code environment')).toBeNull()
+  })
+
+  it('does not put the local source under any other domain', async () => {
+    mockAccounts()
+    mockSources([LOCAL_SOURCE])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    expect(screen.queryByText(/Local folder ·/)).toBeNull()
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
+    expect(screen.queryByText(/Local folder ·/)).toBeNull()
+  })
+
+  it('names the machine from config, falling back to the source name', () => {
+    expect(localFolderLabel(LOCAL_SOURCE)).toBe('Local folder · mehdi-mbp')
+    expect(localFolderLabel({ name: 'lab-01', config: {} })).toBe('Local folder · lab-01')
+    expect(localFolderLabel({ name: 'lab-01', config: { machine_name: '  ' } })).toBe(
+      'Local folder · lab-01'
+    )
+  })
 })
 
 describe('ConnectedAccountsCard', () => {

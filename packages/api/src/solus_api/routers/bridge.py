@@ -57,6 +57,7 @@ from solus_api.bridge.service import (
     ingest_result,
     supersede,
 )
+from solus_api.connectors.local_folder import SCAN_TOOL as LOCAL_SCAN_TOOL
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
@@ -197,6 +198,7 @@ async def _await_hello(ws: WebSocket, settings: Settings) -> HelloData:
         raw,
         control_cap=settings.bridge_control_frame_max_bytes,
         tool_result_cap=settings.bridge_tool_result_max_bytes,
+        hello_cap=settings.bridge_hello_frame_max_bytes,
     )
     if not (isinstance(frame, InboundFrame) and isinstance(frame.payload, HelloData)):
         raise _CloseError(CLOSE_UNSUPPORTED_VERSION, "expected_hello", "first frame must be hello")
@@ -340,8 +342,14 @@ async def _handle_credential_submit(
     return credential_ack_frame(data.server, ok=True, stored=sorted(data.secrets), error=None)
 
 
-def _schedule_local_resync(state: Any, session: BridgeSession) -> None:
+def _schedule_local_resync(state: Any, session: BridgeSession, *, only_local: bool = False) -> None:
     """Fire-and-forget the probe for this companion's local sources.
+
+    `only_local` (SOLUSDEV-249): on CONNECT, re-scan just the `local` folder
+    sources bound to this machine — the companion has (re)spawned with its
+    workspace, which is the moment a freshly linked folder becomes readable.
+    KiCad/Altium exports are NOT re-run on connect: a flapping companion must
+    not turn into an export loop; they wait for a `change` frame as before.
 
     CHEAP ENQUEUE ONLY. `_handle_parsed` is awaited inline in the recv loop, so
     doing the probe here would stall pongs and every in-flight `tool_result`.
@@ -363,11 +371,17 @@ def _schedule_local_resync(state: Any, session: BridgeSession) -> None:
     #
     # A frame arriving while one runs is not lost: the running pass re-reads the
     # workspace anyway, so it already covers the change that just landed.
+    if not session.may_write:
+        # Security review C1: a re-sync WRITES the graph (upserts + tombstones).
+        # The change-frame handler refuses a viewer/share-only session; both
+        # entrances (frame and connect) must, so the gate lives here.
+        logger.debug("resync refused for read-only session=%s", session.session_id)
+        return
     existing = _INFLIGHT_RESYNC.get(session.session_id)
     if existing is not None and not existing.done():
         logger.debug("resync already in flight for session=%s", session.session_id)
         return
-    task = asyncio.create_task(_resync_local_sources(state, session))
+    task = asyncio.create_task(_resync_local_sources(state, session, only_local=only_local))
     _INFLIGHT_RESYNC[session.session_id] = task
     # Hold a reference or the loop may garbage-collect the task mid-flight.
     _BACKGROUND_TASKS.add(task)
@@ -380,31 +394,54 @@ def _schedule_local_resync(state: Any, session: BridgeSession) -> None:
     task.add_done_callback(_done)
 
 
-async def _resync_local_sources(state: Any, session: BridgeSession) -> None:
+async def _resync_local_sources(
+    state: Any, session: BridgeSession, *, only_local: bool = False
+) -> None:
     from sqlalchemy import select
 
     from solus_api.connectors.worker import execute_source_sync
     from solus_api.models import Source, SourceStatus, SourceType, SyncTrigger
 
     # Only the providers a companion can actually speak for. A change frame must
-    # not be able to trigger a cloud-API sync (and spend its quota).
-    local_types = (SourceType.KICAD, SourceType.ALTIUM)
+    # not be able to trigger a cloud-API sync (and spend its quota). A `local`
+    # source (SOLUSDEV-249) belongs to ONE machine: only the session whose
+    # companion instance id matches may re-scan it.
+    local_types = (
+        (SourceType.LOCAL,)
+        if only_local
+        else (SourceType.KICAD, SourceType.ALTIUM, SourceType.LOCAL)
+    )
     try:
         async with state.sessionmaker() as db:
-            source_ids = list(
-                (
-                    await db.scalars(
-                        select(Source.id)
-                        .where(
-                            Source.project_id == session.project_id,
-                            Source.type.in_(local_types),
-                            Source.status == SourceStatus.CONNECTED,
-                        )
-                        .order_by(Source.id)
-                        .limit(_MAX_RESYNC_SOURCES)
+            rows = (
+                await db.execute(
+                    select(Source.id, Source.type, Source.status, Source.config, Source.created_by)
+                    .where(
+                        Source.project_id == session.project_id,
+                        Source.type.in_(local_types),
+                        # A `local` source whose last scan found the companion
+                        # offline sits in ERROR; a connect is exactly what
+                        # resolves that. Export connectors stay CONNECTED-only.
+                        Source.status.in_((SourceStatus.CONNECTED, SourceStatus.ERROR)),
                     )
-                ).all()
-            )
+                    .order_by(Source.id)
+                    .limit(_MAX_RESYNC_SOURCES)
+                )
+            ).all()
+            # A `local` source belongs to the USER who linked it on that machine
+            # (`created_by`, server-derived) — the declared instance id alone is
+            # client-supplied and never authorization (security review H1).
+            source_ids = [
+                source_id
+                for source_id, source_type, status, config, created_by in rows
+                if (source_type is not SourceType.LOCAL and status is SourceStatus.CONNECTED)
+                or (
+                    source_type is SourceType.LOCAL
+                    and created_by == session.user_id
+                    and isinstance(config, dict)
+                    and config.get("machine_id") == session.companion_instance_id
+                )
+            ]
         for source_id in source_ids:
             await execute_source_sync(
                 sessionmaker=state.sessionmaker,
@@ -623,6 +660,9 @@ async def bridge_ws(ws: WebSocket, project_id: uuid.UUID) -> None:
             len(inventory),
         )
         await ws.send_text(hello_ack_frame())
+        if any(spec.descriptor.name == LOCAL_SCAN_TOOL for spec in inventory):
+            # SOLUSDEV-249: the linked folder is readable now — scan it once.
+            _schedule_local_resync(state, session, only_local=True)
         await _frame_loop(ws, session, auth.user, settings)
     except _CloseError as close:
         if close.error is not None:

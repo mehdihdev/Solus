@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
     #: Parks a gated call for approval; None when the call is not gated.
     ParkFn = Callable[[_ToolCallHint], Awaitable[ParkedCall | None]]
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -71,6 +72,9 @@ _CONTEXT_DEGREE = 1
 # The shared UUID parser lives in reason.py (one instance, no drift).
 _UUID_RE = reason.UUID_RE
 
+#: A preview read is a live round-trip to the machine (SOLUSDEV-251); bounded.
+_PREVIEW_READ_TIMEOUT_SECONDS = 8.0
+
 logger = logging.getLogger("solus.agent.runtime")
 
 
@@ -108,7 +112,11 @@ def build_sol_registry(
         registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
         # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
         # graph, never the model's. Function-local import (house pattern).
+        from solus_api.agent.tools.environment import build_resolve_environment_tool
         from solus_api.sourcing.tools import build_derive_torque_tool
+
+        # SOLUSDEV-250: the Code environment proposal (read-only, project-bound).
+        registry.register(build_resolve_environment_tool(session_factory, project_id))
 
         registry.register(build_derive_torque_tool(session_factory, project_id))
     if systems is not None:
@@ -281,6 +289,7 @@ def _register_bridge_tools(
         build_license_preflight,
     )
     from solus_api.agent.tools.mcp_tool import LicenseTier
+    from solus_api.bridge.previews import preview_builder
     from solus_api.bridge.tool import BridgeTool
 
     session = bridge.get(user_id, team_id, project_id)
@@ -308,8 +317,46 @@ def _register_bridge_tools(
                 project_id=project_id,
                 call_cap_bytes=bridge_call_cap_bytes,
                 preflight=preflight,
+                # SOLUSDEV-251: a companion WRITE previews by reading through the
+                # same bridge first, so the approval card shows before → after.
+                # The reader carries the SAME license preflight as the tool
+                # (review M1): a BYO-paid server never yields a free read.
+                preview=preview_builder(
+                    spec.descriptor.name,
+                    _bridge_reader(
+                        bridge, user_id, team_id, project_id, bridge_call_cap_bytes, preflight
+                    ),
+                ),
             )
         )
+
+
+def _bridge_reader(
+    bridge: "BridgeSessionRegistry",
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    project_id: uuid.UUID,
+    call_cap_bytes: int,
+    preflight: "Callable[[], Awaitable[None]] | None" = None,
+) -> "Callable[[str, dict[str, Any]], Awaitable[dict[str, Any] | None]]":
+    """One bounded read over the caller's OWN live session; None on any decline
+    (offline, tool not offered, preflight refusal, timeout, failure)."""
+    from solus_api.bridge.service import dispatch
+
+    async def read(tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        session = bridge.get(user_id, team_id, project_id)
+        if session is None or not any(t.descriptor.name == tool for t in session.inventory):
+            return None
+        try:
+            if preflight is not None:
+                await preflight()
+            async with asyncio.timeout(_PREVIEW_READ_TIMEOUT_SECONDS):
+                result = await dispatch(session, tool, args, call_cap_bytes=call_cap_bytes)
+        except Exception:  # noqa: BLE001 — a preview read declines, never raises
+            return None
+        return result.value if result.ok and isinstance(result.value, dict) else None
+
+    return read
 
 
 def parse_entity_ids(prompt: str) -> list[uuid.UUID]:

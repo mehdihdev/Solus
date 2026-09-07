@@ -1,0 +1,13 @@
+/* Code environment row + modal motion (SOLUSDEV-250). Reuses main.css's
+   sol-fade-rise keyframe — transform/opacity only, tokens only — and switches
+   off under prefers-reduced-motion like every other house animation. The
+   per-section stagger is set inline. */
+.code-env-in {
+  animation: sol-fade-rise 0.16s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-env-in {
+    animation: none;
+  }
+}

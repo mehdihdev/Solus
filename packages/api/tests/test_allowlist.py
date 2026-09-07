@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from solus_api.bridge.allowlist import (
+    AllowedTool,
     BridgeAllowlist,
     load_allowlist,
     validate_inventory,
@@ -169,3 +170,23 @@ def test_the_default_allowlist_root_is_anchored_not_cwd_relative(
     assert root.is_absolute()
     # The repo's real forks — proves the anchor points somewhere that exists.
     assert load_allowlist(root).servers
+
+
+def test_an_allowlisted_timeout_reaches_the_descriptor(tmp_path: Path) -> None:
+    """SOLUSDEV-250 security review M5: the Solus-owned allowlist — never the
+    fork's schema — may raise a slow tool's dispatch bound; absent, the
+    registry default owns it."""
+    _write_allowlist(
+        tmp_path,
+        "mock",
+        "server: mock\ntools:\n  - name: echo\n  - name: slow\n    requires_confirmation: true\n"
+        "    reason: runs long\n    timeout_seconds: 630\n",
+    )
+    hello = _hello([{"server": "mock", "tools": [_tool("echo"), _tool("slow")]}])
+    by_name = {
+        s.descriptor.name: s.descriptor for s in validate_inventory(hello, load_allowlist(tmp_path))
+    }
+    assert by_name["mock.echo"].timeout_seconds is None
+    assert by_name["mock.slow"].timeout_seconds == 630
+    with pytest.raises(ValueError):
+        AllowedTool(name="x", timeout_seconds=901)

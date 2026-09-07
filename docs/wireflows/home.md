@@ -175,52 +175,41 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   account as an `integration.quota_degraded` / `integration.quota_exhausted`
   data event; loading Home again records nothing new.
 
-## How you engineer (SOLUSDEV-244 / HOME H3)
+## The project's `.solus` (SOLUSDEV-253; replaces the HOW YOU ENGINEER card)
 
 ```
-| HOW YOU ENGINEER                                              [Edit] |
-| ELECTRICAL                                                           |
-| Prefer 0.1 mm clearance minimum on all boards. JST-GH for signal.    |
-| UNITS AND STANDARDS                                                  |
-| SI units. ISO 2768-m general tolerances.                             |
-|                                                                      |
-| (editing:)                                                           |
-| CODE STYLE                                                  0 / 800  |
-| [                                                                  ] |
-| MECHANICAL … ELECTRICAL … DOCUMENTATION … UNITS AND STANDARDS        |
-| ANYTHING ELSE                                              0 / 2400  |
-| [                                                                  ] |
-|                                            [Cancel]   [Save]         |
+| .SOLUS  Rover FW                                                     |
+| Everything SOL knows about this project — notes, files and what SOL  |
+| filed. Yours to read and change; SOL reads it on every turn.         |
+| → Hardware configs                                            EMPTY  |
+| ↓ Project details                                                 1  |
+|   ┌ Wheelbase 1.6 m, 6S battery                                    ┐ |
+|   │ you · now                                        Edit  Delete  │ |
+|   └────────────────────────────────────────────────────────────────┘ |
+|   [Add a note] [Import file]                                         |
+| → Error logging                                     AUTO + YOU    8  |
+| → Documentation                                               EMPTY  |
+| → Code environment                                            EMPTY  |
 ```
 
-- The card sits in Home's right column under CONNECTED ACCOUNTS, and stays on
-  the offline Home too: it is **machine-local**, the one part of `~/.solus` the
-  user owns (`~/.solus/preferences.json`, ADR-034 amendment 2026-09-06). It is
-  the Solus equivalent of a `claude.md` — a **document the user writes**, not a
-  settings screen. No toggles.
-- View: the sections that have text, labelled (Code style · Mechanical ·
-  Electrical · Documentation · Units and standards · Anything else); empty ones
-  are hidden. Nothing written yet → the intro line and an **+ Add** button
-  ("SOL follows these on every turn and says when one changed its answer").
-- Edit: one textarea per section with a `n / cap` counter (800 chars per
-  section, 2 400 for Anything else — the caps are what bound the prompt), Save /
-  Cancel. Save is optimistic through the desktop main process (atomic write,
-  0600); a failed save keeps the editor open with "Couldn't save your
-  conventions — try again." Cancel discards the draft.
-- The card always carries the line "Stored on this computer and shared by everyone who
-  signs in here." — the file is one per machine (ADR-034), so the sharing is stated, never
-  silent. An identity change (sign-out, in-place session swap) drops the loaded copy; the next
-  turn re-reads the file under the new identity.
-- **Read-only** when the file was written by a newer Solus (shown, no Edit).
-  **Unavailable** outside the desktop app ("Your conventions live in ~/.solus and
-  are edited in the Solus desktop app.").
-- **Effect**: the document rides along with every SOL turn
-  (`POST …/sol/conversations/{id}/messages` body `preferences`) and enters the
-  system prompt as one fenced data block, layered above the shipped engineering
-  references and below a project's own `.solus` (reserved). SOL is told to apply
-  the conventions and to say which one changed its answer. Nothing is stored
-  server-side; the Custom instruction card on the SOL page (SOLUSDEV-233) stays
-  a separate, server-stored answer-styling note.
+- The card sits in Home's right column under CONNECTED ACCOUNTS and shows the
+  CURRENT project's `.solus` (docs/api/solus.md): the five sections with honest
+  counts ("EMPTY" when none). It re-scopes with "Switch to" on a card. No
+  project open → "Open or switch to a project to see its .solus."; offline →
+  "Solus can't reach its API — …"; never an invented row.
+- A row opens in place (grid-row slide, chevron turn; `prefers-reduced-motion`
+  honoured): typed and SOL-filed notes (text, "you"/"filed by SOL", relative
+  time, Edit, Delete), imported files (name, media type, size, Delete).
+  **Add a note** opens the Workspace's own composer; **Import file** picks a
+  file (8 MiB cap). Delete is armed on the first click ("Confirm delete?", red)
+  and confirmed on the second; it disarms by itself after 4 s.
+- Everything goes through the Workspace's `useSolusConfig`/`useSolusActions`:
+  a note added here IS the node the Workspace's `.solus` shows, and Impact
+  reaches it through the same `contains` edge.
+- **HOW YOU ENGINEER (HOME H3, SOLUSDEV-244)** moved to **Settings**, under
+  Appearance — the same View → Edit → Save document, still machine-local
+  (`~/.solus/preferences.json`, ADR-034), still read by SOL on every turn. Home
+  no longer hosts it, online or offline.
 
 ## The team layer (SOLUSDEV-244 / HOME H5)
 
@@ -234,7 +223,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 | └───────────────────────────────────────┘  │ Noor A  noor@…      [member ▾] ✕           │   |
 | ┌ TEAM ACTIVITY                  RECENT ┐  │ new@…   INVITE PENDING · MEMBER        ✕   │   |
 | │ Maya invited noor@… · 2h ago          │  └────────────────────────────────────────────┘   |
-| │ … (6 rows)                            │  ┌ CONNECTED ACCOUNTS ┐  ┌ HOW YOU ENGINEER ┐      |
+| │ … (6 rows)                            │  ┌ CONNECTED ACCOUNTS ┐  ┌ .SOLUS           ┐      |
 | │ View all activity (41) →              │  └────────────────────┘  └──────────────────┘      |
 | └───────────────────────────────────────┘                                                    |
 ```
@@ -261,10 +250,40 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **LOCAL FOLDER card** (right column, between MEMBERS and CONNECTED ACCOUNTS;
   moved here from the retired Project Overview hub): the CURRENT project's working
   copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
-  then the path (one line, clipped with "…", full path in the title), Open
-  with VSCode / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
+  then the path (one line, clipped with "…", full path in the title), **Open in
+  editor** / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
   current project → "Open or switch to a project to link a working copy on
   this computer." Not under the desktop bridge → its honest note.
+  **SOLUSDEV-249 (INTEGRATIONS I2):** linking also files the folder as a `local`
+  source for THIS machine (`POST /local-folder`; unlink disconnects it). Under
+  the path: the scan state — "Scanning…" (shimmer), "Scanned <ago>", or the
+  sync's `last_error.message` verbatim. Then the **detected list**, one row per
+  tool project the scan derived (KiCad, Altium, CAD folder, Arduino sketch,
+  Python) with mark, name, relative path and its Open buttons built from the
+  API's `open_targets` ("Open in KiCad" / "Open in Altium" / "Open in editor" /
+  "Open"); rows fade in staggered, reduced-motion respected. Every Open control
+  launches through the companion (`POST …/open`) — bridge offline → disabled
+  with "Solus companion is offline on this machine", never hidden; a tool's
+  refusal (`launched: false`) shows its reason inline. The folder's own
+  "Open in editor", when disabled, writes its reason under the buttons
+  (offline companion, VS Code missing, not scanned yet) — a tooltip alone was
+  not enough (SOLUSDEV-253). Nothing detected → "Nothing
+  Solus recognises in this folder yet (KiCad, Altium, CAD, Arduino, Python)."
+  The same Open buttons appear in the Workspace inspector for a focused
+  `local_*` node that belongs to this machine's folder (`LocalOpenPanel`), and
+  the source itself is listed under Connected accounts › Software as
+  "Local folder · <machine>".
+- **SOLUSDEV-250 (INTEGRATIONS I3) — the "VSCode item", properly named:** under Connected
+  accounts › Software, right below the Local folder row and only when a local source exists for
+  this machine, a **Code environment** row (mark `Py`): status "<python> · <venv or 'no virtual
+  environment'> · N requirement(s)" from a live probe, or the honest offline / "code server not
+  running" / "not probed yet" line; a second line in the error colour when the checker found pin
+  conflicts ("N dependency conflict(s) — split proposed"). **Details** opens the Code environment
+  modal: INTERPRETER, VIRTUAL ENVIRONMENT, REQUIREMENTS, CONFLICTS (each warning verbatim with its
+  pins), PROPOSAL (one card per environment, or "Single environment"), and **Ask SOL to set it
+  up**, which hands SOL a prefilled request; every install/run/test SOL then proposes arrives as
+  an approval card showing the exact command. Failed runs/tests appear in Workspace › .solus ›
+  Error logging automatically.
 - **MEMBERS card** (right column, above LOCAL FOLDER): roster with roles;
   owners and admins change roles (admin / member / viewer — ownership is
   transferred, not picked) and remove members, never on an owner row; pending

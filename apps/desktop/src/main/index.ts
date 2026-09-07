@@ -26,6 +26,7 @@ import {
   realLocalStateDeps,
   unlinkProjectFolder
 } from './localState'
+import { machineIdentity, realMachineIdentityDeps } from './machineIdentity'
 import { isAllowedAppStoreUrl } from './appStoreUrl'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
@@ -106,6 +107,18 @@ function registerFolderRegistryHandlers(): void {
   ipcMain.handle('folder:links', (event) =>
     isMainRendererSender(event) ? readRegistry(realLocalStateDeps).registry.projects : {}
   )
+  // This machine's identity for local-folder sources (SOLUSDEV-249): the
+  // companion's instance id (~/.solus/companion_id, created here the same way
+  // when the desktop runs first) plus the hostname. An unwritable home yields
+  // null — the renderer then says the folder cannot be linked to the graph.
+  ipcMain.handle('folder:machine', (event) => {
+    if (!isMainRendererSender(event)) return null
+    try {
+      return machineIdentity(realMachineIdentityDeps)
+    } catch {
+      return null
+    }
+  })
 }
 
 /** The machine-local SOL chat cache (~/.solus, ADR-034 Layer 1 — SOLUSDEV-233).
