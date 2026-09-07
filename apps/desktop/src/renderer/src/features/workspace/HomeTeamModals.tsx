@@ -88,82 +88,101 @@ export interface HomeTeamModalsProps {
   onUpgrade?: () => void
 }
 
-export function HomeTeamModals({
+/** Invite / new team / join — the dialogs that grow the team. */
+function MembershipModals({
   modal,
-  teamName,
-  isPersonal = false,
+  isPersonal,
   home,
   team,
   onClose,
   onUpgrade
 }: HomeTeamModalsProps): React.JSX.Element | null {
-  switch (modal) {
-    case 'invite':
-      return (
-        <InviteModal
-          onClose={onClose}
-          onInvite={team.actions.invite}
-          onUpgrade={onUpgrade}
-          isPersonal={isPersonal}
-        />
-      )
-    case 'newTeam':
-      return (
-        <NameModal
-          title="New team"
-          label="Team name"
-          submitLabel="Create"
-          errorText="Couldn't create the team. Please try again."
-          onClose={onClose}
-          onUpgrade={onUpgrade}
-          onSubmit={async (name) => {
-            const result = await home.createTeam(name)
-            return result.ok ? true : modalResult(result)
-          }}
-        />
-      )
-    case 'join':
-      return (
-        <JoinTeamModal
-          onClose={onClose}
-          onUpgrade={onUpgrade}
-          onJoin={async (token) => {
-            const result = await home.joinTeam(token)
-            return result.ok ? true : modalResult(result)
-          }}
-        />
-      )
-    case 'rename':
-      return (
-        <NameModal
-          title="Rename team"
-          label="Team name"
-          submitLabel="Rename"
-          initial={teamName ?? ''}
-          errorText="Couldn't rename the team. Check your role and try again."
-          onClose={onClose}
-          onSubmit={(name) => team.actions.rename(name)}
-        />
-      )
-    case 'leave':
-      return (
-        <LeaveTeamModal
-          teamName={teamName ?? 'this team'}
-          onClose={onClose}
-          onLeave={team.actions.leave}
-        />
-      )
-    case 'delete':
-      return (
-        <DeleteConfirmModal
-          name={teamName ?? 'this team'}
-          noun="team"
-          detail="and every project in it"
-          onClose={onClose}
-          onConfirm={team.actions.deleteTeam}
-        />
-      )
-    default:
-      return null
+  if (modal === 'invite') {
+    return (
+      <InviteModal
+        onClose={onClose}
+        onInvite={team.actions.invite}
+        onUpgrade={onUpgrade}
+        isPersonal={isPersonal ?? false}
+      />
+    )
   }
+  if (modal === 'newTeam') {
+    return (
+      <NameModal
+        title="New team"
+        label="Team name"
+        submitLabel="Create"
+        errorText="Couldn't create the team. Please try again."
+        onClose={onClose}
+        onUpgrade={onUpgrade}
+        onSubmit={async (name) => {
+          const result = await home.createTeam(name)
+          return result.ok ? true : modalResult(result)
+        }}
+      />
+    )
+  }
+  if (modal === 'join') {
+    return (
+      <JoinTeamModal
+        onClose={onClose}
+        onUpgrade={onUpgrade}
+        onJoin={async (token) => {
+          const result = await home.joinTeam(token)
+          return result.ok ? true : modalResult(result)
+        }}
+      />
+    )
+  }
+  return null
+}
+
+/** Rename / leave / delete — the dialogs that change or end the team. */
+function LifecycleModals({
+  modal,
+  teamName,
+  team,
+  onClose
+}: HomeTeamModalsProps): React.JSX.Element | null {
+  const name = teamName ?? 'this team'
+  if (modal === 'rename') {
+    return (
+      <NameModal
+        title="Rename team"
+        label="Team name"
+        submitLabel="Rename"
+        initial={teamName ?? ''}
+        errorText="Couldn't rename the team. Check your role and try again."
+        onClose={onClose}
+        onSubmit={(next) => team.actions.rename(next)}
+      />
+    )
+  }
+  if (modal === 'leave') {
+    return <LeaveTeamModal teamName={name} onClose={onClose} onLeave={team.actions.leave} />
+  }
+  if (modal === 'delete') {
+    return (
+      <DeleteConfirmModal
+        name={name}
+        noun="team"
+        detail="and every project in it"
+        onClose={onClose}
+        onConfirm={team.actions.deleteTeam}
+      />
+    )
+  }
+  return null
+}
+
+const MEMBERSHIP_MODALS: ReadonlySet<HomeTeamModal> = new Set(['invite', 'newTeam', 'join'])
+
+export function HomeTeamModals(props: HomeTeamModalsProps): React.JSX.Element | null {
+  if (props.modal === null) return null
+  return MEMBERSHIP_MODALS.has(props.modal) ? (
+    <MembershipModals {...props} />
+  ) : (
+    <LifecycleModals {...props} />
+  )
 }

@@ -16,7 +16,7 @@ import { MANAGER_ROLES, LiveMembers } from '../team/MembersPanel'
 import { PreferencesCard } from '../preferences/PreferencesCard'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
-import { useHomeTeam } from './useHomeTeam'
+import { useHomeTeam, type HomeTeam } from './useHomeTeam'
 import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal } from './modals'
@@ -74,6 +74,100 @@ export function HomeScreen({ onOpenProject, onNavigate }: HomeScreenProps): Reac
   )
 }
 
+interface LiveProps {
+  home: HomeData
+  team: HomeTeam
+  currentProject: WorkspaceProject | null
+  onOpenProject: HomeScreenProps['onOpenProject']
+  onNavigate: HomeScreenProps['onNavigate']
+  openModal: (modal: HomeTeamModal) => void
+  onNewProject: () => void
+}
+
+function ProjectsColumn({
+  home,
+  team,
+  currentProject,
+  onOpenProject,
+  onNewProject
+}: LiveProps): React.JSX.Element {
+  const teamReady = home.team !== null && team.status === 'ready'
+  return (
+    <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
+      {home.team ? (
+        <ProjectGrid
+          team={home.team}
+          projects={home.projects}
+          activityByProject={home.activityByProject}
+          currentProjectId={currentProject?.id ?? null}
+          actions={home.actions}
+          onOpenProject={onOpenProject}
+          onNewProject={onNewProject}
+          onActionFailed={toastActionFailed}
+        />
+      ) : (
+        <Card pad={20}>
+          <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>
+            You&apos;re not on any teams yet. Create one, or join with an invite token.
+          </div>
+        </Card>
+      )}
+      {teamReady && (
+        <TeamActivityPanel
+          activity={team.activity}
+          members={team.members}
+          total={team.activityTotal}
+          hasMore={team.activityHasMore}
+          onLoadMore={team.actions.loadMoreActivity}
+        />
+      )}
+    </div>
+  )
+}
+
+function SideColumn({
+  home,
+  team,
+  currentProject,
+  onNavigate,
+  openModal
+}: LiveProps): React.JSX.Element {
+  const teamReady = home.team !== null && team.status === 'ready'
+  const canManage = team.myRole !== null && MANAGER_ROLES.includes(team.myRole)
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      {teamReady && (
+        <LiveMembers
+          members={team.members}
+          invites={team.invites}
+          myRole={team.myRole}
+          canManage={canManage}
+          onChangeRole={team.actions.changeRole}
+          onRemove={team.actions.remove}
+          onRevoke={team.actions.revoke}
+          onInvite={() => openModal('invite')}
+        />
+      )}
+      {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
+          once; each project picks what it tracks on its Sources page. */}
+      <ConnectedAccountsCard
+        currentProject={currentProject}
+        onOpenSources={onNavigate ? () => onNavigate('sources') : undefined}
+      />
+      {/* HOME H3 (SOLUSDEV-244): the one part of ~/.solus the user owns —
+          how they engineer. Machine-local, read by SOL on every turn. */}
+      <PreferencesCard />
+    </div>
+  )
+}
+
+/** The strip's member count: the live roster once loaded (a removal updates
+ *  it at once); the detail's count only until then. */
+function memberCount(team: HomeTeam): number | null {
+  if (team.status === 'ready') return team.members.length
+  return team.detail?.member_count ?? null
+}
+
 function LiveHome({
   home,
   onOpenProject,
@@ -84,24 +178,26 @@ function LiveHome({
   onNavigate: HomeScreenProps['onNavigate']
 }): React.JSX.Element {
   const currentProject = useWorkspaceStore((s) => s.project)
-  const currentProjectId = currentProject?.id ?? null
   const team = useHomeTeam(home.team, home.me, home.actions.refresh)
   const [creatingProject, setCreatingProject] = useState(false)
   const [modal, setModal] = useState<HomeTeamModal>(null)
-  const canManage = team.myRole !== null && MANAGER_ROLES.includes(team.myRole)
   const onUpgrade = onNavigate ? () => onNavigate('billing') : undefined
-  const teamReady = home.team !== null && team.status === 'ready'
+  const live: LiveProps = {
+    home,
+    team,
+    currentProject,
+    onOpenProject,
+    onNavigate,
+    openModal: setModal,
+    onNewProject: () => setCreatingProject(true)
+  }
 
   return (
     <>
       <TeamStrip
         team={home.team}
         teams={home.teams}
-        // The live roster once loaded (a removal updates it at once); the
-        // detail's count only until then.
-        memberCount={
-          team.status === 'ready' ? team.members.length : (team.detail?.member_count ?? null)
-        }
+        memberCount={memberCount(team)}
         myRole={team.myRole}
         teamLimit={team.teamLimit}
         onSwitch={home.actions.switchTeam}
@@ -113,62 +209,10 @@ function LiveHome({
         onDelete={() => setModal('delete')}
         onUpgrade={onUpgrade}
       />
-
       <div style={GRID_STYLE}>
-        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
-          {home.team ? (
-            <ProjectGrid
-              team={home.team}
-              projects={home.projects}
-              activityByProject={home.activityByProject}
-              currentProjectId={currentProjectId}
-              actions={home.actions}
-              onOpenProject={onOpenProject}
-              onNewProject={() => setCreatingProject(true)}
-              onActionFailed={toastActionFailed}
-            />
-          ) : (
-            <Card pad={20}>
-              <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>
-                You&apos;re not on any teams yet. Create one, or join with an invite token.
-              </div>
-            </Card>
-          )}
-          {teamReady && (
-            <TeamActivityPanel
-              activity={team.activity}
-              members={team.members}
-              total={team.activityTotal}
-              hasMore={team.activityHasMore}
-              onLoadMore={team.actions.loadMoreActivity}
-            />
-          )}
-        </div>
-        <div style={{ display: 'grid', gap: 16 }}>
-          {teamReady && (
-            <LiveMembers
-              members={team.members}
-              invites={team.invites}
-              myRole={team.myRole}
-              canManage={canManage}
-              onChangeRole={team.actions.changeRole}
-              onRemove={team.actions.remove}
-              onRevoke={team.actions.revoke}
-              onInvite={() => setModal('invite')}
-            />
-          )}
-          {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
-              once; each project picks what it tracks on its Sources page. */}
-          <ConnectedAccountsCard
-            currentProject={currentProject}
-            onOpenSources={onNavigate ? () => onNavigate('sources') : undefined}
-          />
-          {/* HOME H3 (SOLUSDEV-244): the one part of ~/.solus the user owns —
-              how they engineer. Machine-local, read by SOL on every turn. */}
-          <PreferencesCard />
-        </div>
+        <ProjectsColumn {...live} />
+        <SideColumn {...live} />
       </div>
-
       {creatingProject && (
         <NameModal
           title="New project"
