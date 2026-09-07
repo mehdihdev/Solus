@@ -59,14 +59,62 @@ export function moveDetail(
 }
 
 /** Why the row asks for a fresh sign-in, or null. Never forces it: the
- *  existing token keeps working until the new consent succeeds. */
+ *  existing token keeps working until the new consent succeeds. H4: a bound
+ *  source the provider rejected also means the grant is gone. */
 export function reauthText(connection: Connection): string | null {
   if (connection.needs_reauth === 'token_error' || connection.status === 'error') {
-    return connection.last_error?.message
-      ? `${connection.last_error.message} Re-authorize to reconnect.`
-      : 'The last sign-in failed. Re-authorize to reconnect.'
+    const message = connection.last_error?.message?.trim()
+    if (!message) return 'The last sign-in failed. Re-authorize to reconnect.'
+    const sentence = /[.!?]$/.test(message) ? message : `${message}.`
+    return `${sentence} Re-authorize to reconnect.`
+  }
+  if (connection.health === 'token_expired') {
+    return "The provider rejected this account's token. Re-authorize to reconnect."
   }
   return null
+}
+
+/** The badge word for the derived health (SOLUSDEV-244 / H4). */
+export function healthLabel(connection: Connection): 'Healthy' | 'Token expired' | 'Degraded' {
+  if (connection.health === 'token_expired') return 'Token expired'
+  if (connection.health === 'degraded') return 'Degraded'
+  return 'Healthy'
+}
+
+const number = new Intl.NumberFormat('en-US')
+
+/** The meter's position, always labelled an estimate (ADR-019): a floor on
+ *  Solus's own calls, never a balance. Null when the provider is unmetered or
+ *  the ledger was unreachable — nothing is said rather than something invented. */
+export function quotaText(connection: Connection, providerName: string): string | null {
+  const quota = connection.quota
+  if (!quota) return null
+  return `At least ${number.format(quota.used)} of ${number.format(quota.allowance)} ${providerName} calls this year (estimate)`
+}
+
+/** What is already degraded, or what will, stated BEFORE the wall (H4). */
+export function quotaNote(connection: Connection, providerName: string): string | null {
+  const quota = connection.quota
+  if (!quota || quota.status === 'ok') return null
+  if (quota.status === 'exhausted') {
+    return (
+      `${providerName}'s call limit is reached, so Solus is in cache-only mode: documents already ` +
+      `synced stay readable, nothing new is fetched and no syncs run until the allowance resets. ` +
+      `This is not an error and needs no sign-in.`
+    )
+  }
+  return (
+    `Approaching ${providerName}'s call limit. Automatic syncs and SOL's ${providerName} calls are ` +
+    `paused; your own Sync now still reaches ${providerName}. At the limit Solus switches to ` +
+    `cache-only reads and starts no new syncs.`
+  )
+}
+
+/** 0..1 of the allowance used, for the meter bar; clamped. */
+export function quotaFraction(connection: Connection): number {
+  const quota = connection.quota
+  if (!quota || quota.allowance <= 0) return 0
+  return Math.min(1, quota.used / quota.allowance)
 }
 
 /** The confirmation must say what revoking disconnects. */

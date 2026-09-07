@@ -1,129 +1,54 @@
-// Home's "Connected accounts" card (SOLUSDEV-241 / I1, screen H2). OAuth binds
-// at ACCOUNT scope: this is where a user links a provider account once. What
-// each project tracks is chosen on that project's Sources page, whose wizard
-// reuses the account here and skips the sign-in.
+// Home's "Connected accounts" card (SOLUSDEV-241 / I1, screen H2), grouped by
+// domain (SOLUSDEV-244). ONE flow for every tool, whatever it is:
 //
-// Everything rendered is derived from the live registry (which providers use
-// OAuth) and the live connection list — no provider ids in this file. Revoking
-// is a confirmed, destructive action: it disconnects the account in EVERY
-// project that uses it, so the confirmation names them.
+//   [mark] Tool name                                   [ next step ]
+//          status line
+//          ─ what already exists: accounts / sources / sessions, each with
+//            its own confirmed action (Revoke · Disconnect · Stop)
 //
-// SOLUSDEV-242 (H2): every linked row states its SCOPE plainly (read only /
-// read and edit / not recorded); a grant whose last sign-in failed offers
-// Re-authorize, which lands on the same account (no duplicate, no widened
-// scope; the old token keeps working until the new one succeeds); a
-// project-scoped grant from before account-level connections is listed as
-// "sign in once to move it"; once the user holds the proving grant the row
-// offers the move as an explicit, confirmed action naming the projects and the
-// grant — never a side effect of loading Home.
-// Every catalog tool appears: file-export and local tools have no account to
-// link, so their row offers the open project's Sources page — where such a
-// source is attached — instead of pretending to connect here.
+// The next step is always offered — a tool with a linked account or an
+// existing source still takes another — and every step runs through the
+// connect wizard modal (ConnectWizardModal): account sign-in for OAuth tools,
+// then "Pick documents" on the open project reusing that account; "Choose
+// file" for committed-export tools; the registry's own guidance for local
+// tools; and Start for simulators (SimulationPanel, same visual language).
+// Everything rendered is derived from the live registry and live lists — no
+// provider ids in this file; a new connector gets a correct row for free.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
-import type { Connection, LegacyConnection } from '../../lib/api/resources'
+import type { BridgeStatus, Source } from '../../lib/api/resources'
 import type { WorkspaceProject } from '../../store/workspaceStore'
 import { ConnectWizardModal } from '../onboarding/ConnectWizardModal'
+import type { WizardScope } from '../onboarding/connectSteps'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import { integrationLogo } from '../onboarding/integrationLogos'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
+import { plural } from '../onboarding/selectionConfigureStep'
 import { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
+import { toolStatusText } from '../project/localconnections/presentation'
+import { useProjectSources } from '../project/useProjectSources'
+import { AccountRow, LegacyRow, SourceItem } from './AccountRows'
 import {
-  legacyText,
-  moveDetail,
-  reauthText,
-  revokeDetail,
-  scopeText,
-  usageText
-} from './connectedAccounts'
-import { ModalShell } from './modals'
-import { useAccountConnections } from './useAccountConnections'
+  ACCOUNT_DOMAINS,
+  ACCOUNT_DOMAIN_LABEL,
+  NEEDS_PROJECT_HINT,
+  accountDomain,
+  emptyDomainText,
+  type AccountDomain
+} from './accountDomains'
+import { SimulationPanel } from './SimulationPanel'
+import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
+import { useBridgeStatus } from './useBridgeStatus'
 
-function ConfirmModal({
-  title,
-  detail,
-  action,
-  busyLabel,
-  failure,
-  danger = false,
-  onClose,
-  onConfirm
+/** The square mark every row (and the simulator rows) leads with. */
+export function ProviderMark({
+  entry
 }: {
-  title: string
-  detail: string
-  action: string
-  busyLabel: string
-  failure: string
-  danger?: boolean
-  onClose: () => void
-  onConfirm: () => Promise<boolean>
+  entry: Pick<CatalogEntry, 'id' | 'mark'>
 }): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const confirm = async (): Promise<void> => {
-    setBusy(true)
-    setError(null)
-    if (await onConfirm()) {
-      onClose()
-      return
-    }
-    setBusy(false)
-    setError(failure)
-  }
-  return (
-    <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>{title}</div>
-      <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        {detail}
-      </div>
-      {error && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
-        <Button kind="ghost" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          kind={danger ? 'danger' : 'primary'}
-          size="sm"
-          disabled={busy}
-          onClick={() => void confirm()}
-        >
-          {busy ? busyLabel : action}
-        </Button>
-      </div>
-    </ModalShell>
-  )
-}
-
-function RevokeModal({
-  providerName,
-  connection,
-  onClose,
-  onConfirm
-}: {
-  providerName: string
-  connection: Connection
-  onClose: () => void
-  onConfirm: () => Promise<boolean>
-}): React.JSX.Element {
-  const who = connection.account_login ? ` (${connection.account_login})` : ''
-  return (
-    <ConfirmModal
-      title={`Revoke ${providerName}${who}?`}
-      detail={revokeDetail(providerName, connection)}
-      action="Revoke"
-      busyLabel="Revoking…"
-      failure="Couldn't revoke this account. Check your connection and try again."
-      danger
-      onClose={onClose}
-      onConfirm={onConfirm}
-    />
-  )
-}
-
-function ProviderMark({ entry }: { entry: CatalogEntry }): React.JSX.Element {
   const logo = integrationLogo(entry.id)
   return (
     <span
@@ -150,234 +75,305 @@ function ProviderMark({ entry }: { entry: CatalogEntry }): React.JSX.Element {
   )
 }
 
-function AccountRow({
+/** The standard row head: mark, name, one status line, and the next step. */
+export function ToolRowHead({
   entry,
-  connection,
-  onRevoke,
-  onReauthorize
+  status,
+  action,
+  actionLabel,
+  disabledHint,
+  onAction
 }: {
-  entry: CatalogEntry
-  connection: Connection
-  onRevoke: () => Promise<boolean>
-  onReauthorize: () => void
+  entry: Pick<CatalogEntry, 'id' | 'name' | 'mark'>
+  status: string
+  action: string
+  /** Accessible name; defaults to `${action} ${entry.name}`. */
+  actionLabel?: string
+  /** Non-null disables the action and says why beneath the status line. */
+  disabledHint?: string | null
+  onAction: () => void
 }): React.JSX.Element {
-  const [confirming, setConfirming] = useState(false)
-  const reauth = reauthText(connection)
+  const disabled = disabledHint != null
   return (
-    <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <ProviderMark entry={entry} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            {entry.name}
-            {connection.account_login && (
-              <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
-                {' '}
-                · {connection.account_login}
-              </span>
-            )}
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '13px 16px' }}>
+      <ProviderMark entry={entry} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{status}</div>
+        {disabled && (
+          <div style={{ fontSize: 10.5, color: 'var(--mut)' }} data-testid="needs-project">
+            {disabledHint}
           </div>
-          <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
-            {usageText(connection)} · {scopeText(connection)}
-          </div>
-        </div>
-        <Button
-          kind="ghost"
-          size="sm"
-          aria-label={`Revoke ${entry.name}`}
-          onClick={() => setConfirming(true)}
-        >
-          Revoke
-        </Button>
-      </div>
-      {reauth && (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <div
-            role="note"
-            style={{ flex: 1, fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}
-          >
-            {reauth}
-          </div>
-          <Button
-            kind="soft"
-            size="sm"
-            aria-label={`Re-authorize ${entry.name}`}
-            onClick={onReauthorize}
-          >
-            Re-authorize
-          </Button>
-        </div>
-      )}
-      {confirming && (
-        <RevokeModal
-          providerName={entry.name}
-          connection={connection}
-          onClose={() => setConfirming(false)}
-          onConfirm={onRevoke}
-        />
-      )}
-    </div>
-  )
-}
-
-/** A grant still owned by a project: a sign-in proves the account; once the
- *  caller holds that grant, the move is offered and confirmed here. */
-function LegacyRow({
-  entry,
-  legacy,
-  grant,
-  onSignIn,
-  onMove
-}: {
-  entry: CatalogEntry
-  legacy: LegacyConnection
-  grant: Connection | null
-  onSignIn: () => void
-  onMove: (grant: Connection) => Promise<boolean>
-}): React.JSX.Element {
-  const [confirming, setConfirming] = useState(false)
-  // The move is offered only against a grant this card can NAME in the
-  // confirmation — never on an id alone, so the scope shown is the scope sent.
-  const claimable = grant !== null
-  return (
-    <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <ProviderMark entry={entry} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            {entry.name}
-            {legacy.account_login && (
-              <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
-                {' '}
-                · {legacy.account_login}
-              </span>
-            )}
-          </div>
-          <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
-            Connected in a project, not yet on your account
-          </div>
-        </div>
-        {claimable ? (
-          <Button
-            kind="primary"
-            size="sm"
-            aria-label={`Move ${entry.name} to your account`}
-            onClick={() => setConfirming(true)}
-          >
-            Move to your account
-          </Button>
-        ) : (
-          <Button
-            kind="soft"
-            size="sm"
-            aria-label={`Sign in to move ${entry.name}`}
-            onClick={onSignIn}
-          >
-            Sign in to move
-          </Button>
         )}
       </div>
-      <div role="note" style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}>
-        {legacyText(legacy)}
-      </div>
-      {confirming && grant && (
-        <ConfirmModal
-          title={`Move ${entry.name} to your account?`}
-          detail={moveDetail(entry.name, legacy, grant)}
-          action="Move"
-          busyLabel="Moving…"
-          failure={`Couldn't move this ${entry.name} connection. Check your connection and try again.`}
-          onClose={() => setConfirming(false)}
-          onConfirm={() => onMove(grant)}
-        />
-      )}
-    </div>
-  )
-}
-
-/** A tool with no account to link: it is attached per project (a committed
- *  export or the local companion) from that project's Sources page. */
-function NoAccountRow({
-  entry,
-  currentProject,
-  onOpenSources
-}: {
-  entry: CatalogEntry
-  currentProject: WorkspaceProject | null
-  onOpenSources: (() => void) | undefined
-}): React.JSX.Element {
-  const how = entry.mode === 'local-bridge' ? 'Connects on this computer' : 'Committed export'
-  const canAttach = currentProject !== null && onOpenSources !== undefined
-  return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
-      <ProviderMark entry={entry} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
-        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>
-          {how} · attached per project
-          {!canAttach && ' — open a project to attach it from its Sources page'}
-        </div>
-      </div>
-      {canAttach && (
-        <Button
-          kind="ghost"
-          size="sm"
-          aria-label={`Attach ${entry.name} in ${currentProject.name}`}
-          onClick={onOpenSources}
-        >
-          Attach in {currentProject.name}
-        </Button>
-      )}
-    </div>
-  )
-}
-
-function ConnectRow({
-  entry,
-  onConnect
-}: {
-  entry: CatalogEntry
-  onConnect: () => void
-}): React.JSX.Element {
-  return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
-      <ProviderMark entry={entry} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
-        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>Not connected</div>
-      </div>
-      <Button kind="ghost" size="sm" aria-label={`Connect ${entry.name}`} onClick={onConnect}>
-        Connect
+      <Button
+        kind={disabled ? 'ghost' : 'primary'}
+        size="sm"
+        aria-label={actionLabel ?? `${action} ${entry.name}`}
+        disabled={disabled}
+        onClick={onAction}
+      >
+        {action}
       </Button>
     </div>
   )
 }
 
+interface NextStep {
+  action: string
+  scope: WizardScope
+  needsProject: boolean
+}
+
+/** What the tool's row offers next — derived from the connector's declared
+ *  shape and whether an account is already linked, never from its id. */
+function nextStep(entry: CatalogEntry, linked: boolean): NextStep {
+  if (entry.mode === 'export-file')
+    return { action: 'Choose file', scope: 'project', needsProject: true }
+  if (entry.mode === 'local-bridge')
+    return { action: 'Connect', scope: 'project', needsProject: false }
+  if (!linked) return { action: 'Connect', scope: 'account', needsProject: false }
+  const action = entry.selection
+    ? `Pick ${plural(entry.selection.label)}`
+    : entry.configFields.length > 0
+      ? 'Enter details'
+      : 'Add to project'
+  return { action, scope: 'project', needsProject: true }
+}
+
+function statusLine(
+  entry: CatalogEntry,
+  linkedCount: number,
+  sources: readonly Source[],
+  project: WorkspaceProject | null,
+  bridge: BridgeStatus | null
+): string {
+  const here = project ? ` in ${project.name}` : ''
+  const held = sources.length > 0 ? ` · ${sources.length} connected${here}` : ''
+  if (entry.mode === 'local-bridge' && entry.localTool) {
+    return toolStatusText(entry.localTool, bridge)
+  }
+  if (entry.mode === 'export-file') return `Committed export · per project${held}`
+  if (linkedCount === 0) return 'Not connected'
+  return `${linkedCount} account${linkedCount === 1 ? '' : 's'} linked${held}`
+}
+
+interface ToolRowProps {
+  entry: CatalogEntry
+  accounts: ReturnType<typeof useAccountConnections>
+  sources: ReturnType<typeof useProjectSources>
+  currentProject: WorkspaceProject | null
+  bridge: BridgeStatus | null
+  onOpen: (entry: CatalogEntry, scope: WizardScope) => void
+}
+
+/** One tool: its head, then everything that already exists for it. */
+function ToolRow({
+  entry,
+  accounts,
+  sources,
+  currentProject,
+  bridge,
+  onOpen
+}: ToolRowProps): React.JSX.Element {
+  const linked = accounts.connections.filter((c) => c.provider === entry.id)
+  const unclaimed = accounts.legacy.filter((l) => l.provider === entry.id)
+  const held = sources.sources.filter((s) => s.type === entry.id)
+  const step = nextStep(entry, linkedAccountFor(accounts.connections, entry.id) !== null)
+  const disabledHint = step.needsProject && !currentProject ? NEEDS_PROJECT_HINT : null
+  return (
+    <div>
+      <ToolRowHead
+        entry={entry}
+        status={statusLine(entry, linked.length, held, currentProject, bridge)}
+        action={step.action}
+        actionLabel={`${step.action} for ${entry.name}`}
+        disabledHint={disabledHint}
+        onAction={() => onOpen(entry, step.scope)}
+      />
+      {linked.map((connection) => (
+        <AccountRow
+          key={connection.id}
+          entry={entry}
+          connection={connection}
+          onRevoke={() => accounts.revoke(connection.id)}
+          // The same account-scope handshake as Connect: a finished sign-in
+          // lands on THIS grant (I1 dedupes by account), so the old token is
+          // replaced only once the new one succeeded.
+          onReauthorize={() => onOpen(entry, 'account')}
+        />
+      ))}
+      {unclaimed.map((legacy) => (
+        <LegacyRow
+          key={legacy.source_ids.join(',')}
+          entry={entry}
+          legacy={legacy}
+          grant={linked.find((c) => c.id === legacy.claimable_connection_id) ?? null}
+          // The sign-in proves the account; the move is then offered and
+          // confirmed on this item — never automatic.
+          onSignIn={() => onOpen(entry, 'account')}
+          onMove={(grant) => accounts.move(legacy, grant)}
+        />
+      ))}
+      {held.map((source) => (
+        <SourceItem
+          key={source.id}
+          source={source}
+          entry={entry}
+          projectId={source.project_id}
+          onSync={() => void sources.actions.syncNow(source.id)}
+          onDisconnect={() => sources.actions.disconnect(source.id)}
+          onChanged={() => void sources.actions.refresh()}
+        />
+      ))}
+    </div>
+  )
+}
+
+/** The domain pills above the card: one selected, the rest quiet. */
+function DomainTabs({
+  value,
+  onChange
+}: {
+  value: AccountDomain
+  onChange: (domain: AccountDomain) => void
+}): React.JSX.Element {
+  return (
+    <div
+      role="tablist"
+      aria-label="Tool domain"
+      style={{ display: 'flex', gap: 8, margin: '0 0 10px' }}
+    >
+      {ACCOUNT_DOMAINS.map((domain) => {
+        const active = domain === value
+        return (
+          <button
+            key={domain}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            id={`accounts-tab-${domain}`}
+            className="interactive"
+            onClick={() => onChange(domain)}
+            style={{
+              fontFamily: 'var(--font-ui)',
+              fontSize: 11.5,
+              fontWeight: active ? 600 : 500,
+              padding: '5px 13px',
+              borderRadius: 99,
+              cursor: 'pointer',
+              userSelect: 'none',
+              whiteSpace: 'nowrap',
+              background: active ? 'var(--acc)' : 'var(--sur2)',
+              color: active ? 'var(--acc-ink)' : 'var(--mut)',
+              border: `1px solid ${active ? 'transparent' : 'var(--bd)'}`,
+              transition: 'background 0.12s, color 0.12s, border-color 0.12s'
+            }}
+          >
+            {ACCOUNT_DOMAIN_LABEL[domain]}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export interface ConnectedAccountsCardProps {
-  /** The open project, whose Sources page attaches per-project tools. */
+  /** The current project: where a picked document set, a chosen file, or a
+   *  simulation lands. Null ⇒ project-bound steps are offered but disabled. */
   currentProject?: WorkspaceProject | null
-  onOpenSources?: () => void
+}
+
+/** The card's one wizard, in whichever scope the clicked step needs, plus the
+ *  refresh both scopes share once a connect settles. */
+function useCardWizard(
+  currentProject: WorkspaceProject | null,
+  accounts: ReturnType<typeof useAccountConnections>,
+  sources: ReturnType<typeof useProjectSources>
+): {
+  wizard: ReturnType<typeof useConnectWizard>
+  scope: WizardScope
+  open: (entry: CatalogEntry, scope: WizardScope) => void
+} {
+  // One wizard, two scopes: the account sign-in, or a project-bound step that
+  // reuses the linked account (the rail then skips the sign-in).
+  const [scope, setScope] = useState<WizardScope>('account')
+  const wizard = useConnectWizard({
+    projectId: currentProject?.id ?? null,
+    scope,
+    linkedConnections: accounts.connections,
+    onConnected: () => {
+      void accounts.refresh()
+      void sources.actions.refresh()
+    }
+  })
+  const open = (entry: CatalogEntry, nextScope: WizardScope): void => {
+    setScope(nextScope)
+    wizard.open(entry)
+  }
+  return { wizard, scope, open }
+}
+
+/** Every tool the registry knows for a domain, account tools first — a missing
+ *  row would read as "unsupported". */
+function providersFor(catalog: readonly CatalogEntry[], domain: AccountDomain): CatalogEntry[] {
+  return catalog
+    .filter((entry) => accountDomain(entry) === domain)
+    .sort((a, b) => Number(b.mode === 'oauth') - Number(a.mode === 'oauth'))
+}
+
+function DomainPanel({
+  domain,
+  providers,
+  accounts,
+  sources,
+  currentProject,
+  bridge,
+  onOpen
+}: {
+  domain: AccountDomain
+  providers: readonly CatalogEntry[]
+} & Omit<ToolRowProps, 'entry'>): React.JSX.Element {
+  if (domain === 'simulation') return <SimulationPanel currentProject={currentProject} />
+  if (providers.length === 0) {
+    return (
+      <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
+        {emptyDomainText(domain)}
+      </div>
+    )
+  }
+  return (
+    <>
+      {providers.map((entry, i) => (
+        <div
+          key={entry.id}
+          style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
+        >
+          <ToolRow
+            entry={entry}
+            accounts={accounts}
+            sources={sources}
+            currentProject={currentProject}
+            bridge={bridge}
+            onOpen={onOpen}
+          />
+        </div>
+      ))}
+    </>
+  )
 }
 
 export function ConnectedAccountsCard({
-  currentProject = null,
-  onOpenSources
+  currentProject = null
 }: ConnectedAccountsCardProps = {}): React.JSX.Element | null {
   const catalog = useIntegrationCatalog()
   const accounts = useAccountConnections()
+  const sources = useProjectSources()
+  const bridge = useBridgeStatus(currentProject?.id ?? null)
   const states = useOnboardingStore((s) => s.connections)
-  const wizard = useConnectWizard({
-    projectId: null,
-    scope: 'account',
-    onConnected: () => void accounts.refresh()
-  })
-  // Every tool the registry knows, account or not — the user asked "what can I
-  // connect?", and a missing row reads as "unsupported". Account tools first;
-  // the per-project ones follow so the linkable rows read as one group.
-  const providers = [...catalog].sort(
-    (a, b) => Number(b.mode === 'oauth') - Number(a.mode === 'oauth')
-  )
-  if (accounts.status === 'offline' || providers.length === 0) return null
+  const [domain, setDomain] = useState<AccountDomain>(ACCOUNT_DOMAINS[0])
+  const { wizard, scope, open } = useCardWizard(currentProject, accounts, sources)
+  if (accounts.status === 'offline' || catalog.length === 0) return null
 
   return (
     <div>
@@ -386,64 +382,34 @@ export function ConnectedAccountsCard({
           CONNECTED ACCOUNTS
         </Mono>
       </div>
+      <DomainTabs value={domain} onChange={setDomain} />
       <Card pad={0}>
-        {providers.map((entry, i) => {
-          const linked = accounts.connections.filter((c) => c.provider === entry.id)
-          const unclaimed = accounts.legacy.filter((l) => l.provider === entry.id)
-          return (
-            <div
-              key={entry.id}
-              style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
-            >
-              {entry.mode !== 'oauth' ? (
-                <NoAccountRow
-                  entry={entry}
-                  currentProject={currentProject}
-                  onOpenSources={onOpenSources}
-                />
-              ) : (
-                <>
-                  {linked.map((connection) => (
-                    <AccountRow
-                      key={connection.id}
-                      entry={entry}
-                      connection={connection}
-                      onRevoke={() => accounts.revoke(connection.id)}
-                      // The same account-scope handshake as Connect: a finished
-                      // sign-in lands on THIS row (I1 dedupes by account), so the
-                      // old token is replaced only once the new one succeeded.
-                      onReauthorize={() => wizard.open(entry)}
-                    />
-                  ))}
-                  {unclaimed.map((legacy) => (
-                    <LegacyRow
-                      key={legacy.source_ids.join(',')}
-                      entry={entry}
-                      legacy={legacy}
-                      grant={linked.find((c) => c.id === legacy.claimable_connection_id) ?? null}
-                      // The sign-in proves the account; the move is then offered
-                      // and confirmed on this row — never automatic.
-                      onSignIn={() => wizard.open(entry)}
-                      onMove={(grant) => accounts.move(legacy, grant)}
-                    />
-                  ))}
-                  {linked.length === 0 && unclaimed.length === 0 && (
-                    <ConnectRow entry={entry} onConnect={() => wizard.open(entry)} />
-                  )}
-                </>
-              )}
-            </div>
-          )
-        })}
+        {/* Keyed by domain so each switch remounts the panel and replays the entrance. */}
+        <div
+          key={domain}
+          role="tabpanel"
+          aria-labelledby={`accounts-tab-${domain}`}
+          className="accounts-panel-in"
+        >
+          <DomainPanel
+            domain={domain}
+            providers={providersFor(catalog, domain)}
+            accounts={accounts}
+            sources={sources}
+            currentProject={currentProject}
+            bridge={bridge}
+            onOpen={open}
+          />
+        </div>
       </Card>
-      <div style={{ fontSize: 10.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.5 }}>
-        Link an account once; choose what each project tracks from its Sources page.
-      </div>
       {wizard.active && (
         <ConnectWizardModal
           entry={wizard.active}
-          scope="account"
+          scope={scope}
           state={states[wizard.active.id]}
+          linkedAccount={
+            wizard.linkedAccount ? { login: wizard.linkedAccount.account_login } : null
+          }
           onBegin={() => void wizard.begin()}
           onPickFile={(file) => void wizard.pickFile(file)}
           onSelect={wizard.select}

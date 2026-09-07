@@ -55,10 +55,12 @@ def app(app: FastAPI) -> FastAPI:
 
 
 # ------------------------------------------------------------------ helpers
-def _bundle(version: str = "1.0.0", slug: str = "bom", *, publisher: str = "Ada Lovelace") -> bytes:
+def _bundle(
+    version: str = "1.0.0", slug: str = "bom-lite", *, publisher: str = "Ada Lovelace"
+) -> bytes:
     toml = (
         MINIMAL_MANIFEST_TOML.replace('version = "1.0.0"', f'version = "{version}"')
-        .replace('id = "bom"', f'id = "{slug}"')
+        .replace('id = "bom-lite"', f'id = "{slug}"')
         .replace('publisher = "Ada Lovelace"', f'publisher = "{publisher}"')
     )
     return build_zip(with_manifest(minimal_files(), toml))
@@ -132,13 +134,13 @@ async def test_publish_creates_rows_bytes_and_event(
     body = resp.json()["data"]
     assert body["review"] == {"status": "pending", "problems": []}
     version = body["version"]
-    assert version["slug"] == "bom"
+    assert version["slug"] == "bom-lite"
     assert version["version"] == "1.0.0"
     assert version["review_status"] == "pending"
     assert version["content_hash"] == hashlib.sha256(data).hexdigest()
     assert version["bundle_size_bytes"] == len(data)
-    assert version["bundle_url"] == "/api/v1/extensions/bom/versions/1.0.0/bundle"
-    assert version["review_url"] == "/api/v1/extensions/bom/versions/1.0.0/review"
+    assert version["bundle_url"] == "/api/v1/extensions/bom-lite/versions/1.0.0/bundle"
+    assert version["review_url"] == "/api/v1/extensions/bom-lite/versions/1.0.0/review"
     assert "job_id" not in body  # no project-scoped Job row for the global registry
 
     publisher = await db.scalar(select(ExtensionPublisher))
@@ -148,7 +150,7 @@ async def test_publish_creates_rows_bytes_and_event(
     extension = await db.scalar(select(Extension))
     assert extension is not None
     assert (extension.slug, extension.name, extension.publisher_id) == (
-        "bom",
+        "bom-lite",
         "BOM",
         publisher.id,
     )
@@ -157,7 +159,7 @@ async def test_publish_creates_rows_bytes_and_event(
     assert row is not None
     assert row.review_status is ExtensionReviewStatus.PENDING
     assert row.published_at is None
-    assert row.manifest["extension"]["id"] == "bom"
+    assert row.manifest["extension"]["id"] == "bom-lite"
     assert row.manifest["views"] == {"widget": {"entry": "widget.html", "preferred": "wide"}}
     assert row.bundle_storage.value == "local"
     stored = {p.name for p in app.state.artifact_store.root.iterdir()}
@@ -166,7 +168,7 @@ async def test_publish_creates_rows_bytes_and_event(
     event = await db.scalar(select(DataEvent).where(DataEvent.event_type == "extension.publish"))
     assert event is not None
     assert event.payload == {
-        "slug": "bom",
+        "slug": "bom-lite",
         "version": "1.0.0",
         "bundle_size_bytes": len(data),
         "content_hash": version["content_hash"],
@@ -456,11 +458,11 @@ async def test_slug_claim_is_case_insensitive(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
     """`extensions.slug` is unique on lower(slug); the claim lookup must match the
-    same way, so a row seeded as `BOM` blocks Alice's `bom`."""
+    same way, so a row seeded as `BOM-LITE` blocks Alice's `bom-lite`."""
     other = ExtensionPublisher(user_id=None, display_name="Someone")
     db.add(other)
     await db.flush()
-    db.add(Extension(slug="BOM", publisher_id=other.id, name="Other", summary="Theirs."))
+    db.add(Extension(slug="BOM-LITE", publisher_id=other.id, name="Other", summary="Theirs."))
     await db.commit()
     resp = await _publish(client, alice_headers, _bundle())
     assert resp.status_code == 409
@@ -485,7 +487,7 @@ async def test_existing_version_is_409_version_exists_even_after_unpublish(
     assert again.status_code == 409
     assert again.json()["error"]["code"] == "version_exists"
 
-    gone = await client.delete("/api/v1/extensions/bom/versions/1.0.0", headers=alice_headers)
+    gone = await client.delete("/api/v1/extensions/bom-lite/versions/1.0.0", headers=alice_headers)
     assert gone.status_code == 204
     burned = await _publish(client, alice_headers, _bundle("1.0.0"), key="c")
     assert burned.status_code == 409
@@ -515,25 +517,27 @@ async def test_unpublish_recomputes_latest_approved(
     await _consenting(client, db, alice_headers)
     for i, v in enumerate(("1.0.0", "1.1.0", "2.0.0-rc.1")):
         assert (await _publish(client, alice_headers, _bundle(v), key=str(i))).status_code == 202
-    await _approve(db, "bom", "1.0.0", latest=False)
-    await _approve(db, "bom", "1.1.0", latest=True)
+    await _approve(db, "bom-lite", "1.0.0", latest=False)
+    await _approve(db, "bom-lite", "1.1.0", latest=True)
     await _approve(
-        db, "bom", "2.0.0-rc.1", latest=False
+        db, "bom-lite", "2.0.0-rc.1", latest=False
     )  # pre-release < 1.1.0? no: 2.0.0-rc.1 > 1.1.0
 
-    gone = await client.delete("/api/v1/extensions/bom/versions/1.1.0", headers=alice_headers)
+    gone = await client.delete("/api/v1/extensions/bom-lite/versions/1.1.0", headers=alice_headers)
     assert gone.status_code == 204
-    assert await _latest(db, "bom") == "2.0.0-rc.1"
+    assert await _latest(db, "bom-lite") == "2.0.0-rc.1"
 
     assert (
-        await client.delete("/api/v1/extensions/bom/versions/2.0.0-rc.1", headers=alice_headers)
+        await client.delete(
+            "/api/v1/extensions/bom-lite/versions/2.0.0-rc.1", headers=alice_headers
+        )
     ).status_code == 204
-    assert await _latest(db, "bom") == "1.0.0"
+    assert await _latest(db, "bom-lite") == "1.0.0"
 
     assert (
-        await client.delete("/api/v1/extensions/bom/versions/1.0.0", headers=alice_headers)
+        await client.delete("/api/v1/extensions/bom-lite/versions/1.0.0", headers=alice_headers)
     ).status_code == 204
-    assert await _latest(db, "bom") is None
+    assert await _latest(db, "bom-lite") is None
 
     db.expire_all()
     rows = (await db.scalars(select(ExtensionVersion))).all()
@@ -549,21 +553,23 @@ async def test_unpublish_by_non_publisher_or_unknown_is_404(
 ) -> None:
     assert (await _publish(client, alice_headers, _bundle())).status_code == 202
     await me(client, bob_headers)
-    foreign = await client.delete("/api/v1/extensions/bom/versions/1.0.0", headers=bob_headers)
+    foreign = await client.delete("/api/v1/extensions/bom-lite/versions/1.0.0", headers=bob_headers)
     assert foreign.status_code == 404
     assert foreign.json()["error"]["code"] == "not_found"
     unknown = await client.delete("/api/v1/extensions/nope/versions/1.0.0", headers=alice_headers)
     assert unknown.status_code == 404
-    twice = await client.delete("/api/v1/extensions/bom/versions/1.0.0", headers=alice_headers)
+    twice = await client.delete("/api/v1/extensions/bom-lite/versions/1.0.0", headers=alice_headers)
     assert twice.status_code == 204
-    again = await client.delete("/api/v1/extensions/bom/versions/1.0.0", headers=alice_headers)
+    again = await client.delete("/api/v1/extensions/bom-lite/versions/1.0.0", headers=alice_headers)
     assert again.status_code == 404
 
 
 async def test_unpublish_requires_verified_email(
     client: AsyncClient, unverified_headers: dict[str, str]
 ) -> None:
-    resp = await client.delete("/api/v1/extensions/bom/versions/1.0.0", headers=unverified_headers)
+    resp = await client.delete(
+        "/api/v1/extensions/bom-lite/versions/1.0.0", headers=unverified_headers
+    )
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "email_not_verified"
 
@@ -571,10 +577,10 @@ async def test_unpublish_requires_verified_email(
 @pytest.mark.parametrize(
     "path",
     [
-        "/-bom/versions/1.0.0",
+        "/-bom-lite/versions/1.0.0",
         "/constructor/versions/1.0.0",
-        "/bom/versions/latest",
-        "/bom/versions/1",
+        "/bom-lite/versions/latest",
+        "/bom-lite/versions/1",
     ],
 )
 async def test_bad_slug_or_version_syntax_is_422_before_lookup(

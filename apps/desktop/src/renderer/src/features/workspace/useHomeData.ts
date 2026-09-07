@@ -16,15 +16,19 @@ import {
   listProjects,
   unarchiveProject as unarchiveProjectApi,
   updateProject as updateProjectApi,
-  type AcceptInviteResult,
   type Me,
   type Project,
   type TeamSummary
 } from '../../lib/api/resources'
+import { classifyFetchError } from '../../lib/api/errors'
+import { ApiError } from '../../lib/api/envelope.types'
+import { planLimitFromError, type PlanLimitRefusal } from '../../lib/api/planLimit'
+import { renameWorkspaceProject } from './projectSwitch'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { forgetWorkspaceGraph } from '../graph/useWorkspaceGraph'
 import { resolveTeam } from './activeTeam'
 import { switchWorkspaceProject } from './projectSwitch'
+import { switchWorkspaceTeam } from './teamSwitch'
 import {
   groupActivityByProject,
   HOME_ACTIVITY_FETCH_LIMIT,
@@ -32,16 +36,47 @@ import {
 } from './projectActivity'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
-export type HomeStatus = 'loading' | 'ready' | 'offline'
+/** `gone`: the server answered that the active team no longer exists (deleted,
+ *  or I was removed) — not an outage, and the only verdict that discards it. */
+export type HomeStatus = 'loading' | 'ready' | 'offline' | 'gone'
+
+/** Why a team could not be created or joined — named, never "try again"
+ *  (SOLUSDEV-244 / HOME H5). `plan_limit` carries the server's own numbers. */
+export type TeamRefusal =
+  | { ok: false; reason: 'plan_limit'; limit: PlanLimitRefusal }
+  | {
+      ok: false
+      reason: 'invalid_token' | 'expired' | 'wrong_email' | 'already_member' | 'failed'
+    }
+export type CreateTeamResult = { ok: true; teamId: string } | TeamRefusal
+export type JoinTeamResult = { ok: true; teamId: string; role: string } | TeamRefusal
+
+/** Map an invite-accept failure to the reason the modal names (invites.py). */
+export function joinRefusal(error: unknown): TeamRefusal {
+  const limit = planLimitFromError(error)
+  if (limit) return { ok: false, reason: 'plan_limit', limit }
+  if (!(error instanceof ApiError)) return { ok: false, reason: 'failed' }
+  if (error.status === 410) return { ok: false, reason: 'expired' }
+  if (error.status === 404) return { ok: false, reason: 'invalid_token' }
+  if (error.status === 403) return { ok: false, reason: 'wrong_email' }
+  if (error.code === 'already_member') return { ok: false, reason: 'already_member' }
+  if (error.code === 'invite_revoked' || error.code === 'invite_already_accepted') {
+    return { ok: false, reason: 'invalid_token' }
+  }
+  return { ok: false, reason: 'failed' }
+}
 
 export interface HomeActions {
-  /** Make another of my teams the active team; the hook reloads for it. */
+  /** Make another of my teams the active team through the team choke point:
+   *  a project of the previous team is closed, and the hook reloads. */
   switchTeam: (teamId: string) => void
   /** Create a project in the active team. */
   createProject: (name: string) => Promise<Project | null>
-  createTeam: (name: string) => Promise<boolean>
-  joinTeam: (token: string) => Promise<AcceptInviteResult | null>
+  createTeam: (name: string) => Promise<CreateTeamResult>
+  joinTeam: (token: string) => Promise<JoinTeamResult>
   renameProject: (projectId: string, name: string) => Promise<boolean>
+  /** Rename and re-describe (the retired Overview hub's edit, now on the card). */
+  editProject: (projectId: string, name: string, description: string) => Promise<boolean>
   archiveProject: (projectId: string) => Promise<boolean>
   unarchiveProject: (projectId: string) => Promise<boolean>
   deleteProject: (projectId: string) => Promise<boolean>
@@ -117,8 +152,12 @@ export function useHomeData(): HomeData {
       setActivityByProject(snap.activityByProject)
       setStatus('ready')
       loadedTeamId.current = storedTeamId
-    } catch {
-      if (seq === loadSeq.current) setStatus('offline')
+    } catch (error: unknown) {
+      if (seq !== loadSeq.current) return
+      // A 404 for the stored team is "gone" (deleted, or I was removed) — the
+      // backend is answering; telling the user to restart it is the failure
+      // errors.ts exists to prevent. The next load re-resolves to the personal team.
+      setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
     }
   }, [fetchEnabled, storedTeamId])
 
@@ -140,7 +179,9 @@ export function useHomeData(): HomeData {
     [load]
   )
 
-  const setActiveTeam = (teamId: string): void => useWorkspaceStore.getState().setTeamId(teamId)
+  // Through the team choke point (HOME H5): a project of the previous team is
+  // closed and every project-scoped store cleared before the team moves.
+  const setActiveTeam = (teamId: string): void => switchWorkspaceTeam(teamId, 'home')
 
   // Archiving or deleting the OPEN project closes it: the shell must not stay
   // scoped to a project that is hidden or gone (its retained entity list goes
@@ -169,9 +210,10 @@ export function useHomeData(): HomeData {
         const created = await createTeamApi(name)
         // Focus the new team; the load effect re-resolves off the stored id.
         setActiveTeam(created.id)
-        return true
-      } catch {
-        return false
+        return { ok: true, teamId: created.id }
+      } catch (error: unknown) {
+        const limit = planLimitFromError(error)
+        return limit ? { ok: false, reason: 'plan_limit', limit } : { ok: false, reason: 'failed' }
       }
     },
     joinTeam: async (token) => {
@@ -179,12 +221,18 @@ export function useHomeData(): HomeData {
         const result = await acceptInvite(token)
         // Focus the newly-joined team so it (and its projects) is in view.
         setActiveTeam(result.team_id)
-        return result
-      } catch {
-        return null
+        return { ok: true, teamId: result.team_id, role: result.role }
+      } catch (error: unknown) {
+        return joinRefusal(error)
       }
     },
     renameProject: (projectId, name) => runAction(() => updateProjectApi(projectId, { name })),
+    editProject: (projectId, name, description) =>
+      runAction(async () => {
+        await updateProjectApi(projectId, { name, description })
+        // The open project's pill and switcher follow the new name at once.
+        if (useWorkspaceStore.getState().project?.id === projectId) renameWorkspaceProject(name)
+      }),
     archiveProject: (projectId) =>
       runAction(async () => {
         await archiveProjectApi(projectId)

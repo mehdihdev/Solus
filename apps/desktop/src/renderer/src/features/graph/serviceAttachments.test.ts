@@ -16,6 +16,7 @@ const connection: resources.Connection = {
   access: 'read',
   last_error: null,
   needs_reauth: null,
+  health: 'healthy',
   projects: [],
   created_at: '',
   updated_at: ''

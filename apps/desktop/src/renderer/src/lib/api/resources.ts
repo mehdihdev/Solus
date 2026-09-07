@@ -78,6 +78,19 @@ export interface Source {
 
 export type ConnectionStatus = 'pending' | 'connected' | 'error' | 'revoked'
 
+/** SOLUSDEV-244 (HOME H4): derived server-side from stored state, never a probe. */
+export type ConnectionHealth = 'healthy' | 'token_expired' | 'degraded'
+
+/** The provider-quota meter's position for a metered account (SOLUSDEV-167 /
+ *  ADR-019). `estimated` is always true: a floor on Solus's own calls since the
+ *  counter started, never a remaining balance — the UI must say so. */
+export interface ConnectionQuota {
+  status: 'ok' | 'degraded' | 'exhausted'
+  used: number
+  allowance: number
+  estimated: boolean
+}
+
 /** A project that uses an account grant (SOLUSDEV-241). */
 export interface ConnectionProject {
   project_id: string
@@ -98,6 +111,10 @@ export interface Connection {
    *  failed (`token_error`). Null when nothing is needed. */
   needs_reauth: 'token_error' | null
   last_error: SourceError | null
+  /** SOLUSDEV-244 (H4): what Home badges. `token_expired` outranks `degraded`. */
+  health: ConnectionHealth
+  /** Present only for a metered provider with a reachable ledger (H4). */
+  quota?: ConnectionQuota
   projects: ConnectionProject[]
   created_at: string
   updated_at: string
@@ -575,8 +592,13 @@ export function unarchiveProject(projectId: string, client: ApiClient = api): Pr
 }
 
 /** Permanently delete a project (admin, confirmation required — API.md §2.3). */
+/** Owner-only; the API demands `?confirm=true` like team delete — the card's
+ *  confirm dialog is that confirmation (HOME H5 review: every desktop project
+ *  delete answered 400 `confirmation_required` before). */
 export function deleteProject(projectId: string, client: ApiClient = api): Promise<void> {
-  return client.request<void>(`/projects/${projectId}`, { method: 'DELETE' })
+  return client.request<void>(`/projects/${encodeURIComponent(projectId)}?confirm=true`, {
+    method: 'DELETE'
+  })
 }
 
 /** The personal team auto-provisioned at first login (API.md §1.3). */
@@ -986,8 +1008,13 @@ export function updateTeam(
 }
 
 /** Delete a team (owner only; API.md §2.2). Irreversible — confirm in the UI first. */
+/** Owner-only, and the API demands `?confirm=true` (API.md §2.2) — the UI's
+ *  confirm dialog IS that confirmation. Found in the HOME H5 live run: without
+ *  the flag every desktop delete answered 400 `confirmation_required`. */
 export function deleteTeam(teamId: string, client: ApiClient = api): Promise<void> {
-  return client.request<void>(`/teams/${teamId}`, { method: 'DELETE' })
+  return client.request<void>(`/teams/${encodeURIComponent(teamId)}?confirm=true`, {
+    method: 'DELETE'
+  })
 }
 
 export function listMembers(teamId: string, client: ApiClient = api): Promise<TeamMemberApi[]> {
@@ -1047,10 +1074,6 @@ export function acceptInvite(token: string, client: ApiClient = api): Promise<Ac
   return client.request<AcceptInviteResult>(`/invites/${encodeURIComponent(token)}/accept`, {
     method: 'POST'
   })
-}
-
-export function listActivity(teamId: string, client: ApiClient = api): Promise<ActivityApi[]> {
-  return client.request<ActivityApi[]>(`/teams/${teamId}/activity`)
 }
 
 export interface ActivityPageOptions {

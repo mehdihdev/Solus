@@ -9,7 +9,7 @@ import type { ConnectMode } from './integrationCatalog'
 import type { ConnectionState, ConnectStage } from './onboardingStore'
 import { plural } from './selectionConfigureStep'
 
-export type WizardStepId = 'access' | 'authorize' | 'configure' | 'file' | 'index'
+export type WizardStepId = 'access' | 'authorize' | 'configure' | 'file' | 'index' | 'bridge'
 
 export interface WizardStep {
   readonly id: WizardStepId
@@ -40,6 +40,9 @@ export interface WizardPosition {
 
 /** The steps this connector's declared shape implies, in order. */
 export function wizardSteps(shape: WizardShape): readonly WizardStep[] {
+  // A local tool has no credential flow: it connects when its vendor app runs
+  // its server and the companion bridges it — one step, stated plainly.
+  if (shape.mode === 'local-bridge') return [{ id: 'bridge', title: 'Connect on this computer' }]
   if (shape.mode === 'export-file') {
     return [
       { id: 'file', title: 'Choose export' },
@@ -116,7 +119,10 @@ const GUIDE: Readonly<Record<WizardStepId, Copy>> = {
     'components and nets — the electronics domain of your graph.',
   index: () =>
     'Solus is reading the source and building graph entities from it. ' +
-    'The first sync can take a moment.'
+    'The first sync can take a moment.',
+  bridge: ({ name }) =>
+    `${name} runs its own local server on this computer; the Solus companion bridges it. ` +
+    'There is no account to link — follow the steps below in the vendor app.'
 }
 
 const EXPERT: Readonly<Record<WizardStepId, Copy>> = {
@@ -127,7 +133,8 @@ const EXPERT: Readonly<Record<WizardStepId, Copy>> = {
       ? `Pick the ${plural(selectionLabel)} to track.`
       : 'Enter the connector details.',
   file: () => 'Choose the committed netlist export.',
-  index: () => 'Indexing…'
+  index: () => 'Indexing…',
+  bridge: ({ name }) => `${name} runs locally; the companion bridges it.`
 }
 
 /** What the current step tells the user, in their SOL mode. */

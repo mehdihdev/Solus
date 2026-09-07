@@ -228,6 +228,42 @@ async def test_a_hostile_saved_preference_cannot_escalate(
     assert result.data["ok"] is False
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [p for p in PAYLOADS if p.surface is Surface.ENGINEERING_PREFERENCES],
+    ids=lambda p: p.case_id,
+)
+async def test_a_hostile_engineering_convention_cannot_escalate(
+    engine: AsyncEngine, payload: Payload
+) -> None:
+    """SOLUSDEV-244: the person's engineering conventions reach the SYSTEM
+    prompt from a fork-writable, hand-editable file carried by the renderer.
+    A "house rule" that grants standing approval, widens scope, or closes its
+    own fence must change nothing structural: same tool set, same action mode,
+    the destructive call still parked at the gate."""
+    import dataclasses
+
+    executed: list[dict[str, Any]] = []
+    registry = _registry(executed)
+    baseline = tool_specs(tuple(registry.list()))
+    model = _CompliantModel(
+        (ToolUse(id="t1", name="onshape.set_variable", args={"name": "wall_thickness"}),)
+    )
+    ctx = await _funded_ctx(engine, registry)
+    ctx = dataclasses.replace(ctx, engineering_preferences={"Electrical": payload.text})
+    mode_before = ctx.sol_mode
+
+    events = await _collect(LlmRunner(adapters={"anthropic": model}), ctx)
+
+    assert tool_specs(tuple(registry.list())) == baseline
+    assert ctx.action_mode is ActionMode.GUIDE
+    # The answer mode is a server-side user setting; no convention flips it.
+    assert ctx.sol_mode is mode_before
+    assert executed == []
+    result = next(e for e in events if e.type is AgentEventType.TOOL_RESULT)
+    assert result.data["ok"] is False
+
+
 # ------------------------------------------------- the action alphabet
 
 

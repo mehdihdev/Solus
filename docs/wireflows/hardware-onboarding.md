@@ -16,7 +16,7 @@ closes the modal before affecting graph navigation (`workspace.md` §Add).
 
 ```
 | Add › Hardware                                                              |
-| [ Detected  n ] [ From a file  n ] [ Library ] [ Sourced (disabled) ] [ Authored ] |
+| [ Detected  n ] [ From a file  n ] [ Library ] [ Sourced ] [ Authored ]            |
 ```
 
 ## Flow 1 — Detected (the proposal, not the form)
@@ -74,10 +74,13 @@ closes the modal before affecting graph navigation (`workspace.md` §Add).
    (`GET /hardware/suggestions?status=pending`), never a second robot; the user accepts or rejects
    it (`POST /hardware/suggestions/{id}/accept|reject`).
 
-## Flow 4 — Sourced (disabled)
+## Flow 4 — Sourced
 
-A disabled card reading exactly "Sourcing (ST5) is not available yet." — visible, not clickable,
-no modal. Never a dead button.
+Footer "Find a part". Open → the sourcing panel (STORE ST5, `sourcing.md`) on its **Workspace
+door**: the same two-door panel the BOM uses, defaulting to *From CAD* so SOL derives the torque
+from one of the project's assemblies; the selected candidate enters the chosen robot category as
+a PLANNED part and the robot view reloads (`onCreated`). Offline the card is disabled like the
+other four.
 
 ## Flow 5 — Authored
 

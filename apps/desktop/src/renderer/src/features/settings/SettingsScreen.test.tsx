@@ -60,25 +60,12 @@ function team(status: TeamData['status'] = 'ready'): TeamData {
       member_count: 1,
       role: 'owner'
     },
-    members: [
-      { user_id: 'u1', email: 'maya@strider.dev', name: 'Maya K', role: 'owner', joined_at: '' }
-    ],
-    invites: [],
-    activity: [],
-    activityHasMore: false,
-    activityTotal: 0,
     loadMoreActivity: vi.fn(async () => undefined),
-    projects: [],
     teams: [],
     myRole: 'owner',
     actions: {
-      invite: vi.fn(async () => null),
-      revoke: vi.fn(async () => true),
-      changeRole: vi.fn(async () => true),
-      remove: vi.fn(async () => true),
       updateTeam: vi.fn(async () => true),
       deleteTeam: vi.fn(async () => true),
-      switchTeam: vi.fn(),
       createTeam: vi.fn(async () => true),
       joinTeam: vi.fn(async () => null),
       createProject: vi.fn(async () => null),
@@ -111,7 +98,8 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Privacy')).toBeInTheDocument()
     expect(screen.getByText('Billing')).toBeInTheDocument()
     expect(screen.getByText('Integrations')).toBeInTheDocument()
-    expect(screen.getByText('Members')).toBeInTheDocument()
+    // Members live on Home since SOLUSDEV-244 / HOME H5; Settings keeps Team.
+    expect(screen.queryByText('Members')).toBeNull()
     expect(screen.getByText('Team')).toBeInTheDocument()
   })
 
@@ -149,10 +137,10 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Developer')).toBeInTheDocument()
   })
 
-  it('omits members + team while the team is still loading', () => {
+  it('omits the team section while the team is still loading', () => {
     teamData.mockReturnValue(team('loading'))
     render(<SettingsScreen />)
-    expect(screen.queryByText('Members')).not.toBeInTheDocument()
+    expect(screen.queryByText('Team')).not.toBeInTheDocument()
     expect(screen.getByText('Profile')).toBeInTheDocument()
   })
 })

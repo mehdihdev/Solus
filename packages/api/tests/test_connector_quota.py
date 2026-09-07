@@ -112,6 +112,19 @@ async def test_the_degraded_band_pauses_deferrable_work_only() -> None:
         assert caught.value.code == "quota_degraded"
 
 
+async def test_a_degraded_refusal_is_no_signal_never_a_change() -> None:
+    """HOME H4 (SOLUSDEV-244): the degraded band's refusal must classify as
+    "could not ask", exactly like exhaustion — otherwise the hourly sweep turns
+    the refusal into a full sync that is itself refused (the amplifier)."""
+    from solus_api.connectors.contracts import NO_SIGNAL_CODES
+
+    with pytest.raises(QuotaBlockedError) as caught:
+        await _meter(FakeRedis(), purpose="scheduled", used=60).admit()
+    assert caught.value.code == "quota_degraded"
+    assert caught.value.code in NO_SIGNAL_CODES
+    assert "quota_exhausted" in NO_SIGNAL_CODES
+
+
 async def test_past_the_allowance_even_a_user_action_is_refused() -> None:
     redis = FakeRedis()
 

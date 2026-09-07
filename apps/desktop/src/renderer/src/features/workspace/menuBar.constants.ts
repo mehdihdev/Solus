@@ -47,12 +47,10 @@ export const MENUS: readonly MenuSpec[] = [
     id: 'view',
     label: 'View',
     items: [
-      { label: 'Overview', screen: 'overview' },
+      { label: 'Home', screen: 'home' },
       { label: 'Workspace', screen: 'workspace' },
-      { label: 'Sources', screen: 'sources' },
       { label: 'Live Bench', screen: 'bench' },
       { label: 'SOL', screen: 'sol' },
-      { label: 'Team', screen: 'team' },
       { label: 'Store', screen: 'store' }
     ]
   },
@@ -61,8 +59,7 @@ export const MENUS: readonly MenuSpec[] = [
     label: 'Robot',
     projectHint: 'Open a project to act on its robot.',
     items: [
-      { label: 'Project overview', screen: 'overview', projectScoped: true },
-      { label: 'Connect a tool…', screen: 'sources', projectScoped: true },
+      { label: 'Connect a tool…', screen: 'home', projectScoped: true },
       { label: 'Connect a device…', screen: 'bench', projectScoped: true },
       { label: 'Ask SOL', screen: 'sol', projectScoped: true }
     ]

@@ -13,19 +13,12 @@ export interface ShellToast {
   /** SOLUSDEV-233: the action button navigates to this main screen (e.g. a
    *  backgrounded SOL reply's "View" jumps to the SOL page). */
   screen?: MainScreen
+  /** SOLUSDEV-246 (STORE ST3): with `screen: 'store'`, the action opens this
+   *  extension's detail page (the in-context suggestion after a source connects). */
+  extensionSlug?: string
 }
 
-export type MainScreen =
-  | 'home'
-  | 'overview'
-  | 'workspace'
-  | 'sources'
-  | 'bench'
-  | 'sol'
-  | 'team'
-  | 'store'
-  | 'billing'
-  | 'settings'
+export type MainScreen = 'home' | 'workspace' | 'bench' | 'sol' | 'store' | 'billing' | 'settings'
 
 /** Where the shell is: a main screen (a rail item), an alert detail, or an
  *  installed extension's page view (SOLUSDEV-235 / EXT-14). Detail routes are

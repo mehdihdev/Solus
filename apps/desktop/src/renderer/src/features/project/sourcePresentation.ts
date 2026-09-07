@@ -53,7 +53,6 @@ export function sourceErrorText(error: SourceError | string | null): string | nu
   return text ? text.slice(0, ERROR_TEXT_MAX) : null
 }
 
-
 /** The hosted add-on entry the API echoes back for one source, or undefined.
  *
  *  `serialize_source` strips underscore-prefixed config keys, so `hosted` — the
@@ -88,4 +87,13 @@ export function hostedState(source: Source, server: string): HostedState {
 export function hostedDetail(source: Source, server: string): string | null {
   const detail = hostedEntry(source, server)?.detail
   return typeof detail === 'string' && detail ? detail.slice(0, ERROR_TEXT_MAX) : null
+}
+
+/** What a source tracks today, read from its own config under the connector's
+ *  declared key. A single-select connector stores a scalar, multi stores a list. */
+export function trackedIds(source: Source, configKey?: string): string[] {
+  if (!configKey) return []
+  const value = (source.config as Record<string, unknown> | undefined)?.[configKey]
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string')
+  return typeof value === 'string' ? [value] : []
 }

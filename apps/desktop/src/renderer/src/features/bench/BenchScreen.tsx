@@ -3,7 +3,7 @@
 // focus via the useSharedFocus adapter (SOLUSDEV-70 wiring). Without a focused
 // entity the screen still does not dead-end (SOLUSDEV-72): active sessions
 // with streaming devices render the device-keyed telemetry view, and the
-// header's "Connect a device" offers a real path from the Sources screen.
+// header's "Connect a device" opens the serial-device dialog in place.
 // Honesty rules (SOLUSDEV-152) still bind: nothing here labels data REAL that
 // it cannot vouch for, and "nothing streaming" is only claimed once the API
 // said so.

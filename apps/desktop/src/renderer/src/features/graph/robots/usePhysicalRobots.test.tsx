@@ -11,6 +11,11 @@ import { useWorkspaceStore } from '../../../store/workspaceStore'
 import { useSettingsStore } from '../../../store/settingsStore'
 import { usePhysicalRobots } from './usePhysicalRobots'
 
+vi.mock('../../sourcing/SourcingModal', () => ({
+  SourcingModal: ({ door, projectId }: { door: string; projectId: string }): React.JSX.Element => (
+    <div role="dialog" aria-label={`sourcing:${door}:${projectId}`} />
+  )
+}))
 vi.mock('../../../lib/api/physicalRobots', () => ({
   createPhysicalRobot: vi.fn(),
   renamePhysicalRobot: vi.fn(),
@@ -73,7 +78,7 @@ async function openAuthoredForNewRobot(): Promise<HTMLElement> {
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Robot' }), '__new__')
   return screen.getByRole('button', { name: 'Create' })
 }
-function deferred<T>() {
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((done) => {
     resolve = done
@@ -464,4 +469,19 @@ it('offers honest category guidance and Escape cancels only the inline editor', 
   expect(api.renamePhysicalRobot).not.toHaveBeenCalled()
   act(() => useSettingsStore.setState({ solMode: 'Expert' }))
   expect(screen.getByText('Assigned parts inside.')).toBeInTheDocument()
+})
+
+it('the Sourced card opens the same sourcing panel as the BOM, on the Workspace door', async () => {
+  render(<Harness entities={[]} />)
+  await userEvent.click(screen.getByRole('button', { name: 'Sourced' }))
+  expect(screen.getByRole('dialog', { name: 'sourcing:workspace:p1' })).toBeInTheDocument()
+})
+
+it('cannot source a part while the project is offline', async () => {
+  useAuthStore.setState({ status: 'unauthenticated', user: null })
+  render(<Harness entities={[]} />)
+  const sourced = screen.getByRole('button', { name: 'Sourced' })
+  expect(sourced).toHaveAttribute('aria-disabled', 'true')
+  await userEvent.click(sourced)
+  expect(screen.queryByRole('dialog')).toBeNull()
 })

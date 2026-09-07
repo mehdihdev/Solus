@@ -15,6 +15,7 @@ import type {
   ExtensionsBridge
 } from '../main/extensions/extensions.types'
 import type { ExtensionIndex } from '../main/extensions/extensionIndex'
+import type { EngineeringPreferences } from '@solus/shared-types'
 
 export type {
   ExtDevLoadResult,
@@ -122,6 +123,15 @@ const api = {
       ipcRenderer.invoke('solchat:remove', projectId, conversationId),
     // Purge every cached chat — the account identity changed (ADR-034).
     clear: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('solchat:clear')
+  },
+  preferences: {
+    // ~/.solus/preferences.json — the user's engineering conventions (ADR-034
+    // as amended 2026-09-06, SOLUSDEV-244). Machine-local, user-authored; the
+    // main process owns the file and re-validates every write.
+    read: (): Promise<{ preferences: EngineeringPreferences; readOnly: boolean } | null> =>
+      ipcRenderer.invoke('prefs:read'),
+    write: (document: EngineeringPreferences): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('prefs:write', document)
   }
 }
 

@@ -71,6 +71,9 @@ _SYNC_FLIGHT_TTL_SECONDS = 300
 _SYNC_OPERATION_SECONDS = 3600
 _SYNC_QUEUE_SECONDS = 7200
 _SYNC_DEFER_SECONDS = 30
+#: One provider call (120 s) x the gateway's transient retries, plus slack; never retried by
+#: ARQ — a retry would be a second billed model call (security review M2).
+_SOURCING_JOB_SECONDS = 480
 _SYNC_MAX_TRIES = _SYNC_QUEUE_SECONDS // _SYNC_DEFER_SECONDS + 1
 
 
@@ -577,6 +580,7 @@ def build_worker_settings(settings: Settings) -> type:
 
     from solus_api.billing.reconciliation import reconcile_credit_debits
     from solus_api.extensions.review import extension_review
+    from solus_api.sourcing.worker import sourcing_request
 
     redis_url = settings.redis_url or "redis://localhost:6379"
 
@@ -590,6 +594,8 @@ def build_worker_settings(settings: Settings) -> type:
             func(sync_source, timeout=_SYNC_OPERATION_SECONDS + 60, max_tries=_SYNC_MAX_TRIES),
             reconcile_credit_debits,
             extension_review,
+            # SOLUSDEV-246 (STORE ST5): one sourcing request → candidates, metered.
+            func(sourcing_request, timeout=_SOURCING_JOB_SECONDS, max_tries=1),
         ]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —

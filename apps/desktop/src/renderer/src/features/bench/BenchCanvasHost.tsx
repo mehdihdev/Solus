@@ -8,7 +8,7 @@
 // requirement hints are judged against real sources, never assumed met
 // (docs/wireflows/widget-canvas.md "Header", "Picker"). Developer registrations
 // with a widget view (EXT-20) go in as the picker's Developer section.
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { Focus, SourceKind } from '@solus/shared-types'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -19,6 +19,7 @@ import { selectDevRegistration, useDevExtensionsStore } from '../devExtensions/d
 import { connectedKinds } from '../extensions/extensionLogic'
 import { useProjectSources } from '../project/useProjectSources'
 import type { MainScreen } from '../workspace/shellStore'
+import { ConnectDeviceModal } from './ConnectDeviceModal'
 
 export interface BenchCanvasHostProps {
   readonly projectId: string
@@ -26,7 +27,7 @@ export interface BenchCanvasHostProps {
   readonly onFocusChange: (focus: Focus | null) => void
   /** Active sessions as last reported; null = unknown, which is never "none". */
   readonly sessions: readonly BenchSession[] | null
-  /** Shell navigation for "Connect a device" and the picker's "Browse the Store". */
+  /** Shell navigation for the picker's "Browse the Store". */
   readonly onNavigate?: (screen: MainScreen) => void
 }
 
@@ -62,11 +63,12 @@ const TITLE_STYLE: React.CSSProperties = {
 }
 
 function BenchHeader({
+  projectId,
   focus,
-  sessions,
-  onNavigate
-}: Pick<BenchCanvasHostProps, 'focus' | 'sessions' | 'onNavigate'>): React.JSX.Element {
+  sessions
+}: Pick<BenchCanvasHostProps, 'projectId' | 'focus' | 'sessions'>): React.JSX.Element {
   const status = benchHeaderStatus(focus, sessions)
+  const [connecting, setConnecting] = useState(false)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -89,9 +91,12 @@ function BenchHeader({
         </div>
       </div>
       {status === 'nothing-streaming' && (
-        <Button kind="primary" size="sm" onClick={() => onNavigate?.('sources')}>
+        <Button kind="primary" size="sm" onClick={() => setConnecting(true)}>
           Connect a device
         </Button>
+      )}
+      {connecting && (
+        <ConnectDeviceModal projectId={projectId} onClose={() => setConnecting(false)} />
       )}
     </div>
   )
@@ -140,7 +145,7 @@ export function BenchCanvasHost(props: BenchCanvasHostProps): React.JSX.Element 
       projectId={projectId}
       focus={focus}
       onFocusChange={onFocusChange}
-      header={<BenchHeader focus={focus} sessions={sessions} onNavigate={onNavigate} />}
+      header={<BenchHeader projectId={projectId} focus={focus} sessions={sessions} />}
       onOpenStore={onNavigate ? () => onNavigate('store') : undefined}
       connectedKinds={kinds}
       dev={dev}

@@ -28,6 +28,7 @@ const ONSHAPE: resources.Connection = {
   access: 'read',
   needs_reauth: null,
   last_error: null,
+  health: 'healthy',
   projects: [{ project_id: 'p1', name: 'Rover' }],
   created_at: '',
   updated_at: ''

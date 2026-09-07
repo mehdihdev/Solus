@@ -144,6 +144,15 @@ instructions…" committed by anyone with repo access). Recommendation:
 
 No code for this ships in Tickets A–C. It is Ticket D, with its own Phase 1 design-review gate.
 
+**Status (2026-09-06, SOLUSDEV-244 / HOME H3):** the ROOT-level half of Ticket D shipped under the
+ADR-034 amendment of 2026-09-06 — `~/.solus/preferences.json`, the user's own engineering
+conventions, attached to each SOL turn by the desktop and injected as a fenced, capped
+`engineering_preferences` data block layered above the (future) corpus and below the reserved
+project-level slot (`docs/contracts/local-state.md`). It is user-authored, machine-local, and never
+server-stored, so the repo-commit injection vector above does not apply. Team/project-level
+instructions (the server-stored W1 `.solus` reaching the prompt, or a repo `instructions.md`) remain
+deferred to their own gate.
+
 ## 7. Execution plan (tickets, in dependency order)
 
 **Ticket A — `~/.solus` foundation + project registry** (unblocks Altium; smallest shippable win)
@@ -195,4 +204,5 @@ ADR-034). **2 and 4 remain open** for Tickets D and C respectively.
 | Artifact manifest, env requirements, parts | repo `.solus/` (TOML)                 | `~/.solus`                |
 | `sol_mode`, consent, onboarding step       | server (cross-machine by design)      | `~/.solus`, repo          |
 | Auth tokens (Supabase), BYO-license creds  | Supabase session storage / never disk | `~/.solus`, repo          |
-| Custom SOL instructions                    | TBD via Ticket D ADR                  | prompt without gating     |
+| Root engineering preferences               | `~/.solus/preferences.json` (user-authored, ADR-034 2026-09-06) | server, repo              |
+| Team/project SOL instructions              | TBD via Ticket D ADR                  | prompt without gating     |

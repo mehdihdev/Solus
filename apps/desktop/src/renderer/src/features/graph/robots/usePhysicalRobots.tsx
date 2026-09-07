@@ -33,14 +33,14 @@ export function usePhysicalRobots(
   prompt: ReactNode
 } {
   const mode = useSettingsStore((state) => state.solMode)
-  const { revealed, captureReveal } = useRevealCapture(onReveal)
+  const { revealedRef, captureReveal } = useRevealCapture(onReveal)
   const { session, online, generation, current } = useRobotSession(
     projectId,
     onChanged,
     captureReveal
   )
   const state = useSyncExternalStore(session.subscribe, session.snapshot)
-  const hardware = useHardwareAdd(session, current, revealed, onChanged, entities)
+  const hardware = useHardwareAdd(session, current, revealedRef, onChanged, entities)
   const [deletion, setDeletion] = useState<{ session: RobotSession; entity: Entity } | null>(null)
   const pending = deletion?.session === session ? deletion.entity : null
   useEffect(() => {
@@ -81,16 +81,19 @@ export function usePhysicalRobots(
 
 // ponytail: RobotSession.create() reveals the new robot but returns only a boolean;
 // capture the revealed id rather than widening robotSession.ts (outside R1).
-function useRevealCapture(onReveal: (entityId: string) => void) {
-  const revealed = useRef<string | null>(null)
+function useRevealCapture(onReveal: (entityId: string) => void): {
+  revealedRef: React.RefObject<string | null>
+  captureReveal: (entityId: string) => void
+} {
+  const revealedRef = useRef<string | null>(null)
   const captureReveal = useCallback(
     (entityId: string) => {
-      revealed.current = entityId
+      revealedRef.current = entityId
       onReveal(entityId)
     },
     [onReveal]
   )
-  return { revealed, captureReveal }
+  return { revealedRef, captureReveal }
 }
 
 /** Add › Hardware wiring: the Authored target list, robot creation through the
@@ -98,18 +101,18 @@ function useRevealCapture(onReveal: (entityId: string) => void) {
 function useHardwareAdd(
   session: RobotSession,
   current: () => boolean,
-  revealed: React.RefObject<string | null>,
+  revealedRef: React.RefObject<string | null>,
   onChanged: () => void,
   entities: readonly Entity[] | null
-) {
+): { createRobot: () => Promise<string>; onCreated: () => void; robots: Entity[] } {
   const createRobot = useCallback(async (): Promise<string> => {
-    revealed.current = null
+    revealedRef.current = null
     const ok = await session.create()
-    const id = revealed.current
+    const id = revealedRef.current
     if (!ok || !id)
       throw new Error(session.snapshot().error?.message ?? 'The robot could not be created.')
     return id
-  }, [session, revealed])
+  }, [session, revealedRef])
   const onCreated = useCallback(() => {
     if (current()) onChanged()
   }, [current, onChanged])
@@ -124,7 +127,7 @@ function useRobotSession(
   projectId: string | null,
   onChanged: (removedId?: string) => void,
   onReveal: (entityId: string) => void
-) {
+): { session: RobotSession; online: boolean; generation: number; current: () => boolean } {
   const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
   const authenticated = useAuthStore((state) => state.status === 'authenticated')
   const generation = useWorkspaceSessionGeneration()

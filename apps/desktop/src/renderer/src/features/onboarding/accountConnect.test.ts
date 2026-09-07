@@ -18,6 +18,7 @@ function connection(overrides: Partial<Connection> = {}): Connection {
     access: 'read',
     needs_reauth: null,
     last_error: null,
+    health: 'healthy',
     projects: [],
     created_at: '',
     updated_at: '',

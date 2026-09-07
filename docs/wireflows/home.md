@@ -1,8 +1,10 @@
 # Wireflow — Home, the cross-project surface (SOLUSDEV-242 / HOME H1)
 
-Home manages ACROSS projects and connects WHOLE accounts. Everything
-project-specific (documents, the graph, Live Bench, installed widgets, SOL)
-lives in the workspace screens. Home is `MainScreen 'home'`, the first rail
+Home manages ACROSS projects, carries the TEAM layer (SOLUSDEV-244 / HOME H5:
+the active team, its members and roles, one-time invites, join by token, the
+team feed — the separate Team screen is retired), and connects WHOLE accounts.
+Everything project-specific (documents, the graph, Live Bench, installed
+widgets, SOL) lives in the workspace screens. Home is `MainScreen 'home'`, the first rail
 item, the "All projects" entry of the project pill (`project-topbar.md`), and
 `Solus → Home` in the menu row. `docs/api/API.md §5` ("/") is the route map.
 
@@ -35,65 +37,265 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - Account-level actions stay on Home: `Join team` (invite token) and `New team`
   (both make the new team active), and the **CONNECTED ACCOUNTS** card
   (SOLUSDEV-241: OAuth binds at account scope; each project picks what it
-  tracks on its Sources page). See "Connected accounts" below (HOME H2).
+  tracks from the same card — the Sources page is retired, SOLUSDEV-244). See
+  "Connected accounts" below (HOME H2).
 
 ## Connected accounts (SOLUSDEV-242 / HOME H2)
 
 ```
 | CONNECTED ACCOUNTS                                                          |
-| [On] Onshape · ada@example.com                                              |
-|      Used in Rover and Arm · Read only                        [Revoke]      |
-| [Gh] GitHub · octocat                                                       |
-|      Connected in a project, not yet on your account   [Sign in to move]   |
-|      ⚠ Connected in Rover before account-level connections. Sign in once   |
-|        to move it to your account — Rover keeps syncing until then.         |
-|      (once signed in:)                          [Move to your account]      |
-|      ⚠ …Your linked account matches — move it so Rover uses your account   |
-|        grant.  → confirmation names the project, the grant, the removal     |
-| [Gl] GitLab                                                                 |
-|      Not connected                                            [Connect]     |
-| [Ki] KiCad                                                                  |
-|      Committed export · attached per project           [Attach in Rover]    |
-| [Fu] Fusion 360 (local)                                                     |
-|      Connects on this computer · attached per project  [Attach in Rover]    |
+| (Mechanical) ( Electrical ) ( Simulation ) ( Software )     ← domain tabs   |
+| ── one shape for every tool ────────────────────────────────────────────── |
+| [On] Onshape                                            [Pick documents]   |
+|      1 account linked · 2 connected in Rover                               |
+|        ada@example.com  HEALTHY                                [Revoke]    |
+|          Used in Rover and Arm · Read only                                 |
+|        Chassis v3                                          [Disconnect]    |
+|          ● connected · 1,204 entities                                      |
+| [Fu] Fusion                                                    [Connect]   |
+|      Server ready                                                          |
+| ── Electrical ──────────────────────────────────────────────────────────── |
+| [Ki] KiCad                                                 [Choose file]   |
+|      Committed export · per project · 1 connected in Rover                 |
+|        rover.xml                                           [Disconnect]    |
+|          ● connected · 42 entities                                         |
+| ── Simulation ──────────────────────────────────────────────────────────── |
+| [Mu] MuJoCo                                                      [Start]   |
+|      Ready · 1 session running in Rover                                    |
+|        STREAMING  MuJoCo demo                12 INGESTED          [Stop]   |
+| [Is] Isaac Sim                                                  (Start)    |
+|      Unavailable on this machine · No in-app start — use a script or …     |
+| ── Software ────────────────────────────────────────────────────────────── |
+| [Gh] GitHub                                                    [Connect]   |
+|      Not connected                                                         |
+| [Gl] GitLab                                          (Pick repositories)   |
+|      1 account linked · Open or switch to a project first.                 |
 ```
 
-- **Every tool the registry knows is listed** — a missing row reads as
-  "unsupported". OAuth tools link an account here; committed-export tools
-  (KiCad, Altium) and local-companion tools are attached per project, so their
-  row offers **Attach in <open project>**, which opens that project's Sources
-  page (where the source is added). With no project open the row says "open a
-  project to attach it from its Sources page" and has no button.
-- **Connect** opens the connect wizard in account mode (rail
-  `Choose access → Sign in`; no document picking here — that is the project's
-  Sources page, W2).
-- **Scope is stated on every linked row**: `Read only`, `Read and edit`, or
+- **Domain tabs** (SOLUSDEV-244): four pills — Mechanical, Electrical,
+  Simulation, Software — in that order, Mechanical selected on open. One tab
+  is shown at a time (`role="tablist"`/`tab`/`tabpanel`), and each switch
+  remounts the panel with a short fade-and-rise (`accounts-panel-in`; off under
+  `prefers-reduced-motion`). A tool's domain is classified in the app by
+  provider type (`accountDomains.ts`); a provider the app has no entry for lands
+  under Software rather than disappearing. A domain with nothing to connect yet
+  says so in place of rows. There is no footer line under the card.
+- **One shape for every tool.** Each row is: mark, name, one status line, and
+  ONE primary button — the **next step** for that tool. Beneath it, what already
+  exists, each item with its own confirmed action. The next step is offered
+  even when something already exists (a second account, a second export, a
+  second session are one click away). Every step runs through the connect
+  wizard modal (`ConnectWizardModal`, W2) — the same rail, header and copy the
+  Onshape sign-in uses:
+  - **OAuth tool, nothing linked** → `Connect` (account scope: rail
+    `Choose access → Sign in`; no picking here).
+  - **OAuth tool, account linked** → the connector's own next step on the
+    CURRENT project, reusing the linked account so the rail skips the sign-in:
+    `Pick documents` / `Pick repositories` (its declared selection), else
+    `Enter details` (its config fields), else `Add to project`. Status line
+    "N accounts linked · M connected in <project>".
+  - **Committed-export tool** (KiCad, Altium) → `Choose file` (project scope:
+    rail `Choose export → Build graph`). Status "Committed export · per project
+    · M connected in <project>".
+  - **Local tool** (Fusion) → `Connect`: the wizard's single step
+    `Connect on this computer` shows the registry's `connect_notice` verbatim and
+    its host, and closes on Got it. Status line is the live bridge word
+    (`toolStatusText`).
+  - **Simulator** (Simulation tab, `SimulationPanel`) → `Start`, which opens
+    `SimulatorStartModal` in the wizard's visual language: MuJoCo starts the
+    builtin demo scene; Gazebo asks for topics; MCAP replay for a path under the
+    server's data root; Isaac has no in-app start and its Start is disabled with
+    that reason. A refused start shows the backend's message in the modal.
+  - A project-bound step with **no current project** stays visible but
+    disabled, with "Open or switch to a project first." under the status line.
+    "Switch to" on a project card re-scopes every row in place.
+- **What already exists, beneath the row** (indented under the mark):
+  - each linked **account grant**: login (one line, clipped), health badge,
+    "Used in … · scope", quota meter (H4), Re-authorize when needed, confirmed
+    **Revoke** naming the projects it disconnects;
+  - each **legacy grant** (`GET /users/me/connections/legacy`): "Connected in a
+    project, not yet on your account", **Sign in to move** → once the matching
+    account is linked, confirmed **Move to your account** (unchanged from H2);
+  - each **source the current project holds** for the tool
+    (`GET /projects/{id}/sources` filtered by type): name, status dot, entity
+    count, confirmed **Disconnect** (retains entities — the shared
+    `DisconnectSourceModal`);
+  - each **running session** for a simulator: link state, label, ingest count,
+    **Stop** (`SessionChip`).
+- **Scope is stated on every linked account**: `Read only`, `Read and edit`, or
   `Access level not recorded`. Scopes are fixed in connector code; nothing on
   this surface widens one.
-- **Legacy grants** (`GET /users/me/connections/legacy`): a project-scoped grant
-  from before account-level connections, made by this user, is listed under its
-  provider as "Connected in a project, not yet on your account" with a note
-  naming the projects. It is not a usable grant here (no Revoke). Two states:
-  - no proving grant yet → note "…Sign in once to move it to your account —
-    Rover keeps syncing until then." and **Sign in to move** (the account-mode
-    wizard; the finished sign-in proves the account, nothing moves yet);
-  - the user holds the matching CONNECTED grant → note "…Your linked account
-    matches — move it so Rover uses your account grant." and **Move to your
-    account**, which opens a confirmation stating exactly what happens: "Rover
-    will use your linked Onshape account (read only access). The project's own
-    Onshape token — and any add-on grant on it — is removed; syncing continues
-    on your account." Confirm → `POST /users/me/connections/adopt` with those
-    source ids and `confirm_access: true` → the row joins the linked account's
-    "Used in". A move is never a side effect of loading Home or of a handshake.
-    A project whose recorded access mode differs from the account grant's is
-    never moved — it keeps its own token (its Sources page is where that changes;
-    W2 follow-up).
-- **Re-authorize** appears on a row whose last sign-in failed, with the
-  provider's message; it runs the same account-mode wizard and lands on the SAME
-  row (I1 dedupes by account), so the old token is replaced only once the new
-  consent succeeded.
-- **Revoke** is confirmed and names the projects it disconnects (unchanged).
-- Hidden while offline (honest empty state elsewhere on Home).
+- **Re-authorize** appears on a grant whose last sign-in failed, with the
+  provider's message; it runs the same account-scope wizard and lands on the
+  SAME grant (I1 dedupes by account), so the old token is replaced only once the
+  new consent succeeded.
+- Hidden while offline (honest empty state elsewhere on Home). The Simulation
+  tab with no project says "Open a project to run a simulation…"; with the API
+  unreachable it says so, never a fabricated inventory.
+
+### Health and quota per account (SOLUSDEV-244 / HOME H4)
+
+```
+| [On] Onshape · ada@example.com                                DEGRADED     |
+|      Used in Rover and Arm · Read only                        [Revoke]     |
+|      At least 1,440 of 1,800 Onshape calls this year (estimate)            |
+|      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░                                                  |
+|      ⚠ Approaching Onshape's call limit. Automatic syncs and SOL's Onshape |
+|        calls are paused; your own Sync now still reaches Onshape. At the   |
+|        limit Solus switches to cache-only reads and starts no new syncs.   |
+| [On] Onshape · ada@example.com                              TOKEN EXPIRED  |
+|      ⚠ The provider rejected this account's token. Re-authorize to        |
+|        reconnect.                                          [Re-authorize]  |
+```
+
+- Every linked row carries a **health badge** — `HEALTHY` (quiet, muted) ·
+  `TOKEN EXPIRED` · `DEGRADED` (warn colour) — from the server's `health`,
+  which is DERIVED from stored state and never probed: a probe would spend the
+  allowance the card protects. `token_expired` outranks `degraded`.
+- **Quota position** (metered providers only, today Onshape): "At least N of A
+  <Provider> calls this year (estimate)" over a thin bar. Always an estimate
+  (ADR-019): a floor on Solus's own calls since the counter started, never a
+  remaining balance — the words "remaining" and "left" never appear. Unmetered
+  providers (GitHub, GitLab) and an unreachable ledger say nothing about quota:
+  empty beats invented.
+- **Approaching the limit** (the meter's degraded band, 70% of the allowance;
+  an account at 80% is flagged): the badge reads DEGRADED and a warn note says
+  what already degrades — automatic syncs and SOL's provider calls pause, the
+  user's own Sync now still reaches the provider — and what happens at the
+  wall.
+- **At the wall** (allowance used, or the provider's 402 latched): the note
+  explains cache-only mode — documents already synced stay readable, nothing
+  new is fetched, no syncs run until the allowance resets — and says it is not
+  an error and needs no sign-in. The grant stays CONNECTED; no Re-authorize.
+- **Token expired** — the grant's last handshake failed, or a bound source's
+  sync was refused with `invalid_credentials` — offers **Re-authorize** in
+  place (the existing account-mode wizard; the row is replaced only once the
+  new consent succeeds), even when the grant row itself still reads connected.
+- Each transition INTO the degraded band or the wall is recorded once per
+  account as an `integration.quota_degraded` / `integration.quota_exhausted`
+  data event; loading Home again records nothing new.
+
+## How you engineer (SOLUSDEV-244 / HOME H3)
+
+```
+| HOW YOU ENGINEER                                              [Edit] |
+| ELECTRICAL                                                           |
+| Prefer 0.1 mm clearance minimum on all boards. JST-GH for signal.    |
+| UNITS AND STANDARDS                                                  |
+| SI units. ISO 2768-m general tolerances.                             |
+|                                                                      |
+| (editing:)                                                           |
+| CODE STYLE                                                  0 / 800  |
+| [                                                                  ] |
+| MECHANICAL … ELECTRICAL … DOCUMENTATION … UNITS AND STANDARDS        |
+| ANYTHING ELSE                                              0 / 2400  |
+| [                                                                  ] |
+|                                            [Cancel]   [Save]         |
+```
+
+- The card sits in Home's right column under CONNECTED ACCOUNTS, and stays on
+  the offline Home too: it is **machine-local**, the one part of `~/.solus` the
+  user owns (`~/.solus/preferences.json`, ADR-034 amendment 2026-09-06). It is
+  the Solus equivalent of a `claude.md` — a **document the user writes**, not a
+  settings screen. No toggles.
+- View: the sections that have text, labelled (Code style · Mechanical ·
+  Electrical · Documentation · Units and standards · Anything else); empty ones
+  are hidden. Nothing written yet → the intro line and an **+ Add** button
+  ("SOL follows these on every turn and says when one changed its answer").
+- Edit: one textarea per section with a `n / cap` counter (800 chars per
+  section, 2 400 for Anything else — the caps are what bound the prompt), Save /
+  Cancel. Save is optimistic through the desktop main process (atomic write,
+  0600); a failed save keeps the editor open with "Couldn't save your
+  conventions — try again." Cancel discards the draft.
+- The card always carries the line "Stored on this computer and shared by everyone who
+  signs in here." — the file is one per machine (ADR-034), so the sharing is stated, never
+  silent. An identity change (sign-out, in-place session swap) drops the loaded copy; the next
+  turn re-reads the file under the new identity.
+- **Read-only** when the file was written by a newer Solus (shown, no Edit).
+  **Unavailable** outside the desktop app ("Your conventions live in ~/.solus and
+  are edited in the Solus desktop app.").
+- **Effect**: the document rides along with every SOL turn
+  (`POST …/sol/conversations/{id}/messages` body `preferences`) and enters the
+  system prompt as one fenced data block, layered above the shipped engineering
+  references and below a project's own `.solus` (reserved). SOL is told to apply
+  the conventions and to say which one changed its answer. Nothing is stored
+  server-side; the Custom instruction card on the SOL page (SOLUSDEV-233) stays
+  a separate, server-stored answer-styling note.
+
+## The team layer (SOLUSDEV-244 / HOME H5)
+
+```
+| Strider · 3 members  [Strider ▾] ⋯          [✉ Join team] [👥 New team] [+ Invite teammate] |
+| 2 of 2 collaborative teams on your plan · your personal team never counts                   |
+| ⚠ You're at your plan's collaborative-team limit. Leave a team, or upgrade…   [Upgrade]     |
+|                                                                                             |
+| ┌ project grid (H1) ─────────────────────┐  ┌ MEMBERS · 3 · 1 PENDING        [+ Invite] ┐   |
+| │ …                                     │  │ Maya K  maya@…            ● OWNER          │   |
+| └───────────────────────────────────────┘  │ Noor A  noor@…      [member ▾] ✕           │   |
+| ┌ TEAM ACTIVITY                  RECENT ┐  │ new@…   INVITE PENDING · MEMBER        ✕   │   |
+| │ Maya invited noor@… · 2h ago          │  └────────────────────────────────────────────┘   |
+| │ … (6 rows)                            │  ┌ CONNECTED ACCOUNTS ┐  ┌ HOW YOU ENGINEER ┐      |
+| │ View all activity (41) →              │  └────────────────────┘  └──────────────────┘      |
+| └───────────────────────────────────────┘                                                    |
+```
+
+- **The team strip** always names the active team (`TeamStrip`): name, "personal
+  workspace" on the personal team, member count from the team detail; the
+  **switcher** (`TeamSelect`) only when the user belongs to more than one team;
+  a **⋯ menu** with `Rename team` (admin+), `Leave team` (any member of a
+  collaborative team; never on the personal team), and `Delete team` (owner
+  only, never on the personal team, confirmed by the shared delete dialog naming
+  the team and "every project in it"); `Join team` (token) and `New team` for
+  everyone; `Invite teammate` for owners and admins.
+- **Plan position, stated proactively**: "N of M collaborative teams on your
+  plan · your personal team never counts" whenever the subscription's
+  `max_teams` is known and finite (ADR-023: BASIC 2, PRO unlimited; ADR-025:
+  the personal team is exempt). At the limit, a warn note carries the
+  **Upgrade** button (→ Billing). Unknown subscription ⇒ no line (nothing
+  invented).
+- **Named refusals, never a silent failure**: `New team`, `Join team` and
+  `Invite teammate` read the server's `409 plan_limit_reached` and show its
+  sentence with **Upgrade** inside the dialog; a join refusal says which —
+  invalid or used token, expired, issued to another email, already a member.
+  The invitee's OWN plan is what blocks a join (ADR-023 cross-plan rule).
+- **LOCAL FOLDER card** (right column, between MEMBERS and CONNECTED ACCOUNTS;
+  moved here from the retired Project Overview hub): the CURRENT project's working
+  copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
+  then the path (one line, clipped with "…", full path in the title), Open
+  with VSCode / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
+  current project → "Open or switch to a project to link a working copy on
+  this computer." Not under the desktop bridge → its honest note.
+- **MEMBERS card** (right column, above LOCAL FOLDER): roster with roles;
+  owners and admins change roles (admin / member / viewer — ownership is
+  transferred, not picked) and remove members, never on an owner row; pending
+  invites with `Revoke`; `+ Invite` in the header for managers. **Remove and
+  Revoke are confirmed** in a dialog naming the person and the consequence
+  ("They lose access to every project in it" / "Its token stops working"). A
+  refused mutation (403, last owner, failure) is shown inline under the roster,
+  never swallowed.
+- **Invite** (`InviteModal`): email in, then the **one-time join token shown
+  once** with `Copy token`; `Done` while the token is uncopied asks a second
+  time ("You won't see this token again"). The token is never logged or listed
+  again (the server returns it only at creation). Inviting from the PERSONAL
+  team spins up a new collaborative team server-side (ADR-025 keeps the
+  personal team solo): the invite dialog says so BEFORE Send ("creates a new
+  collaborative team (it counts against your plan) and Home switches to it"),
+  and Home follows it.
+- **Later joiners** get the team's existing projects automatically (the
+  ADR-025 auto-grant on accept, `invites.py`); the joined team becomes active
+  and its grid shows those projects without any per-project sharing.
+- **TEAM ACTIVITY** (left column, under the grid; `TeamActivityPanel`): the
+  humanised team feed, six rows with actor attribution, `View all activity (N)
+→` opening the dialog with `Load more` (`activity-feed.md`). Per-project rows
+  stay on the project cards.
+- **Leave** moves Home to the personal workspace; the last owner is told to
+  make someone else an owner first (`409 last_owner`). **Delete** likewise
+  lands on the personal workspace.
+- **Gone**: a stored team that no longer exists (deleted, or the user was
+  removed — a 404, `useHomeData` status `gone`) reads "This team is no longer
+  available…" with `Go to my personal workspace` — never "restart the backend".
+- Settings keeps its Team section (rename, notify-on-new-project, the owner
+  danger zone); its Members section is retired in favour of Home.
 
 ## Project grid
 
@@ -113,9 +315,15 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   `?project_id=`, `Load more` while `has_next`, `N EVENTS` = the project's own
   `meta.total`.
 - Footer button: `Open` (no project open, or this one) / `Switch to` (another
-  project is open). Clicking anywhere on the card body does the same. Opening
-  lands on the project Overview (SOLUSDEV-164).
-- `⋯` menu (member+): `Rename` (name dialog) · `Archive` · `Delete` (owner only,
+  project is open). `Open` — and a click anywhere on the card body — opens the
+  project, landing on its Workspace (the Overview hub is retired, SOLUSDEV-244).
+  `Switch to` does NOT leave
+  Home: it makes that project current through the switch choke point
+  (`switchWorkspaceProject`, surface `home`), so the accounts card's
+  "Attach in …" and the Simulation tab re-scope in place and the card's footer
+  flips to `Open`.
+- `⋯` menu (member+): `Edit details` (name + description, `ProjectEditModal`;
+  the retired Overview hub's edit) · `Archive` · `Delete` (owner only,
   ADR-025, confirmed). The menu never opens the project. A failed archive raises the
   shell toast "That didn't work".
 - **New project** tile (member+): dashed, last in the grid; the name dialog
@@ -145,6 +353,18 @@ or deleted project. The switch is reported as the
 `project.switched` data event. The module header lists every project-scoped
 store and how it is kept honest; new project state is added there.
 
+## Switching teams — a broader swap
+
+Every team switch — the strip's selector, a created or joined team, leaving or
+deleting the active team, the gone-team button — goes through
+`switchWorkspaceTeam()` (`teamSwitch.ts`). If the open project belongs to
+another team it is closed THROUGH `switchWorkspaceProject(null)`, so every
+project-scoped store in that module's audit table is cleared; then `teamId`
+moves, `useHomeData` blanks the grid and reloads the project list for the new
+team, and `useHomeTeam` (keyed on the team id with a stale-response guard)
+reloads members, invites and the feed. A project already in the target team
+stays open. Reported as the `team.switched` data event.
+
 ## States
 
 - **Loading**: centred spinner.
@@ -157,5 +377,10 @@ store and how it is kept honest; new project state is added there.
 
 - The per-team cards listing every team's projects, and the merged cross-team
   RECENT ACTIVITY panel with its all-activity dialog (`activity-feed.md` §Home
-  surface). Activity on Home is per project now; the Team screen keeps the team
-  feed.
+  surface). Activity on Home is per project on the cards; since HOME H5 the
+  single-team TEAM ACTIVITY panel also lives on Home (it was the Team screen's).
+
+## Removed (SOLUSDEV-244 / HOME H5)
+
+- The separate Team screen (`MainScreen 'team'`, its rail item and menu entry)
+  and Settings → Members: both consolidated into Home above.

@@ -120,7 +120,16 @@ class SyncResult(FrozenModel):
 #: log, skip, ask again next time. Connector-wide vocabulary rather than
 #: per-connector, so the sweep can classify without knowing the provider.
 NO_SIGNAL_CODES = frozenset(
-    {"rate_limited", "quota_exhausted", "api_unreachable", "invalid_credentials"}
+    {
+        "rate_limited",
+        # SOLUSDEV-244 (HOME H4): the degraded band refuses deferrable work
+        # BEFORE the wall. Left out of this set, a sweep read that refusal as
+        # "changed" and scheduled the full sync it was refusing — the amplifier.
+        "quota_degraded",
+        "quota_exhausted",
+        "api_unreachable",
+        "invalid_credentials",
+    }
 )
 
 

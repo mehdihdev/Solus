@@ -11,12 +11,18 @@ import type { Page } from '../../lib/api/client'
 import { useInterval } from '../../lib/useInterval'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
 import { useDevExtensionsStore, type DevExtensionEntry } from '../devExtensions/devExtensionsStore'
+import { usePinsStore } from '../extensions/pinsStore'
 import { useExtensionRail, EXTENSION_RAIL_POLL_MS } from './useExtensionRail'
 
 vi.mock('../../lib/useInterval', () => ({ useInterval: vi.fn() }))
 vi.mock('../../lib/api/resources.extensions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources.extensions')>()
-  return { ...actual, listProjectExtensions: vi.fn() }
+  return {
+    ...actual,
+    listProjectExtensions: vi.fn(),
+    listExtensionPins: vi.fn(async () => []),
+    pinExtension: vi.fn()
+  }
 })
 
 const SVG = '<svg viewBox="0 0 16 16"><path d="M0 0h16v16H0z"/></svg>'
@@ -69,6 +75,7 @@ function devEntry(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  usePinsStore.getState().reset()
   useDevExtensionsStore.getState().reset()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover' } })
@@ -217,5 +224,53 @@ describe('useExtensionRail — developer registrations (EXT-20)', () => {
     await waitFor(() => expect(result.current.entries.map((e) => e.slug)).toEqual(['lab']))
     act(() => useDevExtensionsStore.setState({ entries: {} }))
     expect(result.current.entries).toEqual([])
+  })
+})
+
+describe('useExtensionRail — pins (STORE ST3)', () => {
+  it('hydrates the pins once and draws a pin-only entry beside the installs', async () => {
+    listMock.mockResolvedValue(page([install('cam', '2026-09-02T00:00:00Z')]))
+    vi.mocked(ext.listExtensionPins).mockResolvedValue([
+      {
+        slug: 'bom',
+        name: 'BOM',
+        verified: true,
+        publisher: { display_name: 'Solus' },
+        version: '2.0.0',
+        views: ['page'],
+        page: { label: 'BOM', icon: 'bom.svg' },
+        pinned_at: '2026-09-06T00:00:00Z'
+      }
+    ])
+    const { result } = renderHook(() => useExtensionRail({ iconTransport }))
+    await waitFor(() =>
+      expect(result.current.entries.map((e) => [e.slug, e.installed, e.pinned])).toEqual([
+        ['bom', false, true],
+        ['cam', true, false]
+      ])
+    )
+    expect(vi.mocked(ext.listExtensionPins)).toHaveBeenCalledTimes(1)
+    // The pin-only entry's icon is read from the latest approved version.
+    await waitFor(() => expect(result.current.icons.bom).toContain('<svg'))
+  })
+
+  it('a pin made after mount reaches the rail without a poll', async () => {
+    listMock.mockResolvedValue(page([]))
+    const { result } = renderHook(() => useExtensionRail({ iconTransport }))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(ext.pinExtension).mockResolvedValueOnce({
+      slug: 'bom',
+      name: 'BOM',
+      verified: true,
+      publisher: { display_name: 'Solus' },
+      version: null,
+      views: [],
+      page: null,
+      pinned_at: '2026-09-06T00:00:00Z'
+    })
+    await act(() => usePinsStore.getState().pin('bom'))
+    await waitFor(() => expect(result.current.entries.map((e) => e.slug)).toEqual(['bom']))
+    expect(result.current.entries[0]).toMatchObject({ label: 'BOM', iconPath: null })
+    expect(result.current.icons.bom).toBeNull()
   })
 })

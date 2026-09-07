@@ -5,6 +5,25 @@ import { OverviewTab } from './OverviewTab'
 import { manifest, viewOf } from '../testing/fixtures'
 
 describe('OverviewTab', () => {
+  it('names what a first-party bundle runs inside Solus (STORE ST3)', () => {
+    const firstParty = manifest({
+      schema_version: 2,
+      backend: { capability: 'bom', routes: true },
+      graph: { kinds: [{ name: 'item', domain: 'project' }] },
+      tools: { names: ['add_item'] }
+    })
+    render(<OverviewTab view={viewOf({ manifest: firstParty, install: {} })} />)
+    expect(screen.getByText('Runs in Solus (first-party)')).toBeInTheDocument()
+    expect(
+      screen.getByText(/backend routes · 1 graph kind · 1 SOL tool — implemented and reviewed/)
+    ).toBeInTheDocument()
+  })
+
+  it('says nothing about a backend for a community bundle', () => {
+    render(<OverviewTab view={viewOf({ install: {} })} />)
+    expect(screen.queryByText(/first-party/)).toBeNull()
+  })
+
   it('lists only the views the manifest declares, plus a permissions summary', () => {
     render(<OverviewTab view={viewOf({ install: {} })} />)
     expect(screen.getByText('Widget')).toBeInTheDocument()

@@ -524,9 +524,17 @@ those tables is an in-repo package under `packages/api/src/solus_api/widgets/<id
 in the bundle, and the publish validator refuses the tables from anyone but Solus staff with a
 matching package. Routes mount at `/api/v1/projects/{project_id}/widgets/<id>/…` behind the
 install row; tools register per request through the W0-04 registry as `<id>.<name>`; kinds land as
-`ext:<id>:<name>` with `origin="extension"`. The desktop needs nothing new: the frame, protocol,
-bridge and Store are exactly as documented here, and the v2 tables are simply parsed and ignored
-by the renderer. Design and routes: `docs/api/widget-bundles.md`. **STORE ST2** adds every
+`ext:<id>:<name>` with `origin="extension"`. The v2 tables are parsed and ignored by the frame,
+protocol and bridge, which are exactly as documented here. Design and routes:
+`docs/api/widget-bundles.md`. **STORE ST3/ST4 correction to "the desktop needs nothing new":** a
+first-party bundle's PAGE is rendered **in-repo** (`features/extensions/firstParty.ts` → e.g.
+`features/bom/BomScreen.tsx`), not in a sandboxed frame, because its data lives behind the bundle's
+own routes and the bridge's closed method table deliberately cannot reach them (adding a proxy
+method would widen the community surface for a first-party need). The install row still decides
+whether the page mounts (installed + enabled + not blocked); the bundle's `page.html` is an honest
+fallback for any host that mounts it as a plain extension. STORE ST3 also adds per-user pins
+(`docs/api/extensions.md` §6.5) — the rail is then installs ∪ pins, drawn after the Store behind a
+separator. **STORE ST2** adds every
 install to the project graph as a `solus:widget` node beside a `solus:live_bench` node under a
 per-project `solus:workspace` root (domain `workspace`, origin `system`), registered and removed
 by the install lifecycle and readable at `GET /projects/{id}/widgets/graph` for the workspace

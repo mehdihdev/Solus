@@ -92,6 +92,40 @@ describe('streamSolMessage', () => {
     expect(events.map((e) => e.type)).toEqual(['token', 'message', 'done'])
   })
 
+  it('sends the engineering preferences beside the text, and omits the key when null', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const preferences = {
+      schema_version: 1,
+      freeText: '',
+      codeStyle: '',
+      mechanical: '',
+      electrical: 'Prefer 0.1 mm clearance minimum on all boards.',
+      documentation: '',
+      unitsStandards: ''
+    }
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'what clearance?',
+      actionMode: 'guide' as const,
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => 'jwt',
+      baseUrl: 'http://api.test/api/v1'
+    }
+    await streamSolMessage({ ...base, preferences })
+    await streamSolMessage({ ...base, preferences: null })
+    const bodies = fetchImpl.mock.calls.map(
+      (call) =>
+        JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as Record<
+          string,
+          unknown
+        >
+    )
+    expect(bodies[0].preferences).toEqual(preferences)
+    expect('preferences' in bodies[1]).toBe(false)
+  })
+
   it('sends @-mentioned entity ids beside the text, never encoded into it', async () => {
     const fetchImpl = vi.fn(async () => sseResponse(WIRE))
     await streamSolMessage({

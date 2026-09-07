@@ -93,7 +93,7 @@ export interface ExtensionView {
 
 /** One row of the Overview's WHAT IT ADDS list, derived from `manifest.views`. */
 export interface Contribution {
-  readonly kind: 'widget' | 'page' | 'window' | 'permissions'
+  readonly kind: 'widget' | 'page' | 'window' | 'permissions' | 'backend'
   readonly title: string
   readonly detail: string
 }

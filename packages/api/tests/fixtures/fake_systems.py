@@ -27,6 +27,7 @@ from solus_api.agent.interfaces import (
     TelemetryWindowSummary,
 )
 from solus_api.agent.tools import ArtifactRef
+from solus_api.corpus.retrieval import CorpusHit
 from solus_api.fingerprint.contract import SourceRef
 from solus_api.models import ArtifactStorage
 
@@ -150,6 +151,8 @@ class FakeSolSystems:
         k: int,
         filter: RetrievalFilter | None = None,
     ) -> list[RagHit]:
+        if filter is not None and filter.source_types == ["corpus"]:
+            return self.corpus_hits(filter)[:k]
         hits = [
             RagHit(
                 chunk="The LM358 is a dual op-amp with a single-supply range of 3-32V.",
@@ -163,6 +166,52 @@ class FakeSolSystems:
             ),
         ]
         return hits[:k]
+
+    def corpus_hits(self, filter: RetrievalFilter) -> list[RagHit]:
+        """Two shipped-reference chunks (CORPUS C2): a confident principle and a
+        low-confidence rule of thumb, both electrical. Honour the domain filter."""
+        if filter.domains is not None and "electrical" not in filter.domains:
+            return []
+        return [
+            CorpusHit(
+                chunk=(
+                    "Decoupling is about loop area\n\nA decoupling capacitor supplies transient "
+                    "current; the loop inductance through its pins limits how fast."
+                ),
+                source_ref=SourceRef(
+                    source_connector="corpus", external_ref="electrical/decoupling/loop-area"
+                ),
+                score=0.83,
+                chunk_id="corpus:electrical/decoupling/loop-area",
+                title="Decoupling is about loop area",
+                domain="electrical",
+                topic="decoupling",
+                kind="principle",
+                audience="fundamentals",
+                confidence=0.9,
+                attribution="",
+                low_confidence=False,
+            ),
+            CorpusHit(
+                chunk=(
+                    "Bulk capacitance per rail\n\nA few hundred microfarads of bulk per motor "
+                    "rail is a starting point, not a design."
+                ),
+                source_ref=SourceRef(
+                    source_connector="corpus", external_ref="electrical/power_design/bulk-cap-rule"
+                ),
+                score=0.61,
+                chunk_id="corpus:electrical/power_design/bulk-cap-rule",
+                title="Bulk capacitance per rail",
+                domain="electrical",
+                topic="power_design",
+                kind="rule_of_thumb",
+                audience="reference",
+                confidence=0.5,
+                attribution="",
+                low_confidence=True,
+            ),
+        ]
 
     async def record_error_solution(
         self,

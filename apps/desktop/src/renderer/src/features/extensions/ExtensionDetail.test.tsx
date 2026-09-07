@@ -11,6 +11,26 @@ const fail = (over: Partial<ExtensionActionResult>): ExtensionActionResult =>
   ({ ok: false, code: 'x', message: 'x', ...over }) as ExtensionActionResult
 
 describe('ExtensionDetail — header', () => {
+  it('marks a first-party bundle and offers the pin (STORE ST3)', () => {
+    const firstParty = manifest({ schema_version: 2, backend: { capability: 'bom', routes: true } })
+    render(
+      <ExtensionDetail
+        view={viewOf({ manifest: firstParty, install: {} })}
+        actions={fakeActions()}
+        onBack={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId('first-party-badge')).toHaveTextContent('FIRST-PARTY')
+    expect(screen.getByRole('button', { name: 'Pin for all projects' })).toBeInTheDocument()
+  })
+
+  it('shows no first-party badge for a community bundle', () => {
+    render(
+      <ExtensionDetail view={viewOf({ install: {} })} actions={fakeActions()} onBack={vi.fn()} />
+    )
+    expect(screen.queryByTestId('first-party-badge')).toBeNull()
+  })
+
   it('shows the meta line with the real install count', () => {
     render(
       <ExtensionDetail view={viewOf({ install: {} })} actions={fakeActions()} onBack={vi.fn()} />

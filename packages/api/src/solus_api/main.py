@@ -32,6 +32,7 @@ from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.core.errors import register_error_handlers
 from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
+from solus_api.corpus import router as corpus_router
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
@@ -65,6 +66,7 @@ from solus_api.routers import (
     sol,
     solus_config,
     sources,
+    sourcing,
     teams,
     users,
     webhooks,
@@ -321,6 +323,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         # SYS-05: TTL'd semantic cache over the retrieval feeds (hit-rate logged).
         cache=SemanticCache(),
     )
+    # CORPUS C2 (ADR-036): the corpus is pulled through this same DbSolSystems
+    # (rag_query source_type "corpus"); the HTTP search route is full-text only.
     # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
     # + the §4.5 upload-route budgets (separate from the global rate limiter).
     app.state.artifact_store = build_artifact_store(resolved_settings)
@@ -393,6 +397,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(orchestration.router)
     app.include_router(panel.router)
     app.include_router(toolkb.router)
+    app.include_router(corpus_router.router)
     app.include_router(webhooks.router)
     app.include_router(live.router)
     # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,
@@ -400,4 +405,5 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(extensions.router)
     # SOLUSDEV-246: first-party bundle capability routes (widget-bundles.md §3).
     app.include_router(widgets.router)
+    app.include_router(sourcing.router)
     return app

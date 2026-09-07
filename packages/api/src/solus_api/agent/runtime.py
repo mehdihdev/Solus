@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     ParkFn = Callable[[_ToolCallHint], Awaitable[ParkedCall | None]]
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -106,6 +106,11 @@ def build_sol_registry(
         from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
 
         registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
+        # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
+        # graph, never the model's. Function-local import (house pattern).
+        from solus_api.sourcing.tools import build_derive_torque_tool
+
+        registry.register(build_derive_torque_tool(session_factory, project_id))
     if systems is not None:
         # SYS-03: the four builtin reads (query_graph / get_telemetry /
         # retrieve_errors / run_checkers) as thin closures over the real
@@ -368,6 +373,11 @@ class AgentRunContext:
     #: SOLUSDEV-233: the user's saved preference note. Reaches the prompt only
     #: through prompt.system_prompt's fenced data block, never as raw text.
     custom_instruction: str | None = None
+    #: SOLUSDEV-244: the person's engineering conventions (from their own
+    #: `~/.solus/preferences.json`, attached to the turn and validated by
+    #: `agent/preferences.py`), already labelled. Reaches the prompt only through
+    #: prompt.system_prompt's fenced data block, never as raw text.
+    engineering_preferences: Mapping[str, str] | None = None
     history: tuple[TurnView, ...] = ()
     #: SOLUSDEV-168: graph entities the user pointed at explicitly (the
     #: composer's `@`). They become the neighbourhood's anchors, so SOL is
@@ -625,7 +635,9 @@ class LlmRunner:
             # generic error event, and it is obvious in dev.
             raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
 
-        system = prompt.system_prompt(ctx.sol_mode, ctx.custom_instruction)
+        system = prompt.system_prompt(
+            ctx.sol_mode, ctx.custom_instruction, ctx.engineering_preferences
+        )
         tools = prompt.tool_specs(ctx.tools)
         nonce = prompt.new_nonce()
         # SOL-02: plan what to pull (deterministic, no model call), assemble
@@ -639,6 +651,9 @@ class LlmRunner:
             window=plan.window,
             budget=plan.budget,
             k=plan.k,
+            # CORPUS C2 (ADR-036): mode only orders corpus ties — Guide reads
+            # fundamentals first, Expert reference first. Never a filter.
+            mode=ctx.sol_mode,
         )
         # SOLUSDEV-233: declare the turn's context up front so clients can show
         # what SOL is grounded in. Manifest only — no section text.

@@ -3,7 +3,7 @@
 // blocked + `[views.page]`, by install time then label, capped).
 import { describe, it, expect } from 'vitest'
 import { fakeInstall, fakeManifest } from '../extensions/frame/testing/fixtures'
-import type { ExtensionInstallApi } from '../../lib/api/resources.extensions'
+import type { ExtensionInstallApi, ExtensionPinApi } from '../../lib/api/resources.extensions'
 import type { DevExtensionEntry } from '../devExtensions/devExtensionsStore'
 import {
   devRailEntriesFrom,
@@ -40,9 +40,26 @@ describe('railEntriesFrom', () => {
         iconPath: 'bom.svg',
         version: '1.2.0',
         installedAt: '2026-09-01T00:00:00Z',
-        dev: false
+        dev: false,
+        pinned: false,
+        installed: true,
+        firstParty: false,
+        publisher: { displayName: 'Solus', verified: true }
       }
     ])
+  })
+
+  it('marks an install whose pinned manifest declares a first-party table (STORE ST4)', () => {
+    const row = install('bom', '2026-09-01T00:00:00Z')
+    const firstParty = {
+      ...row,
+      version: {
+        ...row.version,
+        manifest: { ...row.version.manifest, backend: { capability: 'bom', routes: true } }
+      }
+    }
+    expect(railEntriesFrom([firstParty])[0]?.firstParty).toBe(true)
+    expect(railEntriesFrom([row])[0]?.firstParty).toBe(false)
   })
 
   it('drops disabled, blocked and page-less installs', () => {
@@ -99,6 +116,89 @@ describe('railEntriesFrom', () => {
   })
 })
 
+/** A §6.5 pin row (STORE ST3). */
+function pin(slug: string, pinnedAt: string, page = true): ExtensionPinApi {
+  return {
+    slug,
+    name: `${slug} ext`,
+    verified: true,
+    publisher: { display_name: 'Solus' },
+    version: '2.0.0',
+    views: page ? ['page'] : ['widget'],
+    page: page ? { label: slug.toUpperCase(), icon: `${slug}.svg` } : null,
+    pinned_at: pinnedAt
+  }
+}
+
+describe('railEntriesFrom — pins (STORE ST3)', () => {
+  it('draws a pinned extension in a project where it is not installed, marked not installed', () => {
+    const entries = railEntriesFrom([], [pin('bom', '2026-09-06T00:00:00Z')])
+    expect(entries).toEqual([
+      {
+        slug: 'bom',
+        label: 'BOM',
+        iconPath: 'bom.svg',
+        version: '2.0.0',
+        installedAt: '2026-09-06T00:00:00Z',
+        dev: false,
+        pinned: true,
+        installed: false,
+        firstParty: false,
+        publisher: { displayName: 'Solus', verified: true }
+      }
+    ])
+  })
+
+  it('merges a pin with the install of the same slug into one entry carrying the install facts', () => {
+    const entries = railEntriesFrom(
+      [install('bom', '2026-09-01T00:00:00Z')],
+      [pin('bom', '2026-09-06T00:00:00Z')]
+    )
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      slug: 'bom',
+      version: '1.2.0',
+      installedAt: '2026-09-01T00:00:00Z',
+      pinned: true,
+      installed: true
+    })
+  })
+
+  it('puts pinned entries first, then the project installs, each by time', () => {
+    const entries = railEntriesFrom(
+      [install('cam', '2026-09-01T00:00:00Z'), install('bom', '2026-09-03T00:00:00Z')],
+      [pin('bom', '2026-09-06T00:00:00Z'), pin('scope', '2026-09-05T00:00:00Z')]
+    )
+    expect(entries.map((e) => [e.slug, e.pinned, e.installed])).toEqual([
+      ['scope', true, false],
+      ['bom', true, true],
+      ['cam', false, true]
+    ])
+  })
+
+  it('a pin without a page view uses the extension name and the neutral glyph', () => {
+    const [entry] = railEntriesFrom([], [pin('widget-only', '2026-09-06T00:00:00Z', false)])
+    expect(entry).toMatchObject({ label: 'widget-only ext', iconPath: null, installed: false })
+  })
+
+  it('a pinned install that is disabled here is drawn as a pin, not as an install', () => {
+    const [entry] = railEntriesFrom(
+      [install('bom', '2026-09-01T00:00:00Z', { enabled: false })],
+      [pin('bom', '2026-09-06T00:00:00Z')]
+    )
+    expect(entry).toMatchObject({ slug: 'bom', pinned: true, installed: false })
+  })
+
+  it('pins count toward the cap, ahead of installs', () => {
+    const pins = Array.from({ length: RAIL_EXTENSION_CAP }, (_, i) =>
+      pin(`pin-${i}`, `2026-09-06T00:00:${String(i).padStart(2, '0')}Z`)
+    )
+    const entries = railEntriesFrom([install('late', '2026-09-01T00:00:00Z')], pins)
+    expect(entries).toHaveLength(RAIL_EXTENSION_CAP)
+    expect(entries.some((e) => e.slug === 'late')).toBe(false)
+  })
+})
+
 /** A dev-store row as main would have validated it. */
 function devEntry(
   slug: string,
@@ -128,7 +228,11 @@ describe('devRailEntriesFrom', () => {
         iconPath: 'bom.svg',
         version: 'dev',
         installedAt: '2026-09-05T00:00:00Z',
-        dev: true
+        dev: true,
+        pinned: false,
+        installed: false,
+        firstParty: false,
+        publisher: null
       }
     ])
   })

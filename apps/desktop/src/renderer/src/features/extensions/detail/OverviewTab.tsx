@@ -12,7 +12,8 @@ const CONTRIBUTION_ICON: Readonly<Record<Contribution['kind'], IconName>> = {
   widget: 'grid',
   page: 'lines',
   window: 'box',
-  permissions: 'check'
+  permissions: 'check',
+  backend: 'hex'
 }
 
 const RIGHT_COLUMN_WIDTH = 260

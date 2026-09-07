@@ -20,6 +20,7 @@ export interface ProjectGridProps {
   currentProjectId: string | null
   actions: HomeActions
   onOpenProject: (project: WorkspaceProject) => void
+  onSwitchProject: (project: WorkspaceProject) => void
   onNewProject: () => void
   onActionFailed: (body: string) => void
 }
@@ -31,6 +32,7 @@ export function ProjectGrid({
   currentProjectId,
   actions,
   onOpenProject,
+  onSwitchProject,
   onNewProject,
   onActionFailed
 }: ProjectGridProps): React.JSX.Element {
@@ -65,6 +67,7 @@ export function ProjectGrid({
               canDelete={canDelete}
               actions={actions}
               onOpen={onOpenProject}
+              onSwitch={onSwitchProject}
               onActionFailed={onActionFailed}
             />
           ))}

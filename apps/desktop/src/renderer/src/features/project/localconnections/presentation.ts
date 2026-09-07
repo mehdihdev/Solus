@@ -8,7 +8,10 @@ import type {
   BenchSession,
   BenchSimulatorKind,
   BridgeStatus,
-  LocalTool
+  GazeboSimConfig,
+  LocalTool,
+  McapReplayConfig,
+  MujocoSimConfig
 } from '../../../lib/api/resources'
 
 const SIMULATOR_NAMES: Record<BenchSimulatorKind, string> = {
@@ -20,6 +23,21 @@ const SIMULATOR_NAMES: Record<BenchSimulatorKind, string> = {
 
 export function simulatorName(kind: BenchSimulatorKind): string {
   return SIMULATOR_NAMES[kind]
+}
+
+const SIMULATOR_MARKS: Record<BenchSimulatorKind, string> = {
+  mujoco: 'Mu',
+  gazebo: 'Ga',
+  isaac: 'Is',
+  'mcap-replay': 'MC'
+}
+
+/** The config a simulator start sends (`POST /bench/sessions`, mode sim). */
+export type SimStartConfig = MujocoSimConfig | GazeboSimConfig | McapReplayConfig
+
+/** The two-letter mark a simulator row leads with (no vendor logo shipped). */
+export function simulatorMark(kind: BenchSimulatorKind): string {
+  return SIMULATOR_MARKS[kind]
 }
 
 /** Row title. A `usb_bridge` device NEVER shows a guessed board — the bridge

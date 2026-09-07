@@ -70,7 +70,12 @@ usable. No provider call occurs on graph selection, zoom or layout changes.
 
 Add → Hardware offers manual creation of a Physical Robot now; later R1/R2
 onboarding connects to the same service. The five-card Hardware surface is specified in
-`hardware-onboarding.md`. Default name is the project's name,
+`hardware-onboarding.md`.
+Its **Sourced** card (STORE ST5, `sourcing.md`) opens the same sourcing panel
+the BOM uses, defaulting to *From CAD* so SOL derives the torque from one of
+the project's assemblies; the selected candidate enters the chosen robot
+category as a PLANNED part and the robot view reloads. Disabled while the
+project is offline. Default name is the project's name,
 editable inline. Multiple robots coexist with independent names and containment.
 Enter a robot to see Sensors, Actuators / motors, Controllers, End effectors,
 Power, Structure, Wiring; enter a category to see its parts. Empty categories

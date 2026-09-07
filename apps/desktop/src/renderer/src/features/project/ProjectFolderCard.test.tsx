@@ -1,5 +1,6 @@
-// Local folder card on the Project Overview hub (SOLUSDEV-164): select an
-// existing directory or clone a repo, then open/unlink the linked folder.
+// Local folder card on Home (SOLUSDEV-244; from the Project Overview hub,
+// SOLUSDEV-164): select an existing directory or clone a repo, then
+// open/unlink the linked folder. A long path is clipped with an ellipsis.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -117,5 +118,16 @@ describe('ProjectFolderCard', () => {
     await userEvent.click(screen.getByRole('button', { name: /choose folder & clone/i }))
     expect(await screen.findByText(/repository not found/i)).toBeInTheDocument()
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
+  })
+})
+
+describe('ProjectFolderCard — long paths', () => {
+  it('clips the path to one line ending in an ellipsis and keeps the full path in the title', () => {
+    const long = '/Users/someone/Documents/robotics/teams/strider/rover-mk2/firmware/workspace'
+    useProjectFolderStore.setState({ folders: { p1: { path: long } } })
+    render(<ProjectFolderCard projectId="p1" />)
+    const path = screen.getByTitle(long)
+    expect(path).toHaveTextContent(long)
+    expect(path).toHaveStyle({ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' })
   })
 })

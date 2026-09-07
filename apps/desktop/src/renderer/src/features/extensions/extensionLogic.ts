@@ -336,7 +336,31 @@ export function contributionsOf(view: ExtensionView): Contribution[] {
       ? 'Asks for nothing'
       : `${plural(scopes.length, 'scope')} · ${plural(network.length, 'network origin')}`
   rows.push({ kind: 'permissions', title: 'Permissions', detail })
+  const backend = firstPartyDetail(manifest)
+  if (backend) rows.push({ kind: 'backend', title: 'Runs in Solus (first-party)', detail: backend })
   return rows
+}
+
+/** True when the manifest declares a first-party table (ADR-035 as amended
+ *  2026-09-05): its backend is in-repo Solus code, reviewed like any other. */
+export function isFirstParty(manifest: ExtensionManifest | null): boolean {
+  if (!manifest) return false
+  return (
+    manifest.backend !== undefined ||
+    manifest.graph.kinds.length > 0 ||
+    manifest.tools.names.length > 0
+  )
+}
+
+/** "Backend routes · 1 graph kind · 2 SOL tools" — what the in-repo code provides. */
+export function firstPartyDetail(manifest: ExtensionManifest): string | null {
+  if (!isFirstParty(manifest)) return null
+  const parts: string[] = []
+  if (manifest.backend?.routes) parts.push('backend routes')
+  if (manifest.graph.kinds.length > 0) parts.push(plural(manifest.graph.kinds.length, 'graph kind'))
+  if (manifest.tools.names.length > 0) parts.push(plural(manifest.tools.names.length, 'SOL tool'))
+  const what = parts.length > 0 ? parts.join(' · ') : 'first-party code'
+  return `${what} — implemented and reviewed inside Solus, never shipped in the bundle.`
 }
 
 /** The whole declared set — grants are all-or-nothing in this build. */

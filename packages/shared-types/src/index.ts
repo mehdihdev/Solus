@@ -138,6 +138,25 @@ export {
   type RegistryParseResult,
 } from "./local-state";
 
+// SOLUSDEV-244 (ADR-034 amendment 2026-09-06) — ~/.solus/preferences.json, the
+// user's engineering preferences. docs/contracts/local-state.md
+export {
+  ENGINEERING_PREFERENCES_FIELDS,
+  ENGINEERING_PREFERENCES_SCHEMA_VERSION,
+  PREFERENCES_FIELD_CAP,
+  PREFERENCES_FILENAME,
+  PREFERENCES_FREE_TEXT_CAP,
+  PREFERENCES_MAX_BYTES,
+  PREFERENCE_SECTIONS,
+  emptyEngineeringPreferences,
+  isEmptyPreferences,
+  parseEngineeringPreferences,
+  preferencesPromptChars,
+  type EngineeringPreferences,
+  type PreferenceSection,
+  type PreferencesParseResult,
+} from "./engineering-preferences";
+
 /** Fixture typing support — see src/json.ts. */
 export type { JsonShapeOf } from "./json";
 

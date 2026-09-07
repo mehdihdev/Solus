@@ -1,0 +1,159 @@
+[
+  {
+    "id": "robotics-actuator_selection-01",
+    "domain": "robotics",
+    "topic": "actuator_selection",
+    "question": "My shoulder joint has to hold a 2 kg payload horizontally for minutes at a time. Which torque figure on the motor datasheet do I compare that against?",
+    "gold_chunk_ids": [
+      "corpus:robotics/actuator_selection/size-from-the-load-not-the-catalogue",
+      "corpus:robotics/actuator_selection/stall-torque-is-not-a-rating"
+    ],
+    "required_facts": ["continuous", "stall"],
+    "answer": "Against the continuous (rated) torque, not stall torque. Holding a gravity load is a sustained duty, and continuous torque is a thermal limit set by winding heating, which grows with the square of current. Stall torque is where the motor stops turning at maximum current; designing to it overheats the winding. Include gearbox efficiency and a margin, and check the worst-case pose."
+  },
+  {
+    "id": "robotics-actuator_selection-02",
+    "domain": "robotics",
+    "topic": "actuator_selection",
+    "question": "Stepper or BLDC for a small arm joint that also carries a gravity load? I don't want to add an encoder if I can avoid it.",
+    "gold_chunk_ids": [
+      "corpus:robotics/actuator_selection/motor-family-trade-offs"
+    ],
+    "required_facts": ["stepper", "missed steps"],
+    "answer": "A stepper without an encoder is open loop: under overload it silently misses steps, and its torque falls with speed while it runs hot at standstill. Under a gravity load that is a poor fit unless you add position feedback. A BLDC with a field-oriented driver needs an encoder you fit and tune, but gives closed-loop torque control down to zero speed. An integrated smart servo is the shortcut if its continuous (not stall) torque covers the load."
+  },
+  {
+    "id": "robotics-actuator_selection-03",
+    "domain": "robotics",
+    "topic": "actuator_selection",
+    "question": "How much does a three-stage planetary gearbox cost me in output torque, and why does my harmonic drive feel inefficient when lightly loaded?",
+    "gold_chunk_ids": [
+      "corpus:robotics/actuator_selection/stall-torque-is-not-a-rating"
+    ],
+    "required_facts": ["efficiency", "stage"],
+    "answer": "Output torque is motor torque times ratio times efficiency, and efficiency is per stage, so a three-stage train multiplies three stage efficiencies. Strain-wave (harmonic) gears have no backlash but their efficiency depends strongly on speed, load, and temperature and can be low at light load or when cold. Use the efficiency at your actual operating point, not the headline figure."
+  },
+  {
+    "id": "robotics-kinematics_basics-01",
+    "domain": "robotics",
+    "topic": "kinematics_basics",
+    "question": "I exported my arm from CAD and the URDF looks right at zero pose but the links twist when I move joint 3. What conventions should I check?",
+    "gold_chunk_ids": [
+      "corpus:robotics/kinematics_basics/urdf-conventions-that-break-models"
+    ],
+    "required_facts": ["axis", "radians", "rpy"],
+    "answer": "Check that the joint axis is expressed in the child/joint frame (not the parent or world), that the rpy is fixed-axis roll about x, then pitch about y, then yaw about z, that all angles and limits are in radians, and that the origin is the parent-to-child transform at the joint's zero position. A DH table cannot be typed into URDF fields directly; CAD exports with intrinsic angles or a different order produce exactly this pose-dependent twist."
+  },
+  {
+    "id": "robotics-kinematics_basics-02",
+    "domain": "robotics",
+    "topic": "kinematics_basics",
+    "question": "Why does my IK solver command huge joint velocities when the arm is almost fully extended, even for a small tool movement?",
+    "gold_chunk_ids": [
+      "corpus:robotics/kinematics_basics/forward-inverse-and-the-jacobian"
+    ],
+    "required_facts": ["singularity", "jacobian"],
+    "answer": "A fully extended arm is at or near a kinematic singularity: the Jacobian loses rank because some direction of tool motion has become unreachable. Near that pose a small tool velocity in the lost direction requires enormous joint velocities, so the solver returns motions the actuators cannot follow. Keep targets inside the reachable workspace with a margin, or use a solver that damps the solution near singularities."
+  },
+  {
+    "id": "robotics-kinematics_basics-03",
+    "domain": "robotics",
+    "topic": "kinematics_basics",
+    "question": "What is the difference between odom and map frames, and which way do the axes point on a robot body in ROS?",
+    "gold_chunk_ids": [
+      "corpus:robotics/kinematics_basics/frames-and-transforms"
+    ],
+    "required_facts": ["odom", "x forward"],
+    "answer": "REP 105 defines base_link fixed to the body, odom which is continuous but drifts, and map which is globally consistent but may jump when the localiser corrects. REP 103 sets right-handed frames, SI units, radians, and for a body frame x forward, y left, z up. A transform T_a_c composes as T_a_b times T_b_c; frames with no path between them in the tree cannot be related."
+  },
+  {
+    "id": "robotics-sensor_fusion_basics-01",
+    "domain": "robotics",
+    "topic": "sensor_fusion_basics",
+    "question": "My IMU-only orientation estimate drifts after about a minute even though the gyro noise looks tiny on the scope. What is going on and what is the simplest fix?",
+    "gold_chunk_ids": [
+      "corpus:robotics/sensor_fusion_basics/covariance-as-trust"
+    ],
+    "required_facts": ["bias", "complementary"],
+    "answer": "Integrating a gyroscope turns a small constant bias into an angle error that grows linearly with time; averaging does not remove it because it is bias, not noise. Pair the gyro with the accelerometer, which measures gravity and gives a non-drifting tilt reference: a complementary filter trusts the gyro for fast changes (high-pass) and the accelerometer for the slow average (low-pass). Heading still needs a magnetometer or another absolute reference."
+  },
+  {
+    "id": "robotics-sensor_fusion_basics-02",
+    "domain": "robotics",
+    "topic": "sensor_fusion_basics",
+    "question": "What do the covariance fields in the odometry and IMU messages actually do for the EKF, and is it OK to leave them as zeros or identity?",
+    "gold_chunk_ids": [
+      "corpus:robotics/sensor_fusion_basics/timestamps-and-covariance-pitfalls",
+      "corpus:robotics/sensor_fusion_basics/covariance-as-trust"
+    ],
+    "required_facts": ["covariance", "trust"],
+    "answer": "Covariance is the filter's statement of how much to trust a measurement: the Kalman gain is computed from the ratio of measurement to state uncertainty, so a small covariance pulls the estimate hard and a large one barely moves it. All zeros is defined to mean unknown and a leading -1 means not measured; an identity matrix everywhere tells the filter every sensor is equally trustworthy. Set them from datasheet noise figures or a static test."
+  },
+  {
+    "id": "robotics-sensor_fusion_basics-03",
+    "domain": "robotics",
+    "topic": "sensor_fusion_basics",
+    "question": "My fused pose lags and jumps when the robot moves fast but is fine when it is slow. The camera runs over USB and the IMU over UART on a microcontroller.",
+    "gold_chunk_ids": [
+      "corpus:robotics/sensor_fusion_basics/timestamps-and-covariance-pitfalls"
+    ],
+    "required_facts": ["timestamp", "clock"],
+    "answer": "Most likely timestamps are taken on arrival rather than at capture, so camera frames are stamped tens of milliseconds late by a variable amount, and the two devices' clocks are not synchronised and drift apart. Stamp at exposure or sampling time using hardware triggers or the sensor's own clock, synchronise to one master or measure the offset, and confirm the IMU frame matches REP 145 with gravity included in the accelerometer."
+  },
+  {
+    "id": "robotics-control_tuning-01",
+    "domain": "robotics",
+    "topic": "control_tuning",
+    "question": "My position loop is fine for small moves but overshoots massively after a big step and takes ages to settle. Gains seem reasonable. What is happening?",
+    "gold_chunk_ids": [
+      "corpus:robotics/control_tuning/anti-windup-and-derivative-on-measurement"
+    ],
+    "required_facts": ["windup", "saturat"],
+    "answer": "Integral windup. During the large move the actuator saturates while the error stays large, and the integrator keeps accumulating error it cannot act on; when the measurement reaches the setpoint the stored integral drives it well past. Clamp the integrator, stop integrating while the output is saturated, or use back-calculation, and reset the integrator on enable or deliberate setpoint jumps."
+  },
+  {
+    "id": "robotics-control_tuning-02",
+    "domain": "robotics",
+    "topic": "control_tuning",
+    "question": "Walk me through tuning a PID by hand on a real joint with no model, and tell me what each gain is doing to the step response.",
+    "gold_chunk_ids": [
+      "corpus:robotics/control_tuning/tuning-a-loop-by-hand",
+      "corpus:robotics/control_tuning/what-each-pid-term-does"
+    ],
+    "required_facts": ["kp", "overshoot", "steady"],
+    "answer": "Zero Ki and Kd; raise Kp until a small step just oscillates steadily, then back off to around half. Add Kd to trim overshoot and damp the oscillation, filtering it if the command gets noisy. Add a small Ki to remove the steady offset from gravity or friction, watching for windup. Repeat at extreme poses and test a disturbance separately. P sets speed and stiffness but leaves a steady offset and overshoots when large; I removes the offset at the cost of lag; D adds damping but amplifies noise."
+  },
+  {
+    "id": "robotics-control_tuning-03",
+    "domain": "robotics",
+    "topic": "control_tuning",
+    "question": "How fast does my control loop need to run for a 20 Hz position bandwidth, and why do motor drivers put the current loop innermost?",
+    "gold_chunk_ids": [
+      "corpus:robotics/control_tuning/sample-rate-and-cascaded-loops"
+    ],
+    "required_facts": ["bandwidth", "current", "inner"],
+    "answer": "Rule of thumb: at least ten times the closed-loop bandwidth, so 200 Hz minimum and 400 to 600 Hz comfortable, provided jitter is small and the sensor latency does not cap it first. The current loop is innermost because the winding's electrical time constant is the fastest dynamics and current is what damages hardware; velocity sits around it and position outermost, each outer loop a comfortable factor slower, tuned from the inside out."
+  },
+  {
+    "id": "robotics-dynamics_basics-01",
+    "domain": "robotics",
+    "topic": "dynamics_basics",
+    "question": "Why does my arm sag at full horizontal reach under P control, and how does the gear ratio change the inertia the motor sees?",
+    "gold_chunk_ids": [
+      "corpus:robotics/dynamics_basics/reflected-inertia-and-gravity"
+    ],
+    "required_facts": ["reflected", "gravity", "sag"],
+    "answer": "Gravity torque at a joint is the downstream weight times the horizontal lever arm, largest with the arm horizontal. A proportional controller only produces holding torque when there is an error, so the joint droops until the error is big enough. An integral term removes it slowly; gravity compensation from the model's masses removes it as feedforward. Load inertia seen by the motor is divided by the ratio squared, and the rotor's inertia seen at the joint is multiplied by it."
+  },
+  {
+    "id": "robotics-simulation_fidelity-01",
+    "domain": "robotics",
+    "topic": "simulation_fidelity",
+    "question": "My MuJoCo sim is stable but the gains I tuned there oscillate on the real arm. The URDF came straight from CAD with default masses. Is the simulator the problem?",
+    "gold_chunk_ids": [
+      "corpus:robotics/simulation_fidelity/what-mujoco-gets-right-and-wrong"
+    ],
+    "required_facts": ["mass", "inertia", "contact"],
+    "answer": "Check the masses first. Default or copied inertial parameters make a simulated robot that is stable but tuned to the wrong dynamics, so gains do not transfer. MuJoCo's soft contact parameters (solref/solimp) are tuning knobs rather than material physics, and it omits backlash, motor torque-speed limits, and sensor latency unless modelled explicitly. Wrong inertials are the most frequent sim-to-real gap, then contact tuning, then actuator models."
+  }
+]

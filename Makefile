@@ -49,3 +49,12 @@ gen-openapi: ## regenerate packages/api/openapi.json + desktop TS types (run aft
 
 onshape-budget: ## SOLUSDEV-167: print the Onshape before/after call-count table
 	cd packages/api && uv run pytest tests/test_onshape_session_cost.py -q -s
+
+corpus-validate: ## SOLUSDEV-241 CORPUS C2: validate the shipped engineering corpus tree + manifest
+	cd packages/api && uv run --no-sync python -m solus_api.corpus validate && uv run --no-sync python -m solus_api.corpus manifest --check
+
+corpus-ingest: ## SOLUSDEV-241 CORPUS C2: apply the shipped corpus to $(SOLUS_DATABASE_URL) (the only write path)
+	cd packages/api && uv run --no-sync python -m solus_api.corpus ingest
+
+corpus-eval: ## SOLUSDEV-241 CORPUS C2: retrieval eval with per-domain scores (keyless full-text path)
+	cd packages/api && uv run --no-sync pytest tests/corpus/test_corpus_eval.py -q -s

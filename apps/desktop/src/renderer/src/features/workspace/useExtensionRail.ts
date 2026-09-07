@@ -12,9 +12,17 @@
 //
 // Developer registrations (EXT-20) come from the dev store, not the API:
 // merged after the installs, marked `dev`, icon never fetched (neutral glyph).
+//
+// Pins (SOLUSDEV-246 / STORE ST3) come from the pins store — the user's
+// account state, hydrated once here and re-read on the same poll, so a pin
+// made on another machine or in the Store reaches every project's rail.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useInterval } from '../../lib/useInterval'
-import { listProjectExtensions, type ExtensionInstallApi } from '../../lib/api/resources.extensions'
+import {
+  listProjectExtensions,
+  type ExtensionInstallApi,
+  type ExtensionPinApi
+} from '../../lib/api/resources.extensions'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import {
   fetchExtensionIconSvg,
@@ -22,6 +30,7 @@ import {
 } from '../extensions/pageview/extensionIconAsset'
 import { reduceSvg } from '../extensions/host/svgReduce'
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
+import { usePinsStore } from '../extensions/pinsStore'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 import {
   devRailEntriesFrom,
@@ -73,9 +82,9 @@ interface Listing {
 const NO_ENTRIES: readonly RailExtensionEntry[] = []
 
 /** One fetch, resolved to the listing it produces — never rejects. */
-async function fetchListing(projectId: string): Promise<Listing> {
+async function fetchListing(projectId: string, pins: readonly ExtensionPinApi[]): Promise<Listing> {
   try {
-    const entries = railEntriesFrom(await listAllInstalls(projectId))
+    const entries = railEntriesFrom(await listAllInstalls(projectId), pins)
     return { projectId, status: 'ready', entries }
   } catch {
     return { projectId, status: 'offline', entries: NO_ENTRIES }
@@ -94,16 +103,30 @@ function mergeListing(prev: Listing | null, next: Listing): Listing {
 function useRailEntries(): Pick<ExtensionRailData, 'status' | 'entries'> {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
+  const pins = usePinsStore((s) => s.pins)
   const [listing, setListing] = useState<Listing | null>(null)
   const active = projectId !== null && fetchEnabled
 
   const refresh = useCallback((): void => {
     if (!active) return
-    void fetchListing(projectId).then((next) => setListing((prev) => mergeListing(prev, next)))
+    void fetchListing(projectId, usePinsStore.getState().pins).then((next) =>
+      setListing((prev) => mergeListing(prev, next))
+    )
   }, [active, projectId])
 
-  useEffect(refresh, [refresh])
-  useInterval(refresh, EXTENSION_RAIL_POLL_MS, active)
+  // Pins are account state: hydrated once the rail can draw, re-read on the poll.
+  useEffect(() => {
+    if (active) void usePinsStore.getState().hydrate()
+  }, [active])
+  useEffect(refresh, [refresh, pins])
+  useInterval(
+    () => {
+      void usePinsStore.getState().hydrate()
+      refresh()
+    },
+    EXTENSION_RAIL_POLL_MS,
+    active
+  )
 
   if (!active) return { status: 'offline', entries: NO_ENTRIES }
   if (listing === null || listing.projectId !== projectId) {
@@ -113,7 +136,7 @@ function useRailEntries(): Pick<ExtensionRailData, 'status' | 'entries'> {
 }
 
 function iconKey(entry: RailExtensionEntry): string {
-  return `${entry.slug}/${entry.version}/${entry.iconPath}`
+  return `${entry.slug}/${entry.version ?? ''}/${entry.iconPath ?? ''}`
 }
 
 /** Fetch + reduce each entry's icon once per (slug, version, path); never throws. */
@@ -135,7 +158,7 @@ function useRailIcons(
 
   useEffect(() => {
     for (const entry of entries) {
-      if (entry.dev) continue
+      if (entry.dev || entry.iconPath === null || entry.version === null) continue
       const key = iconKey(entry)
       if (requested.current.has(key)) continue
       requested.current.add(key)

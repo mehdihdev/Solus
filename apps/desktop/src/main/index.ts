@@ -1,4 +1,4 @@
-import { app, shell, dialog, BrowserWindow, ipcMain, protocol } from 'electron'
+import { app, shell, dialog, BrowserWindow, ipcMain, protocol, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -29,6 +29,7 @@ import {
 import { isAllowedAppStoreUrl } from './appStoreUrl'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
+import { preferencesIpc, realPreferencesStoreDeps } from './preferencesStore'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { externalOpenHandler } from './externalUrl'
@@ -128,6 +129,18 @@ function registerSolChatCacheHandlers(): void {
   )
 }
 
+/** The user's engineering preferences, ~/.solus/preferences.json (ADR-034 as
+ *  amended 2026-09-06 — SOLUSDEV-244 / HOME H3). Shape, caps and the
+ *  newer-schema rule are enforced inside preferencesStore; the renderer's copy
+ *  is re-parsed there, never trusted. */
+function registerPreferencesHandlers(): void {
+  const deps = realPreferencesStoreDeps
+  ipcMain.handle('prefs:read', (event) => preferencesIpc.read(isMainRendererSender(event), deps))
+  ipcMain.handle('prefs:write', (event, document: unknown) =>
+    preferencesIpc.write(isMainRendererSender(event), document, deps)
+  )
+}
+
 /** Extensions (SOLUSDEV-235 / EXT-05, ADR-035): serve installed bundles + dev
  *  folders read-only over solus-ext://, and wire the install / dev-mode /
  *  window / network-proxy invokes. Every channel is sender-gated; every
@@ -157,11 +170,25 @@ function isMainRendererSender(event: Electron.IpcMainInvokeEvent): boolean {
   return isFromWindow(event.sender, mainWindow)
 }
 
+/** Preferred main-window size, clamped to the primary display's work area so a
+ *  small laptop screen still gets a window that fits. */
+const PREFERRED_WINDOW = { width: 1440, height: 900 } as const
+const WINDOW_SCREEN_MARGIN = 40
+
+function initialWindowSize(): { width: number; height: number } {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize
+  return {
+    width: Math.min(PREFERRED_WINDOW.width, width - WINDOW_SCREEN_MARGIN),
+    height: Math.min(PREFERRED_WINDOW.height, height - WINDOW_SCREEN_MARGIN)
+  }
+}
+
 function createWindow(): void {
   // Create the browser window.
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    ...initialWindowSize(),
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     autoHideMenuBar: true,
     // SOLUSDEV-235: the renderer owns the title row (project pill), so on macOS the
@@ -264,6 +291,7 @@ if (!app.requestSingleInstanceLock()) {
 
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
+    registerPreferencesHandlers()
 
     registerExtensionHandlers()
 

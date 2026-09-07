@@ -551,3 +551,33 @@ export function postDataEvents(
 ): Promise<void> {
   return client.request<void>('/events', { method: 'POST', body: { events } })
 }
+
+/* ---------------- §6.5 per-user pins (SOLUSDEV-246, STORE ST3) ---------------- */
+
+/** One pinned extension — the rail draws a tab for it in EVERY project. */
+export interface ExtensionPinApi {
+  slug: string
+  name: string
+  verified: boolean
+  publisher: ExtensionPublisherApi
+  /** Latest approved version, or null when the catalog has none right now. */
+  version: string | null
+  views: string[]
+  /** The latest manifest's `views.page`, or null when it declares no page. */
+  page: { label: string; icon: string } | null
+  pinned_at: string
+}
+
+export function listExtensionPins(client: ApiClient = api): Promise<ExtensionPinApi[]> {
+  return client.request<ExtensionPinApi[]>('/users/me/extension-pins')
+}
+
+export function pinExtension(slug: string, client: ApiClient = api): Promise<ExtensionPinApi> {
+  return client.request<ExtensionPinApi>(`/users/me/extension-pins/${seg(slug)}`, {
+    method: 'PUT'
+  })
+}
+
+export function unpinExtension(slug: string, client: ApiClient = api): Promise<void> {
+  return client.request<void>(`/users/me/extension-pins/${seg(slug)}`, { method: 'DELETE' })
+}

@@ -8,6 +8,9 @@ import asyncio
 import os
 
 from alembic import context
+from solus_api.corpus import (
+    schema as _corpus_schema,  # noqa: F401  (registers corpus_* on Base.metadata, ADR-036)
+)
 from solus_api.models import Base
 from solus_api.toolkb import (
     schema as _toolkb_schema,  # noqa: F401  (registers tool_knowledge on Base.metadata)

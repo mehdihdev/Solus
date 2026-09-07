@@ -184,12 +184,18 @@ matches on any other axis.
 - Size is bounded by the §3 minimum, not by a target count. There is no number of chunks to hit;
   there is a set of questions to be able to answer.
 
-## 8. Open items carried to C2
+## 8. Open items carried to C2 — resolution (CORPUS C2, ADR-036)
 
-- The storage ADR: a global `corpus_chunk` table under ADR-033's four rules, or a shipped static
-  bundle read at startup like `allowlist.yaml`. This document is neutral; the schema works for
-  both.
-- Whether checker warnings cite chunk ids in the `Warning` contract or only in the explanation
-  text. Needs the checker-interface owner.
-- The `.solus/project.toml` Layer-2 contract must adopt the §6 key set or this document is
-  amended to match it — whichever lands second reconciles.
+- **Storage:** a global `corpus_chunk` table under ADR-036 (ADR-033's four rules, with prose
+  columns admitted under closed enums, caps, and a single curated write path). Not a static
+  bundle. The content tree in `packages/api/src/solus_api/corpus/content/` is the source of
+  truth; `python -m solus_api.corpus ingest` is the only writer (`docs/corpus/AUTHORING.md`).
+- **Checker warnings citing chunk ids:** still open — needs the checker-interface owner. SOL
+  cites chunk ids today; checkers do not yet.
+- **`.solus/project.toml` applicability keys:** the Layer-2 contract has not landed. The §6 key
+  set is implemented as the retrieval filter's `applicability` parameter (closed keys and
+  values); nothing supplies it at request time yet, so every chunk "applies regardless" at v1.
+  Whichever lands second still reconciles.
+- **Root preferences (ADR-034 amendment, SOLUSDEV-244)** are free text, not applicability keys.
+  They sit above the corpus in the system prompt; the corpus enters below them as fenced
+  `context_corpus` data. That is the whole layering at v1.

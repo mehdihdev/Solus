@@ -1,8 +1,9 @@
 # Connect Wizard — Wireflow (SOLUSDEV-165)
 
 The guided connect experience for sources, replacing the inline in-tile flow on
-BOTH surfaces that offer connections: the per-project **Sources page**
-(`features/project/SourcesScreen.tsx`) and **onboarding step 1**
+BOTH surfaces that offer connections: **Home › Connected accounts**
+(`features/workspace/ConnectedAccountsCard.tsx`; the per-project Sources page it
+replaced is retired, SOLUSDEV-244 — see `home.md`) and **onboarding step 1**
 (`features/onboarding/ConnectStep.tsx`). Documents the flow **exactly as
 implemented**. One implementation serves both surfaces:
 `ConnectCatalog` (tiles + wizard) → `ConnectWizardModal` (presentation) →
@@ -74,14 +75,14 @@ always shown verbatim — never fabricated.
 
 ## Flows
 
-1. **Tile click** (Sources page catalog / onboarding grid) → wizard opens at
+1. **Next-step click** (a Home row's button / an onboarding tile) → wizard opens at
    step 0. Tiles are pure launchers (`ConnectTile`): identity, logo, live
    status footer. Clicking an errored tile reopens the wizard on the error.
 2. **OAuth**: Connect → (grant choice if offered) → browser handshake →
    token exchange → pick/enter what to track → sync + poll → done.
 3. **Committed export**: Choose file (validated ≤8 MB, non-empty by the
    engine) → parse + sync → done.
-4. **Done** → `onConnected` fires (Sources page refreshes its connected list;
+4. **Done** → `onConnected` fires (Home refreshes its accounts and the project's sources;
    onboarding recounts toward "Build context model").
 
 ## Cancel contract (close mid-flight)
@@ -101,7 +102,7 @@ the attempt** (`useConnectWizard.close`, per-attempt latches):
   backend REUSES the existing connected source, so the flow's `sourceId` can
   name live, populated graph data — auto-deleting it would violate the §7
   no-unconfirmed-destruction rule. A genuinely half-configured source stays
-  visible on the Sources page, where the confirmed Disconnect already lives.
+  visible under its tool's row on Home, where the confirmed Disconnect already lives.
 - A flow that **completed successfully anyway** (the handshake finished before
   the abort landed) keeps its source and reports through `onConnected` —
   finished work is never silently discarded.
@@ -126,7 +127,7 @@ gains a suffix (`Connected — 12 entities indexed · FeatureScript enabled`); o
 is simply absent.
 
 **The RECOVERY path, not the primary one:** an add-on block under the connected source on
-the Sources page (`HostedAddOnRow`, rendered by `SourceRow`), driven entirely by
+Home (`HostedAddOnRow`, rendered by the source item under the tool's row), driven entirely by
 `source.config.hosted.<server>.state` — server-backed, so it is correct for every teammate
 and survives every navigation. Three states: `not_connected` (the disclosure + *Enable*),
 `subscription_required` (the vendor's own reason + *Open … App Store* + *I've subscribed —
@@ -140,8 +141,8 @@ surface must be durable rather than wizard-resident, each load-bearing:
 - **The cancel contract.** Closing the wizard cancels the attempt. Subscribing is an
   external browser purchase that can wait on a company administrator — no state parked in
   the wizard would survive it.
-- **The Sources page resets the onboarding store on mount**, so wizard-resident state is
-  lost the moment the user navigates.
+- **Wizard-resident state does not survive navigation** (the wizard is modal), so nothing
+  durable may be parked in it.
 - **A teammate never opens this wizard.** For a `multi`-selection connector the backend
   REUSES the project's existing source, so someone joining a project where Onshape is
   already connected would never reach a wizard-only affordance.
@@ -165,7 +166,7 @@ registry with a *Connect* action that opens THIS wizard in account mode (`projec
 account with the projects that use it and a confirmed *Revoke* that names those projects
 ("Disconnects Onshape in Rover and Arm").
 
-On the Sources page, when the user already has a CONNECTED account for the tile's provider,
+On Home, when the user already has a CONNECTED account for the row's provider,
 the wizard **reuses it**: the rail drops `access` and `authorize` and reads
 `Pick <plural noun> → Build graph`, the idle action area says *Connect <name>* over
 "Using your linked account · <login>", and `begin()` goes `POST /projects/{p}/sources

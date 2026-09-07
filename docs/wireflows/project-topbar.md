@@ -35,8 +35,8 @@ design**; reshape by editing the constant.
 | Menu  | Items                                                                                                                                                                  |
 | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Solus | Home · Settings · Billing · ─ · Sign out                                                                                                                               |
-| View  | Overview · Context Model · Sources · Live Bench · SOL · Team · Store (active screen checked)                                                                           |
-| Robot | Project overview · Connect a tool… (Sources) · Connect a device… (Live Bench) · Ask SOL — disabled with "Open a project to act on its robot." while no project is open |
+| View  | Home · Workspace · Live Bench · SOL · Store (active screen checked)                                                                           |
+| Robot | Connect a tool… (Home › Connected accounts) · Connect a device… (Live Bench) · Ask SOL — disabled with "Open a project to act on its robot." while no project is open |
 | Help  | Documentation ↗ · Report an issue ↗ (https anchors → OS browser)                                                                                                     |
 
 Right cluster, unchanged from the previous topbar: bridge pill, search box

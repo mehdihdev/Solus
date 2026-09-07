@@ -1,7 +1,8 @@
 // Workspace shell: title row (project pill), menu row (Solus · View · Robot ·
 // Help + bridge / search / bell / sign out), icon rail, notifications popover,
 // toast, mini orb, and the workspace screens plus the alert detail view and
-// the installed extensions' page views (rail entries above the Store — EXT-14).
+// the installed extensions' page views (rail entries AFTER the Store, behind a
+// separator, pinned ones first — EXT-14 as amended by SOLUSDEV-246 STORE ST3).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
 // shows live API data or honest empty states, never fabricated robot data.
 import { useEffect, useState } from 'react'
@@ -16,16 +17,17 @@ import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
 import { SolScreen } from '../sol/SolScreen'
 import { MiniOrb } from '../sol/MiniOrb'
-import { TeamScreen } from '../team/TeamScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
-import { ProjectOverview } from '../project/ProjectOverview'
-import { SourcesScreen } from '../project/SourcesScreen'
 import { StoreScreen } from '../extensions/StoreScreen'
 import { useExtensionsStore } from '../extensions/extensionsStore'
 import { ExtensionPageScreen } from '../extensions/pageview/ExtensionPageScreen'
+import { PinnedNotInstalled } from '../extensions/pageview/PinnedNotInstalled'
 import { ExtensionIcon } from '../extensions/host/ExtensionIcon'
+import { renderFirstPartyPage } from '../extensions/firstParty'
+import { usePinsStore } from '../extensions/pinsStore'
+import { ContextMenu, clampMenuPosition } from '../../components/ui/ContextMenu'
 import { HomeScreen } from './HomeScreen'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
@@ -49,7 +51,6 @@ const SCREEN_TITLES: Readonly<Record<string, string>> = {
   sources: 'Sources',
   bench: 'Live Bench',
   sol: 'SOL',
-  team: 'Team',
   store: 'Store',
   billing: 'Billing',
   settings: 'Settings',
@@ -66,6 +67,8 @@ interface ShellNavigation {
   switchProject: (p: WorkspaceProject) => void
   openAlert: (alertId: string) => void
   openExtensionPage: (slug: string) => void
+  /** The Store, landing on one extension's detail page (STORE ST3). */
+  openStoreDetail: (slug: string) => void
   /** The toast's action button: an alert id opens that alert, else the toast's screen. */
   viewToast: (alertId?: string) => void
   onSignOut: () => Promise<void>
@@ -88,10 +91,10 @@ function useShellNavigation(): ShellNavigation {
   }
   const openProject = (p: WorkspaceProject): void => {
     // Every project-scoped store is swapped in ONE place (SOLUSDEV-242).
-    switchWorkspaceProject(p, route.name === 'team' ? 'team' : 'home')
-    // Opening a project from Home/Team lands on the project hub (SOLUSDEV-164)
-    // — an orienting overview — rather than the Context Model canvas.
-    go('overview')
+    switchWorkspaceProject(p, 'home')
+    // Opening a project from Home lands on its Workspace (SOLUSDEV-244): the
+    // Overview hub and the Sources page are retired — Home carries their tasks.
+    go('workspace')
   }
   const switchProject = (p: WorkspaceProject): void => {
     // Switching from the topbar only re-scopes the CURRENT screen to the new
@@ -99,8 +102,8 @@ function useShellNavigation(): ShellNavigation {
     switchWorkspaceProject(p, 'topbar')
     // A detail route belongs to the project it was opened in: an alert id is
     // project-scoped, and an extension's page view may not be installed in
-    // the new project (its rail entry may be gone) — fall back to Overview.
-    if (route.name === 'ext-page' || route.name === 'alert') go('overview')
+    // the new project (its rail entry may be gone) — fall back to Workspace.
+    if (route.name === 'ext-page' || route.name === 'alert') go('workspace')
     setNotifOpen(false)
   }
   const openAlert = (alertId: string): void => {
@@ -111,10 +114,15 @@ function useShellNavigation(): ShellNavigation {
     setRoute({ name: 'ext-page', slug })
     setNotifOpen(false)
   }
+  const openStoreDetail = (slug: string): void => {
+    go('store')
+    useExtensionsStore.getState().select(slug)
+  }
   const viewToast = (alertId?: string): void => {
-    const screen = useShellStore.getState().toast?.screen
+    const toast = useShellStore.getState().toast
     if (alertId) openAlert(alertId)
-    else if (screen) go(screen)
+    else if (toast?.screen === 'store' && toast.extensionSlug) openStoreDetail(toast.extensionSlug)
+    else if (toast?.screen) go(toast.screen)
     useShellStore.getState().clearToast()
   }
   const onSignOut = async (): Promise<void> => {
@@ -130,6 +138,8 @@ function useShellNavigation(): ShellNavigation {
     // Per-project install state is this user's workspace configuration; on a shared
     // workstation it must not outlive the session (same reasoning as WS-01).
     useExtensionsStore.getState().reset()
+    // Pins are this user's account state; the next user must not inherit them.
+    usePinsStore.getState().reset()
     navigate('/')
   }
   return {
@@ -141,6 +151,7 @@ function useShellNavigation(): ShellNavigation {
     switchProject,
     openAlert,
     openExtensionPage,
+    openStoreDetail,
     viewToast,
     onSignOut
   }
@@ -213,6 +224,7 @@ export function WorkspaceShell(): React.JSX.Element {
           extensions={rail}
           activeSlug={route.name === 'ext-page' ? route.slug : null}
           onOpenExtension={nav.openExtensionPage}
+          onOpenStoreDetail={nav.openStoreDetail}
         />
         <div
           data-screen-label={SCREEN_TITLES[name]}
@@ -220,8 +232,11 @@ export function WorkspaceShell(): React.JSX.Element {
         >
           <ScreenView
             route={route}
+            project={project}
+            rail={rail}
             openProject={nav.openProject}
             navigate={go}
+            openStoreDetail={nav.openStoreDetail}
             goBack={() => go(useShellStore.getState().lastMain)}
           />
         </div>
@@ -295,43 +310,96 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 /** Screens that take no props, keyed by name (keeps ScreenView's branching low). */
 const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
   workspace: WorkspaceScreen,
-  sources: SourcesScreen,
   store: StoreScreen,
   sol: SolScreen,
   billing: BillingScreen,
   settings: SettingsScreen
 }
 
+/** The `ext-page` route, by what the rail knows about the slug (STORE ST3/ST4):
+ *  a pinned tab with no install here → the honest pinned state; an installed
+ *  first-party bundle → its in-repo page; anything else → the sandboxed frame. */
+/** The first-party page for an installed, non-dev, first-party entry — else null. */
+function firstPartyPageFor(
+  entry: ExtensionRailData['entries'][number] | undefined,
+  project: WorkspaceProject | null,
+  props: { goBack: () => void; openStoreDetail: (slug: string) => void }
+): React.JSX.Element | null {
+  if (!entry || !project || !entry.installed || !entry.firstParty || entry.dev) return null
+  return renderFirstPartyPage(entry.slug, {
+    projectId: project.id,
+    slug: entry.slug,
+    publisher: entry.publisher,
+    onBack: props.goBack,
+    onOpenStore: () => props.openStoreDetail(entry.slug)
+  })
+}
+
+function ExtensionPageRoute({
+  slug,
+  project,
+  rail,
+  goBack,
+  openStoreDetail
+}: {
+  slug: string
+  project: WorkspaceProject | null
+  rail: ExtensionRailData
+  goBack: () => void
+  openStoreDetail: (slug: string) => void
+}): React.JSX.Element {
+  const entry = rail.entries.find((e) => e.slug === slug)
+  if (entry && !entry.installed && !entry.dev && project) {
+    return (
+      <PinnedNotInstalled
+        label={entry.label}
+        projectName={project.name}
+        onInstall={() => openStoreDetail(slug)}
+        onUnpin={() => void usePinsStore.getState().unpin(slug)}
+      />
+    )
+  }
+  const firstParty = firstPartyPageFor(entry, project, { goBack, openStoreDetail })
+  if (firstParty) return firstParty
+  return (
+    <ExtensionPageScreen slug={slug} onBack={goBack} onOpenStore={() => openStoreDetail(slug)} />
+  )
+}
+
 function ScreenView({
   route,
+  project,
+  rail,
   openProject,
   navigate,
+  openStoreDetail,
   goBack
 }: {
   route: ShellRoute
+  project: WorkspaceProject | null
+  rail: ExtensionRailData
   openProject: (project: WorkspaceProject) => void
   navigate: (screen: MainScreen) => void
+  openStoreDetail: (slug: string) => void
   goBack: () => void
 }): React.JSX.Element | null {
   const screen = ((): React.JSX.Element | null => {
     switch (route.name) {
       case 'home':
         return <HomeScreen onOpenProject={openProject} onNavigate={navigate} />
-      case 'overview':
-        return <ProjectOverview onNavigate={navigate} />
       case 'bench':
         // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
         return <BenchScreen onNavigate={navigate} />
-      case 'team':
-        return <TeamScreen onOpenProject={openProject} />
       case 'alert':
         return <AlertScreen onBack={goBack} />
       case 'ext-page':
         return (
-          <ExtensionPageScreen
+          <ExtensionPageRoute
             slug={route.slug}
-            onBack={goBack}
-            onOpenStore={() => navigate('store')}
+            project={project}
+            rail={rail}
+            goBack={goBack}
+            openStoreDetail={openStoreDetail}
           />
         )
       default: {
@@ -363,19 +431,16 @@ interface RailItem {
   emphasis?: boolean
 }
 
-/** Top rail: Home + the project-scoped screens (Overview → Sources) in flow order. */
+/** Top rail: Home + the project-scoped screens in flow order. */
 const RAIL_TOP: readonly RailItem[] = [
-  { screen: 'home', icon: <Icons.box size={17} />, label: 'Home' },
-  { screen: 'overview', icon: <Icons.spark size={17} />, label: 'Overview' },
+  { screen: 'home', icon: <Icons.home size={17} />, label: 'Home' },
   { screen: 'workspace', icon: <Icons.graph size={17} />, label: 'Workspace' },
-  { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },
   { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
-  { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' },
-  { screen: 'team', icon: <Icons.team size={17} />, label: 'Team' }
+  { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' }
 ]
 
-/** SOLUSDEV-235: the Store — capabilities are installed, not built in. Sits
- *  right below the installed extensions' page entries (EXT-14). */
+/** SOLUSDEV-235: the Store — capabilities are installed, not built in. The
+ *  installed extensions' tabs follow it behind a separator (STORE ST3). */
 const RAIL_STORE: RailItem = {
   screen: 'store',
   icon: <Icons.plus size={17} />,
@@ -415,16 +480,39 @@ function RailDevMark(): React.JSX.Element {
 /** One installed page-view extension in the rail: its reduced manifest icon,
  *  or the neutral glyph when the icon is missing or was refused by the reducer.
  *  Developer registrations add the DEV corner mark. */
+/** The pinned tab's corner mark: a tab that follows the user to every project. */
+function RailPinMark(): React.JSX.Element {
+  return (
+    <span
+      data-testid="rail-pin-mark"
+      aria-hidden="true"
+      title="Pinned for all projects"
+      style={{
+        position: 'absolute',
+        top: 3,
+        right: 3,
+        width: 5,
+        height: 5,
+        borderRadius: 99,
+        background: 'var(--acc)',
+        pointerEvents: 'none'
+      }}
+    />
+  )
+}
+
 function ExtensionRailButton({
   entry,
   iconSvg,
   active,
-  onOpen
+  onOpen,
+  onContextMenu
 }: {
   entry: RailExtensionEntry
   iconSvg: string | null
   active: boolean
   onOpen: (slug: string) => void
+  onContextMenu: (entry: RailExtensionEntry, x: number, y: number) => void
 }): React.JSX.Element {
   const icon = iconSvg ? (
     <ExtensionIcon svg={iconSvg} size={17} />
@@ -440,11 +528,67 @@ function ExtensionRailButton({
         <>
           {icon}
           {entry.dev && <RailDevMark />}
+          {entry.pinned && <RailPinMark />}
         </>
       }
       label={entry.label}
+      title={entry.installed || entry.dev ? entry.label : `${entry.label} — not installed here`}
       active={active}
+      dimmed={!entry.installed && !entry.dev}
       onClick={() => onOpen(entry.slug)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        onContextMenu(entry, e.clientX, e.clientY)
+      }}
+    />
+  )
+}
+
+/** Right-click on a tab: pin it for all projects (or unpin), or open it in the Store. */
+function RailMenu({
+  entry,
+  x,
+  y,
+  onClose,
+  onOpenStoreDetail
+}: {
+  entry: RailExtensionEntry
+  x: number
+  y: number
+  onClose: () => void
+  onOpenStoreDetail: (slug: string) => void
+}): React.JSX.Element {
+  const pos = clampMenuPosition(x, y)
+  const pins = usePinsStore.getState()
+  const pinItem = entry.dev
+    ? {
+        label: 'Pin for all projects',
+        onSelect: () => undefined,
+        disabled: true,
+        hint: 'Developer registrations live on this machine only.'
+      }
+    : entry.pinned
+      ? { label: 'Unpin from all projects', onSelect: () => void pins.unpin(entry.slug) }
+      : { label: 'Pin for all projects', onSelect: () => void pins.pin(entry.slug) }
+  return (
+    <ContextMenu
+      x={pos.x}
+      y={pos.y}
+      title={entry.label}
+      items={[pinItem, { label: 'Open in Store', onSelect: () => onOpenStoreDetail(entry.slug) }]}
+      onClose={onClose}
+    />
+  )
+}
+
+/** The line between Solus's own screens and the installed tabs (STORE ST3). */
+function RailSeparator(): React.JSX.Element {
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      data-testid="rail-separator"
+      style={{ width: 24, height: 1, background: 'var(--bd)', margin: '2px 0' }}
     />
   )
 }
@@ -455,7 +599,8 @@ function Rail({
   userName,
   extensions,
   activeSlug,
-  onOpenExtension
+  onOpenExtension,
+  onOpenStoreDetail
 }: {
   name: string
   go: (screen: MainScreen) => void
@@ -463,7 +608,9 @@ function Rail({
   extensions: ExtensionRailData
   activeSlug: string | null
   onOpenExtension: (slug: string) => void
+  onOpenStoreDetail: (slug: string) => void
 }): React.JSX.Element {
+  const [menu, setMenu] = useState<{ entry: RailExtensionEntry; x: number; y: number } | null>(null)
   const renderItem = (item: RailItem): React.JSX.Element => (
     <RailButton
       key={item.screen}
@@ -490,6 +637,8 @@ function Rail({
       }}
     >
       {RAIL_TOP.map(renderItem)}
+      {renderItem(RAIL_STORE)}
+      {extensions.entries.length > 0 && <RailSeparator />}
       {extensions.entries.map((entry) => (
         <ExtensionRailButton
           key={entry.slug}
@@ -497,9 +646,18 @@ function Rail({
           iconSvg={extensions.icons[entry.slug] ?? null}
           active={activeSlug === entry.slug}
           onOpen={onOpenExtension}
+          onContextMenu={(target, x, y) => setMenu({ entry: target, x, y })}
         />
       ))}
-      {renderItem(RAIL_STORE)}
+      {menu && (
+        <RailMenu
+          entry={menu.entry}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          onOpenStoreDetail={onOpenStoreDetail}
+        />
+      )}
       <div style={{ flex: 1 }} />
       {RAIL_BOTTOM.map(renderItem)}
       <div style={{ marginTop: 4 }}>
@@ -535,29 +693,39 @@ function RailButton({
   id,
   icon,
   label,
+  title,
   active,
   onClick,
+  onContextMenu,
   badge,
-  emphasis = false
+  emphasis = false,
+  dimmed = false
 }: {
   id: string
   icon: React.ReactNode
   label: string
+  /** Tooltip; defaults to the label. */
+  title?: string
   active: boolean
   onClick: () => void
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void
   badge?: boolean
   emphasis?: boolean
+  /** A tab whose bundle is not installed in this project (a pin) draws muted. */
+  dimmed?: boolean
 }): React.JSX.Element {
   return (
     <div
       id={id}
       onClick={onClick}
-      title={label}
+      onContextMenu={onContextMenu}
+      title={title ?? label}
       aria-label={label}
       data-active={active || undefined}
       data-emphasis={emphasis || undefined}
+      data-dimmed={dimmed || undefined}
       className="interactive"
-      style={railButtonStyle(active, emphasis)}
+      style={{ ...railButtonStyle(active, emphasis), opacity: dimmed && !active ? 0.55 : 1 }}
     >
       {icon}
       {badge && (

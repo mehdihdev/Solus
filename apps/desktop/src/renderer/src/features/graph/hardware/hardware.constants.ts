@@ -37,8 +37,7 @@ export const HARDWARE_CARDS: readonly HardwareCard[] = [
     id: 'sourced',
     title: 'Sourced',
     kind: 'Parts from suppliers',
-    status: 'Sourcing (ST5) is not available yet.',
-    disabled: true
+    status: 'Find a part'
   },
   { id: 'authored', title: 'Authored', kind: 'Describe a part yourself', status: 'Create a part' }
 ]

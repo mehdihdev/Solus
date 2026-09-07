@@ -211,7 +211,13 @@ async def test_runner_scopes_the_context_pull_to_the_request_project(
             return await super().get_graph_context(project_id, scope, budget)
 
         async def rag_query(self, text, k, filter=None):  # type: ignore[no-untyped-def]
-            assert isinstance(filter, RetrievalFilter) and filter.project_id is not None
+            assert isinstance(filter, RetrievalFilter)
+            if filter.source_types == ["corpus"]:
+                # CORPUS C2 / ADR-036: the shipped corpus is the one GLOBAL source —
+                # no tenant scope exists for it, and none may be attached.
+                assert filter.project_id is None
+                return await super().rag_query(text, k, filter)
+            assert filter.project_id is not None
             seen_projects.append(filter.project_id)
             hits = await super().rag_query(text, k, filter)
             return [hits[0].model_copy(update={"chunk": hostile})]
@@ -275,3 +281,34 @@ async def test_runner_hands_the_model_the_fenced_custom_instruction(
     assert seen is not None and seen.system is not None
     assert seen.system.startswith(system_prompt(ctx.sol_mode))
     assert '"Prefer metric units."' in seen.system
+
+
+async def test_runner_hands_the_model_the_fenced_engineering_preferences(
+    engine: AsyncEngine,
+) -> None:
+    """SOLUSDEV-244: ctx.engineering_preferences reaches the provider inside the
+    system prompt — fenced as data, after the base, before the styling note."""
+    import dataclasses
+
+    from solus_api.agent.prompt import ENGINEERING_PREFERENCES_KIND, system_prompt
+    from solus_api.agent.runtime import LlmRunner
+    from test_sol_red_team import _funded_ctx, _registry
+
+    model = _CitingModel("Understood.")
+    runner = LlmRunner(adapters={"anthropic": model})
+    ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
+    ctx = dataclasses.replace(
+        ctx,
+        custom_instruction="Round to 2dp.",
+        engineering_preferences={"Electrical": "Prefer 0.1 mm clearance minimum."},
+    )
+    _ = [event async for event in runner.run(ctx)]
+
+    seen = model.seen
+    assert seen is not None and seen.system is not None
+    assert seen.system.startswith(system_prompt(ctx.sol_mode))
+    assert f"kind={ENGINEERING_PREFERENCES_KIND}" in seen.system
+    assert '"Prefer 0.1 mm clearance minimum."' in seen.system
+    assert seen.system.index(f"kind={ENGINEERING_PREFERENCES_KIND}") < seen.system.index(
+        "kind=user_preference"
+    )

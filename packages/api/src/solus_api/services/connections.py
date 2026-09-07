@@ -153,7 +153,9 @@ async def connection_projects(
         return {}
     rows = (
         await session.execute(
-            select(Source.connection_id, Project.id, Project.name, Project.team_id)
+            select(
+                Source.connection_id, Project.id, Project.name, Project.team_id, Source.last_error
+            )
             .join(Project, Project.id == Source.project_id)
             .where(
                 Source.connection_id.in_(connection_ids),
@@ -164,8 +166,13 @@ async def connection_projects(
         )
     ).all()
     out: dict[uuid.UUID, list[dict[str, Any]]] = {cid: [] for cid in connection_ids}
-    for connection_id, project_id, name, team_id in rows:
-        out[connection_id].append({"project_id": project_id, "name": name, "team_id": team_id})
+    for connection_id, project_id, name, team_id, last_error in rows:
+        # SOLUSDEV-244 (H4): the source's last sync error code rides along so
+        # health can tell "the provider rejected this grant" from "healthy".
+        code = last_error.get("code") if isinstance(last_error, dict) else None
+        out[connection_id].append(
+            {"project_id": project_id, "name": name, "team_id": team_id, "error_code": code}
+        )
     return out
 
 

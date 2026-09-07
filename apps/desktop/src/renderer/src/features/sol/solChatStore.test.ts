@@ -16,6 +16,17 @@ import {
   useSolChatStore
 } from './solChatStore'
 
+vi.mock('../preferences/preferencesStore', () => ({
+  preferencesForTurn: vi.fn(async () => ({
+    schema_version: 1,
+    freeText: '',
+    codeStyle: '',
+    mechanical: '',
+    electrical: 'XT30 for power.',
+    documentation: '',
+    unitsStandards: ''
+  }))
+}))
 vi.mock('./solApi', () => ({
   createSolConversation: vi.fn(),
   listSolTurns: vi.fn(),
@@ -39,6 +50,21 @@ beforeEach(() => {
     detached: false,
     streaming: false,
     conversationByProject: {}
+  })
+})
+
+describe('engineering preferences ride along (SOLUSDEV-244)', () => {
+  it('passes the loaded document to every turn', async () => {
+    useOrbStore.getState().setConversation('p1', 'c1')
+    streamSolMessage.mockImplementation(async ({ onEvent }) => onEvent(messageEvent('ok')))
+    await act(async () => {
+      await sendMessage('p1', 'hi', 'guide')
+    })
+    expect(streamSolMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferences: expect.objectContaining({ electrical: 'XT30 for power.' })
+      })
+    )
   })
 })
 
@@ -120,6 +146,9 @@ describe('background completion + away toast', () => {
     })
     const pending = sendMessage('p1', 'hello', 'guide')
     expect(selectSession(useSolChatStore.getState(), 'p1').streaming).toBe(true)
+    // The turn first collects the user's preferences (SOLUSDEV-244), so the
+    // stream opens one tick later than the call.
+    await vi.waitFor(() => expect(streamSolMessage).toHaveBeenCalled())
     await act(async () => {
       finish()
       await pending
