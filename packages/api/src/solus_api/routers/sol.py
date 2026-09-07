@@ -22,7 +22,12 @@ from pydantic import Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from solus_api.agent.confirmations import ParkedCall, decide_confirmation, request_confirmation
+from solus_api.agent.confirmations import (
+    ParkedCall,
+    command_outcome_text,
+    decide_confirmation,
+    request_confirmation,
+)
 from solus_api.agent.conversation import (
     ConversationService,
     serialize_conversation,
@@ -350,7 +355,8 @@ def _decision_summary(decision: str, result: ToolResult) -> str:
     the one the model most needs to understand before it tries again.
     """
     if result.ok:
-        return "approved by you and applied ok"
+        outcome = command_outcome_text(result.value) if isinstance(result.value, dict) else None
+        return "approved by you and applied ok" + (outcome or "")
     if decision != "approve":
         return "rejected by you; nothing was applied"
     code = result.error.code.value if result.error is not None else "error"

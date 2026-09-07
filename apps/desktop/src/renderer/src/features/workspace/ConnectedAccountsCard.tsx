@@ -31,6 +31,7 @@ import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
 import { toolStatusText } from '../project/localconnections/presentation'
 import { useProjectSources } from '../project/useProjectSources'
 import { AccountRow, LegacyRow, SourceItem } from './AccountRows'
+import { CodeEnvironmentRow } from './CodeEnvironmentRow'
 import { LOCAL_FOLDER_MARK, LOCAL_SOURCE_TYPE, localFolderLabel } from './connectedAccounts'
 import {
   ACCOUNT_DOMAINS,
@@ -41,6 +42,7 @@ import {
   type AccountDomain
 } from './accountDomains'
 import { SimulationPanel } from './SimulationPanel'
+import type { MainScreen } from './shellStore'
 import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
 import { useBridgeStatus } from './useBridgeStatus'
 
@@ -341,6 +343,8 @@ export interface ConnectedAccountsCardProps {
   /** The current project: where a picked document set, a chosen file, or a
    *  simulation lands. Null ⇒ project-bound steps are offered but disabled. */
   currentProject?: WorkspaceProject | null
+  /** The shell navigator — the Code environment row's "Ask SOL" opens the SOL screen. */
+  onNavigate?: (screen: MainScreen) => void
 }
 
 /** The card's one wizard, in whichever scope the clicked step needs, plus the
@@ -388,10 +392,12 @@ function DomainPanel({
   sources,
   currentProject,
   bridge,
-  onOpen
+  onOpen,
+  onNavigate
 }: {
   domain: AccountDomain
   providers: readonly CatalogEntry[]
+  onNavigate?: (screen: MainScreen) => void
 } & Omit<ToolRowProps, 'entry'>): React.JSX.Element {
   if (domain === 'simulation') return <SimulationPanel currentProject={currentProject} />
   const hasLocal =
@@ -421,12 +427,22 @@ function DomainPanel({
         </div>
       ))}
       {hasLocal && <LocalFolderRows sources={sources} first={providers.length === 0} />}
+      {/* The interpreter + venv behind the folder on THIS machine (SOLUSDEV-250 /
+          I3); the row hides itself when the local source lives elsewhere. */}
+      {hasLocal && (
+        <CodeEnvironmentRow
+          projectId={currentProject?.id ?? null}
+          sources={sources.sources}
+          onNavigate={onNavigate}
+        />
+      )}
     </>
   )
 }
 
 export function ConnectedAccountsCard({
-  currentProject = null
+  currentProject = null,
+  onNavigate
 }: ConnectedAccountsCardProps = {}): React.JSX.Element | null {
   const catalog = useIntegrationCatalog()
   const accounts = useAccountConnections()
@@ -461,6 +477,7 @@ export function ConnectedAccountsCard({
             currentProject={currentProject}
             bridge={bridge}
             onOpen={open}
+            onNavigate={onNavigate}
           />
         </div>
       </Card>

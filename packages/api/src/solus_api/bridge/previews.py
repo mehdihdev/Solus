@@ -95,8 +95,50 @@ def _kicad_symbol_property(read: BridgeReader) -> PreviewBuilder:
     return build
 
 
+CODE_PLAN_TOOL: Final = "code.plan"
+CODE_ACTIONS: Final = ("create_environment", "install", "run", "test")
+
+
+def _code_action(action: str) -> Callable[[BridgeReader], PreviewBuilder]:
+    """SOLUSDEV-250: the approval card shows the EXACT argv the `code` server will
+    run — read back from the server's own `plan` (one source of truth), never
+    re-assembled cloud-side. A declined plan renders its refusal reason."""
+
+    def factory(read: BridgeReader) -> PreviewBuilder:
+        async def build(args: dict[str, Any]) -> list[dict[str, Any]]:
+            try:
+                plan = await read(CODE_PLAN_TOOL, {"action": action, "args": dict(args)})
+            except Exception:  # noqa: BLE001 — a preview never blocks the park
+                logger.warning("code preview plan failed for %s", action)
+                plan = None
+            argv = plan.get("argv") if isinstance(plan, dict) else None
+            command = (
+                " ".join(str(a) for a in argv)
+                if isinstance(argv, list) and all(isinstance(a, str) for a in argv)
+                else None
+            )
+            rows: list[dict[str, Any]] = [
+                {"label": "command", "before": None, "after": _text(command)},
+                {
+                    "label": "cwd",
+                    "before": None,
+                    "after": _text(plan.get("cwd", ".") if isinstance(plan, dict) else None),
+                },
+            ]
+            if isinstance(plan, dict) and plan.get("ok") is False:
+                rows.append(
+                    {"label": "refused", "before": None, "after": _text(plan.get("reason"))}
+                )
+            return rows
+
+        return build
+
+    return factory
+
+
 PREVIEWABLE_TOOLS: Final[dict[str, Callable[[BridgeReader], PreviewBuilder]]] = {
     "kicad.set_symbol_property": _kicad_symbol_property,
+    **{f"code.{action}": _code_action(action) for action in CODE_ACTIONS},
 }
 
 

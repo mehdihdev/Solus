@@ -112,7 +112,11 @@ def build_sol_registry(
         registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
         # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
         # graph, never the model's. Function-local import (house pattern).
+        from solus_api.agent.tools.environment import build_resolve_environment_tool
         from solus_api.sourcing.tools import build_derive_torque_tool
+
+        # SOLUSDEV-250: the Code environment proposal (read-only, project-bound).
+        registry.register(build_resolve_environment_tool(session_factory, project_id))
 
         registry.register(build_derive_torque_tool(session_factory, project_id))
     if systems is not None:

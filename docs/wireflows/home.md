@@ -281,6 +281,17 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   `local_*` node that belongs to this machine's folder (`LocalOpenPanel`), and
   the source itself is listed under Connected accounts › Software as
   "Local folder · <machine>".
+- **SOLUSDEV-250 (INTEGRATIONS I3) — the "VSCode item", properly named:** under Connected
+  accounts › Software, right below the Local folder row and only when a local source exists for
+  this machine, a **Code environment** row (mark `Py`): status "<python> · <venv or 'no virtual
+  environment'> · N requirement(s)" from a live probe, or the honest offline / "code server not
+  running" / "not probed yet" line; a second line in the error colour when the checker found pin
+  conflicts ("N dependency conflict(s) — split proposed"). **Details** opens the Code environment
+  modal: INTERPRETER, VIRTUAL ENVIRONMENT, REQUIREMENTS, CONFLICTS (each warning verbatim with its
+  pins), PROPOSAL (one card per environment, or "Single environment"), and **Ask SOL to set it
+  up**, which hands SOL a prefilled request; every install/run/test SOL then proposes arrives as
+  an approval card showing the exact command. Failed runs/tests appear in Workspace › .solus ›
+  Error logging automatically.
 - **MEMBERS card** (right column, above LOCAL FOLDER): roster with roles;
   owners and admins change roles (admin / member / viewer — ownership is
   transferred, not picked) and remove members, never on an owner row; pending

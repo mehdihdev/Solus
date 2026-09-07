@@ -105,7 +105,7 @@ def test_never_raises_when_every_internal_step_explodes(
 
 
 def test_open_in_tool_rejects_non_string_arguments_without_raising() -> None:
-    result = server.tool_open_in_tool(None, 42)  # type: ignore[arg-type]
+    result = server.tool_open_in_tool(None, 42)  # type: ignore[arg-type, unused-ignore]
     assert result["launched"] is False and isinstance(result["reason"], str)
     assert result["tool"] == ""
 
@@ -114,3 +114,31 @@ def test_open_in_tool_bounds_the_echoed_tool_name() -> None:
     result = server.tool_open_in_tool("a.py", "x" * 1000)
     assert result["launched"] is False
     assert len(result["tool"]) <= server.MAX_TOOL_NAME_ECHO
+
+
+def test_empty_scan_carries_the_dependency_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """docs/api/code-environment.md §3: the failure shape has the same keys as
+    a real scan, so the cloud never key-errors on an unconfigured workspace."""
+    monkeypatch.delenv("SOLUS_MCP_WORKSPACE", raising=False)
+    scan = server.tool_scan_folder()
+    assert scan["dependencies"] == [] and scan["truncated_dependencies"] is False
+
+
+async def test_scan_folder_dependencies_over_the_wire(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(tmp_path))
+    (tmp_path / "requirements.txt").write_text("torch==2.1.0\n")
+    built = server.build_server()
+    _content, structured = await built.call_tool("scan_folder", {})
+    assert structured["dependencies"] == [
+        {
+            "parts": ["requirements.txt"],
+            "ecosystem": "python",
+            "name": "torch",
+            "specifier": "==2.1.0",
+            "extras": [],
+            "line": 1,
+        }
+    ]
+    assert structured["truncated_dependencies"] is False

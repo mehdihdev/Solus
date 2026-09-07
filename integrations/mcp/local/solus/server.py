@@ -41,15 +41,19 @@ try:
     from .scan import SCHEMA_VERSION, folder_digest, scan_folder
     from .workspace import workspace_root
 except ImportError:  # pragma: no cover - script mode under bin/launch
-    from solus.detect import tools_installed  # type: ignore[import-not-found, no-redef]
-    from solus.launch import open_in_tool  # type: ignore[import-not-found, no-redef]
-    from solus.roster import TOOL_ROSTER  # type: ignore[import-not-found, no-redef]
-    from solus.scan import (  # type: ignore[import-not-found, no-redef]
+    from solus.detect import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        tools_installed,
+    )
+    from solus.launch import open_in_tool  # type: ignore[import-not-found, no-redef, unused-ignore]
+    from solus.roster import TOOL_ROSTER  # type: ignore[import-not-found, no-redef, unused-ignore]
+    from solus.scan import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         SCHEMA_VERSION,
         folder_digest,
         scan_folder,
     )
-    from solus.workspace import workspace_root  # type: ignore[import-not-found, no-redef]
+    from solus.workspace import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        workspace_root,
+    )
 
 logger = logging.getLogger("solus.local.server")
 
@@ -73,6 +77,8 @@ def _empty_scan() -> dict[str, Any]:
         "digest": _empty_digest(),
         "truncated": False,
         "tools_installed": dict(_NO_TOOLS),
+        "dependencies": [],
+        "truncated_dependencies": False,
     }
 
 
@@ -89,12 +95,13 @@ def _guarded(
 
 def tool_scan_folder() -> dict[str, Any]:
     """Scan the linked folder: git identity, tool-relevant files (path parts,
-    size, blake2b-128 hash, tool), digest."""
+    size, blake2b-128 hash, tool), digest, and the Python dependency
+    declarations (requirements*.txt, pyproject.toml, environment.yml)."""
 
     def body() -> dict[str, Any]:
         root = workspace_root()
         try:
-            tools = dict(tools_installed())
+            tools = {name: bool(flag) for name, flag in tools_installed().items()}
         except Exception:  # noqa: BLE001 - probing must not sink the scan
             tools = dict(_NO_TOOLS)
         return scan_folder(root, tools=tools)
@@ -111,6 +118,12 @@ def tool_folder_digest() -> dict[str, Any]:
     )
 
 
+def _all_strings(*values: object) -> bool:
+    """FastMCP validates argument types, but the never-raises rule is kept
+    independent of that: a non-string is refused, not raised on."""
+    return all(isinstance(value, str) for value in values)
+
+
 def tool_open_in_tool(path: str, tool: str) -> dict[str, Any]:
     """Launch `tool` on `path` (relative to the linked folder)."""
     echoed = tool[:MAX_TOOL_NAME_ECHO] if isinstance(tool, str) else ""
@@ -119,7 +132,7 @@ def tool_open_in_tool(path: str, tool: str) -> dict[str, Any]:
         return {"launched": False, "tool": echoed, "reason": "launch failed"}
 
     def body() -> dict[str, Any]:
-        if not isinstance(path, str) or not isinstance(tool, str):
+        if not _all_strings(path, tool):
             return {"launched": False, "tool": echoed, "reason": "path and tool must be strings"}
         result = open_in_tool(workspace_root(), path, tool)
         return {**result, "tool": echoed}

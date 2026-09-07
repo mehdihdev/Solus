@@ -40,7 +40,13 @@ def _netlist() -> dict[str, Any]:
 
 
 def test_only_the_kicad_write_is_previewable_today() -> None:
-    assert set(PREVIEWABLE_TOOLS) == {"kicad.set_symbol_property"}
+    assert set(PREVIEWABLE_TOOLS) == {
+        "kicad.set_symbol_property",
+        "code.create_environment",
+        "code.install",
+        "code.run",
+        "code.test",
+    }
     assert preview_builder("kicad.export_netlist", _Reader(None)) is None
     assert preview_builder("kicad.set_symbol_property", _Reader(None)) is not None
 
@@ -300,3 +306,49 @@ async def test_bridge_reader_declines_without_session_tool_or_preflight() -> Non
     gated = _bridge_reader(sessions, user, team, project, 1000, _refuse)
     assert await gated("kicad.extract_project_netlist", {}) is None
     assert sent == []  # preflight refused before any dispatch
+
+
+# ------------------------------------------------ SOLUSDEV-250: code.* previews
+
+
+async def test_code_previews_show_the_servers_own_argv() -> None:
+    reader = _Reader(
+        {
+            "ok": True,
+            "argv": [".venv/bin/python", "-m", "pip", "install", "--", "six==1.17.0"],
+            "cwd": ".",
+        }
+    )
+    build = preview_builder("code.install", reader)
+    assert build is not None
+    rows = await build({"packages": ["six==1.17.0"], "environment": ".venv"})
+    assert rows[0] == {
+        "label": "command",
+        "before": None,
+        "after": ".venv/bin/python -m pip install -- six==1.17.0",
+    }
+    assert rows[1] == {"label": "cwd", "before": None, "after": "."}
+    assert reader.calls == [
+        (
+            "code.plan",
+            {"action": "install", "args": {"packages": ["six==1.17.0"], "environment": ".venv"}},
+        )
+    ]
+
+
+async def test_code_preview_renders_a_refusal_and_survives_a_failed_read() -> None:
+    refused = _Reader(
+        {"ok": False, "argv": [], "cwd": ".", "reason": "package name may not start with -"}
+    )
+    rows = await preview_builder("code.run", refused)({"script": "-x.py"})  # type: ignore[misc]
+    assert rows[0]["after"] == ""
+    assert rows[2] == {
+        "label": "refused",
+        "before": None,
+        "after": "package name may not start with -",
+    }
+    rows = await preview_builder("code.test", _Reader(None))({"target": "tests"})  # type: ignore[misc]
+    assert rows[0]["after"] is None and len(rows) == 2
+    hostile = _Reader({"ok": True, "argv": "rm -rf /", "cwd": 5})
+    rows = await preview_builder("code.test", hostile)({"target": "tests"})  # type: ignore[misc]
+    assert rows[0]["after"] is None  # a non-list argv is never rendered as a command

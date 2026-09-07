@@ -19,7 +19,9 @@ folder is without the user saying so:
 - file extensions → tool projects: `.kicad_pro/.kicad_sch/.kicad_pcb` → `kicad_project`,
   `.PrjPcb/.SchDoc/.PcbDoc` → `altium_project`, `.step/.stp/.sldprt/.sldasm/.iges/.igs/.f3d` →
   `cad_folder` (one per directory), `.ino` → `arduino_sketch` (one per sketch directory),
-  `.py` → one `python_code` node at the root. The chain in the graph is
+  `.py` → one `python_code` node at the root; dependency declarations (`requirements*.txt`,
+  `pyproject.toml`, `environment.yml`, walked as `python` files so an edit moves the digest) →
+  one `python_requirement` node per (file, package) — SOLUSDEV-250. The chain in the graph is
   `code_repo ←clone_of— local_clone —contains→ kicad_project`.
 - **Open in [tool]** launches the tool on the right file through the companion bridge (the
   Solus-authored `local` server's `open_in_tool`), never from the cloud and never from the

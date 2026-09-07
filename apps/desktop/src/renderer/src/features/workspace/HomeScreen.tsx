@@ -140,7 +140,13 @@ function ProjectsColumn({
   )
 }
 
-function SideColumn({ home, team, currentProject, openModal }: LiveProps): React.JSX.Element {
+function SideColumn({
+  home,
+  team,
+  currentProject,
+  openModal,
+  onNavigate
+}: LiveProps): React.JSX.Element {
   const teamReady = home.team !== null && team.status === 'ready'
   const canManage = team.myRole !== null && MANAGER_ROLES.includes(team.myRole)
   return (
@@ -162,7 +168,7 @@ function SideColumn({ home, team, currentProject, openModal }: LiveProps): React
       <LocalFolderSection currentProject={currentProject} />
       {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
           once; each project picks what it tracks on its Sources page. */}
-      <ConnectedAccountsCard currentProject={currentProject} />
+      <ConnectedAccountsCard currentProject={currentProject} onNavigate={onNavigate} />
       {/* HOME H3 (SOLUSDEV-244): the one part of ~/.solus the user owns —
           how they engineer. Machine-local, read by SOL on every turn. */}
       <PreferencesCard />

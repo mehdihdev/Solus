@@ -175,3 +175,49 @@
    only origin URL (userinfo stripped) / branch / short sha are surfaced.
 2. The lockfile was derived, not compiled, offline (see its header). A network-enabled
    `uv pip compile` regeneration before ship would remove the derivation caveat.
+
+---
+
+## Addendum — `2026-09-07` (SOLUSDEV-250: dependency parsing) — DRAFT, awaiting human sign-off
+
+> Appended, not rewritten (integrations/mcp/CLAUDE.md rule 3). Scope: the new
+> `solus/deps.py` (~300 lines) reached from `scan_folder`, plus the `toolmap.py` change that walks
+> `requirements*.txt` / `pyproject.toml` / `environment.yml` as `python` tool files. No new tool,
+> no new subprocess site, no new env access, no writes. The §7 tier-1 read now also covers
+> `solus/deps.py`; human reviewers must repeat it.
+
+### §5 bounds (the untrusted-input items, re-evidenced for the parser)
+
+- [x] Parsers bound input sizes — evidence: `deps.py::_read_bounded` refuses a file whose stat
+      size exceeds `MAX_DEP_FILE_BYTES` (256 KiB) and re-checks after a bounded read of
+      256 KiB + 1 (a file growing mid-read is still skipped); the entry list stops at
+      `MAX_DEPENDENCIES` (500) → `truncated_dependencies: true`; specifiers are whitespace-
+      stripped and capped at 128 chars; extras at 8 × 32 chars; every wire string (name,
+      specifier, extra) is kept under 40 chars so the cloud's entropic redaction never blanks an
+      entry (`tests/test_deps.py::test_no_dependency_string_is_redaction_shaped`,
+      `test_specifier_is_capped_and_kept_under_the_redaction_threshold`, `test_file_over_256_kib_is_skipped`,
+      `test_dependencies_cap_at_500_then_truncated`).
+- [x] Malformed input yields fewer entries, never a crash — evidence: `parse_dependency_file`
+      wraps every parser in a catch-all (`test_parser_exception_is_swallowed`); `tomllib` errors,
+      `RecursionError` and `ValueError` are caught (`test_pyproject_malformed_yields_nothing`,
+      including a `[[` × 5000 nesting bomb); hostile requirement lines (shell metacharacters,
+      traversal, NUL bytes, `--hash` tails, 40-char names) are dropped
+      (`test_hostile_requirement_lines_are_dropped_or_defanged`); `environment.yml` YAML tags
+      (`!!python/object/apply:os.system`) are plain text to the line reader and never
+      instantiated (`test_environment_yml_hostile_or_odd_shapes_never_raise`).
+- [x] No file is FOLLOWED from a dependency file — evidence: `-r`/`-c`/`-e` and every
+      `-`-prefixed line is skipped before parsing (`test_referenced_requirements_files_are_never_followed`:
+      `other.txt` referenced by `-r` is neither walked nor parsed); `environment.yml` `- -r …`
+      items under `pip:` are skipped the same way.
+- [x] No `eval`/`exec`/dynamic import/YAML loader — evidence:
+      `grep -nE 'yaml|eval\(|exec\(|__import__|importlib' solus/deps.py` → no hits; TOML is
+      parsed by the stdlib `tomllib` (data only), YAML by a 40-line indentation reader.
+- [x] Read scope unchanged — evidence: `collect_dependencies` iterates the SAME capped, symlink-
+      free, skip-dir-filtered file list `scan.py::_collect` produced; `root.joinpath(*parts)` only
+      re-opens entries that walk already admitted (`_walk` drops symlinked files/dirs before any
+      read).
+
+### §7 depth
+
+- [x] Tier 1 — `solus/deps.py` and the `toolmap.py` diff line-read in full by the authoring
+      agent; **PENDING(human)** for both reviewers.

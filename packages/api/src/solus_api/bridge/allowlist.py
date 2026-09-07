@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from solus_api.agent.tools.shapes import ToolDescriptor
 from solus_api.agent.tools.untrusted import (
@@ -42,6 +42,12 @@ class AllowedTool(BaseModel):
     name: str
     requires_confirmation: bool = False
     reason: str | None = None  # required on destructive entries (README rule)
+    # SOLUSDEV-250 security review M5: a tool that legitimately runs longer
+    # than the registry's default dispatch bound (a pip install, a test run)
+    # declares its own bound HERE, in the Solus-owned allowlist — never from
+    # the fork's advertised schema. It must exceed the fork's own cap so the
+    # cloud never reports TIMEOUT while the child keeps running.
+    timeout_seconds: int | None = Field(default=None, ge=1, le=900)
 
     @model_validator(mode="after")
     def _destructive_needs_reason(self) -> Self:
@@ -187,7 +193,7 @@ def validate_inventory(hello: HelloData, allowlist: BridgeAllowlist) -> tuple[Br
                 returns=(
                     tool.output_schema if tool.output_schema is not None else _ANY_OBJECT_RETURNS
                 ),
-                timeout_seconds=None,  # the registry default owns the bound
+                timeout_seconds=allowed.timeout_seconds,  # None: the registry default
                 requires_confirmation=allowed.requires_confirmation,
             )
             specs.append(

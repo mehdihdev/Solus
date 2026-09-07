@@ -6,7 +6,8 @@ project (Home › LOCAL FOLDER). It makes a working copy on THIS machine a graph
 runs here, the path never reaches the API, and "Open in [tool]" launches the desktop app here.
 
 Authoritative tool contract: `docs/api/local-folder.md` §4 (names, argument and result shapes,
-caps, skip list, suffix→tool table, digest algorithm, launch commands, the never-raises rule).
+caps, skip list, suffix→tool table, digest algorithm, launch commands, the never-raises rule) plus
+`docs/api/code-environment.md` §3 (the `dependencies` scan extension, SOLUSDEV-250).
 
 ## What is in this directory
 
@@ -14,7 +15,7 @@ caps, skip list, suffix→tool table, digest algorithm, launch commands, the nev
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bin/launch`            | The ONLY entrypoint. Fixed argv, `env -i` scrub to the allowlist declared in `solus/env_allowlist.py`, `PATH=/usr/bin:/bin`, fork-private `.venv/bin/python3`, zero network I/O.        |
 | `allowlist.yaml`        | `server: local` + the three tools. `open_in_tool` is `requires_confirmation: true`. Single source of truth for discovery, the cloud ingress gate, and `solus/roster.py`.                 |
-| `solus/`                | The server: `server.py` (FastMCP entry), `workspace.py` (fail-closed root + confinement), `toolmap.py`, `gitremote.py`, `scan.py`, `detect.py`, `launch.py`, `roster.py`, `env.allow`.   |
+| `solus/`                | The server: `server.py` (FastMCP entry), `workspace.py` (fail-closed root + confinement), `toolmap.py`, `gitremote.py`, `scan.py`, `deps.py`, `detect.py`, `launch.py`, `roster.py`, `env.allow`. |
 | `requirements.lock.txt` | Hash-pinned `mcp` closure, derived from the altium fork's lock (header explains). `make mcp-forks` materializes `.venv/` from it; `.venv/` is gitignored.                                |
 | `PROVENANCE.md`         | Identity, license (MIT, Solus), no-upstream statement, exposed tools, blank sign-offs.                                                                                                   |
 | `SECURITY_REVIEW.md`    | DRAFT checklist with pasted evidence — awaiting both human sign-offs.                                                                                                                    |
@@ -33,6 +34,18 @@ caps, skip list, suffix→tool table, digest algorithm, launch commands, the nev
   masks any 40+ char entropic string. Symlinks are never followed or hashed; the walk stops at
   the cap and hashing stops at the byte budget even if a file grows mid-read. Skips `.git`, `node_modules`, `.venv`, `venv`,
   `__pycache__`, `build`, `dist`, `solus-artifacts`.
+  Python dependency files (`requirements*.txt`, `pyproject.toml`, `environment.yml`) are walked
+  as `python` tool files, so an edit to one moves the digest, and are parsed into
+  `dependencies` (`docs/api/code-environment.md` §3): `{parts, ecosystem: "python", name
+  (PEP 503-normalised), specifier (raw PEP 440 set, "" when unpinned, ≤ 128 chars), extras
+  (≤ 8), line}`, ≤ 500 entries then `truncated_dependencies: true`. `requirements*.txt` is read
+  as PEP 508 lines (comments, `-r`/`-c`/`-e` and every option line skipped and NEVER followed;
+  markers and `@ url` dropped); `pyproject.toml` via `tomllib` (`[project].dependencies` + every
+  `[project.optional-dependencies]` group; no execution); `environment.yml` by a minimal line
+  reader over the `dependencies:` list (conda `name=ver` → `==ver`, the nested `- pip:` block; no
+  YAML library). Files over 256 KiB are skipped; `Pipfile` is not parsed. Names over 39 chars and
+  base64-ish specifiers over 39 chars are dropped/cut so no string trips the cloud's 40-char
+  entropic redaction.
 - `folder_digest {}` — `{digest, truncated}`, the same digest, for the change-signal comparison.
 - `open_in_tool {path, tool}` — argv-list launch of `kicad` / `altium` / `vscode` / `system` on a
   workspace-confined path; `launched: false` with a reason otherwise (a spawn failure answers

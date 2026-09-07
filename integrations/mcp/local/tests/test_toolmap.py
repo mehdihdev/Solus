@@ -53,3 +53,24 @@ def test_every_table_suffix_is_lowercase_and_dotted() -> None:
     for suffixes in toolmap.TOOL_SUFFIXES.values():
         for suffix in suffixes:
             assert suffix.startswith(".") and suffix == suffix.lower()
+
+
+@pytest.mark.parametrize(
+    ("path", "is_dep"),
+    [
+        ("requirements.txt", True),
+        ("isaac/requirements-dev.txt", True),
+        ("Requirements.TXT", True),
+        ("pyproject.toml", True),
+        ("policy/environment.yml", True),
+        ("environment.yaml", False),
+        ("Pipfile", False),
+        ("requirements.md", False),
+        ("my-requirements.txt", False),
+    ],
+)
+def test_dependency_files_are_python_tool_files(path: str, is_dep: bool) -> None:
+    """docs/api/code-environment.md §3: dependency declarations are walked
+    (so an edit moves the digest) and belong to the `python` tool."""
+    assert toolmap.is_dependency_file(path) is is_dep
+    assert (toolmap.tool_for(path) == "python") is is_dep

@@ -8,7 +8,9 @@ cap, so a truncated result is the first MAX_FILES files in sorted-walk order,
 themselves sorted), hashes each file with a
 streamed blake2b-128 (null over MAX_HASH_BYTES), and folds
 `joined-path:hash-or-size\n` lines into a blake2b-128 digest. Both tools
-share `_collect()` so the cloud compares like with like.
+share `_collect()` so the cloud compares like with like. `scan_folder` also
+parses the walked dependency files into `dependencies` (deps.py —
+docs/api/code-environment.md §3).
 
 Wire shape: a file is `{parts, size, hash, tool}` — `parts` is the relative
 path SPLIT into segments and `hash` is 32 hex chars, because the cloud's
@@ -23,6 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import IO, Any, TypedDict
 
+from .deps import collect_dependencies
 from .detect import tools_installed
 from .gitremote import git_info
 from .toolmap import HASH_CHUNK_BYTES, MAX_FILES, MAX_HASH_BYTES, SKIP_DIRS, tool_for
@@ -129,6 +132,9 @@ def _collect(root: Path) -> tuple[list[FileEntry], bool]:
 def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str, Any]:
     """The full §4 `scan_folder` shape for `root`."""
     files, truncated = _collect(root)
+    dependencies, truncated_dependencies = collect_dependencies(
+        root, [entry["parts"] for entry in files]
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "root_name": root.name,
@@ -137,6 +143,8 @@ def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str
         "digest": compute_digest(files),
         "truncated": truncated,
         "tools_installed": dict(tools) if tools is not None else dict(tools_installed()),
+        "dependencies": dependencies,
+        "truncated_dependencies": truncated_dependencies,
     }
 
 

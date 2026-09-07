@@ -387,16 +387,124 @@ async def decide_confirmation(
         return await registry.invoke(call)  # the sanctioned post-approval site
 
     result = await run_tool(_approved, stored)
-    await _feed_back_outcome(session, row, result, user_id=user_id, project_id=project_id)
+    # Plain values, captured BEFORE the best-effort hooks: a hook may roll the
+    # session back, which expires the row — touching it afterwards would lazy-load
+    # outside the async context.
+    tool_name, team_id = row.tool, row.team_id
+    await _feed_back_outcome(
+        session, tool_name, result, user_id=user_id, team_id=team_id, project_id=project_id
+    )
+    await _file_failure(session, tool_name, result, user_id=user_id, project_id=project_id)
     return result
+
+
+#: Confirmed commands whose non-zero exit is a project error worth filing (S5).
+_FILED_COMMAND_TOOLS: Final = frozenset({"code.run", "code.test"})
+_ERROR_STDERR_CAP: Final = 3000
+
+
+def failure_entry_text(tool: str, value: dict[str, Any]) -> str | None:
+    """The Error logging entry for a failed confirmed command, or None when the
+    result is not a failure (exit 0, a refusal with no exit, a non-command)."""
+    exit_code = value.get("exit_code")
+    if not isinstance(exit_code, int) or exit_code == 0:
+        return None
+    argv = value.get("argv")
+    command = (
+        " ".join(str(a) for a in argv)
+        if isinstance(argv, list) and all(isinstance(a, str) for a in argv)
+        else tool
+    )
+    tail = output_tail(value, _ERROR_STDERR_CAP)
+    text = f"{command} exited {exit_code}"
+    return f"{text}\n\n{tail}" if tail else text
+
+
+def output_tail(value: dict[str, Any], cap: int) -> str:
+    """The last `cap` characters of what the command printed — stdout then
+    stderr. pytest reports its FAILED lines on stdout; a crashing script puts
+    its traceback on stderr; keeping only one of them loses the other.
+
+    Security review H3: this text is persisted (Error logging, the tool turn)
+    and replayed into the next prompt's history block, so it goes through the
+    same scalar redaction as every other untrusted machine text, and control
+    characters never ride along."""
+    parts = [
+        str(value[key]).strip()
+        for key in ("stdout_tail", "stderr_tail")
+        if isinstance(value.get(key), str) and str(value[key]).strip()
+    ]
+    joined = "\n".join(parts)
+    printable = "".join(ch for ch in joined if ch.isprintable() or ch == "\n")
+    return redact_text(printable)[-cap:]
+
+
+_OUTCOME_TAIL_CAP: Final = 400
+_REASON_CAP: Final = 200
+
+
+def command_outcome_text(value: dict[str, Any]) -> str | None:
+    """A short clause naming what a confirmed COMMAND did, for the tool turn
+    the next model reads (SOLUSDEV-250). `ToolResult.ok` is the transport; the
+    command's own exit lives in the value, and without it the model can only
+    say "applied ok" about a test run that failed. None for non-commands — a
+    result is a command's only when it carries an `exit_code` key (every
+    `code.*` answer does, `null` for a refusal); a `reason` alone is not one
+    (`local.open_in_tool` answers `reason: null` on success)."""
+    if "exit_code" not in value:
+        return None
+    exit_code = value["exit_code"]
+    if exit_code is None:
+        return f"; the server refused to run it: {str(value.get('reason'))[:_REASON_CAP]}"
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return None
+    if exit_code == 0:
+        return "; the command exited 0"
+    tail = output_tail(value, _OUTCOME_TAIL_CAP)
+    return f"; the command exited {exit_code}" + (f" — output tail: {tail}" if tail else "")
+
+
+async def _file_failure(
+    session: AsyncSession,
+    tool_name: str,
+    result: ToolResult,
+    *,
+    user_id: uuid.UUID,
+    project_id: uuid.UUID,
+) -> None:
+    """SOLUSDEV-250 (S5): a confirmed `code.run`/`code.test` that exited non-zero
+    is filed as ONE entry in the project's `.solus` Error logging section. Best
+    effort, after the fact; never alters the result."""
+    if tool_name not in _FILED_COMMAND_TOOLS or not result.ok:
+        return
+    value = result.value if isinstance(result.value, dict) else {}
+    text = failure_entry_text(tool_name, value)
+    if text is None:
+        return
+    try:
+        from solus_api.models import SolusSection
+        from solus_api.services.solus_config import add_text_entry
+
+        await add_text_entry(
+            session, project_id, SolusSection.ERRORS, text, author="sol", created_by=user_id
+        )
+        await session.commit()
+        logger.info("filed a failed %s into Error logging", tool_name)
+    except Exception:  # noqa: BLE001 — filing never fails the action that ran
+        logger.warning("could not file the failed %s into Error logging", tool_name, exc_info=True)
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            logger.warning("session rollback after error filing also failed")
 
 
 async def _feed_back_outcome(
     session: AsyncSession,
-    row: ToolConfirmation,
+    tool_name: str,
     result: ToolResult,
     *,
     user_id: uuid.UUID,
+    team_id: uuid.UUID,
     project_id: uuid.UUID,
 ) -> None:
     """SOLUSDEV-251: the outcome of a confirmed write is one observation on the
@@ -409,15 +517,15 @@ async def _feed_back_outcome(
             return
         await record_write_outcome(
             session,
-            tool_name=row.tool,
+            tool_name=tool_name,
             result=result,
             user=voter,
-            team_id=row.team_id,
+            team_id=team_id,
             project_id=project_id,
         )
         await session.commit()
     except Exception:  # noqa: BLE001 — feedback never fails the action that ran
-        logger.warning("tool knowledge feedback failed after %s", row.tool, exc_info=True)
+        logger.warning("tool knowledge feedback failed after %s", tool_name, exc_info=True)
         try:
             await session.rollback()
         except Exception:  # noqa: BLE001

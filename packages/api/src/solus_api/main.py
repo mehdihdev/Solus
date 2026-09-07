@@ -50,6 +50,7 @@ from solus_api.routers import (
     artifacts,
     billing,
     bridge,
+    code_environment,
     connections,
     entities,
     events,
@@ -408,6 +409,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(billing.actions_router)
     app.include_router(sources.router)
     app.include_router(local_folder.router)
+    app.include_router(code_environment.router)
     app.include_router(hosted.router)
     app.include_router(artifacts.router)
     app.include_router(solus_config.router)

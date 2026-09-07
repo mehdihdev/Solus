@@ -78,7 +78,7 @@ export interface LocalFolderController {
  *  plus `resolve`, which awaits the same request so a link issued before it
  *  settles (select folder straight after mount) still carries the identity.
  *  `undefined` = not asked yet, `null` = the bridge has no companion id. */
-function useMachineIdentity(deps: LocalFolderDeps): {
+export function useMachineIdentity(deps: Pick<LocalFolderDeps, 'machine'>): {
   machine: MachineIdentity | null | undefined
   resolve: () => Promise<MachineIdentity | null>
 } {
@@ -113,11 +113,9 @@ export function useLocalFolder(
   const active = fetchEnabled && linked && projectId !== null && !!machine
 
   const load = useCallback(async (): Promise<void> => {
-    if (!active || !projectId || !machine) {
-      setView(null)
-      setStatus('idle')
-      return
-    }
+    // Inactive scopes render idle by derivation (see the return) — no state
+    // write here, so the effect that calls `load` never sets state synchronously.
+    if (!active || !projectId || !machine) return
     const mine = generation.current
     try {
       const next = await deps.getLocalFolder(projectId, machine.id)
@@ -196,8 +194,8 @@ export function useLocalFolder(
   )
 
   return {
-    view,
-    status,
+    view: active ? view : null,
+    status: active ? status : 'idle',
     machineAvailable: machine !== null,
     link,
     unlink,

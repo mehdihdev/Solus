@@ -35,6 +35,17 @@ vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: v
 // with their own tests; here they are stubbed so the card stays deterministic.
 vi.mock('../project/useProjectSources', () => ({ useProjectSources: vi.fn() }))
 vi.mock('./useBridgeStatus', () => ({ useBridgeStatus: vi.fn(() => null) }))
+// The Code environment row's hook (SOLUSDEV-250) has its own tests; here it
+// answers from the sources it is handed so the row appears only with a local
+// source, without touching the desktop bridge or the route.
+vi.mock('../project/useCodeEnvironment', () => ({
+  useCodeEnvironment: vi.fn((_projectId: string | null, sources: Source[]) => ({
+    view: null,
+    status: 'loading',
+    source: sources.find((s) => s.type === 'local') ?? null,
+    refresh: vi.fn(async () => undefined)
+  }))
+}))
 // The Simulation tab's bench inventory has its own tests (SimulationPanel);
 // here it is offline so the card never reaches the bench routes.
 vi.mock('../project/localconnections/useLocalConnections', () => ({
@@ -132,7 +143,11 @@ const LOCAL_SOURCE: Source = {
   type: 'local',
   name: 'mehdi-mbp',
   status: 'connected',
-  config: { machine_id: '0123456789abcdef0123456789abcdef', machine_name: 'mehdi-mbp', folder_name: 'rover-fw' },
+  config: {
+    machine_id: '0123456789abcdef0123456789abcdef',
+    machine_name: 'mehdi-mbp',
+    folder_name: 'rover-fw'
+  },
   account_login: null,
   last_synced_at: '2026-09-07T00:00:00Z',
   last_error: null,
@@ -155,6 +170,21 @@ describe('ConnectedAccountsCard — local folder source (SOLUSDEV-249)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Sync mehdi-mbp now' }))
     expect(sources.actions.syncNow).toHaveBeenCalledWith('s-local')
     expect(screen.getByRole('button', { name: 'Disconnect mehdi-mbp' })).toBeInTheDocument()
+  })
+
+  it('shows the Code environment row under Software only with a local source (SOLUSDEV-250)', async () => {
+    mockAccounts()
+    mockSources([LOCAL_SOURCE])
+    const { unmount } = render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(screen.getByText('Code environment')).toBeInTheDocument()
+    expect(screen.getByText('Py')).toBeInTheDocument()
+    unmount()
+
+    mockSources([])
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(screen.queryByText('Code environment')).toBeNull()
   })
 
   it('does not put the local source under any other domain', async () => {

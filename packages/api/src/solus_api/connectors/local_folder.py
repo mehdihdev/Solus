@@ -136,6 +136,43 @@ def _no_credentials(value: str | None) -> str | None:
     return value
 
 
+MAX_SCAN_DEPENDENCIES: Final = 500
+REQUIREMENT_KIND: Final = "python_requirement"
+REQUIRES: Final = "requires"
+_PACKAGE_NAME: Final = re.compile(r"^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
+_SPECIFIER_SET: Final = re.compile(r"^(?:(?:===|~=|==|!=|<=|>=|<|>)[A-Za-z0-9.*+!_-]+,?)*$")
+
+
+class ScannedDependency(_Wire):
+    """One dependency declaration (SOLUSDEV-250): `(source file, package)`. Names
+    are PEP 503-normalised companion-side and re-checked here; a specifier is a
+    raw PEP 440 set, bounded — never evaluated here (the checker does that)."""
+
+    parts: list[str] = Field(min_length=1, max_length=MAX_PATH_PARTS)
+    ecosystem: Literal["python"] = "python"
+    name: str = Field(min_length=1, max_length=128, pattern=_PACKAGE_NAME.pattern)
+    # A PEP 440 specifier set and nothing else (security review H4: this
+    # string becomes a graph node's name and rides the model's graph context —
+    # it can carry a version, never a sentence).
+    specifier: str = Field(default="", max_length=128, pattern=_SPECIFIER_SET.pattern)
+    extras: list[str] = Field(default_factory=list, max_length=8)
+    line: int = Field(default=0, ge=0)
+
+    _parts = field_validator("parts")(_segments)
+
+    @field_validator("extras")
+    @classmethod
+    def _bounded_extras(cls, value: list[str]) -> list[str]:
+        for extra in value:
+            if not isinstance(extra, str) or not 0 < len(extra) <= 64:
+                raise ValueError("extra out of range")
+        return value
+
+    @property
+    def source_file(self) -> str:
+        return "/".join(self.parts)
+
+
 class GitInfo(_Wire):
     remote_url: str | None = Field(default=None, max_length=2048)
     branch: str | None = Field(default=None, max_length=255)
@@ -156,6 +193,10 @@ class FolderScan(_Wire):
     digest: str = Field(min_length=1, max_length=128, pattern=r"^[0-9a-f]+$")
     truncated: bool = False
     tools_installed: dict[str, bool] = Field(default_factory=dict)
+    dependencies: list[ScannedDependency] = Field(
+        default_factory=list, max_length=MAX_SCAN_DEPENDENCIES
+    )
+    truncated_dependencies: bool = False
 
     @field_validator("tools_installed")
     @classmethod
@@ -356,6 +397,37 @@ def _python_code(files: list[ScannedFile], root_name: str) -> list[tuple[EntityO
     return [(entity, ".")]
 
 
+def _requirements(scan: FolderScan) -> list[EntityOut]:
+    """One `python_requirement` node per (source file, package); a masked path
+    segment or a duplicate declaration in the same file is skipped."""
+    out: list[EntityOut] = []
+    seen: set[str] = set()
+    for dep in scan.dependencies:
+        if any(part == REDACTED_SEGMENT for part in dep.parts):
+            continue
+        key = f"req:{dep.source_file}:{dep.name}"
+        if key in seen or len(key) > 1000:
+            continue
+        seen.add(key)
+        out.append(
+            EntityOut(
+                source_key=key,
+                type=REQUIREMENT_KIND,
+                domain=Domain.CODE,
+                name=f"{dep.name} {dep.specifier}".strip()[:512],
+                properties={
+                    "name": dep.name,
+                    "specifier": dep.specifier,
+                    "extras": list(dep.extras),
+                    "source_file": dep.source_file,
+                    "ecosystem": dep.ecosystem,
+                    "line": dep.line,
+                },
+            )
+        )
+    return out
+
+
 def _root_entity(scan: FolderScan, remote: RemoteRef | None, machine_name: str) -> EntityOut:
     git = scan.git
     return EntityOut(
@@ -415,11 +487,12 @@ def derive_local_graph(
         *_python_code(by_tool["python"], scan.root_name),
     ]
     root = _root_entity(scan, remote, machine_name)
-    entities = [root, *(entity for entity, _ in projects)]
+    requirements = _requirements(scan)
+    entities = [root, *(entity for entity, _ in projects), *requirements]
     relations = [
         RelationOut(from_key=CLONE_KEY, to_key=entity.source_key, type=CONTAINS)
         for entity, _ in projects
-    ]
+    ] + [RelationOut(from_key=CLONE_KEY, to_key=r.source_key, type=REQUIRES) for r in requirements]
     open_paths = {CLONE_KEY: ".", **{entity.source_key: path for entity, path in projects}}
     return LocalGraph(
         entities=entities,
@@ -450,6 +523,7 @@ def detected_entries(graph: LocalGraph) -> list[dict[str, Any]]:
             "path": graph.open_paths[entity.source_key],
         }
         for entity in graph.entities
+        if entity.source_key in graph.open_paths
     ]
 
 
@@ -525,6 +599,7 @@ class LocalFolderConnector(Connector):
             "branch": scan.git.branch if scan.git else None,
             "tools_installed": dict(scan.tools_installed),
             "detected": detected_entries(graph),
+            "dependencies_truncated": scan.truncated_dependencies,
         }
         return SyncResult(
             entities=graph.entities, relations=graph.relations, cursor=cursor, errors=errors
