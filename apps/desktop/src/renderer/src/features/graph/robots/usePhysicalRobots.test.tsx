@@ -471,14 +471,17 @@ it('offers honest category guidance and Escape cancels only the inline editor', 
   expect(screen.getByText('Assigned parts inside.')).toBeInTheDocument()
 })
 
-it('offers a sourced part through the same panel as the BOM, only when online', async () => {
+it('the Sourced card opens the same sourcing panel as the BOM, on the Workspace door', async () => {
   render(<Harness entities={[]} />)
-  await userEvent.click(screen.getByRole('button', { name: 'Find a sourced part' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Sourced' }))
   expect(screen.getByRole('dialog', { name: 'sourcing:workspace:p1' })).toBeInTheDocument()
 })
 
-it('cannot source a part while the project is offline', () => {
+it('cannot source a part while the project is offline', async () => {
   useAuthStore.setState({ status: 'unauthenticated', user: null })
   render(<Harness entities={[]} />)
-  expect(screen.getByRole('button', { name: 'Find a sourced part' })).toBeDisabled()
+  const sourced = screen.getByRole('button', { name: 'Sourced' })
+  expect(sourced).toHaveAttribute('aria-disabled', 'true')
+  await userEvent.click(sourced)
+  expect(screen.queryByRole('dialog')).toBeNull()
 })

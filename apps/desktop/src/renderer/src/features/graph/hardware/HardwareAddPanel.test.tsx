@@ -5,6 +5,23 @@ import * as hardware from '../../../lib/api/hardware'
 import { ApiError } from '../../../lib/api/envelope.types'
 import { HardwareAddPanel } from './HardwareAddPanel'
 
+vi.mock('../../sourcing/SourcingModal', () => ({
+  SourcingModal: ({
+    door,
+    projectId,
+    onSelected
+  }: {
+    door: string
+    projectId: string
+    onSelected?: (entity: unknown) => void
+  }): React.JSX.Element => (
+    <div role="dialog" aria-label={`sourcing:${door}:${projectId}`}>
+      <button type="button" onClick={() => onSelected?.({ id: 'planned-1' })}>
+        pick
+      </button>
+    </div>
+  )
+}))
 vi.mock('../../../lib/api/hardware', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/api/hardware')>()),
   listDetectedDevices: vi.fn(),
@@ -59,16 +76,21 @@ beforeEach(() => {
   ])
 })
 
-it('renders the five cards, with Sourced disabled and its exact footer copy', () => {
+it('renders the five cards, every one live', () => {
   renderPanel()
   const names = screen.getAllByRole('button').map((card) => card.getAttribute('aria-labelledby'))
   expect(names).toHaveLength(5)
   for (const title of ['Detected', 'From a file', 'Library', 'Sourced', 'Authored'])
-    expect(screen.getByRole('button', { name: title })).toBeInTheDocument()
-  const sourced = screen.getByRole('button', { name: 'Sourced' })
-  expect(sourced).toHaveAttribute('aria-disabled', 'true')
-  expect(sourced).toHaveAccessibleDescription('Sourcing (ST5) is not available yet.')
-  expect(sourced).not.toHaveClass('interactive')
+    expect(screen.getByRole('button', { name: title })).not.toHaveAttribute('aria-disabled')
+  expect(screen.getByRole('button', { name: 'Sourced' })).toHaveAccessibleDescription('Find a part')
+})
+
+it('Sourced opens the sourcing panel on the Workspace door and reports the planned part', async () => {
+  renderPanel()
+  await userEvent.click(screen.getByRole('button', { name: 'Sourced' }))
+  const dialog = screen.getByRole('dialog', { name: 'sourcing:workspace:p1' })
+  await userEvent.click(within(dialog).getByRole('button', { name: 'pick' }))
+  expect(onCreated).toHaveBeenCalledWith({ id: 'planned-1' })
 })
 
 it('disables every card offline and never reads devices', async () => {

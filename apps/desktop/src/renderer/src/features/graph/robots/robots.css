@@ -14,12 +14,6 @@
   cursor: pointer;
   text-align: left;
 }
-.robot-hardware > button {
-  border: 1px solid var(--bd);
-  background: var(--sur2);
-  padding: 8px;
-  border-radius: 4px;
-}
 .graph-node:has(.robot-node-editor) {
   height: auto !important;
   min-height: 164px;

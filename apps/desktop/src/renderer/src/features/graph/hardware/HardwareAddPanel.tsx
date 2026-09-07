@@ -1,6 +1,9 @@
 // The Hardware tab of the workspace Add panel (SOLUSDEV-248 R1): five entry
 // cards in a compact 2-column grid, each opening its own ModalShell flow.
 // Offline → every card is disabled with honest copy; nothing is fabricated.
+// Sourced (SOLUSDEV-246 ST5) opens the same sourcing panel the BOM uses, on
+// its Workspace door: the chosen candidate lands in a robot category as a
+// PLANNED part and the robot view reloads through `onCreated`.
 import { useState } from 'react'
 import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
@@ -10,6 +13,7 @@ import { FromFileModal } from './FromFileModal'
 import { HardwareCard } from './HardwareCard'
 import { HARDWARE_CARDS, HARDWARE_COPY, type HardwareCardId } from './hardware.constants'
 import { LibraryModal } from './LibraryModal'
+import { SourcingModal } from '../../sourcing/SourcingModal'
 
 export interface HardwareAddPanelProps {
   projectId: string
@@ -67,6 +71,14 @@ export function HardwareAddPanel({
           mode={mode}
           robots={robots}
           onCreated={onCreated}
+          onClose={close}
+        />
+      )}
+      {open === 'sourced' && (
+        <SourcingModal
+          projectId={projectId}
+          door="workspace"
+          onSelected={onCreated}
           onClose={close}
         />
       )}
