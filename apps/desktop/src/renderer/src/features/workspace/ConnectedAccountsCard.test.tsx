@@ -28,6 +28,11 @@ vi.mock('./useAccountConnections', async (importOriginal) => {
   return { ...actual, useAccountConnections: vi.fn() }
 })
 vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: vi.fn() }))
+// The Simulation tab's bench inventory has its own tests (SimulationPanel);
+// here it is offline so the card never reaches the bench routes.
+vi.mock('../project/localconnections/useLocalConnections', () => ({
+  useLocalConnections: vi.fn(() => ({ data: null, refresh: vi.fn() }))
+}))
 
 const ONSHAPE: CatalogEntry = {
   id: 'onshape',
@@ -469,13 +474,34 @@ describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
     expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
   })
 
-  it('an empty domain says what will land there instead of an empty box', async () => {
+  it('the Simulation tab is the bench inventory, which needs an open project', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
     await userEvent.click(screen.getByRole('tab', { name: 'Simulation' }))
-    expect(screen.getByRole('tabpanel')).toHaveTextContent(/MuJoCo and Isaac Sim/)
+    expect(screen.getByRole('tabpanel')).toHaveTextContent(/Open a project to run a simulation/)
     expect(screen.getAllByRole('tab')).toHaveLength(4) // the tabs remain
     expect(screen.queryByRole('button', { name: /connect|attach|revoke/i })).toBeNull()
+  })
+
+  it('an empty domain says so instead of showing an empty box', async () => {
+    vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([ONSHAPE])
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
+    expect(screen.getByRole('tabpanel')).toHaveTextContent(
+      'No electrical tools are available to connect yet.'
+    )
+  })
+
+  it('replays the entrance animation on every switch by remounting the panel', async () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    const before = screen.getByRole('tabpanel')
+    expect(before).toHaveClass('accounts-panel-in')
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    const after = screen.getByRole('tabpanel')
+    expect(after).not.toBe(before)
+    expect(after).toHaveAttribute('aria-labelledby', 'accounts-tab-software')
   })
 
   it('no longer points at the Sources page under the card', () => {
@@ -494,7 +520,6 @@ describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
     expect(accountDomain({ id: 'github' })).toBe('software')
     expect(accountDomain({ id: 'gitlab' })).toBe('software')
     expect(accountDomain({ id: 'brand-new-tool' })).toBe('software')
-    expect(emptyDomainText('simulation')).toMatch(/MuJoCo/)
     expect(emptyDomainText('electrical')).toMatch(/No electrical tools/)
   })
 })

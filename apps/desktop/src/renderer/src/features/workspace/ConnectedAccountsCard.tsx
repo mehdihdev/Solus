@@ -21,7 +21,10 @@
 // source is attached — instead of pretending to connect here.
 // SOLUSDEV-244: the tools are grouped under four domain tabs (Mechanical,
 // Electrical, Simulation, Software) so the card reads by discipline; a domain
-// with nothing to connect yet says so rather than showing an empty box.
+// with nothing to connect yet says so rather than showing an empty box. The
+// Simulation tab is the open project's bench inventory (SimulationPanel) —
+// simulators start and stop from here, through the same bench routes the
+// Sources page used. The panel fades in on every switch (`accounts-panel-in`).
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -54,7 +57,19 @@ import {
   type AccountDomain
 } from './accountDomains'
 import { ModalShell } from './modals'
+import { SimulationPanel } from './SimulationPanel'
 import { useAccountConnections } from './useAccountConnections'
+
+/** The account login sits on the name line and truncates instead of wrapping —
+ *  a long id (or email) never pushes the row's action out of place. */
+const LOGIN_STYLE: React.CSSProperties = {
+  fontWeight: 400,
+  color: 'var(--mut)',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'pre'
+}
 
 function ConfirmModal({
   title,
@@ -178,14 +193,14 @@ function AccountRow({
   const [confirming, setConfirming] = useState(false)
   const reauth = reauthText(connection)
   return (
-    <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+    <div style={{ padding: '13px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
         <ProviderMark entry={entry} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            {entry.name}
+          <div style={{ fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'baseline' }}>
+            <span style={{ flexShrink: 0 }}>{entry.name}</span>
             {connection.account_login && (
-              <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
+              <span style={LOGIN_STYLE} title={connection.account_login}>
                 {' '}
                 · {connection.account_login}
               </span>
@@ -324,14 +339,14 @@ function LegacyRow({
   // confirmation — never on an id alone, so the scope shown is the scope sent.
   const claimable = grant !== null
   return (
-    <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+    <div style={{ padding: '13px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
         <ProviderMark entry={entry} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            {entry.name}
+          <div style={{ fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'baseline' }}>
+            <span style={{ flexShrink: 0 }}>{entry.name}</span>
             {legacy.account_login && (
-              <span style={{ fontWeight: 400, color: 'var(--mut)' }}>
+              <span style={LOGIN_STYLE} title={legacy.account_login}>
                 {' '}
                 · {legacy.account_login}
               </span>
@@ -393,7 +408,7 @@ function NoAccountRow({
   const how = entry.mode === 'local-bridge' ? 'Connects on this computer' : 'Committed export'
   const canAttach = currentProject !== null && onOpenSources !== undefined
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '13px 16px' }}>
       <ProviderMark entry={entry} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
@@ -424,7 +439,7 @@ function ConnectRow({
   onConnect: () => void
 }): React.JSX.Element {
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '13px 16px' }}>
       <ProviderMark entry={entry} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
@@ -577,8 +592,15 @@ export function ConnectedAccountsCard({
       </div>
       <DomainTabs value={domain} onChange={setDomain} />
       <Card pad={0}>
-        <div role="tabpanel" aria-labelledby={`accounts-tab-${domain}`}>
-          {providers.length === 0 && (
+        {/* Keyed by domain so each switch remounts the panel and replays the entrance. */}
+        <div
+          key={domain}
+          role="tabpanel"
+          aria-labelledby={`accounts-tab-${domain}`}
+          className="accounts-panel-in"
+        >
+          {domain === 'simulation' && <SimulationPanel currentProject={currentProject} />}
+          {domain !== 'simulation' && providers.length === 0 && (
             <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
               {emptyDomainText(domain)}
             </div>

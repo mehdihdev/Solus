@@ -55,8 +55,13 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 | [Al] Altium                                                                 |
 |      Committed export · attached per project           [Attach in Rover]    |
 | ── Simulation ──────────────────────────────────────────────────────────── |
-|      Simulation tools such as MuJoCo and Isaac Sim will connect from here   |
-|      soon.                                                                  |
+|      Runs in Rover                                                          |
+|      MuJoCo                                          [Start demo scene]     |
+|        STREAMING  MuJoCo demo            12 INGESTED          [Stop]        |
+|      Isaac Sim                                                              |
+|        No live adapter for Isaac Sim. …                                     |
+|      (no open project:) Open a project to run a simulation — sessions       |
+|        stream into that project's Live Bench.                               |
 | ── Software ────────────────────────────────────────────────────────────── |
 | [Gh] GitHub · octocat                                                       |
 |      Connected in a project, not yet on your account   [Sign in to move]   |
@@ -75,9 +80,18 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   `tabpanel`). A tool's domain is classified in the app by provider type
   (`accountDomains.ts`); a provider the app has no entry for lands under
   Software rather than disappearing. A domain with nothing to connect yet says
-  so in place of rows — Simulation names MuJoCo and Isaac Sim, which move here
-  from the project Sources page as that page winds down. There is no footer
-  line under the card.
+  so in place of rows. There is no footer line under the card. Each switch
+  remounts the panel with a short fade-and-rise (`accounts-panel-in`; off
+  under `prefers-reduced-motion`).
+- **Simulation tab** (`SimulationPanel`): not account grants but the OPEN
+  project's bench inventory — the same `SimulatorRow`s and the same routes the
+  project Sources page used (`GET /projects/{id}/bench/sources`,
+  `POST …/bench/sessions`, `POST …/bench/sessions/{sid}/stop`), moved here as
+  the Sources page winds down. "Runs in <project>" names where a session lands;
+  an unavailable simulator carries the backend's reason with its controls dead;
+  a missing runner disables every start with that reason. No open project ⇒
+  "Open a project to run a simulation…" and no controls; API unreachable ⇒ says
+  so, never a fabricated inventory.
 - **Every tool the registry knows is listed** — a missing row reads as
   "unsupported". OAuth tools link an account here; committed-export tools
   (KiCad, Altium) and local-companion tools are attached per project, so their
@@ -182,7 +196,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   settings screen. No toggles.
 - View: the sections that have text, labelled (Code style · Mechanical ·
   Electrical · Documentation · Units and standards · Anything else); empty ones
-  are hidden. Nothing written yet → the intro line and a **Write** button
+  are hidden. Nothing written yet → the intro line and an **+ Add** button
   ("SOL follows these on every turn and says when one changed its answer").
 - Edit: one textarea per section with a `n / cap` counter (800 chars per
   section, 2 400 for Anything else — the caps are what bound the prompt), Save /

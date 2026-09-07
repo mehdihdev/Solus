@@ -38,10 +38,7 @@ export function accountDomain(entry: Pick<CatalogEntry, 'id'>): AccountDomain {
   return DOMAIN_BY_PROVIDER[entry.id.toLowerCase()] ?? 'software'
 }
 
-/** What an empty tab says — plain about what will land there, never a fake row. */
+/** What an empty tab says — plain, never a fake row. */
 export function emptyDomainText(domain: AccountDomain): string {
-  if (domain === 'simulation') {
-    return 'Simulation tools such as MuJoCo and Isaac Sim will connect from here soon.'
-  }
   return `No ${ACCOUNT_DOMAIN_LABEL[domain].toLowerCase()} tools are available to connect yet.`
 }
