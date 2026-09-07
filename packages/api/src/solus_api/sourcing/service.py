@@ -67,7 +67,9 @@ async def read_assembly(
     *,
     masses: dict[uuid.UUID, float] | None = None,
 ) -> AssemblyRead:
-    """The assembly and its DIRECT child parts with placement + mass, or 404."""
+    """The assembly and its DIRECT child parts with placement + mass, or 404. A child that is
+    itself an assembly counts like any part: it contributes when the graph carries its rolled-up
+    mass and placement and is NAMED as unknown otherwise — never silently dropped."""
     assembly = await session.scalar(
         select(GraphEntity).where(
             GraphEntity.id == assembly_id,
@@ -111,9 +113,48 @@ async def read_assembly(
             position_mm=_placement_of(edge.attrs or {}),
         )
         for entity, edge in rows
-        if not (entity.attrs or {}).get("is_assembly")
     ]
     return AssemblyRead(assembly=assembly, parts=parts)
+
+
+MAX_ASSEMBLY_NAMES = 20
+
+
+async def list_assemblies(session: AsyncSession, project_id: uuid.UUID) -> list[GraphEntity]:
+    """The project's CAD assemblies (parts flagged `is_assembly`), by name, bounded."""
+    rows = await session.scalars(
+        select(GraphEntity)
+        .where(
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == PART_KIND,
+            GraphEntity.deleted_at.is_(None),
+            GraphEntity.attrs["is_assembly"].as_boolean().is_(True),
+        )
+        .order_by(GraphEntity.name, GraphEntity.id)
+        .limit(MAX_ASSEMBLY_NAMES)
+    )
+    return list(rows)
+
+
+async def find_assembly(session: AsyncSession, project_id: uuid.UUID, name: str) -> GraphEntity:
+    """Resolve an assembly by name (case-insensitive, whitespace-folded) inside ONE project.
+    Unknown → 404 naming the assemblies that exist; ambiguous → 422 naming the ids."""
+    wanted = " ".join(name.lower().split())
+    candidates = await list_assemblies(session, project_id)
+    matches = [a for a in candidates if " ".join(a.name.lower().split()) == wanted]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        known = ", ".join(a.name for a in candidates) or "none"
+        raise APIError(
+            404, "not_found", f"No assembly named {name!r} in this project; assemblies: {known}"
+        )
+    ids = ", ".join(str(a.id) for a in matches)
+    raise APIError(
+        422,
+        "validation_error",
+        f"{len(matches)} assemblies are named {name!r}; pass assembly_entity_id ({ids})",
+    )
 
 
 # ------------------------------------------------------------------- rules

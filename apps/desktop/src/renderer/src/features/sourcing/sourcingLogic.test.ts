@@ -135,3 +135,11 @@ describe('defaultCategory', () => {
     expect(defaultCategory([])).toBe('')
   })
 })
+
+describe('linkHost', () => {
+  it('names the host of a link, never throws', async () => {
+    const { linkHost } = await import('./sourcingLogic')
+    expect(linkHost('https://www.omc-stepperonline.com/x.step')).toBe('www.omc-stepperonline.com')
+    expect(linkHost('not a url')).toBe('link')
+  })
+})

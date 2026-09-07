@@ -51,7 +51,8 @@ A comparison table, one column per included candidate:
   price / no stock ever), the trade-off line `Optimises for <x> · gives up <y>`, the rules pass's
   flags in amber (e.g. "Voltage unknown (project maximum 24.0 V)");
 - rows: Torque · Price · Weight · Protocol · Voltage · Availability · Supplier · Certifications ·
-  Vendor CAD (`model ↗`, https only) — unknown is a dash;
+  Vendor CAD (`<host> ↗`, https only — every model-chosen link shows its destination host) —
+  unknown is a dash;
 - last row: `Category` (Workspace door only: the robot's categories) · `Quantity` · **Select
   <name>**.
 
@@ -62,7 +63,7 @@ describe the requirement differently." `← Change the requirement` returns to t
 ## Selected
 
 "<name> is planned" — it entered the graph as a planned part (under the chosen category for the
-Workspace door); the BOM lists it as PLANNED. **Get vendor CAD model ↗** opens the cited https URL
+Workspace door); the BOM lists it as PLANNED. **Get vendor CAD model from <host> ↗** opens the cited https URL
 in the system browser (no download, no execution); without one: "No vendor CAD model was cited
 for this part." **Source another** resets; **Done** closes and the door refreshes (the robot
 session reloads; the BOM re-reads its rows).

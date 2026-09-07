@@ -47,7 +47,7 @@ All routes: `ProjectCtx` (member of the project's team). Writes require `member`
 | ------ | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | GET    | `/rules`                              | The effective rules: defaults ← repo `.solus` `[ext.sourcing]` (the `solus_project_toml` connector row) ← the project's manual `sourcing_rules` entity     | none                            |
 | PUT    | `/rules`                              | Save the project-level layer (the manual `sourcing_rules` entity); returns the effective set. Member floor.                                               | none                            |
-| POST   | `/torque`                             | Derive torque from an assembly (`assembly_entity_id`, optional `pivot_mm`, `masses`) or a spec (`load_kg` + `arm_m`); `safety_factor` 1.0–10 (default 1.5) | none                            |
+| POST   | `/torque`                             | Derive torque from an assembly (`assembly_entity_id`, optional `pivot_mm`, `masses`) or a spec (`load_kg` + `arm_m`); `safety_factor` 1.0–10 (default 1.5). Shares the 10/min/user budget | none                            |
 | POST   | `/requests`                           | `202` — create a sourcing request + `SOURCING` Job; ARQ `sourcing_request` (inline when no redis). 10/min/user (`429` + `Retry-After`). Member floor.     | one `COMPATIBILITY_RESEARCH` completion, to the caller |
 | GET    | `/requests`                           | The project's requests, newest first (`limit` ≤ 100)                                                                                                      | none                            |
 | GET    | `/requests/{request_id}`              | One request (poll target). `404` across projects.                                                                                                        | none                            |
@@ -61,8 +61,10 @@ default 1.5). `422 validation_error` when neither an assembly nor a load+arm is 
 
 `RequestBody` = `TorqueBody` + `spec: RequirementSpec` (`text` ≤ 2000, `protocol?`, `voltage_v?`,
 `load_kg?`, `arm_m?`, `part_class` default `motor`) + `door: "workspace" | "bom"` (default `bom`) +
-`preferences?: {section: string ≤ 2400}` (the user's `~/.solus/preferences.json` sections, ranking
-context only — never echoed back; stripped from `spec` on read).
+`preferences?: {mechanical?, electrical?, unitsStandards?, freeText?}` (each ≤ 2400 chars — the four
+`~/.solus/preferences.json` sections the engine reads; other sections are dropped at the boundary and
+never stored; never echoed back). `422 validation_error` when there is no ask at all: blank `text`,
+no load+arm, no assembly — a metered call needs a requirement (the desktop refuses the same).
 
 `SelectBody`: `candidate_id` (16 hex) · `category_entity_id?: uuid` (must be a `robot_category`
 of this project) · `quantity` (1–100 000, default 1).
@@ -96,18 +98,30 @@ candidate_id, grounding, optimizes_for, gives_up, source_url}`, `properties.vend
 the category when one was given. The BOM's design-row reader shows the manual part's own
 lifecycle/supplier/cost, so the part appears PLANNED in the BOM without an overlay.
 
+A child of the assembly that is itself an assembly counts like any part: it contributes when the
+graph carries its rolled-up `mass_kg` and a placement, and is NAMED in `unknown` otherwise — never
+silently dropped.
+
 ### 2.3 Failure modes (typed, never a 500)
 
 The engine `run_request` never raises: `insufficient_credits` (ADR-018 gate), `rate_limited`
-(frequency / trial caps), `model_unavailable` (provider or parse failure) settle the request as
+(frequency / trial caps), `model_unavailable` (provider or parse failure), `unknown_requester`
+(the creator was deleted before the job ran — nobody to gate or bill, so no call is made) and
+`dispatch_failed` (the queue refused the job after the row was committed) settle the request as
 `failed` with `error.code/message` and mark the Job `FAILED`; an empty candidate list is a
-`succeeded` request with `candidates: []` (empty beats invented).
+`succeeded` request with `candidates: []` (empty beats invented). `run_request` is idempotent: a
+re-delivered job on a settled request returns its status without a second model call, and the ARQ
+function runs with `max_tries=1` and a 480 s timeout. The answer budget is 12 000 output tokens —
+Claude 5 models think before answering and the thinking counts against it.
 
 ## 3. SOL tool
 
-`sourcing.derive_torque` (`sourcing/tools.py`): `{assembly_entity_id, pivot_mm?, masses?,
-safety_factor?}` → the `torque` payload above, read-only, tenant-scoped through the same service
-as the route. Registered for every registry (no `user_id` gate: it needs no credentials).
+`sourcing.derive_torque` (`sourcing/tools.py`): `{assembly_entity_id? | assembly_name?, pivot_mm?,
+masses?, safety_factor?}` → the `torque` payload above, read-only, tenant-scoped through the same
+service as the route. `assembly_name` resolves case-insensitively inside the project (SOL usually
+knows the name, not the id); an unknown name answers `not_found` naming the assemblies that exist,
+an ambiguous one `invalid_args` naming the ids. Registered with the other user-scoped feature tools
+(the reference registry without a `user_id` stays `get_entity` only).
 
 ## 4. Data events (ADR-011)
 
@@ -119,6 +133,12 @@ is metered and logged by the gateway (`context = COMPATIBILITY_RESEARCH`).
 ## 5. Prompt hygiene (CLAUDE.md §7)
 
 `sourcing_prompt(nonce, spec=, torque=, rules=, preferences=, assembly_name=)` fences every
-user-influenced value (`spec.text`, assembly names, part names, preferences) in `data_block`s; the
-model is asked for JSON only; `parse_candidates` is a tolerant extractor that drops anything
-malformed, over-long, or with a non-https URL. The rules pass runs AFTER parsing, in Python.
+user-influenced value (`spec.text`, `part_class`, assembly names, part names, preferences) in
+`data_block`s — nothing caller-controlled reaches the instruction head; the model is asked for JSON
+only; `parse_candidates` is a tolerant extractor that drops anything malformed, over-long, or with a
+non-https URL, and salvages the complete objects of an array the token cap cut off. The rules pass
+runs AFTER parsing, in Python. **Excluded suppliers are withheld from the model on purpose**: told
+about them it simply never proposes them and the user never learns why a supplier is missing;
+voltage, protocols, certifications and preferred suppliers are passed. A zero-candidate answer is
+logged by shape, size and digest at WARNING (its head only at DEBUG) — team part names never reach
+CloudWatch by default.

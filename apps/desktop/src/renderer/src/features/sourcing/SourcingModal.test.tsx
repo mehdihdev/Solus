@@ -198,10 +198,10 @@ describe('SourcingModal — candidates and selection', () => {
     const price = within(table).getByRole('row', { name: /Price/ })
     expect(price).toHaveTextContent('$24.90')
     expect(within(price).getAllByRole('cell')[1]).toHaveTextContent('—')
-    expect(within(table).getByRole('link', { name: 'model ↗' })).toHaveAttribute(
-      'href',
-      'https://www.omc-stepperonline.com/23hs22-2804s.step'
-    )
+    const cadRow = within(table).getByRole('row', { name: /Vendor CAD/ })
+    expect(
+      within(cadRow).getByRole('link', { name: 'www.omc-stepperonline.com ↗' })
+    ).toHaveAttribute('href', 'https://www.omc-stepperonline.com/23hs22-2804s.step')
     const excluded = screen.getByTestId('sourcing-excluded')
     expect(excluded).toHaveTextContent('Acme MegaServo 40')
     expect(excluded).toHaveTextContent(
@@ -242,10 +242,9 @@ describe('SourcingModal — candidates and selection', () => {
     expect(screen.getByTestId('sourcing-selected')).toHaveTextContent(
       'NEMA 23 23HS22-2804S is planned'
     )
-    expect(screen.getByRole('link', { name: 'Get vendor CAD model ↗' })).toHaveAttribute(
-      'href',
-      'https://v.example/x.step'
-    )
+    expect(
+      screen.getByRole('link', { name: 'Get vendor CAD model from v.example ↗' })
+    ).toHaveAttribute('href', 'https://v.example/x.step')
     await userEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onSelected).toHaveBeenCalledWith(expect.objectContaining({ id: 'e-planned' }))
     expect(onClose).toHaveBeenCalled()

@@ -9,6 +9,7 @@ and filtered by `rules.apply_rules` — the model proposes, Solus decides.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from collections.abc import Mapping
@@ -32,7 +33,7 @@ from solus_api.orchestration.providers import ProviderAdapter
 from solus_api.sourcing.candidates import RequirementSpec, parse_candidates, sourcing_prompt
 from solus_api.sourcing.rules import SourcingRules, apply_rules
 from solus_api.sourcing.service import load_rules
-from solus_api.sourcing.torque import TorqueResult
+from solus_api.sourcing.torque import Load, TorqueResult
 
 logger = logging.getLogger("solus.sourcing")
 
@@ -54,7 +55,14 @@ def _torque(request: SourcingRequest) -> TorqueResult | None:
             static_torque_nm=float(raw["static_torque_nm"]),
             required_torque_nm=float(raw["required_torque_nm"]),
             safety_factor=float(raw["safety_factor"]),
-            loads=(),
+            loads=tuple(
+                Load(
+                    name=str(load["name"]),
+                    mass_kg=float(load["mass_kg"]),
+                    lever_arm_m=float(load["lever_arm_m"]),
+                )
+                for load in raw.get("loads", [])
+            ),
             unknown=tuple(str(u) for u in raw.get("unknown", [])),
             assumptions=tuple(str(a) for a in raw.get("assumptions", [])),
         )
@@ -72,6 +80,10 @@ def _preferences(spec: dict[str, Any]) -> dict[str, str] | None:
         if isinstance(raw.get(k), str) and raw[k].strip()
     }
     return out or None
+
+
+class _NoRequesterError(Exception):
+    """`created_by` is NULL (the user was deleted before the job ran)."""
 
 
 def _error(code: str, message: str) -> dict[str, str]:
@@ -128,14 +140,20 @@ async def _run(
     candidates = parse_candidates(completion.text)
     if not candidates:
         # "Why did this user's sourcing return nothing?" must be answerable from logs (CLAUDE.md
-        # §6): the size and the head of the answer, never the whole thing.
+        # §6) WITHOUT shipping the team's part names to CloudWatch: shape, size and a digest at
+        # WARNING; the head of the answer only at DEBUG (security review M4).
+        text = completion.text
         logger.warning(
-            "sourcing: request %s parsed 0 candidates from %d chars (model %s); head=%r",
+            "sourcing: request %s parsed 0 candidates "
+            "(model %s, %d chars, starts %r, fenced=%s, sha=%s)",
             request.id,
-            len(completion.text),
             completion.model.model_name,
-            completion.text[:300],
+            len(text),
+            text.lstrip()[:1],
+            "```" in text,
+            hashlib.sha256(text.encode()).hexdigest()[:12],
         )
+        logger.debug("sourcing: request %s answer head=%r", request.id, text[:300])
     included, excluded = apply_rules(candidates, rules)
     request.candidates = [c.payload() for c in included]
     request.excluded = [{"candidate": c.payload(), "reasons": reasons} for c, reasons in excluded]
@@ -163,9 +181,17 @@ async def run_request(
         if request is None:
             logger.warning("sourcing: request %s not found", request_id)
             return None
+        if request.status is not JobStatus.QUEUED:
+            # Idempotent: a re-delivered or retried job never buys a second model call.
+            logger.info("sourcing: request %s already %s", request_id, request.status.value)
+            return request.status
         request.status = JobStatus.RUNNING
         await session.commit()
         try:
+            if request.created_by is None:
+                # The gateway gates and meters by user; with no requester there is nobody to
+                # gate or bill, so the call must not happen (security review M1).
+                raise _NoRequesterError
             await _run(
                 session,
                 request,
@@ -175,6 +201,9 @@ async def run_request(
                 redis=redis,
                 enqueue=enqueue,
             )
+        except _NoRequesterError:
+            request.status = JobStatus.FAILED
+            request.error = _error("unknown_requester", "The requesting user no longer exists.")
         except InsufficientCreditsError:
             request.status = JobStatus.FAILED
             request.error = _error("insufficient_credits", "Not enough credits to run sourcing.")

@@ -11,6 +11,7 @@ import {
   compareColumns,
   defaultCategory,
   groundingLabel,
+  linkHost,
   safeHttps,
   tradeOffLine,
   type CategoryOption
@@ -44,7 +45,7 @@ function GroundingBadge({ candidate }: { candidate: CandidateApi }): React.JSX.E
       </Mono>
       {cited && source && (
         <a href={source} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>
-          source ↗
+          {linkHost(source)} ↗
         </a>
       )}
     </span>
@@ -188,7 +189,7 @@ export function CandidateCompare({
                     <td key={`cad-${c.id}`} style={CELL}>
                       {cad ? (
                         <a href={cad} target="_blank" rel="noopener noreferrer">
-                          model ↗
+                          {linkHost(cad)} ↗
                         </a>
                       ) : (
                         '—'

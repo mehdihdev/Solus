@@ -196,3 +196,12 @@ export function defaultCategory(categories: readonly CategoryOption[]): string {
   const actuators = categories.find((c) => /^actuators/i.test(c.label))
   return (actuators ?? categories[0])?.id ?? ''
 }
+
+/** The host a safe https link goes to, for link text — the user sees where a model-chosen URL leads. */
+export function linkHost(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return 'link'
+  }
+}

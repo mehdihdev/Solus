@@ -9,7 +9,7 @@ import type { Entity } from '../../lib/api/resources'
 import type { SourcingDoor, SourcingRequestApi, TorqueApi } from '../../lib/api/resources.sourcing'
 import { CandidateCompare, type CategoryOption } from './CandidateCompare'
 import { RulesEditor } from './RulesEditor'
-import { rulesSummary, safeHttps, torqueLine } from './sourcingLogic'
+import { linkHost, rulesSummary, safeHttps, torqueLine } from './sourcingLogic'
 import type { SourcingData } from './useSourcing'
 
 const lowerFirst = (line: string): string => line.charAt(0).toLowerCase() + line.slice(1)
@@ -147,7 +147,7 @@ export function SelectedView({
           rel="noopener noreferrer"
           style={{ display: 'inline-block', marginTop: 10, fontSize: 12.5 }}
         >
-          Get vendor CAD model ↗
+          Get vendor CAD model from {linkHost(cad)} ↗
         </a>
       ) : (
         <div style={{ fontSize: 12, color: 'var(--mut)', marginTop: 10 }}>

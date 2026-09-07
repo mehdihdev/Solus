@@ -9,6 +9,7 @@ metered to the requesting user through the orchestration gateway.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Annotated, Any, Literal
 
@@ -20,7 +21,7 @@ from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectContext, ProjectCtx, SessionDep, SettingsDep, require_role
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
-from solus_api.models import Job, JobKind, JobStatus, Role, SourcingRequest
+from solus_api.models import Job, JobKind, JobStatus, Role, SourcingRequest, utcnow
 from solus_api.schemas import serialize_entity
 from solus_api.services.events import emit_event
 from solus_api.sourcing import service
@@ -37,6 +38,8 @@ from solus_api.sourcing.torque import (
 from solus_api.sourcing.worker import SOURCING_JOB
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/sourcing")
+
+logger = logging.getLogger(__name__)
 
 REQUESTS_PER_MINUTE_PER_USER = 10
 _LIMITER = "sourcing_request_limiter"
@@ -60,11 +63,26 @@ class TorqueBody(BaseModel):
     safety_factor: Safety = DEFAULT_SAFETY_FACTOR
 
 
+PreferenceText = Annotated[str, StringConstraints(max_length=2400)] | None
+
+
+class PreferencesBody(BaseModel):
+    """The `~/.solus/preferences.json` sections the engine reads (engine.PREFERENCE_KEYS) —
+    ranking context only. Other sections of the user's file are dropped at the boundary, never
+    stored (security review M3)."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    mechanical: PreferenceText = None
+    electrical: PreferenceText = None
+    unitsStandards: PreferenceText = None  # noqa: N815 — the file's own key
+    freeText: PreferenceText = None  # noqa: N815
+
+
 class RequestBody(TorqueBody):
     spec: RequirementSpec = RequirementSpec()
     door: Literal["workspace", "bom"] = "bom"
     #: The user's `~/.solus/preferences.json` sections, ranking context only (SOLUSDEV-244).
-    preferences: dict[str, Annotated[str, StringConstraints(max_length=2400)]] | None = None
+    preferences: PreferencesBody | None = None
 
 
 class SelectBody(BaseModel):
@@ -169,10 +187,12 @@ async def _torque_payload(
     return None
 
 
-@router.post("/torque")
+@router.post("/torque", response_model=None)
 async def derive_torque_route(
-    body: TorqueBody, ctx: ProjectCtx, session: SessionDep
-) -> dict[str, Any]:
+    body: TorqueBody, request: Request, ctx: ProjectCtx, session: SessionDep
+) -> Any:
+    if (limited := _budget(request, ctx)) is not None:
+        return limited
     payload = await _torque_payload(session, ctx, body)
     if payload is None:
         raise APIError(422, "validation_error", "Name an assembly, or give load_kg and arm_m")
@@ -217,11 +237,20 @@ async def create_request(
     if (limited := _budget(request, ctx)) is not None:
         return limited
     torque = await _torque_payload(session, ctx, body)
+    if torque is None and not body.spec.text.strip():
+        # A metered call needs an ask (the client refuses the same; the boundary must too).
+        raise APIError(
+            422,
+            "validation_error",
+            "Describe the requirement, give load_kg and arm_m, or name an assembly",
+        )
     spec = body.spec.model_dump(mode="json")
     if torque is not None and "assembly" in torque:
         spec["assembly_name"] = torque["assembly"]
     if body.preferences:
-        spec["preferences"] = dict(body.preferences)
+        sections = body.preferences.model_dump(exclude_none=True)
+        if sections:
+            spec["preferences"] = sections
     job = Job(
         project_id=ctx.project.id,
         team_id=ctx.team.id,
@@ -254,7 +283,17 @@ async def create_request(
         },
     )
     await session.commit()
-    await _dispatch(request, background, settings, row.id)
+    try:
+        await _dispatch(request, background, settings, row.id)
+    except Exception:  # noqa: BLE001 — the row is committed; never strand it QUEUED
+        logger.exception("sourcing: could not dispatch request %s", row.id)
+        row.status = JobStatus.FAILED
+        row.error = {"code": "dispatch_failed", "message": "Solus could not start sourcing."}
+        row.finished_at = utcnow()
+        job.status = JobStatus.FAILED
+        job.error = row.error
+        job.finished_at = utcnow()
+        await session.commit()
     return JSONResponse(
         status_code=202,
         content=envelope({"request": serialize_request(row), "job_id": str(job.id)}),

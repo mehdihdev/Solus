@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.core.errors import APIError
-from solus_api.sourcing.service import read_assembly
+from solus_api.sourcing.service import find_assembly, read_assembly
 from solus_api.sourcing.torque import (
     DEFAULT_SAFETY_FACTOR,
     MAX_SAFETY_FACTOR,
@@ -31,12 +31,15 @@ DERIVE_TORQUE = ToolDescriptor(
         "project: Solus sums each direct child part's mass x g x horizontal distance from the "
         "pivot (the assembly origin unless pivot_mm is given), times a safety factor. Parts "
         "with no mass in the graph are listed as unknown, never guessed; pass masses (kg by "
-        "entity id) when you have them, e.g. from onshape.get_mass_properties."
+        "entity id) when you have them, e.g. from onshape.get_mass_properties. Name the "
+        "assembly by assembly_entity_id, or by assembly_name when you only know its name — an "
+        "unknown name answers with the assemblies this project has."
     ),
     params={
         "type": "object",
         "properties": {
             "assembly_entity_id": {"type": "string", "format": "uuid"},
+            "assembly_name": {"type": "string", "minLength": 1, "maxLength": 200},
             "pivot_mm": {
                 "type": "array",
                 "items": {"type": "number"},
@@ -54,7 +57,6 @@ DERIVE_TORQUE = ToolDescriptor(
                 "maximum": MAX_SAFETY_FACTOR,
             },
         },
-        "required": ["assembly_entity_id"],
         "additionalProperties": False,
     },
     returns={
@@ -115,16 +117,28 @@ async def derive_for_assembly(
     }
 
 
-def build_derive_torque_tool(
-    session_factory: async_sessionmaker[AsyncSession], project_id: uuid.UUID
-) -> Tool:
-    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+async def _resolve_assembly(
+    session: AsyncSession, project_id: uuid.UUID, args: dict[str, Any]
+) -> uuid.UUID:
+    """`assembly_entity_id` wins; else `assembly_name` within THIS project; else invalid."""
+    raw_id = args.get("assembly_entity_id")
+    if raw_id is not None:
         try:
-            assembly_id = uuid.UUID(str(args["assembly_entity_id"]))
+            return uuid.UUID(str(raw_id))
         except ValueError:
             raise ToolException(
                 "assembly_entity_id is not a uuid", code=ToolErrorCode.INVALID_ARGS
             ) from None
+    name = args.get("assembly_name")
+    if isinstance(name, str) and name.strip():
+        return (await find_assembly(session, project_id, name)).id
+    raise ToolException("Give assembly_entity_id or assembly_name", code=ToolErrorCode.INVALID_ARGS)
+
+
+def build_derive_torque_tool(
+    session_factory: async_sessionmaker[AsyncSession], project_id: uuid.UUID
+) -> Tool:
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
         pivot = args.get("pivot_mm")
         pivot_mm = (
             (float(pivot[0]), float(pivot[1]), float(pivot[2]))
@@ -133,6 +147,7 @@ def build_derive_torque_tool(
         )
         async with session_factory() as session:
             try:
+                assembly_id = await _resolve_assembly(session, project_id, args)
                 payload = await derive_for_assembly(
                     session,
                     project_id,
@@ -142,7 +157,12 @@ def build_derive_torque_tool(
                     safety_factor=float(args.get("safety_factor", DEFAULT_SAFETY_FACTOR)),
                 )
             except APIError as exc:
-                raise ToolException(exc.message, code=ToolErrorCode.NOT_FOUND) from None
+                code = (
+                    ToolErrorCode.NOT_FOUND
+                    if exc.status_code == 404
+                    else ToolErrorCode.INVALID_ARGS
+                )
+                raise ToolException(exc.message, code=code) from None
             except ValueError as exc:
                 raise ToolException(str(exc), code=ToolErrorCode.INVALID_ARGS) from None
         payload.pop("assembly_entity_id", None)

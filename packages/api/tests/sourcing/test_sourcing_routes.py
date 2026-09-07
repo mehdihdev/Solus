@@ -10,6 +10,7 @@ isolation, and the SOL tool.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -22,6 +23,7 @@ from fixtures.extensions.routes import consent, events_of, install, project_for,
 from httpx import AsyncClient
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools.shapes import ToolCall
+from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.core.config import Settings
 from solus_api.main import create_app
 from solus_api.models import (
@@ -556,13 +558,18 @@ async def test_the_engine_never_surfaces_provider_text_and_settles_the_job(
         _src(project_id) + "/requests", json={"spec": {"text": "a motor"}}, headers=alice_headers
     )
     request_id = uuid.UUID(created.json()["data"]["request"]["id"])
+    # The inline route already ran it; re-queue so the engine runs again here.
+    queued = await db.get(SourcingRequest, request_id)
+    assert queued is not None
+    queued.status = JobStatus.QUEUED
+    await db.commit()
+    db.expire(queued)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     # Let the inline job finish (it may have already), then run it again with a failing provider.
     for _ in range(40):
         got = await client.get(_src(project_id) + f"/requests/{request_id}", headers=alice_headers)
         if got.json()["data"]["status"] != "queued":
             break
-    from solus_api.connectors.secrets import InMemorySecretStore
 
     status = await run_request(
         factory,
@@ -589,7 +596,6 @@ async def test_a_spend_gate_refusal_is_a_typed_failure_not_a_stack_trace(
 ) -> None:
     """The gateway's credit gate refuses → the request fails with the typed
     `insufficient_credits` error and the job settles; nothing raises."""
-    from solus_api.connectors.secrets import InMemorySecretStore
     from solus_api.orchestration.gates import InsufficientCreditsError
     from solus_api.sourcing import engine as engine_module
 
@@ -599,6 +605,12 @@ async def test_a_spend_gate_refusal_is_a_typed_failure_not_a_stack_trace(
     )
     assert created.status_code == 202
     request_id = uuid.UUID(created.json()["data"]["request"]["id"])
+    # The inline route already ran it; re-queue so the engine runs again here.
+    queued = await db.get(SourcingRequest, request_id)
+    assert queued is not None
+    queued.status = JobStatus.QUEUED
+    await db.commit()
+    db.expire(queued)
     job_id = uuid.UUID(created.json()["data"]["job_id"])
 
     async def refuse(*_args: object, **_kwargs: object) -> None:
@@ -646,7 +658,9 @@ async def test_sol_derive_torque_tool_reads_the_graph_and_never_guesses(
     _, project_id = await project_for(client, alice_headers)
     ids = await _seed_assembly(db, project_id)
     registry = build_sol_registry(
-        async_sessionmaker(engine, expire_on_commit=False), uuid.UUID(project_id)
+        async_sessionmaker(engine, expire_on_commit=False),
+        uuid.UUID(project_id),
+        user_id=uuid.uuid4(),
     )
     assert "sourcing.derive_torque" in {d.name for d in registry.list()}
     result = await registry.invoke(
@@ -670,12 +684,315 @@ async def test_sol_derive_torque_tool_reads_the_graph_and_never_guesses(
     # Another project's registry cannot read this assembly.
     _, other = await project_for(client, alice_headers)
     foreign = build_sol_registry(
-        async_sessionmaker(engine, expire_on_commit=False), uuid.UUID(other)
+        async_sessionmaker(engine, expire_on_commit=False), uuid.UUID(other), user_id=uuid.uuid4()
     )
     cross = await foreign.invoke(
         ToolCall(tool="sourcing.derive_torque", args={"assembly_entity_id": str(ids["assembly"])})
     )
     assert not cross.ok and cross.error is not None and cross.error.code.value == "not_found"
+
+
+async def test_sol_derive_torque_tool_resolves_the_assembly_by_name(
+    client: AsyncClient, db: AsyncSession, engine: AsyncEngine, alice_headers: dict[str, str]
+) -> None:
+    """SOL usually knows the assembly's NAME, not its id: resolve inside this project only;
+    an unknown name answers with the assemblies that exist (never a guess)."""
+    _, project_id = await project_for(client, alice_headers)
+    ids = await _seed_assembly(db, project_id)
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        uuid.UUID(project_id),
+        user_id=uuid.uuid4(),
+    )
+    by_name = await registry.invoke(
+        ToolCall(tool="sourcing.derive_torque", args={"assembly_name": "  arm   ASSEMBLY "})
+    )
+    assert by_name.ok and by_name.value is not None, by_name.error
+    assert by_name.value["assembly"] == "Arm assembly"
+    by_id = await registry.invoke(
+        ToolCall(tool="sourcing.derive_torque", args={"assembly_entity_id": str(ids["assembly"])})
+    )
+    assert by_id.value == by_name.value
+    unknown = await registry.invoke(
+        ToolCall(tool="sourcing.derive_torque", args={"assembly_name": "Gearbox"})
+    )
+    assert not unknown.ok and unknown.error is not None
+    assert unknown.error.code.value == "not_found"
+    assert "assemblies: Arm assembly" in unknown.error.message
+    neither = await registry.invoke(ToolCall(tool="sourcing.derive_torque", args={}))
+    assert not neither.ok and neither.error is not None
+    assert neither.error.code.value == "invalid_args"
+    # The name resolves only inside the registry's own project.
+    _, other = await project_for(client, alice_headers)
+    foreign = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False), uuid.UUID(other), user_id=uuid.uuid4()
+    )
+    cross = await foreign.invoke(
+        ToolCall(tool="sourcing.derive_torque", args={"assembly_name": "Arm assembly"})
+    )
+    assert not cross.ok and cross.error is not None and cross.error.code.value == "not_found"
+    assert "assemblies: none" in cross.error.message
+
+
+async def _seed_nested(db: AsyncSession, project_id: str) -> dict[str, uuid.UUID]:
+    """An assembly whose child is itself an assembly: one with a rolled-up mass, one without."""
+    ids = await _seed_assembly(db, project_id)
+    pid = uuid.UUID(project_id)
+    wrist = GraphEntity(
+        project_id=pid,
+        kind="part",
+        domain=Domain.MECHANICAL,
+        name="Wrist assembly",
+        origin="connector",
+        external_ref="wrist",
+        attrs={"is_assembly": True, "mass_kg": 0.5},
+    )
+    hand = GraphEntity(
+        project_id=pid,
+        kind="part",
+        domain=Domain.MECHANICAL,
+        name="Hand assembly",
+        origin="connector",
+        external_ref="hand",
+        attrs={"is_assembly": True},
+    )
+    db.add_all([wrist, hand])
+    await db.flush()
+    for child, pos in ((wrist, [200.0, 0.0, 0.0]), (hand, [500.0, 0.0, 0.0])):
+        db.add(
+            GraphEdge(
+                project_id=pid,
+                src_id=ids["assembly"],
+                dst_id=child.id,
+                relation_type="contains",
+                domain_pair="mechanical<->mechanical",
+                origin="connector",
+                attrs={"placement": pos},
+            )
+        )
+    await db.commit()
+    return {**ids, "wrist": wrist.id, "hand": hand.id}
+
+
+async def test_torque_counts_sub_assemblies_or_names_them_never_drops_them(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    """A child that is itself an assembly contributes its rolled-up mass; one with no mass is
+    NAMED as unknown (code review HIGH: never silently dropped)."""
+    _, project_id = await project_for(client, alice_headers)
+    ids = await _seed_nested(db, project_id)
+    res = await client.post(
+        _src(project_id) + "/torque",
+        json={"assembly_entity_id": str(ids["assembly"])},
+        headers=alice_headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()["data"]
+    assert {load["name"] for load in data["loads"]} == {"Arm link", "Gripper", "Wrist assembly"}
+    assert sorted(data["unknown"]) == ["Camera", "Hand assembly"]
+
+
+async def test_torque_and_select_refuse_another_projects_real_resources(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    """Real foreign ids, not random ones (security review H2): project B's assembly and category
+    are 404 from project A, byte-identical to a non-existent id, and nothing is created."""
+    _, project_a = await project_for(client, alice_headers)
+    _, project_b = await project_for(client, alice_headers)
+    foreign = await _seed_assembly(db, project_b)
+    robot = await client.post(
+        f"/api/v1/projects/{project_b}/entities",
+        json={"type": "physical_robot", "name": "B robot"},
+        headers=alice_headers,
+    )
+    assert robot.status_code == 201, robot.text
+    categories = await client.get(
+        f"/api/v1/projects/{project_b}/entities",
+        params={"type": "robot_category"},
+        headers=alice_headers,
+    )
+    category_b = categories.json()["data"][0]["id"]
+    foreign_torque = await client.post(
+        _src(project_a) + "/torque",
+        json={"assembly_entity_id": str(foreign["assembly"])},
+        headers=alice_headers,
+    )
+    ghost_torque = await client.post(
+        _src(project_a) + "/torque",
+        json={"assembly_entity_id": str(uuid.uuid4())},
+        headers=alice_headers,
+    )
+    assert foreign_torque.status_code == 404
+    assert foreign_torque.json() == ghost_torque.json()
+    # A succeeded request in A, then select into B's category.
+    alice = await me(client, alice_headers)
+    await _fund(db, alice["id"])
+    created = await client.post(
+        _src(project_a) + "/requests",
+        json={"spec": {"text": "a motor"}},
+        headers=alice_headers,
+    )
+    request_id = created.json()["data"]["request"]["id"]
+    for _ in range(50):
+        shown = await client.get(_src(project_a) + f"/requests/{request_id}", headers=alice_headers)
+        if shown.json()["data"]["status"] == "succeeded":
+            break
+        await asyncio.sleep(0.05)
+    candidate_id = shown.json()["data"]["candidates"][0]["id"]
+    foreign_select = await client.post(
+        _src(project_a) + f"/requests/{request_id}/select",
+        json={"candidate_id": candidate_id, "category_entity_id": category_b},
+        headers=alice_headers,
+    )
+    ghost_select = await client.post(
+        _src(project_a) + f"/requests/{request_id}/select",
+        json={"candidate_id": candidate_id, "category_entity_id": str(uuid.uuid4())},
+        headers=alice_headers,
+    )
+    assert foreign_select.status_code == 404
+    assert foreign_select.json() == ghost_select.json()
+    planned = await db.scalar(
+        select(GraphEntity).where(
+            GraphEntity.origin == "manual",
+            GraphEntity.kind == "part",
+            GraphEntity.project_id.in_([uuid.UUID(project_a), uuid.UUID(project_b)]),
+        )
+    )
+    assert planned is None
+
+
+async def test_an_empty_ask_is_refused_before_any_metered_call(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], adapter: _FakeAdapter
+) -> None:
+    _, project_id = await project_for(client, alice_headers)
+    alice = await me(client, alice_headers)
+    await _fund(db, alice["id"])
+    res = await client.post(_src(project_id) + "/requests", json={}, headers=alice_headers)
+    assert res.status_code == 422
+    assert adapter.prompts == []
+
+
+async def test_preferences_are_bounded_to_the_sections_the_engine_reads(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    """Unknown sections are dropped at the boundary (security review M3), never stored."""
+    _, project_id = await project_for(client, alice_headers)
+    alice = await me(client, alice_headers)
+    await _fund(db, alice["id"])
+    junk = {f"section{i}": "x" * 100 for i in range(200)}
+    res = await client.post(
+        _src(project_id) + "/requests",
+        json={
+            "spec": {"text": "a motor"},
+            "preferences": {**junk, "mechanical": "metric only", "codeStyle": "tabs"},
+        },
+        headers=alice_headers,
+    )
+    assert res.status_code == 202, res.text
+    row = await db.get(SourcingRequest, uuid.UUID(res.json()["data"]["request"]["id"]))
+    assert row is not None and row.spec["preferences"] == {"mechanical": "metric only"}
+    too_long = await client.post(
+        _src(project_id) + "/requests",
+        json={"spec": {"text": "a motor"}, "preferences": {"mechanical": "x" * 2401}},
+        headers=alice_headers,
+    )
+    assert too_long.status_code == 422
+
+
+async def test_a_request_with_no_requester_never_reaches_a_provider(
+    client: AsyncClient, db: AsyncSession, engine: AsyncEngine, alice_headers: dict[str, str]
+) -> None:
+    """created_by is NULL once the user is deleted: nobody to gate or bill, so no call (M1)."""
+    _, project_id = await project_for(client, alice_headers)
+    alice = await me(client, alice_headers)
+    await _fund(db, alice["id"])
+    created = await client.post(
+        _src(project_id) + "/requests",
+        json={"spec": {"text": "a motor"}},
+        headers=alice_headers,
+    )
+    request_id = uuid.UUID(created.json()["data"]["request"]["id"])
+    row = await db.get(SourcingRequest, request_id)
+    assert row is not None
+    row.status = JobStatus.QUEUED
+    row.created_by = None
+    await db.commit()
+    probe = _FakeAdapter()
+    status = await run_request(
+        async_sessionmaker(engine, expire_on_commit=False),
+        request_id,
+        secret_store=InMemorySecretStore(),
+        adapters={"anthropic": probe, "google": probe},
+    )
+    assert status is JobStatus.FAILED and probe.prompts == []
+    await db.refresh(row)
+    assert row.error is not None and row.error["code"] == "unknown_requester"
+
+
+async def test_running_the_same_request_twice_does_not_call_the_model_again(
+    client: AsyncClient, db: AsyncSession, engine: AsyncEngine, alice_headers: dict[str, str]
+) -> None:
+    """A re-delivered ARQ job is idempotent: a settled request never buys a second call (M2)."""
+    _, project_id = await project_for(client, alice_headers)
+    alice = await me(client, alice_headers)
+    await _fund(db, alice["id"])
+    created = await client.post(
+        _src(project_id) + "/requests",
+        json={"spec": {"text": "a motor"}},
+        headers=alice_headers,
+    )
+    request_id = uuid.UUID(created.json()["data"]["request"]["id"])
+    for _ in range(50):
+        row = await db.get(SourcingRequest, request_id)
+        assert row is not None
+        await db.refresh(row)
+        if row.status is JobStatus.SUCCEEDED:
+            break
+        await asyncio.sleep(0.05)
+    probe = _FakeAdapter()
+    status = await run_request(
+        async_sessionmaker(engine, expire_on_commit=False),
+        request_id,
+        secret_store=InMemorySecretStore(),
+        adapters={"anthropic": probe, "google": probe},
+    )
+    assert status is JobStatus.SUCCEEDED and probe.prompts == []
+
+
+async def test_the_model_answer_is_not_logged_verbatim(
+    client: AsyncClient,
+    db: AsyncSession,
+    engine: AsyncEngine,
+    alice_headers: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A zero-candidate answer is diagnosed by shape and digest at WARNING, never by its
+    content (M4)."""
+    _, project_id = await project_for(client, alice_headers)
+    alice = await me(client, alice_headers)
+    await _fund(db, alice["id"])
+    created = await client.post(
+        _src(project_id) + "/requests",
+        json={"spec": {"text": "a motor"}},
+        headers=alice_headers,
+    )
+    request_id = uuid.UUID(created.json()["data"]["request"]["id"])
+    row = await db.get(SourcingRequest, request_id)
+    assert row is not None
+    row.status = JobStatus.QUEUED
+    await db.commit()
+    prose = _FakeAdapter(text="Sorry, the Arm assembly needs a SECRET-PART-NAME motor.")
+    with caplog.at_level("WARNING", logger="solus.sourcing"):
+        status = await run_request(
+            async_sessionmaker(engine, expire_on_commit=False),
+            request_id,
+            secret_store=InMemorySecretStore(),
+            adapters={"anthropic": prose, "google": prose},
+        )
+    assert status is JobStatus.SUCCEEDED
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("parsed 0 candidates" in w for w in warnings)
+    assert all("SECRET-PART-NAME" not in w for w in warnings)
 
 
 async def test_jobs_route_lists_the_sourcing_job(

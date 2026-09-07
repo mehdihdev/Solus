@@ -106,11 +106,11 @@ def build_sol_registry(
         from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
 
         registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
-    # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
-    # graph, never the model's. Function-local import (house pattern).
-    from solus_api.sourcing.tools import build_derive_torque_tool
+        # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
+        # graph, never the model's. Function-local import (house pattern).
+        from solus_api.sourcing.tools import build_derive_torque_tool
 
-    registry.register(build_derive_torque_tool(session_factory, project_id))
+        registry.register(build_derive_torque_tool(session_factory, project_id))
     if systems is not None:
         # SYS-03: the four builtin reads (query_graph / get_telemetry /
         # retrieve_errors / run_checkers) as thin closures over the real

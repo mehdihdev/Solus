@@ -211,8 +211,9 @@ def parse_candidates(text: str) -> list[Candidate]:
 # ------------------------------------------------------------------- prompt
 
 _INSTRUCTIONS = (
-    "You are Solus's sourcing engine. Propose up to {max} candidate {part_class} parts that "
-    "satisfy the requirement below, then answer with ONLY a JSON array (no prose) of objects "
+    "You are Solus's sourcing engine. Propose up to {max} candidate parts (of the part_class "
+    "named in the requirement block) that satisfy the requirement below, then answer with "
+    "ONLY a JSON array (no prose) of objects "
     "with these keys:\n"
     "name, manufacturer, part_number, supplier, torque_nm, cost, currency, weight_kg, protocol, "
     "voltage_v, availability, certifications (array of strings), source_url, vendor_cad_url, "
@@ -256,7 +257,6 @@ def sourcing_prompt(
     factor = torque.safety_factor if torque else 0.0
     head = _INSTRUCTIONS.format(
         max=MAX_CANDIDATES,
-        part_class=spec.part_class or "motor",
         required=required,
         static=static,
         factor=factor,
