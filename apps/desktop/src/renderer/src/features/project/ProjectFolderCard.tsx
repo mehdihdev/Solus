@@ -178,6 +178,11 @@ function LinkedFolder({
       </div>
       {!folder.machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
       {bridgeOffline && <Note>{COMPANION_OFFLINE_NOTE}</Note>}
+      {/* A greyed "Open in editor" says why in words, not only in a hover
+          tooltip (SOLUSDEV-253) — the offline notes above already cover theirs. */}
+      {editorReason !== null && !bridgeOffline && folder.machineAvailable && (
+        <Note>{editorReason}</Note>
+      )}
       <DetectedProjectList
         projects={detectedProjects(view)}
         scanned={scanned}

@@ -10,6 +10,7 @@ import { useSettingsData } from './useSettingsData'
 import { useTeamData } from '../team/useTeamData'
 import { ProfileSection } from './sections/ProfileSection'
 import { PreferencesSection } from './sections/PreferencesSection'
+import { PreferencesCard } from '../preferences/PreferencesCard'
 import { PrivacySection } from './sections/PrivacySection'
 import { BillingSection } from './sections/BillingSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
@@ -66,6 +67,11 @@ export function SettingsScreen(): React.JSX.Element {
 
         {online && <ProfileSection data={settings} />}
         <PreferencesSection data={settings} />
+        {/* HOME H3 (SOLUSDEV-244) lives here since SOLUSDEV-253: the one part of
+            ~/.solus the user owns, machine-local, read by SOL on every turn. */}
+        <div style={{ marginBottom: 14 }}>
+          <PreferencesCard />
+        </div>
         {online && <PrivacySection data={settings} />}
         {online && <BillingSection data={settings} />}
         <IntegrationsSection />

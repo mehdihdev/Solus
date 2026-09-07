@@ -7,6 +7,7 @@
 // current step needs.
 import { useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
+import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import type { IntegrationAccessModes, SelectableItem } from '../../lib/api/resources'
@@ -75,10 +76,13 @@ function fieldLabel(field: string): string {
 function EndpointMark({
   label,
   busy,
+  plain = false,
   children
 }: {
   label: string
   busy: boolean
+  /** The child draws its own tile (the Solus logo): no second frame around it. */
+  plain?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
   return (
@@ -89,8 +93,8 @@ function EndpointMark({
         width: 52,
         height: 52,
         borderRadius: 8,
-        background: 'var(--sur2)',
-        border: '1px solid var(--bd)',
+        background: plain ? 'transparent' : 'var(--sur2)',
+        border: plain ? 'none' : '1px solid var(--bd)',
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -129,8 +133,8 @@ export function LinkHeader({
         padding: '10px 0 4px'
       }}
     >
-      <EndpointMark label="Solus" busy={status === 'busy'}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 600 }}>S</span>
+      <EndpointMark label="Solus" busy={status === 'busy'} plain>
+        <SolusLogo size={52} />
       </EndpointMark>
       <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
         {Array.from({ length: LINK_DOTS }, (_, i) => (

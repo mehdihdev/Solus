@@ -91,6 +91,13 @@ describe('ConnectWizardModal', () => {
     expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe('Sign in')
   })
 
+  it('draws the Solus logo, not a letter, at the Solus end of the link (SOLUSDEV-253)', () => {
+    renderWizard(OAUTH_PICK)
+    const solusEnd = document.querySelector('[aria-label="Solus"]')
+    expect(solusEnd?.querySelector('svg[role="img"]')).not.toBeNull()
+    expect(solusEnd?.textContent).toBe('')
+  })
+
   it('starts idle with a Connect action that begins the flow', () => {
     const handlers = renderWizard(OAUTH_PICK)
     fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
@@ -163,7 +170,7 @@ describe('ConnectWizardModal', () => {
     renderWizard(OAUTH_ACCESS, {
       phase: 'busy',
       stage: 'access',
-      accessModes: OAUTH_ACCESS.accessModes!,
+      accessModes: OAUTH_ACCESS.accessModes!
     })
     expect((screen.getByLabelText('Read-only') as HTMLInputElement).checked).toBe(true)
   })
@@ -172,7 +179,7 @@ describe('ConnectWizardModal', () => {
     const handlers = renderWizard(OAUTH_ACCESS, {
       phase: 'busy',
       stage: 'access',
-      accessModes: OAUTH_ACCESS.accessModes!,
+      accessModes: OAUTH_ACCESS.accessModes!
     })
     expect(screen.getByText('Read and change models')).toBeTruthy()
     fireEvent.click(screen.getByLabelText('Read and edit'))

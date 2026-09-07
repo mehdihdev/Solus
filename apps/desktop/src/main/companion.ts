@@ -19,6 +19,14 @@ export const BACKOFF_BASE_MS = 1_000
 export const BACKOFF_CAP_MS = 30_000
 export const BACKOFF_RESET_UPTIME_MS = 60_000
 const STOP_GRACE_MS = 3_000
+/** A deliberate replacement inside this window is coalesced onto one pending
+ *  respawn (security review M2): a renderer loop cannot drive a spawn/kill
+ *  storm, and the kill of the previous child still happens at once. */
+export const REPLACE_COALESCE_MS = 500
+// Helper binaries pinned to their expected paths (CLAUDE.md §7): never resolved
+// through PATH, where a planted executable could shadow them.
+const TASKKILL = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+const PS = '/bin/ps'
 
 export interface CompanionRuntime {
   isPackaged: boolean
@@ -169,7 +177,7 @@ function isPidAlive(pid: number): boolean {
 /** Signal the companion's whole process tree; best-effort on every path. */
 function killTree(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => undefined)
+    execFile(TASKKILL, ['/pid', String(pid), '/T', '/F'], () => undefined)
     return
   }
   try {
@@ -190,7 +198,7 @@ function readCmdline(pid: number): string | null {
   try {
     if (process.platform === 'linux') return readFileSync(`/proc/${pid}/cmdline`, 'utf8')
     if (process.platform === 'darwin') {
-      return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' })
+      return execFileSync(PS, ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' })
     }
   } catch {
     /* process vanished or unreadable — treat as not-a-companion */
@@ -373,6 +381,9 @@ export function notifyProjectFolderChanged(projectId: string): void {
 /** Kill the current child (if any) and spawn a fresh one against the current
  *  project + registry state. A deliberate replacement is not a failure, so the
  *  backoff schedule resets to the 1 s step. */
+let lastReplaceAt = 0
+let replaceTimer: NodeJS.Timeout | null = null
+
 function replaceChild(): void {
   if (restartTimer) {
     clearTimeout(restartTimer)
@@ -380,9 +391,52 @@ function replaceChild(): void {
   }
   const previous = child
   child = null // detach first: onDown must not schedule a restart for the old config
-  previous?.kill('SIGTERM')
+  if (previous) retire(previous)
   attempt = -1
-  if (started) maybeSpawn()
+  if (!started) return
+  // Coalesce (M2): the previous child is already being retired; the respawn
+  // for a burst of switches happens once, after the burst.
+  const now = Date.now()
+  const inBurst = now - lastReplaceAt < REPLACE_COALESCE_MS
+  lastReplaceAt = now
+  if (replaceTimer) clearTimeout(replaceTimer)
+  if (!inBurst) {
+    replaceTimer = null
+    maybeSpawn()
+    return
+  }
+  replaceTimer = setTimeout(() => {
+    replaceTimer = null
+    maybeSpawn()
+  }, REPLACE_COALESCE_MS)
+}
+
+/** Kill a replaced child's whole process tree (SOLUSDEV-253): `uv run` is only
+ *  the wrapper of a detached group — signalling it alone left the companion
+ *  alive, and the old and new companions then superseded each other on the
+ *  bridge forever (4409 loop, "Bridge offline", every Open-in button greyed).
+ *  Its exit/error listeners go first, so its death never schedules a restart
+ *  of the OLD configuration over the new child (code review H1). SIGKILL
+ *  follows after the same grace stopCompanion gives, but only while THIS child
+ *  has not reported exit — a pid the OS has recycled is never signalled
+ *  (security review H1). */
+function retire(previous: ChildProcess): void {
+  previous.removeAllListeners('exit')
+  previous.removeAllListeners('error')
+  const pid = previous.pid
+  if (!pid || previous.exitCode !== null || previous.signalCode !== null) return
+  let exited = false
+  previous.once('exit', () => {
+    exited = true
+  })
+  previous.once('error', () => {
+    exited = true
+  })
+  killTree(pid, 'SIGTERM')
+  const escalate = setTimeout(() => {
+    if (!exited) killTree(pid, 'SIGKILL')
+  }, STOP_GRACE_MS)
+  escalate.unref?.()
 }
 
 /** Relay the current access token (null ⇒ signout) to the companion's stdin.

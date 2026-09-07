@@ -14,7 +14,7 @@ import { Spinner } from '../../components/ui/Spinner'
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import { personalTeam } from '../../lib/api/resources'
 import { MANAGER_ROLES, LiveMembers } from '../team/MembersPanel'
-import { PreferencesCard } from '../preferences/PreferencesCard'
+import { SolusCard } from './SolusCard'
 import { ProjectFolderCard } from '../project/ProjectFolderCard'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
@@ -169,9 +169,13 @@ function SideColumn({
       {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
           once; each project picks what it tracks on its Sources page. */}
       <ConnectedAccountsCard currentProject={currentProject} onNavigate={onNavigate} />
-      {/* HOME H3 (SOLUSDEV-244): the one part of ~/.solus the user owns —
-          how they engineer. Machine-local, read by SOL on every turn. */}
-      <PreferencesCard />
+      {/* The current project's .solus (SOLUSDEV-253): what SOL knows about the
+          project, readable and editable here. "How you engineer" (HOME H3,
+          the ~/.solus preferences) moved to Settings. */}
+      <SolusCard
+        projectId={currentProject?.id ?? null}
+        projectName={currentProject?.name ?? null}
+      />
     </div>
   )
 }
@@ -307,7 +311,6 @@ function GoneHome({ home }: { home: HomeData }): React.JSX.Element {
 
 /** Honest offline state (dev bypass / unreachable API) — never a demo project. */
 function OfflineHome(): React.JSX.Element {
-  // The preferences card still works here: it is machine-local (HOME H3).
   const reason = useOfflineReason()
   return (
     <div style={GRID_STYLE}>
@@ -318,7 +321,6 @@ function OfflineHome(): React.JSX.Element {
             : 'Sign in to Solus to see your teams, projects, and recent activity here.'}
         </div>
       </Card>
-      <PreferencesCard />
     </div>
   )
 }

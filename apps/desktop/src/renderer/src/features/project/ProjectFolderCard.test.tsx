@@ -285,7 +285,11 @@ describe('ProjectFolderCard — scan state and detected projects', () => {
       const name = within(row).getByTestId('detected-name')
       expect(name).toHaveStyle({ minWidth: '0px' })
       for (const line of Array.from(name.children)) {
-        expect(line).toHaveStyle({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })
+        expect(line).toHaveStyle({
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        })
         expect(line).toHaveAttribute('title')
       }
       expect(within(row).getByTestId('detected-open')).toHaveStyle({ minWidth: '0px' })
@@ -338,6 +342,8 @@ describe('ProjectFolderCard — scan state and detected projects', () => {
     )
     render(<ProjectFolderCard projectId="p1" />)
     await waitFor(() => expect(rootEditor()).toHaveAttribute('title', VSCODE_MISSING_NOTE))
+    // SOLUSDEV-253: the reason is written under the buttons, not only in a tooltip.
+    expect(screen.getByRole('note', { name: '' })).toHaveTextContent(VSCODE_MISSING_NOTE)
   })
 
   it('shows Scanning… while the source syncs, and the error verbatim on failure', async () => {
