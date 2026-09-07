@@ -50,7 +50,7 @@ describe('PreferencesCard', () => {
   it('invites the first write when nothing is saved yet', async () => {
     fakeBridge(emptyEngineeringPreferences())
     render(<PreferencesCard />)
-    expect(await screen.findByRole('button', { name: 'Write' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '+ Add' })).toBeInTheDocument()
     expect(screen.getByText(/SOL follows these on every turn/)).toBeInTheDocument()
   })
 

@@ -112,8 +112,8 @@ export function PreferencesCard(): React.JSX.Element {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Mono size={10}>HOW YOU ENGINEER</Mono>
         {canEdit && (
-          <Button kind="bare" size="sm" onClick={beginEdit}>
-            {isEmptyPreferences(preferences) ? 'Write' : 'Edit'}
+          <Button kind="soft" size="sm" onClick={beginEdit}>
+            {isEmptyPreferences(preferences) ? '+ Add' : 'Edit'}
           </Button>
         )}
       </div>

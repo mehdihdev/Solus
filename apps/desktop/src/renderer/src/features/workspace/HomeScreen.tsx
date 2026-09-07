@@ -39,7 +39,7 @@ const HOME_MAX_WIDTH = 1480
 
 const GRID_STYLE: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(0,1fr) 340px',
+  gridTemplateColumns: 'minmax(0,1fr) 420px',
   gap: 16,
   marginTop: 16,
   alignItems: 'start'
