@@ -1,4 +1,4 @@
-import { app, shell, dialog, BrowserWindow, ipcMain, protocol } from 'electron'
+import { app, shell, dialog, BrowserWindow, ipcMain, protocol, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -170,11 +170,25 @@ function isMainRendererSender(event: Electron.IpcMainInvokeEvent): boolean {
   return isFromWindow(event.sender, mainWindow)
 }
 
+/** Preferred main-window size, clamped to the primary display's work area so a
+ *  small laptop screen still gets a window that fits. */
+const PREFERRED_WINDOW = { width: 1440, height: 900 } as const
+const WINDOW_SCREEN_MARGIN = 40
+
+function initialWindowSize(): { width: number; height: number } {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize
+  return {
+    width: Math.min(PREFERRED_WINDOW.width, width - WINDOW_SCREEN_MARGIN),
+    height: Math.min(PREFERRED_WINDOW.height, height - WINDOW_SCREEN_MARGIN)
+  }
+}
+
 function createWindow(): void {
   // Create the browser window.
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    ...initialWindowSize(),
+    minWidth: 900,
+    minHeight: 600,
     show: false,
     autoHideMenuBar: true,
     // SOLUSDEV-235: the renderer owns the title row (project pill), so on macOS the

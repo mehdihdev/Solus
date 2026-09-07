@@ -32,6 +32,11 @@ export interface HomeScreenProps {
   onNavigate?: (screen: MainScreen) => void
 }
 
+/** Home fills the window up to this width — wide enough for four project cards
+ *  beside the side column on a large display, without unused margins on either
+ *  side at the default window size. */
+const HOME_MAX_WIDTH = 1480
+
 const GRID_STYLE: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0,1fr) 340px',
@@ -60,7 +65,7 @@ export function HomeScreen({ onOpenProject, onNavigate }: HomeScreenProps): Reac
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
-      <div style={{ maxWidth: 1080, margin: '0 auto', padding: '26px 24px 48px' }}>
+      <div style={{ maxWidth: HOME_MAX_WIDTH, margin: '0 auto', padding: '26px 24px 48px' }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em' }}>
           {greeting}
         </h1>
