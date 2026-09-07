@@ -202,19 +202,27 @@ def test_default_runner_kills_the_whole_process_group_on_timeout(tmp_path: Path)
     assert time.monotonic() - started < 15
     grandchild = int(outcome.stdout.split()[0])
     for _ in range(50):
-        try:
-            os.kill(grandchild, 0)
-        except ProcessLookupError:
-            break
-        # A zombie still answers kill(0); ps shows its state.
-        state = subprocess.run(
-            ["/bin/ps", "-o", "stat=", "-p", str(grandchild)], capture_output=True, text=True
-        )
-        if not state.stdout.strip() or state.stdout.strip().startswith("Z"):
+        # A zombie still answers kill(0); read its scheduler state instead.
+        if _process_state(grandchild) in ("", "Z"):
             break
         time.sleep(0.1)
     else:
         pytest.fail("grandchild survived the process-group kill")
+
+
+def _process_state(pid: int) -> str:
+    """One-letter scheduler state ("" once the pid is gone). Reads /proc on
+    Linux — the slim CI image ships no `ps` — and falls back to ps elsewhere."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return ""
+    proc_stat = Path(f"/proc/{pid}/stat")
+    if proc_stat.exists():
+        # `pid (comm) S ...` — comm may contain spaces, so split after the last ')'.
+        return proc_stat.read_text().rpartition(")")[2].split()[0]
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return state.stdout.strip()[:1]
 
 
 def test_default_runner_stdin_is_closed(tmp_path: Path) -> None:
