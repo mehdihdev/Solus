@@ -38,7 +38,13 @@ logger = logging.getLogger("solus.toolkb.feedback")
 
 
 async def apply_feedback(
-    session: AsyncSession, *, entry_id: uuid.UUID, verdict: Verdict, user: User
+    session: AsyncSession,
+    *,
+    entry_id: uuid.UUID,
+    verdict: Verdict,
+    user: User,
+    team_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
 ) -> ToolKnowledgeEntry:
     """Record one voter's confirm/reject, recompute confidence, reconcile the
     entry's shared-store status, and emit the event.
@@ -66,6 +72,8 @@ async def apply_feedback(
         session,
         user=user,
         event_type=f"tool_knowledge.{verdict.value}ed",
+        team_id=team_id,
+        project_id=project_id,
         payload={
             "tool": entry.tool.value,
             "control_id": entry.control_id,

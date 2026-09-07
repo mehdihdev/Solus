@@ -70,6 +70,10 @@ class ToolDescriptor(BaseModel):
     #: Deliberately NOT inferred from `consent_summary is not None`: the two
     #: meanings will diverge.
     description_trusted: bool = True
+    #: SOLUSDEV-251: a vendor-documentation note about the UI control this tool
+    #: acts on (tool knowledge, ADR-033). Rendered by prompt assembly as its OWN
+    #: fenced data block, outside the description's fence — never prose.
+    knowledge_note: str | None = None
 
 
 class ToolCall(BaseModel):

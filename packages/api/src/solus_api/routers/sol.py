@@ -39,6 +39,7 @@ from solus_api.agent.runtime import (
 )
 from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
 from solus_api.agent.tools import ToolRegistry
+from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import redact_value
 from solus_api.core.errors import APIError
@@ -646,7 +647,9 @@ async def post_message(
             parked_by_action[_action_key(call)] = parked
         return parked
 
-    descriptors = tuple(registry.list())
+    # SOLUSDEV-251: vendor-documented tool knowledge rides each mapped write
+    # tool's description as a fenced note (global table, never project data).
+    descriptors = with_knowledge_notes(tuple(registry.list()), await load_knowledge_notes(session))
     run_ctx = AgentRunContext(
         prompt=content,
         # Descriptors + a gated, MODE-WRAPPED dispatcher, never the registry

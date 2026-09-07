@@ -162,3 +162,32 @@ order-independent (evaluated from the whole tally, not vote arrival order). Even
 - User-authored guides (a guides table) — the current guides are committed seed data.
 - Semantic search over the embedding column — when the Guide needs it (rag pattern ready).
 - PATCH/DELETE — review is operator-CLI only for now (open question Phase 0 §7.1).
+
+## SOLUSDEV-251 (INTEGRATIONS I4) amendment — tool knowledge in the SOL loop
+
+No new routes. Two seams inside the API consume and feed the global table (ADR-033):
+
+- **Notes on write tools.** `agent/tools/knowledge.py::TOOL_CONTROLS` maps each MCP write tool
+  to the vendor-documented UI control it acts on (`kicad.set_symbol_property` →
+  `kicad.eeschema.edit_symbol_properties`; `onshape.set_variable` →
+  `onshape.partstudio.variable_table`; `onshape.add_feature`/`update_feature` →
+  `onshape.partstudio.feature_list`). When the SOL route assembles the turn's descriptors, a
+  PUBLISHED entry for that control is appended to the tool's description as one nonce-fenced
+  `tool_knowledge` data block (`{control, note}`, ≤ 400 chars) — the model learns how the TOOL
+  behaves ("writing the Variable Table replaces it") without any prose entering the prompt as
+  an instruction. Candidates are never read; nothing project-scoped is read.
+- **Outcome feedback.** After a confirmed write actually runs (`confirmations.decide_confirmation`,
+  the sanctioned post-approval site) its outcome is one vote on that control through
+  `toolkb.feedback.apply_feedback` — `confirm` when the write landed, `reject` when the tool
+  refused (per tool: a KiCad write that answers `changed: false` with a reason is a rejection
+  even though the result is `ok`). Per-voter idempotent, as every vote is.
+- **Seed.** `scripts/seed-toolkb-mcp-controls.py` admits the three controls through the guard's
+  docs path (vendor documentation URLs, published directly). The catalogs
+  `toolkb/catalog/{kicad,onshape}.json` list the ids as known vendor controls. Set
+  `SOLUS_TOOLKB_VOTE_SALT` so votes survive an API restart (the unset warning is real: the live
+  run counted the same user twice across a restart).
+- **Bridge write previews** (`bridge/previews.py`): a companion write tool gets an approval-card
+  diff by READING through the same bridge first — `kicad.set_symbol_property` previews as
+  `R1 · Value: <current> → <new>` from `kicad.extract_project_netlist` (the schematic's project
+  file), `before: None` when the read declines. The gate re-runs the preview at approve time and
+  refuses on divergence, exactly as for in-process tools.

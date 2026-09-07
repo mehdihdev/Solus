@@ -1232,3 +1232,69 @@ def test_the_action_key_identifies_a_proposal_regardless_of_key_order() -> None:
     # So is the same arguments on a different tool.
     elsewhere = ToolCall(tool="onshape.add_feature", args={"name": "w", "expression": "5 mm"})
     assert _action_key(one) != _action_key(elsewhere)
+
+
+async def test_an_approved_write_feeds_its_outcome_back_into_tool_knowledge(
+    maker: async_sessionmaker[AsyncSession], monkeypatch: Any
+) -> None:
+    """SOLUSDEV-251: after the sanctioned post-approval dispatch, the outcome is
+    recorded as a confirm/reject observation on the tool's vendor control."""
+    from solus_api.agent import confirmations as module
+
+    recorded: list[tuple[str, bool]] = []
+
+    async def _record(
+        session: Any, *, tool_name: str, result: Any, user: Any, **scope: Any
+    ) -> None:
+        recorded.append((tool_name, result.ok))
+        assert user.id is not None
+        assert scope["team_id"] is not None and scope["project_id"] is not None
+
+    monkeypatch.setattr(module, "record_write_outcome", _record)
+    executed: list[dict[str, Any]] = []
+    project_id, team_id, user_id = await _scope(maker)
+    confirmation_id = await _park(
+        maker, executed, project_id=project_id, team_id=team_id, user_id=user_id
+    )
+    async with maker() as session:
+        result = await decide_confirmation(
+            session,
+            _registry(executed),
+            confirmation_id,
+            approve=True,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        await session.commit()
+    assert result.ok is True
+    assert recorded == [("onshape.set_variable", True)]
+
+
+async def test_feedback_failure_never_fails_the_action_that_ran(
+    maker: async_sessionmaker[AsyncSession], monkeypatch: Any
+) -> None:
+    """Security review H2: the write already landed; a failing vote is logged, the
+    session is left usable, and the successful result is returned."""
+    from solus_api.agent import confirmations as module
+
+    async def _boom(session: Any, **_: Any) -> None:
+        raise RuntimeError("lock timeout inside apply_feedback")
+
+    monkeypatch.setattr(module, "record_write_outcome", _boom)
+    executed: list[dict[str, Any]] = []
+    project_id, team_id, user_id = await _scope(maker)
+    confirmation_id = await _park(
+        maker, executed, project_id=project_id, team_id=team_id, user_id=user_id
+    )
+    async with maker() as session:
+        result = await decide_confirmation(
+            session,
+            _registry(executed),
+            confirmation_id,
+            approve=True,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        await session.commit()  # the session is still usable afterwards
+    assert result.ok is True
+    assert executed == [{"name": "width"}]

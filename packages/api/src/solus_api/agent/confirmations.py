@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.agent.tools.exec import run_tool
+from solus_api.agent.tools.knowledge import record_write_outcome
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import (
     ToolCall,
@@ -47,7 +48,7 @@ from solus_api.agent.tools.shapes import (
     ToolResult,
 )
 from solus_api.agent.tools.untrusted import redact_text
-from solus_api.models import ConfirmationStatus, ToolConfirmation, utcnow
+from solus_api.models import ConfirmationStatus, ToolConfirmation, User, utcnow
 
 logger = logging.getLogger("solus.agent.confirmations")
 
@@ -385,7 +386,42 @@ async def decide_confirmation(
     async def _approved(call: ToolCall) -> ToolResult:
         return await registry.invoke(call)  # the sanctioned post-approval site
 
-    return await run_tool(_approved, stored)
+    result = await run_tool(_approved, stored)
+    await _feed_back_outcome(session, row, result, user_id=user_id, project_id=project_id)
+    return result
+
+
+async def _feed_back_outcome(
+    session: AsyncSession,
+    row: ToolConfirmation,
+    result: ToolResult,
+    *,
+    user_id: uuid.UUID,
+    project_id: uuid.UUID,
+) -> None:
+    """SOLUSDEV-251: the outcome of a confirmed write is one observation on the
+    vendor control it acts on — the correction loop into tool knowledge. The
+    write has ALREADY landed: nothing here may change or lose the result, so
+    the whole block is best-effort and leaves the session usable on failure."""
+    try:
+        voter = await session.get(User, user_id)
+        if voter is None:
+            return
+        await record_write_outcome(
+            session,
+            tool_name=row.tool,
+            result=result,
+            user=voter,
+            team_id=row.team_id,
+            project_id=project_id,
+        )
+        await session.commit()
+    except Exception:  # noqa: BLE001 — feedback never fails the action that ran
+        logger.warning("tool knowledge feedback failed after %s", row.tool, exc_info=True)
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            logger.warning("session rollback after feedback failure also failed")
 
 
 def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:

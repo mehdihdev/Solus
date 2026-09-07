@@ -1,0 +1,8 @@
+{
+  "$comment": "SOLUSDEV-251 seed catalog \u2014 control ids named by Onshape's own documentation (cad.onshape.com/help). Curation is human-signed-off.",
+  "tool": "onshape",
+  "controls": [
+    "onshape.partstudio.variable_table",
+    "onshape.partstudio.feature_list"
+  ]
+}
