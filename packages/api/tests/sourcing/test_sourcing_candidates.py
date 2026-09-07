@@ -126,3 +126,45 @@ def test_candidate_is_frozen_and_serialisable() -> None:
     assert isinstance(c, Candidate)
     payload = c.payload()
     assert payload["grounding"] == "cited" and payload["flags"] == []
+
+
+def test_parse_keeps_the_complete_objects_of_a_truncated_array() -> None:
+    """The token cap cut the answer mid-object: whole candidates survive, the tail is dropped."""
+    text = (
+        'Here you go:\n[{"name": "A", "optimizes_for": "cost", "gives_up": "weight", '
+        '"source_url": "https://a.example/p"}, {"name": "B", "optimizes_for": "torque", '
+        '"gives_up": "cost"}, {"name": "C", "optimizes_for": "we'
+    )
+    parsed = parse_candidates(text)
+    assert [c.name for c in parsed] == ["A", "B"]
+    assert parsed[0].grounding == "cited"
+    assert parsed[1].grounding == "unverified"
+
+
+def test_parse_truncated_answer_without_any_complete_object_is_empty() -> None:
+    assert parse_candidates('[{"name": "A", "optimizes_for": "x", "gives_up": "y"') == []
+
+
+def test_prompt_withholds_excluded_suppliers_from_the_model_but_keeps_the_other_rules() -> None:
+    """Excluded suppliers are filtered AFTER the answer so the exclusion (and its reason)
+    is visible; the model still learns voltage/protocol/preferred so it proposes better."""
+    from solus_api.sourcing.rules import ExcludedSupplier
+
+    rules = SourcingRules(
+        excluded_suppliers=[ExcludedSupplier(name="Acme Motors", reason="export controlled")],
+        max_voltage_v=24,
+        allowed_protocols=["CAN"],
+        preferred_suppliers=["T-Motor Store"],
+    )
+    prompt = sourcing_prompt(
+        new_nonce(),
+        spec=RequirementSpec(text="x"),
+        torque=None,
+        rules=rules,
+        preferences=None,
+        assembly_name=None,
+    )
+    assert "Acme Motors" not in prompt
+    assert "export controlled" not in prompt
+    assert "max_voltage_v" in prompt and "allowed_protocols" in prompt
+    assert "T-Motor Store" in prompt

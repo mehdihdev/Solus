@@ -36,7 +36,11 @@ from solus_api.sourcing.torque import TorqueResult
 
 logger = logging.getLogger("solus.sourcing")
 
-MAX_TOKENS = 3000
+#: Output budget for the candidate answer. Claude 5 models think before answering and the
+#: thinking tokens count against `max_tokens` (a live run at 3000 came back with ZERO text
+#: after 3000 billed output tokens), so the cap must leave room for eight fully-keyed
+#: candidates AFTER the model's own reasoning. `parse_candidates` salvages a cut-off array.
+MAX_TOKENS = 12000
 PREFERENCE_KEYS = ("mechanical", "electrical", "unitsStandards", "freeText")
 PREFERENCE_CAP = 800
 
@@ -122,6 +126,16 @@ async def _run(
         max_tokens=MAX_TOKENS,
     )
     candidates = parse_candidates(completion.text)
+    if not candidates:
+        # "Why did this user's sourcing return nothing?" must be answerable from logs (CLAUDE.md
+        # §6): the size and the head of the answer, never the whole thing.
+        logger.warning(
+            "sourcing: request %s parsed 0 candidates from %d chars (model %s); head=%r",
+            request.id,
+            len(completion.text),
+            completion.model.model_name,
+            completion.text[:300],
+        )
     included, excluded = apply_rules(candidates, rules)
     request.candidates = [c.payload() for c in included]
     request.excluded = [{"candidate": c.payload(), "reasons": reasons} for c, reasons in excluded]

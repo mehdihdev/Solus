@@ -167,7 +167,28 @@ def _json_payload(text: str) -> Any:
             return json.loads(body[start:end])
         except ValueError:
             continue
-    return None
+    return _complete_items(body, start)
+
+
+def _complete_items(body: str, start: int) -> list[Any] | None:
+    """The whole objects of an array the model never closed (token cap hit): each complete
+    element is kept, the cut-off tail is dropped. Objects only — a candidate is an object."""
+    if body[start] != "[":
+        return None
+    decoder = json.JSONDecoder()
+    items: list[Any] = []
+    pos = start + 1
+    while True:
+        while pos < len(body) and body[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= len(body) or body[pos] != "{":
+            break
+        try:
+            item, pos = decoder.raw_decode(body, pos)
+        except ValueError:
+            break
+        items.append(item)
+    return items or None
 
 
 def parse_candidates(text: str) -> list[Candidate]:
@@ -213,6 +234,14 @@ _INSTRUCTIONS = (
 )
 
 
+def _rules_for_model(rules: SourcingRules) -> dict[str, Any]:
+    """The rules the model may use to pick better candidates. Excluded suppliers are
+    WITHHELD on purpose: told about them, the model simply never proposes them and the
+    user never learns why a supplier is missing. Solus excludes after parsing, with the
+    rule's own reason on the candidate (`rules.apply_rules`) — that is the visible trail."""
+    return {k: v for k, v in rules.payload().items() if k != "excluded_suppliers"}
+
+
 def sourcing_prompt(
     nonce: str,
     *,
@@ -235,7 +264,7 @@ def sourcing_prompt(
     blocks = [
         data_block(nonce, "requirement", spec.model_dump(mode="json")),
         data_block(nonce, "torque", torque.payload() if torque else {"derived": False}),
-        data_block(nonce, "project_rules", rules.payload()),
+        data_block(nonce, "project_rules", _rules_for_model(rules)),
     ]
     if assembly_name:
         blocks.append(data_block(nonce, "assembly", {"name": assembly_name}))
