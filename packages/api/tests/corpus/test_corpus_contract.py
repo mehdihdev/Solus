@@ -303,7 +303,7 @@ def test_source_class_has_no_customer_community_or_model_value(value: str) -> No
 def test_the_model_is_frozen() -> None:
     built = build()
     with pytest.raises(ValidationError):
-        built.title = "changed"  # type: ignore[misc]
+        built.title = "changed"
 
 
 # ------------------------------------------------------------------- §4: enumerations

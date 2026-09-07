@@ -99,10 +99,14 @@ def upgrade() -> None:
         sa.Column("embedding", Vector(dim=1536), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_corpus_chunk_confidence"),
+        sa.CheckConstraint(
+            "confidence >= 0 AND confidence <= 1", name="ck_corpus_chunk_confidence"
+        ),
         sa.CheckConstraint("char_length(body) <= 6000", name="ck_corpus_chunk_body_cap"),
         sa.CheckConstraint("status <> 'withdrawn' OR body = ''", name="ck_corpus_chunk_withdrawn"),
-        sa.CheckConstraint("cardinality(applicability) <= 16", name="ck_corpus_chunk_applicability"),
+        sa.CheckConstraint(
+            "cardinality(applicability) <= 16", name="ck_corpus_chunk_applicability"
+        ),
         sa.CheckConstraint("cardinality(related) <= 12", name="ck_corpus_chunk_related"),
         sa.PrimaryKeyConstraint("id"),
     )
