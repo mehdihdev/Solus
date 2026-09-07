@@ -1,0 +1,22 @@
+id: unitree-go2
+name: Unitree Go2
+manufacturer: Unitree
+machine_class: quadruped
+keywords: [unitree, go2, quadruped, legged, ethernet, sdk]
+transport: ethernet
+driver_id: null
+params: {}
+parts:
+  - {part: unitree-go-m8010, address: "leg:0", role: FR_hip}
+  - {part: unitree-go-m8010, address: "leg:1", role: FR_thigh}
+  - {part: unitree-go-m8010, address: "leg:2", role: FR_calf}
+  - {part: unitree-go-m8010, address: "leg:3", role: FL_hip}
+  - {part: unitree-go-m8010, address: "leg:4", role: FL_thigh}
+  - {part: unitree-go-m8010, address: "leg:5", role: FL_calf}
+  - {part: unitree-go-m8010, address: "leg:6", role: RR_hip}
+  - {part: unitree-go-m8010, address: "leg:7", role: RR_thigh}
+  - {part: unitree-go-m8010, address: "leg:8", role: RR_calf}
+  - {part: unitree-go-m8010, address: "leg:9", role: RL_hip}
+  - {part: unitree-go-m8010, address: "leg:10", role: RL_thigh}
+  - {part: unitree-go-m8010, address: "leg:11", role: RL_calf}
+notes: SDK bridge is not yet a Solus driver; the platform imports as planned parts only.

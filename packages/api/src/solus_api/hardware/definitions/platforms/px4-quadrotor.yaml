@@ -1,0 +1,16 @@
+id: px4-quadrotor
+name: PX4 quadrotor
+machine_class: quadrotor
+keywords: [px4, pixhawk, mavlink, quadrotor, quadcopter, drone, multirotor, uav]
+transport: wifi
+driver_id: mavlink
+params: {system_id: 1, component_id: 1, protocol_version: 2}
+parts:
+  - {part: px4-autopilot, address: "1:1", role: autopilot}
+  - {part: blheli32-esc, address: "servo:1", role: motor_1}
+  - {part: blheli32-esc, address: "servo:2", role: motor_2}
+  - {part: blheli32-esc, address: "servo:3", role: motor_3}
+  - {part: blheli32-esc, address: "servo:4", role: motor_4}
+  - {part: mpu-6050, address: "1:1:imu", role: imu}
+  - {part: neo-m8n, address: "1:1:gps", role: gps}
+  - {part: bmp390, address: "1:1:baro", role: baro}

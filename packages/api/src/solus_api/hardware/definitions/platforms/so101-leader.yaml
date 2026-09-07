@@ -1,0 +1,15 @@
+id: so101-leader
+name: SO-101 leader arm
+manufacturer: TheRobotStudio
+machine_class: arm
+keywords: [so-101, so101, lerobot, sts3215, feetech, leader, teleop, arm, 5-dof]
+transport: usb_serial
+driver_id: feetech-sts
+params: {baud: 1000000, protocol_version: 0}
+parts:
+  - {part: sts3215, address: "1", role: shoulder_pan, gear_ratio: "1/191", calibration_mode: degrees}
+  - {part: sts3215, address: "2", role: shoulder_lift, gear_ratio: "1/345", calibration_mode: degrees}
+  - {part: sts3215, address: "3", role: elbow_flex, gear_ratio: "1/191", calibration_mode: degrees}
+  - {part: sts3215, address: "4", role: wrist_flex, gear_ratio: "1/147", calibration_mode: degrees}
+  - {part: sts3215, address: "5", role: wrist_roll, gear_ratio: "1/147", calibration_mode: degrees}
+  - {part: sts3215, address: "6", role: gripper, gear_ratio: "1/147", calibration_mode: range_0_100, category: end_effectors}

@@ -187,6 +187,8 @@ async def get_entry(
 async def update_text(session: AsyncSession, entry: SolusEntry, text: str) -> SolusEntry:
     if entry.kind == SolusEntryKind.ARTIFACT:
         raise APIError(409, "conflict", "An imported file has no editable text")
+    if entry.kind == SolusEntryKind.CONFIG:
+        raise APIError(409, "conflict", "A hardware config is edited through the hardware routes")
     entry.text = clean_text(text)
     graph = await SolusGraph.ensure(session, entry.project_id)
     node = graph.attach_entry(entry)
@@ -237,6 +239,8 @@ def serialize_entry(entry: SolusEntry, artifact: Artifact | None = None) -> dict
         "entity_id": entry.entity_id,
         "media_type": artifact.media_type if artifact is not None else None,
         "size_bytes": artifact.size_bytes if artifact is not None else None,
+        # CONFIG only (SOLUSDEV-248): the validated HardwareConfig document.
+        "payload": entry.payload if entry.kind == SolusEntryKind.CONFIG else None,
         "created_by": entry.created_by,
         "created_at": entry.created_at,
         "updated_at": entry.updated_at,

@@ -26,6 +26,7 @@ from solus_api.models import (
 
 SOLUS_KIND = "solus_config"
 DOCUMENT_KIND = "document"
+CONFIG_NODE_KIND = "hardware_config"  # a Physical Robot's HardwareConfig entry (SOLUSDEV-248)
 ORIGIN = "manual"
 SECTION_LABELS: dict[SolusSection, str] = {
     SolusSection.HARDWARE: "Hardware configs",
@@ -172,11 +173,12 @@ class SolusGraph:
         """Keep legacy document IDs, or create a note identity, then attach it."""
         if entry.project_id != self.project_id:
             raise APIError(404, "not_found", "Entry not found")
-        kind = (
-            DOCUMENT_KIND
-            if entry.kind == SolusEntryKind.ARTIFACT
-            else ("solus_error" if entry.section == SolusSection.ERRORS else "solus_note")
-        )
+        if entry.kind == SolusEntryKind.ARTIFACT:
+            kind = DOCUMENT_KIND
+        elif entry.kind == SolusEntryKind.CONFIG:
+            kind = CONFIG_NODE_KIND
+        else:
+            kind = "solus_error" if entry.section == SolusSection.ERRORS else "solus_note"
         node = self.nodes.get(entry.entity_id) if entry.entity_id is not None else None
         if entry.entity_id is not None:
             # No FK alone proves tenancy, ownership, or that this is an entry node.

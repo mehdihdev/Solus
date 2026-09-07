@@ -657,6 +657,12 @@ shape lands in `packages/shared-types`; no Python twin is added because no Pytho
 file (the API validates the request body with its own schema). This supersedes the solus-folder.md
 §6 deferral for ROOT-level preferences only; team/project instructions remain deferred.
 
+**Amended 2026-09-06 (SOLUSDEV-248 / ROBOT ONBOARDING R5, human-approved in-chat):** a
+Hardware-configs entry may carry a structured payload — `SolusEntryKind.CONFIG`, a JSONB column
+validated by the `HardwareConfig` Pydantic model on every write, one entry per Physical Robot,
+provenance on every field. This is configuration, not graph facts: parts stay in the graph and
+the entry references them by entity id; free-form or unvalidated JSON remains forbidden.
+
 ---
 
 ## ADR-035: Extensions — sandboxed views, a permission-checked host bridge, and an open registry

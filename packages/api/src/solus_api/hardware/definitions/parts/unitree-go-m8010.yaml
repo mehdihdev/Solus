@@ -1,0 +1,17 @@
+id: unitree-go-m8010
+name: Unitree GO-M8010-6
+manufacturer: Unitree
+category: actuators
+keywords: [actuator, quadruped, unitree, go2, leg, rs485]
+specs:
+  rated_torque_n_m: 8
+  peak_torque_n_m: 23.7
+  rated_speed_rad_s: 30
+  gear_ratio: "6.33:1"
+  interface: RS-485 (vendor SDK)
+  supply_v: 24
+telemetry:
+  - {quantity: position, unit: rad}
+  - {quantity: torque, unit: N.m}
+notes: Reached through the vendor SDK; no Solus driver exposes the bus directly.
+datasheet_url: https://www.unitree.com/

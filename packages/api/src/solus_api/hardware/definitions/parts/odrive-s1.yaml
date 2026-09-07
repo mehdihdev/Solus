@@ -1,0 +1,20 @@
+id: odrive-s1
+name: ODrive S1
+manufacturer: ODrive Robotics
+category: controllers
+keywords: [motor-controller, bldc, foc, can, odrive, wheel]
+specs:
+  voltage_min_v: 12
+  voltage_max_v: 50
+  continuous_current_a: 40
+  peak_current_a: 80
+  interfaces: CAN, USB, UART
+  can_bitrate_default: 250000
+  onboard_encoder: true
+  weight_g: 40
+driver_id: odrive-can
+telemetry:
+  - {quantity: position, unit: rev}
+  - {quantity: velocity, unit: rev/s}
+  - {quantity: current, unit: A}
+datasheet_url: https://docs.odriverobotics.com/

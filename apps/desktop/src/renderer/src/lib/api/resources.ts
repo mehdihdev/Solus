@@ -1395,11 +1395,20 @@ export interface SerialRealConfig {
   serial_number?: string
   confirmed_device_path?: string
   baud?: number
+  /** Driver plugin id + params (hardware.md §6) — generic, no closed list of names. */
+  driver_id?: string
+  driver_params?: Record<string, string | number | boolean | null>
+}
+
+/** Open a real session from a Physical Robot's hardware config (hardware.md §6). */
+export interface RobotRealConfig {
+  provider: 'robot'
+  robot_entity_id: string
 }
 
 export type CreateBenchSessionInput =
   | { mode: 'sim'; config: MujocoSimConfig | GazeboSimConfig | McapReplayConfig }
-  | { mode: 'real'; config: SerialRealConfig }
+  | { mode: 'real'; config: SerialRealConfig | RobotRealConfig }
 
 export type BenchSessionStatus = 'starting' | 'active' | 'ended'
 /** Honest live link state — a dead pump reads `disconnected`, never "streaming". */
@@ -1418,7 +1427,10 @@ export interface BenchWindowSummary {
 export interface BenchSessionDevice {
   serial_number: string | null
   device_path: string | null
-  baud: number
+  baud: number | null
+  /** `<transport>:<binding>` identity (hardware.md §1); null on legacy serial sessions. */
+  device_ref?: string | null
+  driver_id?: string | null
 }
 
 export interface BenchSession {
@@ -1538,7 +1550,7 @@ export function listLocalTools(client: ApiClient = api): Promise<LocalTool[]> {
 
 export const SOLUS_SECTIONS = ['hardware', 'details', 'errors', 'docs', 'code'] as const
 export type SolusSection = (typeof SOLUS_SECTIONS)[number]
-export type SolusEntryKind = 'text' | 'artifact' | 'sol'
+export type SolusEntryKind = 'text' | 'artifact' | 'sol' | 'config'
 
 /** One row under a `.solus` section. `name`/`media_type`/`size_bytes` are set for
  *  imported files; `text` for typed and SOL-filed notes. */
@@ -1548,6 +1560,9 @@ export interface SolusEntry {
   kind: SolusEntryKind
   author: 'user' | 'sol'
   text: string | null
+  /** Structured document for `config` entries (ADR-034 amendment); null otherwise.
+   *  ponytail: optional until useSolusNodes.test.tsx's fixture (outside R1) adds it. */
+  payload?: Record<string, unknown> | null
   name: string | null
   artifact_id: string | null
   entity_id: string | null

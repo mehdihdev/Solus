@@ -114,7 +114,20 @@ Also **self-heals**: a project created before this ticket has no node; the first
 ```
 
 `kind` is `text` (typed by a person), `sol` (filed by SOL via `add_solus_entry`, `author: "sol"`),
-or `artifact` (an imported file). Entries are in creation order.
+`artifact` (an imported file), or `config` (a Physical Robot's hardware configuration —
+SOLUSDEV-248). Entries are in creation order.
+
+### SOLUSDEV-248 amendment — `config` entries (ADR-034 amendment 2026-09-06)
+
+A `hardware` entry of kind `config` carries `payload`: the robot's `HardwareConfig` document,
+validated by its Pydantic model on every write (`docs/api/hardware.md` §2). Every other kind
+returns `payload: null`. One entry exists per Physical Robot; it is created on the first
+`GET /hardware/robots/{robot_id}/config` and referenced from the robot root's
+`properties.hardware_config_ref`. Its graph identity is a `hardware_config` node under the
+Hardware section with a `configures` edge to the robot. Config entries are written only through
+the hardware routes — `POST /solus/hardware/entries` still accepts `text` and `artifact` only, and
+`PATCH` on a config entry is `409 conflict`. Deleting one removes the entry and its node; the
+next hardware read recreates an empty config.
 
 ## 3. POST `/{section}/entries` — file (member+)
 

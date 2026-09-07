@@ -1,0 +1,16 @@
+id: teensy-4
+name: Teensy 4.1
+manufacturer: PJRC
+category: controllers
+keywords: [mcu, teensy, arduino, cortex-m7, usb, ethernet, can]
+specs:
+  mcu: NXP i.MX RT1062 Cortex-M7
+  clock_mhz: 600
+  flash_mb: 8
+  ram_mb: 1
+  can_fd: true
+  ethernet: true
+  usb_vid: "0x16C0"
+  supply_v: 3.3
+telemetry: []
+datasheet_url: https://www.pjrc.com/store/teensy41.html

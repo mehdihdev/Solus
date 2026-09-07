@@ -22,16 +22,28 @@ import importlib.util
 import logging
 import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from solus_api.hardware.config import (
+    FieldProvenance,
+    HardwareConfig,
+    ProtocolBinding,
+    ProvenanceRecord,
+    TransportBinding,
+    TransportKind,
+)
 from solus_api.livebench.sessions import AmbiguousDeviceError, DeviceNotFoundError
 
 from livebench.recognition.passive import PortIdentity, enumerate_usb_serial
 from livebench.telemetry.stream_live import PacketStreamLiveConnection
+
+if TYPE_CHECKING:
+    from livebench.hardware.connection import RobotConnection
 
 __all__ = [
     "AmbiguousDeviceError",
@@ -42,7 +54,10 @@ __all__ = [
     "open_mujoco",
     "open_gazebo",
     "open_mcap",
+    "open_robot",
     "open_serial",
+    "detect_devices",
+    "propose_device",
 ]
 
 logger = logging.getLogger(__name__)
@@ -277,10 +292,29 @@ async def open_serial(
     project_id: UUID,
     baud: int = _DEFAULT_BAUD,
     confirmed_device_path: str | None = None,
+    driver_id: str | None = None,
+    driver_params: Mapping[str, Any] | None = None,
 ) -> PacketStreamLiveConnection:
     """A serial robot connection bound by USB serial (see `resolve_serial_device`).
-    The blocking pyserial open runs off-loop."""
+    The blocking pyserial open runs off-loop. With a `driver_id` the link opens through the
+    protocol-driver registry (SOLUSDEV-248) instead of the passive LB-06 line reader."""
     from livebench.telemetry.robot import SerialRobotConnection
+
+    if driver_id is not None:
+        if serial_number is None:
+            raise ValueError("a driver session binds by USB serial number")
+        document = HardwareConfig(
+            robot_entity_id=UUID(int=0),
+            identity=TransportBinding(kind=TransportKind.USB_SERIAL, binding=serial_number),
+            protocol=ProtocolBinding(
+                driver_id=driver_id, params={"baud": baud, **dict(driver_params or {})}
+            ),
+            provenance={
+                "identity": ProvenanceRecord(by=FieldProvenance.DETECTED),
+                "protocol": ProvenanceRecord(by=FieldProvenance.USER),
+            },
+        )
+        return await open_robot(document.model_dump(mode="json"), project_id=project_id)
 
     def _open() -> PacketStreamLiveConnection:
         # Enumeration + the pyserial open both block — resolve AND open off-loop.
@@ -288,3 +322,143 @@ async def open_serial(
         return SerialRobotConnection.open(device, baud, project_id=project_id)
 
     return await asyncio.to_thread(_open)
+
+
+def _detected_wire(device: Any) -> dict[str, Any]:
+    """DetectedDevice → plain dict (crosses the optional-import boundary duck-typed)."""
+    return {
+        "transport": device.transport.value,
+        "device_ref": device.device_ref,
+        "identity": device.identity.model_dump(mode="json") if device.identity else None,
+        "level": device.level,
+        "board": device.board,
+        "board_class": device.board_class,
+        "mcu_known": device.mcu_known,
+        "confidence": device.confidence,
+        "evidence": [m.model_dump(mode="json") for m in device.evidence],
+        "ambiguous": device.ambiguous,
+        "last_seen_path": device.last_seen_path,
+        "vid": device.vid,
+        "pid": device.pid,
+    }
+
+
+def _repo_match_wire(match: Any) -> dict[str, Any]:
+    return {
+        "config_id": match.config_id,
+        "parser_id": match.parser_id,
+        "label": match.label,
+        "source": match.source,
+        "protocol_hint": match.protocol_hint,
+        "parts": [
+            {
+                "name": part.name,
+                "address": part.address,
+                "model": part.model,
+                "calibration_mode": (
+                    part.calibration_mode.value if part.calibration_mode is not None else None
+                ),
+                "calibration": part.calibration,
+                "calibration_source": part.calibration_source,
+            }
+            for part in match.parts
+        ],
+        "port_hint": match.port_hint,
+        "calibration_source": match.calibration_source,
+        "params": dict(match.params),
+    }
+
+
+def _proposal_wire(proposal: Any) -> dict[str, Any]:
+    return {
+        "device_ref": proposal.device_ref,
+        "identity": proposal.identity.model_dump(mode="json") if proposal.identity else None,
+        "level": proposal.level,
+        "summary": proposal.summary,
+        "driver_id": proposal.driver_id,
+        "params": dict(proposal.params),
+        "rows": [
+            {
+                "id": row.id,
+                "subject": row.subject,
+                "address": row.address,
+                "model": row.model,
+                "proposed_function": row.proposed_function,
+                "confidence": row.confidence,
+                "evidence": [m.model_dump(mode="json") for m in row.evidence],
+                "provenance": row.provenance,
+            }
+            for row in proposal.rows
+        ],
+        "repo_matches": [_repo_match_wire(m) for m in proposal.repo_matches],
+        "disambiguation": (
+            {
+                "question": proposal.disambiguation.question,
+                "options": proposal.disambiguation.options,
+                "favoured": proposal.disambiguation.favoured,
+            }
+            if proposal.disambiguation is not None
+            else None
+        ),
+        "confidence": proposal.confidence,
+        "evidence": [m.model_dump(mode="json") for m in proposal.evidence],
+        "calibration_source": proposal.calibration_source,
+    }
+
+
+def detect_devices() -> list[dict[str, Any]]:
+    """Every USB-serial device on this machine at its honest level (opens no port)."""
+    from livebench.hardware.detection import enumerate_devices
+
+    return [_detected_wire(d) for d in enumerate_devices(list_devices=list_devices)]
+
+
+def propose_device(
+    device_ref: str, *, repo_root: str | None = None, budget_s: float = 0.5
+) -> dict[str, Any] | None:
+    """Interrogate one detected device safely and build its proposal; None when the device is
+    not here. BLOCKING (ports are opened): callers run it off-loop."""
+    from livebench.hardware import registries as hardware_registries
+    from livebench.hardware.detection import enumerate_devices, interrogate_device, propose
+    from livebench.hardware.repo_config import match_configs, scan_repo
+
+    device = next(
+        (d for d in enumerate_devices(list_devices=list_devices) if d.device_ref == device_ref),
+        None,
+    )
+    if device is None or device.identity is None:
+        return None
+    registries = hardware_registries.default_registries()
+    interrogations = interrogate_device(device.identity, registries=registries, budget_s=budget_s)
+    matches: list[Any] = []
+    if repo_root and interrogations:
+        best = max(interrogations, key=lambda i: i.confidence)
+        configs = scan_repo(Path(repo_root), registries.repo_parsers)
+        matches = match_configs(best.bus_map, configs)
+    return _proposal_wire(propose(device, interrogations, repo_matches=matches))
+
+
+async def open_robot(config: Mapping[str, Any], *, project_id: UUID) -> "RobotConnection":
+    """A configured robot's connection (SOLUSDEV-248): transport identity, driver id and
+    parameters all come from the HardwareConfig document; the plugin registries do the rest.
+    An invalid document is a ValueError; an absent device surfaces as the identity error the
+    routes already map (404/409), anything else as unavailable."""
+    from livebench.hardware import registries as hardware_registries
+    from livebench.hardware.channel import TransportUnavailableError
+    from livebench.hardware.connection import open_robot_connection
+
+    document = HardwareConfig.model_validate(config)
+    registries = hardware_registries.default_registries()
+    try:
+        return await asyncio.to_thread(
+            open_robot_connection,
+            document,
+            project_id=project_id,
+            transports=registries.transports,
+            drivers=registries.drivers,
+        )
+    except TransportUnavailableError as exc:
+        cause = exc.__cause__
+        if isinstance(cause, DeviceNotFoundError | AmbiguousDeviceError):
+            raise cause from None
+        raise

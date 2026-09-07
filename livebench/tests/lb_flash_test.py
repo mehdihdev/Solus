@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 from livebench.deploy.flash import (
-    ArduinoCliRunner,
     FlashError,
     FlashPhase,
     flash,
 )
+from livebench.plugins.arduino.arduino_flash import ArduinoCliRunner
 
 
 class ScriptedRunner:

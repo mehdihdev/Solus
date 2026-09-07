@@ -13,6 +13,7 @@ import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
 import * as workspaceApi from '../../lib/api/workspace'
 import * as robotApi from '../../lib/api/physicalRobots'
+import * as hardwareApi from '../../lib/api/hardware'
 import { clearWorkspaceGraphCache } from './useWorkspaceGraph'
 
 vi.mock('../../lib/api/workspace', () => ({
@@ -26,6 +27,11 @@ vi.mock('../../lib/api/physicalRobots', () => ({
   renamePhysicalRobot: vi.fn(),
   deletePhysicalRobot: vi.fn(),
   listRobotOrphans: vi.fn()
+}))
+
+vi.mock('../../lib/api/hardware', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/api/hardware')>()),
+  createHardwarePart: vi.fn()
 }))
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
@@ -158,7 +164,7 @@ describe('WorkspaceScreen — linked', () => {
     expect(useFocusStore.getState().status).toBe('idle')
   })
 
-  it('adds a real second robot through Hardware and reveals its persisted identity', async () => {
+  it('authors a part under a new robot through Add › Hardware and reveals the robot', async () => {
     useAuthStore.setState({
       status: 'authenticated',
       user: { email: 'robot-qa@example.invalid' },
@@ -185,17 +191,33 @@ describe('WorkspaceScreen — linked', () => {
       truncated: false
     })
     vi.mocked(robotApi.createPhysicalRobot).mockResolvedValue(follower)
+    vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
+      entity: { ...entity('cam', 'Wrist camera'), origin: 'manual', project_id: 'p1' },
+      config_entry_id: 'entry-1'
+    })
     render(<WorkspaceScreen />)
     await screen.findByRole('button', { name: 'Select Leader' })
     await userEvent.click(screen.getByRole('button', { name: 'Add' }))
     await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Authored' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Name' }), 'Wrist camera')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Robot' }), '__new__')
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0))
     vi.mocked(resources.listAllEntities).mockResolvedValue([leader, follower])
-    await userEvent.click(screen.getByRole('button', { name: 'Add Physical Robot' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect(await screen.findByRole('button', { name: 'Select Rover MK2' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Select Leader' })).toBeInTheDocument()
     await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('follower'))
     expect(robotApi.createPhysicalRobot).toHaveBeenCalledTimes(1)
+    await waitFor(() =>
+      expect(hardwareApi.createHardwarePart).toHaveBeenCalledExactlyOnceWith('p1', 'follower', {
+        name: 'Wrist camera',
+        category: 'sensors',
+        specs: {},
+        lifecycle: 'planned'
+      })
+    )
+    expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument()
   })
 
   it('navigates a containment level and selects a leaf with its shared focus path', async () => {

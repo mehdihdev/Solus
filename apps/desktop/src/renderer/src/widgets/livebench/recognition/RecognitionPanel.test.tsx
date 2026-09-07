@@ -37,10 +37,10 @@ describe('RecognitionPanel', () => {
     const onDecision = vi.fn()
     render(<RecognitionPanel proposals={TIER1_BUS_FIRMWARE_REPO} onDecision={onDecision} />)
 
-    const row = screen.getByTestId('proposal-ttyUSB0/id:3')
+    const row = screen.getByTestId('proposal-bus:demo/3')
     fireEvent.click(within(row).getByRole('button', { name: /^accept$/i }))
 
-    expect(onDecision).toHaveBeenCalledWith('ttyUSB0/id:3', { kind: 'accept' })
+    expect(onDecision).toHaveBeenCalledWith('bus:demo/3', { kind: 'accept' })
     expect(within(row).getByText('accepted')).toBeInTheDocument()
   })
 
@@ -48,10 +48,10 @@ describe('RecognitionPanel', () => {
     const onDecision = vi.fn()
     render(<RecognitionPanel proposals={TIER1_BUS_FIRMWARE_REPO} onDecision={onDecision} />)
 
-    const row = screen.getByTestId('proposal-ttyUSB0/id:7')
+    const row = screen.getByTestId('proposal-bus:demo/7')
     fireEvent.click(within(row).getByRole('button', { name: /reject/i }))
 
-    expect(onDecision).toHaveBeenCalledWith('ttyUSB0/id:7', { kind: 'reject' })
+    expect(onDecision).toHaveBeenCalledWith('bus:demo/7', { kind: 'reject' })
     expect(within(row).getByText('rejected')).toBeInTheDocument()
   })
 
@@ -71,7 +71,7 @@ describe('RecognitionPanel', () => {
   it('unknown rows are explicitly unknown and have no accept button', () => {
     render(<RecognitionPanel proposals={TIER3_BARE_SERIAL} onDecision={vi.fn()} />)
 
-    const row = screen.getByTestId('proposal-serial:/dev/ttyACM0/ch0')
+    const row = screen.getByTestId('proposal-serial:demo/ch0')
     expect(within(row).getByText('unknown')).toBeInTheDocument()
     expect(within(row).queryByRole('button', { name: /^accept$/i })).toBeNull()
   })
@@ -80,11 +80,11 @@ describe('RecognitionPanel', () => {
     const onDecision = vi.fn()
     render(<RecognitionPanel proposals={TIER3_BARE_SERIAL} onDecision={onDecision} />)
 
-    const row = screen.getByTestId('proposal-serial:/dev/ttyACM0/ch2')
+    const row = screen.getByTestId('proposal-serial:demo/ch2')
     fireEvent.change(within(row).getByRole('textbox'), { target: { value: 'shoulder' } })
     fireEvent.click(within(row).getByRole('button', { name: /save/i }))
 
-    expect(onDecision).toHaveBeenCalledWith('serial:/dev/ttyACM0/ch2', {
+    expect(onDecision).toHaveBeenCalledWith('serial:demo/ch2', {
       kind: 'edit',
       functionName: 'shoulder'
     })
@@ -109,17 +109,35 @@ describe('RecognitionPanel', () => {
     expect(within(row).getByText(/55%/)).toBeInTheDocument()
     fireEvent.click(within(row).getByText(/evidence/i))
     expect(within(row).getByText(/code intent only/)).toBeInTheDocument()
-    expect(within(row).getByText(/src\/arm\.ino:11/)).toBeInTheDocument()
+    expect(within(row).getByText(/src\/firmware\.cpp:11/)).toBeInTheDocument()
   })
 
   it('saving an empty name does nothing — an unknown cannot be silently blanked in', () => {
     const onDecision = vi.fn()
     render(<RecognitionPanel proposals={TIER3_BARE_SERIAL} onDecision={onDecision} />)
 
-    const row = screen.getByTestId('proposal-serial:/dev/ttyACM0/ch1')
+    const row = screen.getByTestId('proposal-serial:demo/ch1')
     fireEvent.click(within(row).getByRole('button', { name: /save/i }))
 
     expect(onDecision).not.toHaveBeenCalled()
     expect(within(row).getByText('unknown')).toBeInTheDocument()
+  })
+
+  it('renders an optional extra cell per row, keyed to the proposal', () => {
+    render(
+      <RecognitionPanel
+        proposals={TIER1_BUS_FIRMWARE_REPO}
+        onDecision={vi.fn()}
+        renderRowExtra={(proposal) => (
+          <select aria-label={`category for ${proposal.subject}`}>
+            <option>actuators</option>
+          </select>
+        )}
+      />
+    )
+
+    expect(screen.getByRole('combobox', { name: 'category for servo at address 3' })).toBeVisible()
+    expect(screen.getAllByRole('combobox')).toHaveLength(TIER1_BUS_FIRMWARE_REPO.length)
+    expect(screen.getAllByRole('columnheader')).toHaveLength(5)
   })
 })

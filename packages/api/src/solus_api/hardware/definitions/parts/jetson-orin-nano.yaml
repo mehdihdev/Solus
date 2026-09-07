@@ -1,0 +1,14 @@
+id: jetson-orin-nano
+name: NVIDIA Jetson Orin Nano
+manufacturer: NVIDIA
+category: controllers
+keywords: [sbc, compute, jetson, orin, cuda, ros2, linux]
+specs:
+  cpu: 6-core Arm Cortex-A78AE
+  gpu: 1024-core Ampere
+  ram_gb: 8
+  power_w_max: 15
+  interfaces: USB 3.2, GbE, CSI, PCIe
+  jetpack: "6.x"
+telemetry: []
+datasheet_url: https://developer.nvidia.com/embedded/jetson-orin

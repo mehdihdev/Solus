@@ -1,0 +1,16 @@
+id: esp32-devkit
+name: ESP32 DevKit
+manufacturer: Espressif
+category: controllers
+keywords: [mcu, wifi, ble, esp32, arduino, micropython, devkit]
+specs:
+  mcu: ESP32 dual-core Xtensa LX6
+  clock_mhz: 240
+  flash_mb: 4
+  wifi: true
+  bluetooth: true
+  usb_bridge: CP2102 / CH340
+  gpio_count: 34
+  supply_v: 3.3
+telemetry: []
+datasheet_url: https://www.espressif.com/en/products/devkits

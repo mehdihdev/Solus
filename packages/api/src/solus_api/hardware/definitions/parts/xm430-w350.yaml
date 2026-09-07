@@ -1,0 +1,27 @@
+id: xm430-w350
+name: Dynamixel XM430-W350-T
+manufacturer: ROBOTIS
+category: actuators
+keywords: [servo, serial-bus, dynamixel, xm430, protocol-2]
+specs:
+  voltage_v: 12
+  stall_torque_n_m: 4.1
+  no_load_speed_rpm: 46
+  resolution_steps: 4096
+  interface: TTL serial (half duplex)
+  baud_default: 1000000
+  weight_g: 82
+  gear_ratio: "353.5:1"
+driver_id: dynamixel-2
+protocol_version: 2
+resolution: 4096
+register_map:
+  torque_enable: {address: 64, size: 1}
+  goal_position: {address: 116, size: 4}
+  present_load: {address: 126, size: 2}
+  present_position: {address: 132, size: 4}
+  present_temperature: {address: 146, size: 1}
+telemetry:
+  - {quantity: position, unit: deg}
+calibration_mode: degrees
+datasheet_url: https://emanual.robotis.com/docs/en/dxl/x/xm430-w350/

@@ -1217,6 +1217,268 @@ export interface paths {
         patch: operations["patch_entry_api_v1_projects__project_id__solus_entries__entry_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Config */
+        get: operations["get_config_api_v1_projects__project_id__hardware_robots__robot_id__config_get"];
+        /** Replace Config */
+        put: operations["replace_config_api_v1_projects__project_id__hardware_robots__robot_id__config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Author Part */
+        post: operations["author_part_api_v1_projects__project_id__hardware_robots__robot_id__parts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts/{part_id}/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Lifecycle */
+        post: operations["promote_lifecycle_api_v1_projects__project_id__hardware_robots__robot_id__parts__part_id__lifecycle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/unassigned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Unassigned
+         * @description Connector-sourced parts no robot category owns yet (From a file).
+         */
+        get: operations["list_unassigned_api_v1_projects__project_id__hardware_unassigned_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts/attach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach Parts */
+        post: operations["attach_parts_api_v1_projects__project_id__hardware_robots__robot_id__parts_attach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/detected": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Detected
+         * @description Devices on this machine at whichever level is honestly known (opens no port).
+         */
+        get: operations["list_detected_api_v1_projects__project_id__hardware_detected_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/detected/{device_ref}/propose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Propose Detected */
+        post: operations["propose_detected_api_v1_projects__project_id__hardware_detected__device_ref__propose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/detected/{device_ref}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Detected */
+        post: operations["confirm_detected_api_v1_projects__project_id__hardware_detected__device_ref__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Suggestions */
+        get: operations["get_suggestions_api_v1_projects__project_id__hardware_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/suggestions/{suggestion_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept Suggestion */
+        post: operations["accept_suggestion_api_v1_projects__project_id__hardware_suggestions__suggestion_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/suggestions/{suggestion_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Suggestion */
+        post: operations["reject_suggestion_api_v1_projects__project_id__hardware_suggestions__suggestion_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Definitions */
+        get: operations["list_definitions_api_v1_projects__project_id__hardware_library_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/library/{kind}/{definition_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Definition */
+        get: operations["get_definition_api_v1_projects__project_id__hardware_library__kind___definition_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/library/platforms/{definition_id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Platform */
+        post: operations["import_platform_api_v1_projects__project_id__hardware_library_platforms__definition_id__import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/library/parts/{definition_id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Part */
+        post: operations["import_part_api_v1_projects__project_id__hardware_library_parts__definition_id__import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/workspace-layout": {
         parameters: {
             query?: never;
@@ -2204,6 +2466,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AcceptedRow */
+        AcceptedRow: {
+            /** Row Id */
+            row_id: string;
+            /** Function Name */
+            function_name?: string | null;
+            /**
+             * Category
+             * @default actuators
+             * @enum {string}
+             */
+            category: "sensors" | "actuators" | "controllers" | "end_effectors" | "power" | "structure" | "wiring";
+        };
         /**
          * ActionMode
          * @description How SOL is allowed to act on this request: explain, or operate.
@@ -2224,6 +2499,16 @@ export interface components {
              * @default false
              */
             confirm_access: boolean;
+        };
+        /** AttachIn */
+        AttachIn: {
+            /** Entity Ids */
+            entity_ids: string[];
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "sensors" | "actuators" | "controllers" | "end_effectors" | "power" | "structure" | "wiring";
         };
         /**
          * AttachmentIn
@@ -2247,8 +2532,28 @@ export interface components {
              */
             mode: "sim" | "real";
             /** Config */
-            config: components["schemas"]["MujocoSimConfig"] | components["schemas"]["GazeboSimConfig"] | components["schemas"]["McapSimConfig"] | components["schemas"]["SerialRealConfig"];
+            config: components["schemas"]["MujocoSimConfig"] | components["schemas"]["GazeboSimConfig"] | components["schemas"]["McapSimConfig"] | components["schemas"]["SerialRealConfig"] | components["schemas"]["RobotRealConfig"];
         };
+        /**
+         * BusMapEntry
+         * @description `{protocol, address, part, model}` — servo ids, CAN node ids, autopilot
+         *     system:component ids all fit one shape. Never a `servo_id` field.
+         */
+        BusMapEntry: {
+            /** Protocol */
+            protocol: string;
+            /** Address */
+            address: string;
+            /** Part Entity Id */
+            part_entity_id?: string | null;
+            /** Model */
+            model?: string | null;
+        };
+        /**
+         * CalibrationMode
+         * @enum {string}
+         */
+        CalibrationMode: "degrees" | "range_0_100" | "range_m100_100" | "linear" | "raw";
         /**
          * CheckoutSessionCreate
          * @description Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,
@@ -2298,6 +2603,31 @@ export interface components {
          * @enum {string}
          */
         Complexity: "trivial" | "standard" | "hard";
+        /** ConfigIn */
+        ConfigIn: {
+            config: components["schemas"]["HardwareConfig"];
+        };
+        /** ConfirmIn */
+        ConfirmIn: {
+            /** Target */
+            target: components["schemas"]["NewRobotTarget"] | components["schemas"]["ExistingRobotTarget"];
+            /** Accepted */
+            accepted: components["schemas"]["AcceptedRow"][];
+            /** Repo Config Id */
+            repo_config_id?: string | null;
+            /** Repo Root */
+            repo_root?: string | null;
+            /**
+             * Start Session
+             * @default true
+             */
+            start_session: boolean;
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
+        };
         /**
          * ConfirmationDecision
          * @description Approve or reject one parked destructive action (SOLUS-ONS-A5).
@@ -2352,10 +2682,30 @@ export interface components {
             /** Events */
             events: components["schemas"]["ClientEvent"][];
         };
+        /** ExistingRobotTarget */
+        ExistingRobotTarget: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "existing";
+            /**
+             * Robot Id
+             * Format: uuid
+             */
+            robot_id: string;
+        };
         /** FeedbackBody */
         FeedbackBody: {
             verdict: components["schemas"]["Verdict"];
         };
+        /**
+         * FieldProvenance
+         * @description Who set a field. Layers apply library → repo → user → detected; SOL writes take the user
+         *     slot; the record names who WON, never a merge of several.
+         * @enum {string}
+         */
+        FieldProvenance: "library" | "repo" | "user" | "sol" | "detected";
         /** GazeboSimConfig */
         GazeboSimConfig: {
             /**
@@ -2382,6 +2732,38 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HardwareConfig */
+        HardwareConfig: {
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            /**
+             * Robot Entity Id
+             * Format: uuid
+             */
+            robot_entity_id: string;
+            identity?: components["schemas"]["TransportBinding"] | null;
+            protocol?: components["schemas"]["ProtocolBinding"] | null;
+            /** Bus Map */
+            bus_map?: components["schemas"]["BusMapEntry"][];
+            /** Parts */
+            parts?: {
+                [key: string]: components["schemas"]["PartConfig"];
+            };
+            /** Firmware */
+            firmware?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** Disambiguated By */
+            disambiguated_by?: "user" | null;
+            /** Provenance */
+            provenance?: {
+                [key: string]: components["schemas"]["ProvenanceRecord"];
+            };
         };
         /**
          * HostedExchange
@@ -2445,6 +2827,15 @@ export interface components {
              */
             size: "compact" | "standard" | "wide" | "full";
         };
+        /** LifecycleIn */
+        LifecycleIn: {
+            state: components["schemas"]["LifecycleState"];
+        };
+        /**
+         * LifecycleState
+         * @enum {string}
+         */
+        LifecycleState: "planned" | "ordered" | "received" | "installed" | "live";
         /** McapSimConfig */
         McapSimConfig: {
             /**
@@ -2509,6 +2900,16 @@ export interface components {
              */
             window_seconds: number;
         };
+        /** NewRobotTarget */
+        NewRobotTarget: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "new";
+            /** Name */
+            name?: string | null;
+        };
         /** NoteBody */
         NoteBody: {
             /** Text */
@@ -2572,6 +2973,68 @@ export interface components {
             /** User Code */
             user_code: string;
         };
+        /** PartCalibration */
+        PartCalibration: {
+            mode?: components["schemas"]["CalibrationMode"] | null;
+            /** Values */
+            values?: {
+                [key: string]: number;
+            };
+            /** Source */
+            source?: string | null;
+            /**
+             * Owner
+             * @default solus
+             * @enum {string}
+             */
+            owner: "repo" | "solus";
+        };
+        /** PartConfig */
+        PartConfig: {
+            calibration?: components["schemas"]["PartCalibration"] | null;
+            limits?: components["schemas"]["PartLimits"] | null;
+            /** Telemetry */
+            telemetry?: components["schemas"]["TelemetryChannel"][];
+            /** Firmware */
+            firmware?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** @default planned */
+            lifecycle: components["schemas"]["LifecycleState"];
+        };
+        /** PartImportIn */
+        PartImportIn: {
+            /**
+             * Robot Id
+             * Format: uuid
+             */
+            robot_id: string;
+            /** Category */
+            category?: ("sensors" | "actuators" | "controllers" | "end_effectors" | "power" | "structure" | "wiring") | null;
+        };
+        /** PartIn */
+        PartIn: {
+            /** Name */
+            name: string;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "sensors" | "actuators" | "controllers" | "end_effectors" | "power" | "structure" | "wiring";
+            /** Specs */
+            specs?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** @default planned */
+            lifecycle: components["schemas"]["LifecycleState"];
+        };
+        /** PartLimits */
+        PartLimits: {
+            /** Values */
+            values?: {
+                [key: string]: number;
+            };
+        };
         /** PatchBody */
         PatchBody: {
             /** Enabled */
@@ -2604,6 +3067,11 @@ export interface components {
          * @enum {string}
          */
         PlanType: "basic" | "pro" | "enterprise";
+        /** PlatformImportIn */
+        PlatformImportIn: {
+            /** Name */
+            name?: string | null;
+        };
         /**
          * PolicyWrite
          * @description §10 PUT body: `extra="forbid"`, at least one key, never blocked AND default.
@@ -2631,6 +3099,60 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+        };
+        /** ProposeIn */
+        ProposeIn: {
+            /** Repo Root */
+            repo_root?: string | null;
+            /**
+             * Budget S
+             * @default 0.5
+             */
+            budget_s: number;
+        };
+        /**
+         * ProtocolBinding
+         * @description The driver plugin by id plus its parameters — in config, not code.
+         */
+        ProtocolBinding: {
+            /** Driver Id */
+            driver_id: string;
+            /** Params */
+            params?: {
+                [key: string]: string | number | boolean | null;
+            };
+        };
+        /** ProvenanceRecord */
+        ProvenanceRecord: {
+            by: components["schemas"]["FieldProvenance"];
+            /** Source */
+            source?: string | null;
+        };
+        /** RejectIn */
+        RejectIn: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * RobotRealConfig
+         * @description A session from a Physical Robot's HardwareConfig (docs/api/hardware.md §6).
+         */
+        RobotRealConfig: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "robot";
+            /**
+             * Robot Entity Id
+             * Format: uuid
+             */
+            robot_entity_id: string;
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
         };
         /**
          * RouteType
@@ -2663,6 +3185,12 @@ export interface components {
              * @default 1
              */
             window_seconds: number;
+            /** Driver Id */
+            driver_id?: string | null;
+            /** Driver Params */
+            driver_params?: {
+                [key: string]: string | number | boolean | null;
+            };
         };
         /** SettingsUpdate */
         SettingsUpdate: {
@@ -2765,12 +3293,40 @@ export interface components {
             /** Events */
             events?: components["schemas"]["ObserverEventIn"][];
         };
+        /** TelemetryChannel */
+        TelemetryChannel: {
+            /** Name */
+            name: string;
+            /** Unit */
+            unit?: string | null;
+        };
         /**
          * ToolFamily
          * @description Tools Solus models the UI of. Closed: a new tool is a decision, not a value.
          * @enum {string}
          */
         ToolFamily: "fusion" | "onshape" | "solidworks" | "autocad" | "kicad" | "altium" | "spice";
+        /**
+         * TransportBinding
+         * @description Binding identity: USB serial / BT address / MAC / IP. `last_seen_path` is informational
+         *     only — a port path is never binding (tty numbering swaps on re-enumeration).
+         */
+        TransportBinding: {
+            kind: components["schemas"]["TransportKind"];
+            /** Binding */
+            binding: string;
+            /** Vid */
+            vid?: number | null;
+            /** Pid */
+            pid?: number | null;
+            /** Last Seen Path */
+            last_seen_path?: string | null;
+        };
+        /**
+         * TransportKind
+         * @enum {string}
+         */
+        TransportKind: "usb_serial" | "usb_can" | "ble" | "bt_classic" | "wifi" | "ethernet" | "ros2";
         /**
          * UiSurface
          * @description Where in the tool's UI the control lives.
@@ -5329,6 +5885,593 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_config_api_v1_projects__project_id__hardware_robots__robot_id__config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_config_api_v1_projects__project_id__hardware_robots__robot_id__config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    author_part_api_v1_projects__project_id__hardware_robots__robot_id__parts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PartIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_lifecycle_api_v1_projects__project_id__hardware_robots__robot_id__parts__part_id__lifecycle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                part_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecycleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_unassigned_api_v1_projects__project_id__hardware_unassigned_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_parts_api_v1_projects__project_id__hardware_robots__robot_id__parts_attach_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                robot_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_detected_api_v1_projects__project_id__hardware_detected_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    propose_detected_api_v1_projects__project_id__hardware_detected__device_ref__propose_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_ref: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProposeIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_detected_api_v1_projects__project_id__hardware_detected__device_ref__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_ref: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_suggestions_api_v1_projects__project_id__hardware_suggestions_get: {
+        parameters: {
+            query?: {
+                status?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_suggestion_api_v1_projects__project_id__hardware_suggestions__suggestion_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_suggestion_api_v1_projects__project_id__hardware_suggestions__suggestion_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RejectIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_definitions_api_v1_projects__project_id__hardware_library_get: {
+        parameters: {
+            query?: {
+                q?: string;
+                kind?: ("part" | "platform") | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_definition_api_v1_projects__project_id__hardware_library__kind___definition_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: "part" | "platform";
+                definition_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_platform_api_v1_projects__project_id__hardware_library_platforms__definition_id__import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PlatformImportIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_part_api_v1_projects__project_id__hardware_library_parts__definition_id__import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PartImportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

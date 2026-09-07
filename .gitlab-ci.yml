@@ -32,6 +32,7 @@ variables:
         - packages/companion/**/*
         - packages/contracts/python/**/*
         - livebench/**/*
+        - libs/**/*
         - integrations/**/*
         - reasoning/**/*
         - scripts/**/*.py

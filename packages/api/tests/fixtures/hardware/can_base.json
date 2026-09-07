@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "robot_entity_id": "019a0000-0000-7000-8000-00000000b001",
+  "identity": {
+    "kind": "usb_can",
+    "binding": "ODRV-3F2A-CAN0",
+    "vid": 4617,
+    "pid": 22336,
+    "last_seen_path": "can0"
+  },
+  "protocol": {
+    "driver_id": "odrive-can",
+    "params": { "bitrate": 250000, "timeout_s": 0.2 }
+  },
+  "bus_map": [
+    {
+      "protocol": "odrive-can",
+      "address": "0x10",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000b101",
+      "model": "ODrive S1"
+    },
+    {
+      "protocol": "odrive-can",
+      "address": "0x11",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000b102",
+      "model": "ODrive S1"
+    },
+    {
+      "protocol": "odrive-can",
+      "address": "0x10:encoder",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000b103",
+      "model": "AMT102"
+    }
+  ],
+  "parts": {
+    "019a0000-0000-7000-8000-00000000b101": {
+      "calibration": {
+        "mode": "raw",
+        "values": { "pole_pairs": 7, "torque_constant": 0.0827 },
+        "source": null,
+        "owner": "solus"
+      },
+      "limits": {
+        "values": { "velocity_max_rad_s": 40.0, "current_max_a": 20.0 }
+      },
+      "telemetry": [
+        { "name": "left_wheel.velocity", "unit": "rad/s" },
+        { "name": "left_wheel.current", "unit": "A" }
+      ],
+      "firmware": { "version": "0.6.9" },
+      "lifecycle": "installed"
+    },
+    "019a0000-0000-7000-8000-00000000b102": {
+      "calibration": {
+        "mode": "raw",
+        "values": { "pole_pairs": 7, "torque_constant": 0.0827 },
+        "source": null,
+        "owner": "solus"
+      },
+      "limits": {
+        "values": { "velocity_max_rad_s": 40.0, "current_max_a": 20.0 }
+      },
+      "telemetry": [
+        { "name": "right_wheel.velocity", "unit": "rad/s" },
+        { "name": "right_wheel.current", "unit": "A" }
+      ],
+      "firmware": { "version": "0.6.9" },
+      "lifecycle": "installed"
+    },
+    "019a0000-0000-7000-8000-00000000b103": {
+      "calibration": null,
+      "limits": null,
+      "telemetry": [{ "name": "left_wheel.encoder", "unit": "count" }],
+      "firmware": {},
+      "lifecycle": "received"
+    }
+  },
+  "firmware": { "controller": "odrive-fw" },
+  "disambiguated_by": null,
+  "provenance": {
+    "identity": { "by": "detected" },
+    "protocol": { "by": "library", "source": "platform:odrive-diff-base" },
+    "bus_map": { "by": "detected" },
+    "parts": { "by": "library", "source": "platform:odrive-diff-base" },
+    "parts.019a0000-0000-7000-8000-00000000b101.firmware": { "by": "detected" },
+    "parts.019a0000-0000-7000-8000-00000000b102.firmware": { "by": "detected" },
+    "firmware": { "by": "detected" },
+    "disambiguated_by": { "by": "user" }
+  }
+}

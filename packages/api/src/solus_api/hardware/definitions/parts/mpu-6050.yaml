@@ -1,0 +1,17 @@
+id: mpu-6050
+name: TDK InvenSense MPU-6050
+manufacturer: TDK InvenSense
+category: sensors
+keywords: [imu, accelerometer, gyroscope, 6-axis, i2c, mpu6050]
+specs:
+  axes: 6
+  interface: I2C
+  i2c_address_default: "0x68"
+  i2c_address_alt: "0x69"
+  accel_range_g_max: 16
+  gyro_range_dps_max: 2000
+  supply_v: 3.3
+telemetry:
+  - {quantity: accel, unit: m/s^2}
+  - {quantity: gyro, unit: rad/s}
+datasheet_url: https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/

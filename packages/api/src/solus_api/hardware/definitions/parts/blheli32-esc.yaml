@@ -1,0 +1,15 @@
+id: blheli32-esc
+name: BLHeli_32 ESC
+category: actuators
+keywords: [esc, bldc, pwm, dshot, blheli, motor, drone, multirotor]
+specs:
+  signal: PWM, OneShot, DShot
+  pwm_min_us: 1000
+  pwm_max_us: 2000
+  cells_min: 2
+  cells_max: 6
+  continuous_current_a: 35
+  telemetry_uart: true
+telemetry:
+  - {quantity: output, unit: us}
+datasheet_url: https://github.com/bitdump/BLHeli

@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "robot_entity_id": "019a0000-0000-7000-8000-00000000c001",
+  "identity": {
+    "kind": "wifi",
+    "binding": "aa:bb:cc:dd:ee:ff",
+    "vid": null,
+    "pid": null,
+    "last_seen_path": "udp://192.168.4.1:14550"
+  },
+  "protocol": {
+    "driver_id": "mavlink",
+    "params": {
+      "system_id": 1,
+      "component_id": 1,
+      "protocol_version": 2,
+      "heartbeat_timeout_s": 3.0
+    }
+  },
+  "bus_map": [
+    {
+      "protocol": "mavlink",
+      "address": "1:1",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c101",
+      "model": "PX4 autopilot"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "servo:1",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c102",
+      "model": "ESC"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "servo:2",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c103",
+      "model": "ESC"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "servo:3",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c104",
+      "model": "ESC"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "servo:4",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c105",
+      "model": "ESC"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "1:1:imu",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c106",
+      "model": "IMU"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "1:1:gps",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c107",
+      "model": "GPS"
+    },
+    {
+      "protocol": "mavlink",
+      "address": "1:1:baro",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000c108",
+      "model": "Barometer"
+    }
+  ],
+  "parts": {
+    "019a0000-0000-7000-8000-00000000c101": {
+      "calibration": null,
+      "limits": null,
+      "telemetry": [
+        { "name": "attitude.roll", "unit": "rad" },
+        { "name": "attitude.pitch", "unit": "rad" },
+        { "name": "attitude.yaw", "unit": "rad" }
+      ],
+      "firmware": { "autopilot": "px4", "version": "1.15.0" },
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c102": {
+      "calibration": null,
+      "limits": { "values": { "pwm_min_us": 1000, "pwm_max_us": 2000 } },
+      "telemetry": [{ "name": "motor_1.output", "unit": "us" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c103": {
+      "calibration": null,
+      "limits": { "values": { "pwm_min_us": 1000, "pwm_max_us": 2000 } },
+      "telemetry": [{ "name": "motor_2.output", "unit": "us" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c104": {
+      "calibration": null,
+      "limits": { "values": { "pwm_min_us": 1000, "pwm_max_us": 2000 } },
+      "telemetry": [{ "name": "motor_3.output", "unit": "us" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c105": {
+      "calibration": null,
+      "limits": { "values": { "pwm_min_us": 1000, "pwm_max_us": 2000 } },
+      "telemetry": [{ "name": "motor_4.output", "unit": "us" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c106": {
+      "calibration": null,
+      "limits": null,
+      "telemetry": [{ "name": "imu.accel_z", "unit": "m/s^2" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c107": {
+      "calibration": null,
+      "limits": null,
+      "telemetry": [{ "name": "gps.satellites", "unit": "count" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000c108": {
+      "calibration": null,
+      "limits": null,
+      "telemetry": [{ "name": "baro.pressure", "unit": "hPa" }],
+      "firmware": {},
+      "lifecycle": "live"
+    }
+  },
+  "firmware": {},
+  "disambiguated_by": null,
+  "provenance": {
+    "identity": { "by": "detected" },
+    "protocol": { "by": "library", "source": "platform:px4-quadrotor" },
+    "protocol.params.system_id": { "by": "detected" },
+    "bus_map": { "by": "detected" },
+    "parts": { "by": "library", "source": "platform:px4-quadrotor" },
+    "parts.019a0000-0000-7000-8000-00000000c101.firmware": { "by": "detected" },
+    "disambiguated_by": { "by": "user" }
+  }
+}

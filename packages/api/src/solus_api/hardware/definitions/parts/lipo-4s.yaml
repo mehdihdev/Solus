@@ -1,0 +1,13 @@
+id: lipo-4s
+name: 4S LiPo battery
+category: power
+keywords: [battery, lipo, 4s, 14.8v, power]
+specs:
+  chemistry: LiPo
+  cells: 4
+  nominal_v: 14.8
+  full_charge_v: 16.8
+  cutoff_v: 12.8
+  connector: XT60
+telemetry:
+  - {quantity: voltage, unit: V}

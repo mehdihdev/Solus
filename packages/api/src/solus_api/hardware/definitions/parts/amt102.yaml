@@ -1,0 +1,15 @@
+id: amt102
+name: CUI AMT102-V
+manufacturer: CUI Devices
+category: sensors
+keywords: [encoder, incremental, quadrature, capacitive, amt10]
+specs:
+  type: incremental quadrature
+  resolution_ppr_max: 2048
+  resolution_selectable: true
+  index_pulse: true
+  supply_v: 5
+  max_rpm: 7500
+telemetry:
+  - {quantity: position, unit: count}
+datasheet_url: https://www.cuidevices.com/

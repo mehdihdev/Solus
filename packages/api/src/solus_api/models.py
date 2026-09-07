@@ -866,6 +866,7 @@ class SolusEntryKind(enum.StrEnum):
     TEXT = "text"  # typed by a person
     ARTIFACT = "artifact"  # an imported file — a `document` graph node
     SOL = "sol"  # filed by SOL via `add_solus_entry`
+    CONFIG = "config"  # a Physical Robot's HardwareConfig (ADR-034 amendment 2026-09-06)
 
 
 class SolusEntry(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -892,6 +893,45 @@ class SolusEntry(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     author: Mapped[str] = mapped_column(String(16), default="user")  # "user" | "sol"
     created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    # CONFIG only: the HardwareConfig document, validated by its Pydantic model on every
+    # write (solus_api.hardware.config) — never free-form JSON (ADR-034 amendment).
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+
+
+class SuggestionStatus(enum.StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"  # a sibling for the same subject was accepted
+
+
+class HardwareSuggestion(UuidPkMixin, TimestampMixin, Base):
+    """A link-suggestion engine row (docs/api/hardware.md §3): "this observed device/part
+    belongs to that robot", with evidence and confidence. Durable because nothing auto-accepts
+    and the user decides later; two plausible robots are two rows."""
+
+    __tablename__ = "hardware_suggestions"
+    __table_args__ = (Index("ix_hardware_suggestions_project_status", "project_id", "status"),)
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    subject_ref: Mapped[str] = mapped_column(String(512))  # device ref, part ref or entity:<id>
+    subject_kind: Mapped[str] = mapped_column(String(16))  # "device" | "part"
+    candidate_robot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("graph_entity.id", ondelete="CASCADE"), index=True
+    )
+    confidence: Mapped[float] = mapped_column(Float)
+    tier: Mapped[str] = mapped_column(String(8))  # high | medium | low
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[SuggestionStatus] = mapped_column(
+        _enum_column(SuggestionStatus), default=SuggestionStatus.PENDING
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
 

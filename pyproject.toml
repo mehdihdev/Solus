@@ -4,7 +4,13 @@ version = "0.0.0"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["packages/api", "packages/companion", "packages/contracts/python", "livebench"]
+members = [
+    "packages/api",
+    "packages/companion",
+    "packages/contracts/python",
+    "livebench",
+    "libs/solus-telemetry/python",
+]
 # Add as they are created: "integrations/*", "reasoning"
 
 [tool.ruff]
@@ -47,9 +53,9 @@ exclude = [
 # These packages ship no py.typed marker; treat their imports as untyped rather than error.
 [[tool.mypy.overrides]]
 # `OCP.*` is the CAD kernel (SOLUSDEV-60 lane), `msgpack` the LB-06 telemetry
-# codec (LANE A), `mujoco` the simulator (LANE H) — unrelated additions to the
-# same list, so all three are kept.
-module = ["pgvector.*", "asyncpg", "OCP.*", "msgpack", "mujoco"]
+# codec (LANE A), `mujoco` the simulator (LANE H), `ujson` the MicroPython json
+# the solus-telemetry emitter falls back from — unrelated additions to the same list.
+module = ["pgvector.*", "asyncpg", "OCP.*", "msgpack", "mujoco", "ujson"]
 ignore_missing_imports = true
 
 # mcap ships a layout mypy maps to two module names ("mcap" and "mcap.__init__"),
@@ -123,6 +129,14 @@ ignore_missing_imports = true
 module = ["test_bench_router"]
 warn_unused_ignores = false
 
+# libs/solus-telemetry/micropython/solus_telemetry.py targets MicroPython, which has no
+# typing module: its bodies are type-checked, but its defs are not required to be annotated.
+[[tool.mypy.overrides]]
+module = ["micropython.solus_telemetry"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # Per-test ceiling (pytest-timeout). The slowest legitimate tests are the 3 s
@@ -130,7 +144,7 @@ asyncio_mode = "auto"
 # hang, which then fails with every thread's stack instead of stalling CI.
 timeout = 300
 timeout_method = "thread"
-testpaths = ["packages", "integrations", "reasoning", "livebench", "infrastructure/ci/tests"]
+testpaths = ["packages", "integrations", "reasoning", "livebench", "libs", "infrastructure/ci/tests"]
 addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros"
 # Setting norecursedirs REPLACES pytest's defaults, so the defaults we rely on
 # are restated alongside the vendored MCP fork trees (upstream/, vendor/).

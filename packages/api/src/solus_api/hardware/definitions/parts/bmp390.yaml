@@ -1,0 +1,17 @@
+id: bmp390
+name: Bosch BMP390
+manufacturer: Bosch
+category: sensors
+keywords: [barometer, pressure, altitude, i2c, spi, bmp390]
+specs:
+  interface: I2C, SPI
+  i2c_address_default: "0x77"
+  i2c_address_alt: "0x76"
+  pressure_min_hpa: 300
+  pressure_max_hpa: 1250
+  relative_accuracy_pa: 3
+  supply_v: 3.3
+telemetry:
+  - {quantity: pressure, unit: hPa}
+  - {quantity: temperature, unit: degC}
+datasheet_url: https://www.bosch-sensortec.com/products/environmental-sensors/pressure-sensors/bmp390/

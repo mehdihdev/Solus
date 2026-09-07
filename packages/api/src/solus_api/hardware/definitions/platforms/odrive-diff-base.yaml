@@ -1,0 +1,12 @@
+id: odrive-diff-base
+name: ODrive differential base
+machine_class: mobile_base
+keywords: [odrive, can, differential, diff-drive, mobile-base, wheels, rover]
+transport: usb_can
+driver_id: odrive-can
+params: {bitrate: 250000}
+parts:
+  - {part: odrive-s1, address: "0x10", role: left_wheel}
+  - {part: odrive-s1, address: "0x11", role: right_wheel}
+  - {part: amt102, address: "0x10:encoder", role: left_encoder}
+  - {part: amt102, address: "0x11:encoder", role: right_encoder}

@@ -7,7 +7,7 @@
 // NOTHING is auto-accepted at any confidence — a wrong motor→joint mapping
 // poisons everything downstream, the same catastrophe class as a false
 // fingerprint merge.
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { Decision, MappingProposal, RowStatus } from './proposals.types'
 
 const KIND_LABEL: Record<string, string> = {
@@ -19,11 +19,14 @@ const KIND_LABEL: Record<string, string> = {
 interface RecognitionPanelProps {
   readonly proposals: readonly MappingProposal[]
   readonly onDecision: (id: string, decision: Decision) => void
+  /** An extra per-row cell (e.g. a category pick); its control carries its own label. */
+  readonly renderRowExtra?: (proposal: MappingProposal) => ReactNode
 }
 
 export function RecognitionPanel({
   proposals,
-  onDecision
+  onDecision,
+  renderRowExtra
 }: RecognitionPanelProps): React.JSX.Element {
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>(() =>
     Object.fromEntries(proposals.map((p) => [p.id, p.proposedFunction ? 'proposed' : 'unknown']))
@@ -52,6 +55,7 @@ export function RecognitionPanel({
           <tr>
             <th scope="col">Hardware</th>
             <th scope="col">Proposed function</th>
+            {renderRowExtra && <th scope="col" />}
             <th scope="col">Confidence</th>
             <th scope="col">Decision</th>
           </tr>
@@ -63,6 +67,7 @@ export function RecognitionPanel({
               proposal={proposal}
               status={statuses[proposal.id]}
               onDecide={decide}
+              extra={renderRowExtra?.(proposal)}
             />
           ))}
         </tbody>
@@ -75,9 +80,16 @@ interface ProposalRowProps {
   readonly proposal: MappingProposal
   readonly status: RowStatus
   readonly onDecide: (id: string, decision: Decision, status: RowStatus) => void
+  readonly extra?: ReactNode
 }
 
-function ProposalRow({ proposal, status, onDecide }: ProposalRowProps): React.JSX.Element {
+function confidenceText(proposal: MappingProposal): string {
+  if (proposal.confidence === null) return '—'
+  const kind = proposal.evidence[0]?.kind
+  return `${Math.round(proposal.confidence * 100)}% · ${KIND_LABEL[kind] ?? ''}`
+}
+
+function ProposalRow({ proposal, status, onDecide, extra }: ProposalRowProps): React.JSX.Element {
   const [name, setName] = useState('')
   const [showEvidence, setShowEvidence] = useState(false)
 
@@ -97,11 +109,8 @@ function ProposalRow({ proposal, status, onDecide }: ProposalRowProps): React.JS
         {showEvidence && <EvidenceList proposal={proposal} />}
       </td>
       <td>{proposal.proposedFunction ?? 'unnamed'}</td>
-      <td>
-        {proposal.confidence !== null
-          ? `${Math.round(proposal.confidence * 100)}% · ${KIND_LABEL[proposal.evidence[0]?.kind] ?? ''}`
-          : '—'}
-      </td>
+      {extra !== undefined && <td>{extra}</td>}
+      <td>{confidenceText(proposal)}</td>
       <td>
         <span data-testid="row-status">{status}</span>
         {proposal.proposedFunction !== null && status === 'proposed' && (
