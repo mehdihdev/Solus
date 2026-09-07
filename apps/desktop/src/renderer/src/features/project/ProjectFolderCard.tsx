@@ -1,5 +1,6 @@
-// Local folder card for the Project Overview hub (SOLUSDEV-164). Links a
-// project to a working copy on THIS machine: select an existing directory, or
+// Local folder card — on Home's side column for the current project
+// (SOLUSDEV-244; it began life on the Project Overview hub, SOLUSDEV-164).
+// Links a project to a working copy on THIS machine: select an existing directory, or
 // clone a repo (URL prefilled from a connected GitHub source; cloned by the
 // user's own git, so private repos use their local credentials — no Solus token
 // touches disk). The path lives in a machine-local store, never the API. When
@@ -98,31 +99,49 @@ function LinkedFolder({
   onUnlink: () => void
 }): React.JSX.Element {
   return (
-    <div style={{ padding: '14px 16px', display: 'flex', gap: 12, alignItems: 'center' }}>
-      <span style={{ color: 'var(--acc)' }}>
-        <Icons.box size={16} />
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <Mono size={11} style={{ textTransform: 'none', wordBreak: 'break-all' }}>
-          {link.path}
-        </Mono>
-        {link.repoUrl && (
-          <div style={{ fontSize: 10.5, color: 'var(--mut)', marginTop: 3 }}>
-            cloned from {link.repoUrl}
+    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0 }}>
+        <span style={{ color: 'var(--acc)', flexShrink: 0, display: 'inline-flex' }}>
+          <Icons.box size={16} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* A long path ends in "…" rather than wrapping; the title carries the whole of it. */}
+          <div title={link.path} style={ONE_LINE}>
+            <Mono size={11} style={{ textTransform: 'none' }}>
+              {link.path}
+            </Mono>
           </div>
-        )}
+          {link.repoUrl && (
+            <div
+              title={link.repoUrl}
+              style={{ ...ONE_LINE, fontSize: 10.5, color: 'var(--mut)', marginTop: 3 }}
+            >
+              cloned from {link.repoUrl}
+            </div>
+          )}
+        </div>
       </div>
-      <Button kind="ghost" size="sm" onClick={onOpenVscode}>
-        Open with VSCode
-      </Button>
-      <Button kind="ghost" size="sm" onClick={onOpenFolder}>
-        Open Folder
-      </Button>
-      <Button kind="ghost" size="sm" onClick={onUnlink}>
-        Unlink
-      </Button>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Button kind="ghost" size="sm" onClick={onOpenVscode}>
+          Open with VSCode
+        </Button>
+        <Button kind="ghost" size="sm" onClick={onOpenFolder}>
+          Open Folder
+        </Button>
+        <Button kind="ghost" size="sm" onClick={onUnlink}>
+          Unlink
+        </Button>
+      </div>
     </div>
   )
+}
+
+/** Single line, clipped with an ellipsis. */
+const ONE_LINE: React.CSSProperties = {
+  display: 'block',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
 }
 
 function CloneModal({

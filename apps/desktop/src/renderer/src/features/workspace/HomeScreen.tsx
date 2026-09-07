@@ -9,11 +9,13 @@
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import { personalTeam } from '../../lib/api/resources'
 import { MANAGER_ROLES, LiveMembers } from '../team/MembersPanel'
 import { PreferencesCard } from '../preferences/PreferencesCard'
+import { ProjectFolderCard } from '../project/ProjectFolderCard'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
 import { useHomeTeam, type HomeTeam } from './useHomeTeam'
@@ -161,6 +163,9 @@ function SideColumn({
           onInvite={() => openModal('invite')}
         />
       )}
+      {/* The current project's working copy on THIS machine (moved here from the
+          Project Overview): machine-local, re-scoped by "Switch to" on a card. */}
+      <LocalFolderSection currentProject={currentProject} />
       {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
           once; each project picks what it tracks on its Sources page. */}
       <ConnectedAccountsCard
@@ -170,6 +175,31 @@ function SideColumn({
       {/* HOME H3 (SOLUSDEV-244): the one part of ~/.solus the user owns —
           how they engineer. Machine-local, read by SOL on every turn. */}
       <PreferencesCard />
+    </div>
+  )
+}
+
+function LocalFolderSection({
+  currentProject
+}: {
+  currentProject: WorkspaceProject | null
+}): React.JSX.Element {
+  return (
+    <div>
+      <div style={{ margin: '0 0 10px' }}>
+        <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
+          LOCAL FOLDER
+        </Mono>
+      </div>
+      {currentProject ? (
+        <ProjectFolderCard key={currentProject.id} projectId={currentProject.id} />
+      ) : (
+        <Card pad={16}>
+          <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+            Open or switch to a project to link a working copy on this computer.
+          </div>
+        </Card>
+      )}
     </div>
   )
 }

@@ -152,9 +152,9 @@ describe('ProjectOverview', () => {
     )
   })
 
-  it('offers a local folder section for the open project', () => {
+  it('no longer carries the local folder section (it lives on Home)', () => {
     mockOverview({})
     render(<ProjectOverview onNavigate={vi.fn()} />)
-    expect(screen.getByText('LOCAL FOLDER')).toBeInTheDocument()
+    expect(screen.queryByText('LOCAL FOLDER')).toBeNull()
   })
 })

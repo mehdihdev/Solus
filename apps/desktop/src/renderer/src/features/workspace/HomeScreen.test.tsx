@@ -209,6 +209,24 @@ describe('HomeScreen — the active team’s project grid', () => {
     expect(onOpenProject).toHaveBeenCalledWith({ id: 'p2', name: 'Arm', teamId: 't1' })
   })
 
+  it('carries the LOCAL FOLDER card for the current project, above connected accounts', () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    const label = screen.getByText('LOCAL FOLDER')
+    expect(label).toBeInTheDocument()
+    // Not under the desktop bridge here, so the card degrades to its honest note.
+    expect(screen.getByText(/available in the Solus desktop app/)).toBeInTheDocument()
+    const accounts = screen.getByTestId('connected-accounts')
+    expect(label.compareDocumentPosition(accounts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('asks for a project before a folder can be linked', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByText(/switch to a project to link a working copy/)).toBeInTheDocument()
+  })
+
   it('switches the active team from the selector', async () => {
     const home = mockHome()
     render(<HomeScreen onOpenProject={vi.fn()} />)

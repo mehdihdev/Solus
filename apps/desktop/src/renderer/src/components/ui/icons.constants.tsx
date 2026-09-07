@@ -114,6 +114,10 @@ export const Icons = {
     '0 0 17 17',
     '<path d="M9.5 1.5L4 9.5h4L7 15.5l6-8.5H8.5l1-5.5z" fill="currentColor"/>'
   ),
+  home: makeIcon(
+    '0 0 17 17',
+    '<path d="M2.3 8.4L8.5 3l6.2 5.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.2 7.4v6.6h3.1v-3.8h2.4v3.8h3.1V7.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>'
+  ),
   box: makeIcon(
     '0 0 17 17',
     '<path d="M8.5 1.8l6 3.2v7l-6 3.2-6-3.2v-7l6-3.2z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.5 5l6 3.2 6-3.2M8.5 8.2v7" fill="none" stroke="currentColor" stroke-width="1.1"/>'

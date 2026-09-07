@@ -438,7 +438,7 @@ interface RailItem {
 
 /** Top rail: Home + the project-scoped screens (Overview → Sources) in flow order. */
 const RAIL_TOP: readonly RailItem[] = [
-  { screen: 'home', icon: <Icons.box size={17} />, label: 'Home' },
+  { screen: 'home', icon: <Icons.home size={17} />, label: 'Home' },
   { screen: 'overview', icon: <Icons.spark size={17} />, label: 'Overview' },
   { screen: 'workspace', icon: <Icons.graph size={17} />, label: 'Workspace' },
   { screen: 'sources', icon: <Icons.link size={17} />, label: 'Sources' },

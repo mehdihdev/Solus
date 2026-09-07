@@ -16,17 +16,8 @@ import { Icons } from '../../components/ui/icons.constants'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useOfflineReason } from '../workspace/workspaceOnline'
 import { ProjectEditModal } from './ProjectEditModal'
-import { ProjectFolderCard } from './ProjectFolderCard'
 import { sourceStatusColor, sourceTypeLabel } from './sourcePresentation'
 import { useProjectOverview } from './useProjectOverview'
-
-/** Derive a clone URL from a connected GitHub source, if any (config.repo is
- *  the `owner/name` full name recorded by the connector). Best-effort prefill. */
-function githubRepoUrl(sources: Source[]): string | undefined {
-  const gh = sources.find((s) => s.type === 'github')
-  const repo = gh?.config?.repo
-  return typeof repo === 'string' && repo ? `https://github.com/${repo}.git` : undefined
-}
 
 export interface ProjectOverviewProps {
   onNavigate: (screen: MainScreen) => void
@@ -116,13 +107,6 @@ export function ProjectOverview({ onNavigate }: ProjectOverviewProps): React.JSX
             <DomainCard key={d.screen} domain={d} onClick={() => onNavigate(d.screen)} />
           ))}
         </div>
-
-        {overview.id && (
-          <>
-            <SectionLabel>LOCAL FOLDER</SectionLabel>
-            <ProjectFolderCard projectId={overview.id} suggestedRepoUrl={githubRepoUrl(sources)} />
-          </>
-        )}
 
         <SectionLabel>SOURCES</SectionLabel>
         <SourcesSummary

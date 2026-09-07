@@ -254,7 +254,14 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   sentence with **Upgrade** inside the dialog; a join refusal says which —
   invalid or used token, expired, issued to another email, already a member.
   The invitee's OWN plan is what blocks a join (ADR-023 cross-plan rule).
-- **MEMBERS card** (right column, above CONNECTED ACCOUNTS): roster with roles;
+- **LOCAL FOLDER card** (right column, between MEMBERS and CONNECTED ACCOUNTS;
+  moved here from the Project Overview hub): the CURRENT project's working
+  copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
+  then the path (one line, clipped with "…", full path in the title), Open
+  with VSCode / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
+  current project → "Open or switch to a project to link a working copy on
+  this computer." Not under the desktop bridge → its honest note.
+- **MEMBERS card** (right column, above LOCAL FOLDER): roster with roles;
   owners and admins change roles (admin / member / viewer — ownership is
   transferred, not picked) and remove members, never on an owner row; pending
   invites with `Revoke`; `+ Invite` in the header for managers. **Remove and
