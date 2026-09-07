@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "robot_entity_id": "019a0000-0000-7000-8000-00000000a001",
+  "identity": {
+    "kind": "usb_serial",
+    "binding": "5B42134331",
+    "vid": 6790,
+    "pid": 21971,
+    "last_seen_path": "/dev/ttyACM0"
+  },
+  "protocol": {
+    "driver_id": "feetech-sts",
+    "params": { "baud": 1000000, "timeout_s": 0.05, "protocol_version": 0 }
+  },
+  "bus_map": [
+    {
+      "protocol": "feetech-sts",
+      "address": "1",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000a101",
+      "model": "STS3215"
+    },
+    {
+      "protocol": "feetech-sts",
+      "address": "2",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000a102",
+      "model": "STS3215"
+    },
+    {
+      "protocol": "feetech-sts",
+      "address": "3",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000a103",
+      "model": "STS3215"
+    },
+    {
+      "protocol": "feetech-sts",
+      "address": "4",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000a104",
+      "model": "STS3215"
+    },
+    {
+      "protocol": "feetech-sts",
+      "address": "5",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000a105",
+      "model": "STS3215"
+    },
+    {
+      "protocol": "feetech-sts",
+      "address": "6",
+      "part_entity_id": "019a0000-0000-7000-8000-00000000a106",
+      "model": "STS3215"
+    }
+  ],
+  "parts": {
+    "019a0000-0000-7000-8000-00000000a101": {
+      "calibration": {
+        "mode": "degrees",
+        "values": {
+          "homing_offset": -2043,
+          "range_min": 719,
+          "range_max": 3441,
+          "drive_mode": 0
+        },
+        "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json",
+        "owner": "repo"
+      },
+      "limits": {
+        "values": { "position_min_deg": -110.0, "position_max_deg": 110.0 }
+      },
+      "telemetry": [{ "name": "shoulder_pan.position", "unit": "deg" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000a102": {
+      "calibration": {
+        "mode": "degrees",
+        "values": {
+          "homing_offset": -1619,
+          "range_min": 760,
+          "range_max": 3295,
+          "drive_mode": 0
+        },
+        "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json",
+        "owner": "repo"
+      },
+      "limits": null,
+      "telemetry": [{ "name": "shoulder_lift.position", "unit": "deg" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000a103": {
+      "calibration": {
+        "mode": "degrees",
+        "values": {
+          "homing_offset": 1036,
+          "range_min": 874,
+          "range_max": 3092,
+          "drive_mode": 0
+        },
+        "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json",
+        "owner": "repo"
+      },
+      "limits": null,
+      "telemetry": [{ "name": "elbow_flex.position", "unit": "deg" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000a104": {
+      "calibration": {
+        "mode": "degrees",
+        "values": {
+          "homing_offset": 1670,
+          "range_min": 823,
+          "range_max": 3196,
+          "drive_mode": 0
+        },
+        "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json",
+        "owner": "repo"
+      },
+      "limits": null,
+      "telemetry": [{ "name": "wrist_flex.position", "unit": "deg" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000a105": {
+      "calibration": {
+        "mode": "degrees",
+        "values": {
+          "homing_offset": -1972,
+          "range_min": 0,
+          "range_max": 4095,
+          "drive_mode": 0
+        },
+        "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json",
+        "owner": "repo"
+      },
+      "limits": null,
+      "telemetry": [{ "name": "wrist_roll.position", "unit": "deg" }],
+      "firmware": {},
+      "lifecycle": "live"
+    },
+    "019a0000-0000-7000-8000-00000000a106": {
+      "calibration": {
+        "mode": "range_0_100",
+        "values": {
+          "homing_offset": 1408,
+          "range_min": 2036,
+          "range_max": 3486,
+          "drive_mode": 0
+        },
+        "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json",
+        "owner": "repo"
+      },
+      "limits": null,
+      "telemetry": [{ "name": "gripper.position", "unit": "%" }],
+      "firmware": {},
+      "lifecycle": "live"
+    }
+  },
+  "firmware": {},
+  "disambiguated_by": "user",
+  "provenance": {
+    "identity": { "by": "detected" },
+    "identity.vid": { "by": "detected" },
+    "protocol": { "by": "library", "source": "platform:so101-follower" },
+    "bus_map": { "by": "detected" },
+    "parts": {
+      "by": "repo",
+      "source": "~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json"
+    },
+    "parts.019a0000-0000-7000-8000-00000000a101.limits": {
+      "by": "library",
+      "source": "platform:so101-follower"
+    },
+    "parts.019a0000-0000-7000-8000-00000000a106.lifecycle": { "by": "user" },
+    "disambiguated_by": { "by": "user" }
+  }
+}

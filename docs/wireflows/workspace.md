@@ -1,7 +1,8 @@
 # Wireflow — Workspace (SOLUSDEV-242)
 
-Authority: `docs/design/screens/SPEC.md` §2 and the approved combined Workspace
-request. Architecture: `docs/architecture/workspace-navigation.md`; routes:
+Authority: the approved combined Workspace request (SOLUSDEV-242); the design spec cited
+previously (`docs/design/screens/SPEC.md`) does not exist in the repository.
+Architecture: `docs/architecture/workspace-navigation.md`; routes:
 `docs/api/workspace.md`, `docs/api/solus.md`, API.md §2.5.
 This replaces the W1 panel/list wireflow. Implementation lands in four ordered
 phases; the old panel exists only until the Phase 2 migration is integrated.
@@ -68,7 +69,8 @@ usable. No provider call occurs on graph selection, zoom or layout changes.
 ## Physical Robot
 
 Add → Hardware offers manual creation of a Physical Robot now; later R1/R2
-onboarding connects to the same service. Default name is the project's name,
+onboarding connects to the same service. The five-card Hardware surface is specified in
+`hardware-onboarding.md`. Default name is the project's name,
 editable inline. Multiple robots coexist with independent names and containment.
 Enter a robot to see Sensors, Actuators / motors, Controllers, End effectors,
 Power, Structure, Wiring; enter a category to see its parts. Empty categories

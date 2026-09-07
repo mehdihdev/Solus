@@ -36,6 +36,7 @@ from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
+from solus_api.hardware import hardware_router, library_router
 from solus_api.livebench.bench_router import BenchEventRing
 from solus_api.livebench.bench_router import router as bench_router
 from solus_api.livebench.sessions import SessionManager, load_local
@@ -382,6 +383,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(hosted.router)
     app.include_router(artifacts.router)
     app.include_router(solus_config.router)
+    app.include_router(hardware_router.router)
+    app.include_router(library_router.router)
     app.include_router(workspace_layout.router)
     app.include_router(entities.router)
     app.include_router(sol.router)

@@ -1,7 +1,7 @@
 """Firmware-source idiom extraction (RBT-02) — the richest signal, no hardware needed.
 
-Parses Arduino/PlatformIO C++ and MicroPython with tree-sitter and extracts, with
-exact file:line provenance:
+Parses hobby-MCU C++ firmware (the sketch/PlatformIO shape) and MicroPython with
+tree-sitter and extracts, with exact file:line provenance:
 
 * **attach calls** — `servo_elbow.attach(9)`, `wrist = PWM(Pin(12))`: the idiom that
   binds a name to a PWM channel. A symbolic argument (`s.attach(WRIST_PIN)`) records

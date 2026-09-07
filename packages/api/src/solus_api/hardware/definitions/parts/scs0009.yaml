@@ -1,0 +1,30 @@
+id: scs0009
+name: Feetech SCS0009
+manufacturer: Feetech
+category: actuators
+keywords: [servo, serial-bus, scs, feetech, micro]
+specs:
+  voltage_v: 6
+  stall_torque_kg_cm: 2.5
+  no_load_speed_rpm: 60
+  resolution_steps: 1024
+  interface: TTL serial (half duplex)
+  baud_default: 1000000
+  weight_g: 15
+driver_id: feetech-sts
+protocol_version: 1
+resolution: 1024
+register_map:
+  model_number: {address: 3, size: 2}
+  id: {address: 5, size: 1}
+  baud_rate: {address: 6, size: 1}
+  homing_offset: {address: 31, size: 2}
+  torque_enable: {address: 40, size: 1}
+  goal_position: {address: 42, size: 2}
+  present_position: {address: 56, size: 2}
+  present_load: {address: 60, size: 2}
+  present_temperature: {address: 63, size: 1}
+telemetry:
+  - {quantity: position, unit: deg}
+calibration_mode: degrees
+datasheet_url: https://www.feetechrc.com/

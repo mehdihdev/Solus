@@ -29,6 +29,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.agent.interfaces import TelemetryWindow
 from solus_api.core.errors import APIError
@@ -36,6 +37,8 @@ from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
 from solus_api.graph.codec import PacketDecodeError, from_wire
 from solus_api.graph.telemetry import TelemetryPlumbing
+from solus_api.hardware.config import TransportKind
+from solus_api.hardware.store import ensure_config, robot_root
 from solus_api.livebench.sessions import (
     AmbiguousDeviceError,
     DeviceNotFoundError,
@@ -291,6 +294,22 @@ class SerialRealConfig(BaseModel):
     confirmed_device_path: str | None = Field(default=None, min_length=1, max_length=256)
     baud: int = Field(default=115200, ge=300, le=3_000_000)
     window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+    # SOLUSDEV-248: a protocol driver by id with generic parameters — never a closed list of
+    # driver names in this schema; the registry decides what exists.
+    driver_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
+    driver_params: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict, max_length=32
+    )
+
+
+class RobotRealConfig(BaseModel):
+    """A session from a Physical Robot's HardwareConfig (docs/api/hardware.md §6)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["robot"]
+    robot_entity_id: uuid.UUID
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
 
 
 class BenchSessionIn(BaseModel):
@@ -298,7 +317,7 @@ class BenchSessionIn(BaseModel):
 
     mode: Literal["sim", "real"]
     config: Annotated[
-        MujocoSimConfig | GazeboSimConfig | McapSimConfig | SerialRealConfig,
+        MujocoSimConfig | GazeboSimConfig | McapSimConfig | SerialRealConfig | RobotRealConfig,
         Field(discriminator="provider"),
     ]
 
@@ -429,6 +448,7 @@ def _session_opener(
             return await local.open_mcap(mcap_path, project_id=project_id, topics=cfg.topics)
 
         return open_mcap, f"MCAP replay {mcap_path.name}", None
+    assert isinstance(cfg, SerialRealConfig)  # the robot provider is opened in start_session
     serial_cfg = cfg
 
     async def open_serial() -> Any:
@@ -437,6 +457,8 @@ def _session_opener(
             project_id=project_id,
             baud=serial_cfg.baud,
             confirmed_device_path=serial_cfg.confirmed_device_path,
+            driver_id=serial_cfg.driver_id,
+            driver_params=serial_cfg.driver_params,
         )
 
     # Wire contract with the desktop's session-to-device matching: an explicit
@@ -445,12 +467,42 @@ def _session_opener(
         "serial_number": serial_cfg.serial_number,
         "device_path": serial_cfg.confirmed_device_path,
         "baud": serial_cfg.baud,
+        "driver_id": serial_cfg.driver_id,
     }
     return (
         open_serial,
         f"Serial {serial_cfg.serial_number or serial_cfg.confirmed_device_path}",
         device,
     )
+
+
+async def _robot_opener(
+    local: Any, session: AsyncSession, project_id: uuid.UUID, cfg: RobotRealConfig
+) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any]]:
+    """(open_conn, label, device) for a robot session: the config document is the truth."""
+    robot = await robot_root(session, project_id, cfg.robot_entity_id)
+    _, config = await ensure_config(session, project_id, robot, created_by=None)
+    if config.identity is None or config.protocol is None:
+        raise APIError(
+            422,
+            "validation_error",
+            "the robot's config has no transport identity or protocol yet — detect it or "
+            "configure it before starting a session",
+        )
+    document = config.model_dump(mode="json")
+    identity, protocol = config.identity, config.protocol
+
+    async def open_robot() -> Any:
+        return await local.open_robot(document, project_id=project_id)
+
+    device = {
+        "device_ref": identity.device_ref,
+        "driver_id": protocol.driver_id,
+        "serial_number": identity.binding if identity.kind is TransportKind.USB_SERIAL else None,
+        "device_path": identity.last_seen_path,
+        "baud": protocol.params.get("baud"),
+    }
+    return open_robot, f"Robot {robot.name} ({identity.device_ref})", device
 
 
 @router.post("/sessions", status_code=201)
@@ -462,7 +514,11 @@ async def start_session(
     if local is None:
         raise APIError(503, "source_unavailable", _RUNNER_ABSENT)
     settings = request.app.state.settings
-    open_conn, label, device = _session_opener(local, settings, ctx.project.id, body)
+    device: dict[str, Any] | None
+    if isinstance(body.config, RobotRealConfig):
+        open_conn, label, device = await _robot_opener(local, session, ctx.project.id, body.config)
+    else:
+        open_conn, label, device = _session_opener(local, settings, ctx.project.id, body)
     manager = get_session_manager(request)
     try:
         record = await manager.start(

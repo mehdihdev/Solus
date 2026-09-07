@@ -1,0 +1,16 @@
+id: ur5e
+name: Universal Robots UR5e
+manufacturer: Universal Robots
+machine_class: arm
+keywords: [ur5e, ur, universal-robots, cobot, arm, 6-dof, ethernet, rtde]
+transport: ethernet
+driver_id: null
+params: {}
+parts:
+  - {part: ur-joint-module, address: "joint:0", role: shoulder_pan}
+  - {part: ur-joint-module, address: "joint:1", role: shoulder_lift}
+  - {part: ur-joint-module, address: "joint:2", role: elbow}
+  - {part: ur-joint-module, address: "joint:3", role: wrist_1}
+  - {part: ur-joint-module, address: "joint:4", role: wrist_2}
+  - {part: ur-joint-module, address: "joint:5", role: wrist_3}
+notes: SDK bridge is not yet a Solus driver; the platform imports as planned parts only.

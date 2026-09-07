@@ -1,0 +1,15 @@
+id: neo-m8n
+name: u-blox NEO-M8N
+manufacturer: u-blox
+category: sensors
+keywords: [gps, gnss, ublox, uart, i2c, navigation]
+specs:
+  interface: UART, I2C, SPI
+  constellations: GPS, GLONASS, Galileo, BeiDou
+  update_rate_hz_max: 10
+  horizontal_accuracy_m: 2.5
+  supply_v: 3.3
+telemetry:
+  - {quantity: satellites, unit: count}
+  - {quantity: fix, unit: null}
+datasheet_url: https://www.u-blox.com/en/product/neo-m8-series

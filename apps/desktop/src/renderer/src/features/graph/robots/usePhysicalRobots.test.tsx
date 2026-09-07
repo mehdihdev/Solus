@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as api from '../../../lib/api/physicalRobots'
+import * as hardwareApi from '../../../lib/api/hardware'
 import type { Entity } from '../../../lib/api/resources'
 import type { Page } from '../../../lib/api/client'
 import { ApiError } from '../../../lib/api/envelope.types'
@@ -15,6 +16,10 @@ vi.mock('../../../lib/api/physicalRobots', () => ({
   renamePhysicalRobot: vi.fn(),
   deletePhysicalRobot: vi.fn(),
   listRobotOrphans: vi.fn()
+}))
+vi.mock('../../../lib/api/hardware', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lib/api/hardware')>()),
+  createHardwarePart: vi.fn()
 }))
 const robot: Entity = {
   id: 'robot-1',
@@ -47,7 +52,7 @@ function Harness({
   revision?: number
 }): React.JSX.Element {
   const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
-  const nodes = usePhysicalRobots(projectId, revision, changed, reveal)
+  const nodes = usePhysicalRobots(projectId, revision, changed, reveal, entities)
   return (
     <>
       {nodes.hardware}
@@ -60,6 +65,13 @@ function Harness({
       {nodes.prompt}
     </>
   )
+}
+/** Add › Hardware › Authored with a new Physical Robot as the target; returns Create. */
+async function openAuthoredForNewRobot(): Promise<HTMLElement> {
+  await userEvent.click(screen.getByRole('button', { name: 'Authored' }))
+  await userEvent.type(screen.getByRole('textbox', { name: 'Name' }), 'Wrist IMU')
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Robot' }), '__new__')
+  return screen.getByRole('button', { name: 'Create' })
 }
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -75,26 +87,61 @@ beforeEach(() => {
   useSettingsStore.setState({ solMode: 'Guide' })
   vi.mocked(api.listRobotOrphans).mockResolvedValue({ data: [], meta: { has_next: false } })
   vi.mocked(api.createPhysicalRobot).mockResolvedValue(robot)
+  vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
+    entity: { ...part, id: 'part-new', name: 'Wrist IMU', origin: 'manual', source_id: null },
+    config_entry_id: 'entry-1'
+  })
   vi.mocked(api.renamePhysicalRobot).mockResolvedValue({ ...robot, name: 'Scout', version: 2 })
   vi.mocked(api.deletePhysicalRobot).mockResolvedValue({
     deleted_entity_id: robot.id,
     retained_part_ids: [part.id]
   })
 })
-it('creates a default-named instance once and reveals its real ID after refresh', async () => {
+it('creates a default-named robot once, reveals its real ID, then authors the part under it', async () => {
   const pending = deferred<Entity>()
   vi.mocked(api.createPhysicalRobot).mockReturnValue(pending.promise)
   render(<Harness />)
-  const add = screen.getByRole('button', { name: 'Add Physical Robot' })
-  fireEvent.click(add)
-  fireEvent.click(add)
+  const create = await openAuthoredForNewRobot()
+  fireEvent.click(create)
+  fireEvent.click(create)
   expect(api.createPhysicalRobot).toHaveBeenCalledOnce()
   expect(api.createPhysicalRobot).toHaveBeenCalledWith('p1', expect.anything())
+  expect(screen.getByText('Creating part…')).toBeInTheDocument()
   await act(async () => {
     pending.resolve(robot)
   })
-  expect(changed).toHaveBeenCalledOnce()
   expect(reveal).toHaveBeenCalledWith(robot.id)
+  await waitFor(() =>
+    expect(hardwareApi.createHardwarePart).toHaveBeenCalledExactlyOnceWith('p1', robot.id, {
+      name: 'Wrist IMU',
+      category: 'sensors',
+      specs: {},
+      lifecycle: 'planned'
+    })
+  )
+  await waitFor(() => expect(changed).toHaveBeenCalledTimes(2))
+  expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument()
+})
+
+it('lists only editable robots as Authored targets and posts the part to the chosen one', async () => {
+  render(<Harness entities={[robot, second, { ...robot, id: 'robot-3', origin: 'connector' }]} />)
+  await userEvent.click(screen.getByRole('button', { name: 'Authored' }))
+  const target = screen.getByRole('combobox', { name: 'Robot' })
+  expect(Array.from(target.querySelectorAll('option')).map((o) => o.textContent)).toEqual([
+    'Rover',
+    'Spare',
+    'New Physical Robot'
+  ])
+  await userEvent.type(screen.getByRole('textbox', { name: 'Name' }), 'Bus driver')
+  await userEvent.selectOptions(target, 'robot-2')
+  await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+  await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+  expect(api.createPhysicalRobot).not.toHaveBeenCalled()
+  expect(hardwareApi.createHardwarePart).toHaveBeenCalledWith(
+    'p1',
+    'robot-2',
+    expect.objectContaining({ name: 'Bus driver' })
+  )
 })
 it('keeps inline names independent and trims a valid submitted name', async () => {
   render(<Harness />)
@@ -229,7 +276,7 @@ it.each(['project', 'account'])(
     const pending = deferred<Entity>()
     vi.mocked(api.createPhysicalRobot).mockReturnValue(pending.promise)
     render(<Harness />)
-    await userEvent.click(screen.getByRole('button', { name: 'Add Physical Robot' }))
+    await userEvent.click(await openAuthoredForNewRobot())
     act(() => {
       if (boundary === 'project') {
         useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } })
@@ -244,6 +291,7 @@ it.each(['project', 'account'])(
     })
     expect(changed).not.toHaveBeenCalled()
     expect(reveal).not.toHaveBeenCalled()
+    expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
   }
 )
 it('discards older orphan reads after a graph refresh and uses a fresh read client', async () => {
@@ -266,7 +314,9 @@ it.each(['signed out', 'missing project'])('never writes when %s', async (state)
   if (state === 'signed out') useAuthStore.setState({ status: 'unauthenticated' })
   else useWorkspaceStore.setState({ project: null })
   render(<Harness />)
-  expect(screen.getByRole('button', { name: 'Add Physical Robot' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Authored' })).toHaveAttribute('aria-disabled', 'true')
+  await userEvent.click(screen.getByRole('button', { name: 'Authored' }))
+  expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument()
   expect(
     within(screen.getByRole('article', { name: 'Rover' })).queryByRole('button', {
       name: 'Rename'
@@ -279,11 +329,11 @@ it.each(['signed out', 'missing project'])('never writes when %s', async (state)
 it('allows authenticated hardware creation and orphan reads with a stale onboarding linked flag', async () => {
   useWorkspaceStore.setState({ linked: false })
   render(<Harness />)
-  expect(screen.getByRole('button', { name: 'Add Physical Robot' })).toBeEnabled()
-  await userEvent.click(screen.getByRole('button', { name: 'Add Physical Robot' }))
+  expect(screen.getByRole('button', { name: 'Authored' })).not.toHaveAttribute('aria-disabled')
+  await userEvent.click(await openAuthoredForNewRobot())
   expect(api.createPhysicalRobot).toHaveBeenCalledWith('p1', expect.anything())
   expect(api.listRobotOrphans).toHaveBeenCalledWith('p1', null, expect.anything())
-  expect(reveal).toHaveBeenCalledWith(robot.id)
+  await waitFor(() => expect(reveal).toHaveBeenCalledWith(robot.id))
 })
 it.each([
   { origin: 'connector' },
@@ -302,17 +352,19 @@ it.each([
 it('keeps creation failures visible without publishing success', async () => {
   vi.mocked(api.createPhysicalRobot).mockRejectedValue(new Error('Cannot create robot'))
   render(<Harness />)
-  await userEvent.click(screen.getByRole('button', { name: 'Add Physical Robot' }))
+  await userEvent.click(await openAuthoredForNewRobot())
   expect(await screen.findByRole('alert')).toHaveTextContent('Cannot create robot')
   expect(changed).not.toHaveBeenCalled()
   expect(reveal).not.toHaveBeenCalled()
+  expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
+  expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Wrist IMU')
 })
 
 it('does not revive a pending write after unmounting', async () => {
   const pending = deferred<Entity>()
   vi.mocked(api.createPhysicalRobot).mockReturnValue(pending.promise)
   const view = render(<Harness />)
-  await userEvent.click(screen.getByRole('button', { name: 'Add Physical Robot' }))
+  await userEvent.click(await openAuthoredForNewRobot())
   view.unmount()
   await act(async () => {
     pending.resolve(robot)
@@ -328,7 +380,7 @@ it('closes stale editors and refuses token lookup from an expired workspace', as
   await userEvent.click(
     within(screen.getByRole('article', { name: 'Rover' })).getByRole('button', { name: 'Rename' })
   )
-  await userEvent.click(screen.getByRole('button', { name: 'Add Physical Robot' }))
+  await userEvent.click(await openAuthoredForNewRobot())
   const client = vi.mocked(api.createPhysicalRobot).mock.calls[0]?.[1]
   act(() => useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } }))
   expect(screen.queryByRole('textbox', { name: 'Robot name' })).not.toBeInTheDocument()

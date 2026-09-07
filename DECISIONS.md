@@ -636,6 +636,12 @@ graph facts — parts stay in the graph; imported files are retained `artifacts`
 remains the later feeder for connector-ingested declarations; `~/.solus` is unchanged. Routes:
 `docs/api/solus.md`.
 
+**Amended 2026-09-06 (SOLUSDEV-248 / ROBOT ONBOARDING R5, human-approved in-chat):** a
+Hardware-configs entry may carry a structured payload — `SolusEntryKind.CONFIG`, a JSONB column
+validated by the `HardwareConfig` Pydantic model on every write, one entry per Physical Robot,
+provenance on every field. This is configuration, not graph facts: parts stay in the graph and
+the entry references them by entity id; free-form or unvalidated JSON remains forbidden.
+
 ---
 
 ## ADR-035: Extensions — sandboxed views, a permission-checked host bridge, and an open registry

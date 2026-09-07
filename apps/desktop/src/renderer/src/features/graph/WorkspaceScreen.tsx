@@ -297,7 +297,13 @@ function ProjectWorkspace(): React.JSX.Element {
     summary.entities ?? [],
     onGraphChanged
   )
-  const robots = usePhysicalRobots(projectId, graphRevision, onGraphChanged, onReveal)
+  const robots = usePhysicalRobots(
+    projectId,
+    graphRevision,
+    onGraphChanged,
+    onReveal,
+    summary.entities
+  )
   const nodes = useSolusNodes(projectId, () => setGraphRevision((revision) => revision + 1))
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>

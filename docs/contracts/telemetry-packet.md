@@ -58,6 +58,21 @@ decide which one resolves.
 producer and the packet disagree, so it is rejected at the boundary rather than stored as metadata
 that describes nothing.
 
+### 2a. Signal naming convention (SOLUSDEV-248 addendum, tier-1)
+
+Producers written or configured by Solus name signals `<part>.<quantity>` — `shoulder_pan.position`,
+`left_wheel.velocity`, `attitude.roll`, `imu.accel_z` — and carry the unit in `units`, never in the
+name (`joint_3.pos_deg` is the shape this rule retires). `<part>` is the part's function name as
+the user confirmed it (or the driver's address when unnamed: `addr_6.position`); `<quantity>` is a
+lowercase snake_case physical quantity. Units follow the part's calibration mode
+(`docs/api/hardware.md` §2: `degrees→deg`, `range_0_100→%`, `range_m100_100→%`, `linear→mm`).
+The packet validator does not enforce the convention (raw third-party producers keep their names);
+the hardware config's `parts[].telemetry` is where the convention is authoritative and where the
+Live Bench reads names and units from.
+On the wire from a configured robot, `device_id` is the **part's** key `<device ref>/<address>`
+(the part's `external_ref`): the robot connection splits a driver's sweep by `<part>` prefix
+before the packet reaches the resolver (`docs/api/hardware.md` §6).
+
 ## 3. Two clocks, and why
 
 `timestamp` is wall-clock; `seq` is monotonic. They are not redundant.

@@ -1,0 +1,14 @@
+id: ur-joint-module
+name: UR e-Series joint module
+manufacturer: Universal Robots
+category: actuators
+keywords: [actuator, joint, ur, ur5e, cobot, ethernet]
+specs:
+  interface: Ethernet (RTDE / vendor SDK)
+  rtde_rate_hz: 500
+  supply_v: 48
+telemetry:
+  - {quantity: position, unit: rad}
+  - {quantity: current, unit: A}
+notes: Read through RTDE on the controller; no Solus driver speaks to a joint directly.
+datasheet_url: https://www.universal-robots.com/

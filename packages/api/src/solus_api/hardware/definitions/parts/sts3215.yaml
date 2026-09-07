@@ -1,0 +1,31 @@
+id: sts3215
+name: Feetech STS3215
+manufacturer: Feetech
+category: actuators
+keywords: [servo, serial-bus, sts, feetech, lerobot, so-101, so101, arm]
+specs:
+  voltage_v: 7.4
+  stall_torque_kg_cm: 19.5
+  no_load_speed_rpm: 60
+  resolution_steps: 4096
+  interface: TTL serial (half duplex)
+  baud_default: 1000000
+  weight_g: 55
+  magnetic_encoder: true
+driver_id: feetech-sts
+protocol_version: 0
+resolution: 4096
+register_map:
+  model_number: {address: 3, size: 2}
+  id: {address: 5, size: 1}
+  baud_rate: {address: 6, size: 1}
+  homing_offset: {address: 31, size: 2}
+  torque_enable: {address: 40, size: 1}
+  goal_position: {address: 42, size: 2}
+  present_position: {address: 56, size: 2}
+  present_load: {address: 60, size: 2}
+  present_temperature: {address: 63, size: 1}
+telemetry:
+  - {quantity: position, unit: deg}
+calibration_mode: degrees
+datasheet_url: https://www.feetechrc.com/

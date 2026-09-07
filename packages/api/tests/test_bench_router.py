@@ -53,9 +53,10 @@ async def _project_with_graph(client: AsyncClient, headers: dict[str, str]) -> t
 def wire_packet(device_id: str, sec: float, values: dict[str, float]) -> dict[str, Any]:
     from datetime import timedelta
 
-    return to_wire(
+    wire: dict[str, Any] = to_wire(
         TelemetryPacket(device_id=device_id, timestamp=T0 + timedelta(seconds=sec), values=values)
     )
+    return wire
 
 
 async def _ingest(

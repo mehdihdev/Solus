@@ -15,6 +15,7 @@ members = [
     "solus-companion",
     "solus-contracts",
     "solus-livebench",
+    "solus-telemetry",
     "solus-workspace",
 ]
 
@@ -2169,6 +2170,21 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "types-pyserial", specifier = ">=3.5.0.20260712" },
 ]
+
+[[package]]
+name = "solus-telemetry"
+version = "0.1.0"
+source = { editable = "libs/solus-telemetry/python" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.2" }]
 
 [[package]]
 name = "solus-workspace"

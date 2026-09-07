@@ -1,19 +1,26 @@
-"""RBT-01: passive identification — honest about exactly what the wire can say."""
+"""RBT-01: passive identification — honest about exactly what the wire can say. Vendor probes
+(servo-bus ping, CAN heartbeats) live in their plugins; this module stays vendor-free."""
 
 import os
+import re
+from pathlib import Path
 
 import pytest
 from livebench.recognition.passive import (
-    DXL_BROADCAST_PING,
+    BOARD_TABLE,
     BoardClass,
     StreamShape,
     characterize_stream,
-    dynamixel_broadcast_ping,
-    identify_odrive_heartbeats,
     identify_port,
     resolve_board,
 )
 from solus_api.fingerprint.contract import MatchState, Modality
+
+VENDOR_WORDS = re.compile(
+    r"\b(teensy|pjrc|arduino|espressif|esp32|adafruit|raspberry|rp2040|wch|ch343|ch340|ch9102"
+    r"|silicon labs|cp210x?|ftdi|ft232|prolific|pl2303|dynamixel|robotis|odrive|feetech"
+    r"|sts3215|lerobot|mavlink|px4)\b"
+)
 
 
 class TestUsbEnumeration:
@@ -53,87 +60,11 @@ class TestUsbEnumeration:
         assert resolve_board(0x1A86, 0x55D3) is not None
         assert resolve_board(0x0000, 0x0000) is None
 
+    def test_board_table_is_data_from_the_definitions_package(self) -> None:
+        from livebench.definitions import usb_boards
 
-class TestDynamixelPing:
-    def test_broadcast_ping_frame_matches_the_documented_bytes(self) -> None:
-        # Golden bytes from the ROBOTIS Protocol 2.0 spec — proves the CRC16 too.
-        assert DXL_BROADCAST_PING == bytes.fromhex("fffffd00fe03000131 42".replace(" ", ""))
-
-    def test_enumerates_responding_servos_with_model_names(self) -> None:
-        from livebench.recognition.passive import _dxl_status_packet
-
-        wire = _dxl_status_packet(servo_id=3, model_number=1020, firmware=46)
-        wire += _dxl_status_packet(servo_id=7, model_number=1190, firmware=52)
-
-        class FakePort:
-            port: str | None = "/dev/ttyUSB0"
-            written: list[bytes] = []
-
-            def write(self, data: bytes) -> int:
-                self.written.append(data)
-                return len(data)
-
-            def read(self, size: int) -> bytes:
-                nonlocal wire
-                chunk, wire = wire[:size], wire[size:]
-                return chunk
-
-        findings = dynamixel_broadcast_ping(FakePort())
-
-        assert FakePort.written == [DXL_BROADCAST_PING]
-        assert len(findings) == 2
-        first = findings[0]
-        assert first.modality is Modality.BUS_ENUMERATION
-        assert first.state is MatchState.MATCHED
-        assert first.confidence == 0.92
-        assert first.source_ref.external_ref == "/dev/ttyUSB0/id:3"
-        assert first.evidence["value"] == "1020"
-        assert "XM430-W350" in first.evidence["note"]
-
-    def test_silent_bus_returns_empty_never_errors(self) -> None:
-        class DeadPort:
-            port: str | None = "/dev/ttyUSB0"
-
-            def write(self, data: bytes) -> int:
-                return len(data)
-
-            def read(self, size: int) -> bytes:
-                return b""
-
-        assert dynamixel_broadcast_ping(DeadPort()) == []
-
-    def test_garbage_on_the_bus_is_not_an_error(self) -> None:
-        class NoisyPort:
-            port: str | None = "/dev/ttyUSB0"
-            _junk = b"\xff\x00\x12garbage" * 10
-
-            def write(self, data: bytes) -> int:
-                return len(data)
-
-            def read(self, size: int) -> bytes:
-                chunk, self._junk = self._junk[:size], self._junk[size:]
-                return chunk
-
-        assert dynamixel_broadcast_ping(NoisyPort()) == []
-
-
-class TestOdriveHeartbeats:
-    def test_heartbeats_identify_nodes(self) -> None:
-        frames = [
-            (0x021, b"\x00\x00\x00\x00\x08\x00\x00\x00"),  # node 1, heartbeat (cmd 0x01)
-            (0x041, b"\x00\x00\x00\x00\x08\x00\x00\x00"),  # node 2
-            (0x022, b"\x00\x00"),  # node 1, some other command — ignored
-        ]
-
-        findings = identify_odrive_heartbeats(frames, interface="can0")
-
-        refs = [f.source_ref.external_ref for f in findings]
-        assert refs == ["can0/node:1", "can0/node:2"]
-        assert all(f.state is MatchState.MATCHED for f in findings)
-        assert all(f.confidence == 0.92 for f in findings)
-
-    def test_no_heartbeats_returns_empty(self) -> None:
-        assert identify_odrive_heartbeats([(0x123, b"\x01")], interface="can0") == []
+        assert BOARD_TABLE is usb_boards.BOARD_TABLE
+        assert all(isinstance(board.kind, BoardClass) for board in BOARD_TABLE.values())
 
 
 class TestStreamShape:
@@ -172,6 +103,15 @@ class TestStreamShape:
         assert binary.channel_count == 0
         assert silent.framing == "silent"
         assert silent.update_hz == 0.0
+
+
+def test_passive_module_names_no_vendor_or_product() -> None:
+    """Shared detection code: the vendor probes moved to plugins, the board table to
+    definitions — nothing product-specific may remain here (hardware-onboarding.md ratchet)."""
+    import livebench.recognition.passive as module
+
+    source = Path(module.__file__).read_text().lower()
+    assert VENDOR_WORDS.search(source) is None
 
 
 @pytest.mark.skipif(not os.path.exists("/dev/serial/by-id"), reason="no serial hardware attached")

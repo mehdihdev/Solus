@@ -3977,6 +3977,1093 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/config": {
+      "get": {
+        "summary": "Get Config",
+        "operationId": "get_config_api_v1_projects__project_id__hardware_robots__robot_id__config_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Config Api V1 Projects  Project Id  Hardware Robots  Robot Id  Config Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace Config",
+        "operationId": "replace_config_api_v1_projects__project_id__hardware_robots__robot_id__config_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Replace Config Api V1 Projects  Project Id  Hardware Robots  Robot Id  Config Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts": {
+      "post": {
+        "summary": "Author Part",
+        "operationId": "author_part_api_v1_projects__project_id__hardware_robots__robot_id__parts_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Author Part Api V1 Projects  Project Id  Hardware Robots  Robot Id  Parts Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts/{part_id}/lifecycle": {
+      "post": {
+        "summary": "Promote Lifecycle",
+        "operationId": "promote_lifecycle_api_v1_projects__project_id__hardware_robots__robot_id__parts__part_id__lifecycle_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "part_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Part Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Promote Lifecycle Api V1 Projects  Project Id  Hardware Robots  Robot Id  Parts  Part Id  Lifecycle Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/unassigned": {
+      "get": {
+        "summary": "List Unassigned",
+        "description": "Connector-sourced parts no robot category owns yet (From a file).",
+        "operationId": "list_unassigned_api_v1_projects__project_id__hardware_unassigned_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 24,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Unassigned Api V1 Projects  Project Id  Hardware Unassigned Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts/attach": {
+      "post": {
+        "summary": "Attach Parts",
+        "operationId": "attach_parts_api_v1_projects__project_id__hardware_robots__robot_id__parts_attach_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "robot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Robot Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Attach Parts Api V1 Projects  Project Id  Hardware Robots  Robot Id  Parts Attach Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/detected": {
+      "get": {
+        "summary": "List Detected",
+        "description": "Devices on this machine at whichever level is honestly known (opens no port).",
+        "operationId": "list_detected_api_v1_projects__project_id__hardware_detected_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Detected Api V1 Projects  Project Id  Hardware Detected Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/detected/{device_ref}/propose": {
+      "post": {
+        "summary": "Propose Detected",
+        "operationId": "propose_detected_api_v1_projects__project_id__hardware_detected__device_ref__propose_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Ref"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ProposeIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Propose Detected Api V1 Projects  Project Id  Hardware Detected  Device Ref  Propose Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/detected/{device_ref}/confirm": {
+      "post": {
+        "summary": "Confirm Detected",
+        "operationId": "confirm_detected_api_v1_projects__project_id__hardware_detected__device_ref__confirm_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Ref"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Confirm Detected Api V1 Projects  Project Id  Hardware Detected  Device Ref  Confirm Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/suggestions": {
+      "get": {
+        "summary": "Get Suggestions",
+        "operationId": "get_suggestions_api_v1_projects__project_id__hardware_suggestions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 16,
+              "default": "pending",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Suggestions Api V1 Projects  Project Id  Hardware Suggestions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/suggestions/{suggestion_id}/accept": {
+      "post": {
+        "summary": "Accept Suggestion",
+        "operationId": "accept_suggestion_api_v1_projects__project_id__hardware_suggestions__suggestion_id__accept_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "suggestion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Suggestion Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Accept Suggestion Api V1 Projects  Project Id  Hardware Suggestions  Suggestion Id  Accept Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/suggestions/{suggestion_id}/reject": {
+      "post": {
+        "summary": "Reject Suggestion",
+        "operationId": "reject_suggestion_api_v1_projects__project_id__hardware_suggestions__suggestion_id__reject_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "suggestion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Suggestion Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RejectIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reject Suggestion Api V1 Projects  Project Id  Hardware Suggestions  Suggestion Id  Reject Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/library": {
+      "get": {
+        "summary": "List Definitions",
+        "operationId": "list_definitions_api_v1_projects__project_id__hardware_library_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "part",
+                    "platform"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Definitions Api V1 Projects  Project Id  Hardware Library Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/library/{kind}/{definition_id}": {
+      "get": {
+        "summary": "Get Definition",
+        "operationId": "get_definition_api_v1_projects__project_id__hardware_library__kind___definition_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "part",
+                "platform"
+              ],
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "definition_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
+              "title": "Definition Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Definition Api V1 Projects  Project Id  Hardware Library  Kind   Definition Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/library/platforms/{definition_id}/import": {
+      "post": {
+        "summary": "Import Platform",
+        "operationId": "import_platform_api_v1_projects__project_id__hardware_library_platforms__definition_id__import_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "definition_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
+              "title": "Definition Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PlatformImportIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Import Platform Api V1 Projects  Project Id  Hardware Library Platforms  Definition Id  Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/library/parts/{definition_id}/import": {
+      "post": {
+        "summary": "Import Part",
+        "operationId": "import_part_api_v1_projects__project_id__hardware_library_parts__definition_id__import_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "definition_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
+              "title": "Definition Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartImportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Import Part Api V1 Projects  Project Id  Hardware Library Parts  Definition Id  Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/workspace-layout": {
       "get": {
         "summary": "Get Layout",
@@ -8243,6 +9330,49 @@
   },
   "components": {
     "schemas": {
+      "AcceptedRow": {
+        "properties": {
+          "row_id": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 1,
+            "title": "Row Id"
+          },
+          "function_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Function Name"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "sensors",
+              "actuators",
+              "controllers",
+              "end_effectors",
+              "power",
+              "structure",
+              "wiring"
+            ],
+            "title": "Category",
+            "default": "actuators"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "row_id"
+        ],
+        "title": "AcceptedRow"
+      },
       "ActionMode": {
         "type": "string",
         "enum": [
@@ -8277,6 +9407,40 @@
         ],
         "title": "AdoptRequest",
         "description": "SOLUSDEV-242 (H2): the explicit, confirmed move of NAMED legacy sources\nto the caller's proved account. `confirm_access` is the caller accepting a\ngrant wider than a source ever recorded (shown in the confirmation)."
+      },
+      "AttachIn": {
+        "properties": {
+          "entity_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Entity Ids"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "sensors",
+              "actuators",
+              "controllers",
+              "end_effectors",
+              "power",
+              "structure",
+              "wiring"
+            ],
+            "title": "Category"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entity_ids",
+          "category"
+        ],
+        "title": "AttachIn"
       },
       "AttachmentIn": {
         "properties": {
@@ -8325,6 +9489,9 @@
               },
               {
                 "$ref": "#/components/schemas/SerialRealConfig"
+              },
+              {
+                "$ref": "#/components/schemas/RobotRealConfig"
               }
             ],
             "title": "Config",
@@ -8334,6 +9501,7 @@
                 "gazebo": "#/components/schemas/GazeboSimConfig",
                 "mcap-replay": "#/components/schemas/McapSimConfig",
                 "mujoco": "#/components/schemas/MujocoSimConfig",
+                "robot": "#/components/schemas/RobotRealConfig",
                 "serial": "#/components/schemas/SerialRealConfig"
               }
             }
@@ -8346,6 +9514,66 @@
           "config"
         ],
         "title": "BenchSessionIn"
+      },
+      "BusMapEntry": {
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Protocol"
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Address"
+          },
+          "part_entity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part Entity Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "protocol",
+          "address"
+        ],
+        "title": "BusMapEntry",
+        "description": "`{protocol, address, part, model}` \u2014 servo ids, CAN node ids, autopilot\nsystem:component ids all fit one shape. Never a `servo_id` field."
+      },
+      "CalibrationMode": {
+        "type": "string",
+        "enum": [
+          "degrees",
+          "range_0_100",
+          "range_m100_100",
+          "linear",
+          "raw"
+        ],
+        "title": "CalibrationMode"
       },
       "CheckoutSessionCreate": {
         "properties": {
@@ -8498,6 +9726,94 @@
         "title": "Complexity",
         "description": "Routing tier, derived automatically by the Step-1 gateway \u2014 never supplied\nby the end user (see `router.derive_complexity`)."
       },
+      "ConfigIn": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/HardwareConfig"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "config"
+        ],
+        "title": "ConfigIn"
+      },
+      "ConfirmIn": {
+        "properties": {
+          "target": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NewRobotTarget"
+              },
+              {
+                "$ref": "#/components/schemas/ExistingRobotTarget"
+              }
+            ],
+            "title": "Target",
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "existing": "#/components/schemas/ExistingRobotTarget",
+                "new": "#/components/schemas/NewRobotTarget"
+              }
+            }
+          },
+          "accepted": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptedRow"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Accepted"
+          },
+          "repo_config_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Config Id"
+          },
+          "repo_root": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Root"
+          },
+          "start_session": {
+            "type": "boolean",
+            "title": "Start Session",
+            "default": true
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 86400.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target",
+          "accepted"
+        ],
+        "title": "ConfirmIn"
+      },
       "ConfirmationDecision": {
         "properties": {
           "decision": {
@@ -8607,6 +9923,27 @@
         ],
         "title": "EventBatch"
       },
+      "ExistingRobotTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "existing",
+            "title": "Kind"
+          },
+          "robot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Robot Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "robot_id"
+        ],
+        "title": "ExistingRobotTarget"
+      },
       "FeedbackBody": {
         "properties": {
           "verdict": {
@@ -8619,6 +9956,18 @@
           "verdict"
         ],
         "title": "FeedbackBody"
+      },
+      "FieldProvenance": {
+        "type": "string",
+        "enum": [
+          "library",
+          "repo",
+          "user",
+          "sol",
+          "detected"
+        ],
+        "title": "FieldProvenance",
+        "description": "Who set a field. Layers apply library \u2192 repo \u2192 user \u2192 detected; SOL writes take the user\nslot; the record names who WON, never a merge of several."
       },
       "GazeboSimConfig": {
         "properties": {
@@ -8687,6 +10036,104 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HardwareConfig": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version",
+            "default": 1
+          },
+          "robot_entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Robot Entity Id"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransportBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProtocolBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bus_map": {
+            "items": {
+              "$ref": "#/components/schemas/BusMapEntry"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "title": "Bus Map"
+          },
+          "parts": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PartConfig"
+            },
+            "type": "object",
+            "title": "Parts"
+          },
+          "firmware": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Firmware"
+          },
+          "disambiguated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "user"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disambiguated By"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ProvenanceRecord"
+            },
+            "type": "object",
+            "title": "Provenance"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "robot_entity_id"
+        ],
+        "title": "HardwareConfig"
       },
       "HostedExchange": {
         "properties": {
@@ -8840,6 +10287,30 @@
         ],
         "title": "LayoutSlotIn"
       },
+      "LifecycleIn": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/LifecycleState"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "LifecycleIn"
+      },
+      "LifecycleState": {
+        "type": "string",
+        "enum": [
+          "planned",
+          "ordered",
+          "received",
+          "installed",
+          "live"
+        ],
+        "title": "LifecycleState"
+      },
       "McapSimConfig": {
         "properties": {
           "provider": {
@@ -8989,6 +10460,34 @@
           "provider"
         ],
         "title": "MujocoSimConfig"
+      },
+      "NewRobotTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "new",
+            "title": "Kind"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "NewRobotTarget"
       },
       "NoteBody": {
         "properties": {
@@ -9171,6 +10670,234 @@
         "title": "PanelLinkApprove",
         "description": "Reject unknown fields: this endpoint hands out a 90-day credential."
       },
+      "PartCalibration": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalibrationMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "owner": {
+            "type": "string",
+            "enum": [
+              "repo",
+              "solus"
+            ],
+            "title": "Owner",
+            "default": "solus"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PartCalibration"
+      },
+      "PartConfig": {
+        "properties": {
+          "calibration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartCalibration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartLimits"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "telemetry": {
+            "items": {
+              "$ref": "#/components/schemas/TelemetryChannel"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Telemetry"
+          },
+          "firmware": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Firmware"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/LifecycleState",
+            "default": "planned"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PartConfig"
+      },
+      "PartImportIn": {
+        "properties": {
+          "robot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Robot Id"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sensors",
+                  "actuators",
+                  "controllers",
+                  "end_effectors",
+                  "power",
+                  "structure",
+                  "wiring"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "robot_id"
+        ],
+        "title": "PartImportIn"
+      },
+      "PartIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "sensors",
+              "actuators",
+              "controllers",
+              "end_effectors",
+              "power",
+              "structure",
+              "wiring"
+            ],
+            "title": "Category"
+          },
+          "specs": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "maxProperties": 32,
+            "title": "Specs"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/LifecycleState",
+            "default": "planned"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "category"
+        ],
+        "title": "PartIn"
+      },
+      "PartLimits": {
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PartLimits"
+      },
       "PatchBody": {
         "properties": {
           "enabled": {
@@ -9247,6 +10974,26 @@
           "enterprise"
         ],
         "title": "PlanType"
+      },
+      "PlatformImportIn": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PlatformImportIn"
       },
       "PolicyWrite": {
         "properties": {
@@ -9350,6 +11097,145 @@
         "type": "object",
         "title": "ProjectUpdate"
       },
+      "ProposeIn": {
+        "properties": {
+          "repo_root": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Root"
+          },
+          "budget_s": {
+            "type": "number",
+            "maximum": 5.0,
+            "minimum": 0.05,
+            "title": "Budget S",
+            "default": 0.5
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProposeIn"
+      },
+      "ProtocolBinding": {
+        "properties": {
+          "driver_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "title": "Driver Id"
+          },
+          "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Params"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "driver_id"
+        ],
+        "title": "ProtocolBinding",
+        "description": "The driver plugin by id plus its parameters \u2014 in config, not code."
+      },
+      "ProvenanceRecord": {
+        "properties": {
+          "by": {
+            "$ref": "#/components/schemas/FieldProvenance"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "by"
+        ],
+        "title": "ProvenanceRecord"
+      },
+      "RejectIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RejectIn"
+      },
+      "RobotRealConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "robot",
+            "title": "Provider"
+          },
+          "robot_entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Robot Entity Id"
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "robot_entity_id"
+        ],
+        "title": "RobotRealConfig",
+        "description": "A session from a Physical Robot's HardwareConfig (docs/api/hardware.md \u00a76)."
+      },
       "RouteType": {
         "type": "string",
         "enum": [
@@ -9407,6 +11293,42 @@
             "exclusiveMinimum": 0.0,
             "title": "Window Seconds",
             "default": 1.0
+          },
+          "driver_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Id"
+          },
+          "driver_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "maxProperties": 32,
+            "title": "Driver Params"
           }
         },
         "additionalProperties": false,
@@ -9741,6 +11663,34 @@
         ],
         "title": "TelemetryBatchIn"
       },
+      "TelemetryChannel": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TelemetryChannel"
+      },
       "ToolFamily": {
         "type": "string",
         "enum": [
@@ -9754,6 +11704,79 @@
         ],
         "title": "ToolFamily",
         "description": "Tools Solus models the UI of. Closed: a new tool is a decision, not a value."
+      },
+      "TransportBinding": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TransportKind"
+          },
+          "binding": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^/\\s]+$",
+            "title": "Binding"
+          },
+          "vid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 65535.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vid"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 65535.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "last_seen_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "binding"
+        ],
+        "title": "TransportBinding",
+        "description": "Binding identity: USB serial / BT address / MAC / IP. `last_seen_path` is informational\nonly \u2014 a port path is never binding (tty numbering swaps on re-enumeration)."
+      },
+      "TransportKind": {
+        "type": "string",
+        "enum": [
+          "usb_serial",
+          "usb_can",
+          "ble",
+          "bt_classic",
+          "wifi",
+          "ethernet",
+          "ros2"
+        ],
+        "title": "TransportKind"
       },
       "UiSurface": {
         "type": "string",

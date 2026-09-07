@@ -1,40 +1,44 @@
 // RBT-03: fixtures for the four recognition tiers. Every tier must produce a
 // USABLE screen — and the product must be good at tier 3, not just tier 1.
+// Placeholders are vendor-neutral: a "servo at address 3", never a product name.
 import type { MappingProposal } from './proposals.types'
+
+const BUS_NOTE = 'the device asserts its own identity; identifies the part, not the joint'
+const FIRMWARE_NOTE = 'code intent only — may be stale relative to the physical build'
 
 /** Tier 1 — self-describing bus + firmware + repo: near-automatic, high confidence. */
 export const TIER1_BUS_FIRMWARE_REPO: readonly MappingProposal[] = [
   {
-    id: 'ttyUSB0/id:3',
-    subject: 'Dynamixel XM430-W350 (id 3)',
+    id: 'bus:demo/3',
+    subject: 'servo at address 3',
     proposedFunction: 'elbow',
     confidence: 0.92,
     evidence: [
       {
         kind: 'bus_enumeration',
         value: 'model register 1020',
-        note: 'the device asserts its own identity; identifies the part, not the joint',
-        provenance: 'ttyUSB0 broadcast ping'
+        note: BUS_NOTE,
+        provenance: 'bus:demo broadcast ping'
       },
       {
         kind: 'firmware_symbol',
-        value: 'servo_elbow.attach(9)',
-        note: 'code intent only — may be stale relative to the physical build',
-        provenance: 'src/arm.ino:11'
+        value: 'actuator.attach(9)',
+        note: FIRMWARE_NOTE,
+        provenance: 'src/firmware.cpp:11'
       }
     ]
   },
   {
-    id: 'ttyUSB0/id:7',
-    subject: 'Dynamixel XL330-M288 (id 7)',
+    id: 'bus:demo/7',
+    subject: 'servo at address 7',
     proposedFunction: 'wrist',
     confidence: 0.92,
     evidence: [
       {
         kind: 'bus_enumeration',
         value: 'model register 1190',
-        note: 'the device asserts its own identity; identifies the part, not the joint',
-        provenance: 'ttyUSB0 broadcast ping'
+        note: BUS_NOTE,
+        provenance: 'bus:demo broadcast ping'
       }
     ]
   }
@@ -50,9 +54,9 @@ export const TIER2_FIRMWARE_ONLY: readonly MappingProposal[] = [
     evidence: [
       {
         kind: 'firmware_symbol',
-        value: 'servo_elbow.attach(9)',
-        note: 'code intent only — may be stale relative to the physical build',
-        provenance: 'src/arm.ino:11'
+        value: 'actuator.attach(9)',
+        note: FIRMWARE_NOTE,
+        provenance: 'src/firmware.cpp:11'
       }
     ]
   },
@@ -65,8 +69,8 @@ export const TIER2_FIRMWARE_ONLY: readonly MappingProposal[] = [
       {
         kind: 'firmware_symbol',
         value: '#define WRIST_PIN 5',
-        note: 'code intent only — may be stale relative to the physical build',
-        provenance: 'src/arm.ino:3'
+        note: FIRMWARE_NOTE,
+        provenance: 'src/firmware.cpp:3'
       }
     ]
   }
@@ -74,7 +78,7 @@ export const TIER2_FIRMWARE_ONLY: readonly MappingProposal[] = [
 
 /** Tier 3 — bare serial, no repo: channel shape only. The user NAMES the channels. */
 export const TIER3_BARE_SERIAL: readonly MappingProposal[] = [0, 1, 2, 3, 4, 5].map((i) => ({
-  id: `serial:/dev/ttyACM0/ch${i}`,
+  id: `serial:demo/ch${i}`,
   subject: `channel ${i} (float, ~100 Hz)`,
   proposedFunction: null,
   confidence: null,
@@ -83,7 +87,7 @@ export const TIER3_BARE_SERIAL: readonly MappingProposal[] = [0, 1, 2, 3, 4, 5].
       kind: 'telemetry_channel',
       value: '6ch@100Hz/json-lines',
       note: 'channel shape constrains, it does not identify — stays unlinked pending confirmation',
-      provenance: 'serial:/dev/ttyACM0'
+      provenance: 'serial:demo'
     }
   ]
 }))
@@ -92,7 +96,7 @@ export const TIER3_BARE_SERIAL: readonly MappingProposal[] = [0, 1, 2, 3, 4, 5].
 export const TIER4_ROS_BONUS: readonly MappingProposal[] = [
   {
     id: '/joint_states/wrist_pitch',
-    subject: 'ROS 2 joint_states channel',
+    subject: 'joint_states channel',
     proposedFunction: 'wrist_pitch',
     confidence: 0.75,
     evidence: [
@@ -100,7 +104,7 @@ export const TIER4_ROS_BONUS: readonly MappingProposal[] = [
         kind: 'telemetry_channel',
         value: '/joint_states/wrist_pitch',
         note: 'named by the URDF when present — a bonus, never assumed',
-        provenance: 'ros2 topic list'
+        provenance: 'topic list'
       }
     ]
   }

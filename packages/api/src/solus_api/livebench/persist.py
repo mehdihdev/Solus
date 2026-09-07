@@ -113,7 +113,7 @@ async def persist_confirmed_robot(
     for mapping in confirmed:
         # Normalize to the SAME base FP-02 keys on (matcher.py: canonical_uuid(base),
         # part_number=base) — keying on the raw string would fork identity for every
-        # hyphenated part (XM430-W350 vs XM430W350), the false-merge/fork class this
+        # hyphenated part (ABC-123 vs ABC123), the false-merge/fork class this
         # module exists to prevent. No derivable MPN, or a base too long to store, →
         # reported, never persisted under an invented/truncated key.
         normalized = normalize_mpn(mapping.part_number, config) if mapping.part_number else None

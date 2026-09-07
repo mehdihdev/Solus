@@ -88,6 +88,8 @@ def test_main_contains_only_image_build_and_staging_deploy(source: str) -> None:
     [
         ("packages/api/src/solus_api/main.py", PYTHON_JOBS | SCAN),
         ("packages/api/pyproject.toml", PYTHON_JOBS | SCAN),
+        ("libs/solus-telemetry/python/src/solus_telemetry/__init__.py", PYTHON_JOBS | SCAN),
+        ("libs/solus-telemetry/python/tests/test_emitter.py", PYTHON_JOBS | SCAN),
         ("apps/desktop/src/renderer/main.tsx", NODE_JOBS | SCAN),
         (".gitlab-ci.yml", PYTHON_JOBS | NODE_JOBS | SCAN),
         ("docs/example.md", SCAN),

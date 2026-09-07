@@ -1,0 +1,17 @@
+id: px4-autopilot
+name: PX4 autopilot
+category: controllers
+keywords: [autopilot, flight-controller, px4, pixhawk, mavlink, drone, uav]
+specs:
+  firmware: PX4
+  protocol: MAVLink 2
+  system_id_default: 1
+  component_id_default: 1
+  telemetry_link: UDP 14550 / serial
+  imu_onboard: true
+  barometer_onboard: true
+driver_id: mavlink
+protocol_version: 2
+telemetry:
+  - {quantity: attitude, unit: rad}
+datasheet_url: https://docs.px4.io/

@@ -1,7 +1,8 @@
 # Workspace graph navigation — SOLUSDEV-242
 
 Approved direction: the combined W1 fix + W2 + W3 + W4 request and the Phase 0
-approval in this session. Product source: `docs/design/screens/SPEC.md` §2.
+approval in this session. Product source: the approved combined Workspace request; the
+design spec cited previously (`docs/design/screens/SPEC.md`) does not exist in the repository.
 Governing decisions: ADR-001, ADR-005, ADR-008, ADR-025, ADR-027, ADR-030, ADR-034.
 Focus remains `docs/contracts/focus.md`; integration reads follow
 `change-signal-spine.md`. No shared contract or new domain is required.

@@ -2,7 +2,17 @@
 // (RBT-01 passive probes, RBT-02 firmware idioms, RBT-04 active runs) produces
 // EVIDENCE; a row here is a proposal the user confirms — never an assertion.
 
-export type EvidenceKind = 'bus_enumeration' | 'firmware_symbol' | 'telemetry_channel'
+/** The RBT-03 hardware kinds plus the fingerprint contract's other modalities —
+ *  a detection proposal (SOLUSDEV-248 R2) carries `ModalityMatch.modality` here. */
+export type EvidenceKind =
+  | 'bus_enumeration'
+  | 'firmware_symbol'
+  | 'telemetry_channel'
+  | 'part_number'
+  | 'datasheet'
+  | 'schematic_symbol'
+  | 'cad_model'
+  | 'photo'
 
 export interface ProposalEvidence {
   readonly kind: EvidenceKind
@@ -15,7 +25,7 @@ export interface ProposalEvidence {
 }
 
 export interface MappingProposal {
-  /** Stable row id: the channel/motor being mapped (e.g. "ttyUSB0/id:3", "ch2"). */
+  /** Stable row id: the channel/motor being mapped (e.g. "bus:demo/3", "ch2"). */
   readonly id: string
   /** What the hardware side is, as honestly as it is known. */
   readonly subject: string
