@@ -104,6 +104,14 @@ Local API with the dev database ingested to 0.2.0 (`inserted 19, unchanged 102, 
 
 ## Validation gate (H10) at handoff
 
+**Root cause found after the first diagnosis:** `stop_validation_gate.sh` runs the full API
+suite under a 1000 s wrapper (`twrap 1000 … pytest -q`). The suite now takes ~22 min serially
+even on an isolated database (3456 tests), so the gate's pytest step cannot finish inside its
+budget for any session on this branch, collision or not. The traceback the gate prints is the
+wrapper killing pytest mid-fixture. This is a stale hook budget, not a code failure; hooks are
+human-only (H1), so it is flagged here: raise the wrapper (the CI job already uses a 3 h
+timeout for the same suite) or scope the Stop gate to the touched packages' suites.
+
 - Every item the gate attributed to corpus files was fixed in `5f53e7a` (ruff/mypy clean on
   `migrations/env.py`, the corpus migration, and the contract test).
 - A full API run on a private test database (`SOLUS_TEST_DATABASE_URL=…/solus_test_corpus65`)
