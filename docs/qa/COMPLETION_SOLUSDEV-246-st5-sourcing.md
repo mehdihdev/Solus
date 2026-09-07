@@ -128,7 +128,13 @@ Live runs consumed real model calls (`claude-sonnet-5`), 8 requests in total.
 | Desktop full suite (`npx vitest run`) | **2903 passed, 1 failed** — `widgets/livebench/LiveBenchWidget.test.tsx` "shows tiles, a chart, and a data-derived stream state" (a timing assertion untouched by this ticket, last changed in `ae8fe02`); it passes when run alone, a load-induced flake |
 | Lint / types | ruff + mypy clean on the sourcing modules and tests; eslint + `pnpm typecheck` clean on the desktop |
 
-The H10 Stop gate's own full-suite run timed out during this session (pytest-timeout while eight
-pytest processes from three sessions shared one Postgres); the private run above is the evidence
-for this branch. The remaining eslint output on the gate is max-lines WARNINGS in HOME-session files,
+**H10 Stop gate — flag for a human (not a code problem).** The gate wraps `pytest -q` in
+`timeout 1000`. The full API suite now takes longer than that on this machine even with the test
+database completely idle: a second, uncontended run of the same commit finished
+**4238 passed, 5 skipped in 1464 s (24 min)**, so the gate kills pytest at 1000 s every time and reports
+a pytest-timeout traceback. Three gate attempts failed this way and the gate's loop guard allowed the
+stop with its "a HUMAN must review" warning. The two private full-suite runs above (23 min under
+contention, 24 min idle, both fully green) are the evidence for this branch. Raising the wrapper
+budget, or running the local Postgres with `fsync=off` as CI does, is a human decision
+(agents never edit `.claude/hooks`). The remaining eslint output on the gate is max-lines WARNINGS in HOME-session files,
 not errors.
