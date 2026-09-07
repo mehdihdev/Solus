@@ -1,8 +1,9 @@
 // One project in the Home grid (SOLUSDEV-242 / HOME H1): name, description,
 // a preview of its own recent
 // activity, and the row menu (rename / archive / delete). The card opens the
-// project; when another project is open the footer reads "Switch to" so the
-// user knows they are leaving one and entering another.
+// project; when another project is open the footer reads "Switch to", which
+// only re-scopes Home to that project (the accounts card's "Attach in …", the
+// Simulation tab) — the user stays on Home and opens it when they choose.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -26,6 +27,8 @@ export interface ProjectCardProps {
   canDelete: boolean
   actions: HomeActions
   onOpen: (project: WorkspaceProject) => void
+  /** Make this the current project WITHOUT leaving Home. */
+  onSwitch: (project: WorkspaceProject) => void
   onActionFailed: (body: string) => void
 }
 
@@ -37,12 +40,15 @@ export function ProjectCard({
   canDelete,
   actions,
   onOpen,
+  onSwitch,
   onActionFailed
 }: ProjectCardProps): React.JSX.Element {
   const [showActivity, setShowActivity] = useState(false)
   const isCurrent = project.id === currentProjectId
-  const open = (): void => onOpen({ id: project.id, name: project.name, teamId: project.team_id })
-  const footerLabel = isCurrent ? 'Open' : currentProjectId ? 'Switch to' : 'Open'
+  const target: WorkspaceProject = { id: project.id, name: project.name, teamId: project.team_id }
+  const open = (): void => onOpen(target)
+  const isSwitch = !isCurrent && currentProjectId !== null
+  const footerLabel = isSwitch ? 'Switch to' : 'Open'
 
   return (
     <Card
@@ -126,7 +132,8 @@ export function ProjectCard({
           size="sm"
           onClick={(e) => {
             e.stopPropagation()
-            open()
+            if (isSwitch) onSwitch(target)
+            else open()
           }}
         >
           {footerLabel}

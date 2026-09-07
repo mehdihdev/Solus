@@ -304,8 +304,12 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   `?project_id=`, `Load more` while `has_next`, `N EVENTS` = the project's own
   `meta.total`.
 - Footer button: `Open` (no project open, or this one) / `Switch to` (another
-  project is open). Clicking anywhere on the card body does the same. Opening
-  lands on the project Overview (SOLUSDEV-164).
+  project is open). `Open` — and a click anywhere on the card body — opens the
+  project, landing on its Overview (SOLUSDEV-164). `Switch to` does NOT leave
+  Home: it makes that project current through the switch choke point
+  (`switchWorkspaceProject`, surface `home`), so the accounts card's
+  "Attach in …" and the Simulation tab re-scope in place and the card's footer
+  flips to `Open`.
 - `⋯` menu (member+): `Rename` (name dialog) · `Archive` · `Delete` (owner only,
   ADR-025, confirmed). The menu never opens the project. A failed archive raises the
   shell toast "That didn't work".

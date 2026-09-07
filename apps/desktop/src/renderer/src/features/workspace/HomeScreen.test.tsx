@@ -193,7 +193,19 @@ describe('HomeScreen — the active team’s project grid', () => {
     render(<HomeScreen onOpenProject={onOpenProject} />)
     expect(within(card('p1')).getByRole('button', { name: 'Open' })).toBeInTheDocument()
     await userEvent.click(within(card('p2')).getByRole('button', { name: 'Switch to' }))
-    expect(onOpenProject).toHaveBeenCalledTimes(1) // the footer button does not double-fire the card
+    // "Switch to" only re-scopes Home: the current project moves, nothing opens.
+    expect(onOpenProject).not.toHaveBeenCalled()
+    expect(useWorkspaceStore.getState().project).toEqual({ id: 'p2', name: 'Arm', teamId: 't1' })
+    expect(within(card('p2')).getByRole('button', { name: 'Open' })).toBeInTheDocument()
+    expect(within(card('p1')).getByRole('button', { name: 'Switch to' })).toBeInTheDocument()
+  })
+
+  it('still opens a project from its card body while another is current', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
+    const onOpenProject = vi.fn()
+    render(<HomeScreen onOpenProject={onOpenProject} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Switch to Arm' }))
     expect(onOpenProject).toHaveBeenCalledWith({ id: 'p2', name: 'Arm', teamId: 't1' })
   })
 

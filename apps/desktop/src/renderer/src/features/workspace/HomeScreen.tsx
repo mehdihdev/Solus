@@ -17,6 +17,7 @@ import { PreferencesCard } from '../preferences/PreferencesCard'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
 import { useHomeTeam, type HomeTeam } from './useHomeTeam'
+import { switchWorkspaceProject } from './projectSwitch'
 import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal } from './modals'
@@ -43,6 +44,12 @@ const GRID_STYLE: React.CSSProperties = {
   gap: 16,
   marginTop: 16,
   alignItems: 'start'
+}
+
+/** "Switch to" on a card re-scopes Home to that project and stays here — the
+ *  same choke point as every other switch (SOLUSDEV-242), no navigation. */
+function switchHomeProject(project: WorkspaceProject): void {
+  switchWorkspaceProject(project, 'home')
 }
 
 /** Surface a failed background mutation (archive/unarchive) via the shell toast. */
@@ -107,6 +114,7 @@ function ProjectsColumn({
           currentProjectId={currentProject?.id ?? null}
           actions={home.actions}
           onOpenProject={onOpenProject}
+          onSwitchProject={switchHomeProject}
           onNewProject={onNewProject}
           onActionFailed={toastActionFailed}
         />
