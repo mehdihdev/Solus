@@ -40,7 +40,8 @@ export function useCodeEnvironment(
 ): CodeEnvironmentController {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const { machine } = useMachineIdentity(deps)
-  const source = localSourceForMachine(sources, machine?.id ?? null)
+  const machineId = machine?.id ?? null
+  const source = localSourceForMachine(sources, machineId)
   const [view, setView] = useState<CodeEnvironmentView | null>(null)
   const [status, setStatus] = useState<LocalFolderStatus>('idle')
   // A response for a scope the hook has since left (project switch, unlink,
@@ -51,7 +52,6 @@ export function useCodeEnvironment(
   // nests one state update inside another's updater.
   const hasView = useRef(false)
 
-  const machineId = machine?.id ?? null
   const active = fetchEnabled && projectId !== null && machineId !== null && source !== null
 
   const load = useCallback(async (): Promise<void> => {
