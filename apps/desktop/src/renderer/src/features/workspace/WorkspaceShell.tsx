@@ -322,6 +322,22 @@ const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
 /** The `ext-page` route, by what the rail knows about the slug (STORE ST3/ST4):
  *  a pinned tab with no install here → the honest pinned state; an installed
  *  first-party bundle → its in-repo page; anything else → the sandboxed frame. */
+/** The first-party page for an installed, non-dev, first-party entry — else null. */
+function firstPartyPageFor(
+  entry: ExtensionRailData['entries'][number] | undefined,
+  project: WorkspaceProject | null,
+  props: { goBack: () => void; openStoreDetail: (slug: string) => void }
+): React.JSX.Element | null {
+  if (!entry || !project || !entry.installed || !entry.firstParty || entry.dev) return null
+  return renderFirstPartyPage(entry.slug, {
+    projectId: project.id,
+    slug: entry.slug,
+    publisher: entry.publisher,
+    onBack: props.goBack,
+    onOpenStore: () => props.openStoreDetail(entry.slug)
+  })
+}
+
 function ExtensionPageRoute({
   slug,
   project,
@@ -346,16 +362,7 @@ function ExtensionPageRoute({
       />
     )
   }
-  const firstParty =
-    entry?.installed && entry.firstParty && !entry.dev && project
-      ? renderFirstPartyPage(slug, {
-          projectId: project.id,
-          slug,
-          publisher: entry.publisher,
-          onBack: goBack,
-          onOpenStore: () => openStoreDetail(slug)
-        })
-      : null
+  const firstParty = firstPartyPageFor(entry, project, { goBack, openStoreDetail })
   if (firstParty) return firstParty
   return (
     <ExtensionPageScreen slug={slug} onBack={goBack} onOpenStore={() => openStoreDetail(slug)} />

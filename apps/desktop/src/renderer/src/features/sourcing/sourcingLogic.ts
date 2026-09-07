@@ -185,3 +185,14 @@ export function rulesSummary(rules: SourcingRulesApi | null): string {
   ].filter(Boolean)
   return parts.length > 0 ? parts.join(' · ') : 'No rules set'
 }
+
+export interface CategoryOption {
+  id: string
+  label: string
+}
+
+/** Motors land in "Actuators / motors" unless the user says otherwise; else the first category. */
+export function defaultCategory(categories: readonly CategoryOption[]): string {
+  const actuators = categories.find((c) => /^actuators/i.test(c.label))
+  return (actuators ?? categories[0])?.id ?? ''
+}

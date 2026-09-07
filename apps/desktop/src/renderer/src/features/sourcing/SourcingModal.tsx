@@ -114,7 +114,12 @@ export function SourcingModal(props: SourcingModalProps): React.JSX.Element {
 
   return (
     <ModalShell onClose={onClose} width={860}>
-      <div role="dialog" aria-modal="true" aria-label="Find a part">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Find a part"
+        style={{ maxHeight: '82vh', overflowY: 'auto', paddingRight: 4 }}
+      >
         <PanelHeader door={door} onClose={onClose} />
         {phase === 'requirement' && (
           <RequirementPhase projectId={projectId} door={door} data={data} />

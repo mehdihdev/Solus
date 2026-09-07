@@ -7,12 +7,16 @@ import { Fragment, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
 import type { CandidateApi, ExcludedCandidateApi } from '../../lib/api/resources.sourcing'
-import { compareColumns, groundingLabel, safeHttps, tradeOffLine } from './sourcingLogic'
+import {
+  compareColumns,
+  defaultCategory,
+  groundingLabel,
+  safeHttps,
+  tradeOffLine,
+  type CategoryOption
+} from './sourcingLogic'
 
-export interface CategoryOption {
-  id: string
-  label: string
-}
+export type { CategoryOption }
 
 const CELL: React.CSSProperties = {
   padding: '7px 10px',
@@ -58,7 +62,12 @@ function SelectRow({
   busy: boolean
   onSelect: (candidateId: string, categoryId: string | undefined, quantity: number) => void
 }): React.JSX.Element {
-  const [category, setCategory] = useState(categories[0]?.id ?? '')
+  // Categories load after the table mounts: an explicit pick wins, otherwise the default.
+  const [picked, setPicked] = useState<string | null>(null)
+  const category =
+    picked !== null && categories.some((c) => c.id === picked)
+      ? picked
+      : defaultCategory(categories)
   const [quantity, setQuantity] = useState('1')
   const qty = Number(quantity)
   const valid = Number.isInteger(qty) && qty >= 1
@@ -68,7 +77,7 @@ function SelectRow({
         <select
           aria-label={`Category for ${candidate.name}`}
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          onChange={(e) => setPicked(e.target.value)}
           style={INPUT}
         >
           {categories.map((c) => (

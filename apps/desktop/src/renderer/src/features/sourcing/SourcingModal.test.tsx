@@ -56,7 +56,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(resources.listEntities).mockImplementation(async (_p, filters) => {
     if (filters?.type === 'robot_category')
-      return [entity({ id: 'cat-act', type: 'robot_category', name: 'Actuators / motors' })]
+      return [
+        entity({ id: 'cat-wire', type: 'robot_category', name: 'Wiring' }),
+        entity({ id: 'cat-act', type: 'robot_category', name: 'Actuators / motors' })
+      ]
     return [
       entity({ id: 'asm-1', name: 'Arm assembly', properties: { is_assembly: true } }),
       entity({ id: 'p-1', name: 'Arm link', properties: { is_assembly: false } })
@@ -170,7 +173,7 @@ describe('SourcingModal — candidates and selection', () => {
       />
     )
     expect(screen.getByTestId('sourcing-searching')).toHaveTextContent(
-      /finding candidates for required 8.24/
+      'finding candidates for required 8.24 N·m (static 5.49 N·m × 1.5 safety)'
     )
   })
 
@@ -206,7 +209,8 @@ describe('SourcingModal — candidates and selection', () => {
     )
     // Select the cited stepper into Actuators, quantity 2.
     const category = await screen.findByLabelText('Category for NEMA 23 23HS22-2804S')
-    await userEvent.selectOptions(category, 'cat-act')
+    // Motors default to the Actuators category even when it is not listed first.
+    await waitFor(() => expect(category).toHaveValue('cat-act'))
     await userEvent.clear(screen.getByLabelText('Quantity for NEMA 23 23HS22-2804S'))
     await userEvent.type(screen.getByLabelText('Quantity for NEMA 23 23HS22-2804S'), '2')
     await userEvent.click(screen.getByRole('button', { name: 'Select NEMA 23 23HS22-2804S' }))

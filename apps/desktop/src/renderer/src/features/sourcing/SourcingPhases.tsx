@@ -12,6 +12,8 @@ import { RulesEditor } from './RulesEditor'
 import { rulesSummary, safeHttps, torqueLine } from './sourcingLogic'
 import type { SourcingData } from './useSourcing'
 
+const lowerFirst = (line: string): string => line.charAt(0).toLowerCase() + line.slice(1)
+
 const WARN: React.CSSProperties = { fontSize: 12, color: 'var(--warn)', marginTop: 10 }
 const ROW: React.CSSProperties = { display: 'flex', gap: 8, marginTop: 12 }
 
@@ -53,7 +55,7 @@ export function SearchingView({ torque }: { torque: TorqueApi | null }): React.J
     >
       <Spinner size={16} />
       <span>
-        Solus is finding candidates{torque ? ` for ${torqueLine(torque).toLowerCase()}` : ''}…
+        Solus is finding candidates{torque ? ` for ${lowerFirst(torqueLine(torque))}` : ''}…
       </span>
     </div>
   )

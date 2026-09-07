@@ -121,3 +121,17 @@ describe('massesFrom / excludedFrom / rulesSummary', () => {
     ).toBe('2 excluded suppliers · requires RoHS · max 24 V · protocols CAN')
   })
 })
+
+describe('defaultCategory', () => {
+  it('prefers the Actuators category, then the first, then nothing', async () => {
+    const { defaultCategory } = await import('./sourcingLogic')
+    expect(
+      defaultCategory([
+        { id: 'w', label: 'Wiring' },
+        { id: 'a', label: 'Actuators / motors' }
+      ])
+    ).toBe('a')
+    expect(defaultCategory([{ id: 'w', label: 'Wiring' }])).toBe('w')
+    expect(defaultCategory([])).toBe('')
+  })
+})
