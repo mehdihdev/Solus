@@ -19,6 +19,9 @@
 // Every catalog tool appears: file-export and local tools have no account to
 // link, so their row offers the open project's Sources page — where such a
 // source is attached — instead of pretending to connect here.
+// SOLUSDEV-244: the tools are grouped under four domain tabs (Mechanical,
+// Electrical, Simulation, Software) so the card reads by discipline; a domain
+// with nothing to connect yet says so rather than showing an empty box.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -43,6 +46,13 @@ import {
   scopeText,
   usageText
 } from './connectedAccounts'
+import {
+  ACCOUNT_DOMAINS,
+  ACCOUNT_DOMAIN_LABEL,
+  accountDomain,
+  emptyDomainText,
+  type AccountDomain
+} from './accountDomains'
 import { ModalShell } from './modals'
 import { useAccountConnections } from './useAccountConnections'
 
@@ -427,6 +437,109 @@ function ConnectRow({
   )
 }
 
+/** The domain pills above the card: one selected, the rest quiet. */
+function DomainTabs({
+  value,
+  onChange
+}: {
+  value: AccountDomain
+  onChange: (domain: AccountDomain) => void
+}): React.JSX.Element {
+  return (
+    <div
+      role="tablist"
+      aria-label="Tool domain"
+      style={{ display: 'flex', gap: 8, margin: '0 0 10px' }}
+    >
+      {ACCOUNT_DOMAINS.map((domain) => {
+        const active = domain === value
+        return (
+          <button
+            key={domain}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            id={`accounts-tab-${domain}`}
+            className="interactive"
+            onClick={() => onChange(domain)}
+            style={{
+              fontFamily: 'var(--font-ui)',
+              fontSize: 11.5,
+              fontWeight: active ? 600 : 500,
+              padding: '5px 13px',
+              borderRadius: 99,
+              cursor: 'pointer',
+              userSelect: 'none',
+              whiteSpace: 'nowrap',
+              background: active ? 'var(--acc)' : 'var(--sur2)',
+              color: active ? 'var(--acc-ink)' : 'var(--mut)',
+              border: `1px solid ${active ? 'transparent' : 'var(--bd)'}`,
+              transition: 'background 0.12s, color 0.12s, border-color 0.12s'
+            }}
+          >
+            {ACCOUNT_DOMAIN_LABEL[domain]}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** One provider's rows: a per-project tool is a single row; an account tool
+ *  lists every linked grant, every legacy grant, or a Connect. */
+function ProviderRows({
+  entry,
+  accounts,
+  currentProject,
+  onOpenSources,
+  onSignIn
+}: {
+  entry: CatalogEntry
+  accounts: ReturnType<typeof useAccountConnections>
+  currentProject: WorkspaceProject | null
+  onOpenSources: (() => void) | undefined
+  onSignIn: () => void
+}): React.JSX.Element {
+  if (entry.mode !== 'oauth') {
+    return (
+      <NoAccountRow entry={entry} currentProject={currentProject} onOpenSources={onOpenSources} />
+    )
+  }
+  const linked = accounts.connections.filter((c) => c.provider === entry.id)
+  const unclaimed = accounts.legacy.filter((l) => l.provider === entry.id)
+  return (
+    <>
+      {linked.map((connection) => (
+        <AccountRow
+          key={connection.id}
+          entry={entry}
+          connection={connection}
+          onRevoke={() => accounts.revoke(connection.id)}
+          // The same account-scope handshake as Connect: a finished sign-in
+          // lands on THIS row (I1 dedupes by account), so the old token is
+          // replaced only once the new one succeeded.
+          onReauthorize={onSignIn}
+        />
+      ))}
+      {unclaimed.map((legacy) => (
+        <LegacyRow
+          key={legacy.source_ids.join(',')}
+          entry={entry}
+          legacy={legacy}
+          grant={linked.find((c) => c.id === legacy.claimable_connection_id) ?? null}
+          // The sign-in proves the account; the move is then offered and
+          // confirmed on this row — never automatic.
+          onSignIn={onSignIn}
+          onMove={(grant) => accounts.move(legacy, grant)}
+        />
+      ))}
+      {linked.length === 0 && unclaimed.length === 0 && (
+        <ConnectRow entry={entry} onConnect={onSignIn} />
+      )}
+    </>
+  )
+}
+
 export interface ConnectedAccountsCardProps {
   /** The open project, whose Sources page attaches per-project tools. */
   currentProject?: WorkspaceProject | null
@@ -440,18 +553,20 @@ export function ConnectedAccountsCard({
   const catalog = useIntegrationCatalog()
   const accounts = useAccountConnections()
   const states = useOnboardingStore((s) => s.connections)
+  const [domain, setDomain] = useState<AccountDomain>(ACCOUNT_DOMAINS[0])
   const wizard = useConnectWizard({
     projectId: null,
     scope: 'account',
     onConnected: () => void accounts.refresh()
   })
   // Every tool the registry knows, account or not — the user asked "what can I
-  // connect?", and a missing row reads as "unsupported". Account tools first;
-  // the per-project ones follow so the linkable rows read as one group.
-  const providers = [...catalog].sort(
-    (a, b) => Number(b.mode === 'oauth') - Number(a.mode === 'oauth')
-  )
-  if (accounts.status === 'offline' || providers.length === 0) return null
+  // connect?", and a missing row reads as "unsupported". Within a domain the
+  // account tools come first; the per-project ones follow so the linkable rows
+  // read as one group.
+  const providers = catalog
+    .filter((entry) => accountDomain(entry) === domain)
+    .sort((a, b) => Number(b.mode === 'oauth') - Number(a.mode === 'oauth'))
+  if (accounts.status === 'offline' || catalog.length === 0) return null
 
   return (
     <div>
@@ -460,59 +575,30 @@ export function ConnectedAccountsCard({
           CONNECTED ACCOUNTS
         </Mono>
       </div>
+      <DomainTabs value={domain} onChange={setDomain} />
       <Card pad={0}>
-        {providers.map((entry, i) => {
-          const linked = accounts.connections.filter((c) => c.provider === entry.id)
-          const unclaimed = accounts.legacy.filter((l) => l.provider === entry.id)
-          return (
+        <div role="tabpanel" aria-labelledby={`accounts-tab-${domain}`}>
+          {providers.length === 0 && (
+            <div style={{ padding: '14px', fontSize: 11.5, color: 'var(--mut)', lineHeight: 1.5 }}>
+              {emptyDomainText(domain)}
+            </div>
+          )}
+          {providers.map((entry, i) => (
             <div
               key={entry.id}
               style={{ borderBottom: i === providers.length - 1 ? 'none' : '1px solid var(--bd)' }}
             >
-              {entry.mode !== 'oauth' ? (
-                <NoAccountRow
-                  entry={entry}
-                  currentProject={currentProject}
-                  onOpenSources={onOpenSources}
-                />
-              ) : (
-                <>
-                  {linked.map((connection) => (
-                    <AccountRow
-                      key={connection.id}
-                      entry={entry}
-                      connection={connection}
-                      onRevoke={() => accounts.revoke(connection.id)}
-                      // The same account-scope handshake as Connect: a finished
-                      // sign-in lands on THIS row (I1 dedupes by account), so the
-                      // old token is replaced only once the new one succeeded.
-                      onReauthorize={() => wizard.open(entry)}
-                    />
-                  ))}
-                  {unclaimed.map((legacy) => (
-                    <LegacyRow
-                      key={legacy.source_ids.join(',')}
-                      entry={entry}
-                      legacy={legacy}
-                      grant={linked.find((c) => c.id === legacy.claimable_connection_id) ?? null}
-                      // The sign-in proves the account; the move is then offered
-                      // and confirmed on this row — never automatic.
-                      onSignIn={() => wizard.open(entry)}
-                      onMove={(grant) => accounts.move(legacy, grant)}
-                    />
-                  ))}
-                  {linked.length === 0 && unclaimed.length === 0 && (
-                    <ConnectRow entry={entry} onConnect={() => wizard.open(entry)} />
-                  )}
-                </>
-              )}
+              <ProviderRows
+                entry={entry}
+                accounts={accounts}
+                currentProject={currentProject}
+                onOpenSources={onOpenSources}
+                onSignIn={() => wizard.open(entry)}
+              />
             </div>
-          )
-        })}
+          ))}
+        </div>
       </Card>
-      <div style={{ fontSize: 10.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.5 }}>
-        Link an account once; choose what each project tracks from its Sources page.
-      </div>
       {wizard.active && (
         <ConnectWizardModal
           entry={wizard.active}

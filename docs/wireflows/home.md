@@ -43,8 +43,21 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 
 ```
 | CONNECTED ACCOUNTS                                                          |
+| (Mechanical) ( Electrical ) ( Simulation ) ( Software )     ← domain tabs   |
+| ── Mechanical ──────────────────────────────────────────────────────────── |
 | [On] Onshape · ada@example.com                                              |
 |      Used in Rover and Arm · Read only                        [Revoke]      |
+| [Fu] Fusion 360 (local)                                                     |
+|      Connects on this computer · attached per project  [Attach in Rover]    |
+| ── Electrical ──────────────────────────────────────────────────────────── |
+| [Ki] KiCad                                                                  |
+|      Committed export · attached per project           [Attach in Rover]    |
+| [Al] Altium                                                                 |
+|      Committed export · attached per project           [Attach in Rover]    |
+| ── Simulation ──────────────────────────────────────────────────────────── |
+|      Simulation tools such as MuJoCo and Isaac Sim will connect from here   |
+|      soon.                                                                  |
+| ── Software ────────────────────────────────────────────────────────────── |
 | [Gh] GitHub · octocat                                                       |
 |      Connected in a project, not yet on your account   [Sign in to move]   |
 |      ⚠ Connected in Rover before account-level connections. Sign in once   |
@@ -54,12 +67,17 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 |        grant.  → confirmation names the project, the grant, the removal     |
 | [Gl] GitLab                                                                 |
 |      Not connected                                            [Connect]     |
-| [Ki] KiCad                                                                  |
-|      Committed export · attached per project           [Attach in Rover]    |
-| [Fu] Fusion 360 (local)                                                     |
-|      Connects on this computer · attached per project  [Attach in Rover]    |
 ```
 
+- **Domain tabs** (SOLUSDEV-244): the tools are grouped under four pills —
+  Mechanical, Electrical, Simulation, Software — in that order, Mechanical
+  selected on open. One tab is shown at a time (`role="tablist"`/`tab`/
+  `tabpanel`). A tool's domain is classified in the app by provider type
+  (`accountDomains.ts`); a provider the app has no entry for lands under
+  Software rather than disappearing. A domain with nothing to connect yet says
+  so in place of rows — Simulation names MuJoCo and Isaac Sim, which move here
+  from the project Sources page as that page winds down. There is no footer
+  line under the card.
 - **Every tool the registry knows is listed** — a missing row reads as
   "unsupported". OAuth tools link an account here; committed-export tools
   (KiCad, Altium) and local-companion tools are attached per project, so their

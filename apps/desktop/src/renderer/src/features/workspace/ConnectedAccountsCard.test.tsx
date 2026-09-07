@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
+import { ACCOUNT_DOMAINS, accountDomain, emptyDomainText } from './accountDomains'
 import {
   healthLabel,
   legacyText,
@@ -97,12 +98,13 @@ beforeEach(() => {
 })
 
 describe('ConnectedAccountsCard', () => {
-  it('offers Connect for an OAuth provider when nothing is linked', () => {
+  it('offers Connect for an OAuth provider when nothing is linked', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
     expect(screen.getByText('Onshape')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Connect Onshape' })).toBeInTheDocument()
-    // A file-export tool is listed too, but has no account to connect.
+    // A file-export tool is listed too (under its own domain), but has no account to connect.
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
     expect(screen.getByText('KiCad')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Connect KiCad' })).toBeNull()
   })
@@ -240,7 +242,7 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByText(/Couldn't move this Onshape connection/)).toBeInTheDocument()
   })
 
-  it('lists every catalog tool after the account tools; a per-project tool attaches from the open project', async () => {
+  it('lists every catalog tool under its domain; a per-project tool attaches from the open project', async () => {
     mockAccounts()
     const onOpenSources = vi.fn()
     render(
@@ -249,16 +251,20 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
         onOpenSources={onOpenSources}
       />
     )
-    const names = screen.getAllByText(/^(Onshape|KiCad)$/).map((n) => n.textContent)
-    expect(names).toEqual(['Onshape', 'KiCad'])
+    expect(screen.getByText('Onshape')).toBeInTheDocument()
+    expect(screen.queryByText('KiCad')).toBeNull()
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
+    expect(screen.queryByText('Onshape')).toBeNull()
+    expect(screen.getByText('KiCad')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Connect KiCad' })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Attach KiCad in Rover' }))
     expect(onOpenSources).toHaveBeenCalled()
   })
 
-  it('without an open project a per-project tool says so and offers no button', () => {
+  it('without an open project a per-project tool says so and offers no button', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Electrical' }))
     expect(
       screen.getByText(/open a project to attach it from its Sources page/)
     ).toBeInTheDocument()
@@ -414,5 +420,81 @@ describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () =>
     }
     expect(quotaText(degraded, 'Onshape')).toMatch(/\(estimate\)$/)
     expect(quotaText(degraded, 'Onshape')).not.toMatch(/remaining|left/)
+  })
+})
+
+describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
+  const GITHUB: CatalogEntry = {
+    id: 'github',
+    name: 'GitHub',
+    kind: 'Code',
+    mark: 'GH',
+    mode: 'oauth',
+    configFields: ['repo', 'branch'],
+    selection: null,
+    accessModes: null,
+    hosted: null
+  }
+  const FUSION: CatalogEntry = {
+    id: 'fusion',
+    name: 'Fusion',
+    kind: 'Local tool — companion bridge',
+    mark: 'Fu',
+    mode: 'local-bridge',
+    configFields: [],
+    selection: null,
+    accessModes: null,
+    hosted: null
+  }
+
+  it('shows the four domains in order, Mechanical selected first', () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    const tabs = screen.getAllByRole('tab').map((t) => t.textContent)
+    expect(tabs).toEqual(['Mechanical', 'Electrical', 'Simulation', 'Software'])
+    expect(screen.getByRole('tab', { name: 'Mechanical' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Software' })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('groups tools by domain and keeps account tools ahead of per-project ones', async () => {
+    vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([FUSION, KICAD, GITHUB, ONSHAPE])
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    const rows = (): string[] =>
+      screen.getAllByText(/^(Onshape|KiCad|GitHub|Fusion)$/).map((n) => n.textContent ?? '')
+    expect(rows()).toEqual(['Onshape', 'Fusion'])
+    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
+    expect(rows()).toEqual(['GitHub'])
+    expect(screen.getByRole('tab', { name: 'Software' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+  })
+
+  it('an empty domain says what will land there instead of an empty box', async () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Simulation' }))
+    expect(screen.getByRole('tabpanel')).toHaveTextContent(/MuJoCo and Isaac Sim/)
+    expect(screen.getAllByRole('tab')).toHaveLength(4) // the tabs remain
+    expect(screen.queryByRole('button', { name: /connect|attach|revoke/i })).toBeNull()
+  })
+
+  it('no longer points at the Sources page under the card', () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard />)
+    expect(screen.queryByText(/Link an account once/)).toBeNull()
+  })
+
+  it('classifies known providers and falls back to Software for an unknown one', () => {
+    expect(ACCOUNT_DOMAINS).toEqual(['mechanical', 'electrical', 'simulation', 'software'])
+    expect(accountDomain({ id: 'onshape' })).toBe('mechanical')
+    expect(accountDomain({ id: 'fusion' })).toBe('mechanical')
+    expect(accountDomain({ id: 'kicad' })).toBe('electrical')
+    expect(accountDomain({ id: 'altium' })).toBe('electrical')
+    expect(accountDomain({ id: 'mujoco' })).toBe('simulation')
+    expect(accountDomain({ id: 'github' })).toBe('software')
+    expect(accountDomain({ id: 'gitlab' })).toBe('software')
+    expect(accountDomain({ id: 'brand-new-tool' })).toBe('software')
+    expect(emptyDomainText('simulation')).toMatch(/MuJoCo/)
+    expect(emptyDomainText('electrical')).toMatch(/No electrical tools/)
   })
 })
