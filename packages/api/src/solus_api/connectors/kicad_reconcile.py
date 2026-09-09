@@ -85,7 +85,14 @@ class _Finding:
     values: tuple[str, ...] = ()
     pin: str = ""
 
-    def render(self) -> str:
+    def warning(self) -> str:
+        """The finding as one `Netlist.warnings` line, values clipped.
+
+        Named `warning` rather than the obvious alternative because
+        `test_context.py` forbids that method name anywhere in production code
+        (it guards prompt assembly's `Context`), by text search — a blunt guard,
+        but one worth keeping strict rather than loosening for a name.
+        """
         return f"{MISMATCH_PREFIX}{self._subject()}: {self.detail.format(*map(_clip, self.values))}"
 
     def _subject(self) -> str:
@@ -251,13 +258,13 @@ def _membership_mismatch(
 def _bounded(findings: Iterable[_Finding]) -> list[str]:
     """Render the first `MAX_MISMATCH_WARNINGS` findings and COUNT the rest.
 
-    The overflow is never rendered — that is the point: an adversarial board
-    yields one cheap descriptor per finding, not one string (S8)."""
+    The overflow is never built — that is the point: an adversarial board yields
+    one cheap descriptor per finding, not one string (S8)."""
     kept: list[str] = []
     overflow = 0
     for finding in findings:
         if len(kept) < MAX_MISMATCH_WARNINGS:
-            kept.append(finding.render())
+            kept.append(finding.warning())
         else:
             overflow += 1
     if overflow:
