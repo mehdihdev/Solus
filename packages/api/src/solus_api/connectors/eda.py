@@ -314,23 +314,14 @@ class EdaExportConnector(Connector):
         return _content_sha(text) != ctx.cursor.get("content_sha")
 
     async def _read_export(self, ctx: SyncContext) -> str:
-        """Obtain the committed export content.
+        """Obtain the committed export content, or fail the sync.
 
-        Acquisition chain (docs/contracts/metadata-extraction.md §2.1): try the
-        injected `ExportAcquirer` first — success wins outright; decline
-        (`None`) or any raised exception logs a degradation and falls through
-        to the inline `ctx.config['export']` path, exactly as if no acquirer
-        were configured. Only when BOTH are exhausted (no acquirer/decline,
-        AND no inline export) does this raise `ConnectorError('export_unavailable')`.
-
-        The size bound applies to whichever text was ultimately selected —
-        acquired or inline — identically (§2.1 invariant 4: untrusted either
-        way). Only `ConnectorError` ever escapes this method, so
-        `detect_changes`'s narrow catch keeps its fail-safe behavior.
+        `_select_export` runs the acquisition chain; only when BOTH sources are
+        exhausted (no acquirer/decline, AND no inline export) does this raise
+        `ConnectorError('export_unavailable')`. Only `ConnectorError` ever
+        escapes, so `detect_changes`'s narrow catch keeps its fail-safe behavior.
         """
-        export = await self._acquire_export(ctx)
-        if export is None:
-            export = ctx.config.get(EXPORT_CONFIG_KEY)
+        export = await self._select_export(ctx)
         if export is None:
             raise ConnectorError(
                 "export_unavailable",
@@ -339,11 +330,32 @@ class EdaExportConnector(Connector):
                     f"declined/failed and config['{EXPORT_CONFIG_KEY}'] was not supplied."
                 ),
             )
-        if not isinstance(export, str):
-            raise ConnectorError("export_invalid", "export content must be text")
-        if _byte_len(export) > MAX_EXPORT_BYTES:
-            raise ConnectorError("export_too_large", "export exceeds the size limit")
         return export
+
+    async def _select_export(self, ctx: SyncContext) -> str | None:
+        """Run the acquisition chain; `None` means "no export anywhere".
+
+        Chain (docs/contracts/metadata-extraction.md §2.1): try the injected
+        `ExportAcquirer` first — success wins outright; decline (`None`) or any
+        raised exception logs a degradation and falls through to the inline
+        `ctx.config['export']` path, exactly as if no acquirer were configured.
+        The type and size bounds apply to whichever text was ultimately
+        selected — acquired or inline — identically (§2.1 invariant 4:
+        untrusted either way). Whether an absent export is fatal is the
+        caller's call: `_read_export` says yes; a subclass with a second design
+        input (KiCad's board, §5.2a) may not.
+        """
+        acquired = await self._acquire_export(ctx)
+        if acquired is None:
+            return self._inline_text(ctx, EXPORT_CONFIG_KEY)
+        return _validated_text(acquired, EXPORT_CONFIG_KEY)
+
+    def _inline_text(self, ctx: SyncContext, key: str) -> str | None:
+        """The inline text on `ctx.config[key]`, bounds-checked; `None` when absent."""
+        value = ctx.config.get(key)
+        if value is None:
+            return None
+        return _validated_text(value, key)
 
     async def _acquire_export(self, ctx: SyncContext) -> str | None:
         """Try the injected `ExportAcquirer`, if any. Returns `None` for "fall
@@ -371,6 +383,16 @@ class EdaExportConnector(Connector):
             EXPORT_CONFIG_KEY,
             reason,
         )
+
+
+def _validated_text(value: object, key: str) -> str:
+    """Enforce the family's input bounds on one design text (§7): text only,
+    at most `MAX_EXPORT_BYTES`. `key` names the input in the stable messages."""
+    if not isinstance(value, str):
+        raise ConnectorError("export_invalid", f"{key} content must be text")
+    if _byte_len(value) > MAX_EXPORT_BYTES:
+        raise ConnectorError("export_too_large", f"{key} exceeds the size limit")
+    return value
 
 
 def _byte_len(text: str) -> int:

@@ -3,6 +3,11 @@ bridge-offline/declining and raising acquirers both degrade to the committed
 inline export with a logged degradation (docs/contracts/metadata-extraction.md
 §2.1 invariant 3), and an oversize acquired export fails the sync outright
 rather than silently falling back (invariant 4 — untrusted either way).
+
+SOLUSDEV-252 adds the board input (§5.2a): the acquisition chain selects the
+NETLIST only — an acquired netlist still wins over the inline `export` and is
+reconciled with an inline `board`, and a declining acquirer with a board-only
+source still syncs from the board.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import logging
 
 import pytest
 from fixtures.kicad_project import SOLUS_SAMPLE_NETLIST
+from fixtures.kicad_sample import KICAD_PCB, KICAD_XML
 from solus_api.connectors.contracts import ConnectorError, Credentials, SyncContext
 from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.kicad import KicadConnector
@@ -85,3 +91,57 @@ async def test_oversize_acquired_export_fails_the_sync_outright() -> None:
             SyncContext(credentials=Credentials(token=""), config={"export": NETLIST_TEXT})
         )
     assert exc_info.value.code == "export_too_large"
+
+
+# ------------------------------------------------- SOLUSDEV-252: board input
+
+
+class _FixedAcquirer:
+    """A successful live acquisition of a fixed netlist text."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def acquire(self, ctx: SyncContext) -> str | None:
+        return self._text
+
+
+async def test_acquired_netlist_wins_over_inline_export_and_merges_with_the_board() -> None:
+    # The acquirer's netlist (the hand fixture) is authoritative; the inline
+    # `export` (a DIFFERENT design) is never read; the inline board is reconciled.
+    result = await KicadConnector(acquirer=_FixedAcquirer(KICAD_XML)).sync(
+        SyncContext(
+            credentials=Credentials(token=""),
+            config={"export": NETLIST_TEXT, "board": KICAD_PCB},
+        )
+    )
+    components = {e.source_key: e for e in result.entities if e.type == "component"}
+    assert set(components) == {"U1", "R1", "C1"}  # the acquired design, not solus_sample
+    assert components["U1"].modality_hints["part_number"] == "LM358DR"
+    assert components["C1"].properties["layer"] == "B.Cu"  # board corroboration landed
+    assert any(
+        e.message == "board/netlist mismatch: H1: placed on board but not in netlist"
+        for e in result.errors
+    )
+
+
+async def test_declining_acquirer_with_board_only_source_syncs_from_the_board(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=_EDA_LOGGER):
+        result = await KicadConnector(acquirer=_DecliningAcquirer()).sync(
+            SyncContext(credentials=Credentials(token=""), config={"board": KICAD_PCB})
+        )
+
+    components = {e.source_key for e in result.entities if e.type == "component"}
+    assert components == {"U1", "R1", "C1", "H1", "FID1"}
+    assert any("falling back to inline export" in r.getMessage() for r in caplog.records)
+
+
+async def test_declining_acquirer_with_no_inputs_names_both_keys() -> None:
+    with pytest.raises(ConnectorError) as exc_info:
+        await KicadConnector(acquirer=_DecliningAcquirer()).sync(
+            SyncContext(credentials=Credentials(token=""), config={})
+        )
+    assert exc_info.value.code == "export_unavailable"
+    assert "config['board']" in exc_info.value.message

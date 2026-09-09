@@ -259,3 +259,35 @@ async def test_non_text_export_is_refused() -> None:
 
 async def test_fake_eda_passes_the_conformance_suite() -> None:
     await assert_connector_contract(_FakeEda(), _ctx())
+
+
+# ----------------------------------------------- input selection (SOLUSDEV-252)
+
+
+async def test_select_export_returns_none_without_raising_when_nothing_is_supplied() -> None:
+    # The seam a two-input subclass (KiCad: netlist + board) builds on: selection
+    # reports "nothing here" and leaves the "is that fatal?" decision to the caller.
+    assert await _FakeEda()._select_export(_ctx(config={})) is None
+
+
+async def test_select_export_prefers_the_acquirer_then_inline() -> None:
+    class _Acquirer:
+        async def acquire(self, ctx: SyncContext) -> str | None:
+            return "U9 ACQ"
+
+    assert await _FakeEda(acquirer=_Acquirer())._select_export(_ctx()) == "U9 ACQ"
+    assert await _FakeEda()._select_export(_ctx()) == "U1 SOIC8\nR1 0603"
+
+
+def test_inline_text_validates_the_named_key() -> None:
+    connector = _FakeEda()
+    assert connector._inline_text(_ctx(config={}), "board") is None
+    assert connector._inline_text(_ctx(config={"board": "(kicad_pcb)"}), "board") == "(kicad_pcb)"
+    with pytest.raises(ConnectorError) as invalid:
+        connector._inline_text(
+            SyncContext(credentials=Credentials(token="x"), config={"board": 7}), "board"
+        )
+    assert invalid.value.code == "export_invalid"
+    with pytest.raises(ConnectorError) as too_large:
+        connector._inline_text(_ctx(config={"board": "b" * (MAX_EXPORT_BYTES + 1)}), "board")
+    assert too_large.value.code == "export_too_large"

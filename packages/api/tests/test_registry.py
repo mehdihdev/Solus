@@ -95,10 +95,12 @@ def test_build_registry_ships_the_roster() -> None:
     for eda_provider in ("altium", "kicad"):
         assert catalog[eda_provider]["auth_kind"] == "none"
     # Altium additionally advertises the live-acquisition project_path key
-    # (SOLUSDEV-102 ALT-8; mcp_acquire.py's config-key decision). KiCad's
-    # matching update belongs to whoever owns connectors/kicad.py.
+    # (SOLUSDEV-102 ALT-8; mcp_acquire.py's config-key decision). KiCad
+    # advertises its two design inputs — the netlist export (XML or
+    # S-expression) and the .kicad_pcb board (SOLUSDEV-252, §5.2/§5.2a);
+    # its project_path key is still owed by a later ticket.
     assert catalog["altium"]["config_fields"] == ["export", "project_path"]
-    assert catalog["kicad"]["config_fields"] == ["export"]
+    assert catalog["kicad"]["config_fields"] == ["export", "board"]
     # Onshape (SOLUSDEV-96 / CAD-01) is the thin-API mechanical CAD connector:
     # OAuth ONLY — an API key pair would reach only the DEVELOPER's documents.
     assert isinstance(registry.create("onshape"), OnshapeConnector)
