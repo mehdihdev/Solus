@@ -44,12 +44,21 @@ zero-pin nets — verified 2026-09-08); `.kicad_pro` is settings. Both raise
 expected="netlist"|"board")` owns the five message strings — reuse it, do not re-word.
 
 **Owned S-expression reader (`kicad_sexpr.py`).** Iterative (explicit stack, never
-recursion); `MAX_SEXPR_DEPTH=64`, `MAX_SEXPR_NODES=2_000_000` materialized nodes (the 8 MiB
-export cap bounds bytes, not node count); a `prune(head, depth)` predicate skips whole
-sublists by paren-balanced scan WITHOUT allocating — this is how the board parser ignores
-segments/vias/zones and the netlist parser skips `design`/`libparts`/`libraries`. Strings
-decode `\"`, `\\`, `\n`, `\t`, `\r`; unknown escapes are preserved literally. Not the fork's
-`solus/write/sexpr.py` (that one carries byte offsets for splicing) and not
+recursion); `MAX_SEXPR_DEPTH=64` and `MAX_SEXPR_NODES=1_000_000` materialized nodes — the
+8 MiB export cap bounds BYTES, not node count, and the node figure is calibrated by
+MEASUREMENT, not taste: a dense legitimate 8 MiB netlist is ~677k nodes / 33 MB, adversarial
+tiny atoms trip the guard at ~49 MB (SOLUSDEV-252 Phase 4). Re-measure before changing it.
+A `prune(head, depth)` predicate skips whole sublists by paren-balanced scan WITHOUT
+allocating — the board parser ignores segments/vias/zones, the netlist parser skips
+`design`/`libparts`/`libraries` plus every unread head (`units`, `sheetpath`, `tstamps`,
+`description`, `pinfunction`, `pintype`) at any depth. **`prune` must see the same heads
+`children()` matches** — both compare DECODED strings, so a quoted head faces the predicate
+too; consulting only bare atoms let `("design" …)` materialize unpruned. C0 control
+characters (`\x00-\x08\x0b\x0c\x0e-\x1f`) are refused before tokenizing: Postgres rejects NUL
+later, where it surfaces as an opaque sync failure AND logs the statement's bound parameters.
+A BOM is stripped before the reader, matching what `detect_kicad_format` already ignores.
+Strings decode `\"`, `\\`, `\n`, `\t`, `\r`; unknown escapes are preserved literally. Not the
+fork's `solus/write/sexpr.py` (that one carries byte offsets for splicing) and not
 `sexpdata`/`kinparse` (no bounds, extra dependency).
 
 **Real-export quirk (measured, KiCad 10.0.1 vs 9.0.4):** KiCad 10 prefixes LOCAL-label net
@@ -113,7 +122,10 @@ The netlist is authoritative for identity AND connectivity; the board corroborat
 `layer`). Disagreement is reported, never merged: refdes on one side only, differing
 value/footprint, pad-net membership absent or different in the netlist — each a warning
 prefixed `board/netlist mismatch: ` that `build_graph` surfaces as a `SyncError`, capped at
-200 with a trailing count. Board-only sources use the board as the connectivity source. The
+200 with a trailing count. Every ingested value is clipped (`VALUE_LIMIT`) BEFORE it enters a
+message, and findings are lazy descriptors so only the kept 200 are ever rendered: a count cap
+bounds how MANY errors persist, never how BIG each one is (`ErrorRecorder` adds a 512-char
+message clip and a 64 KiB aggregate budget for exactly that reason). Board-only sources use the board as the connectivity source. The
 change-detection hash covers both texts.
 
 ---
