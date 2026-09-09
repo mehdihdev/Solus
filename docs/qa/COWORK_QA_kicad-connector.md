@@ -9,9 +9,15 @@
 > path is phase 2's fallback and must pass on its own), then the MCP plan. The flows
 > below are unchanged by phase 2.
 
+> **SOLUSDEV-252 (2026-09-08) supersedes the XML-only wording below.** The connector now
+> accepts BOTH KiCad netlist formats (XML and the default S-expression `.net`) and a
+> `.kicad_pcb` board file, and refuses `.kicad_sch`/`.kicad_pro` with guidance. Flow 5,
+> Flow 8 step 2–3, Flow 9 step 1 and the limitations list are updated here; the full new
+> flows live in [`COWORK_QA_kicad-natural-ingestion.md`](COWORK_QA_kicad-natural-ingestion.md).
+
 End-to-end test plan for the KiCad connector — the electrical PRIMARY (W0-08
-§5.2). v1 **parses a committed KiCad XML netlist** (`kicad-cli sch export
-netlist --format kicadxml`) into the shared electrical graph shape — components
+§5.2). v1 **parses a committed KiCad netlist** (XML `kicad-cli sch export
+netlist --format kicadxml`, or the default S-expression export) into the shared electrical graph shape — components
 
 - first-class nets + `connected_to` relations — via the EDA family base. Unlike
   Altium, KiCad carries the fingerprint identity channels: `part_number` (MPN
@@ -87,11 +93,13 @@ Run: `cd packages/api && uv run pytest tests/test_kicad_netlist.py tests/test_ki
 - [ ] `sync` with no `config["export"]` → `ConnectorError("export_unavailable")`
       with a clear "live acquisition not yet implemented" message.
 
-## Flow 5 — XML-only v1 (design review Q2)
+## Flow 5 — Both netlist formats accepted; design files refused with guidance (SOLUSDEV-252)
 
-- [ ] An S-expression netlist (`(export (version "E") …)`) fails with
-      `ConnectorError("export_format_unsupported")` whose message names the fix:
-      re-export with `kicad-cli sch export netlist --format kicadxml`.
+- [ ] An S-expression netlist (`(export (version "E") …)`) parses to the SAME graph as its
+      XML twin (`uv run pytest packages/api/tests/test_kicad_netlist_sexpr.py -q`).
+- [ ] A `.kicad_sch` supplied as the export fails with
+      `ConnectorError("export_format_unsupported")` whose message names BOTH routes: export a
+      netlist (any format) or provide the `.kicad_pcb`.
 
 ## Flow 6 — Registry / catalog
 
@@ -128,8 +136,9 @@ In the desktop app, onboarding step "Connect your tools":
 
 1. - [ ] The tile grid shows GitHub, KiCad, Onshape, ROS 2 **and Altium** (the
          catalog is live from `GET /integrations`; Altium was invisible before).
-2. - [ ] Click **KiCad** → an OS file picker opens (accepts `.xml`/`.net`).
-3. - [ ] Pick the KiCad XML netlist → the tile shows live progress
+2. - [ ] Click **KiCad** → an OS file picker opens (accepts `.xml`/`.net`/`.kicad_pcb`,
+         multi-select; button reads "Choose netlist / board file").
+3. - [ ] Pick the KiCad XML netlist (or the S-expression `.net`) → the tile shows live progress
          ("Reading power-board.xml…", "Parsing netlist & building the graph…")
          and lands on "Connected — N entities indexed" with the real count
          (fixture: 6 = 3 components + 3 nets).
@@ -140,8 +149,10 @@ In the desktop app, onboarding step "Connect your tools":
 
 ## Flow 9 — UI failure paths
 
-1. - [ ] Pick an **S-expression `.net`** file → the tile shows the error state
-         with the re-export guidance message (not a spinner hang, not a crash).
+1. - [ ] Pick a **`.kicad_sch`** file → the tile shows the error state IMMEDIATELY (no
+         source created, no sync) with the guidance "Solus can't read a .kicad_sch schematic
+         directly yet. Export a netlist from KiCad (File → Export → Netlist, any format) or
+         add your .kicad_pcb board file." (not a spinner hang, not a crash).
 2. - [ ] Pick an **empty file** → immediate "The selected file is empty."
          without any API call.
 3. - [ ] Pick a **file > 8 MB** → immediate "too large" error without upload.
@@ -163,8 +174,9 @@ In the desktop app, onboarding step "Connect your tools":
 
 ## v1 limitations to confirm are documented (not bugs)
 
-- [ ] XML netlist only; the S-expr `.net` is a documented rejection with
-      guidance (kinparse support is a later extension).
+- [ ] Raw `.kicad_sch`/`.kicad_pro` are a documented rejection with guidance (no
+      pin-level connectivity without KiCad's netlister); both netlist formats and the
+      `.kicad_pcb` are accepted (SOLUSDEV-252).
 - [ ] Live repo acquisition (committed file at a ref) is the family's
       scaffolded post-launch stub — the UI supplies the file content directly.
 - [ ] MPN recognition is an alias list (`MPN`, `Manufacturer_Part_Number`,

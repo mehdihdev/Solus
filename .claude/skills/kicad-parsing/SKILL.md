@@ -1,6 +1,6 @@
 ---
 name: kicad-parsing
-description: Use this skill when parsing KiCad netlists (kicadxml), reading or splicing .kicad_sch S-expression files, invoking kicad-cli, or working with the committed KiCad sample fixtures. Captures the SOLUSDEV-100 domain knowledge — field encodings, DTD refusal, byte-offset splicing, headless degradation — so it is not re-derived (or gotten wrong) per ticket.
+description: Use this skill when parsing KiCad netlists (kicadxml OR the default S-expression .net), .kicad_pcb board files, reading or splicing .kicad_sch S-expression files, invoking kicad-cli, or working with the committed KiCad sample fixtures. Captures the SOLUSDEV-100/252 domain knowledge — field encodings, content sniffing, refusal guidance, netlist/board reconciliation, DTD refusal, byte-offset splicing, headless degradation — so it is not re-derived (or gotten wrong) per ticket.
 origin: Solus (SOLUSDEV-100)
 ---
 
@@ -20,17 +20,42 @@ that way.
 
 ---
 
-## 1. KiCad XML netlist parsing (`kicadxml`)
+## 1. KiCad netlist parsing (`kicadxml` AND the default S-expression `.net`)
 
-Reference: `packages/api/src/solus_api/connectors/kicad_netlist.py` (governing contract:
-`docs/contracts/metadata-extraction.md` §5.2).
+Reference: `packages/api/src/solus_api/connectors/kicad_netlist.py` — the content-sniffing
+dispatcher — plus `kicad_netlist_sexpr.py` (S-expression mapping), `kicad_sexpr.py` (owned
+reader), `kicad_formats.py` (detection + refusal guidance). Governing contract:
+`docs/contracts/metadata-extraction.md` §5.2, §5.2a, §6.3.
 
-**Target format.** The v1 parse target is the **XML netlist**
-(`kicad-cli sch export netlist --format kicadxml`) — the documented intermediate all other
-netlist formats derive from, schema-stable v5–v10, stdlib-parseable. The default S-expr
-`.net` is NOT parsed: refuse it with `ConnectorError("export_format_unsupported")` and a
-message naming the re-export command (detect it cheaply: stripped text starts with
-`(export`).
+**Target formats (SOLUSDEV-252).** BOTH KiCad netlist formats are first-class equals:
+the **XML netlist** (`kicad-cli sch export netlist --format kicadxml`, stdlib `xml.etree`)
+and the **default S-expression `.net`** (`--format kicadsexpr`, what the Export Netlist
+dialog and `kicad-cli` emit unless told otherwise) via the owned reader. Same schema in both
+(`components/comp/ref|value|footprint|datasheet|fields/field|property|libsource`,
+`nets/net/code|name|class|node`), so the two mappings are mirrored LINE FOR LINE and a parity
+test pins `parse(XML) == parse(S-expr)` on the same design. **Detect by content, never by
+extension** (`detect_kicad_format`: `(export` / `(kicad_pcb` / `(kicad_sch` / `<` / `{`).
+
+**Refuse design files with guidance, never half-parse them.** A `.kicad_sch` has no pin-level
+connectivity without geometric wire tracing (the fork's KiCad-free parse yields components and
+zero-pin nets — verified 2026-09-08); `.kicad_pro` is settings. Both raise
+`ConnectorError("export_format_unsupported")` whose message names the two accepted routes
+(export a netlist in any format, or provide the `.kicad_pcb`). `refuse_unsupported(fmt,
+expected="netlist"|"board")` owns the five message strings — reuse it, do not re-word.
+
+**Owned S-expression reader (`kicad_sexpr.py`).** Iterative (explicit stack, never
+recursion); `MAX_SEXPR_DEPTH=64`, `MAX_SEXPR_NODES=2_000_000` materialized nodes (the 8 MiB
+export cap bounds bytes, not node count); a `prune(head, depth)` predicate skips whole
+sublists by paren-balanced scan WITHOUT allocating — this is how the board parser ignores
+segments/vias/zones and the netlist parser skips `design`/`libparts`/`libraries`. Strings
+decode `\"`, `\\`, `\n`, `\t`, `\r`; unknown escapes are preserved literally. Not the fork's
+`solus/write/sexpr.py` (that one carries byte offsets for splicing) and not
+`sexpdata`/`kinparse` (no bounds, extra dependency).
+
+**Real-export quirk (measured, KiCad 10.0.1 vs 9.0.4):** KiCad 10 prefixes LOCAL-label net
+names with the sheet path (`/SDA`) where 9 wrote `SDA`; power nets (`+3V3`, `GND`) and
+`unconnected-…` names are identical. Normalize ONE leading `/` before comparing net names
+across producers (the netlist/board reconciler does this); never rename nets in the graph.
 
 **The two custom-field encodings (both are live in the wild):**
 
@@ -59,8 +84,8 @@ raise `ConnectorError("export_invalid")`. Do not try to "safely parse around" it
 children at their documented spots. Never a whole-subtree walk (`.iter()`/`.findall(".//")`):
 adversarial content nested elsewhere in an untrusted export must have nowhere to land.
 
-**Lenient WITHIN valid XML.** Structural unusability (malformed XML, wrong root, DTD,
-S-expr) raises; a component without `ref`, a net without `name`, a node missing `ref`/`pin`
+**Lenient WITHIN valid input.** Structural unusability (malformed XML/S-expression, wrong root,
+DTD, a design file) raises; a component without `ref`, a net without `name`, a node missing `ref`/`pin`
 is SKIPPED and counted onto `Netlist.warnings` so one bad element never fails a sync and
 partial parses stay visible.
 
@@ -68,6 +93,28 @@ partial parses stay visible.
 refdes; nets → first-class `net:<NAME>` entities (never O(n²) pairwise edges);
 connectivity → `connected_to` edges carrying the pins in `properties.pins`. Identity is
 content-derived only (§2.1 invariant 2) — never from temp paths, artifact ids, or call ids.
+
+### 1a. `.kicad_pcb` board file (contract §5.2a)
+
+Reference: `packages/api/src/solus_api/connectors/kicad_pcb.py`; arrives on config key
+`board` (the netlist stays on `export`). Prune everything at depth 1 except `net` and
+`footprint`; inside a footprint keep only `layer`, `property`, `fp_text`, `pad`; inside a pad
+only `net`. Header `(net <code> "<name>")` maps code→name; code 0 / `""` = unconnected.
+Footprint → component: refdes from `(property "Reference" …)` (KiCad 8+) or
+`(fp_text reference …)` (≤7; property wins); `REF**`/empty → skipped + warning; footprint =
+`Footprint` property else the lib id; MPN popped by alias; `ki_*` properties dropped;
+`layer`/`description` kept as properties. **No `schematic_symbol_name`** — a board has no
+libsource; leave the hint absent. Pads → `Node(ref, pad_number)` on the pad's own net name;
+NPTH pads (`""` number) contribute no node. Emit only nets with ≥1 node.
+
+### 1b. Netlist + board in one source (`kicad_reconcile.py`)
+
+The netlist is authoritative for identity AND connectivity; the board corroborates (adds
+`layer`). Disagreement is reported, never merged: refdes on one side only, differing
+value/footprint, pad-net membership absent or different in the netlist — each a warning
+prefixed `board/netlist mismatch: ` that `build_graph` surfaces as a `SyncError`, capped at
+200 with a trailing count. Board-only sources use the board as the connectivity source. The
+change-detection hash covers both texts.
 
 ---
 

@@ -6,14 +6,14 @@ Bugfix QA plan. The Sources page previously **white-screened the entire desktop 
 
 - [ ] Full stack running: `pnpm dev:all` (Postgres in Docker, API on `127.0.0.1:8000`, Electron desktop app) with real Supabase auth configured (`apps/desktop/.env` has `VITE_SUPABASE_*`).
 - [ ] A signed-in account that owns a team and at least one project.
-- [ ] The open project has **at least one source in `error` status with a non-null `last_error`**. Easiest real path: connect a KiCad source by picking an S-expression netlist export (a `.net` file exported without `--format kicadxml`) — the v1 connector rejects it and records `{code: "export_format_unsupported", message: "kicad: the S-expression netlist is not supported in v1; …"}`.
+- [ ] The open project has **at least one source in `error` status with a non-null `last_error`**. Easiest real path (post-SOLUSDEV-252 — the S-expression `.net` is now accepted and the app blocks `.kicad_sch` picks client-side): `POST /api/v1/projects/{id}/sources` with `{"type":"kicad","name":"Arduino_hat","config":{"export":"(kicad_sch (version 20250114))"}}` then trigger a sync — the connector rejects it and records `{code: "export_format_unsupported", message: "kicad: a .kicad_sch schematic can't be read directly yet …"}`.
 - [ ] Also have one healthy source (e.g. a connected GitHub repo) to verify mixed lists.
 
 ## Flow 1 — Sources page renders with an error'd source (the regression)
 
 1. Sign in, open the project (Home → project card). **Expected:** project hub Overview loads.
 2. Click **Sources** in the left icon rail. **Expected:** the Sources page renders — no white screen, no blank app, no dev-tools console error `Objects are not valid as a React child`.
-3. Find the error'd source row (e.g. `Arduino_hat`). **Expected:** red status dot, status text `ERROR`, and the human-readable error **message** in red under the source name (e.g. "kicad: the S-expression netlist is not supported in v1; re-export as XML with `kicad-cli sch export netlist --format kicadxml`."). It must be the message text, **not** `[object Object]` and not JSON like `{"code": …}`.
+3. Find the error'd source row (e.g. `Arduino_hat`). **Expected:** red status dot, status text `ERROR`, and the human-readable error **message** in red under the source name (e.g. "kicad: a .kicad_sch schematic can't be read directly yet (no pin-level connectivity without KiCad's own netlister). Export a netlist from KiCad … or provide the .kicad_pcb board file."). It must be the message text, **not** `[object Object]` and not JSON like `{"code": …}`.
 4. Verify the healthy source row still shows its type, "Synced … ago" time, and entity count.
 5. Navigate away (Overview, Context Model) and back to Sources. **Expected:** stable every time.
 
