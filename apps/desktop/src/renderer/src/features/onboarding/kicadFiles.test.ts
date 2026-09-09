@@ -10,11 +10,15 @@ import {
   classifyKicadFile,
   exportFileAccept,
   exportFilePrompt,
+  KICAD_TOO_MANY_FILES_ERROR,
+  maxPickedFiles,
   MULTIPLE_BOARDS_ERROR,
   MULTIPLE_NETLISTS_ERROR,
   NO_FILES_ERROR,
   PROJECT_UNSUPPORTED_ERROR,
   SCHEMATIC_UNSUPPORTED_ERROR,
+  TOO_MANY_FILES_ERROR,
+  tooManyFilesError,
   UNRECOGNIZED_FILE_ERROR,
   type EdaExportFile
 } from './kicadFiles'
@@ -77,6 +81,21 @@ describe('classifyKicadFile', () => {
     expect(classifyKicadFile(JUNK.content)).toBe('unknown')
     expect(classifyKicadFile('')).toBe('unknown')
     expect(classifyKicadFile('(footprint "x")')).toBe('unknown')
+  })
+
+  it('matches the head atom on a boundary, exactly as the API sniffer does', () => {
+    // Backend: `\(\s*([A-Za-z_]+)` then an exact root lookup — a longer atom is
+    // NOT a prefix match, whitespace after `(` is fine, a digit ends the atom.
+    expect(classifyKicadFile('(exportfoo (version "E"))')).toBe('unknown')
+    expect(classifyKicadFile('(kicad_pcbx (version 1))')).toBe('unknown')
+    expect(classifyKicadFile('(kicad_schema)')).toBe('unknown')
+    expect(classifyKicadFile('( export (version "E"))')).toBe('sexpr-netlist')
+    expect(classifyKicadFile('(\n\tkicad_pcb (version 1))')).toBe('board')
+    expect(classifyKicadFile('(export1)')).toBe('sexpr-netlist')
+    expect(classifyKicadFile('(export(version "E"))')).toBe('sexpr-netlist')
+    expect(classifyKicadFile('(')).toBe('unknown')
+    expect(classifyKicadFile('(123)')).toBe('unknown')
+    expect(classifyKicadFile('("export")')).toBe('unknown')
   })
 })
 
@@ -198,6 +217,21 @@ describe('file-input shape per provider', () => {
   it('other export providers keep the single netlist pick', () => {
     expect(exportFileAccept('altium')).toBe('.xml,.net')
     expect(allowsMultipleFiles('altium')).toBe(false)
+  })
+
+  it('bounds the pick to one netlist + one board for kicad, one file otherwise', () => {
+    expect(maxPickedFiles('kicad')).toBe(2)
+    expect(maxPickedFiles('altium')).toBe(1)
+    expect(maxPickedFiles('eagle')).toBe(1)
+  })
+
+  it('explains an over-count pick per provider', () => {
+    expect(tooManyFilesError('kicad')).toBe(KICAD_TOO_MANY_FILES_ERROR)
+    expect(KICAD_TOO_MANY_FILES_ERROR).toBe(
+      'Choose at most one netlist export and one .kicad_pcb board file.'
+    )
+    expect(tooManyFilesError('altium')).toBe(TOO_MANY_FILES_ERROR)
+    expect(TOO_MANY_FILES_ERROR).toBe('Choose one export file.')
   })
 
   it('kicad gets the netlist / board prompt with a hint; others keep the export prompt', () => {

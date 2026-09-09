@@ -9,10 +9,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useConnectWizard, NOT_LINKED_ERROR } from './useConnectWizard'
-import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
 import {
-  MULTIPLE_NETLISTS_ERROR,
+  EMPTY_EXPORT_ERROR,
+  FILE_READ_ERROR,
+  MAX_EXPORT_BYTES,
+  OVERSIZE_EXPORT_ERROR
+} from './edaConnect'
+import {
+  KICAD_TOO_MANY_FILES_ERROR,
   NO_FILES_ERROR,
+  TOO_MANY_FILES_ERROR,
   SCHEMATIC_UNSUPPORTED_ERROR,
   UNRECOGNIZED_FILE_ERROR
 } from './kicadFiles'
@@ -296,17 +302,100 @@ describe('useConnectWizard', () => {
     })
   })
 
-  it('a single-file provider refuses two files before starting a flow', async () => {
+  it('a single-file provider refuses two files BEFORE reading either (S5)', async () => {
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
     act(() => result.current.open(ALTIUM))
-    await act(async () =>
-      result.current.pickFiles([new File(['a'], 'a.net'), new File(['b'], 'b.net')])
-    )
+    const files = [new File(['a'], 'a.net'), new File(['b'], 'b.net')]
+    const reads = files.map((file) => vi.spyOn(file, 'text'))
+    await act(async () => result.current.pickFiles(files))
+    reads.forEach((read) => expect(read).not.toHaveBeenCalled())
     expect(mockedEda).not.toHaveBeenCalled()
     expect(useOnboardingStore.getState().connections.altium).toEqual({
       phase: 'error',
-      error: MULTIPLE_NETLISTS_ERROR
+      error: TOO_MANY_FILES_ERROR
     })
+  })
+
+  it('kicad refuses a third file BEFORE reading any — a folder pick never lands in memory (S5)', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    const files = [
+      new File(['<x/>'], 'a.xml'),
+      new File([BOARD_TEXT], 'a.kicad_pcb'),
+      new File(['(export)'], 'b.net')
+    ]
+    const reads = files.map((file) => vi.spyOn(file, 'text'))
+    await act(async () => result.current.pickFiles(files))
+    reads.forEach((read) => expect(read).not.toHaveBeenCalled())
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toEqual({
+      phase: 'error',
+      error: KICAD_TOO_MANY_FILES_ERROR
+    })
+  })
+
+  it('kicad still accepts exactly two files after the count bound', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    await act(async () =>
+      result.current.pickFiles([new File(['<x/>'], 'a.xml'), new File([BOARD_TEXT], 'a.kicad_pcb')])
+    )
+    expect(mockedEda).toHaveBeenCalledTimes(1)
+  })
+
+  it('pickFiles without a project fails honestly even when guard() lets it through (T2)', async () => {
+    // `account` scope skips the project check in guard(); pickFiles must still
+    // never reach the engine with a null projectId.
+    const { result } = renderHook(() => useConnectWizard({ projectId: null, scope: 'account' }))
+    act(() => result.current.open(KICAD))
+    const file = new File(['<x/>'], 'a.xml')
+    const read = vi.spyOn(file, 'text')
+    await act(async () => result.current.pickFiles([file]))
+    expect(read).not.toHaveBeenCalled()
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toEqual({
+      phase: 'error',
+      error: NOT_LINKED_ERROR
+    })
+  })
+
+  it('a failed file read fails the tile with friendly copy and settles the attempt (T1)', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    const file = new File(['<x/>'], 'a.xml')
+    vi.spyOn(file, 'text').mockRejectedValue(new Error('EACCES: permission denied'))
+    // Resolves (never rejects): a `void wizard.pickFiles()` caller must not
+    // surface an unhandled rejection.
+    await act(async () => expect(result.current.pickFiles([file])).resolves.toBeUndefined())
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toEqual({
+      phase: 'error',
+      error: FILE_READ_ERROR
+    })
+    expect(FILE_READ_ERROR).not.toMatch(/EACCES/)
+    // Settled: closing keeps the error retryable instead of cancelling.
+    act(() => result.current.close())
+    expect(useOnboardingStore.getState().connections.kicad).toEqual({
+      phase: 'error',
+      error: FILE_READ_ERROR
+    })
+  })
+
+  it('a failed read on an attempt the user already cancelled stays quiet (T1)', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(KICAD))
+    const file = new File(['<x/>'], 'a.xml')
+    let failRead: (reason: Error) => void = () => undefined
+    vi.spyOn(file, 'text').mockImplementation(() => new Promise((_, reject) => (failRead = reject)))
+
+    act(() => {
+      void result.current.pickFiles([file])
+    })
+    act(() => result.current.close())
+    await act(async () => failRead(new Error('gone')))
+
+    expect(mockedEda).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.kicad).toBeUndefined()
   })
 
   it('rejects an empty pick without reading it and without starting a flow', async () => {

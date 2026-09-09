@@ -43,6 +43,9 @@ export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 
 export const EMPTY_EXPORT_ERROR = 'The selected file is empty.'
 export const OVERSIZE_EXPORT_ERROR = 'The selected file is too large (limit 8 MB).'
+/** A `file.text()` rejection (permissions, file moved, media gone). The raw
+ * error never reaches the UI. */
+export const FILE_READ_ERROR = 'Could not read the selected file. Try choosing it again.'
 
 function busy(label: string, sourceId?: string): ConnectionState {
   // Everything after the file pick is indexing work from the wizard's view.

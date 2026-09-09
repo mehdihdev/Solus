@@ -40,10 +40,25 @@ export const UNRECOGNIZED_FILE_ERROR =
   "That doesn't look like a KiCad netlist or board file. Choose a netlist export " +
   '(.xml or .net) or a .kicad_pcb.'
 export const NO_FILES_ERROR = 'Choose a netlist export or a .kicad_pcb board file.'
+export const KICAD_TOO_MANY_FILES_ERROR =
+  'Choose at most one netlist export and one .kicad_pcb board file.'
+export const TOO_MANY_FILES_ERROR = 'Choose one export file.'
 
 const KICAD_PROVIDER = 'kicad'
 const NETLIST_ACCEPT = '.xml,.net'
 const KICAD_ACCEPT = '.xml,.net,.kicad_pcb'
+/** One netlist + one board at most; every other provider takes one file. */
+const KICAD_MAX_FILES = 2
+const DEFAULT_MAX_FILES = 1
+/** Mirrors the API sniffer (kicad_formats._HEAD_ATOM): the root atom is
+ * matched on a boundary and compared EXACTLY, so `(exportfoo` is unknown to
+ * both sides and `( export` is a netlist to both. */
+const HEAD_ATOM = /^\(\s*([A-Za-z_]+)/
+const SEXPR_ROOTS: Readonly<Record<string, KicadFileKind>> = {
+  export: 'sexpr-netlist',
+  kicad_pcb: 'board',
+  kicad_sch: 'schematic'
+}
 /** How far into a JSON file the project marker is looked for. */
 const PROJECT_SNIFF_CHARS = 4096
 const PROJECT_MARKERS = ['"kicad_pro"', '"meta"'] as const
@@ -51,9 +66,10 @@ const PROJECT_MARKERS = ['"kicad_pro"', '"meta"'] as const
 /** Sniff a file's kind from its leading bytes (BOM and whitespace ignored). */
 export function classifyKicadFile(content: string): KicadFileKind {
   const head = content.replace(/^\uFEFF/, '').trimStart()
-  if (head.startsWith('(export')) return 'sexpr-netlist'
-  if (head.startsWith('(kicad_pcb')) return 'board'
-  if (head.startsWith('(kicad_sch')) return 'schematic'
+  if (head.startsWith('(')) {
+    const atom = HEAD_ATOM.exec(head)?.[1]
+    return (atom && SEXPR_ROOTS[atom]) || 'unknown'
+  }
   if (head.startsWith('<')) return 'xml-netlist'
   if (head.startsWith('{')) {
     const window = head.slice(0, PROJECT_SNIFF_CHARS)
@@ -111,6 +127,17 @@ export function exportFileAccept(providerId: string): string {
 /** Whether the provider's file step takes several files in one pick. */
 export function allowsMultipleFiles(providerId: string): boolean {
   return providerId === KICAD_PROVIDER
+}
+
+/** The most files one pick may hold — checked BEFORE any file is read, so a
+ * folder-sized selection never lands in renderer memory. */
+export function maxPickedFiles(providerId: string): number {
+  return providerId === KICAD_PROVIDER ? KICAD_MAX_FILES : DEFAULT_MAX_FILES
+}
+
+/** The refusal for a pick over `maxPickedFiles`. */
+export function tooManyFilesError(providerId: string): string {
+  return providerId === KICAD_PROVIDER ? KICAD_TOO_MANY_FILES_ERROR : TOO_MANY_FILES_ERROR
 }
 
 export interface ExportFilePrompt {
