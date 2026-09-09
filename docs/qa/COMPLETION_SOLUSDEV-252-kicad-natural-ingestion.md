@@ -72,20 +72,80 @@ DECISIONS.md (ADR-021, ADR-030, ADR-031, ADR-032); `docs/contracts/metadata-extr
 | Connector                                | `test_kicad_connector.py` (17), `test_kicad_acquisition_fallback.py`, `test_eda.py`, `test_registry.py`        |
 | HTTP end-to-end                          | `test_kicad_ingest_e2e.py` — cross-format invariant through the real route; board-only                         |
 | Desktop                                  | 5 onboarding test files (94 tests) + 2 call-site tests; vitest related run: 308 passed                         |
+| Phase 4 hardening (backend)              | control characters, BOM round-trip, quoted-head pruning, node-cap memory ceiling, dense-8-MiB acceptance, message/byte budgets, bounded labels, lazy findings, separate-then-combined cursor, shared builders |
+| Phase 4 hardening (API boundary)         | `test_sources.py` — neither bulk key echoed on list/detail/PATCH, cross-team 404s, over-cap `board` refused at POST and PATCH, at-cap accepted |
+| Phase 4 hardening (desktop)              | failed read settles retryably, cancelled-during-failed-read stays quiet, no-project honesty, count cap refuses before any read, head-atom boundary parity |
 
-Parser subset: 111 passed. Connector subset: 119 passed. Full API suite and Phase 4 review
-results: see "Verification" below.
+Subset runs during the build: parsers 111 passed, connector 119 passed. After the Phase 4
+fixes: backend unit subset 189 passed, connector/sources/integration subset 86 passed, desktop
+255 passed on the touched files.
 
 ## Verification
 
-- ruff: clean on all 20 changed `.py` files. mypy: clean (`uv run mypy packages/api/src`
-  — "no issues found"; the pre-existing cryptography/openai INTERNAL ERROR noise is unrelated).
-- eslint: 0 errors, 8 `max-lines-per-function` warnings (test `describe` blocks and
-  `useConnectWizard`, which was already over the limit on `main`). tsc `--noEmit` for
-  `apps/desktop`: clean. vitest related: 308 passed.
-- Full `uv run pytest -q`: _filled in at handoff — see the final section._
-- Phase 4 subagent passes (code-reviewer, security-reviewer, python-reviewer,
-  typescript-reviewer): _filled in at handoff — see the final section._
+| Gate                                    | Result                                                                 |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| ruff (all 20 changed `.py`)             | clean                                                                  |
+| ruff format                             | clean (588 files)                                                      |
+| mypy (`uv run mypy packages/api/src`)   | clean — 279 source files                                               |
+| Full backend suite (private DB)         | see **Final verification** below                                       |
+| eslint (changed `.ts`/`.tsx`)           | 0 errors, 8 `max-lines-per-function` warnings (test blocks; `useConnectWizard` was already over on `main`) |
+| tsc `--noEmit` (`apps/desktop`)         | clean                                                                  |
+| vitest (related to changed files)       | 308 passed                                                             |
+
+The pre-existing cryptography/openai `INTERNAL ERROR` lines mypy prints are unrelated to this
+diff and reproduce on `main`.
+
+## Phase 4 review and the fixes it forced
+
+Four review passes ran on the integrated diff. The security pass returned **FAIL** with three
+HIGH and six MEDIUM findings, every one verified by executing the built package against
+adversarial input. Per CLAUDE.md §5, all of them were fixed before handoff — nothing was
+noted and skipped. Commits `83f6cb9` (desktop) and `21ca29f` (backend).
+
+| ID  | Severity | Finding                                                                                          | Fix                                                                                                              |
+| --- | -------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| S1  | HIGH     | `board` missing from `_BULK_CONFIG_KEYS`, so up to 8 MiB of board content echoed by every `/sources` read | `board` added; a KiCad source's config now echoes neither input (`test_sources.py`)                              |
+| S2  | HIGH     | Mismatch messages interpolated unbounded ingested strings — measured 13.36 MiB persisted, longest message 140,065 chars | values clipped to `VALUE_LIMIT` (96) before interpolation; `ErrorRecorder` gained `MESSAGE_LIMIT` (512) and a 64 KiB aggregate budget |
+| S3  | HIGH     | `prune` consulted only for bare-atom heads while `children()` matches quoted heads → `("components" …)` bypassed pruning; 8 MiB → ~102 MB peak | `prune` sees any string head; unread heads pruned at any depth; node cap 2M → 1M, calibrated by measurement      |
+| S4  | MEDIUM   | NUL/C0 control characters accepted, then rejected by Postgres — opaque sync failure that logged bound parameters (design content) | refused up front with the offset; `\t`, `\n`, `\r` stay legal                                                     |
+| S5  | MEDIUM   | 8 MiB bound enforced only at sync time, so a 200 MB `board` was stored first                     | `SourceCreate`/`SourceUpdate` bound the bulk keys → 422 at the boundary; desktop caps the pick count before reading |
+| S6  | MEDIUM   | Sniffer ignored a BOM, reader did not — a valid BOM-prefixed export was refused with a wrong reason | `read_sexpr_root` strips the BOM the sniffer already ignored (also raised by the code review as its only HIGH)    |
+| S7  | MEDIUM   | Unbounded `SyncError.item` in `build_graph`'s net-node path (60,006-char item measured)          | wrapped in `label`                                                                                               |
+| S8  | MEDIUM   | All findings materialized before the 200 cap applied                                             | findings are lazy descriptors; only kept ones render, the overflow is counted                                     |
+| T1  | HIGH     | A rejected `file.text()` escaped `pickFiles` as an unhandled rejection and left the tile stuck   | read wrapped; friendly copy; attempt settles retryably                                                            |
+| T2  | MEDIUM   | `projectId!` rested on a `scope` invariant living in a sibling file                              | explicit local check                                                                                             |
+| S9  | LOW      | `\x1e` cursor separator claimed an invariant that does not hold                                  | each side hashed separately, then combined                                                                       |
+| L2  | LOW      | Desktop sniffer used `startsWith` where the API matches the head atom on a boundary              | renderer mirrors the API rule                                                                                    |
+| C1  | LOW      | `KicadConnector.parse()` unreachable from `sync()`                                               | documented as the abstract-contract/conformance entry point                                                       |
+| P1  | MEDIUM   | ~50 duplicated lines between the XML and S-expression component/net loops                        | shared `build_components`/`build_nets` over per-format records; each reader only walks its tree                    |
+| P2  | LOW      | Two guards not marked `Final`                                                                    | marked, with a note that tests monkeypatch them                                                                   |
+
+**One correction to the S3 write-up.** The finding described the quoted-head gap as letting
+content "bypass pruning yet still parse as real data", which reads like smuggling. Verified
+after the fix: a quoted section head parses *identically* to the bare form
+(`("components" …)` == `(components …)`), so quoting never granted an attacker a landing place
+the plain syntax did not already offer. The real and only impact was MEMORY — a quoted
+`("design" …)` at a prunable position was materialized instead of skipped. That is what the fix
+closes, by making `prune` and `children()` agree on what a head is: a ~2 MB block at a prunable
+position now costs 0.0 MB peak whether its head is quoted or bare.
+
+**Node-cap calibration (S3), measured 2026-09-09.** The cap has to sit between two hard
+numbers, so both were measured rather than guessed:
+
+| Input                                                     | Nodes    | Peak     |
+| --------------------------------------------------------- | -------- | -------- |
+| Committed 21.7 KB fixture netlist                         | 1,244    | —        |
+| Dense legitimate 8 MiB netlist (real `kicad-cli` density)  | 676,956  | 32.8 MB  |
+| Adversarial 8 MiB of 2-char atoms at a legal position      | guard trips | 49.1 MB |
+
+`MAX_SEXPR_NODES = 1_000_000` therefore parses the densest legitimate file with ~1.5×
+headroom while capping one parse near 49 MB, so the worker's worst case
+(`max_jobs = 4` × 2 parses) is a few hundred MB instead of the ~800 MB the old 2M cap allowed.
+
+One deliberate deviation: the desktop task did not add a summed-`file.size` check on top of the
+per-file cap and the count cap, because with count ≤ max and every file ≤ 8 MiB the sum can
+never exceed the product — the branch would be unreachable code. The memory bound the finding
+asked for still holds (≤ 16 MB read for KiCad, ≤ 8 MB elsewhere).
 
 ## Decisions made under delegated judgment
 
@@ -132,10 +192,34 @@ results: see "Verification" below.
    positives during TDD; H9's pytest runs use the shared default test DB and collided once
    with a subagent run (a transient `0 == 1001` on the large-fixture e2e test that passes on a
    private DB). Consider a per-invocation `SOLUS_TEST_DATABASE_URL` in the hook.
-6. **Mismatch cap layering**: the reconciler caps at 200 warnings, `build_graph` at 100
-   `SyncError`s — the second cap wins today; the first is defense in depth if the recorder
-   cap ever rises.
+6. **Mismatch cap layering**: the reconciler caps at 200 findings, `build_graph` at 100
+   `SyncError`s, and `ErrorRecorder` now also at 64 KiB total — whichever binds first wins.
+   The outer caps are defense in depth, deliberately kept.
+7. **A subagent died on the account's monthly spend limit** part-way through the backend fix
+   pass, after it had written the failing tests but before any source change. The
+   orchestrator finished those fixes directly. Nothing was left half-applied, but it is worth
+   knowing that the review-fix phase of this ticket was the expensive part.
+8. **Mismatch reporting order under the cap.** Findings are emitted refdes-first, then field
+   differences, then connectivity. Pairing a netlist with an unrelated board therefore fills
+   the 200-finding budget with "placed on board but not in netlist" and crowds out the value
+   and pin findings. That ordering puts the loudest signal first, which is the right default,
+   but if a balanced sample is ever wanted, interleaving the three generators in `_bounded` is
+   a contained follow-up.
+9. **Two residual, harmless sniffer divergences** between the renderer and the API: the
+   renderer requires the quoted `"kicad_pro"`/`"meta"` keys where the API looks for the bare
+   words, so `{"metadata": …}` is a project file to the API and `unknown` to the wizard. The
+   wizard is the stricter of the two, so the user always gets the API's answer or a refusal —
+   never a silent wrong route.
 
-## Final verification (filled at handoff)
+## Final verification
 
-_See the end of this file after the full-suite and review passes complete._
+- **Full backend suite, pre-fix (private DB):** 6396 passed, 8 skipped, 1 xfailed (25m 44s).
+- **Full backend suite, post-fix (private DB):** FULL_SUITE_RESULT
+- **Phase 4 reviews:** code review WARNING → its one HIGH (BOM) fixed; python review APPROVE
+  with one MEDIUM (duplication) → fixed; typescript review WARNING → both findings fixed;
+  security review FAIL (3 HIGH, 6 MEDIUM) → all fixed, with tests naming each finding.
+- **Handoff state:** feature branch `SOLUSDEV-252-kicad-natural-ingestion`, 8 local commits,
+  clean working tree, nothing pushed, no MR opened. The push, the MR and the merge are human
+  actions (ADR-021).
+- **Ownership manifests** under `.claude/state/ownership/` for this ticket were removed after
+  the work merged into the feature branch.

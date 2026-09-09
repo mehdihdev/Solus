@@ -145,6 +145,41 @@ Drive the API directly with `<TOKEN>`:
 5. - [ ] Board with a `comp`/`footprint` smuggled inside a pruned `zone` or `segment` → it
          never appears as an entity.
 
+## Flow 6a — Hardening added in Phase 4 review (SOLUSDEV-252)
+
+Each item below is a fix for a finding the security/code reviews raised, so each
+is worth exercising by hand at least once.
+
+1. - [ ] **A BOM-prefixed export is accepted.** Re-save `solus_sample.net` as
+         "UTF-8 with BOM" (any editor; or `printf '\xef\xbb\xbf' | cat - solus_sample.net > bom.net`)
+         and connect it → syncs normally. Before the fix this failed with a
+         misleading "not a well-formed S-expression".
+2. - [ ] **The board file is never echoed back.** Connect a source with BOTH
+         files, then `GET /api/v1/projects/<PROJECT_ID>/sources` and
+         `…/sources/<id>` → the JSON `config` contains NEITHER `export` NOR
+         `board` (only your own extra keys). Check the response size: a source
+         list must not carry megabytes.
+3. - [ ] **Over-cap input is refused at the boundary.** POST a source whose
+         `config.board` is larger than 8 MiB → **422** `validation_error`, and
+         `GET …/sources` shows nothing was stored. Same for a PATCH.
+4. - [ ] **Control characters are refused cleanly.** Insert a NUL byte into a
+         netlist value (`printf '(export (components (comp (ref "U\x00"))))' > nul.net`)
+         and connect → the sync fails with `export_invalid` naming a "control
+         character", NOT an opaque internal error.
+5. - [ ] **A hostile board cannot flood the sync record.** Take
+         `sample.kicad_pcb`, give one footprint a 70 KB `Value` property, pair it
+         with a netlist that disagrees, and sync → the mismatch error message is
+         truncated (ends with `…`), and the whole sync's errors stay small
+         (`GET …/syncs/<id>` is a normal-sized response).
+6. - [ ] **Too many files are refused before reading.** In the wizard, select
+         three files at once for KiCad → "Choose at most one netlist export and
+         one .kicad_pcb board file." appears immediately, with no source created.
+7. - [ ] **An unreadable file fails honestly.** Pick a file, then make it
+         unreadable (`chmod 000`) before the read completes, or pick a file on a
+         disconnected volume → the tile shows "Could not read the selected file.
+         Try choosing it again." and stays retryable. It must never hang on the
+         pick step.
+
 ## Flow 7 — Cross-team isolation
 
 1. - [ ] As `<TOKEN_B>`, `GET /api/v1/projects/<PROJECT_ID>/sources` and
