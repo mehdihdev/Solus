@@ -58,7 +58,7 @@ does not.
 | ---------- | -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------ | ----------------------------- |
 | GitHub     | Code           | **Live API** — repo tree                                                             | files/modules + imports                                | GitHub REST/GraphQL trees API |
 | GitLab     | Code           | **Live API** — repo tree                                                             | files/modules + imports                                | GitLab REST trees API         |
-| KiCad      | EDA            | **Committed export in the linked Git repo**                                          | KiCad XML netlist (or S-expr `.net`)                   | stdlib XML / `kinparse`       |
+| KiCad      | EDA            | **Committed export in the linked Git repo**                                          | KiCad netlist, XML or S-expression (content-detected); KiCad board file `.kicad_pcb` (§5.2a) | stdlib XML / owned S-expression reader (§6.3) |
 | LTspice    | EDA            | **Committed export**                                                                 | SPICE deck (`.net`; `.asc` only if no netlist)         | `spicelib`                    |
 | NgSpice    | EDA            | **Committed export**                                                                 | SPICE deck (`.cir`/`.net`)                             | `spicelib`                    |
 | Altium     | EDA            | **Committed export**                                                                 | Protel netlist (or SPICE / orcadpcb2)                  | stdlib state machine          |
@@ -221,12 +221,16 @@ domain_pair="code<->code")`, `src`/`dst` = the two file paths.
 > **Research correction (verify):** KiCad has **no JSON netlist export** through v10. The v1 target is the
 > **KiCad XML netlist** (`kicad-cli sch export netlist --format kicadxml`) — the documented intermediate
 > that all other formats derive from, schema-stable across v5–v10, parseable with the stdlib. The default
-> S-expr `.net` is the fallback (parser: `kinparse`). A true-JSON netlist exists only for specific tools
+> S-expression `.net` is accepted as a first-class equal of the XML export and parsed by an owned
+> stdlib-only S-expression reader (§6.3); format is detected from content, never from the file
+> extension (SOLUSDEV-252 amendment, 2026-09-08). A true-JSON netlist exists only for specific tools
 > (tscircuit "Circuit JSON", atopile) — parse those with stdlib `json` + a per-producer adapter. The
 > ticket's "JSON netlist (primary)" is realized here as **the structured netlist export (KiCad XML
 > primary; JSON where a tool emits it)**.
 
-- **Obtain:** committed KiCad XML netlist (or `.net`) — or acquired via a live MCP export call (§2.1); parsing and field mapping identical.
+- **Obtain:** committed KiCad netlist in either format (XML `kicadxml` or the default `kicadsexpr` `.net`) on
+  config key `export` — or acquired via a live MCP export call (§2.1); parsing and field mapping identical
+  across formats and acquisition paths.
 - **Entities:** each component → `EntityOut(kind="component", source_id=<ref designator, e.g. "U1">,
 attrs={value, footprint, datasheet, libsource, ...})`.
 - **modality_hints (→ fingerprint, W0-06):** `{part_number (from MPN custom field), schematic_symbol_name
@@ -240,6 +244,31 @@ attrs={value, footprint, datasheet, libsource, ...})`.
 - **Fields out (richest of the three):** per component `ref, value, footprint, datasheet, custom fields
 (MPN/manufacturer), libsource, sheetpath, tstamp`; per net `code, name, class, nodes(ref, pin num,
 pinfunction, pintype)`.
+- **Raw schematic files are refused, not half-parsed.** A `.kicad_sch` (or `.kicad_pro`) carries no pin-level
+  connectivity without geometric wire tracing, so the cloud parser rejects it with `export_format_unsupported`
+  and guidance naming the two accepted routes: export a netlist in any KiCad format, or provide the
+  `.kicad_pcb` (§5.2a). Components-only ingestion of a schematic is explicitly not permitted (design review,
+  2026-09-08, SOLUSDEV-252).
+
+### 5.2a KiCad board file (electrical) — committed design file
+
+- **Obtain:** committed `.kicad_pcb` on config key `board`, content-detected by the `(kicad_pcb` root; same
+  8 MiB cap and untrusted posture as every export (§2.1 invariant 4). Inline only in v1 — no live acquisition
+  tool exists for it.
+- **Entities:** each footprint carrying a `Reference` property → `EntityOut(kind="component",
+  source_id=<reference designator>, attrs={value, footprint (the footprint lib id), datasheet, layer, custom
+  properties})`. Footprints without a reference are skipped and counted on warnings.
+- **modality_hints:** `{part_number (MPN alias property), datasheet_ref}`. **No `schematic_symbol_name`:** a
+  board carries no libsource; the hint is absent by design, never guessed.
+- **Relations:** pad `(net <code> "<name>")` memberships → the SAME first-class `net` entities and
+  `connected_to` edges as §5.2, with pad numbers as the pins. Net code 0 / the empty net name mean
+  unconnected and are skipped. Board-only footprints (mounting holes, fiducials) remain as components with
+  no connectivity.
+- **Reconciliation when one KiCad source holds both a netlist and a board (mirrors §5.3):** the netlist is
+  authoritative for component identity and connectivity; the board corroborates. Join key = reference
+  designator. Disagreement is NEVER merged silently: a refdes present in one file only, a differing value or
+  footprint, or a pad-net membership not present in the netlist is emitted as a per-item `SyncError` on the
+  sync record for the checker/agent layer. The change-detection content hash covers both files.
 
 ### 5.3 SPICE deck (electrical) — committed export
 
@@ -360,14 +389,14 @@ buggy — don't rely on it beyond geometry.
 | Candidate                                         | Handles netlist?     | License | Deps                          |
 | ------------------------------------------------- | -------------------- | ------- | ----------------------------- |
 | **stdlib `xml.etree`** on KiCad XML (recommended) | YES                  | PSF     | none                          |
-| **kinparse** (KiCad S-expr `.net`)                | YES                  | **MIT** | pyparsing                     |
+| **owned S-expression reader** (KiCad `.net`, `.kicad_pcb`) | YES         | Solus   | none — bounded token count and nesting depth, scoped traversal, no eval |
 | stdlib `json` + adapter (tscircuit/atopile JSON)  | YES                  | PSF     | none                          |
 | ~~kiutils~~                                       | **NO netlist model** | GPLv3   | avoid (wrong tool + copyleft) |
 | Altium Protel: stdlib state machine (~40 lines)   | YES                  | —       | none                          |
 
-**Recommendation:** request the **KiCad XML** export and parse with the stdlib (zero-dep, schema-stable
-v5–v10); `kinparse` only if stuck on the default `.net`. **VERIFY:** `kinparse` advertises v5–v9 — confirm
-KiCad 10 `.net` support (or lean on XML); confirm which format the pipeline actually receives; Altium MPN gap.
+**Recommendation:** accept BOTH KiCad netlist formats — XML via the stdlib (zero-dep, schema-stable v5–v10)
+and the default S-expression `.net` via the owned reader (SOLUSDEV-252); the board file rides the same reader.
+**VERIFY:** Altium MPN gap.
 
 ### 6.4 DWG — DEFERRED (research retained for when it is revived)
 

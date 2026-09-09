@@ -17,8 +17,21 @@ import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import type { Connection } from '../../lib/api/resources'
 import { linkedAccountFor } from '../workspace/useAccountConnections'
 import type { WizardScope } from './connectSteps'
-import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
+import {
+  EMPTY_EXPORT_ERROR,
+  FILE_READ_ERROR,
+  MAX_EXPORT_BYTES,
+  OVERSIZE_EXPORT_ERROR
+} from './edaConnect'
 import type { CatalogEntry } from './integrationCatalog'
+import {
+  assembleExportInputs,
+  maxPickedFiles,
+  NO_FILES_ERROR,
+  tooManyFilesError,
+  type EdaExportFile,
+  type ExportAssembly
+} from './kicadFiles'
 import { noBridgeError } from './oauthConnect'
 import { useOnboardingStore } from './onboardingStore'
 import { useEdaConnect } from './useEdaConnect'
@@ -26,7 +39,7 @@ import { connectOptions, useOAuthConnect } from './useOAuthConnect'
 
 export const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
 
-/** One begin/pickFile invocation for one entry. Latches are PER ATTEMPT so a
+/** One begin/pickFiles invocation for one entry. Latches are PER ATTEMPT so a
  * late-settling abandoned flow is never governed by a newer attempt's cancel. */
 interface Attempt {
   cancelled: boolean
@@ -54,14 +67,43 @@ export interface UseConnectWizard {
   open: (entry: CatalogEntry) => void
   /** Start (or retry) the flow for the active entry — OAuth path. */
   begin: () => Promise<void>
-  /** Start the flow with the user's picked export file — validated by size
-   * BEFORE it is read into memory. */
-  pickFile: (file: File) => Promise<void>
+  /** Start the flow with the user's picked export files (a netlist and/or a
+   * board) — the pick is bounded by COUNT and every file by SIZE before any is
+   * read into memory, then each is routed by CONTENT to its config key. */
+  pickFiles: (files: File[]) => Promise<void>
   /** Close the wizard. Mid-flight this cancels the attempt. */
   close: () => void
   select: ReturnType<typeof useOAuthConnect>['select']
   submitConfig: ReturnType<typeof useOAuthConnect>['submitConfig']
   chooseAccess: ReturnType<typeof useOAuthConnect>['chooseAccess']
+}
+
+/** The size-only pre-read check for one picked file, or null when it may be read. */
+function fileSizeError(file: File): string | null {
+  if (file.size === 0) return EMPTY_EXPORT_ERROR
+  if (file.size > MAX_EXPORT_BYTES) return OVERSIZE_EXPORT_ERROR
+  return null
+}
+
+/** Every refusal decidable WITHOUT reading a byte: nothing picked, too many
+ * files for the provider, or a file outside the size bound. Count comes first
+ * so a folder of 200 files is refused in O(1) memory. */
+function prePickError(providerId: string, files: readonly File[]): string | null {
+  if (files.length === 0) return NO_FILES_ERROR
+  if (files.length > maxPickedFiles(providerId)) return tooManyFilesError(providerId)
+  return files.map(fileSizeError).find((error): error is string => error !== null) ?? null
+}
+
+/** Read every picked file, or null when ANY read rejects (permissions, file
+ * moved, media gone) — the caller decides how to report it. */
+async function readExportFiles(files: readonly File[]): Promise<EdaExportFile[] | null> {
+  try {
+    return await Promise.all(
+      files.map(async (file) => ({ fileName: file.name, content: await file.text() }))
+    )
+  } catch {
+    return null
+  }
 }
 
 export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWizard {
@@ -127,26 +169,37 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     settle(entry, attempt, result)
   }
 
-  const pickFile = async (file: File): Promise<void> => {
+  const pickFiles = async (files: File[]): Promise<void> => {
     const entry = active
     if (!entry || !guard(entry)) return
-    // Bound by size BEFORE file.text() — reading a multi-GB pick into a string
-    // would hang the renderer long before the engine's own validation runs.
     const { failConnect } = useOnboardingStore.getState()
-    if (file.size === 0) {
-      failConnect(entry.id, EMPTY_EXPORT_ERROR)
+    // Explicit, independent of scope: a file connect always needs a project.
+    if (!projectId) {
+      failConnect(entry.id, NOT_LINKED_ERROR)
       return
     }
-    if (file.size > MAX_EXPORT_BYTES) {
-      failConnect(entry.id, OVERSIZE_EXPORT_ERROR)
+    // Bound by count and size BEFORE any file.text() — reading a folder or a
+    // multi-GB pick into strings would hang the renderer long before the
+    // engine's own validation.
+    const pickError = prePickError(entry.id, files)
+    if (pickError) {
+      failConnect(entry.id, pickError)
       return
     }
     const attempt = beginAttempt(entry)
-    const content = await file.text()
+    const read = await readExportFiles(files)
     // The wizard may have closed during the read — a cancelled attempt must
-    // not go on to create and sync a source.
+    // not go on to create and sync a source, nor report a failed read.
     if (attempt.cancelled) return
-    const result = await eda.start(projectId!, entry.id, { fileName: file.name, content })
+    const assembled: ExportAssembly =
+      read === null ? { ok: false, error: FILE_READ_ERROR } : assembleExportInputs(entry.id, read)
+    if (!assembled.ok) {
+      // Guidance, not a flight: settle so close() keeps the error retryable.
+      failConnect(entry.id, assembled.error)
+      settle(entry, attempt, { ok: false })
+      return
+    }
+    const result = await eda.start(projectId, entry.id, assembled.inputs)
     settle(entry, attempt, result)
   }
 
@@ -171,7 +224,7 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     linkedAccount,
     open: setActive,
     begin,
-    pickFile,
+    pickFiles,
     close,
     select: oauth.select,
     submitConfig: oauth.submitConfig,

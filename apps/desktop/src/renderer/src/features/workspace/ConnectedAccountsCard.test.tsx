@@ -364,7 +364,7 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     const dialog = screen.getByRole('dialog', { name: 'Connect KiCad' })
     const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
     expect(steps).toEqual(['Choose export', 'Build graph'])
-    expect(within(dialog).getByRole('button', { name: /choose export file/i })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /choose netlist \/ board file/i })).toBeInTheDocument()
   })
 
   it('without a current project a project-bound step stays visible but disabled, and says why', async () => {

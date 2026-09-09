@@ -7,6 +7,12 @@ identity) equality across all three acquisition paths, and the large
 the live-acquisition/artifact-ref paths (docs/contracts/metadata-extraction.md
 §2.1).
 
+SOLUSDEV-252 adds the natural-ingestion flows through the SAME route: the
+real KiCad-10 S-expression export of the fixture lands the same component/net
+counts and identity hints as its XML twin (the cross-format invariant, W0-08
+§5.2), and a board-only source (`config.board`, §5.2a) lands board-only parts
+as components with no edges.
+
 `serialize_entity` (schemas.py) does not surface `modality_hints` on the
 public `/entities` read (only `attrs`/`properties`) — see the T5 completion
 report. So graph-row assertions here read the DB directly via a dedicated
@@ -30,6 +36,7 @@ from fixtures.kicad_project import (
     SOLUS_SAMPLE_LARGE_NETLIST,
     SOLUS_SAMPLE_NETLIST,
 )
+from fixtures.kicad_sample import KICAD_PCB
 from httpx import AsyncClient
 from solus_api.agent.tools.shapes import ArtifactRef, ToolDescriptor, ToolResult
 from solus_api.bridge.allowlist import BridgeToolSpec
@@ -47,6 +54,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 NETLIST_TEXT = SOLUS_SAMPLE_NETLIST.read_text()
 LARGE_NETLIST_TEXT = SOLUS_SAMPLE_LARGE_NETLIST.read_text()
+#: The real `kicad-cli sch export netlist` (10.0.1, default S-expression format)
+#: of the SAME committed fixture schematic — the XML export's twin.
+SEXPR_NETLIST_TEXT = (Path(__file__).parent / "fixtures" / "solus_sample.net").read_text()
 LARGE_COMPONENT_COUNT = 1001
 TOOL_NAME = "kicad.export_netlist"
 
@@ -87,11 +97,18 @@ async def _project(client: AsyncClient, headers: dict[str, str]) -> uuid.UUID:
 
 
 async def _connect_kicad(
-    client: AsyncClient, headers: dict[str, str], project_id: uuid.UUID, *, export: str
+    client: AsyncClient,
+    headers: dict[str, str],
+    project_id: uuid.UUID,
+    *,
+    export: str | None = None,
+    board: str | None = None,
 ) -> dict[str, Any]:
+    # Exactly what the desktop sends: present keys only (SOLUSDEV-252).
+    config = {key: text for key, text in (("export", export), ("board", board)) if text}
     resp = await client.post(
         f"/api/v1/projects/{project_id}/sources",
-        json={"type": "kicad", "name": "solus-sample", "config": {"export": export}},
+        json={"type": "kicad", "name": "solus-sample", "config": config},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -223,6 +240,105 @@ async def test_real_fixture_lands_expected_component_and_net_entities(
     assert relations[("R2", "net:SCL")] == _edge("SCL", ["2"])
     assert relations[("U1", "net:SCL")] == _edge("SCL", ["17"])
     assert relations[("U2", "net:SCL")] == _edge("SCL", ["23"])
+
+
+# -------------------------------------- 1b: cross-format invariant (SOLUSDEV-252)
+
+
+async def test_sexpr_export_lands_the_same_graph_shape_as_the_xml_twin(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    sessionmaker_fixture: async_sessionmaker[AsyncSession],
+) -> None:
+    """W0-08 §5.2: the default S-expression `.net` is a first-class equal of the
+    XML export. Through the real connect/sync route, the KiCad-10 export of the
+    fixture lands the same component roster (with the same MPN hints) and the
+    same number of net entities and edges as the XML flow. Net NAMES are not
+    compared: KiCad 10 writes local labels as `/SDA` where the XML twin (KiCad 9)
+    wrote `SDA` — a producer quirk the graph keeps verbatim."""
+    xml_project = await _project(client, alice_headers)
+    xml_source = await _connect_kicad(client, alice_headers, xml_project, export=NETLIST_TEXT)
+    await _sync(client, alice_headers, xml_project, xml_source["id"])
+
+    sexpr_project = await _project(client, alice_headers)
+    sexpr_source = await _connect_kicad(
+        client, alice_headers, sexpr_project, export=SEXPR_NETLIST_TEXT
+    )
+    await _sync(client, alice_headers, sexpr_project, sexpr_source["id"])
+
+    xml_entities = await _entity_snapshot(sessionmaker_fixture, xml_project)
+    sexpr_entities = await _entity_snapshot(sessionmaker_fixture, sexpr_project)
+
+    def _components(rows: dict[str, dict[str, Any]]) -> dict[str, str | None]:
+        return {
+            key: row["modality_hints"].get("part_number")
+            for key, row in rows.items()
+            if row["kind"] == "component"
+        }
+
+    assert _components(sexpr_entities) == _components(xml_entities) == EXPECTED_COMPONENT_ROSTER
+    for rows in (xml_entities, sexpr_entities):
+        for designator in EXPECTED_COMPONENT_ROSTER:
+            assert rows[designator]["modality_hints"].get("schematic_symbol_name")
+    xml_nets = {k for k, row in xml_entities.items() if row["kind"] == "net"}
+    sexpr_nets = {k for k, row in sexpr_entities.items() if row["kind"] == "net"}
+    assert len(sexpr_nets) == len(xml_nets)
+    # KiCad 10's `/` sheet-path prefix aside, the two exports name the same nets.
+    assert {n.removeprefix("net:").removeprefix("/") for n in sexpr_nets} == {
+        n.removeprefix("net:") for n in xml_nets
+    }
+
+    xml_relations = await _relation_snapshot(sessionmaker_fixture, xml_project, xml_entities)
+    sexpr_relations = await _relation_snapshot(sessionmaker_fixture, sexpr_project, sexpr_entities)
+    assert len(sexpr_relations) == len(xml_relations)
+    # Same pins on the same edge; the edge carries its producer's net name verbatim.
+    assert xml_relations[("R1", "net:SDA")] == {
+        "type": CONNECTED_TO,
+        "attrs": {"net": "SDA", "pins": ["2"]},
+    }
+    assert sexpr_relations[("R1", "net:/SDA")] == {
+        "type": CONNECTED_TO,
+        "attrs": {"net": "/SDA", "pins": ["2"]},
+    }
+
+
+# ------------------------------------------------ 1c: board-only source (§5.2a)
+
+
+async def test_board_only_source_lands_board_only_parts_without_edges(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    sessionmaker_fixture: async_sessionmaker[AsyncSession],
+) -> None:
+    project_id = await _project(client, alice_headers)
+    source = await _connect_kicad(client, alice_headers, project_id, board=KICAD_PCB)
+    await _sync(client, alice_headers, project_id, source["id"])
+
+    syncs_resp = await client.get(
+        f"/api/v1/projects/{project_id}/sources/{source['id']}/syncs", headers=alice_headers
+    )
+    assert syncs_resp.status_code == 200, syncs_resp.text
+    assert syncs_resp.json()["data"][0]["status"] == "succeeded"
+
+    entities = await _entity_snapshot(sessionmaker_fixture, project_id)
+    components = {key: row for key, row in entities.items() if row["kind"] == "component"}
+    assert set(components) == {"U1", "R1", "C1", "H1", "FID1"}
+    assert components["H1"]["domain"] is Domain.ELECTRICAL
+    # A board carries no libsource: no schematic_symbol_name hint anywhere.
+    assert all("schematic_symbol_name" not in row["modality_hints"] for row in components.values())
+    assert components["U1"]["modality_hints"]["part_number"] == "LM358DR"
+    assert {k for k, row in entities.items() if row["kind"] == "net"} == {
+        "net:VCC",
+        "net:GND",
+        "net:SIGNAL",
+    }
+
+    relations = await _relation_snapshot(sessionmaker_fixture, project_id, entities)
+    assert not any(src in {"H1", "FID1"} for src, _dst in relations)
+    assert relations[("U1", "net:VCC")] == {
+        "type": CONNECTED_TO,
+        "attrs": {"net": "VCC", "pins": ["8"]},
+    }
 
 
 # ------------------------------------------------------------ 2: idempotency

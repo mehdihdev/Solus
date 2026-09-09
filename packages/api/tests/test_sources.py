@@ -357,3 +357,87 @@ async def test_manual_trigger_passes_the_requesting_user_as_acting_user(
     assert provider == "github"
     assert ctx.project_id == uuid.UUID(project_id)
     assert ctx.acting_user_id == uuid.UUID(user["id"])
+
+
+# --- SOLUSDEV-252 Phase 4 (S1/S5): bulk KiCad config keys never echoed, bounded ---
+
+
+async def test_kicad_bulk_config_keys_are_never_echoed(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """Both design inputs (`export` netlist, `board` .kicad_pcb) are stored and
+    parsed, but NEITHER may round-trip on any /sources read (§7 — bound
+    message sizes, untrusted content on a hot endpoint)."""
+    from fixtures.kicad_sample import KICAD_PCB, KICAD_XML
+
+    project_id = await _project(client, alice_headers)
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={
+            "type": "kicad",
+            "name": "power-board",
+            "config": {"export": KICAD_XML, "board": KICAD_PCB, "note": "rev A"},
+        },
+        headers=alice_headers,
+    )
+    assert created.status_code == 201, created.text
+    source = created.json()["data"]
+    assert source["config"] == {"note": "rev A"}
+    base = f"/api/v1/projects/{project_id}/sources"
+
+    listed = (await client.get(base, headers=alice_headers)).json()["data"]
+    assert [s["config"] for s in listed] == [{"note": "rev A"}]
+    detail = (await client.get(f"{base}/{source['id']}", headers=alice_headers)).json()["data"]
+    assert detail["config"] == {"note": "rev A"}
+    patched = await client.patch(
+        f"{base}/{source['id']}", json={"name": "renamed"}, headers=alice_headers
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["data"]["config"] == {"note": "rev A"}
+
+    # Cross-tenant: a non-member never learns the KiCad source exists (404).
+    await me(client, bob_headers)
+    assert (await client.get(base, headers=bob_headers)).status_code == 404
+    assert (await client.get(f"{base}/{source['id']}", headers=bob_headers)).status_code == 404
+    assert (
+        await client.patch(f"{base}/{source['id']}", json={"name": "x"}, headers=bob_headers)
+    ).status_code == 404
+
+
+async def test_oversized_bulk_config_is_rejected_at_the_boundary_and_not_stored(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """The family's 8 MiB bound applies at POST/PATCH, not only at sync time —
+    a 200 MB `board` must never reach the database (§7 input validation)."""
+    from fixtures.kicad_sample import KICAD_XML
+    from solus_api.connectors.eda import MAX_EXPORT_BYTES
+
+    project_id = await _project(client, alice_headers)
+    base = f"/api/v1/projects/{project_id}/sources"
+    too_big = "(kicad_pcb " + "x" * MAX_EXPORT_BYTES + ")"
+    resp = await client.post(
+        base,
+        json={"type": "kicad", "name": "big", "config": {"export": KICAD_XML, "board": too_big}},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["error"]["code"] == "validation_error"
+    assert (await client.get(base, headers=alice_headers)).json()["data"] == []
+
+    # The same bound guards a PATCH onto an existing source.
+    created = await client.post(
+        base,
+        json={"type": "kicad", "name": "ok", "config": {"export": KICAD_XML}},
+        headers=alice_headers,
+    )
+    source_id = created.json()["data"]["id"]
+    patched = await client.patch(
+        f"{base}/{source_id}", json={"config": {"board": too_big}}, headers=alice_headers
+    )
+    assert patched.status_code == 422, patched.text
+    # An in-bounds board is accepted (the cap is exactly MAX_EXPORT_BYTES).
+    exact = "x" * MAX_EXPORT_BYTES
+    ok = await client.patch(
+        f"{base}/{source_id}", json={"config": {"board": exact}}, headers=alice_headers
+    )
+    assert ok.status_code == 200, ok.text

@@ -1,11 +1,15 @@
-// Real committed-export EDA connect orchestration (SOLUSDEV-100). The EDA
-// sibling of githubConnect.ts: no OAuth — the user picks the committed netlist
-// export, we create the source with the file CONTENT as config.export (the v1
-// scaffold the backend EdaExportConnector reads), trigger a sync, and poll it
-// to completion. Transport is injected so this is unit-testable without React.
+// Real committed-export EDA connect orchestration (SOLUSDEV-100, multi-file in
+// SOLUSDEV-252). The EDA sibling of githubConnect.ts: no OAuth — the user picks
+// a netlist export and/or a board file, we create the source with the file
+// CONTENT as config.export / config.board (what the backend EdaExportConnector
+// reads), trigger a sync, and poll it to completion. Transport is injected so
+// this is unit-testable without React.
 import type { Source, Sync } from '../../lib/api/resources'
+import { NO_FILES_ERROR, type EdaExportFile, type EdaExportFiles } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
 import { pollSync, syncErrorMessage, type SyncPollApi } from './sourceSync'
+
+export type { EdaExportFile, EdaExportFiles } from './kicadFiles'
 
 /** The slice of the typed API surface this orchestration depends on. */
 export interface EdaConnectApi extends SyncPollApi {
@@ -26,12 +30,6 @@ export interface EdaConnectDeps {
   sleep?: (ms: number) => Promise<void>
 }
 
-/** The user-picked committed export, already read into memory. */
-export interface EdaExportFile {
-  fileName: string
-  content: string
-}
-
 export interface EdaConnectResult {
   ok: boolean
   sourceId?: string
@@ -45,6 +43,9 @@ export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 
 export const EMPTY_EXPORT_ERROR = 'The selected file is empty.'
 export const OVERSIZE_EXPORT_ERROR = 'The selected file is too large (limit 8 MB).'
+/** A `file.text()` rejection (permissions, file moved, media gone). The raw
+ * error never reaches the UI. */
+export const FILE_READ_ERROR = 'Could not read the selected file. Try choosing it again.'
 
 function busy(label: string, sourceId?: string): ConnectionState {
   // Everything after the file pick is indexing work from the wizard's view.
@@ -57,6 +58,26 @@ function sourceNameFrom(fileName: string, provider: string): string {
   return base || provider
 }
 
+/** The picked files in a stable order: netlist first, then board. */
+function presentFiles(files: EdaExportFiles): EdaExportFile[] {
+  return [files.netlist, files.board].filter((file): file is EdaExportFile => file !== undefined)
+}
+
+/** The source config: only the keys that were picked — the API schema expects
+ * strings where a key is present, never null/undefined. */
+function exportConfig(files: EdaExportFiles): Record<string, string> {
+  return {
+    ...(files.netlist ? { export: files.netlist.content } : {}),
+    ...(files.board ? { board: files.board.content } : {})
+  }
+}
+
+/** "netlist" / "board" / "netlist and board" for the progress label. */
+function describeInputs(files: EdaExportFiles): string {
+  if (files.netlist && files.board) return 'netlist and board'
+  return files.board ? 'board' : 'netlist'
+}
+
 /**
  * Drive the full committed-export connect. Reports progress through
  * `onProgress`; returns a structured result. Never throws — failures resolve
@@ -66,23 +87,24 @@ export async function runEdaConnect(
   deps: EdaConnectDeps,
   projectId: string,
   provider: string,
-  file: EdaExportFile
+  files: EdaExportFiles
 ): Promise<EdaConnectResult> {
-  const invalid = validateExport(file)
+  const picked = presentFiles(files)
+  const invalid = validateExports(picked)
   if (invalid) {
     deps.onProgress({ phase: 'error', error: invalid })
     return { ok: false, error: invalid }
   }
 
   try {
-    deps.onProgress(busy(`Reading ${file.fileName}…`))
+    deps.onProgress(busy(`Reading ${picked.map((file) => file.fileName).join(', ')}…`))
     const source = await deps.api.createSource(projectId, {
       type: provider,
-      name: sourceNameFrom(file.fileName, provider),
-      config: { export: file.content }
+      name: sourceNameFrom(picked[0].fileName, provider),
+      config: exportConfig(files)
     })
 
-    deps.onProgress(busy('Parsing netlist & building the graph…', source.id))
+    deps.onProgress(busy(`Parsing ${describeInputs(files)} & building the graph…`, source.id))
     await deps.api.triggerSync(projectId, source.id)
 
     const sync = await pollSync(deps.api, projectId, source.id, deps.sleep)
@@ -109,12 +131,14 @@ export async function runEdaConnect(
   }
 }
 
-function validateExport(file: EdaExportFile): string | null {
-  if (!file.content.trim()) {
-    return EMPTY_EXPORT_ERROR
-  }
-  if (new TextEncoder().encode(file.content).length > MAX_EXPORT_BYTES) {
-    return OVERSIZE_EXPORT_ERROR
+/** At least one file, and every present file non-empty and within the bound. */
+function validateExports(files: readonly EdaExportFile[]): string | null {
+  if (files.length === 0) return NO_FILES_ERROR
+  for (const file of files) {
+    if (!file.content.trim()) return EMPTY_EXPORT_ERROR
+    if (new TextEncoder().encode(file.content).length > MAX_EXPORT_BYTES) {
+      return OVERSIZE_EXPORT_ERROR
+    }
   }
   return null
 }
