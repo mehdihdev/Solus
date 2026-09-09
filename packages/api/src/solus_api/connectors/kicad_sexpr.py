@@ -41,11 +41,31 @@ from typing import Final
 type Sexp = str | tuple[Sexp, ...]
 
 #: Nesting-depth guard (root list = depth 0). Bounds the reader's explicit stack.
-MAX_SEXPR_DEPTH: int = 64
+#: `Final` is a static annotation only — tests still lower these with
+#: `monkeypatch.setattr`, and both are read at call time.
+MAX_SEXPR_DEPTH: Final = 64
 
 #: Materialized-node guard (atoms, strings and lists). Bounds worst-case memory
-#: independently of the byte cap; read at call time so tests can lower it.
-MAX_SEXPR_NODES: int = 2_000_000
+#: independently of the byte cap, which bounds BYTES and not node count: 8 MiB
+#: of tiny atoms allocates far more than 8 MiB of Python objects.
+#:
+#: Calibrated by measurement (2026-09-09), between two hard requirements:
+#:   * the densest LEGITIMATE input must still parse — an 8 MiB `kicad-cli`
+#:     netlist at the committed fixture's density is 677k nodes / 33 MB peak
+#:     (a components+nets document with nothing prunable is the dense case);
+#:   * an ADVERSARIAL 8 MiB of tiny atoms at a legal unpruned position must
+#:     trip this guard early: it does, at 49 MB peak.
+#: The budget that matters is `worker.py`'s `max_jobs = 4` × 2 parses per KiCad
+#: sync (netlist + board), so one team's worst case stays a few hundred MB
+#: rather than the ~800 MB a 2M-node cap allowed.
+MAX_SEXPR_NODES: Final = 1_000_000
+
+#: C0 control characters that may never appear in a KiCad file. NUL survives
+#: this reader but is rejected by Postgres deep inside the sync, where it
+#: surfaces as an opaque internal error AND logs the failing statement's bound
+#: parameters — i.e. ingested design content (§7). Refuse up front instead.
+#: `\t`, `\n` and `\r` stay legal.
+_CONTROL_CHARS: Final = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 #: One token at the current position. Every character is covered by exactly one
 #: alternative, so `match` never returns None on in-range positions.
@@ -82,12 +102,18 @@ class SExprLimitError(SExprSyntaxError):
 def parse_sexpr(text: str, *, prune: Callable[[str, int], bool] | None = None) -> tuple[Sexp, ...]:
     """Parse *text* into its single root list as nested tuples.
 
-    `prune(head, depth)` is consulted for every list whose first item is a bare
-    atom (`head`) at nesting `depth` (root = 0, its children = 1); returning
-    True skips that list without materializing it. Raises `SExprSyntaxError`
+    `prune(head, depth)` is consulted for every list whose first item is a
+    STRING (`head`) — bare atom or quoted alike, because `children()` matches
+    both, so consulting only atoms would let `("components" …)` bypass pruning
+    yet still parse as real data — at nesting `depth` (root = 0, its children =
+    1); returning True skips that list without materializing it. Raises `SExprSyntaxError`
     on malformed input (empty, unterminated, trailing content, multiple
-    roots) and `SExprLimitError` when a resource guard trips.
+    roots, a C0 control character) and `SExprLimitError` when a resource guard
+    trips.
     """
+    control = _CONTROL_CHARS.search(text)
+    if control is not None:
+        raise SExprSyntaxError(f"control character at offset {control.start()}")
     return _Reader(text, prune).read()
 
 
@@ -148,9 +174,9 @@ class _Reader:
             elif kind == "close":
                 self._close(match.start())
             elif kind == "atom":
-                self._leaf(match.group("atom"), match.start(), is_atom=True)
+                self._leaf(match.group("atom"), match.start())
             elif kind == "string":
-                self._leaf(_decode(match.group("string")), match.start(), is_atom=False)
+                self._leaf(_decode(match.group("string")), match.start())
             elif kind == "stray":
                 raise SExprSyntaxError(f"unterminated string at offset {match.start()}")
         if self._stack:
@@ -176,11 +202,13 @@ class _Reader:
         else:
             self._root = node
 
-    def _leaf(self, value: str, offset: int, *, is_atom: bool) -> None:
+    def _leaf(self, value: str, offset: int) -> None:
         if not self._stack:
             raise SExprSyntaxError(f"content outside the root list at offset {offset}")
         frame = self._stack[-1]
-        if is_atom and not frame and self._prune is not None:
+        # A head is a head whether it was written bare or quoted: `children()`
+        # compares decoded strings, so both must face `prune` (S3).
+        if not frame and self._prune is not None:
             depth = len(self._stack) - 1
             if self._prune(value, depth):
                 self._stack.pop()

@@ -23,7 +23,7 @@ from fixtures.kicad_sample import (
     KICAD_XML,
 )
 from solus_api.connectors.contracts import ConnectorError
-from solus_api.connectors.eda import Component
+from solus_api.connectors.eda import Component, Node
 from solus_api.connectors.kicad_netlist import parse_kicad_netlist
 
 
@@ -236,3 +236,60 @@ def test_unrecognized_content_is_refused() -> None:
     assert "unrecognized file" in message
     assert "XML or S-expression" in message
     assert ".kicad_pcb" in message
+
+
+# ------------------------------------------------ shared record builders (P1)
+
+
+def test_shared_builders_apply_the_family_rules_once_for_both_formats() -> None:
+    # SOLUSDEV-252 Phase 4 (P1): the XML and S-expression mappings feed the SAME
+    # component/net builders, so skip counting, warning strings, MPN popping and
+    # libsource handling cannot drift between formats.
+    from solus_api.connectors.kicad_netlist import (
+        ComponentRecord,
+        NetRecord,
+        build_components,
+        build_nets,
+    )
+
+    warnings: list[str] = []
+    fields = {"MPN": "LM358DR", "Grade": "industrial"}
+    components = build_components(
+        [
+            ComponentRecord(
+                ref="U1",
+                value="LM358",
+                footprint="SOIC-8",
+                datasheet=None,
+                fields=fields,
+                library="Amplifier_Operational",
+                symbol="LM358",
+            ),
+            ComponentRecord(ref=None, value="ghost", footprint=None, datasheet=None, fields={}),
+        ],
+        warnings,
+    )
+    assert [c.designator for c in components] == ["U1"]
+    assert components[0].part_number == "LM358DR"
+    assert components[0].schematic_symbol_name == "LM358"
+    assert components[0].properties == {
+        "Grade": "industrial",
+        "libsource": "Amplifier_Operational:LM358",
+    }
+    assert fields == {"MPN": "LM358DR", "Grade": "industrial"}  # the record is not mutated
+
+    nets = build_nets(
+        [
+            NetRecord(
+                name="VCC", net_class="Power", nodes=(("U1", "8"), (None, "1"), ("U1", None))
+            ),
+            NetRecord(name=None, net_class=None, nodes=(("U1", "4"),)),
+        ],
+        warnings,
+    )
+    assert [(n.name, n.net_class, n.nodes) for n in nets] == [("VCC", "Power", (Node("U1", "8"),))]
+    assert warnings == [
+        "skipped 1 component(s) without a ref designator",
+        "skipped 1 net(s) without a name",
+        "skipped 2 net node(s) missing ref/pin",
+    ]

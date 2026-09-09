@@ -223,3 +223,22 @@ async def test_board_only_cursor_differs_from_netlist_only_cursor() -> None:
     board_only = await connector.sync(_ctx(None, board=KICAD_PCB))
     assert netlist_only.cursor.keys() == {"content_sha"}
     assert netlist_only.cursor["content_sha"] != board_only.cursor["content_sha"]
+
+
+async def test_cursor_hashes_each_input_separately_then_combines() -> None:
+    # SOLUSDEV-252 Phase 4 (S9): the change-detection hash is
+    # sha(sha(netlist) + sha(board)) — fixed-width halves, so bytes can never
+    # shift across the boundary and an absent side is a stable empty digest.
+    from solus_api.connectors.export_common import content_sha
+
+    connector = KicadConnector()
+    both = await connector.sync(_ctx(KICAD_XML, board=KICAD_PCB))
+    assert both.cursor["content_sha"] == content_sha(
+        content_sha(KICAD_XML) + content_sha(KICAD_PCB)
+    )
+    netlist_only = await connector.sync(_ctx(KICAD_XML))
+    assert netlist_only.cursor["content_sha"] == content_sha(
+        content_sha(KICAD_XML) + content_sha("")
+    )
+    board_only = await connector.sync(_ctx(None, board=KICAD_PCB))
+    assert board_only.cursor["content_sha"] == content_sha(content_sha("") + content_sha(KICAD_PCB))

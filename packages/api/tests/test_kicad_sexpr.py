@@ -152,20 +152,83 @@ def test_unterminated_pruned_list_is_still_a_syntax_error() -> None:
         parse_sexpr('(root (skip "never closed) (keep))', prune=lambda head, _d: head == "skip")
 
 
-def test_prune_is_not_consulted_for_headless_lists() -> None:
+def test_prune_is_consulted_for_quoted_heads_and_skipped_for_headless_lists() -> None:
+    # SOLUSDEV-252 Phase 4 (S3): `children()` matches a quoted-string head just
+    # like a bare atom, so `prune` must see both — otherwise `("components" …)`
+    # at a prunable position would bypass pruning yet still parse as real data.
     calls: list[str] = []
 
     def prune(head: str, _depth: int) -> bool:
         calls.append(head)
-        return False
+        return head == "str"
 
-    assert parse_sexpr('(root ("str" 1) ((x)) ())', prune=prune) == (
+    tree = parse_sexpr('(root ("str" 1) ((x)) () (keep 2))', prune=prune)
+    assert tree == ("root", (("x",),), (), ("keep", "2"))
+    assert calls == ["root", "str", "x", "keep"]
+    assert list(children(tree, "str")) == []
+
+
+def test_quoted_head_at_a_prunable_position_is_never_materialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(kicad_sexpr, "MAX_SEXPR_NODES", 10)
+    noise = '("noise" ' + " ".join(['"x"'] * 500) + ")"
+    assert parse_sexpr(f"(root {noise} (keep 1))", prune=lambda h, _d: h == "noise") == (
         "root",
-        ("str", "1"),
-        (("x",),),
-        (),
+        ("keep", "1"),
     )
-    assert calls == ["root", "x"]
+
+
+# ------------------------------------------------------------- control characters
+
+
+@pytest.mark.parametrize(
+    ("text", "offset"),
+    [
+        ("(a b\x00c)", 4),
+        ('(a "b\x01c")', 5),
+        ("(a\x1f)", 2),
+        ("(a (b \x0b))", 6),
+        ("\x0c(a)", 0),
+    ],
+)
+def test_control_characters_are_refused_before_tokenizing(text: str, offset: int) -> None:
+    # SOLUSDEV-252 Phase 4 (S4): NUL/C0 control characters would be accepted
+    # here and rejected by Postgres later — an opaque internal error that logs
+    # design content. Refuse up front with the offset; \t \n \r stay legal.
+    with pytest.raises(SExprSyntaxError, match=f"control character at offset {offset}"):
+        parse_sexpr(text.encode().decode("unicode_escape"))
+
+
+def test_tab_newline_and_carriage_return_stay_legal_inside_strings_and_between_tokens() -> None:
+    assert parse_sexpr('(a\t"x\ty\nz\r"\r\n)') == ("a", "x\ty\nz\r")
+
+
+# ------------------------------------------------------------- memory ceiling
+
+
+def test_eight_mib_of_tiny_atoms_at_a_legal_position_hits_the_node_cap_under_a_memory_ceiling() -> (
+    None
+):
+    # SOLUSDEV-252 Phase 4 (S3): at the REAL `MAX_SEXPR_NODES`, ~8 MiB of the
+    # densest legal input (2-char atoms — 1-char strings are interned by
+    # CPython — under an unpruned `comp` child) must either trip the guard or
+    # stay under a stated allocation ceiling. Measured: the guard trips at
+    # ~1.8 MiB consumed with ~22 MB allocated; the ceiling leaves 2.5× headroom.
+    import tracemalloc
+
+    from solus_api.connectors.kicad_netlist_sexpr import _prune
+
+    body = "ab " * (8 * 1024 * 1024 // 3)
+    text = f'(export (components (comp (ref "U1") (fields (field (name "x") {body})))))'
+    tracemalloc.start()
+    try:
+        with pytest.raises(SExprLimitError):
+            parse_sexpr(text, prune=_prune)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 60 * 1024 * 1024
 
 
 # ------------------------------------------------------------- helpers

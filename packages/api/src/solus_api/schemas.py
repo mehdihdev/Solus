@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
 from solus_api.models import (
@@ -175,6 +176,32 @@ class SolusEntryPatch(StrictModel):
 SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros", "altium", "local"]
 
 
+#: Bulk config keys (committed-export scaffold content, up to 8MB of untrusted
+#: netlist text) are stored but never echoed by the API — a source list must not
+#: round-trip megabytes of ingested content (§7 — bound message sizes).
+_BULK_CONFIG_KEYS = frozenset({"export", "board"})
+
+
+def _bound_bulk_config(config: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Reject an over-cap design input AT THE BOUNDARY (SOLUSDEV-252).
+
+    The committed-export family enforces `MAX_EXPORT_BYTES` when it parses, but
+    that is after the value has been accepted, parsed by Pydantic and written
+    to the row — a 200 MB `board` would be stored and only refused at the next
+    sync. Bound the known bulk keys here so oversized untrusted content never
+    reaches the database (§7 input validation)."""
+    if config is None:
+        return config
+    for key in sorted(_BULK_CONFIG_KEYS):
+        value = config.get(key)
+        if (
+            isinstance(value, str)
+            and len(value.encode("utf-8", "surrogatepass")) > MAX_EXPORT_BYTES
+        ):
+            raise ValueError(f"config['{key}'] exceeds the {MAX_EXPORT_BYTES}-byte limit")
+    return config
+
+
 class SourceCreate(StrictModel):
     """Connect a source directly (type + config; non-OAuth / token providers).
     OAuth providers use the integrations oauth/start flow instead."""
@@ -191,6 +218,7 @@ class SourceCreate(StrictModel):
     connection_id: str | None = Field(default=None, max_length=64)
 
     _name_not_blank = field_validator("name")(_not_blank)
+    _config_bounded = field_validator("config")(_bound_bulk_config)
 
 
 class LocalFolderLink(StrictModel):
@@ -218,6 +246,7 @@ class SourceUpdate(StrictModel):
     config: dict[str, Any] | None = None
 
     _name_not_blank = field_validator("name")(_not_blank)
+    _config_bounded = field_validator("config")(_bound_bulk_config)
 
 
 class SourceDisconnect(StrictModel):
@@ -270,12 +299,6 @@ class OAuthExchange(StrictModel):
 
 
 # --- Response serializers (snake_case dicts inside the §1.4 envelope) ---
-
-
-#: Bulk config keys (committed-export scaffold content, up to 8MB of untrusted
-#: netlist text) are stored but never echoed by the API — a source list must not
-#: round-trip megabytes of ingested content (§7 — bound message sizes).
-_BULK_CONFIG_KEYS = frozenset({"export"})
 
 
 def serialize_source(

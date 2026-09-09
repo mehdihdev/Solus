@@ -291,3 +291,20 @@ def test_inline_text_validates_the_named_key() -> None:
     with pytest.raises(ConnectorError) as too_large:
         connector._inline_text(_ctx(config={"board": "b" * (MAX_EXPORT_BYTES + 1)}), "board")
     assert too_large.value.code == "export_too_large"
+
+
+def test_unknown_component_reference_item_label_is_bounded() -> None:
+    # SOLUSDEV-252 Phase 4 (S7): the one `record` call that interpolated raw
+    # ingested strings into `SyncError.item` — a 60 KB phantom ref must not
+    # persist whole (§7 — bound message sizes).
+    from solus_api.connectors.export_common import LABEL_LIMIT
+
+    phantom = "G" * 60_000
+    netlist = Netlist(
+        components=(Component(designator="U1"),),
+        nets=(Net(name="N1", nodes=(Node("U1", "1"), Node(phantom, "2"))),),
+    )
+    _, _, errors = build_graph(netlist)
+    unknown = [e for e in errors if "unknown component" in e.message]
+    assert len(unknown) == 1
+    assert len(unknown[0].item) <= LABEL_LIMIT + 1

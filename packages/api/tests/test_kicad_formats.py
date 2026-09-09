@@ -108,3 +108,19 @@ def test_unknown_content_refusal() -> None:
     assert "XML or S-expression" in message
     assert ".kicad_pcb" in message
     assert _refusal("unknown", "board").message == message
+
+
+# ------------------------------------------------------------- BOM (S6)
+
+
+def test_bom_prefixed_sexpr_documents_parse_end_to_end() -> None:
+    # SOLUSDEV-252 Phase 4 (S6): the sniffer ignores a UTF-8 BOM but the reader
+    # saw it as content outside the root list — accepted by one, rejected by the
+    # other. Both KiCad S-expression inputs must parse with a BOM.
+    from solus_api.connectors.kicad_netlist import parse_kicad_netlist
+    from solus_api.connectors.kicad_pcb import parse_kicad_pcb
+
+    bom = "\ufeff"
+    assert parse_kicad_netlist(bom + KICAD_SEXPR) == parse_kicad_netlist(KICAD_SEXPR)
+    assert parse_kicad_pcb(bom + " \r\n" + KICAD_PCB) == parse_kicad_pcb(KICAD_PCB)
+    assert len(parse_kicad_netlist(bom + KICAD_SEXPR).components) == 3

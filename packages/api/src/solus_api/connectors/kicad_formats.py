@@ -109,7 +109,10 @@ def read_sexpr_root(
     producing a silently empty graph.
     """
     try:
-        root = parse_sexpr(text, prune=prune)
+        # `detect_kicad_format` ignores a BOM and leading whitespace, so the
+        # reader must too — otherwise a correctly-sniffed, perfectly valid
+        # Windows-authored export dies as "content outside the root list" (S6).
+        root = parse_sexpr(text.lstrip(_LEADING), prune=prune)
     except SExprSyntaxError as exc:
         raise ConnectorError(
             "export_invalid", f"kicad: not a well-formed S-expression ({exc})"

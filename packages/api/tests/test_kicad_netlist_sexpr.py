@@ -190,3 +190,86 @@ def test_resource_guard_trip_is_refused_as_invalid() -> None:
     with pytest.raises(ConnectorError) as excinfo:
         parse_sexpr_netlist(deep)
     assert excinfo.value.code == "export_invalid"
+
+
+def test_control_character_in_atom_or_string_is_refused_as_export_invalid() -> None:
+    # SOLUSDEV-252 Phase 4 (S4): surfaces as the stable `export_invalid`, never
+    # as a Postgres NUL rejection deep in the sync — and nothing is produced.
+    for text in (
+        '(export (components (comp (ref "U1\x00"))) (nets (net (code 1) (name "N"))))',
+        "(export (components (comp (ref U1\x00))) (nets (net (code 1) (name N))))",
+    ):
+        with pytest.raises(ConnectorError) as excinfo:
+            parse_kicad_netlist(text)
+        assert excinfo.value.code == "export_invalid"
+        assert "control character" in str(excinfo.value)
+
+
+def test_unread_sublists_are_never_materialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Scoped traversal at the reader level: a comp's `sheetpath`/`tstamps`/
+    # `description`/`units` and a node's `pinfunction`/`pintype` are never read,
+    # so they must not count against the node guard (S3 — the cap is only
+    # defensible if legitimate dense netlists stay far under it).
+    from solus_api.connectors import kicad_sexpr
+
+    monkeypatch.setattr(kicad_sexpr, "MAX_SEXPR_NODES", 60)
+    noise = " ".join(['"x"'] * 200)
+    text = f"""(export
+      (components
+        (comp (ref "R1") (value "1k") (description {noise}) (sheetpath {noise})
+          (tstamps {noise}) (units {noise})
+          (libsource (lib "Device") (part "R") (description {noise}))
+          (property (name "MPN") (value "RC0603"))))
+      (nets
+        (net (code "1") (name "OK")
+          (node (ref "R1") (pin "1") (pinfunction {noise}) (pintype {noise})))))"""
+    netlist = parse_sexpr_netlist(text)
+    assert netlist.components[0].part_number == "RC0603"
+    assert netlist.components[0].schematic_symbol_name == "R"
+    assert [(n.designator, n.pin) for n in netlist.nets[0].nodes] == [("R1", "1")]
+
+
+def _scaled_to_eight_mib(text: str) -> str:
+    """The real fixture's components and nets replicated with unique refs/net
+    names until the document is ~8 MiB — ordinary KiCad 10 density, no filler."""
+    import re
+
+    def section(head: str) -> str:
+        start = text.index(f"\n\t({head}")
+        end = text.index("\n\t)", start)
+        return text[start:end]
+
+    comps = re.findall(r"\n\t\t\(comp\b.*?\n\t\t\)", section("components"), re.S)
+    nets = re.findall(r"\n\t\t\(net\b.*?\n\t\t\)", section("nets"), re.S)
+    target = 8 * 1024 * 1024
+    parts, size, k = ['(export\n\t(version "E")\n\t(components'], 0, 0
+    while size < target // 2:
+        for comp in comps:
+            item = comp.replace('(ref "', f'(ref "{k}_')
+            parts.append(item)
+            size += len(item)
+        k += 1
+    parts.append("\n\t)\n\t(nets")
+    k = 0
+    while size < target:
+        for net in nets:
+            item = net.replace('(name "', f'(name "{k}_').replace('(ref "', f'(ref "{k}_')
+            parts.append(item)
+            size += len(item)
+        k += 1
+    parts.append("\n\t)\n)\n")
+    return "".join(parts)
+
+
+def test_a_dense_eight_mib_netlist_of_real_kicad_density_parses_under_the_node_cap() -> None:
+    # The node guard must never refuse legitimate input up to the byte cap:
+    # a components+nets-only document (no design/libparts to prune) at real
+    # `kicad-cli` density is the densest legitimate netlist there is.
+    from solus_api.connectors.eda import MAX_EXPORT_BYTES
+
+    big = _scaled_to_eight_mib(SOLUS_SAMPLE_SEXPR_NETLIST.read_text(encoding="utf-8"))
+    assert MAX_EXPORT_BYTES * 0.95 < len(big.encode()) <= MAX_EXPORT_BYTES * 1.05
+    netlist = parse_sexpr_netlist(big)
+    assert len(netlist.components) > 3_000
+    assert len(netlist.nets) > 8_000
+    assert netlist.warnings == ()

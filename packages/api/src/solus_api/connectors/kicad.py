@@ -40,11 +40,6 @@ from solus_api.connectors.kicad_reconcile import mismatch_item, reconcile_kicad
 #: The `SyncContext.config` key the `.kicad_pcb` board text arrives on (§5.2a).
 BOARD_CONFIG_KEY: Final = "board"
 
-#: Joins the two input texts for the content hash. A control character no
-#: KiCad file contains, so `(netlist, board)` pairs can never collide by
-#: shifting bytes across the boundary; an absent side contributes "".
-_HASH_SEPARATOR: Final = "\x1e"
-
 _NO_INPUT_MESSAGE: Final = (
     "kicad: no design input — supply a netlist export on config['export'] (KiCad XML "
     "or S-expression; or via the live acquirer) and/or a .kicad_pcb board file on "
@@ -63,7 +58,13 @@ class KicadConnector(EdaExportConnector):
     config_fields: ClassVar[tuple[str, ...]] = ("export", BOARD_CONFIG_KEY)
 
     def parse(self, text: str) -> Netlist:
-        """The family's single-export entry point: the netlist (either format)."""
+        """The family's single-export entry point: the netlist (either format).
+
+        NOT used by this connector's own `sync()`, which reads two inputs and
+        reconciles them — this satisfies the `EdaExportConnector` contract and
+        the family conformance suite. Anything needing the full KiCad behaviour
+        must go through `sync()`, not here.
+        """
         return parse_kicad_netlist(text)
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
@@ -76,7 +77,7 @@ class KicadConnector(EdaExportConnector):
         return SyncResult(
             entities=entities,
             relations=relations,
-            cursor={"content_sha": _content_sha(_combined(netlist_text, board_text))},
+            cursor={"content_sha": _combined(netlist_text, board_text)},
             errors=[_relabel(error) for error in errors],
         )
 
@@ -87,7 +88,7 @@ class KicadConnector(EdaExportConnector):
             netlist_text, board_text = await self._read_inputs(ctx)
         except ConnectorError:
             return True
-        return _content_sha(_combined(netlist_text, board_text)) != ctx.cursor.get("content_sha")
+        return _combined(netlist_text, board_text) != ctx.cursor.get("content_sha")
 
     async def _read_inputs(self, ctx: SyncContext) -> tuple[str | None, str | None]:
         """`(netlist_text, board_text)` — the acquisition chain for the netlist,
@@ -100,7 +101,11 @@ class KicadConnector(EdaExportConnector):
 
 
 def _combined(netlist_text: str | None, board_text: str | None) -> str:
-    return f"{netlist_text or ''}{_HASH_SEPARATOR}{board_text or ''}"
+    """The change-detection digest over BOTH inputs: each side is hashed first,
+    so the halves are fixed-width and no byte can shift across the boundary
+    (a literal separator cannot promise that — any separator character can
+    appear inside a quoted string). An absent side is a stable empty digest."""
+    return _content_sha(_content_sha(netlist_text or "") + _content_sha(board_text or ""))
 
 
 def _relabel(error: SyncError) -> SyncError:

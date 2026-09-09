@@ -301,3 +301,66 @@ def test_mismatch_item_bounds_an_adversarial_label() -> None:
     long_name = "N" * 500
     item = mismatch_item(f"{MISMATCH_PREFIX}net '{long_name}': on board but not in netlist")
     assert item is not None and len(item) < 100
+
+
+# ------------------------------------------------------ bounded messages (S2)
+
+
+def test_interpolated_ingested_values_are_bounded_in_every_message() -> None:
+    from solus_api.connectors.eda import build_graph
+    from solus_api.connectors.export_common import MESSAGE_LIMIT, TOTAL_BYTES_LIMIT
+
+    huge_a, huge_b, huge_net = "A" * 70_000, "B" * 70_000, "N" * 70_000
+    netlist = Netlist(
+        components=(
+            Component(designator="R1", value=huge_a, footprint=huge_a),
+            Component(designator="R2"),
+            Component(designator=huge_a),
+        ),
+        nets=(Net(name="SIG", nodes=(Node("R1", "1"),)),),
+    )
+    board = Netlist(
+        components=(Component(designator="R1", value=huge_b, footprint=huge_b),),
+        nets=(
+            Net(name=huge_net, nodes=(Node("R1", "1"), Node("R2", "1"))),
+            Net(name="SIG", nodes=(Node("R1", "2"),)),
+        ),
+    )
+    merged = reconcile_kicad(netlist, board)
+    mismatches = _mismatches(merged)
+    assert len(mismatches) >= 6  # value, footprint, 2 pins, net, unplaced R2, unplaced huge
+    assert all(len(w) <= MESSAGE_LIMIT for w in merged.warnings)
+    assert any("value differs" in w and "…" in w for w in mismatches)
+
+    _, _, errors = build_graph(merged)
+    assert all(len(e.message) <= MESSAGE_LIMIT for e in errors)
+    assert sum(len(e.message) + len(e.item) for e in errors) < TOTAL_BYTES_LIMIT
+
+
+# ------------------------------------------------- bounded materialization (S8)
+
+
+class _CountingStr(str):
+    """A designator that counts how many times it is rendered into a message."""
+
+    renders = 0
+
+    def __format__(self, spec: str) -> str:
+        type(self).renders += 1
+        return str.__format__(self, spec)
+
+
+def test_at_most_the_cap_of_finding_strings_are_ever_built() -> None:
+    _CountingStr.renders = 0
+    board_only = 5_000 - len(NETLIST.components)  # + 3 netlist parts not placed = 5,000
+    board = Netlist(
+        components=tuple(Component(designator=_CountingStr(f"X{i}")) for i in range(board_only))
+    )
+
+    merged = reconcile_kicad(NETLIST, board)
+
+    mismatches = _mismatches(merged)
+    assert len(mismatches) == MAX_MISMATCH_WARNINGS + 1
+    assert mismatches[-1] == f"… {5_000 - MAX_MISMATCH_WARNINGS} more board/netlist mismatches"
+    # The remainder was COUNTED, never rendered: only kept findings became strings.
+    assert _CountingStr.renders <= MAX_MISMATCH_WARNINGS

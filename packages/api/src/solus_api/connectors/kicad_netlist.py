@@ -44,6 +44,8 @@ counted on `Netlist.warnings`, so one bad element never fails a whole sync.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from typing import Final
 
 from solus_api.connectors.contracts import ConnectorError
@@ -96,14 +98,98 @@ def pop_mpn(fields: dict[str, str]) -> str | None:
     return None
 
 
+# -------------------------------------------------- shared record builders
+
+
+@dataclass(frozen=True)
+class ComponentRecord:
+    """One `comp` as a format-specific reader found it, before the FAMILY rules
+    (skip counting, MPN popping, libsource composition) are applied."""
+
+    ref: str | None
+    value: str | None
+    footprint: str | None
+    datasheet: str | None
+    fields: Mapping[str, str]
+    library: str | None = None
+    symbol: str | None = None
+
+
+@dataclass(frozen=True)
+class NetRecord:
+    """One `net` as a format-specific reader found it. `nodes` are raw
+    `(ref, pin)` pairs — either half may be missing."""
+
+    name: str | None
+    net_class: str | None
+    nodes: tuple[tuple[str | None, str | None], ...]
+
+
+def build_components(records: Iterable[ComponentRecord], warnings: list[str]) -> list[Component]:
+    """Apply the §5.2 component rules to whatever a reader found.
+
+    Shared by the XML and S-expression readers so the identity handling — MPN
+    popped into `part_number`, libsource composed into `properties`, a ref-less
+    component skipped and COUNTED — cannot drift between the two formats.
+    """
+    components: list[Component] = []
+    skipped = 0
+    for record in records:
+        if not record.ref:
+            skipped += 1
+            continue
+        fields = dict(record.fields)  # never mutate the reader's mapping
+        part_number = pop_mpn(fields)
+        if record.library and record.symbol:
+            fields["libsource"] = f"{record.library}:{record.symbol}"
+        components.append(
+            Component(
+                designator=record.ref,
+                footprint=record.footprint,
+                value=record.value,
+                part_number=part_number,
+                schematic_symbol_name=record.symbol or None,
+                datasheet_ref=record.datasheet,
+                properties=fields,
+            )
+        )
+    if skipped:
+        warnings.append(f"skipped {skipped} component(s) without a ref designator")
+    return components
+
+
+def build_nets(records: Iterable[NetRecord], warnings: list[str]) -> list[Net]:
+    """Apply the §5.2 net rules: a nameless net and a node missing either half
+    are skipped and counted, so a partial parse stays visible (never silent)."""
+    nets: list[Net] = []
+    skipped_nets = 0
+    skipped_nodes = 0
+    for record in records:
+        if not record.name:
+            skipped_nets += 1
+            continue
+        nodes: list[Node] = []
+        for ref, pin in record.nodes:
+            if not ref or not pin:
+                skipped_nodes += 1
+                continue
+            nodes.append(Node(designator=ref, pin=pin))
+        nets.append(Net(name=record.name, nodes=tuple(nodes), net_class=record.net_class))
+    if skipped_nets:
+        warnings.append(f"skipped {skipped_nets} net(s) without a name")
+    if skipped_nodes:
+        warnings.append(f"skipped {skipped_nodes} net node(s) missing ref/pin")
+    return nets
+
+
 # ------------------------------------------------------------------ XML path
 
 
 def _parse_xml_netlist(text: str) -> Netlist:
     root = _parse_xml(text)
     warnings: list[str] = []
-    components = _components(root, warnings)
-    nets = _nets(root, warnings)
+    components = build_components(_component_records(root), warnings)
+    nets = build_nets(_net_records(root), warnings)
     return Netlist(components=tuple(components), nets=tuple(nets), warnings=tuple(warnings))
 
 
@@ -123,59 +209,29 @@ def _parse_xml(text: str) -> ET.Element:
     return root
 
 
-def _components(root: ET.Element, warnings: list[str]) -> list[Component]:
-    components: list[Component] = []
-    skipped = 0
+def _component_records(root: ET.Element) -> Iterator[ComponentRecord]:
+    """Walk the documented XML positions only (§7 scoped traversal) and yield
+    what was found; the family rules live in `build_components`."""
     for comp in _children(root, "components", "comp"):
-        ref = comp.get("ref")
-        if not ref:
-            skipped += 1
-            continue
-        fields = _custom_fields(comp)
-        part_number = pop_mpn(fields)
         libsource = comp.find("libsource")
-        symbol = libsource.get("part") if libsource is not None else None
-        library = libsource.get("lib") if libsource is not None else None
-        if library and symbol:
-            fields["libsource"] = f"{library}:{symbol}"
-        components.append(
-            Component(
-                designator=ref,
-                footprint=_child_text(comp, "footprint"),
-                value=_child_text(comp, "value"),
-                part_number=part_number,
-                schematic_symbol_name=symbol or None,
-                datasheet_ref=_child_text(comp, "datasheet"),
-                properties=fields,
-            )
+        yield ComponentRecord(
+            ref=comp.get("ref"),
+            value=_child_text(comp, "value"),
+            footprint=_child_text(comp, "footprint"),
+            datasheet=_child_text(comp, "datasheet"),
+            fields=_custom_fields(comp),
+            library=libsource.get("lib") if libsource is not None else None,
+            symbol=libsource.get("part") if libsource is not None else None,
         )
-    if skipped:
-        warnings.append(f"skipped {skipped} component(s) without a ref designator")
-    return components
 
 
-def _nets(root: ET.Element, warnings: list[str]) -> list[Net]:
-    nets: list[Net] = []
-    skipped_nets = 0
-    skipped_nodes = 0
+def _net_records(root: ET.Element) -> Iterator[NetRecord]:
     for net in _children(root, "nets", "net"):
-        name = net.get("name")
-        if not name:
-            skipped_nets += 1
-            continue
-        nodes: list[Node] = []
-        for node in net.findall("node"):
-            ref, pin = node.get("ref"), node.get("pin")
-            if not ref or not pin:
-                skipped_nodes += 1
-                continue
-            nodes.append(Node(designator=ref, pin=pin))
-        nets.append(Net(name=name, nodes=tuple(nodes), net_class=net.get("class")))
-    if skipped_nets:
-        warnings.append(f"skipped {skipped_nets} net(s) without a name")
-    if skipped_nodes:
-        warnings.append(f"skipped {skipped_nodes} net node(s) missing ref/pin")
-    return nets
+        yield NetRecord(
+            name=net.get("name"),
+            net_class=net.get("class"),
+            nodes=tuple((node.get("ref"), node.get("pin")) for node in net.findall("node")),
+        )
 
 
 def _custom_fields(comp: ET.Element) -> dict[str, str]:

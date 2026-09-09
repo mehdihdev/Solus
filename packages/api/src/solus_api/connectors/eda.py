@@ -236,7 +236,8 @@ def _map_nets(
         for node in net.nodes:
             if node.designator not in components:
                 recorder.record(
-                    f"{net.name}:{node.designator}", "net node references unknown component"
+                    _label(f"{net.name}:{node.designator}"),
+                    "net node references unknown component",
                 )
                 continue
             pins = pins_by_designator.setdefault(node.designator, [])

@@ -28,19 +28,40 @@ both the hand fixture and the real `kicad-cli` export of the committed sample.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Final
 
-from solus_api.connectors.eda import Component, Net, Netlist, Node
+from solus_api.connectors.eda import Netlist
 from solus_api.connectors.kicad_formats import read_sexpr_root
-from solus_api.connectors.kicad_netlist import is_unset, pop_mpn
+from solus_api.connectors.kicad_netlist import (
+    ComponentRecord,
+    NetRecord,
+    build_components,
+    build_nets,
+    is_unset,
+)
 from solus_api.connectors.kicad_sexpr import Sexp, child, children, string_at
 
 #: The only depth-1 sections the mapping reads; everything else (design,
 #: libparts, libraries, groups, variants) is skipped without materializing.
 _SECTIONS: Final = frozenset({"components", "nets"})
-#: Per-component `(units (unit (pins (pin …))))` — the bulk of a large netlist's
-#: nodes, never read (pin membership comes from `nets`); skipped unread too.
-_COMPONENT_NOISE: Final = frozenset({"units"})
+
+#: Heads this mapping never reads, at any depth — `(units (unit (pins (pin …))))`
+#: alone is the bulk of a large netlist's nodes (pin membership comes from
+#: `nets`), and the rest are free-text KiCad writes beside the fields we map.
+#: Skipping them unread is what keeps the node guard's headroom honest: the
+#: budget must bound ADVERSARIAL input, so legitimate noise must not consume it.
+_UNREAD: Final = frozenset(
+    {
+        "units",
+        "description",
+        "sheetpath",
+        "tstamps",
+        "tstamp",
+        "pinfunction",
+        "pintype",
+    }
+)
 
 
 def parse_sexpr_netlist(text: str) -> Netlist:
@@ -53,69 +74,41 @@ def parse_sexpr_netlist(text: str) -> Netlist:
         text, prune=_prune, expected_head="export", kind="KiCad S-expression netlist"
     )
     warnings: list[str] = []
-    components = _components(root, warnings)
-    nets = _nets(root, warnings)
+    components = build_components(_component_records(root), warnings)
+    nets = build_nets(_net_records(root), warnings)
     return Netlist(components=tuple(components), nets=tuple(nets), warnings=tuple(warnings))
 
 
 def _prune(head: str, depth: int) -> bool:
     if depth == 1:
         return head not in _SECTIONS
-    return depth == 3 and head in _COMPONENT_NOISE
+    return head in _UNREAD
 
 
-def _components(root: Sexp, warnings: list[str]) -> list[Component]:
-    components: list[Component] = []
-    skipped = 0
+def _component_records(root: Sexp) -> Iterator[ComponentRecord]:
+    """Walk the documented S-expression positions only (§7 scoped traversal) and
+    yield what was found — the family rules live in `build_components`, shared
+    with the XML reader so the two mappings cannot drift."""
     for comp in children(child(root, "components"), "comp"):
-        ref = _text(comp, "ref")
-        if not ref:
-            skipped += 1
-            continue
-        fields = _custom_fields(comp)
-        part_number = pop_mpn(fields)
         libsource = child(comp, "libsource")
-        symbol, library = _text(libsource, "part"), _text(libsource, "lib")
-        if library and symbol:
-            fields["libsource"] = f"{library}:{symbol}"
-        components.append(
-            Component(
-                designator=ref,
-                footprint=_value_text(comp, "footprint"),
-                value=_value_text(comp, "value"),
-                part_number=part_number,
-                schematic_symbol_name=symbol or None,
-                datasheet_ref=_value_text(comp, "datasheet"),
-                properties=fields,
-            )
+        yield ComponentRecord(
+            ref=_text(comp, "ref"),
+            value=_value_text(comp, "value"),
+            footprint=_value_text(comp, "footprint"),
+            datasheet=_value_text(comp, "datasheet"),
+            fields=_custom_fields(comp),
+            library=_text(libsource, "lib"),
+            symbol=_text(libsource, "part"),
         )
-    if skipped:
-        warnings.append(f"skipped {skipped} component(s) without a ref designator")
-    return components
 
 
-def _nets(root: Sexp, warnings: list[str]) -> list[Net]:
-    nets: list[Net] = []
-    skipped_nets = 0
-    skipped_nodes = 0
+def _net_records(root: Sexp) -> Iterator[NetRecord]:
     for net in children(child(root, "nets"), "net"):
-        name = _text(net, "name")
-        if not name:
-            skipped_nets += 1
-            continue
-        nodes: list[Node] = []
-        for node in children(net, "node"):
-            ref, pin = _text(node, "ref"), _text(node, "pin")
-            if not ref or not pin:
-                skipped_nodes += 1
-                continue
-            nodes.append(Node(designator=ref, pin=pin))
-        nets.append(Net(name=name, nodes=tuple(nodes), net_class=_text(net, "class")))
-    if skipped_nets:
-        warnings.append(f"skipped {skipped_nets} net(s) without a name")
-    if skipped_nodes:
-        warnings.append(f"skipped {skipped_nodes} net node(s) missing ref/pin")
-    return nets
+        yield NetRecord(
+            name=_text(net, "name"),
+            net_class=_text(net, "class"),
+            nodes=tuple((_text(node, "ref"), _text(node, "pin")) for node in children(net, "node")),
+        )
 
 
 def _custom_fields(comp: Sexp) -> dict[str, str]:
