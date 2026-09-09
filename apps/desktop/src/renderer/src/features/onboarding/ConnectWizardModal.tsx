@@ -23,10 +23,8 @@ import {
 } from './connectSteps'
 import type { CatalogEntry } from './integrationCatalog'
 import { integrationLogo } from './integrationLogos'
+import { allowsMultipleFiles, exportFileAccept, exportFilePrompt } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
-
-/** Committed netlist exports a user can pick (KiCad XML netlist first). */
-export const EXPORT_FILE_ACCEPT = '.xml,.net'
 
 const LINK_DOTS = 6
 
@@ -42,10 +40,11 @@ export interface ConnectWizardModalProps {
   linkedAccount?: { login: string | null } | null
   /** Start (or retry) the flow — OAuth path. */
   onBegin: () => void
-  /** Start the flow with the user's picked committed export. The FILE is
-   * handed over unread — the wizard glue validates its size first, so a
-   * multi-GB pick never gets slurped into renderer memory. */
-  onPickFile: (file: File) => void
+  /** Start the flow with the user's picked committed export(s) — a netlist
+   * and/or a board. The FILES are handed over unread — the wizard glue
+   * validates their size first, so a multi-GB pick never gets slurped into
+   * renderer memory. */
+  onPickFiles: (files: File[]) => void
   /** Resolve the picker step (null cancels). */
   onSelect: (items: SelectableItem[] | null) => void
   /** Resolve the details-form step. */
@@ -313,25 +312,55 @@ function BridgeAction({
   )
 }
 
-/** The step-zero call to action: pick the export file, or start the OAuth flow. */
+/** The committed-export pick: a hidden file input behind a button, with the
+ * provider's own prompt (KiCad takes a netlist and/or a board in one pick). */
+function ExportFilePick({
+  entry,
+  onPickFiles
+}: Pick<ConnectWizardModalProps, 'entry' | 'onPickFiles'>): React.JSX.Element {
+  const fileInput = useRef<HTMLInputElement | null>(null)
+  const prompt = exportFilePrompt(entry.id)
+
+  const pickFiles = (input: HTMLInputElement): void => {
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    if (files.length > 0) onPickFiles(files)
+  }
+
+  return (
+    <>
+      <input
+        ref={fileInput}
+        type="file"
+        accept={exportFileAccept(entry.id)}
+        multiple={allowsMultipleFiles(entry.id)}
+        aria-label={prompt.ariaLabel}
+        style={{ display: 'none' }}
+        onChange={(e) => pickFiles(e.currentTarget)}
+      />
+      <Button kind="primary" size="sm" onClick={() => fileInput.current?.click()}>
+        <Icons.file size={12} /> {prompt.button}
+      </Button>
+      {prompt.hint && (
+        <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--mut)' }}>
+          {prompt.hint}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** The step-zero call to action: pick the export file(s), or start the OAuth flow. */
 function IdleAction({
   entry,
   linkedAccount,
   onBegin,
-  onPickFile,
+  onPickFiles,
   onClose
 }: Pick<
   ConnectWizardModalProps,
-  'entry' | 'linkedAccount' | 'onBegin' | 'onPickFile' | 'onClose'
+  'entry' | 'linkedAccount' | 'onBegin' | 'onPickFiles' | 'onClose'
 >): React.JSX.Element {
-  const fileInput = useRef<HTMLInputElement | null>(null)
-
-  const pickFile = (input: HTMLInputElement): void => {
-    const file = input.files?.[0]
-    input.value = ''
-    if (file) onPickFile(file)
-  }
-
   if (entry.mode === 'local-bridge') return <BridgeAction entry={entry} onClose={onClose} />
   if (entry.mode !== 'export-file') {
     return (
@@ -350,21 +379,7 @@ function IdleAction({
       </>
     )
   }
-  return (
-    <>
-      <input
-        ref={fileInput}
-        type="file"
-        accept={EXPORT_FILE_ACCEPT}
-        aria-label="Choose a committed netlist export"
-        style={{ display: 'none' }}
-        onChange={(e) => pickFile(e.currentTarget)}
-      />
-      <Button kind="primary" size="sm" onClick={() => fileInput.current?.click()}>
-        <Icons.file size={12} /> Choose export file
-      </Button>
-    </>
-  )
+  return <ExportFilePick entry={entry} onPickFiles={onPickFiles} />
 }
 
 /** Whatever input the busy flow is waiting on, or its live progress line. */

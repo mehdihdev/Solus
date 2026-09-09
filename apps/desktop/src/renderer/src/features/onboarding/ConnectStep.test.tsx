@@ -175,7 +175,7 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
     // The tile opens the wizard, whose file step hosts the (hidden) netlist
     // picker; picking a file hands its CONTENT to the orchestration.
     await userEvent.click(screen.getByText('KiCad'))
-    const input = screen.getByLabelText('Choose a committed netlist export')
+    const input = screen.getByLabelText('Choose a netlist export or board file')
     const netlist = '<export version="E"><components/><nets/></export>'
     const file = new File([netlist], 'power-board.xml', { type: 'text/xml' })
     await act(async () => {
@@ -186,7 +186,7 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
     const [, projectId, provider, picked] = mockedEda.mock.calls[0]
     expect(projectId).toBe('p1')
     expect(provider).toBe('kicad')
-    expect(picked).toEqual({ fileName: 'power-board.xml', content: netlist })
+    expect(picked).toEqual({ netlist: { fileName: 'power-board.xml', content: netlist } })
   })
 
   it('reports an honest error when the workspace never linked', async () => {
@@ -194,7 +194,7 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     await userEvent.click(screen.getByText('KiCad'))
-    const input = screen.getByLabelText('Choose a committed netlist export')
+    const input = screen.getByLabelText('Choose a netlist export or board file')
     const file = new File(['<x/>'], 'a.xml', { type: 'text/xml' })
     await act(async () => {
       fireEvent.change(input, { target: { files: [file] } })

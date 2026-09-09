@@ -19,6 +19,7 @@ import { linkedAccountFor } from '../workspace/useAccountConnections'
 import type { WizardScope } from './connectSteps'
 import { EMPTY_EXPORT_ERROR, MAX_EXPORT_BYTES, OVERSIZE_EXPORT_ERROR } from './edaConnect'
 import type { CatalogEntry } from './integrationCatalog'
+import { assembleExportInputs, NO_FILES_ERROR } from './kicadFiles'
 import { noBridgeError } from './oauthConnect'
 import { useOnboardingStore } from './onboardingStore'
 import { useEdaConnect } from './useEdaConnect'
@@ -26,7 +27,7 @@ import { connectOptions, useOAuthConnect } from './useOAuthConnect'
 
 export const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
 
-/** One begin/pickFile invocation for one entry. Latches are PER ATTEMPT so a
+/** One begin/pickFiles invocation for one entry. Latches are PER ATTEMPT so a
  * late-settling abandoned flow is never governed by a newer attempt's cancel. */
 interface Attempt {
   cancelled: boolean
@@ -54,14 +55,22 @@ export interface UseConnectWizard {
   open: (entry: CatalogEntry) => void
   /** Start (or retry) the flow for the active entry — OAuth path. */
   begin: () => Promise<void>
-  /** Start the flow with the user's picked export file — validated by size
-   * BEFORE it is read into memory. */
-  pickFile: (file: File) => Promise<void>
+  /** Start the flow with the user's picked export files (a netlist and/or a
+   * board) — every file is validated by size BEFORE any is read into memory,
+   * then routed by CONTENT to its config key. */
+  pickFiles: (files: File[]) => Promise<void>
   /** Close the wizard. Mid-flight this cancels the attempt. */
   close: () => void
   select: ReturnType<typeof useOAuthConnect>['select']
   submitConfig: ReturnType<typeof useOAuthConnect>['submitConfig']
   chooseAccess: ReturnType<typeof useOAuthConnect>['chooseAccess']
+}
+
+/** The size-only pre-read check for one picked file, or null when it may be read. */
+function fileSizeError(file: File): string | null {
+  if (file.size === 0) return EMPTY_EXPORT_ERROR
+  if (file.size > MAX_EXPORT_BYTES) return OVERSIZE_EXPORT_ERROR
+  return null
 }
 
 export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWizard {
@@ -127,26 +136,32 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     settle(entry, attempt, result)
   }
 
-  const pickFile = async (file: File): Promise<void> => {
+  const pickFiles = async (files: File[]): Promise<void> => {
     const entry = active
     if (!entry || !guard(entry)) return
-    // Bound by size BEFORE file.text() — reading a multi-GB pick into a string
-    // would hang the renderer long before the engine's own validation runs.
+    // Bound by size BEFORE any file.text() — reading a multi-GB pick into a
+    // string would hang the renderer long before the engine's own validation.
     const { failConnect } = useOnboardingStore.getState()
-    if (file.size === 0) {
-      failConnect(entry.id, EMPTY_EXPORT_ERROR)
-      return
-    }
-    if (file.size > MAX_EXPORT_BYTES) {
-      failConnect(entry.id, OVERSIZE_EXPORT_ERROR)
+    const sizeError = files.length === 0 ? NO_FILES_ERROR : files.map(fileSizeError).find(Boolean)
+    if (sizeError) {
+      failConnect(entry.id, sizeError)
       return
     }
     const attempt = beginAttempt(entry)
-    const content = await file.text()
+    const read = await Promise.all(
+      files.map(async (file) => ({ fileName: file.name, content: await file.text() }))
+    )
     // The wizard may have closed during the read — a cancelled attempt must
     // not go on to create and sync a source.
     if (attempt.cancelled) return
-    const result = await eda.start(projectId!, entry.id, { fileName: file.name, content })
+    const assembled = assembleExportInputs(entry.id, read)
+    if (!assembled.ok) {
+      // Guidance, not a flight: settle so close() keeps the error retryable.
+      failConnect(entry.id, assembled.error)
+      settle(entry, attempt, { ok: false })
+      return
+    }
+    const result = await eda.start(projectId!, entry.id, assembled.inputs)
     settle(entry, attempt, result)
   }
 
@@ -171,7 +186,7 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     linkedAccount,
     open: setActive,
     begin,
-    pickFile,
+    pickFiles,
     close,
     select: oauth.select,
     submitConfig: oauth.submitConfig,

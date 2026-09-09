@@ -50,15 +50,25 @@ const EXPORT_FILE: CatalogEntry = {
   kind: 'PCB',
   mark: 'Ki',
   mode: 'export-file',
-  configFields: ['export'],
+  configFields: ['export', 'board'],
   selection: null,
   accessModes: null,
   hosted: null
 }
 
+const SINGLE_EXPORT_FILE: CatalogEntry = {
+  ...EXPORT_FILE,
+  id: 'altium',
+  name: 'Altium',
+  mark: 'Al',
+  configFields: ['export']
+}
+
+const KICAD_HINT = /Schematics \(\.kicad_sch\) can't be read directly yet/
+
 interface Handlers {
   onBegin: ReturnType<typeof vi.fn>
-  onPickFile: ReturnType<typeof vi.fn>
+  onPickFiles: ReturnType<typeof vi.fn>
   onSelect: ReturnType<typeof vi.fn>
   onSubmitConfig: ReturnType<typeof vi.fn>
   onChooseAccess: ReturnType<typeof vi.fn>
@@ -68,7 +78,7 @@ interface Handlers {
 function renderWizard(entry: CatalogEntry, state?: ConnectionState): Handlers {
   const handlers: Handlers = {
     onBegin: vi.fn(),
-    onPickFile: vi.fn(),
+    onPickFiles: vi.fn(),
     onSelect: vi.fn(),
     onSubmitConfig: vi.fn(),
     onChooseAccess: vi.fn(),
@@ -187,21 +197,50 @@ describe('ConnectWizardModal', () => {
     expect(handlers.onChooseAccess).toHaveBeenCalledWith('write')
   })
 
-  it('lets a committed-export connector pick its file and hands over the FILE unread', () => {
+  it('lets a committed-export connector pick its files and hands over the FILES unread', () => {
     const handlers = renderWizard(EXPORT_FILE)
-    const input = screen.getByLabelText('Choose a committed netlist export') as HTMLInputElement
-    const file = new File(['<netlist/>'], 'power-board.xml', { type: 'text/xml' })
-    const text = vi.spyOn(file, 'text')
-    fireEvent.change(input, { target: { files: [file] } })
-    expect(handlers.onPickFile).toHaveBeenCalledWith(file)
-    // The wizard never reads the file — the glue validates size FIRST.
+    const input = screen.getByLabelText('Choose a netlist export or board file') as HTMLInputElement
+    const netlist = new File(['<netlist/>'], 'power-board.xml', { type: 'text/xml' })
+    const board = new File(['(kicad_pcb)'], 'power-board.kicad_pcb')
+    const text = vi.spyOn(netlist, 'text')
+    fireEvent.change(input, { target: { files: [netlist, board] } })
+    expect(handlers.onPickFiles).toHaveBeenCalledWith([netlist, board])
+    // The wizard never reads the files — the glue validates size FIRST.
     expect(text).not.toHaveBeenCalled()
+  })
+
+  it('offers kicad a multi-file input accepting netlists and boards, with the schematic hint', () => {
+    renderWizard(EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a netlist export or board file') as HTMLInputElement
+    expect(input.multiple).toBe(true)
+    expect(input.accept.split(',')).toEqual(['.xml', '.net', '.kicad_pcb'])
+    expect(screen.getByRole('button', { name: /choose netlist \/ board file/i })).toBeTruthy()
+    expect(screen.getByText(KICAD_HINT)).toBeTruthy()
+  })
+
+  it('keeps the single netlist pick for other export connectors, without the kicad hint', () => {
+    const handlers = renderWizard(SINGLE_EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a committed netlist export') as HTMLInputElement
+    expect(input.multiple).toBe(false)
+    expect(input.accept).toBe('.xml,.net')
+    expect(screen.queryByText(KICAD_HINT)).toBeNull()
+    const file = new File(['<netlist/>'], 'design.xml')
+    fireEvent.change(input, { target: { files: [file] } })
+    expect(handlers.onPickFiles).toHaveBeenCalledWith([file])
+    expect(screen.getByRole('button', { name: /choose export file/i })).toBeTruthy()
+  })
+
+  it('ignores an empty file dialog (cancelled pick)', () => {
+    const handlers = renderWizard(EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a netlist export or board file')
+    fireEvent.change(input, { target: { files: [] } })
+    expect(handlers.onPickFiles).not.toHaveBeenCalled()
   })
 
   it('retries a committed-export connector with the file picker, never the OAuth path', () => {
     const handlers = renderWizard(EXPORT_FILE, { phase: 'error', error: 'Sync failed.' })
     expect(screen.getByText('Sync failed.')).toBeTruthy()
-    const again = screen.getByRole('button', { name: /choose export file/i })
+    const again = screen.getByRole('button', { name: /choose netlist \/ board file/i })
     expect(again).toBeTruthy()
     fireEvent.click(again)
     expect(handlers.onBegin).not.toHaveBeenCalled()
@@ -238,7 +277,7 @@ describe('ConnectWizardModal', () => {
       <ConnectWizardModal
         entry={OAUTH_PICK}
         onBegin={vi.fn()}
-        onPickFile={vi.fn()}
+        onPickFiles={vi.fn()}
         onSelect={vi.fn()}
         onSubmitConfig={vi.fn()}
         onChooseAccess={vi.fn()}
@@ -282,7 +321,7 @@ describe('untrusted content rendering', () => {
           selectionMode: 'multi'
         }}
         onBegin={vi.fn()}
-        onPickFile={vi.fn()}
+        onPickFiles={vi.fn()}
         onSelect={vi.fn()}
         onSubmitConfig={vi.fn()}
         onChooseAccess={vi.fn()}
@@ -309,7 +348,7 @@ describe('untrusted content rendering', () => {
         entry={entry}
         state={{ phase: 'busy', stage: 'access', accessModes: entry.accessModes! }}
         onBegin={vi.fn()}
-        onPickFile={vi.fn()}
+        onPickFiles={vi.fn()}
         onSelect={vi.fn()}
         onSubmitConfig={vi.fn()}
         onChooseAccess={vi.fn()}
@@ -326,7 +365,7 @@ describe('untrusted content rendering', () => {
         entry={OAUTH_PICK}
         state={{ phase: 'error', error: `failed: ${PAYLOAD}` }}
         onBegin={vi.fn()}
-        onPickFile={vi.fn()}
+        onPickFiles={vi.fn()}
         onSelect={vi.fn()}
         onSubmitConfig={vi.fn()}
         onChooseAccess={vi.fn()}

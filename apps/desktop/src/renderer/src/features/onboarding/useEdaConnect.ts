@@ -7,7 +7,7 @@ import {
   runEdaConnect,
   type EdaConnectApi,
   type EdaConnectResult,
-  type EdaExportFile
+  type EdaExportFiles
 } from './edaConnect'
 import { useOnboardingStore } from './onboardingStore'
 
@@ -15,9 +15,9 @@ import { useOnboardingStore } from './onboardingStore'
 const edaApi: EdaConnectApi = { createSource, triggerSync, getSyncs, getSource }
 
 export interface UseEdaConnect {
-  /** Begin the real connect for a provider with the picked export file.
+  /** Begin the real connect for a provider with the picked, routed files.
    * Resolves with the structured result so callers can clean up on cancel. */
-  start: (projectId: string, provider: string, file: EdaExportFile) => Promise<EdaConnectResult>
+  start: (projectId: string, provider: string, files: EdaExportFiles) => Promise<EdaConnectResult>
   /** Abandon the in-flight connect: the sync itself cannot be stopped, but the
    * attempt goes quiet — no further progress writes resurrect the tile state
    * the wizard forgot. The caller reads `start`'s result to act on the outcome. */
@@ -31,7 +31,7 @@ export function useEdaConnect(): UseEdaConnect {
   const start = async (
     projectId: string,
     provider: string,
-    file: EdaExportFile
+    files: EdaExportFiles
   ): Promise<EdaConnectResult> => {
     const attempt = { cancelled: false }
     currentAttempt.current = attempt
@@ -44,7 +44,7 @@ export function useEdaConnect(): UseEdaConnect {
       },
       projectId,
       provider,
-      file
+      files
     )
   }
 

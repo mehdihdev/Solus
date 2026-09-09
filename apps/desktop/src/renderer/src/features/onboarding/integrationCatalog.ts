@@ -104,7 +104,7 @@ const CURATED: Readonly<Record<string, CuratedEntry>> = {
   },
   kicad: {
     mode: 'export-file',
-    configFields: ['export'],
+    configFields: ['export', 'board'],
     selection: null,
     accessModes: null,
     hosted: null

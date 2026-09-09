@@ -490,7 +490,7 @@ export function ConnectedAccountsCard({
             wizard.linkedAccount ? { login: wizard.linkedAccount.account_login } : null
           }
           onBegin={() => void wizard.begin()}
-          onPickFile={(file) => void wizard.pickFile(file)}
+          onPickFiles={(files) => void wizard.pickFiles(files)}
           onSelect={wizard.select}
           onSubmitConfig={wizard.submitConfig}
           onChooseAccess={wizard.chooseAccess}
