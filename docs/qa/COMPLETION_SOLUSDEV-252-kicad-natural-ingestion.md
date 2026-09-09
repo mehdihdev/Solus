@@ -87,10 +87,10 @@ fixes: backend unit subset 189 passed, connector/sources/integration subset 86 p
 | ruff (all 20 changed `.py`)             | clean                                                                  |
 | ruff format                             | clean (588 files)                                                      |
 | mypy (`uv run mypy packages/api/src`)   | clean — 279 source files                                               |
-| Full backend suite (private DB)         | see **Final verification** below                                       |
+| Full backend suite (private DB)         | 6418 passed, 8 skipped, 1 xfailed                                      |
 | eslint (changed `.ts`/`.tsx`)           | 0 errors, 8 `max-lines-per-function` warnings (test blocks; `useConnectWizard` was already over on `main`) |
 | tsc `--noEmit` (`apps/desktop`)         | clean                                                                  |
-| vitest (related to changed files)       | 308 passed                                                             |
+| vitest (full desktop suite)             | 3369 passed across 306 files                                           |
 
 The pre-existing cryptography/openai `INTERNAL ERROR` lines mypy prints are unrelated to this
 diff and reproduce on `main`.
@@ -214,7 +214,12 @@ asked for still holds (≤ 16 MB read for KiCad, ≤ 8 MB elsewhere).
 ## Final verification
 
 - **Full backend suite, pre-fix (private DB):** 6396 passed, 8 skipped, 1 xfailed (25m 44s).
-- **Full backend suite, post-fix (private DB):** FULL_SUITE_RESULT
+- **Full backend suite, post-fix (private DB):** 6418 passed, 8 skipped, 1 xfailed (20m 45s).
+  The first post-fix run had ONE failure — `test_context.py::test_no_production_code_uses_bare_render`,
+  a repo-wide text guard that forbids prompt assembly's method name anywhere in production
+  code. The S8 fix had introduced a method with that name in the reconciler. Fixed by renaming
+  the method (`a223b07`); the guard was left strict and untouched.
+- **Full desktop suite:** 306 files, 3369 tests, all passing.
 - **Phase 4 reviews:** code review WARNING → its one HIGH (BOM) fixed; python review APPROVE
   with one MEDIUM (duplication) → fixed; typescript review WARNING → both findings fixed;
   security review FAIL (3 HIGH, 6 MEDIUM) → all fixed, with tests naming each finding.
