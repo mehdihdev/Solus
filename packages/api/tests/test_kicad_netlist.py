@@ -1,18 +1,27 @@
-"""KiCad XML netlist parser tests (SOLUSDEV-100, W0-08 §5.2).
+"""KiCad netlist dispatcher + XML parser tests (SOLUSDEV-100/252, W0-08 §5.2).
 
 The v1 KiCad format is the XML netlist (`kicad-cli sch export netlist --format
 kicadxml`) — schema-stable v5–v10 and stdlib-parseable. The parser produces the
 shared EDA IR; identity fields (MPN → `part_number`, libsource → `schematic_symbol_name`,
 datasheet → `datasheet_ref`) feed the fingerprint per W0-08 §5.2. Netlist text is
-untrusted DATA (§7): DTD/entity tricks are refused, the S-expr `.net` format is
-rejected with re-export guidance (XML-only v1), and lenient handling inside valid
-XML surfaces what was dropped via `Netlist.warnings`. Pure unit — no DB, no network.
+untrusted DATA (§7): DTD/entity tricks are refused, raw `.kicad_sch`/`.kicad_pro`
+files are refused with guidance naming the accepted routes (SOLUSDEV-252), and
+lenient handling inside valid XML surfaces what was dropped via `Netlist.warnings`.
+`parse_kicad_netlist` is the content-sniffing dispatcher: XML here, the default
+S-expression `.net` in `kicad_netlist_sexpr` (parity-tested there). Pure unit —
+no DB, no network.
 """
 
 from __future__ import annotations
 
 import pytest
-from fixtures.kicad_sample import KICAD_XML
+from fixtures.kicad_sample import (
+    KICAD_PCB,
+    KICAD_PROJECT_HEAD,
+    KICAD_SCHEMATIC_HEAD,
+    KICAD_SEXPR,
+    KICAD_XML,
+)
 from solus_api.connectors.contracts import ConnectorError
 from solus_api.connectors.eda import Component
 from solus_api.connectors.kicad_netlist import parse_kicad_netlist
@@ -180,11 +189,50 @@ def test_non_netlist_xml_root_is_refused() -> None:
     assert excinfo.value.code == "export_invalid"
 
 
-def test_sexpr_netlist_is_rejected_with_reexport_guidance() -> None:
-    # XML-only v1 (design review Q2): the default S-expr `.net` gets a clear
-    # "re-export as XML" error, not a confusing parse failure.
-    sexpr = '(export (version "E") (components (comp (ref "U1"))))'
+def test_sexpr_netlist_is_accepted_as_a_first_class_equal() -> None:
+    # SOLUSDEV-252: the default `.net` S-expression export parses through the
+    # same dispatcher to the same IR as the XML export (parity is asserted in
+    # test_kicad_netlist_sexpr.py).
+    netlist = parse_kicad_netlist(KICAD_SEXPR)
+    assert {c.designator for c in netlist.components} == {"U1", "R1", "C1"}
+    assert {n.name for n in netlist.nets} == {"VCC", "GND", "SIGNAL"}
+    assert netlist.warnings == ()
+
+
+def test_custom_field_collision_later_property_wins() -> None:
+    assert _components()["U1"].properties["Grade"] == "industrial"
+
+
+# ------------------------------------------- refused formats (SOLUSDEV-252)
+
+
+def _refused(text: str) -> str:
     with pytest.raises(ConnectorError) as excinfo:
-        parse_kicad_netlist(sexpr)
+        parse_kicad_netlist(text)
     assert excinfo.value.code == "export_format_unsupported"
-    assert "kicad-cli" in str(excinfo.value)
+    return str(excinfo.value)
+
+
+def test_raw_schematic_is_refused_naming_both_accepted_routes() -> None:
+    message = _refused(KICAD_SCHEMATIC_HEAD)
+    assert ".kicad_sch" in message
+    assert "kicad-cli sch export netlist" in message
+    assert ".kicad_pcb" in message
+
+
+def test_project_file_is_refused_naming_both_accepted_routes() -> None:
+    message = _refused(KICAD_PROJECT_HEAD)
+    assert ".kicad_pro" in message
+    assert "Export a netlist" in message
+    assert ".kicad_pcb" in message
+
+
+def test_board_given_as_netlist_is_refused_with_redirect() -> None:
+    assert "supply it as the board, not as the netlist export" in _refused(KICAD_PCB)
+
+
+def test_unrecognized_content_is_refused() -> None:
+    message = _refused("this is not a kicad file of any kind")
+    assert "unrecognized file" in message
+    assert "XML or S-expression" in message
+    assert ".kicad_pcb" in message
