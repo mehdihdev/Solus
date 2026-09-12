@@ -1,4 +1,5 @@
 import type { Connection, SelectableItem } from '../../lib/api/resources'
+import { ProviderMark } from '../workspace/ConnectedAccountsCard'
 import { isServiceAdded, type useServiceAttachments } from './useServiceAttachments'
 import { supportsWorkspaceService } from './serviceAttachments'
 import type { CatalogSnapshot, DocumentListing, ServiceCatalog } from './serviceCatalog'
@@ -28,10 +29,15 @@ export function ServiceAccountPanel({
           <button
             type="button"
             aria-expanded={expanded === account.id}
+            aria-label={`${account.provider} · ${account.account_login ?? account.provider}`}
             disabled={account.status !== 'connected' || !supportsWorkspaceService(account.provider)}
             onClick={() => onExpand(account.id)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
           >
-            {account.provider} · {account.account_login ?? 'account'}
+            <ProviderMark
+              entry={{ id: account.provider, mark: account.provider.slice(0, 1).toUpperCase() }}
+            />
+            {account.account_login ?? account.provider}
           </button>
           {account.last_error && <p role="alert">{account.last_error.message}</p>}
           {expanded === account.id && (

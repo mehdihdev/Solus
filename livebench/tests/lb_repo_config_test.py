@@ -3,6 +3,7 @@ addresses, models and calibration — with provenance — through a parser regis
 readers know shapes, not vendors; a vendor idiom is a plugin parser."""
 
 import json
+import os
 from pathlib import Path
 from typing import ClassVar
 
@@ -14,6 +15,7 @@ from livebench.hardware.repo_config import (
     RepoConfigParser,
     RepoParserRegistry,
     RepoPartDecl,
+    iter_repo_files,
     match_configs,
     scan_repo,
 )
@@ -131,3 +133,24 @@ def test_generic_parser_is_the_only_builtin_and_names_no_vendor() -> None:
 
     source = Path(module.__file__).read_text().lower()
     assert re.search(r"\b(feetech|dynamixel|lerobot|sts3215|px4|odrive|mavlink)\b", source) is None
+
+
+# ── review fixes: the walk never follows a link or reads a non-file ─────────────
+
+
+def test_scan_never_follows_symlinks_or_reads_special_files(tmp_path: Path) -> None:
+    root, outside = tmp_path / "repo", tmp_path / "outside"
+    _repo_file(outside, "secret.yaml", "motors:\n  a: {id: 1}\n")
+    good = _repo_file(root, "arm.yaml", "motors:\n  a: {id: 1}\n")
+    (root / "leak.yaml").symlink_to(outside / "secret.yaml")
+    (root / "vendor").symlink_to(outside, target_is_directory=True)
+    os.mkfifo(root / "pipe.yaml")
+    assert iter_repo_files(root) == [good]
+    assert [m.source for m in scan_repo(root, RepoParserRegistry.with_generic())] == [str(good)]
+
+
+def test_skipped_entries_count_against_the_walk_budget(tmp_path: Path) -> None:
+    for i in range(30):
+        os.mkfifo(tmp_path / f"p{i:02d}")
+    _repo_file(tmp_path, "zzz.yaml", "x")
+    assert iter_repo_files(tmp_path, max_files=2) == []  # junk exhausted the budget first

@@ -40,6 +40,7 @@ from solus_api.graph.neighborhood import (
     load_neighborhood,
     to_graph_context,
 )
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import Domain
 from solus_api.rag import retrieval
 from solus_api.widgets.graph_nodes import NON_WORKSPACE_DOMAINS
@@ -192,7 +193,7 @@ class DbSolSystems:
         project_id = filter.project_id
         bucket = (
             f"{kind}|{k}|{','.join(sorted(filter.source_types or []))}"
-            f"|{','.join(sorted(filter.domains or []))}"
+            f"|{','.join(sorted(filter.domains or []))}|{current_scope(project_id).replacements}"
         )
         cached = self._cache.lookup(project_id, bucket, query_text, None)
         if cached is not None:

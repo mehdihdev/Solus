@@ -76,7 +76,7 @@ Workspace-confined; the workspace IS the linked folder. Composed names `code.<to
 
 | tool                 | gated   | args                                                                                       | answer                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------- | ------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `probe_environment`  | no      | `{}`                                                                                       | `{python: {path, version} \| null, interpreters: [{path, version}] ≤8, venv: {path, python_version, packages: [{name, version}] ≤300, truncated} \| null, conda: {path, envs: [names] ≤32} \| null, uv: {path, version} \| null}` — `venv` is the workspace's `.venv`/`venv`/`env` (first found); packages via `<venv>/bin/python -m pip list --format json`, or `uv pip list --python <venv python>` when the venv has no pip — a `uv venv` ships none (argv, 60 s) |
+| `probe_environment`  | no      | `{environment?: "sim"}`                                                                                       | `{python: {path, version} \| null, interpreters: [{path, version}] ≤8, venv: {path, python_version, packages: [{name, version}] ≤300, truncated} \| null, conda: {path, envs: [names] ≤32} \| null, uv: {path, version} \| null}` — `venv` is the workspace's `.venv`/`venv`/`env` (first found); packages via `<venv>/bin/python -m pip list --format json`, or `uv pip list --python <venv python>` when the venv has no pip — a `uv venv` ships none (argv, 60 s) |
 | `plan`               | no      | `{action: create_environment\|install\|run\|test, args: {...}}`                            | `{argv: [...], cwd: ".", ok: bool, reason: str \| null}` — the EXACT argv the action would run, or the refusal reason. Pure: no execution                                                                                                                                                                                                                                 |
 | `create_environment` | **yes** | `{path?: ".venv", python?: "3.12"}`                                                        | `{ok, path, argv, exit_code, stdout_tail, stderr_tail, duration_ms}` — `python3[.X] -m venv <path>` (uv when present: `uv venv --python X <path>`); refuses an existing path                                                                                                                                                                                              |
 | `install`            | **yes** | `{packages: [≤64 PEP 508 strings], environment?: ".venv"}`                                 | same result shape — `<venv>/bin/python -m pip install -- <pkgs…>` (uv pip when present); refuses `-`-prefixed items, URLs, paths                                                                                                                                                                                                                                          |
@@ -102,9 +102,10 @@ source_files, requirements: [{name, specifier, source_file}]}], conflicts: [Warn
 split: bool}`. Not gated.
 - Bridge tools `code.create_environment`, `code.install`, `code.run`, `code.test`
   (`requires_confirmation: true` from the allowlist): the cloud preview (`bridge/previews.py`)
-  calls `code.plan` with the same args and renders rows `command: <argv joined>`, `cwd`, plus the
-  refusal reason when `plan.ok` is false, so approving means approving that argv; the gate's
-  divergence check re-plans at approve time.
+  calls `code.plan` with the same args and renders the exact command in bounded rows with
+  its working directory and plan fingerprint. A failed or oversized plan is refused.
+  The gate re-plans at approve time; a one-use snapshot also rejects changes between
+  that final preview and invocation.
 - After an approved `code.run`/`code.test` with `exit_code != 0`, the API files ONE Error logging
   entry: `"<argv joined> exited <code>\n\n<output tail ≤ 3000 chars: stdout then stderr>"`
   (pytest reports on stdout, a crashing script on stderr; redacted, control characters
@@ -121,3 +122,14 @@ split: bool}`. Not gated.
 `404 not_found` (non-member, unknown source), `409 bridge_offline` is NOT used here — the route
 answers `probe: null` with `bridge.connected` false rather than failing; tool refusals are
 tool results, never HTTP errors.
+
+## SOLUSDEV-260 named environment observation
+
+The existing ungated `code.probe_environment` accepts optional `environment`, a
+workspace-relative virtual environment path under the same confinement and
+interpreter validation as `code.install`. Omission preserves first-match
+`.venv`/`venv`/`env` detection. An explicit target never falls back to another
+environment; absent, invalid, escaping or untrusted target yields no venv facts.
+Successful confirmed create/install re-probes that exact path before updating its
+CODE record with provenance `sol`. It does not scan arbitrary machine paths or
+add another environment executor. Missing/partial observations remain unavailable.

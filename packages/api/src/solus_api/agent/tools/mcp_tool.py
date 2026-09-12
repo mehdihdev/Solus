@@ -16,14 +16,18 @@ Residual limits, flagged for follow-on tickets: SecretStore keys are a flat v1
 namespace — per-TENANT credential scoping must bind where the SOL-loop wiring
 constructs registries per request (mirror `get_entity`'s constructor-bound
 scope); schema STRING LEAVES (titles, enum values) remain untrusted text the
-model reads — size-bounded here, not sanitized; credential DELIVERY to servers
-is deliberately unbuilt until MCP-03/MCP-05 (presence is checked, values never
-leave the store).
+model reads — size-bounded here, not sanitized.
+
+Credential DELIVERY (SOLUSDEV-252 P6) is `MCPServerSpec.secret_env`: a child env
+var NAME → SecretStore REF, resolved by `_resolve_env` at spawn into the child
+environment and nowhere else. Presence is still gated first (`required_secrets`),
+so a keyless deployment refuses before any process starts.
 """
 
 import asyncio
 import enum
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -137,6 +141,19 @@ class MCPServerSpec(BaseModel):
     env: Mapping[str, str] | None = None  # stdio: extra environment for the child
     url: str | None = None  # streamable-http endpoint
     required_secrets: tuple[str, ...] = ()  # SecretStore key names
+    #: SOLUSDEV-252 P6 — credential DELIVERY, declared by NAME: child env var
+    #: name → SecretStore ref. `_resolve_env` reads the VALUES at spawn and puts
+    #: them in the child environment dict and nowhere else; a value never lives
+    #: in the spec, a descriptor, a result, or a log line. Every ref here must
+    #: also be a `required_secret` (validator below), so the keyless gate refuses
+    #: BEFORE any spawn rather than starting a server that can only error.
+    secret_env: Mapping[str, str] = {}
+    #: Names of API-process environment variables the launcher may see, forwarded
+    #: verbatim from `os.environ` at spawn. NOT for credentials (that is
+    #: `secret_env`): this is for pinning knobs like `SOLUS_NODE_BIN`, the
+    #: absolute Node interpreter a vendored fork's `bin/launch` refuses to
+    #: PATH-resolve. Absent from the environment → simply not forwarded.
+    passthrough_env: tuple[str, ...] = ()
     # MCP-05 BYO-license tiering. `license_secrets` are the per-TEAM license
     # credential KEY NAMES a byo_paid tool needs — distinct from
     # `required_secrets` (cloud-key semantics, MCP-01, unchanged). Values live
@@ -156,15 +173,24 @@ class MCPServerSpec(BaseModel):
     connect_notice: str | None = None
 
     @model_validator(mode="after")
-    def _exactly_one_transport(self) -> Self:
+    def _transport_and_key_delivery(self) -> Self:
         if (self.command is None) == (self.url is None):
             raise ValueError("exactly one transport: set command (stdio) or url (streamable-http)")
+        undeclared = sorted(set(self.secret_env.values()) - set(self.required_secrets))
+        if undeclared:
+            # Fail closed at import: a delivered-but-ungated ref would spawn a
+            # server with an empty key instead of refusing with the typed
+            # UNAUTHORIZED the caller can act on.
+            raise ValueError(f"secret_env refs must also be required_secrets: {undeclared}")
         return self
 
 
 @asynccontextmanager
 async def _open_session(
-    spec: MCPServerSpec, *, headers: Mapping[str, str] | None = None
+    spec: MCPServerSpec,
+    *,
+    headers: Mapping[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> AsyncIterator[ClientSession]:
     """Fresh connect → initialize. `async with` throughout so a registry-level
     cancellation (its timeout) still runs transport cleanup. Note the bound is
@@ -174,7 +200,12 @@ async def _open_session(
         params = StdioServerParameters(
             command=spec.command,
             args=list(spec.args),
-            env=dict(spec.env) if spec.env is not None else None,
+            # `env` is `_resolve_env`'s output when a caller has a SecretStore;
+            # the spec's own static env is the fallback for callers that do not
+            # (`call_remote`, whose specs are url-transport).
+            env=dict(env)
+            if env is not None
+            else (dict(spec.env) if spec.env is not None else None),
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
@@ -212,6 +243,33 @@ async def _missing_secrets(spec: MCPServerSpec, store: SecretStore) -> list[str]
         except SecretNotFoundError:
             missing.append(key)
     return missing
+
+
+async def _resolve_env(spec: MCPServerSpec, store: SecretStore) -> dict[str, str] | None:
+    """The child environment for ONE stdio spawn: the spec's static `env`, plus
+    each `passthrough_env` name present in the API process, plus every
+    `secret_env` ref resolved to its VALUE from the SecretStore.
+
+    This is the only place a credential value exists outside the store, and it
+    exists only inside the dict handed to `StdioServerParameters` — nothing here
+    is logged, returned, or attached to the spec (CLAUDE.md §7: secrets by NAME
+    in code, values only into a child env at spawn). A ref that vanished between
+    the keyless gate and the spawn raises the same typed UNAUTHORIZED, naming
+    the ref and never the value.
+    """
+    if spec.command is None:
+        return None  # url transport: nothing is spawned
+    env: dict[str, str] = dict(spec.env or {})
+    for name in spec.passthrough_env:
+        value = os.environ.get(name)
+        if value is not None:
+            env[name] = value
+    for var, ref in spec.secret_env.items():
+        try:
+            env[var] = await store.get(ref)
+        except SecretNotFoundError as exc:
+            raise _credentials_error(spec, [ref]) from exc
+    return env or None
 
 
 def _credentials_error(spec: MCPServerSpec, missing: list[str]) -> ToolException:
@@ -372,8 +430,9 @@ class MCPTool:
         if self._preflight is not None:
             await self._preflight()
         headers = await self._headers_provider() if self._headers_provider is not None else None
+        env = await _resolve_env(self._spec, self._secret_store)
         try:
-            async with _open_session(self._spec, headers=headers) as session:
+            async with _open_session(self._spec, headers=headers, env=env) as session:
                 result = await session.call_tool(self._remote_name, args)
         except ToolException:
             raise
@@ -410,6 +469,7 @@ async def call_remote(
     args: dict[str, Any],
     *,
     headers: Mapping[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """One authenticated tool call, outside the registry.
 
@@ -423,7 +483,7 @@ async def call_remote(
     Same failure vocabulary as the tool path, so a caller handles one shape.
     """
     try:
-        async with _open_session(spec, headers=headers) as session:
+        async with _open_session(spec, headers=headers, env=env) as session:
             result = await session.call_tool(remote_name, args)
     except ToolException:
         raise
@@ -437,6 +497,27 @@ async def call_remote(
     except Exception as exc:
         raise _unavailable(spec, exc) from exc
     return _map_result(result)
+
+
+async def call_discovered(tool: "MCPTool", args: dict[str, Any]) -> dict[str, Any]:
+    """One call to a tool DISCOVERY already built and allowlisted, made by SOLUS
+    CODE rather than by SOL — today `agent/research.py`'s loop over the brave
+    tools, whose sub-calls are fixed by Solus before any model sees anything.
+
+    Deliberately a function rather than the tool's own dispatch method, for the
+    same reason `call_remote` is not named `invoke`: `test_sol_runtime`'s ratchet
+    fails any dispatch-shaped call site under `agent/` outside the three files
+    that own the gated path, and a Solus-internal read is not a dispatch. The
+    guarantees are identical because it runs the same code — keyless gate,
+    preflight, resolved child env, one typed failure vocabulary.
+    """
+    missing = await _missing_secrets(tool._spec, tool._secret_store)
+    if missing:  # checked BEFORE any connection attempt
+        raise _credentials_error(tool._spec, missing)
+    if tool._preflight is not None:
+        await tool._preflight()
+    env = await _resolve_env(tool._spec, tool._secret_store)
+    return await call_remote(tool._spec, tool._remote_name, args, env=env)
 
 
 def _skip(spec: MCPServerSpec, remote_name: str, reason: str) -> None:
@@ -561,9 +642,10 @@ async def discover_mcp_tools(
     if missing:  # fail fast — no connection without credentials
         raise _credentials_error(spec, missing)
     headers = await headers_provider() if headers_provider is not None else None
+    env = await _resolve_env(spec, secret_store)
     try:
         async with asyncio.timeout(timeout_seconds):
-            async with _open_session(spec, headers=headers) as session:
+            async with _open_session(spec, headers=headers, env=env) as session:
                 listing = await session.list_tools()
     except TimeoutError as exc:
         raise ToolException(

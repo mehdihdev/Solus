@@ -275,6 +275,9 @@ class PhysicalRobotService:
                 .order_by(GraphEntity.id)
             )
         )
+        from solus_api.hardware.bindings import disable_part_bindings
+
+        await disable_part_bindings(self.session, project_id, [], retired_owner_ids=[root.id])
         now = utcnow()
         for container in (root, *categories):
             container.deleted_at = now

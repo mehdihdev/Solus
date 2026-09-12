@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import stat
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -74,6 +75,9 @@ class RepoConfigMatch:
     port_hint: str | None = None  # a tty path the config binds — informational, never identity
     calibration_source: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    #: The parts are the columns of a print order (a sketch), not a keyed map — the proposal
+    #: words it as "your sketch names them …".
+    names_by_print_order: bool = False
 
 
 class RepoConfigParser(Protocol):
@@ -82,16 +86,34 @@ class RepoConfigParser(Protocol):
     def scan(self, root: Path, files: list[Path]) -> list[RepoConfigMatch]: ...
 
 
+def _regular_file_inside(path: Path, root: Path) -> bool:
+    """A regular file by lstat (so neither a symlink nor a FIFO) that resolves inside `root`."""
+    # ponytail: one lstat answers "symlink?" and "regular?" at once — no separate is_symlink()
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode) and path.resolve().is_relative_to(root)
+    except OSError:
+        return False
+
+
 def iter_repo_files(root: Path, *, max_files: int = MAX_SCAN_FILES) -> list[Path]:
-    """A bounded, sorted walk that never enters vendor/VCS/virtualenv directories."""
+    """A bounded, sorted walk that never enters vendor/VCS/virtualenv directories, never
+    follows a symlink, and keeps regular files inside `root` only (repo content is untrusted,
+    CLAUDE.md §7). Every entry walked — kept or skipped — is charged to the budget, so junk
+    cannot exhaust memory before the cap bites."""
+    resolved = root.resolve()
+    budget = max_files * 8
+    walked = 0
     files: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for name in sorted(filenames):
-            files.append(Path(dirpath) / name)
-            if len(files) >= max_files:
-                logger.info("repo scan stopped at %d files under %s", max_files, root)
+            walked += 1
+            if walked > budget or len(files) >= max_files:
+                logger.info("repo scan stopped at %d files under %s", len(files), root)
                 return files
+            path = Path(dirpath) / name
+            if _regular_file_inside(path, resolved):
+                files.append(path)
     return files
 
 

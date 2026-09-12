@@ -33,7 +33,7 @@ from fixtures.extensions import (
 from solus_api.connectors.worker import build_worker_settings
 from solus_api.core.config import Settings
 from solus_api.extensions import review as review_module
-from solus_api.extensions.bundle import BundleReport
+from solus_api.extensions.bundle import BundleReport, inspect_bundle
 from solus_api.extensions.review import (
     INTERNAL_ERROR_PROBLEM,
     MAX_PROBLEM_CHARS,
@@ -193,7 +193,7 @@ async def test_zip_bomb_is_rejected_by_the_full_inspection(
     await db.commit()
     await store.put(str(version.id), data)
     calls: list[str] = []
-    monkeypatch.setattr(review_module, "inspect_bundle", _spy(calls, review_module.inspect_bundle))
+    monkeypatch.setattr(review_module, "inspect_bundle", _spy(calls, inspect_bundle))
 
     assert await extension_review(_ctx(engine, store), str(version.id)) == "rejected"
 

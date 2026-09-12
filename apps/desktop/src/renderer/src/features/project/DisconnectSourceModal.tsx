@@ -1,5 +1,5 @@
 // Confirmed disconnect for one project source (SOLUSDEV-164), shared by the
-// Sources page and Home's connected-accounts rows: it stops syncing and keeps
+// Home's connected-accounts rows: it stops syncing and keeps
 // the graph entities the source contributed — the copy says exactly that.
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'

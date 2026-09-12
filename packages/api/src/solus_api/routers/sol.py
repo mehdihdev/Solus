@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -41,6 +41,13 @@ from solus_api.agent.runtime import (
     AgentRunContext,
     TurnView,
     build_dispatch,
+)
+from solus_api.agent.screen import (
+    MAX_DIMENSION,
+    ScreenshotBlock,
+    ScreenshotError,
+    ScreenshotSource,
+    decode_screenshot,
 )
 from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
 from solus_api.agent.tools import ToolRegistry
@@ -80,6 +87,7 @@ from solus_api.orchestration.gates import (
     TrialCapReachedError,
     check_frequency_cap,
 )
+from solus_api.orchestration.providers import ProviderTransientError
 from solus_api.schemas import ConfirmationDecision, StrictModel
 from solus_api.services.events import emit_event
 
@@ -90,24 +98,41 @@ logger = logging.getLogger("solus.sol")
 # Loaded once per process — static config, same source as the gateway's caps.
 _ORCHESTRATION_LIMITS = load_orchestration_config().limits
 
-_POLICY_BLOCKS: dict[type[BaseException], str] = {
-    FrequencyCapExceededError: "frequency_cap",
-    TrialCapReachedError: "trial_cap",
-    InsufficientCreditsError: "insufficient_credits",
+_LIMIT_MESSAGE = "SOL is rate-limited or out of credits for your team right now."
+#: SOLUSDEV-252, live: a turn that parked a gated call then hit the account's own
+#: 10k-TPM window ("Please try again in 39.456s") reported `internal` — an outage,
+#: as far as the person could tell, from a limit no retry inside the request can
+#: outlast. Both MESSAGES here are Solus-authored: the upstream text names the
+#: model, the organization and the token counts, and none of that is caller-facing
+#: (§7 / ADR-026).
+_POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
+    FrequencyCapExceededError: ("frequency_cap", _LIMIT_MESSAGE),
+    TrialCapReachedError: ("trial_cap", _LIMIT_MESSAGE),
+    InsufficientCreditsError: ("insufficient_credits", _LIMIT_MESSAGE),
+    ProviderTransientError: (
+        "provider_unavailable",
+        "The reasoning service is busy right now. Try that again in a moment.",
+    ),
 }
 
 
 def _turn_failure_sse(exc: Exception, conversation_id: uuid.UUID) -> str:
     """One SSE error frame for a failed turn: a distinct, caller-facing code for
     a policy block; a generic, author-safe `internal` for everything else (§7)."""
-    code = _POLICY_BLOCKS.get(type(exc))
-    if code is not None:
-        logger.info(
-            "SOL turn blocked by %s for conversation %s", type(exc).__name__, conversation_id
-        )
-        return format_sse(
-            AgentEvent.error(code, "SOL is rate-limited or out of credits for your team right now.")
-        )
+    block = _POLICY_BLOCKS.get(type(exc))
+    if block is not None:
+        code, message = block
+        # A budget/rate policy is expected traffic; a provider that will not answer
+        # is an OPERATOR's problem, and the reason (which model, rate-limited vs
+        # overloaded) only exists in the exception. Logging it at info with just a
+        # class name is how a run of failed turns looks like nothing at all.
+        if code == "provider_unavailable":
+            logger.warning("SOL turn failed for conversation %s: %s", conversation_id, exc)
+        else:
+            logger.info(
+                "SOL turn blocked by %s for conversation %s", type(exc).__name__, conversation_id
+            )
+        return format_sse(AgentEvent.error(code, message))
     logger.exception("SOL turn failed for conversation %s", conversation_id)
     return format_sse(AgentEvent.error("internal", "The SOL turn failed."))
 
@@ -129,6 +154,9 @@ SOL_TURN_TIMEOUT_SECONDS = 120.0
 #: gateway; this exists so a broke user gets a 402 instead of an error frame
 #: mid-stream. Make it token-aware if turn cost varies enough to matter.
 SOL_TURN_CREDIT_ESTIMATE = 1
+#: S3 review L4: a screenshot adds the VISUAL_LOG extractor call plus image
+#: tokens on the live turn — a broke user learns that up front, not mid-stream.
+SCREENSHOT_EXTRA_CREDITS = 2
 _ABORT_MESSAGES = {
     "timeout": "The SOL turn timed out.",
     "loop_limit": "SOL stopped: too many tool calls in one turn.",
@@ -153,6 +181,41 @@ class ConversationRename(StrictModel):
         return stripped
 
 
+class ScreenshotIn(StrictModel):
+    """SOLUSDEV-252 S3 (sol-window.md §8): one screenshot on this turn.
+
+    `data` is deliberately NOT length-capped here: a pydantic failure echoes the
+    offending input back in the 422 body, and this field is megabytes of pixels.
+    `agent/screen.py` caps it (3.5 MiB encoded, 2.5 MiB decoded) and sniffs the
+    magic bytes; the route turns its reason into a 422 that never echoes data.
+    """
+
+    media_type: Literal["image/png", "image/jpeg"]
+    data: str
+    #: Accepted for wire compatibility, ignored: dims come from the image header
+    #: (`agent/screen.py`, review L1) so the transcript never records a lie.
+    width: int | None = Field(default=None, ge=1, le=MAX_DIMENSION)
+    height: int | None = Field(default=None, ge=1, le=MAX_DIMENSION)
+    source: ScreenshotSource | None = None
+    #: The downscaled surrounding screen as base64 PNG (sol-window.md §8) — read by
+    #: the extractor pass only, never the reasoning turn. Same never-echo posture
+    #: as `data`: capped in `agent/screen.py` (1.5 MiB decoded), not here.
+    context: str | None = None
+
+    def decode(self) -> ScreenshotBlock:
+        try:
+            return decode_screenshot(
+                media_type=self.media_type,
+                data=self.data,
+                width=self.width,
+                height=self.height,
+                source=self.source,
+                context=self.context,
+            )
+        except ScreenshotError as exc:
+            raise APIError(422, "validation_error", str(exc)) from exc
+
+
 class MessageCreate(StrictModel):
     content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
     #: SOLX-01: how SOL may act on this message — guide (explain + point) or do
@@ -160,6 +223,9 @@ class MessageCreate(StrictModel):
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
     #: request-level choice.
     action_mode: ActionMode = ActionMode.GUIDE
+    #: S1-W3: the composer's "Think harder" — the runner bumps the estimator's
+    #: tier by one for this turn. Never a model name: routing stays Solus's.
+    think_harder: bool = False
     #: SOLUSDEV-168: graph entities the user pointed at explicitly (the
     #: composer's `@`). Integration-agnostic on purpose — an entity id addresses
     #: any node in the graph at any depth, so one field serves Onshape, KiCad,
@@ -182,6 +248,9 @@ class MessageCreate(StrictModel):
     #: re-applies the file's caps so a non-desktop caller cannot smuggle an
     #: unbounded document into the system prompt.
     preferences: EngineeringPreferences | None = None
+    #: SOLUSDEV-252 S3: at most one screenshot per turn. Pixels live for this
+    #: turn only — the transcript keeps `{width, height, app}`.
+    screenshot: ScreenshotIn | None = None
 
 
 def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
@@ -523,6 +592,32 @@ async def _run_and_persist(
         yield _turn_failure_sse(exc, conversation_id)
 
 
+async def _validate_mentions(
+    session: SessionDep, project_id: uuid.UUID, mentions: list[uuid.UUID]
+) -> None:
+    from solus_api.graph.read_scope import current_scope
+    from solus_api.models import GraphEntity
+
+    if mentions:
+        visible_mentions = set(
+            (
+                await session.scalars(
+                    select(GraphEntity.id).where(
+                        GraphEntity.id.in_(mentions),
+                        GraphEntity.deleted_at.is_(None),
+                        current_scope(project_id).entity_predicate(),
+                    )
+                )
+            ).all()
+        )
+        if visible_mentions != set(mentions):
+            raise APIError(
+                409,
+                "stale_mentions",
+                "The selected source view changed. Refresh and select these mentions again.",
+            )
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(
     request: Request,
@@ -548,6 +643,10 @@ async def post_message(
     if not content:
         raise APIError(422, "validation_error", "Message content must not be blank")
     await _owned_or_404(ctx, session, conversation_id)
+    # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
+    screenshot = body.screenshot.decode() if body.screenshot is not None else None
+
+    await _validate_mentions(session, ctx.project.id, body.mentions)
 
     # BUDGET GATE (SOLUS-RUN-01). `track_cost` needs NO wiring here — the gateway
     # fires it per model call from inside CompletionStream._finalize, which is the
@@ -556,7 +655,8 @@ async def post_message(
     # runs per call inside the gateway, but it runs mid-stream, after the SSE
     # response has opened, so a user out of credits would get an error frame
     # instead of a 402 (CLAUDE.md §7; ADR-019/024).
-    if not await has_sufficient_credits(ctx.user.id, SOL_TURN_CREDIT_ESTIMATE, session=session):
+    estimate = SOL_TURN_CREDIT_ESTIMATE + (SCREENSHOT_EXTRA_CREDITS if screenshot else 0)
+    if not await has_sufficient_credits(ctx.user.id, estimate, session=session):
         raise APIError(402, "insufficient_credits", "Not enough credits for a SOL turn")
     # SEC-H3 (SOL-02 review): the context pull fires graph + pgvector work
     # BEFORE the first model round reaches the gateway's cap, so turn admission
@@ -578,14 +678,20 @@ async def post_message(
     )
     history = tuple(TurnView(role=t.role.value, content=t.content) for t in prior)
     # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
-    # on `attrs`; the Solus-authored framing exists only in model input.
+    # on `attrs`; the Solus-authored framing exists only in model input. S3: a
+    # screenshot leaves dims + app only — never pixels (sol-window.md §8.3).
+    user_attrs: dict[str, Any] = {}
+    if attribution:
+        user_attrs["extension_slug"] = attribution.slug
+    if screenshot is not None:
+        user_attrs["screenshot"] = screenshot.summary()
     await SERVICE.append_turn(
         session,
         conversation_id=conversation_id,
         project_id=ctx.project.id,
         role=TurnRole.USER,
         content=content,
-        attrs={"extension_slug": attribution.slug} if attribution else None,
+        attrs=user_attrs or None,
     )
     emit_event(
         session,
@@ -603,6 +709,8 @@ async def post_message(
                 if body.preferences is not None
                 else 0
             ),
+            # S3: a flag for cost/usage attribution — never dims, title or pixels.
+            "screenshot": screenshot is not None,
         },
     )
     await session.commit()
@@ -675,6 +783,7 @@ async def post_message(
             else None
         ),
         action_mode=body.action_mode,
+        think_harder=body.think_harder,
         # Entities the user pointed at with `@`. They lead the neighbourhood's
         # anchors, so SOL grounds on the node meant rather than the one
         # similarity search happened to rank first.
@@ -697,6 +806,8 @@ async def post_message(
         # frames the live message as an extension REQUEST (Phase 4 H2).
         extension_id=attribution.extension_id if attribution else None,
         extension_slug=attribution.slug if attribution else None,
+        # S3: pixels for this turn only; the runner's extractor pass reads them.
+        screenshot=screenshot,
     )
     stream = _run_and_persist(
         runner=runner,
@@ -710,7 +821,13 @@ async def post_message(
         sol_mode=ctx.user.sol_mode.value,
         action_mode=body.action_mode.value,
     )
-    return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
+    from solus_api.graph.read_scope import current_scope, scoped_stream
+
+    return StreamingResponse(
+        scoped_stream(current_scope(ctx.project.id), stream),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
 
 
 @router.post("/confirmations/{confirmation_id}")

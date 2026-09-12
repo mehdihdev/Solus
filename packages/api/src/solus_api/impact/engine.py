@@ -37,6 +37,7 @@ from solus_api.contracts.impact import (
     worst_severity,
 )
 from solus_api.graph.neighborhood import DEFAULT_MAX_ENTITIES, Neighborhood, load_neighborhood
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import GraphEntity
 
 #: The synthetic relation for an FK-only canonical hop (matches the linker's
@@ -57,7 +58,7 @@ async def _load_focus(session: AsyncSession, project_id: UUID, focus_id: UUID) -
         await session.execute(
             select(GraphEntity).where(
                 GraphEntity.id == focus_id,
-                GraphEntity.project_id == project_id,
+                current_scope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
             )
         )
@@ -82,7 +83,7 @@ async def _canonical_siblings(
         await session.scalars(
             select(GraphEntity.id)
             .where(
-                GraphEntity.project_id == project_id,
+                current_scope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
                 GraphEntity.id != focus.id,
                 or_(

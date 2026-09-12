@@ -121,7 +121,7 @@ async def execute_source_sync(
     resolution is centralized HERE so every caller gets it for free."""
     async with sessionmaker() as session:
         source = await session.get(Source, source_id)
-        if source is None:
+        if source is None or source.revision_base_source_id is not None:
             raise ValueError(f"source {source_id} not found")
         provider = source.type.value
         project_id = source.project_id
@@ -303,7 +303,7 @@ def _fair_sweep_query() -> Any:
             )
             .label("rank"),
         )
-        .where(Source.status == SourceStatus.CONNECTED)
+        .where(Source.status == SourceStatus.CONNECTED, Source.revision_base_source_id.is_(None))
         .subquery()
     )
     return (
@@ -526,6 +526,22 @@ async def sweep_artifacts(ctx: dict[str, Any]) -> int:
         )
 
 
+async def source_revision(
+    ctx: dict[str, Any], source_id: str, user_id: str, generation: str
+) -> None:
+    from solus_api.services.source_revisions import acquire_revision
+
+    await acquire_revision(
+        sessionmaker=ctx["sessionmaker"],
+        registry=ctx["registry"],
+        secret_store=ctx["secret_store"],
+        source_id=uuid.UUID(source_id),
+        user_id=uuid.UUID(user_id),
+        generation=uuid.UUID(generation),
+        hub=ctx.get("graph_hub"),
+    )
+
+
 async def _on_startup(ctx: dict[str, Any]) -> None:
     from solus_api.core.config import Settings
     from solus_api.storage import build_artifact_store
@@ -591,6 +607,7 @@ def build_worker_settings(settings: Settings) -> type:
         # extension_review (SOLUSDEV-235 / ADR-035 §5) is enqueued by name from the
         # publish route; it reviews one published bundle and never raises.
         functions = [
+            func(source_revision, timeout=200, max_tries=1),
             func(sync_source, timeout=_SYNC_OPERATION_SECONDS + 60, max_tries=_SYNC_MAX_TRIES),
             reconcile_credit_debits,
             extension_review,

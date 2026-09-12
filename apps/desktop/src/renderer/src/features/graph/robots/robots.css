@@ -14,15 +14,6 @@
   cursor: pointer;
   text-align: left;
 }
-.graph-node:has(.robot-node-editor) {
-  height: auto !important;
-  min-height: 164px;
-  z-index: 30;
-}
-.graph-node:has(.robot-node-editor) .graph-node-content {
-  max-height: none;
-  overflow: visible;
-}
 .robot-node-editor label {
   display: flex;
   flex-direction: column;
@@ -45,13 +36,17 @@
 }
 .robot-orphans {
   flex: none;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--bd);
   color: var(--tx);
-  background: var(--sur);
   font-size: 12px;
-  max-height: 180px;
-  overflow: auto;
+}
+.robot-orphan-attach {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.robot-orphan-attach label {
+  margin-top: 0;
 }
 .robot-orphans p {
   margin: 5px 0;
@@ -59,15 +54,15 @@
   color: var(--mut);
 }
 .robot-orphans ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
   list-style: none;
   margin: 6px 0;
   padding: 0;
 }
 .robot-orphans li {
-  max-width: 260px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 3px 0;
   overflow-wrap: anywhere;
 }
 .robot-orphan-pages {

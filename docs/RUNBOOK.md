@@ -19,8 +19,9 @@ cd packages/api && uv run alembic upgrade head && cd -
 # 3. The vendored MCP forks' private virtualenvs (once per checkout)
 make mcp-forks
 
-# 4. Every env-sourced key into the SecretStore (once per database; idempotent)
+# 4. Every key in the root .env into the SecretStore (once per database; idempotent)
 make seed-secrets
+#    verify: uv run --package solus-api python scripts/seed-provider-keys.py --check
 
 # 5. Everything: API :8000 + desktop + companion
 pnpm dev:all

@@ -11,7 +11,7 @@ beforeEach(() => {
   useAuthStore.setState({ status: 'authenticated', accessToken: 'test-session' })
 })
 afterEach(() => vi.useRealTimers())
-it('invalidates changes, catches up after reconnect, and aborts on unmount', async () => {
+it('validates on every ready, invalidates only on graph.changed, and aborts on unmount', async () => {
   vi.mocked(streamProjectEvents).mockImplementation(async function* () {
     yield 'ready'
     yield 'graph.changed'
@@ -24,7 +24,9 @@ it('invalidates changes, catches up after reconnect, and aborts on unmount', asy
   expect(changed).toHaveBeenCalledTimes(1)
   expect(streamProjectEvents).toHaveBeenCalledTimes(1)
   await act(() => vi.advanceTimersByTimeAsync(5_000))
-  expect(changed).toHaveBeenCalledTimes(3)
+  // The reconnect's `ready` is a validation, never a page walk.
+  expect(ready).toHaveBeenCalledTimes(2)
+  expect(changed).toHaveBeenCalledTimes(2)
   const signal = vi.mocked(streamProjectEvents).mock.calls[1]?.[0].signal
   view.unmount()
   expect(signal?.aborted).toBe(true)
@@ -62,4 +64,35 @@ it('drops late frames when switching projects and opens only the new scope', asy
   })
   expect(changed).toHaveBeenCalledTimes(1)
   expect(vi.mocked(streamProjectEvents).mock.calls[0]?.[0].signal?.aborted).toBe(true)
+})
+it('routes a device frame to onDevices only — never to the graph catch-all', async () => {
+  const devices = [
+    {
+      transport: 'usb_serial',
+      device_ref: 'usb_serial:AB12',
+      identity: null,
+      level: 'board' as const,
+      board: null,
+      board_class: null,
+      mcu_known: true,
+      confidence: 0.5,
+      evidence: [],
+      ambiguous: false,
+      last_seen_path: null
+    }
+  ]
+  vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+    yield 'ready'
+    yield { type: 'hardware.devices_changed', devices }
+    yield { type: 'hardware.devices_changed', devices: [] }
+  })
+  const changed = vi.fn()
+  const ready = vi.fn()
+  const onDevices = vi.fn()
+  renderHook(() => useWorkspaceEvents('p1', changed, ready, onDevices))
+  await act(async () => {})
+  expect(ready).toHaveBeenCalledOnce()
+  expect(changed).not.toHaveBeenCalled()
+  expect(onDevices).toHaveBeenNthCalledWith(1, devices)
+  expect(onDevices).toHaveBeenNthCalledWith(2, [])
 })

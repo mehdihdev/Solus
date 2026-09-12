@@ -8,6 +8,7 @@ import type { SolStreamEvent } from './solStream'
 import {
   createSolConversation,
   deleteSolConversation,
+  fetchArtifactBlob,
   listSolConversations,
   listSolTurns,
   renameSolConversation,
@@ -90,6 +91,59 @@ describe('streamSolMessage', () => {
       mentions: []
     })
     expect(events.map((e) => e.type)).toEqual(['token', 'message', 'done'])
+  })
+
+  it('sends think_harder only when the composer toggle is on', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'what is I2C',
+      actionMode: 'guide' as const,
+      onEvent: () => {},
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    }
+    await streamSolMessage({ ...base, thinkHarder: true })
+    await streamSolMessage({ ...base, thinkHarder: false })
+    await streamSolMessage(base)
+    const bodies = fetchImpl.mock.calls.map(
+      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
+    )
+    expect(bodies[0]).toMatchObject({ think_harder: true })
+    expect(bodies[1]).not.toHaveProperty('think_harder')
+    expect(bodies[2]).not.toHaveProperty('think_harder')
+  })
+
+  it('posts the screenshot as `screenshot` (crop + context) only when one is attached', async () => {
+    // SOLUSDEV-252 S3 (docs/architecture/sol-window.md §8): at most one per turn.
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'What do you think this is?',
+      actionMode: 'guide' as const,
+      onEvent: () => {},
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    }
+    const screenshot = {
+      media_type: 'image/png' as const,
+      data: 'iVBORw0KGgo=',
+      width: 320,
+      height: 200,
+      source: { app: 'Onshape', title: 'Bracket v3' },
+      context: 'iVBORw0KGgoCONTEXT='
+    }
+    await streamSolMessage({ ...base, screenshot })
+    await streamSolMessage(base)
+    const bodies = fetchImpl.mock.calls.map(
+      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
+    )
+    expect(bodies[0]).toMatchObject({ screenshot })
+    expect(bodies[1]).not.toHaveProperty('screenshot')
   })
 
   it('sends the engineering preferences beside the text, and omits the key when null', async () => {
@@ -221,5 +275,42 @@ describe('conversation rename (SOLUSDEV-233 context menu)', () => {
       method: 'PATCH',
       body: { title: 'Diagnose run 41' }
     })
+  })
+})
+
+// SOLUSDEV-252 S5: artifact bytes need the bearer, so they cannot ride an
+// `<img src>` — fetched here, handed back as a Blob for an object URL.
+describe('fetchArtifactBlob', () => {
+  it('GETs the content route with the bearer and returns the bytes as a Blob', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('<svg xmlns="http://www.w3.org/2000/svg"/>', {
+          status: 200,
+          headers: { 'Content-Type': 'image/svg+xml' }
+        })
+    )
+    const blob = await fetchArtifactBlob('p1', 'a1', {
+      fetchImpl,
+      getToken: async () => 'tok',
+      baseUrl: 'http://api.test/api/v1'
+    })
+    expect(blob.type).toBe('image/svg+xml')
+    expect(blob.size).toBeGreaterThan(0)
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('http://api.test/api/v1/projects/p1/artifacts/a1/content')
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok')
+  })
+
+  it('throws the envelope error on a refusal, never a blob of the error body', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'not_found', message: 'gone' } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+    )
+    await expect(
+      fetchArtifactBlob('p1', 'a1', { fetchImpl, getToken: async () => 'tok', baseUrl: 'http://x' })
+    ).rejects.toMatchObject({ status: 404, message: 'gone' })
   })
 })

@@ -28,7 +28,7 @@ describe('GrantPermissionsModal', () => {
     expect(screen.getByRole('dialog', { name: 'Install BOM' })).toBeInTheDocument()
     expect(screen.getByText('BOM asks for')).toBeInTheDocument()
     const titles = screen.getAllByTestId('grant-scope').map((el) => el.textContent)
-    expect(titles[0]).toMatch(/Read the context model/)
+    expect(titles[0]).toMatch(/Read the workspace graph/)
     expect(titles[0]).toMatch(/graph\.read/)
     expect(titles[1]).toMatch(/List connected sources/)
     expect(screen.getByText('It may connect to')).toBeInTheDocument()

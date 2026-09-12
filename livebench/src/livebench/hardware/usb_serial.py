@@ -88,7 +88,10 @@ def open_usb_serial(
     timeout = _bounded(params, "timeout_s", DEFAULT_TIMEOUT_S, _TIMEOUT_RANGE_S)
     confirmed = params.get("confirmed_device_path")
     path = resolver(
-        binding.binding, confirmed_device_path=confirmed if isinstance(confirmed, str) else None
+        binding.binding,
+        confirmed_device_path=confirmed if isinstance(confirmed, str) else None,
+        vid=binding.vid,  # a port binding must still front the bound device
+        pid=binding.pid,
     )
     port = opener(path, baud, timeout=timeout, write_timeout=timeout, exclusive=True)
     return UsbSerialChannel(

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Materialize the fork-private virtualenvs the vendored MCP servers launch from.
+# Materialize the fork-private dependency trees the vendored MCP servers launch
+# from: a `.venv/` per Python fork, a `node_modules/` per Node fork.
 #
 # ADR-031 splits this out deliberately: `bin/launch` does ZERO network I/O and
 # ZERO installs, and resolves a fixed `<fork>/.venv/bin/python3`. Something has
@@ -81,6 +82,51 @@ for lock in integrations/mcp/*/requirements.lock.txt; do
       exit 1
       ;;
   esac
+  echo "$want" >"$stamp"
+  installed=$((installed + 1))
+done
+
+# ---------------------------------------------------------------- Node forks --
+# Same contract as the Python forks above, different ecosystem: `bin/launch`
+# resolves a FIXED interpreter and does zero installs, so the node_modules/ tree
+# it needs has to be materialised here from the committed, integrity-pinned
+# package-lock.json. `npm ci` (never `npm install`) installs exactly the lock;
+# `--ignore-scripts` refuses every dependency lifecycle hook — the supply-chain
+# hole the vendoring rules exist to close; `--omit=dev` keeps the tree to what
+# actually runs.
+#
+# A missing/old Node is a SKIP, never a failure: most developers touch no Node
+# fork, and the Python forks above must still install on their machine. The
+# cloud image installs these for real (infrastructure/docker/api.Dockerfile).
+NODE_BIN="${SOLUS_NODE_BIN:-$(command -v node || true)}"
+NODE_MAJOR=""
+if [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then
+  NODE_MAJOR="$("$NODE_BIN" --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')"
+fi
+
+for lock in integrations/mcp/*/package-lock.json; do
+  [ -e "$lock" ] || continue
+  fork="$(dirname "$lock")"
+  name="$(basename "$fork")"
+
+  if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 22 ] || ! command -v npm >/dev/null 2>&1; then
+    echo "[mcp-forks] $name: needs node >= 22 and npm on PATH at install time — skipping"
+    echo "            (set SOLUS_NODE_BIN=/absolute/path/to/node, or install Node 22)"
+    skipped=$((skipped + 1))
+    continue
+  fi
+
+  stamp="$fork/node_modules/.solus-lock-sha256"
+  want="$(sha256sum "$lock" | cut -d' ' -f1)"
+  if [ -d "$fork/node_modules" ] && [ "$(cat "$stamp" 2>/dev/null || true)" = "$want" ]; then
+    echo "[mcp-forks] $name: up to date"
+    skipped=$((skipped + 1))
+    continue
+  fi
+
+  echo "[mcp-forks] $name: materializing $fork/node_modules (npm ci, lock-pinned, no scripts)…"
+  (cd "$fork" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
+  [ -d "$fork/node_modules" ] || { echo "[mcp-forks] $name: FAILED — no node_modules"; exit 1; }
   echo "$want" >"$stamp"
   installed=$((installed + 1))
 done

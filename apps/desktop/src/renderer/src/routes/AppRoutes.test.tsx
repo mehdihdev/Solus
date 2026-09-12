@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AppRoutes } from './AppRoutes'
 import { useAuthStore } from '../store/authStore'
+
+// SOLUSDEV-252 S3: the SOL window guards its own auth; the routes test only
+// proves the route mounts it (and that the retired #/orb is gone).
+vi.mock('../features/sol/SolWindow', () => ({
+  SolWindow: () => <div data-testid="sol-window" />
+}))
 
 function renderAt(path: string): void {
   render(
@@ -76,5 +82,17 @@ describe('AppRoutes guards', () => {
     expect(
       screen.getByText('Sign in from the main Solus window to use extensions here.')
     ).toBeInTheDocument()
+  })
+
+  it('serves the SOL window at /sol-window (SOLUSDEV-252)', () => {
+    renderAt('/sol-window')
+    expect(screen.getByTestId('sol-window')).toBeInTheDocument()
+  })
+
+  it('no longer serves the retired orb window: /orb falls through to / (SOLUSDEV-252)', () => {
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: true })
+    renderAt('/orb')
+    expect(screen.getAllByText('Workspace').length).toBeGreaterThan(0)
+    expect(screen.queryByLabelText('Ask SOL')).toBeNull()
   })
 })

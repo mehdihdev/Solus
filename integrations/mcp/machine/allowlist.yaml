@@ -1,0 +1,31 @@
+# integrations/mcp/machine/allowlist.yaml — the Solus-owned allowlist for the
+# companion's BUILT-IN `machine` server (SOLUSDEV-252 S5; README.md beside this
+# file). No upstream, no bin/launch: the companion implements these tools
+# natively (packages/companion/src/solus_companion/machine/), so ADR-031's fork
+# gate (provenance, license boundary, vendored-tree hash) has no third-party
+# code to apply to. The allowlist is still the single source of truth for which
+# tools exist cloud-side, which are gated, and which file their failures.
+#
+# Every `reason` on a gated entry IS the sentence the person reads on the
+# consent card (bridge/allowlist.py copies it to consent_summary). The preview
+# rows show the exact argv / path / package (action-gate.md): displayed is
+# executed. Composed names `machine.<tool>` are all <= 128 chars.
+#
+# `files_errors: true` — a failed call is filed into the project's .solus
+# Error logging automatically (command, output, entity, timestamp; author sol).
+server: machine
+# Implemented natively by the companion — there is no bin/launch to find.
+launched_by: builtin
+tools:
+  - name: read_code_file
+    requires_confirmation: false
+    files_errors: false
+    reason: reads bounded UTF-8 source text from the linked folder; refuses credential paths and symlinks; no writes or execution
+  - name: read_file
+    requires_confirmation: true
+    files_errors: false
+    reason: reads one file from your machine and sends its contents to Solus
+  - name: write_file
+    requires_confirmation: true
+    files_errors: true
+    reason: writes or replaces one file on your machine with the shown contents

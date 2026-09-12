@@ -22,17 +22,21 @@ tools:
     reason: pure argv assembly for an action — no execution; what the approval card shows
   - name: create_environment
     requires_confirmation: true
+    files_errors: true
     timeout_seconds: 630
     reason: creates a virtualenv inside the linked folder (uv venv / python -m venv) — writes to the customer machine
   - name: install
     requires_confirmation: true
+    files_errors: true
     timeout_seconds: 630
     reason: runs the workspace venv's pip (or uv pip) to install packages — network egress and writes into the user's environment
   - name: run
     requires_confirmation: true
+    files_errors: true
     timeout_seconds: 630
     reason: executes a workspace script with the workspace venv interpreter — arbitrary code on the customer machine
   - name: test
     requires_confirmation: true
+    files_errors: true
     timeout_seconds: 630
     reason: executes pytest over a workspace target with the workspace venv interpreter — arbitrary code on the customer machine

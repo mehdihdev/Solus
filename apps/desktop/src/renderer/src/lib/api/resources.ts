@@ -145,7 +145,7 @@ export interface Entity {
   type: string
   domain: string
   name: string
-  source_key: string
+  source_key: string | null
   project_id?: string
   source_id?: string | null
   origin?: string
@@ -255,7 +255,7 @@ export interface IntegrationHosted {
 }
 
 /** What a hosted add-on's grant is doing on one source. Server-backed: the
- *  wizard cancels on close and the Sources screen resets the onboarding store
+ *  wizard cancels on close and Home resets the onboarding store
  *  on mount, so a renderer-resident flag would be wrong for every teammate and
  *  lost on every navigation. */
 export type HostedState = 'ready' | 'subscription_required' | 'not_connected'
@@ -1175,20 +1175,22 @@ export type CostTier = 'low' | 'standard' | 'premium'
 export type ComplexityValue = 'trivial' | 'standard' | 'hard'
 export type RouteTypeValue = 'general' | 'code' | 'visual_log' | 'long_context'
 export type ClassifySource = 'explicit' | 'context' | 'estimator'
+/** Effort on the ONE product reasoner (trivial/standard/hard → quick/standard/deep). */
+export type ReasonerEffort = 'quick' | 'standard' | 'deep'
 
 export interface ClassifyOption<V extends string = string> {
   value: V
   viable: boolean
   /** Short factual note when not viable, e.g. "Too many tokens for this tier (340K > 200K)". */
   reason: string | null
-  model: string
   cost_tier: CostTier
 }
 
 export interface ClassifyPreview {
   complexity: ComplexityValue
   type: RouteTypeValue
-  model: { name: string; provider: string }
+  /** S1-W3: never a model id — the product reasoner + an effort label. */
+  reasoner: { name: string; effort: ReasonerEffort }
   cost_tier: CostTier
   source: { complexity: ClassifySource; type: ClassifySource }
   tokens_estimate: number
@@ -1205,6 +1207,8 @@ export interface ClassifyRequestBody {
   query: string
   complexity?: ComplexityValue
   type?: RouteTypeValue
+  /** Preview the composer's "Think harder" — one tier up, exactly as the turn would. */
+  think_harder?: boolean
 }
 
 /** Routing preview — no model call, no credits, its own generous rate bucket. */

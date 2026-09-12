@@ -56,6 +56,12 @@ class ToolDescriptor(BaseModel):
     #: before approving a destructive action. Bridge tools set this from their
     #: allowlist `reason`, which Solus writes and review sees.
     consent_summary: str | None = None
+    #: SOLUSDEV-252 S5: a tool that runs something on the person's machine (a
+    #: command, an install, a script). When such a call FAILS, the runner files
+    #: the failure into the project's `.solus` Error logging section automatically
+    #: (command, output, the entity it was about, timestamp; author `sol`,
+    #: user-editable). Bridge tools set this from their Solus-owned allowlist.
+    files_errors: bool = False
     #: Per-tool override of the prompt layer's result cap, for a tool whose whole
     #: point is a payload bigger than the default. A Feature Studio read back at
     #: 4 000 characters is not a Feature Studio — SOL cannot reason about source

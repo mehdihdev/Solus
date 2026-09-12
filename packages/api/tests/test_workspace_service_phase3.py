@@ -1164,7 +1164,9 @@ async def test_arq_queue_expiry_uses_wall_time_and_per_sync_limits(
         assert recorded is not None and recorded.status is JobStatus.FAILED
         assert recorded.error is not None and recorded.error["code"] == "sync_queue_timeout"
     config: Any = build_worker_settings(settings)
-    sync_function = config.functions[0]
+    sync_function = next(
+        function for function in config.functions if function.name == "sync_source"
+    )
     assert sync_function.name == "sync_source" and sync_function.timeout_s == 3660
     assert sync_function.max_tries == 241
     assert not hasattr(config, "job_timeout"), "unrelated worker functions retain their timeout"

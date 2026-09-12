@@ -721,3 +721,51 @@ async def test_scan_then_link_full_real_pipeline(db: AsyncSession) -> None:
     assert canonical_ids.pop() not in {edges[0].src_id, edges[0].dst_id}
     # the mock seam is untouched by the swap: re-linking from the mock on a
     # separate project still works (regression is the LNK-01 e2e test above)
+
+
+async def test_selected_snapshot_is_not_a_linking_write_target(db: AsyncSession) -> None:
+    from solus_api.graph.read_scope import GraphReadScope, bind_scope
+    from solus_api.models import Source, SourceType
+
+    project = await _project(db, "snapshot")
+    base = Source(
+        project_id=project.id, team_id=project.team_id, type=SourceType.GITHUB, name="base"
+    )
+    db.add(base)
+    await db.flush()
+    snapshot = Source(
+        project_id=project.id,
+        team_id=project.team_id,
+        type=SourceType.GITHUB,
+        name="revision",
+        revision_base_source_id=base.id,
+    )
+    db.add(snapshot)
+    await db.flush()
+    hidden = await _entity(
+        db, project, external_ref="hidden", connector="github", domain=Domain.CODE
+    )
+    hidden.source_id = snapshot.id
+    ordinary = await _entity(db, project, external_ref="ordinary")
+    await db.flush()
+    output = _output(
+        _part(
+            "part",
+            (
+                _mm(_ref("hidden", "github", hidden.id)),
+                _mm(_ref("ordinary", entity_id=ordinary.id)),
+            ),
+        )
+    )
+    with bind_scope(GraphReadScope(project.id, ((base.id, snapshot.id),))):
+        await link(db, output, project_id=project.id)
+    assert (
+        await db.scalar(
+            select(GraphEdge.id).where(
+                GraphEdge.project_id == project.id,
+                GraphEdge.relation_type == RELATION_SAME_AS,
+                GraphEdge.deleted_at.is_(None),
+            )
+        )
+        is None
+    )

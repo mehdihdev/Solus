@@ -1,6 +1,6 @@
 // Integrations overview: the connector catalog Solus can pull into the graph.
 // This is a CATALOG, not a live connection ledger — sources are connected per
-// PROJECT (in a project's Context Model), so a global settings list cannot
+// PROJECT (in a project's Workspace), so a global settings list cannot
 // truthfully show a single connected/disconnected state (SOLUSDEV-152: it
 // previously read an un-hydrated local onboarding flag and wrongly showed every
 // tool as "NOT CONNECTED" for real signed-in users). The catalog itself is the
@@ -14,7 +14,7 @@ export function IntegrationsSection(): React.JSX.Element {
   return (
     <Section
       title="Integrations"
-      sub="Tools Solus can connect into your graph. Connect and manage them per project on the project's Sources page."
+      sub="Tools Solus can connect into your graph. Connect and manage them in Home › Connected accounts; add their documents from Workspace › Add › Integrations."
     >
       {catalog.map((i) => (
         <Row

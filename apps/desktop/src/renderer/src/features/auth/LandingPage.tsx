@@ -90,7 +90,7 @@ function LandingHero(): React.JSX.Element {
       <p
         style={{ fontSize: 17, lineHeight: 1.6, color: 'var(--mut)', maxWidth: 560, marginTop: 22 }}
       >
-        Solus connects firmware, schematics, CAD, and live telemetry into one context model — and
+        Solus connects firmware, schematics, CAD, and live telemetry into one workspace graph — and
         catches the integration bugs that only exist between them, before they break the robot.
       </p>
       <div style={{ display: 'flex', gap: 12, marginTop: 32 }}>

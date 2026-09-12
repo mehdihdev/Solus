@@ -199,6 +199,43 @@ async def read_artifact_content(
     return data, artifact.media_type
 
 
+async def fetch_artifact_bytes(
+    session: AsyncSession,
+    store: ArtifactStore,
+    *,
+    project_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    requester_id: uuid.UUID,
+    ttl_seconds: int,
+    max_bytes: int,
+) -> tuple[Artifact, bytes]:
+    """The server-side lazy byte fetch W0-04 §4 describes (SOLUSDEV-252 P6:
+    `read_document` rendering a stored PDF). Project-scoped, live-only, the same
+    404 collapse as the HTTP routes, and size-capped on the ROW before the store
+    is touched — a consumer with a fixed memory budget never reads what it will
+    refuse. Non-destructive: nothing here consumes or soft-deletes."""
+    artifact = await get_artifact_metadata(
+        session,
+        project_id=project_id,
+        artifact_id=artifact_id,
+        requester_id=requester_id,
+        requester_has_project_access=True,
+        ttl_seconds=ttl_seconds,
+    )
+    if (artifact.size_bytes or 0) > max_bytes:
+        raise APIError(413, "payload_too_large", "Artifact exceeds the size limit for this read")
+
+    from solus_api.storage import ArtifactNotFoundError
+
+    try:
+        data = await store.get(str(artifact.id))
+    except ArtifactNotFoundError:
+        raise APIError(404, "not_found", "Artifact not found") from None
+    if len(data) > max_bytes:  # the row lied; the bytes are authoritative
+        raise APIError(413, "payload_too_large", "Artifact exceeds the size limit for this read")
+    return artifact, data
+
+
 async def consume_tool_artifact(
     session: AsyncSession,
     store: ArtifactStore,

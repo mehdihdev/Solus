@@ -1,6 +1,6 @@
 // SOLUSDEV-233: the Solus brand logo — inline SVG whose colors ride the
 // runtime design tokens, so it re-skins with the theme/accent chosen in
-// Settings. The SOL surfaces keep the SolOrb.
+// Settings. The SOL surfaces carry the plain wordmark (SOLUSDEV-252 S3).
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { SolusLogo } from './SolusLogo'

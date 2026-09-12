@@ -9,7 +9,7 @@
 // populated source — deleting it here would destroy real graph data on a
 // stray backdrop click (CLAUDE.md §7: destructive actions need explicit
 // confirmation). A genuinely half-configured source stays visible on the
-// Sources page, where the confirmed Disconnect already lives. And a flow that
+// Home's connected-accounts card, where the confirmed Disconnect already lives. And a flow that
 // completed successfully despite the cancel keeps its source and is reported —
 // finished work is never silently discarded.
 import { useRef, useState } from 'react'

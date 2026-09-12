@@ -1,0 +1,151 @@
+import webParams from '../web/params.js';
+import API from '../../BraveAPI/index.js';
+import { formatWebResults } from '../web/index.js';
+import { stringify } from '../../utils.js';
+export const name = 'brave_local_search';
+export const annotations = {
+    title: 'Brave Local Search',
+    openWorldHint: true,
+};
+export const description = `
+    Brave Local Search API provides enrichments for location search results. Access to this API is available only through the Brave Search API Pro plans; confirm the user's plan before using this tool (if the user does not have a Pro plan, use the brave_web_search tool). Searches for local businesses and places using Brave's Local Search API. Best for queries related to physical locations, businesses, restaurants, services, etc.
+    
+    Returns detailed information including:
+        - Business names and addresses
+        - Ratings and review counts
+        - Phone numbers and opening hours
+
+    Use this when the query implies 'near me', 'in my area', or mentions specific locations (e.g., 'in San Francisco'). This tool automatically falls back to brave_web_search if no local results are found.
+`.trim();
+// Access to Local API is available through the Pro plans.
+export const execute = async (params) => {
+    // Make sure both 'web' and 'locations' are in the result_filter
+    params = { ...params, result_filter: [...(params.result_filter || []), 'web', 'locations'] };
+    // Starts with a web search to retrieve potential location IDs
+    const { locations, web: web_fallback } = await API.issueRequest('web', params);
+    // We can send up to 20 location IDs at a time to the Local API
+    // TODO (Sampson): Add support for multiple requests
+    const locationIDs = (locations?.results || []).map((poi) => poi.id).slice(0, 20);
+    // No locations were found - user's plan may not include access to the Local API
+    if (!locations || locationIDs.length === 0) {
+        // If we have web results, but no locations, we'll fall back to the web results
+        if (web_fallback && web_fallback.results.length > 0) {
+            return buildFallbackWebResponse(web_fallback);
+        }
+        // If we have no web results, we'll send a message to the user
+        return {
+            content: [
+                {
+                    type: 'text',
+                    text: "No location data was returned. User's plan does not support local search, or the query may be unclear.",
+                },
+            ],
+        };
+    }
+    // Fetch AI-generated descriptions
+    const descriptions = await API.issueRequest('localDescriptions', {
+        ids: locationIDs,
+    });
+    return {
+        content: formatLocalResults(locations.results, descriptions.results).map((formattedPOI) => ({
+            type: 'text',
+            text: formattedPOI,
+        })),
+    };
+};
+export const register = (mcpServer) => {
+    mcpServer.registerTool(name, {
+        title: name,
+        description: description,
+        inputSchema: webParams,
+        annotations: annotations,
+    }, execute);
+};
+const buildFallbackWebResponse = (web_fallback) => {
+    if (!web_fallback || web_fallback.results.length === 0)
+        throw new Error('No web results found');
+    const fallback = {
+        content: [
+            {
+                type: 'text',
+                text: "No location data was returned. Either the user's plan does not support local search, or the API was unable to find locations for the provided query. Falling back to general web search.",
+            },
+        ],
+    };
+    for (const web_result of formatWebResults(web_fallback)) {
+        fallback.content.push({
+            type: 'text',
+            text: stringify(web_result),
+        });
+    }
+    return fallback;
+};
+const formatLocalResults = (poisData, descData = []) => {
+    return poisData.map((poi) => {
+        return stringify({
+            name: poi.title,
+            price_range: poi.price_range,
+            phone: poi.contact?.telephone,
+            rating: poi.rating?.ratingValue,
+            hours: formatOpeningHours(poi.opening_hours),
+            rating_count: poi.rating?.reviewCount,
+            description: descData.find(({ id }) => id === poi.id)?.description,
+            address: poi.postal_address?.displayAddress,
+        });
+    });
+};
+export const formatOpeningHours = (openingHours) => {
+    if (!openingHours)
+        return undefined;
+    /**
+     * Response will be something like {
+     *     'sunday': '10:00-18:00',
+     *     'monday': '10:00-18:00',
+     *     'tuesday': '10:00-18:00',
+     *     'wednesday': '10:00-18:00, 19:00-22:00',
+     *     'thursday': '10:00-18:00',
+     *     'friday': '10:00-18:00',
+     *     'saturday': '12:00-18:00',
+     * }
+     */
+    const today = openingHours.current_day || [];
+    const response = {};
+    const dayHours = [];
+    // `current_day` is optional, and is omitted when the location is closed
+    // today, so only seed the "today" entry when the API actually provided one.
+    if (today.length > 0) {
+        dayHours.push([
+            `today (${today[0].full_name.toLowerCase()})`,
+            today.map(({ opens, closes }) => `${opens}-${closes}`),
+        ]);
+    }
+    // Add the rest of the days to the response
+    for (let parts of openingHours.days || []) {
+        // Not all days have arrays of hours, so normalize to an array
+        if (!Array.isArray(parts))
+            parts = [parts];
+        // Add the hours for each day to the response
+        for (const { full_name, opens, closes } of parts) {
+            const dayName = full_name.toLowerCase();
+            const existingEntry = dayHours.find(([name]) => name === dayName);
+            existingEntry
+                ? existingEntry[1].push(`${opens}-${closes}`)
+                : dayHours.push([dayName, [`${opens}-${closes}`]]);
+        }
+    }
+    // Nothing usable was provided; omit the field rather than emitting `{}`.
+    if (dayHours.length === 0)
+        return undefined;
+    for (const [name, hours] of dayHours) {
+        response[name] = hours.join(', ');
+    }
+    return response;
+};
+export default {
+    name,
+    description,
+    annotations,
+    inputSchema: webParams.shape,
+    execute,
+    register,
+};

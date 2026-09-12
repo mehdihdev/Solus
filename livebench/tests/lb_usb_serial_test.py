@@ -47,7 +47,13 @@ def _binding(serial: str = "5B42134331") -> TransportBinding:
     return TransportBinding(kind=TransportKind.USB_SERIAL, binding=serial, vid=0x1A86, pid=0x55D3)
 
 
-def _resolver(serial: str | None, *, confirmed_device_path: str | None = None) -> str:
+def _resolver(
+    serial: str | None,
+    *,
+    confirmed_device_path: str | None = None,
+    vid: int | None = None,
+    pid: int | None = None,
+) -> str:
     if serial != "5B42134331":
         raise DeviceNotFoundError(f"no device with serial {serial!r}")
     return BY_ID
@@ -127,3 +133,25 @@ def test_usb_serial_module_names_no_vendor() -> None:
 
     source = Path(module.__file__).read_text().lower()
     assert re.search(r"\b(feetech|dynamixel|lerobot|sts3215|px4|odrive|mavlink)\b", source) is None
+
+
+def test_open_hands_the_binding_vid_pid_to_the_resolver() -> None:
+    seen: list[tuple[str | None, int | None, int | None]] = []
+
+    def resolver(
+        serial: str | None,
+        *,
+        confirmed_device_path: str | None = None,
+        vid: int | None = None,
+        pid: int | None = None,
+    ) -> str:
+        seen.append((serial, vid, pid))
+        return BY_ID
+
+    open_usb_serial(
+        _binding(),
+        {},
+        opener=lambda path, baud, **kw: _FakePort(path, baud, **kw),
+        resolver=resolver,
+    )
+    assert seen == [("5B42134331", 0x1A86, 0x55D3)]

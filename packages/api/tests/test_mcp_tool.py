@@ -17,6 +17,7 @@ Proves the contract across the MCP boundary against a REAL protocol server
 import asyncio
 import base64
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -619,3 +620,115 @@ def test_fusion_is_a_vendor_run_url_server_not_a_fork() -> None:
     assert FUSION.url == "http://127.0.0.1:27182/mcp"
     # Loopback is the security boundary the companion re-checks at connect.
     assert FUSION.url.startswith("http://127.0.0.1")
+
+
+# ------------------------------------- SOLUSDEV-252 P6: credential delivery ----
+
+
+async def test_secret_env_reaches_the_child_env_and_never_a_log_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """SOLUSDEV-252 P6. The Brave key travels SecretStore → `_resolve_env` →
+    `StdioServerParameters.env` → the launcher, and appears NOWHERE else: not in
+    the spec, not in the result, not in any log record (CLAUDE.md §7)."""
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    sentinel = "brave-KEY-SENTINEL-9999"
+    store = InMemorySecretStore()
+    await store.put("brave_api_key", sentinel)
+    monkeypatch.setenv("SOLUS_NODE_BIN", "/opt/node22/bin/node")
+
+    captured: list[Any] = []
+
+    @asynccontextmanager
+    async def _fake_stdio(params: Any) -> AsyncIterator[Any]:
+        captured.append(params)
+        if params is not None:  # always: the fake never actually spawns
+            raise RuntimeError("transport refused")
+        yield None
+
+    monkeypatch.setattr(mcp_tool_module, "stdio_client", _fake_stdio)
+
+    registry = ToolRegistry()
+    registry.register(_manual_tool(WEB_SEARCH, "brave_web_search", store=store))
+    with caplog.at_level(logging.DEBUG):
+        result = await registry.invoke(
+            ToolCall(tool="brave.brave_web_search", args={"query": "ov9281 datasheet"})
+        )
+
+    assert result.ok is False  # the fake transport never connects
+    assert result.error is not None
+    (params,) = captured
+    assert params.command == WEB_SEARCH.command and params.args == []
+    assert params.env is not None
+    assert params.env["BRAVE_API_KEY"] == sentinel  # delivered by VALUE, only here
+    assert params.env["SOLUS_NODE_BIN"] == "/opt/node22/bin/node"  # passthrough
+    assert sentinel not in caplog.text
+    assert sentinel not in result.error.message
+
+
+async def test_absent_passthrough_var_is_simply_not_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    store = InMemorySecretStore()
+    await store.put("brave_api_key", "k")
+    monkeypatch.delenv("SOLUS_NODE_BIN", raising=False)
+    env = await mcp_tool_module._resolve_env(WEB_SEARCH, store)
+    assert env == {"BRAVE_API_KEY": "k"}  # the launcher then uses its fixed candidates
+
+
+async def test_url_specs_resolve_no_child_env() -> None:
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    assert await mcp_tool_module._resolve_env(FUSION, InMemorySecretStore()) is None
+
+
+def test_secret_env_must_be_gated_by_required_secrets() -> None:
+    """A ref delivered but not gated would spawn a server with an empty key
+    instead of refusing with a typed UNAUTHORIZED — refused at construction."""
+    with pytest.raises(ValueError, match="required_secrets"):
+        MCPServerSpec(name="ungated", command="/bin/true", secret_env={"K": "some_ref"})
+
+
+async def test_call_discovered_gates_credentials_before_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`research()` reaches the brave tools through `call_discovered`, not the
+    gated dispatcher — so the keyless gate has to hold on THAT path too."""
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    def _no_connect(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("connection attempted before the credential check")
+
+    monkeypatch.setattr(mcp_tool_module, "_open_session", _no_connect)
+    tool = _manual_tool(WEB_SEARCH, "brave_web_search", store=InMemorySecretStore())
+    with pytest.raises(ToolException) as excinfo:
+        await mcp_tool_module.call_discovered(tool, {"query": "x"})
+    assert excinfo.value.code is ToolErrorCode.UNAUTHORIZED
+    assert "brave_api_key" in excinfo.value.message
+
+
+async def test_call_discovered_delivers_the_key_the_same_way_invoke_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import solus_api.agent.tools.mcp_tool as mcp_tool_module
+
+    sentinel = "brave-KEY-SENTINEL-7777"
+    store = InMemorySecretStore()
+    await store.put("brave_api_key", sentinel)
+    captured: list[Any] = []
+
+    @asynccontextmanager
+    async def _fake_stdio(params: Any) -> AsyncIterator[Any]:
+        captured.append(params)
+        if params is not None:  # always: the fake never actually spawns
+            raise RuntimeError("transport refused")
+        yield None
+
+    monkeypatch.setattr(mcp_tool_module, "stdio_client", _fake_stdio)
+    tool = _manual_tool(WEB_SEARCH, "brave_web_search", store=store)
+    with pytest.raises(ToolException):
+        await mcp_tool_module.call_discovered(tool, {"query": "x"})
+    assert captured[0].env["BRAVE_API_KEY"] == sentinel

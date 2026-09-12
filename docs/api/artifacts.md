@@ -19,6 +19,9 @@ output rides an `ArtifactRef`, never inline; §10 names this upload path as the 
 CLAUDE.md §7 (file uploads: validate type and size, never execute; tenant isolation; untrusted
 companion input) · API.md §1.4 conventions (envelope, errors, rate-limit headers) via
 [API-implementation.md](API-implementation.md).
+**Amended under SOLUSDEV-252 P6** (tier-1, ADR-032 — agent-editable, the MR review is the
+approval gate): §6 documents the **PDF artifact kind** and the `read_document` flow, the
+first SERVER-SIDE producer and consumer of artifact bytes (no HTTP route added).
 **Consumers:** the companion (BRG-04) uploading bulk MCP tool output (KiCad/EDA exports) that a
 `tool_result` references instead of inlining; the sync acquirer (T4c/KiCad MCP sync worker) that
 fetches the bytes exactly once; SOL vision/analysis steps that lazily fetch an artifact's bytes.
@@ -251,6 +254,53 @@ checks; (b) there is **no bucket infrastructure yet** (F11 — dev runs on the l
 (c) a presigned GET would create a second read path that bypasses the **single authz path**
 (`ProjectCtx` + `artifact_is_accessible` + one-shot bookkeeping). When F11 lands the bucket and a
 real >8 MiB need arrives, presigning becomes a scoped follow-up amendment to this file.
+
+---
+
+## 6. PDF artifacts and the `read_document` flow (SOLUSDEV-252 P6)
+
+The `read_document` agent tool is the first **server-side** producer and consumer of artifact
+bytes. It adds **no HTTP route** — it calls the service layer directly, under the same scope,
+TTL and `404` rules as §3/§4.
+
+**The PDF artifact kind.** `media_type: "application/pdf"`, `source_tool: "read_document"`,
+`tool_call_id: null`, `scope: PROJECT`, not `retained` — a fetched datasheet is a hand-off
+buffer like every other bridge artifact and the §4.2 TTL sweep reclaims it. Bytes are stored
+verbatim and never executed; rendering happens in-process behind `agent/documents/pdf.py`'s own
+caps (≤ 40 MiB input, ≤ 12 pages per call, one fixed render width). A person who wants the
+document kept files it into the project `.solus`, which flips `retained` (§4.2).
+
+**Two sources, one shape.**
+
+| `source`                  | What happens                                                                                                                                                                     |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{"url": "https://…"}`    | `documents/fetch.py` fetches it (SSRF guard below), then `create_artifact` mints the PDF artifact above; the tool returns its `artifact_id` so a later call can re-read the pages |
+| `{"artifact_id": "…"}`    | `services.artifacts.fetch_artifact_bytes` reads a PDF already in this project                                                                                                    |
+
+Exactly one of the two; both (or neither) → `invalid_args`.
+
+**`fetch_artifact_bytes`** is the lazy byte read `agent-tool.md` §4 describes: project-scoped,
+live-only (soft-deleted/expired → `404`), `artifact_is_accessible`-checked, and **capped on the
+row's `size_bytes` before the store is touched** and again on the bytes themselves (the row can
+lie). It is **non-destructive** — it never consumes or soft-deletes; `consume_tool_artifact`
+(§4.2) remains the only function that does.
+
+**The URL fetch is an SSRF surface** (the URL reaches SOL from a page, a repo or a person, so it
+is untrusted). `documents/fetch.py` enforces, before any connection: **https only**; an IP
+literal host is checked as itself and never handed to a resolver; a name is resolved and **every**
+resolved address must be globally routable (loopback, RFC1918, link-local/`169.254.0.0/16`,
+IPv6 loopback and every other non-global range are refused); at most **3 redirects**, each
+re-checked under the same rules and each required to stay `https`; the body is streamed under
+the byte cap (`Content-Length` first, then while streaming); and the bytes must start with the
+`%PDF-` magic — the bytes, not the declared `Content-Type`, decide. Every refusal is a
+`DocumentError` naming WHY, surfaced to the model as `invalid_args`, never a traceback.
+`ponytail:` the vetted address is not pinned for the connection, so DNS rebinding between the
+check and the connect is out of scope for v1 (named in `fetch.py`).
+
+**What the model gets back** is page-cited proposals plus an optional candidate
+`PartDefinition` — never the PDF bytes, and never raw page text as instructions. Filing the
+candidate into the project `.solus` is a separate, confirmation-gated tool
+(`propose_part_definition`, `docs/contracts/action-gate.md`).
 
 ---
 

@@ -1,13 +1,57 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import {
+  ROBOT_CATEGORIES,
+  ROBOT_CATEGORY_LABELS,
+  type RobotCategory
+} from '../../../lib/api/hardware'
+import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
+import { LabeledSelect } from '../hardware/LabeledSelect'
 import type { RobotSession, RobotView } from './robotSession'
 
+export interface OrphanAttach {
+  robotName: string
+  attach: (part: Entity, category: RobotCategory) => void
+}
 interface OrphanProps {
   session: RobotSession
   state: RobotView
   mode: SolMode
+  /** When set, every part gets "Attach to <robot>" under the category it last had. */
+  onAttach?: OrphanAttach
 }
-export function RobotOrphans({ session, state, mode }: OrphanProps): ReactNode {
+const CATEGORY_OPTIONS = ROBOT_CATEGORIES.map((value) => ({
+  value,
+  label: ROBOT_CATEGORY_LABELS[value]
+}))
+function lastCategory(part: Entity): RobotCategory {
+  const category = part.properties?.category
+  // ponytail: structure is the honest default for CAD/schematic parts; the user picks otherwise.
+  return ROBOT_CATEGORIES.find((key) => key === category) ?? 'structure'
+}
+function AttachRow({
+  part,
+  onAttach
+}: {
+  part: Entity
+  onAttach: OrphanAttach
+}): React.JSX.Element {
+  const [category, setCategory] = useState(() => lastCategory(part))
+  return (
+    <span className="robot-orphan-attach">
+      <LabeledSelect
+        label="Category"
+        value={category}
+        onChange={setCategory}
+        options={CATEGORY_OPTIONS}
+      />
+      <button type="button" onClick={() => onAttach.attach(part, category)}>
+        Attach to {onAttach.robotName}
+      </button>
+    </span>
+  )
+}
+export function RobotOrphans({ session, state, mode, onAttach }: OrphanProps): ReactNode {
   if (!state.loading && !state.readError && state.parts.length === 0) return null
   return (
     <section className="robot-orphans" aria-label="Unassigned robot parts">
@@ -15,8 +59,8 @@ export function RobotOrphans({ session, state, mode }: OrphanProps): ReactNode {
       {state.parts.length > 0 && (
         <p>
           {mode === 'Guide'
-            ? 'These parts were retained when their robot was deleted. Attach them to another robot when assigning hardware. Select a part below to reveal its existing graph node.'
-            : 'Parts retained. Attach them to another robot when assigning hardware; select to reveal.'}
+            ? 'These parts have no robot owner. Attach them when assigning hardware. Select a part below to reveal its existing graph node.'
+            : 'Unassigned parts. Attach them when assigning hardware; select to reveal.'}
         </p>
       )}
       {state.readError && (
@@ -38,6 +82,7 @@ export function RobotOrphans({ session, state, mode }: OrphanProps): ReactNode {
             >
               {part.name}
             </button>
+            {onAttach && <AttachRow part={part} onAttach={onAttach} />}
           </li>
         ))}
       </ul>

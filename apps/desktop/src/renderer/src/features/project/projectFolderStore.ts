@@ -1,6 +1,9 @@
 // Machine-local project→folder links (SOLUSDEV-164). A working-copy path is
-// specific to this computer (and often a private location), so it never goes
-// to the Solus API. Keyed by project id.
+// specific to this computer (and often a private location), so it never leaves
+// this machine: only the co-located local API receives it (as `repo_root` on
+// hardware propose/confirm), and only for the project it is linked to — the
+// API confines it to this registry's entry for that project (recorded in
+// docs/api/hardware.md §4). Keyed by project id.
 //
 // SOLUSDEV-166 (ADR-034): this store is now the DISPLAY CACHE. The durable,
 // main-process-readable copy is ~/.solus/projects.json — that is what the

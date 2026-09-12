@@ -10,7 +10,9 @@ import * as resources from '../../lib/api/resources'
 import { SolScreen } from './SolScreen'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { useOrbStore } from './orbStore'
+import { useSolSessionStore } from './solSessionStore'
+import { fakeSolBridge, installSolBridge, uninstallSolBridge } from './solWindow.fixtures'
+import { disconnectSolBridge, useSolWindowStore } from './solWindowStore'
 
 vi.mock('./solApi', () => ({
   createSolConversation: vi.fn(),
@@ -19,7 +21,9 @@ vi.mock('./solApi', () => ({
   deleteSolConversation: vi.fn(),
   streamSolMessage: vi.fn()
 }))
-vi.mock('../../lib/api/resources', () => ({
+vi.mock('../../lib/api/resources', async (importOriginal) => ({
+  // Spread the real module: ArtifactCard (via SolChat) reads SOLUS_SECTIONS at load.
+  ...(await importOriginal<typeof import('../../lib/api/resources')>()),
   classifyQuery: vi.fn(),
   decideSolConfirmation: vi.fn(),
   getProject: vi.fn(),
@@ -76,13 +80,10 @@ beforeEach(() => {
     project: { id: 'p1', name: 'Rover MK2' },
     linked: true
   })
-  useOrbStore.setState({
-    corner: 'br',
-    expanded: false,
-    detached: false,
-    streaming: false,
-    conversationByProject: {}
-  })
+  useSolSessionStore.setState({ streaming: false, conversationByProject: {} })
+  disconnectSolBridge()
+  useSolWindowStore.setState({ state: null, region: null })
+  uninstallSolBridge()
 })
 
 describe('SolScreen — live chat surface', () => {
@@ -99,7 +100,7 @@ describe('SolScreen — live chat surface', () => {
   })
 
   it('loads the project conversation history', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([
       {
         id: 't1',
@@ -176,26 +177,21 @@ describe('SolScreen — SOLUSDEV-233 layout', () => {
     render(<SolScreen />)
     fireEvent.click(await screen.findByText('Diagnose run 41'))
     await waitFor(() => expect(listSolTurns).toHaveBeenCalledWith('p1', 'c2'))
-    expect(useOrbStore.getState().conversationByProject).toEqual({ p1: 'c2' })
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c2' })
   })
 })
 
-describe('SolScreen — mode setting (ADR-016)', () => {
-  it('switches the universal SOL mode from the header AND persists it', async () => {
+describe('SolScreen — the SOL window hand-off (SOLUSDEV-252 S3, wireflow §F)', () => {
+  it('offers "Open SOL window" under Electron and opens it through the bridge', () => {
+    const bridge = fakeSolBridge()
+    installSolBridge(bridge)
     render(<SolScreen />)
-    expect(screen.getByText('explains and teaches')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('radio', { name: 'Expert' }))
-    expect(useSettingsStore.getState().solMode).toBe('Expert')
-    expect(screen.getByText('terse, direct')).toBeInTheDocument()
-    // The header toggle used to write the local store only — the next turn's
-    // prompt reads the SERVER's mode, so the PATCH is the point (SOLUSDEV-233).
-    await waitFor(() => expect(updateSolMode).toHaveBeenCalledWith('Expert'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open SOL window' }))
+    expect(bridge.open).toHaveBeenCalledTimes(1)
   })
 
-  it('reverts the optimistic flip when the persist fails', async () => {
-    updateSolMode.mockRejectedValue(new Error('down'))
+  it('hides the button outside Electron, where there is no window to open', () => {
     render(<SolScreen />)
-    fireEvent.click(screen.getByRole('radio', { name: 'Expert' }))
-    await waitFor(() => expect(useSettingsStore.getState().solMode).toBe('Guide'))
+    expect(screen.queryByRole('button', { name: 'Open SOL window' })).not.toBeInTheDocument()
   })
 })

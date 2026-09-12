@@ -6,10 +6,12 @@ insufficient role within a team receives 403.
 """
 
 import hashlib
+import logging
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -49,6 +51,11 @@ from solus_api.models import (
     utcnow,
 )
 from solus_api.services.supabase_admin import SupabaseAdmin
+
+if TYPE_CHECKING:
+    from solus_api.agent.tools.mcp_tool import MCPTool
+
+logger = logging.getLogger("solus.deps")
 
 PERSONAL_TEAM_NAME = "Personal"
 # Every user starts on a 14-day trial of their chosen plan (ADR-032); onboarding picks it.
@@ -393,7 +400,47 @@ async def get_project_context(
     return ProjectContext(project=project, team=team, membership=membership, user=user)
 
 
-ProjectCtx = Annotated[ProjectContext, Depends(get_project_context)]
+async def get_project_read_context(
+    project_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> AsyncIterator[ProjectContext]:
+    from solus_api.graph.read_scope import bind_scope, resolve_scope
+
+    context = await get_project_context(project_id, user, session)
+    with bind_scope(await resolve_scope(session, project_id, user.id)):
+        yield context
+
+
+ProjectCtx = Annotated[ProjectContext, Depends(get_project_read_context)]
+
+
+async def discover_research_tools(
+    secret_store: SecretStore, allowlist_root: str
+) -> list["MCPTool"]:
+    """The Brave search tools the P6 `research` loop binds to — or none.
+
+    ASYNC and process-spawning (the vendored fork is launched cloud-side), so it
+    lives in the request scope like `load_hosted_inventory` rather than inside
+    the synchronous, I/O-free `build_sol_registry`.
+
+    `discover_mcp_tools` RAISES when `brave_api_key` is absent or the server is
+    unreachable. That is caught here and nothing is registered: SOL learns from
+    the capability's ABSENCE, never from a failure per call.
+
+    ponytail: discovery runs per request, like the hosted inventory — cache it
+    if the spawn shows up in latency. And nothing bounds research per team
+    beyond MAX_MODEL_ROUNDS while every tenant shares one `brave_api_key`;
+    per-team research budgets are the named upgrade path (ADR-019).
+    """
+    from solus_api.agent.tools.mcp_servers import WEB_SEARCH
+    from solus_api.agent.tools.mcp_tool import discover_mcp_tools
+    from solus_api.agent.tools.tool import ToolException
+
+    try:
+        return await discover_mcp_tools(WEB_SEARCH, secret_store, allowlist_root=allowlist_root)
+    except ToolException as exc:
+        # By CLASS and code only: the message can carry upstream text (§7).
+        logger.info("web research unavailable: %s code=%s", type(exc).__name__, exc.code.value)
+        return []
 
 
 async def get_sol_registry(
@@ -442,6 +489,15 @@ async def get_sol_registry(
         # SOLUSDEV-246: first-party bundle tools for the bundles installed,
         # enabled and unblocked in THIS project (widget-bundles.md §4).
         bundle_capabilities=await load_bundle_capabilities(session, ctx.project.id, ctx.team.id),
+        # SOLUSDEV-252 S5: the artifact store backs make_diagram / read_document
+        # (their refs must be fetchable through the artifacts route), and the
+        # ARQ seam lets a failed post-call debit defer to reconciliation.
+        artifact_store=getattr(request.app.state, "artifact_store", None),
+        enqueue=getattr(request.app.state, "enqueue", None),
+        artifact_ttl_seconds=settings.artifact_ttl_seconds,
+        # SOLUSDEV-252 P6: the web `research` tool, bound to whatever the
+        # Brave fork advertised for THIS request (none = not registered).
+        brave_tools=await discover_research_tools(secret_store, settings.bridge_allowlist_root),
     )
 
 

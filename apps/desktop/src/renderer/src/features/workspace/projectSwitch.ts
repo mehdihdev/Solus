@@ -14,7 +14,11 @@
 //                    the background by design — SOLUSDEV-233 — but A's
 //                    transcript, confirmations included, is never selected
 //                    for B); the away-toast is cleared here on switch
-//   orbStore         `conversationByProject` keyed by project
+//   solSessionStore  `conversationByProject` keyed by project (the SOL window,
+//                    SOLUSDEV-252)
+//   solWindowStore   the circled screen region (pixels) cleared here — it was
+//                    captured for the previous project's question (SOLUSDEV-252
+//                    FIX-2-R H1)
 //   extensionsStore  Store detail selection cleared here (EXT-14)
 //   shellStore       toast cleared here (a "SOL replied — View" raised by A
 //                    must not open B's SOL page); detail routes reset by the
@@ -40,6 +44,7 @@ import { useAuthStore } from '../../store/authStore'
 import { devBypassActive } from '../../lib/supabase'
 import { postDataEvents } from '../../lib/api/resources.extensions'
 import { useExtensionsStore } from '../extensions/extensionsStore'
+import { useSolWindowStore } from '../sol/solWindowStore'
 import { useFocusStore } from './focusStore'
 import { useShellStore } from './shellStore'
 
@@ -83,6 +88,7 @@ export function switchWorkspaceProject(
   useFocusStore.getState().clearProject()
   useExtensionsStore.getState().select(null)
   useShellStore.getState().clearToast()
+  useSolWindowStore.getState().clearRegion()
   if (next) reportSwitch(next, previousId, surface)
 }
 

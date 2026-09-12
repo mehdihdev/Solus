@@ -78,14 +78,19 @@ interface LinkDrawingProps {
   links: readonly ProjectedLink[]
   points: Readonly<Record<string, Point>>
   offset: Point
+  /** The level's anchor: the parent's point, where the parent chip sits. */
+  anchor: Point
   parentName?: string
+  onBack: () => void
 }
 
 export function GraphLinkDrawing({
   links,
   points,
   offset,
-  parentName
+  anchor,
+  parentName,
+  onBack
 }: LinkDrawingProps): React.JSX.Element {
   const local = (id: string): Point => ({ x: points[id].x - offset.x, y: points[id].y - offset.y })
   const seen = new Set<string>()
@@ -99,17 +104,6 @@ export function GraphLinkDrawing({
   return (
     <>
       <svg className="graph-link-drawing" aria-hidden="true">
-        {parentName &&
-          Object.keys(points).map((id) => {
-            const point = local(id)
-            return (
-              <path
-                key={`tree-${id}`}
-                className="graph-containment-edge"
-                d={`M ${-offset.x} 34 V 54 H ${point.x} V ${point.y}`}
-              />
-            )
-          })}
         {unique.slice(0, MAX_DRAWN_LINKS).map(({ relation, from, to }) => {
           const a = local(from!)
           const b = local(to!)
@@ -127,9 +121,15 @@ export function GraphLinkDrawing({
         })}
       </svg>
       {parentName && (
-        <span className="graph-parent-anchor" style={{ left: -offset.x, top: 14 }}>
+        <button
+          type="button"
+          className="graph-parent-anchor"
+          aria-label={`Back to ${parentName}`}
+          style={{ left: anchor.x - offset.x, top: 14 }}
+          onClick={onBack}
+        >
           {parentName}
-        </span>
+        </button>
       )}
       {unique.length > MAX_DRAWN_LINKS && (
         <span className="graph-edge-limit">

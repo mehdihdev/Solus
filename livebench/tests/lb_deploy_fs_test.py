@@ -17,9 +17,7 @@ class CapturingExec:
 
 
 def fs(execute: CapturingExec) -> SshFilesystem:
-    return SshFilesystem(
-        host="robot.local", user="pi", scp_binary="/usr/bin/scp", execute=execute
-    )
+    return SshFilesystem(host="robot.local", user="pi", scp_binary="/usr/bin/scp", execute=execute)
 
 
 async def test_push_builds_a_batchmode_scp_arg_list(tmp_path: Path) -> None:

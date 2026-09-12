@@ -84,7 +84,11 @@ SYNC_HISTORY_LIMIT = 50
 async def _scoped_source(
     session: SessionDep, ctx: ProjectCtx, source_id: uuid.UUID, *, lock: bool = False
 ) -> Source:
-    stmt = select(Source).where(Source.id == source_id, Source.project_id == ctx.project.id)
+    stmt = select(Source).where(
+        Source.id == source_id,
+        Source.project_id == ctx.project.id,
+        Source.revision_base_source_id.is_(None),
+    )
     if lock:
         stmt = stmt.with_for_update().execution_options(populate_existing=True)
     source = await session.scalar(stmt)
@@ -175,7 +179,7 @@ async def list_sources(
 ) -> dict[str, Any]:
     stmt = (
         select(Source)
-        .where(Source.project_id == ctx.project.id)
+        .where(Source.project_id == ctx.project.id, Source.revision_base_source_id.is_(None))
         .order_by(Source.created_at.desc(), Source.id.desc())
         .limit(limit + 1)
     )

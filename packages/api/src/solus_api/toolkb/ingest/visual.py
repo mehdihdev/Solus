@@ -189,8 +189,11 @@ def build_vision_extractor(
                 enqueue=enqueue,
                 max_tokens=_MAX_ANSWER_TOKENS,
             )
-        except Exception:  # noqa: BLE001 — vision is best-effort, never load-bearing
-            logger.warning("visual extraction failed; treating as no-signal", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 — vision is best-effort, never load-bearing
+            # Class name only: a provider 400's cause chain can quote the image bytes.
+            logger.warning(
+                "visual extraction failed (%s); treating as no-signal", type(exc).__name__
+            )
             return []
         return parse_vision_output(completion.text)
 

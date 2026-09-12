@@ -9,8 +9,8 @@
 //   solid nodes  → accent tinted toward --tx (lighter on dark themes,
 //                  darker on light themes — same contrast direction as the mark)
 // Used in brand positions — the shell rail's home button, the auth wordmark,
-// Settings. The SOL page header and the floating mini-orb keep the SolOrb:
-// the orb is SOL's presence, the logo is the product's.
+// Settings. The SOL surfaces carry the plain `SOL` wordmark (SOLUSDEV-252 S3
+// retired the orb): the logo is the product's mark, not SOL's.
 
 interface SolusLogoProps {
   size?: number

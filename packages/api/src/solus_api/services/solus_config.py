@@ -12,12 +12,15 @@ Every section and entry has a graph identity; full text stays in the entry row.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
+from solus_api.hardware.config import EntityHardwareConfig
 from solus_api.models import (
     Artifact,
     Domain,
@@ -49,6 +52,27 @@ def parse_section(raw: str) -> SolusSection:
         return SolusSection(raw)
     except ValueError:
         raise APIError(404, "not_found", "Unknown .solus section") from None
+
+
+def validate_config_payload(section: SolusSection, payload: Mapping[str, Any]) -> BaseModel:
+    """A CONFIG entry's payload, validated by the model its SECTION owns: hardware →
+    `EntityHardwareConfig` (written only through the hardware routes), code → `CodeEnvironment`.
+    Other sections have no config shape (422)."""
+    from solus_api.services.code_env import CodeEnvironment  # circular at module level
+
+    models: dict[SolusSection, type[BaseModel]] = {
+        SolusSection.HARDWARE: EntityHardwareConfig,
+        SolusSection.CODE: CodeEnvironment,
+    }
+    model = models.get(section)
+    if model is None:
+        raise APIError(422, "validation_error", f"{section.value} holds no config entries")
+    try:
+        return model.model_validate(payload)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(loc) for loc in first["loc"]) or "document"
+        raise APIError(422, "validation_error", f"{where}: {first['msg']}") from None
 
 
 def clean_text(raw: str) -> str:
@@ -188,7 +212,7 @@ async def update_text(session: AsyncSession, entry: SolusEntry, text: str) -> So
     if entry.kind == SolusEntryKind.ARTIFACT:
         raise APIError(409, "conflict", "An imported file has no editable text")
     if entry.kind == SolusEntryKind.CONFIG:
-        raise APIError(409, "conflict", "A hardware config is edited through the hardware routes")
+        raise APIError(409, "conflict", "A config entry is edited through its own routes")
     entry.text = clean_text(text)
     graph = await SolusGraph.ensure(session, entry.project_id)
     node = graph.attach_entry(entry)
@@ -239,7 +263,8 @@ def serialize_entry(entry: SolusEntry, artifact: Artifact | None = None) -> dict
         "entity_id": entry.entity_id,
         "media_type": artifact.media_type if artifact is not None else None,
         "size_bytes": artifact.size_bytes if artifact is not None else None,
-        # CONFIG only (SOLUSDEV-248): the validated HardwareConfig document.
+        # CONFIG only: the validated EntityHardwareConfig (SOLUSDEV-251) or CodeEnvironment
+        # (SOLUSDEV-252) document, by section.
         "payload": entry.payload if entry.kind == SolusEntryKind.CONFIG else None,
         "created_by": entry.created_by,
         "created_at": entry.created_at,

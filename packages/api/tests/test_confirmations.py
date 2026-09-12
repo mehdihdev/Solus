@@ -30,10 +30,12 @@ from solus_api.agent.confirmations import (
 )
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolErrorCode
-from solus_api.agent.tools.tool import InProcessTool
+from solus_api.agent.tools.tool import InProcessTool, ToolException
 from solus_api.models import (
     ConfirmationStatus,
     Project,
+    SolusEntry,
+    SolusSection,
     Team,
     ToolConfirmation,
     User,
@@ -1348,8 +1350,9 @@ def test_command_output_is_redacted_before_it_is_persisted_or_replayed() -> None
     logging entry, the persisted tool turn and the next prompt's history — it
     goes through scalar redaction like every other untrusted machine text, and
     control characters are dropped."""
-    from solus_api.agent.confirmations import failure_entry_text, output_tail
-    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.agent.confirmations import output_tail
+    from solus_api.agent.errors_filing import format_error_entry
+    from solus_api.agent.tools.shapes import ToolCall, ToolResult
     from solus_api.routers.sol import _decision_summary
 
     secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
@@ -1361,7 +1364,7 @@ def test_command_output_is_redacted_before_it_is_persisted_or_replayed() -> None
     }
     tail = output_tail(value, 3000)
     assert secret not in tail and "\x1b" not in tail and "\x07" not in tail
-    entry = failure_entry_text("code.run", value)
+    entry = format_error_entry(ToolCall(tool="code.run", args={}), ToolResult.success("c", value))
     assert entry is not None and secret not in entry
     assert secret not in _decision_summary("approve", ToolResult.success("c", value))
 
@@ -1393,3 +1396,144 @@ def test_red_team_command_output_reaches_the_model_only_inside_the_history_fence
     outside = block.replace(bodies[0], "")
     assert "ignore previous instructions" not in outside  # …only inside the fence
     assert outside.count("<<<END-SOLUS-DATA") == 1  # the forged close token never closes it
+
+
+# ------------------------------------ S5 Error logging on the approved path
+#
+# `decide_confirmation` is the ONLY place a gated tool actually runs. The turn's
+# post-dispatch filing hook cannot see this execution at all, so before the fix a
+# genuinely failed approved command/install/flash filed NOTHING — the exact
+# inverse of the ticket requirement — while every PROPOSAL filed a false entry.
+
+FILING = ToolDescriptor(
+    name="companion.run_command",
+    description="Runs a command on the person's machine.",
+    params={"type": "object", "properties": {"command": {"type": "string"}}},
+    returns={"type": "object"},
+    requires_confirmation=True,
+    consent_summary="Run a command on this machine",
+    files_errors=True,
+)
+
+
+def _filing_registry(*, fail: bool) -> ToolRegistry:
+    async def run(args: dict[str, Any]) -> dict[str, Any]:
+        if fail:
+            raise ToolException("exit 1: pio: command not found")
+        return {"stdout": "ok"}
+
+    registry = ToolRegistry()
+    registry.register(InProcessTool(FILING, run))
+    return registry
+
+
+async def _park_filing(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    project_id: uuid.UUID,
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> uuid.UUID:
+    async with maker() as session:
+        parked = await request_confirmation(
+            session,
+            _filing_registry(fail=True),
+            ToolCall(tool=FILING.name, args={"command": "pio run"}),
+            project_id=project_id,
+            team_id=team_id,
+            user_id=user_id,
+        )
+        await session.commit()
+    assert parked is not None and parked.confirmation_id is not None
+    return parked.confirmation_id
+
+
+async def _error_entries(
+    maker: async_sessionmaker[AsyncSession], project_id: uuid.UUID
+) -> list[SolusEntry]:
+    async with maker() as session:
+        rows = await session.scalars(
+            select(SolusEntry).where(
+                SolusEntry.project_id == project_id, SolusEntry.section == SolusSection.ERRORS
+            )
+        )
+        return list(rows)
+
+
+async def test_parking_a_files_errors_action_files_no_error_entry(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    project_id, team_id, user_id = await _scope(maker)
+    await _park_filing(maker, project_id=project_id, team_id=team_id, user_id=user_id)
+    assert await _error_entries(maker, project_id) == []
+
+
+async def test_an_approved_action_that_fails_files_exactly_one_error_entry(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    project_id, team_id, user_id = await _scope(maker)
+    confirmation_id = await _park_filing(
+        maker, project_id=project_id, team_id=team_id, user_id=user_id
+    )
+    async with maker() as session:
+        result = await decide_confirmation(
+            session,
+            _filing_registry(fail=True),
+            confirmation_id,
+            approve=True,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        await session.commit()
+
+    assert result.ok is False
+    [entry] = await _error_entries(maker, project_id)
+    text = entry.text or ""
+    assert entry.author == "sol" and entry.created_by == user_id
+    assert FILING.name in text  # the tool
+    assert "pio run" in text  # the command, from the STORED args
+    assert "command not found" in text  # the output
+    assert "When:" in text and "Entity:" in text  # timestamp + entity line
+
+
+async def test_an_approved_action_that_succeeds_files_nothing(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    project_id, team_id, user_id = await _scope(maker)
+    confirmation_id = await _park_filing(
+        maker, project_id=project_id, team_id=team_id, user_id=user_id
+    )
+    async with maker() as session:
+        result = await decide_confirmation(
+            session,
+            _filing_registry(fail=False),
+            confirmation_id,
+            approve=True,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        await session.commit()
+
+    assert result.ok is True
+    assert await _error_entries(maker, project_id) == []
+
+
+async def test_a_rejected_action_files_nothing(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    project_id, team_id, user_id = await _scope(maker)
+    confirmation_id = await _park_filing(
+        maker, project_id=project_id, team_id=team_id, user_id=user_id
+    )
+    async with maker() as session:
+        await decide_confirmation(
+            session,
+            _filing_registry(fail=True),
+            confirmation_id,
+            approve=False,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        await session.commit()
+
+    assert await _error_entries(maker, project_id) == []

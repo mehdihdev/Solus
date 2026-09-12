@@ -20,53 +20,77 @@
   outline: 2px solid var(--acc);
   outline-offset: 3px;
 }
-.graph-navigator-toolbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 12px 16px;
-  background: var(--sur);
-  border-bottom: 1px solid var(--bd);
-}
-.graph-navigator-toolbar > button,
 .graph-pagination button {
   border: 1px solid var(--bd);
   border-radius: 4px;
   background: var(--sur2);
   padding: 5px 8px;
 }
-.graph-breadcrumbs {
-  flex: 1;
+.graph-viewport-frame {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex: 1;
+  min-height: 0;
   min-width: 0;
-  gap: 5px;
+}
+.graph-corner {
+  position: absolute;
+  top: 10px;
+  z-index: 25;
+  pointer-events: auto;
+}
+.graph-corner-left {
+  left: 10px;
+}
+.graph-corner-right {
+  right: 10px;
+}
+.graph-help {
+  position: relative;
+}
+.graph-help > button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--bd);
+  border-radius: 50%;
+  background: var(--sur);
+  color: var(--mut);
+}
+.graph-help .workspace-add-panel {
+  left: auto;
+  right: 0;
+  width: 300px;
+  min-width: 0;
+  resize: none;
+}
+.graph-help ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
   font-size: 12px;
+  line-height: 1.6;
 }
-.graph-breadcrumbs span {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-}
-.graph-breadcrumbs button {
-  background: none;
-  border: 0;
-  padding: 4px;
+.graph-help-trail {
+  font: 10px var(--font-mono) !important;
   overflow-wrap: anywhere;
 }
-.graph-breadcrumbs button[aria-current] {
-  color: var(--acc);
+.graph-help .workspace-add-panel > button {
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--sur2);
+  padding: 5px 8px;
 }
-.graph-level-meta {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 16px;
-  color: var(--mut);
-  font: 10px var(--font-mono);
+.graph-overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 300px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  z-index: 20;
+}
+/* The rail reserves its column (300px + 12px inset + 12px gap) so the centred stage never sits under it. */
+.graph-viewport-frame:has(.graph-overlay) .graph-viewport {
+  padding-right: 324px;
 }
 .graph-viewport {
   display: flex;
@@ -119,6 +143,12 @@
   box-shadow: 0 6px 20px #0002;
   overflow: hidden;
 }
+.graph-node {
+  cursor: grab;
+}
+.graph-node.graph-node-dragging {
+  cursor: grabbing;
+}
 .graph-node:hover {
   border-color: var(--mut);
 }
@@ -128,6 +158,26 @@
   box-shadow:
     0 0 0 1px var(--acc),
     0 6px 20px #0002;
+}
+/* The top border names the domain (ADR-027 tokens); `integration` is the client-only account anchor. */
+.graph-node {
+  border-top-width: 3px;
+}
+.graph-node[data-domain='code'] {
+  border-top-color: var(--sw);
+}
+.graph-node[data-domain='electrical'] {
+  border-top-color: var(--ee);
+}
+.graph-node[data-domain='mechanical'] {
+  border-top-color: var(--me);
+}
+.graph-node[data-domain='runtime'],
+.graph-node[data-domain='project'] {
+  border-top-color: var(--rt);
+}
+.graph-node[data-domain='integration'] {
+  border-top-color: var(--bd);
 }
 .graph-node-heading {
   display: flex;
@@ -216,12 +266,6 @@
   overflow: visible;
   pointer-events: none;
 }
-.graph-containment-edge {
-  stroke: var(--mut);
-  stroke-width: 1;
-  fill: none;
-  opacity: 0.4;
-}
 .graph-cross-edge {
   stroke: var(--acc);
   stroke-width: 1.5;
@@ -229,10 +273,10 @@
   fill: none;
   opacity: 0.65;
 }
-.graph-parent-anchor {
+.graph-navigator .graph-parent-anchor {
   position: absolute;
   transform: translateX(-50%);
-  background: var(--sur2);
+  background: var(--sur);
   color: var(--mut);
   padding: 4px 10px;
   border: 1px solid var(--bd);
@@ -240,6 +284,11 @@
   font: 10px var(--font-mono);
   max-width: 220px;
   overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.graph-navigator .graph-parent-anchor:hover {
+  color: var(--tx);
+  border-color: var(--mut);
 }
 .graph-edge-limit {
   position: absolute;
@@ -266,11 +315,7 @@
 }
 .graph-edge-legend i {
   width: 20px;
-  border-top: 1px solid var(--mut);
-}
-.graph-edge-legend i:nth-of-type(2) {
   border-top: 1px dashed var(--acc);
-  margin-left: 8px;
 }
 .graph-links-list {
   border-top: 1px solid var(--bd);
@@ -360,14 +405,17 @@
 .workspace-add > button {
   border: 1px solid var(--acc);
   border-radius: 4px;
-  background: var(--sur2);
+  background: var(--sur);
   padding: 5px 12px;
 }
 .workspace-add-panel {
   position: absolute;
   top: 36px;
   left: 0;
-  width: 310px;
+  width: clamp(440px, 42vw, 760px);
+  min-width: 440px;
+  max-width: min(760px, 90vw);
+  resize: horizontal;
   padding: 16px;
   border: 1px solid var(--bd);
   border-radius: 8px;
@@ -376,8 +424,8 @@
   font-size: 13px;
 }
 .workspace-add-panel {
-  max-height: min(650px, calc(100vh - 200px));
-  overflow-y: auto;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
   box-shadow: 0 12px 36px #0006;
 }
 .workspace-add-panel header {
@@ -453,4 +501,14 @@
 }
 .workspace-add-panel [role='alert'] {
   color: var(--err);
+}
+
+/* Bottom line: counts, then the layout's saving/error state and the live-stream state. */
+.graph-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--mut);
 }

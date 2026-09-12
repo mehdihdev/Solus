@@ -14,6 +14,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from typing import Any
 
 import pytest
 from conftest import add_member, me
@@ -117,6 +118,9 @@ class _FakeAdapter:
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
+        # The routed catalog entry may carry a reasoning effort (SOLUSDEV-252 S1);
+        # a fake adapter accepts whatever the provider seam passes.
+        **_: Any,
     ) -> AsyncIterator[str | ToolUse | Usage]:
         self.prompts.append(query)
         if self.fail:
@@ -135,7 +139,11 @@ def app(settings: Settings, engine: AsyncEngine, adapter: _FakeAdapter) -> FastA
     application = create_app(settings=settings, engine=engine)
     # The inline job path reads adapters from app state — a real deployment
     # uses the shipped providers; here the model is a fixture.
-    application.state.orchestration_adapters = {"anthropic": adapter, "google": adapter}
+    application.state.orchestration_adapters = {
+        "anthropic": adapter,
+        "openai": adapter,
+        "google": adapter,
+    }
     return application
 
 
@@ -575,7 +583,11 @@ async def test_the_engine_never_surfaces_provider_text_and_settles_the_job(
         factory,
         request_id,
         secret_store=InMemorySecretStore(),
-        adapters={"anthropic": _FakeAdapter(fail=True), "google": _FakeAdapter(fail=True)},
+        adapters={
+            "anthropic": _FakeAdapter(fail=True),
+            "openai": _FakeAdapter(fail=True),
+            "google": _FakeAdapter(fail=True),
+        },
     )
     assert status is JobStatus.FAILED
     row = await db.get(SourcingRequest, request_id)
@@ -922,7 +934,7 @@ async def test_a_request_with_no_requester_never_reaches_a_provider(
         async_sessionmaker(engine, expire_on_commit=False),
         request_id,
         secret_store=InMemorySecretStore(),
-        adapters={"anthropic": probe, "google": probe},
+        adapters={"anthropic": probe, "openai": probe, "google": probe},
     )
     assert status is JobStatus.FAILED and probe.prompts == []
     await db.refresh(row)
@@ -954,7 +966,7 @@ async def test_running_the_same_request_twice_does_not_call_the_model_again(
         async_sessionmaker(engine, expire_on_commit=False),
         request_id,
         secret_store=InMemorySecretStore(),
-        adapters={"anthropic": probe, "google": probe},
+        adapters={"anthropic": probe, "openai": probe, "google": probe},
     )
     assert status is JobStatus.SUCCEEDED and probe.prompts == []
 
@@ -987,7 +999,7 @@ async def test_the_model_answer_is_not_logged_verbatim(
             async_sessionmaker(engine, expire_on_commit=False),
             request_id,
             secret_store=InMemorySecretStore(),
-            adapters={"anthropic": prose, "google": prose},
+            adapters={"anthropic": prose, "openai": prose, "google": prose},
         )
     assert status is JobStatus.SUCCEEDED
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]

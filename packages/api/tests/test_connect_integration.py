@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from fastapi import FastAPI
@@ -29,6 +29,19 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 @pytest.fixture
 def maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
+
+
+if TYPE_CHECKING:
+    from solus_api.agent.runtime import LlmRunner
+
+
+def _runner(model: object) -> LlmRunner:
+    """The shipped matrix routes a SOL turn to openai OR anthropic by tier
+    (SOLUSDEV-252 S1), so the fake serves every provider the router may pick —
+    these suites are about the reasoning loop, not about which model answers."""
+    from solus_api.agent.runtime import LlmRunner
+
+    return LlmRunner(adapters={"anthropic": model, "openai": model, "google": model})
 
 
 class _ExportConnector:
@@ -231,6 +244,9 @@ class _ProposingModel:
         max_tokens: int,
         images: object = None,
         conversation: object = None,
+        # The routed catalog entry may set a reasoning effort (SOLUSDEV-252 S1);
+        # a fake adapter accepts whatever the seam passes.
+        **_: Any,
     ) -> AsyncIterator[Any]:
         from solus_api.orchestration.providers import ToolUse, Usage
 
@@ -292,11 +308,10 @@ async def _sol_setup(client: AsyncClient, headers: dict[str, str]) -> tuple[str,
 async def test_do_mode_parks_the_connect_and_approval_executes_it(
     app: FastAPI, client: AsyncClient, alice_headers: dict[str, str], engine: AsyncEngine
 ) -> None:
-    from solus_api.agent.runtime import LlmRunner
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _ProposingModel()})
+    app.state.agent_runner = _runner(_ProposingModel())
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages",
@@ -328,12 +343,11 @@ async def test_do_mode_parks_the_connect_and_approval_executes_it(
 async def test_guide_mode_never_parks_or_connects(
     app: FastAPI, client: AsyncClient, alice_headers: dict[str, str], engine: AsyncEngine
 ) -> None:
-    from solus_api.agent.runtime import LlmRunner
     from solus_api.models import ToolConfirmation
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _ProposingModel()})
+    app.state.agent_runner = _runner(_ProposingModel())
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages",
@@ -358,7 +372,6 @@ async def test_another_member_cannot_decide_the_parked_connect(
     engine: AsyncEngine,
 ) -> None:
     from conftest import BOB, add_member, me
-    from solus_api.agent.runtime import LlmRunner
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
@@ -367,7 +380,7 @@ async def test_another_member_cannot_decide_the_parked_connect(
         "data"
     ]["team_id"]
     await add_member(client, alice_headers, bob_headers, BOB, team_id, role="member")
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _ProposingModel()})
+    app.state.agent_runner = _runner(_ProposingModel())
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages",
@@ -398,7 +411,6 @@ async def test_invalid_args_are_refused_at_park_never_persisted_or_streamed(
 ) -> None:
     """SEC-H3: a token-shaped extra argument is refused BEFORE parking — it
     never reaches tool_confirmations.args, the consent card, or the SSE wire."""
-    from solus_api.agent.runtime import LlmRunner
     from solus_api.models import ToolConfirmation
     from solus_api.orchestration.providers import ToolUse
 
@@ -416,7 +428,7 @@ async def test_invalid_args_are_refused_at_park_never_persisted_or_streamed(
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _LeakyModel()})
+    app.state.agent_runner = _runner(_LeakyModel())
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages",
@@ -439,11 +451,10 @@ async def test_unverified_caller_cannot_decide(
     """SEC-H2: the decide endpoint is a destructive execution point — it takes
     the same email-verification gate as REST source creation (ADR-009)."""
     from conftest import bearer
-    from solus_api.agent.runtime import LlmRunner
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _ProposingModel()})
+    app.state.agent_runner = _runner(_ProposingModel())
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages",
@@ -478,12 +489,11 @@ async def test_team_b_cannot_decide_team_a_parked_connect(
     """Cross-TEAM isolation on the destructive execution point: a member of an
     unrelated team gets 404 (no existence leak) and nothing executes."""
     from conftest import me
-    from solus_api.agent.runtime import LlmRunner
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
     await me(client, bob_headers)  # Bob exists in his own personal team only
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _ProposingModel()})
+    app.state.agent_runner = _runner(_ProposingModel())
 
     response = await client.post(
         f"/api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages",
@@ -510,11 +520,10 @@ async def test_injected_connect_instruction_still_parks_never_executes(
     """SEC-M4: the red-team corpus meets the first REAL destructive tool — an
     ingested instruction to connect cannot execute anything without approval."""
     from fixtures.injection_corpus import PAYLOADS
-    from solus_api.agent.runtime import LlmRunner
 
     await _funded_alice(engine, client, alice_headers)
     project_id, conversation_id = await _sol_setup(client, alice_headers)
-    app.state.agent_runner = LlmRunner(adapters={"anthropic": _ProposingModel()})
+    app.state.agent_runner = _runner(_ProposingModel())
 
     hostile = next(p for p in PAYLOADS if "pre-approved" in p.text).text
     response = await client.post(

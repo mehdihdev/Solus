@@ -85,6 +85,36 @@ async def test_unassigned_lists_connector_parts_not_owned_by_a_robot(
     assert resp.json()["meta"]["next_cursor"] is None
 
 
+async def test_named_manual_part_is_unassigned_then_attachable(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    project_id, _ = await _attach_project(client, alice_headers)
+    robot_id = await _attach_robot(client, alice_headers, project_id)
+    part = GraphEntity(
+        project_id=uuid.UUID(project_id),
+        kind="part",
+        domain=Domain.PROJECT,
+        origin="manual",
+        name="Named gripper",
+        attrs={},
+    )
+    db.add(part)
+    await db.commit()
+    listed = await client.get(_attach_url(project_id, "unassigned"), headers=alice_headers)
+    assert any(
+        row["id"] == str(part.id) and row["name"] == "Named gripper"
+        for row in listed.json()["data"]
+    )
+    attached = await client.post(
+        _attach_url(project_id, "robots", robot_id, "parts", "attach"),
+        headers=alice_headers,
+        json={"entity_ids": [str(part.id)], "category": "end_effectors"},
+    )
+    assert attached.status_code == 200, attached.text
+    listed = await client.get(_attach_url(project_id, "unassigned"), headers=alice_headers)
+    assert all(row["id"] != str(part.id) for row in listed.json()["data"])
+
+
 async def test_unassigned_pages_and_bounds_the_limit(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
@@ -136,6 +166,13 @@ async def test_attach_creates_category_edges_and_config_slots(
         assert category is not None and category.attrs["category"] == "sensors"
         part = await db.get(GraphEntity, part_id)
         assert part is not None and part.origin == "connector"  # identity untouched
+        saved = await client.get(
+            _attach_url(project_id, "entities", str(part_id), "config"), headers=alice_headers
+        )
+        document = saved.json()["data"]["config"]
+        assert document["schema_version"] == 2 and document["entity_id"] == str(part_id)
+        assert document["component"]["lifecycle"] == "planned"
+        assert "parts" not in document
     config = (
         await client.get(
             _attach_url(project_id, "robots", robot_id, "config"), headers=alice_headers

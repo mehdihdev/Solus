@@ -8,14 +8,14 @@ import { useClassifyPreview } from './useClassifyPreview'
 vi.mock('../../lib/api/resources', () => ({ classifyQuery: vi.fn() }))
 const classifyQuery = vi.mocked(resources.classifyQuery)
 
-function preview(model: string): ClassifyPreview {
+function preview(tokens: number): ClassifyPreview {
   return {
     complexity: 'standard',
     type: 'code',
-    model: { name: model, provider: 'anthropic' },
+    reasoner: { name: 'sol-reasoner-1', effort: 'standard' },
     cost_tier: 'standard',
     source: { complexity: 'estimator', type: 'estimator' },
-    tokens_estimate: 12,
+    tokens_estimate: tokens,
     viable: true,
     reason: null,
     escalated: false,
@@ -32,7 +32,7 @@ afterEach(() => {
 })
 
 it('debounces: one call after the pause, none per keystroke', async () => {
-  classifyQuery.mockResolvedValue(preview('m1'))
+  classifyQuery.mockResolvedValue(preview(1))
   const { rerender } = renderHook(({ q }) => useClassifyPreview(q), {
     initialProps: { q: 'w' }
   })
@@ -57,7 +57,7 @@ it('applies only the latest response when requests race', async () => {
     .mockImplementationOnce(
       () => new Promise<ClassifyPreview>((resolve) => (resolveFirst = resolve))
     )
-    .mockResolvedValueOnce(preview('newer'))
+    .mockResolvedValueOnce(preview(2))
   const { result, rerender } = renderHook(({ q }) => useClassifyPreview(q), {
     initialProps: { q: 'first question' }
   })
@@ -68,11 +68,11 @@ it('applies only the latest response when requests race', async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(400) // fires request 2, resolves 'newer'
   })
-  expect(result.current.preview?.model.name).toBe('newer')
+  expect(result.current.preview?.tokens_estimate).toBe(2)
   await act(async () => {
-    resolveFirst(preview('stale')) // request 1 arrives late
+    resolveFirst(preview(3)) // request 1 arrives late
   })
-  expect(result.current.preview?.model.name).toBe('newer') // stale dropped
+  expect(result.current.preview?.tokens_estimate).toBe(2) // stale dropped
 })
 
 it('classify failure shows nothing and never throws', async () => {
@@ -87,7 +87,7 @@ it('classify failure shows nothing and never throws', async () => {
 })
 
 it('empty input clears the preview and makes no call', async () => {
-  classifyQuery.mockResolvedValue(preview('m1'))
+  classifyQuery.mockResolvedValue(preview(1))
   const { result, rerender } = renderHook(({ q }) => useClassifyPreview(q), {
     initialProps: { q: 'hello' }
   })
@@ -104,7 +104,7 @@ it('empty input clears the preview and makes no call', async () => {
 })
 
 it('overrides re-classify with explicit values and reset clears them', async () => {
-  classifyQuery.mockResolvedValue(preview('m1'))
+  classifyQuery.mockResolvedValue(preview(1))
   const { result } = renderHook(({ q }) => useClassifyPreview(q), {
     initialProps: { q: 'hello world' }
   })
@@ -126,5 +126,19 @@ it('overrides re-classify with explicit values and reset clears them', async () 
     await vi.advanceTimersByTimeAsync(400)
   })
   expect(classifyQuery).toHaveBeenLastCalledWith({ query: 'hello world' })
-  expect(result.current.override).toEqual({ complexity: null, type: null })
+  expect(result.current.override).toEqual({ complexity: null, type: null, thinkHarder: false })
+})
+
+it('sends think_harder only when the toggle is on', async () => {
+  classifyQuery.mockResolvedValue(preview(1))
+  const { result } = renderHook(({ q }) => useClassifyPreview(q), {
+    initialProps: { q: 'hello world' }
+  })
+  act(() => {
+    result.current.setOverride({ thinkHarder: true })
+  })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(400)
+  })
+  expect(classifyQuery).toHaveBeenLastCalledWith({ query: 'hello world', think_harder: true })
 })

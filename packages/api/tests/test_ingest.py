@@ -777,3 +777,35 @@ async def test_photo_evidence_never_sets_the_graph_fk(db: AsyncSession) -> None:
     photo_entry = entries["photo:altium:assets/board.jpg"]
     assert photo_entry["state"] == "low_confidence"
     assert photo_entry["evidence"]["readings"] == ["LM358"]
+
+
+async def test_personally_selected_snapshot_observation_is_never_mutated(db: AsyncSession) -> None:
+    from solus_api.graph.read_scope import GraphReadScope, bind_scope
+    from solus_api.models import Source, SourceType
+
+    project = await _project(db, "snapshot")
+    base = Source(
+        project_id=project.id, team_id=project.team_id, type=SourceType.GITHUB, name="base"
+    )
+    db.add(base)
+    await db.flush()
+    snapshot = Source(
+        project_id=project.id,
+        team_id=project.team_id,
+        type=SourceType.GITHUB,
+        name="revision",
+        revision_base_source_id=base.id,
+    )
+    db.add(snapshot)
+    await db.flush()
+    observation = await _obs(db, project, external_ref="module.py", hints={})
+    observation.source_id = snapshot.id
+    await db.flush()
+    with bind_scope(GraphReadScope(project.id, ((base.id, snapshot.id),))):
+        await ingest(
+            db,
+            _part(modalities=(_mm(_ref("module.py", entity_id=observation.id)),)),
+            project_id=project.id,
+        )
+    assert observation.canonical_part_id is None
+    assert "fingerprint_link" not in observation.attrs

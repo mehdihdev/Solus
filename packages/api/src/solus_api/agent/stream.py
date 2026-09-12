@@ -11,6 +11,7 @@ ingested-content strings ride as DATA in `data`, never as control instructions.
 
 import enum
 import json
+from collections.abc import Mapping
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict
@@ -32,9 +33,18 @@ class AgentEventType(enum.StrEnum):
     TOOL_RESULT = "tool_result"
     #: SOLUS-ONS-A5: a destructive action is parked awaiting the user.
     TOOL_CONFIRMATION = "tool_confirmation"
+    #: SOLUSDEV-252 S5: a tool produced a viewable artifact (a diagram, a read
+    #: document). A REFERENCE — id, uri, media type — never bytes.
+    ARTIFACT = "artifact"
     MESSAGE = "message"
     ERROR = "error"
     DONE = "done"
+
+
+#: Tools whose successful result may carry an artifact reference. Fixed by Solus
+#: code: a result shaped like an artifact from any other tool emits nothing.
+ARTIFACT_TOOLS: frozenset[str] = frozenset({"make_diagram"})
+_ARTIFACT_KEYS = ("artifact_id", "uri", "media_type")
 
 
 class AgentEvent(BaseModel):
@@ -108,6 +118,36 @@ class AgentEvent(BaseModel):
         # to the client in the clear. Same gate the persisted turn already gets.
         return cls(
             type=AgentEventType.TOOL_RESULT, data=redact_value(result.model_dump(mode="json"))
+        )
+
+    @classmethod
+    def artifact(cls, ref: dict[str, Any]) -> Self:
+        """A viewable artifact the turn produced (SOLUSDEV-252 S5). The renderer
+        fetches the bytes through the artifacts route with the viewer's own auth;
+        the event carries only `{artifact_id, uri, media_type, title, source_tool,
+        summary}` — never inline bytes."""
+        return cls(type=AgentEventType.ARTIFACT, data=dict(ref))
+
+    @classmethod
+    def artifact_from_result(cls, tool: str, result: ToolResult) -> Self | None:
+        """The `artifact` event a tool result implies, or None. Keyed on BOTH the
+        allowlist and the result shape, so a look-alike value from another tool
+        (or model-influenced text) can never make the UI fetch something."""
+        value = result.value if result.ok and tool in ARTIFACT_TOOLS else None
+        # `value` is a tool's own return shape, so it is checked, not trusted:
+        # the whole point of this method is that a look-alike cannot make the UI
+        # fetch something. A non-mapping is simply not an artifact.
+        if not isinstance(value, Mapping):
+            return None
+        if not all(isinstance(value.get(k), str) for k in _ARTIFACT_KEYS):
+            return None
+        return cls.artifact(
+            {
+                **{k: value[k] for k in _ARTIFACT_KEYS},
+                "title": str(value.get("title") or ""),
+                "source_tool": tool,
+                "summary": str(value.get("summary") or ""),
+            }
         )
 
     @classmethod

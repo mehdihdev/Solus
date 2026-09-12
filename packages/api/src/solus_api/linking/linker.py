@@ -59,6 +59,7 @@ from solus_api.fingerprint.contract import (
     load_mock_output,
 )
 from solus_api.fingerprint.matcher import match, observations_from_hints
+from solus_api.graph.read_scope import GraphReadScope
 from solus_api.models import GraphEdge, GraphEntity, utcnow
 
 logger = logging.getLogger(__name__)
@@ -130,7 +131,7 @@ async def _lookup_pairs(
     rows = (
         await session.scalars(
             select(GraphEntity).where(
-                GraphEntity.project_id == project_id,
+                GraphReadScope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
                 tuple_(GraphEntity.source_connector, GraphEntity.external_ref).in_(pairs),
             )
@@ -181,7 +182,7 @@ async def _resolve_all(
         rows = (
             await session.scalars(
                 select(GraphEntity).where(
-                    GraphEntity.project_id == project_id,
+                    GraphReadScope(project_id).entity_predicate(),
                     GraphEntity.deleted_at.is_(None),
                     GraphEntity.id.in_(ids),
                 )
@@ -313,7 +314,7 @@ async def link(
         (
             await session.execute(
                 select(GraphEdge).where(
-                    GraphEdge.project_id == project_id,
+                    GraphReadScope(project_id).edge_predicate(),
                     GraphEdge.origin == LINK_ORIGIN,
                     GraphEdge.relation_type == RELATION_SAME_AS,
                     GraphEdge.deleted_at.is_(None),
@@ -417,7 +418,7 @@ async def link_from_fingerprint(
         await session.scalars(
             select(GraphEntity)
             .where(
-                GraphEntity.project_id == project_id,
+                GraphReadScope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
                 GraphEntity.modality_hints.cast(Text) != "{}",
             )

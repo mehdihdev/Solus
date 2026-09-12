@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Final, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -35,6 +35,20 @@ SERVER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 COMPOSED_NAME_MAX = 128
 _ANY_OBJECT_RETURNS: dict[str, Any] = {"type": "object"}
 
+#: Composed names whose companion implementation advertises `dry_run` and
+#: answers it with the resolved plan instead of running it
+#: (packages/companion/src/solus_companion/machine/server.py). Solus-owned, like
+#: `requires_confirmation`.
+_DRY_RUN_TOOLS: Final = frozenset(
+    {"machine.run_command", "machine.install_package", "machine.create_environment"}
+)
+
+
+def supports_dry_run(composed_name: str) -> bool:
+    """Whether `{server}.{tool}` may be previewed by re-issuing it with
+    `dry_run: true`."""
+    return composed_name in _DRY_RUN_TOOLS
+
 
 class AllowedTool(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -48,6 +62,16 @@ class AllowedTool(BaseModel):
     # the fork's advertised schema. It must exceed the fork's own cap so the
     # cloud never reports TIMEOUT while the child keeps running.
     timeout_seconds: int | None = Field(default=None, ge=1, le=900)
+    #: SOLUSDEV-252 S5: a failing call is filed into `.solus` Error logging
+    #: automatically. Solus-authored here, never advertised by the companion.
+    files_errors: bool = False
+    #: The tool accepts `dry_run: true` and returns the resolved plan WITHOUT
+    #: executing, so the consent card can show the argv/path that will really
+    #: run (bridge/tool.py::BridgeTool). Overwritten from `_DRY_RUN_TOOLS` at
+    #: load: it states what the IMPLEMENTATION accepts, so a yaml (or a fork)
+    #: can never opt a tool into being called with an argument it does not
+    #: advertise.
+    supports_dry_run: bool = False
 
     @model_validator(mode="after")
     def _destructive_needs_reason(self) -> Self:
@@ -67,6 +91,14 @@ class ServerAllowlist(BaseModel):
     #: allowlist carrying `url:` without it would fail validation and the whole
     #: server would register with ZERO tools, silently.
     url: str | None = None
+    #: WHO starts this server. `companion` (the default) is a vendored fork the
+    #: companion launches from `bin/launch`. `cloud` is a fork the API spawns
+    #: itself — the companion must not try, and would only fail noisily (the
+    #: brave fork needs Node, which the companion does not ship). `builtin` is a
+    #: server the companion implements natively, so there is no launcher to find.
+    #: Declared here because this file is the single source of truth for a
+    #: server, and because both readers are `extra="forbid"`.
+    launched_by: Literal["companion", "cloud", "builtin"] = "companion"
     tools: tuple[AllowedTool, ...] = ()
 
 
@@ -120,7 +152,9 @@ def load_allowlist(root: Path) -> BridgeAllowlist:
                     "allowlist %s tool %.64r composed name too long; skipping", path, tool.name
                 )
                 continue
-            entries[tool.name] = tool
+            entries[tool.name] = tool.model_copy(
+                update={"supports_dry_run": supports_dry_run(f"{parsed.server}.{tool.name}")}
+            )
         servers[parsed.server] = entries
     if not servers:
         # A wrong root and a correct-but-empty one used to look identical: every
@@ -195,6 +229,7 @@ def validate_inventory(hello: HelloData, allowlist: BridgeAllowlist) -> tuple[Br
                 ),
                 timeout_seconds=allowed.timeout_seconds,  # None: the registry default
                 requires_confirmation=allowed.requires_confirmation,
+                files_errors=allowed.files_errors,
             )
             specs.append(
                 BridgeToolSpec(

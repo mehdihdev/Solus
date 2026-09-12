@@ -12,6 +12,41 @@ from solus_api.schemas import (
 )
 
 
+def test_existing_onshape_connection_never_displays_opaque_account_id() -> None:
+    from solus_api.models import AccountConnection, ConnectionStatus, SourceType
+    from solus_api.schemas import serialize_connection
+
+    connection = AccountConnection(
+        provider=SourceType.ONSHAPE,
+        status=ConnectionStatus.CONNECTED,
+        account_login="opaque-provider-id",
+        account_external_id="opaque-provider-id",
+    )
+    assert serialize_connection(connection)["account_login"] == "Onshape account"
+
+
+@pytest.mark.parametrize(
+    ("stored_name", "display_name"),
+    [("Onshape · opaque-provider-id", "Onshape account"), ("Arm CAD", "Arm CAD")],
+)
+def test_legacy_onshape_generated_source_name_is_readable(
+    stored_name: str, display_name: str
+) -> None:
+    from solus_api.models import Source, SourceStatus, SourceType
+    from solus_api.schemas import serialize_source
+
+    source = Source(
+        type=SourceType.ONSHAPE,
+        status=SourceStatus.CONNECTED,
+        name=stored_name,
+        config={},
+        account_login="opaque-provider-id",
+        account_external_id="opaque-provider-id",
+    )
+    assert serialize_source(source)["name"] == display_name
+    assert source.name == stored_name
+
+
 @pytest.mark.parametrize(
     ("model", "payload"),
     [

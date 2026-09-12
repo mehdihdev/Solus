@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .execute import CHILD_PATH, PASSTHROUGH_NAMES, _kill_group, pinned_which, search_path
-from .plan import venv_python
+from .plan import _relative, venv_python
 
 logger = logging.getLogger("solus.code.probe")
 
@@ -100,7 +100,9 @@ def _interpreters(which: Which, capture: Capture) -> list[dict[str, str]]:
     return found
 
 
-def _packages(python: str, capture: Capture, uv: str | None) -> tuple[list[dict[str, str]], bool]:
+def _packages(
+    python: str, capture: Capture, uv: str | None
+) -> tuple[list[dict[str, str]], bool] | None:
     text = capture([python, "-m", "pip", "list", "--format", "json"], PIP_LIST_TIMEOUT_SECONDS)
     if text is None and uv is not None:
         # A `uv venv` ships no pip: read the same list through uv.
@@ -108,31 +110,40 @@ def _packages(python: str, capture: Capture, uv: str | None) -> tuple[list[dict[
             [uv, "pip", "list", "--python", python, "--format", "json"], PIP_LIST_TIMEOUT_SECONDS
         )
     try:
-        listed = json.loads(text or "[]")
+        listed = json.loads(text) if text is not None else None
     except ValueError:
-        return [], False
+        return None
     if not isinstance(listed, list):
-        return [], False
+        return None
     packages: list[dict[str, str]] = []
+    truncated = False
     for item in listed:
         if not isinstance(item, dict):
-            continue
+            return None
         name, version = item.get("name"), item.get("version")
-        if not isinstance(name, str) or not isinstance(version, str):
-            continue
+        if not isinstance(name, str) or not isinstance(version, str) or not name or not version:
+            return None
         if len(packages) == MAX_PACKAGES:
             return packages, True
+        truncated |= len(name) > MAX_WIRE_CHARS or len(version) > MAX_WIRE_CHARS
         packages.append({"name": name[:MAX_WIRE_CHARS], "version": version[:MAX_WIRE_CHARS]})
-    return packages, False
+    return packages, truncated
 
 
-def _venv(root: Path, capture: Capture, uv: str | None) -> dict[str, Any] | None:
-    for name in VENV_DIR_NAMES:
+def _venv(
+    root: Path, capture: Capture, uv: str | None, environment: str | None
+) -> dict[str, Any] | None:
+    if environment is not None and not _relative(environment):
+        return None
+    for name in VENV_DIR_NAMES if environment is None else (environment,):
         relative = venv_python(root, name)
         if relative is None:
             continue
         python = str(root / relative)
-        packages, truncated = _packages(python, capture, uv)
+        inventory = _packages(python, capture, uv)
+        if inventory is None:
+            return None
+        packages, truncated = inventory
         return {
             "path": name,
             "python_version": _version(python, capture),
@@ -181,14 +192,18 @@ def _guard(name: str, body: Callable[[], Any], fallback: Any) -> Any:
 
 
 def probe_environment(
-    root: Path, *, which: Which = pinned_which, capture: Capture = run_capture
+    root: Path,
+    *,
+    environment: str | None = None,
+    which: Which = pinned_which,
+    capture: Capture = run_capture,
 ) -> dict[str, Any]:
     """The §4 `probe_environment` shape. Never raises."""
     interpreters = _guard("interpreters", lambda: _interpreters(which, capture), [])
     return {
         "python": interpreters[0] if interpreters else None,
         "interpreters": interpreters,
-        "venv": _guard("venv", lambda: _venv(root, capture, which("uv")), None),
+        "venv": _guard("venv", lambda: _venv(root, capture, which("uv"), environment), None),
         "conda": _guard("conda", lambda: _conda(which, capture), None),
         "uv": _guard("uv", lambda: _uv(which, capture), None),
     }

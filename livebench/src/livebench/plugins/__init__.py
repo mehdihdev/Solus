@@ -28,6 +28,7 @@ PLUGIN_MODULES: Final[tuple[str, ...]] = (
     "livebench.plugins.odrive",
     "livebench.plugins.mavlink",
     "livebench.plugins.lerobot",
+    "livebench.plugins.arduino",
 )
 
 

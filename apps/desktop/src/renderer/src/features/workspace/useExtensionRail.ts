@@ -39,7 +39,7 @@ import {
   type RailExtensionEntry
 } from './extensionRail'
 
-/** Same cadence as the Sources page and the bridge pill. */
+/** Same cadence as Home's connected-accounts card and the bridge pill. */
 export const EXTENSION_RAIL_POLL_MS = 10_000
 
 /** Follow the cursor chain; one project's installs are few, the cap is a guard. */

@@ -106,7 +106,7 @@ class ServiceProject {
       })
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Import could not finish.'
-      const message = `${reason} Open Sources to check the import, then return to Workspace.`
+      const message = `${reason} Check Home › Connected accounts, then return to Workspace.`
       this.failedImports.set(key, message)
       throw new Error(message)
     }

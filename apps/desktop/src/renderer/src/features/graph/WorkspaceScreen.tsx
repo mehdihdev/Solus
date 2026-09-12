@@ -5,11 +5,18 @@ import type { FocusStep } from '@solus/shared-types'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import type { Entity } from '../../lib/api/resources'
+import { useDetectedDevicesFeed } from './hardware/useDetectedDevicesFeed'
+import type { Entity, Relation } from '../../lib/api/resources'
+import type { Point } from '../../lib/api/workspace'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useFocusStore } from '../workspace/focusStore'
 import { useOfflineReason, type OfflineReason } from '../workspace/workspaceOnline'
-import { GraphInspector } from './GraphInspector'
+import { NodeSidebar } from './sidebar/NodeSidebar'
+import { accountDocuments, isAccountAnchor, withAccountAnchors } from './accountAnchors'
+import { AccountNodeContent } from './AccountNodeContent'
+import { placementNearRail } from './hardware/deviceCard'
+import { PendingDeviceCards } from './hardware/PendingDeviceCards'
+import { editableRobot } from './robots/robotSession'
 import { useSolusNodes } from './useSolusNodes'
 import { usePhysicalRobots } from './robots/usePhysicalRobots'
 import { WorkspaceAdd } from './WorkspaceAdd'
@@ -17,7 +24,10 @@ import { useWorkspaceEvents } from './useWorkspaceEvents'
 import { serviceRoot, type ServiceSelection } from './serviceAttachments'
 import { reconcileWorkspaceFocus } from './workspaceFocus'
 import { useAuthStore } from '../../store/authStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { useWorkspaceGraph, type GraphSummary } from './useWorkspaceGraph'
+import { useOptimisticGraph } from './useOptimisticGraph'
+import { mergeOptimistic } from './graphCache'
 import { useWorkspaceLayout } from './useWorkspaceLayout'
 import { GraphNavigator } from './navigation/GraphNavigator'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -43,7 +53,7 @@ export function graphEmptyCopy(
   }
   if (summary.status !== 'ready') {
     return {
-      title: 'Your context model will live here',
+      title: 'Your workspace will live here',
       body:
         'Entities from your code, electronics, CAD, and runtime — and the links between them — ' +
         (reason === 'api_unreachable'
@@ -55,7 +65,7 @@ export function graphEmptyCopy(
     return {
       title: "Connect a source to start building your robot's graph",
       body:
-        'Solus builds the context model from your connected tools. Connect GitHub, KiCad, or ' +
+        'Solus builds the workspace graph from your connected tools. Connect GitHub, KiCad, or ' +
         'Onshape to this project, then run a sync — entities and cross-domain links appear here ' +
         'as sources sync.'
     }
@@ -112,10 +122,19 @@ function LoadingOverlay(): React.JSX.Element {
 type WorkspaceLayout = ReturnType<typeof useWorkspaceLayout>
 type SelectionPath = readonly { entity: Entity; relation: string }[]
 
-function useWorkspaceSelection(projectId: string | null) {
+function useWorkspaceSelection(
+  projectId: string | null,
+  setSelectedAnchorId: (id: string | null) => void
+) {
   return useCallback(
     (entity: Entity, ancestors: SelectionPath): void => {
       if (!projectId || useWorkspaceStore.getState().project?.id !== projectId) return
+      // An account anchor is presentation only: it never enters the shared focus.
+      if (isAccountAnchor(entity.id)) {
+        setSelectedAnchorId(entity.id)
+        return
+      }
+      setSelectedAnchorId(null)
       const path: FocusStep[] = ancestors.flatMap((ancestor) => {
         const focus = toSharedFocus(ancestor.entity, projectId)
         return focus
@@ -131,7 +150,7 @@ function useWorkspaceSelection(projectId: string | null) {
       })
       void useFocusStore.getState().focus(entity.id, path)
     },
-    [projectId]
+    [projectId, setSelectedAnchorId]
   )
 }
 
@@ -151,32 +170,42 @@ function LayoutStatus({ layout }: { layout: WorkspaceLayout }): React.JSX.Elemen
   )
 }
 
+interface AddRequest {
+  tab: 'service' | 'hardware'
+  sequence: number
+}
+
 interface GraphBodyProps {
   summary: ReturnType<typeof useWorkspaceGraph>
+  /** The snapshot with account anchors concatenated — what the navigator draws. */
+  graph: { entities: Entity[]; relations: Relation[] }
   projectId: string | null
   focusedId: string | null
   layout: WorkspaceLayout
   copy: EmptyCopy
   onSelect: (entity: Entity, ancestors: SelectionPath) => void
-  nodes: ReturnType<typeof useSolusNodes>
-  robots: ReturnType<typeof usePhysicalRobots>
-  liveError: string | null
-  onServiceSelected: (selection: ServiceSelection, documentId: string) => void
+  onMove: (entityId: string, point: Point) => void
+  onContextMenu: (event: React.MouseEvent, entity: Entity) => void
+  renderContent: (entity: Entity) => React.ReactNode
+  toolbar: React.ReactNode
   reveal?: { entityId: string; sequence: number }
+  overlay?: React.ReactNode
 }
 
 function WorkspaceGraphBody({
   summary,
+  graph,
   projectId,
   focusedId,
   layout,
   copy,
   onSelect,
-  nodes,
-  robots,
-  onServiceSelected,
-  liveError,
-  reveal
+  onMove,
+  onContextMenu,
+  renderContent,
+  toolbar,
+  reveal,
+  overlay
 }: GraphBodyProps): React.JSX.Element {
   if (summary.status === 'loading') return <LoadingOverlay />
   const canRender =
@@ -193,41 +222,42 @@ function WorkspaceGraphBody({
   return (
     <GraphNavigator
       projectId={projectId}
-      entities={summary.entities ?? []}
-      relations={summary.relations}
+      entities={graph.entities}
+      relations={graph.relations}
       positions={layout.positions}
       focusedId={focusedId}
       reveal={reveal}
+      overlay={overlay}
       onSelect={onSelect}
-      onMove={layout.move}
-      onContextMenu={nodes.onContextMenu}
-      renderContent={(entity) =>
-        entity.type === 'physical_robot' || entity.type === 'robot_category'
-          ? robots.renderContent(entity)
-          : nodes.renderContent(entity)
-      }
-      toolbar={
-        <>
-          <WorkspaceAdd
-            projectId={projectId}
-            onSelected={onServiceSelected}
-            hardware={robots.hardware}
-          />
-          <LayoutStatus layout={layout} />
-          {liveError && <span role="status">{liveError}</span>}
-        </>
-      }
+      onMove={onMove}
+      onContextMenu={onContextMenu}
+      renderContent={renderContent}
+      toolbar={toolbar}
     />
   )
 }
 
-function GraphCounts({ summary }: { summary: GraphSummary }): React.JSX.Element | null {
+/** The bottom line: real counts, then the layout's saving/error state and the live-stream state. */
+function GraphCounts({
+  summary,
+  layout,
+  liveError
+}: {
+  summary: GraphSummary
+  layout: WorkspaceLayout
+  liveError: string | null
+}): React.JSX.Element | null {
   if (summary.status !== 'ready') return null
   return (
-    <div style={{ padding: '9px 16px', flexShrink: 0, borderTop: '1px solid var(--bd)' }}>
+    <div
+      className="graph-status-row"
+      style={{ padding: '9px 16px', flexShrink: 0, borderTop: '1px solid var(--bd)' }}
+    >
       <Mono size={10} style={{ letterSpacing: '0.08em' }}>
         {graphCountsLine(summary)}
       </Mono>
+      <LayoutStatus layout={layout} />
+      {liveError && <span role="status">{liveError}</span>}
     </div>
   )
 }
@@ -272,43 +302,186 @@ function useWorkspaceReveal(entities: readonly Entity[], onGraphChanged: () => v
   return { reveal, onReveal, onServiceSelected }
 }
 
+/** Seed the machine-wide device store on every stream 'ready' (a reconnect may
+ *  have missed a change); offline / runner-absent stays an honest "never seeded". */
+
+/** One-shot placement for a robot confirmed from the rail: once the id is live
+ *  and has no saved position, move it near the rail — then forget it. */
+function useRailPlacement(
+  layout: WorkspaceLayout,
+  entities: readonly Entity[] | null
+): (robotId: string) => void {
+  const pending = useRef(new Map<string, Point>())
+  const { positions, move, status } = layout
+  useEffect(() => {
+    // A graph refetch re-creates the layout session; wait for its positions.
+    if (!entities || (status !== 'ready' && status !== 'saving')) return
+    for (const [id, point] of pending.current) {
+      if (!entities.some((entity) => entity.id === id)) continue
+      pending.current.delete(id)
+      if (!positions[id]) move(id, point)
+    }
+  }, [entities, positions, move, status])
+  return useCallback((robotId: string) => {
+    pending.current.set(robotId, placementNearRail())
+  }, [])
+}
+
+/** The canvas-edge device rail: pending devices as compact cards; a confirmed
+ *  robot is shown at once (optimistic), refetched, revealed, and lands near the
+ *  rail once its id is live. `entities` stays the authoritative snapshot so the
+ *  placement replays when the refetch arrives (an optimistic id is never live). */
+function useDeviceRail(
+  projectId: string | null,
+  entities: readonly Entity[] | null,
+  layout: WorkspaceLayout,
+  onGraphChanged: () => void,
+  onReveal: (entityId: string) => void,
+  onOptimistic: (entity: Entity) => void
+): React.ReactNode {
+  const mode = useSettingsStore((state) => state.solMode)
+  const place = useRailPlacement(layout, entities)
+  const robots = useMemo(
+    () =>
+      (entities ?? []).filter((entity) => projectId !== null && editableRobot(entity, projectId)),
+    [entities, projectId]
+  )
+  const onCreated = useCallback(
+    (robot: Entity) => {
+      place(robot.id)
+      onOptimistic(robot)
+      onGraphChanged()
+      onReveal(robot.id)
+    },
+    [place, onOptimistic, onGraphChanged, onReveal]
+  )
+  return useMemo(
+    () =>
+      projectId ? (
+        <PendingDeviceCards
+          projectId={projectId}
+          mode={mode}
+          robots={robots}
+          entities={entities}
+          onCreated={onCreated}
+        />
+      ) : null,
+    [projectId, mode, robots, entities, onCreated]
+  )
+}
+
 function ProjectWorkspace(): React.JSX.Element {
   const [graphRevision, setGraphRevision] = useState(0)
   const [validation, setValidation] = useState(0)
-  const validateGraph = useCallback(() => setValidation((value) => value + 1), [])
   const summary = useWorkspaceGraph(graphRevision, validation)
   const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
+  const { onDevices, seed } = useDetectedDevicesFeed(projectId)
+  const validateGraph = useCallback(() => {
+    setValidation((value) => value + 1)
+    seed()
+  }, [seed])
   useGraphFocusReconciliation(projectId, summary)
   const focusedId = useFocusStore((state) => state.focusedEntityId)
+  // Optimistic entities join BEFORE the anchors, so a just-confirmed robot is a
+  // root like a real one; the sidebar routes on this list too.
+  const optimistic = useOptimisticGraph(summary.entities)
+  const base = useMemo(
+    () =>
+      mergeOptimistic(
+        { entities: summary.entities ?? [], relations: summary.relations },
+        optimistic.entities
+      ),
+    [summary.entities, summary.relations, optimistic.entities]
+  )
+  // Presentation only: anchors are concatenated upstream of the unmodified index.
+  const merged = useMemo(
+    () => withAccountAnchors(base.entities, base.relations, summary.sources),
+    [base, summary.sources]
+  )
+  const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
+  // Looked up, not stored: an anchor that vanishes with its source deselects itself.
+  const selectedAnchor = merged.entities.find((entity) => entity.id === selectedAnchorId) ?? null
+  // Real entities only, so LayoutSession.move refuses an anchor id and never saves it.
   const liveEntityIds = useMemo(
     () => summary.entities?.map((entity) => entity.id),
     [summary.entities]
   )
   const layout = useWorkspaceLayout(projectId, summary.status === 'ready', liveEntityIds)
+  const move = layout.move
+  const onMove = useCallback(
+    (entityId: string, point: Point) => {
+      if (!isAccountAnchor(entityId)) move(entityId, point)
+    },
+    [move]
+  )
   const copy = graphEmptyCopy(summary, useOfflineReason())
-  const select = useWorkspaceSelection(projectId)
+  const select = useWorkspaceSelection(projectId, setSelectedAnchorId)
+  const [addRequest, setAddRequest] = useState<AddRequest>()
+  const onOpenAdd = useCallback(
+    (tab: 'service') =>
+      setAddRequest((previous) => ({ tab, sequence: (previous?.sequence ?? 0) + 1 })),
+    []
+  )
   const onGraphChanged = useCallback((removedId?: string) => {
     setGraphRevision((revision) => revision + 1)
     const focus = useFocusStore.getState()
     if (removedId && focus.focusedEntityId === removedId) focus.clearProject()
   }, [])
-  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph)
+  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph, onDevices)
+  // The reveal follows the authoritative snapshot: an entity is navigated to and
+  // selected once, at its real level (an optimistic part has no parent yet).
   const { reveal, onReveal, onServiceSelected } = useWorkspaceReveal(
     summary.entities ?? [],
     onGraphChanged
   )
   const robots = usePhysicalRobots(
     projectId,
-    graphRevision,
     onGraphChanged,
     onReveal,
-    summary.entities
+    summary.entities,
+    summary.relations,
+    optimistic.add
   )
-  const nodes = useSolusNodes(projectId, () => setGraphRevision((revision) => revision + 1))
+  const nodes = useSolusNodes(projectId, onGraphChanged)
+  const rail = useDeviceRail(
+    projectId,
+    summary.entities,
+    layout,
+    onGraphChanged,
+    onReveal,
+    optimistic.add
+  )
+  const robotContent = robots.renderContent
+  const solusContent = nodes.renderContent
+  // Stable per snapshot: the memoised cards re-render only when what they show changed.
+  const renderContent = useCallback(
+    (entity: Entity): React.ReactNode =>
+      entity.type === 'integration_account' ? (
+        <AccountNodeContent
+          entity={entity}
+          count={accountDocuments(entity.id, merged.entities, merged.relations).length}
+        />
+      ) : entity.type === 'physical_robot' || entity.type === 'robot_category' ? (
+        robotContent(entity)
+      ) : (
+        solusContent(entity)
+      ),
+    [merged, robotContent, solusContent]
+  )
+  const toolbar = useMemo(
+    () => (
+      <WorkspaceAdd
+        projectId={projectId}
+        onSelected={onServiceSelected}
+        hardware={robots.hardware}
+        openRequest={addRequest}
+      />
+    ),
+    [projectId, onServiceSelected, robots.hardware, addRequest]
+  )
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
       {nodes.overlays}
-      {robots.overlays}
       <div
         style={{
           flex: 1,
@@ -318,23 +491,30 @@ function ProjectWorkspace(): React.JSX.Element {
           flexDirection: 'column'
         }}
       >
-        {summary.status === 'ready' && robots.prompt}
         <WorkspaceGraphBody
           summary={summary}
+          graph={merged}
           projectId={projectId}
-          focusedId={focusedId}
+          focusedId={selectedAnchor ? selectedAnchor.id : focusedId}
           reveal={reveal}
+          overlay={rail}
           layout={layout}
           copy={copy}
           onSelect={select}
-          nodes={nodes}
-          robots={robots}
-          liveError={liveError}
-          onServiceSelected={onServiceSelected}
+          onMove={onMove}
+          onContextMenu={nodes.onContextMenu}
+          renderContent={renderContent}
+          toolbar={toolbar}
         />
-        <GraphCounts summary={summary} />
+        <GraphCounts summary={summary} layout={layout} liveError={liveError} />
       </div>
-      <GraphInspector />
+      <NodeSidebar
+        projectId={projectId}
+        entity={selectedAnchor ?? base.entities.find((entity) => entity.id === focusedId) ?? null}
+        robots={robots}
+        nodes={nodes}
+        account={{ entities: merged.entities, relations: merged.relations, onReveal, onOpenAdd }}
+      />
     </div>
   )
 }

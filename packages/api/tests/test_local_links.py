@@ -199,3 +199,89 @@ async def test_other_projects_are_untouched(db: AsyncSession) -> None:
     await reconcile_local_links(db, p1.id)
     assert await _clone_edges(db, p1) == []
     assert await _clone_edges(db, p2) == []
+
+
+async def _repo_id(db: AsyncSession, source: Source) -> uuid.UUID:
+    from solus_api.models import GraphEntity
+
+    entity_id = await db.scalar(
+        select(GraphEntity.id).where(
+            GraphEntity.source_id == source.id, GraphEntity.external_ref == REPO_ROOT_KEY
+        )
+    )
+    assert entity_id is not None
+    return entity_id
+
+
+async def test_matching_branch_wins_regardless_of_source_order(db: AsyncSession) -> None:
+    project = await _project(db)
+    main = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch="main")
+    feature = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch="feature")
+    local = await _source(db, project, SourceType.LOCAL)
+    for source in (main, feature):
+        await _land_repo(db, source)
+    await _land_clone(db, local, "org/rover-fw", "github")
+    local.cursor = {**local.cursor, "branch": "feature"}
+    await reconcile_local_links(db, project.id)
+    assert [edge.dst_id for edge in await _clone_edges(db, project)] == [
+        await _repo_id(db, feature)
+    ]
+    local.cursor = {**local.cursor, "branch": "main"}
+    await reconcile_local_links(db, project.id)
+    assert [edge.dst_id for edge in await _clone_edges(db, project)] == [await _repo_id(db, main)]
+
+
+async def test_multiple_repo_candidates_without_exact_branch_are_ambiguous(
+    db: AsyncSession,
+) -> None:
+    project = await _project(db)
+    for branch in ("main", "release"):
+        source = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch=branch)
+        await _land_repo(db, source)
+    local = await _source(db, project, SourceType.LOCAL)
+    await _land_clone(db, local, "org/rover-fw", "github")
+    local.cursor = {**local.cursor, "branch": "feature"}
+    await reconcile_local_links(db, project.id)
+    assert await _clone_edges(db, project) == []
+
+
+async def test_internal_snapshot_never_becomes_clone_target(db: AsyncSession) -> None:
+    project = await _project(db)
+    base = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch="main")
+    snapshot = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch="feature")
+    snapshot.revision_base_source_id = base.id
+    await _land_repo(db, snapshot)
+    await _land_repo(db, base)
+    local = await _source(db, project, SourceType.LOCAL)
+    await _land_clone(db, local, "org/rover-fw", "github")
+    local.cursor = {**local.cursor, "branch": "feature"}
+    await reconcile_local_links(db, project.id)
+    assert [edge.dst_id for edge in await _clone_edges(db, project)] == [await _repo_id(db, base)]
+
+
+async def test_duplicate_matching_branches_are_ambiguous(db: AsyncSession) -> None:
+    project = await _project(db)
+    for _ in range(2):
+        source = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch="main")
+        await _land_repo(db, source)
+    local = await _source(db, project, SourceType.LOCAL)
+    await _land_clone(db, local, "org/rover-fw", "github")
+    local.cursor = {**local.cursor, "branch": "main"}
+    await reconcile_local_links(db, project.id)
+    assert await _clone_edges(db, project) == []
+
+
+async def test_disconnected_source_is_not_a_matching_candidate(db: AsyncSession) -> None:
+    project = await _project(db)
+    base = await _source(db, project, SourceType.GITHUB, repo="org/rover-fw", branch="main")
+    disconnected = await _source(
+        db, project, SourceType.GITHUB, repo="org/rover-fw", branch="feature"
+    )
+    disconnected.status = SourceStatus.DISCONNECTED
+    await _land_repo(db, base)
+    await _land_repo(db, disconnected)
+    local = await _source(db, project, SourceType.LOCAL)
+    await _land_clone(db, local, "org/rover-fw", "github")
+    local.cursor = {**local.cursor, "branch": "feature"}
+    await reconcile_local_links(db, project.id)
+    assert [edge.dst_id for edge in await _clone_edges(db, project)] == [await _repo_id(db, base)]

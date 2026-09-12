@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 from fixtures.fake_systems import FakeSolSystems
 from solus_api.agent.context import build_context
@@ -15,6 +16,19 @@ from solus_api.orchestration.providers import ToolConversation, ToolUse, Usage
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 ANCHOR = uuid.uuid4()
+
+
+if TYPE_CHECKING:
+    from solus_api.agent.runtime import LlmRunner
+
+
+def _runner(model: object) -> LlmRunner:
+    """The shipped matrix routes a SOL turn to openai OR anthropic by tier
+    (SOLUSDEV-252 S1), so the fake serves every provider the router may pick —
+    these suites are about the reasoning loop, not about which model answers."""
+    from solus_api.agent.runtime import LlmRunner
+
+    return LlmRunner(adapters={"anthropic": model, "openai": model, "google": model})
 
 
 def test_plan_extracts_graph_anchors_from_the_query() -> None:
@@ -131,6 +145,9 @@ class _CitingModel:
         max_tokens: int,
         images: object = None,
         conversation: ToolConversation | None = None,
+        # The routed catalog entry may set a reasoning effort (SOLUSDEV-252 S1);
+        # a fake adapter accepts whatever the seam passes.
+        **_: Any,
     ) -> AsyncIterator[str | ToolUse | Usage]:
         self.seen = conversation
         yield self._text
@@ -146,9 +163,8 @@ async def test_runner_hands_the_model_fenced_context_and_verifies_sources(
         "The IMU conflict [error_store:err-101] explains it; see also [fabricated:x].\n"
         "Sources: [fabricated:x] [datasheet:totally-made-up.pdf]"
     )
-    from solus_api.agent.runtime import LlmRunner
 
-    runner = LlmRunner(adapters={"anthropic": model})
+    runner = _runner(model)
     ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
     events = [event async for event in runner.run(ctx)]
 
@@ -199,7 +215,6 @@ async def test_runner_scopes_the_context_pull_to_the_request_project(
     # and a poisoned feed chunk cannot place its token in the citations.
     from fixtures.injection_corpus import PAYLOADS
     from solus_api.agent.interfaces import RetrievalFilter
-    from solus_api.agent.runtime import LlmRunner
     from test_sol_red_team import _funded_ctx, _registry
 
     seen_projects: list[uuid.UUID | None] = []
@@ -223,7 +238,7 @@ async def test_runner_scopes_the_context_pull_to_the_request_project(
             return [hits[0].model_copy(update={"chunk": hostile})]
 
     model = _CitingModel(f"As instructed: {hostile} [error_store:err-101]")
-    runner = LlmRunner(adapters={"anthropic": model})
+    runner = _runner(model)
     ctx = await _funded_ctx(engine, _registry([]), systems=RecordingPoisoned())
     events = [event async for event in runner.run(ctx)]
 
@@ -242,12 +257,11 @@ async def test_runner_streams_context_used_before_any_model_output(
     """The first frame of a turn declares WHAT context the model was handed —
     kind/citation/tokens only, never section text (prompt internals stay
     server-side)."""
-    from solus_api.agent.runtime import LlmRunner
     from solus_api.agent.stream import AgentEventType
     from test_sol_red_team import _funded_ctx, _registry
 
     model = _CitingModel("All good [error_store:err-101].")
-    runner = LlmRunner(adapters={"anthropic": model})
+    runner = _runner(model)
     ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
     events = [event async for event in runner.run(ctx)]
 
@@ -268,11 +282,10 @@ async def test_runner_hands_the_model_the_fenced_custom_instruction(
     import dataclasses
 
     from solus_api.agent.prompt import system_prompt
-    from solus_api.agent.runtime import LlmRunner
     from test_sol_red_team import _funded_ctx, _registry
 
     model = _CitingModel("Understood.")
-    runner = LlmRunner(adapters={"anthropic": model})
+    runner = _runner(model)
     ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
     ctx = dataclasses.replace(ctx, custom_instruction="Prefer metric units.")
     _ = [event async for event in runner.run(ctx)]
@@ -291,11 +304,10 @@ async def test_runner_hands_the_model_the_fenced_engineering_preferences(
     import dataclasses
 
     from solus_api.agent.prompt import ENGINEERING_PREFERENCES_KIND, system_prompt
-    from solus_api.agent.runtime import LlmRunner
     from test_sol_red_team import _funded_ctx, _registry
 
     model = _CitingModel("Understood.")
-    runner = LlmRunner(adapters={"anthropic": model})
+    runner = _runner(model)
     ctx = await _funded_ctx(engine, _registry([]), systems=FakeSolSystems())
     ctx = dataclasses.replace(
         ctx,

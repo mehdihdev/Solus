@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Request
@@ -40,6 +41,20 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 #: client notice a dead connection. A comment line, ignored by EventSource.
 _KEEPALIVE_SECONDS = 25.0
 
+_EVENT_TYPE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")  # fullmatch: `$` would admit a trailing newline
+
+
+def _frame_event_type(payload: str) -> str:
+    """The SSE `event:` name for a hub payload — its `type` when it is a well-formed one,
+    `graph.changed` otherwise (the only type the stream carried before SOLUSDEV-250). The
+    pattern keeps a payload from naming an event it cannot spell in one token."""
+    try:
+        frame = json.loads(payload)
+    except Exception:  # noqa: BLE001 — a payload we cannot parse is still a hint
+        return "graph.changed"
+    kind = frame.get("type") if isinstance(frame, dict) else None
+    return kind if isinstance(kind, str) and _EVENT_TYPE.fullmatch(kind) else "graph.changed"
+
 
 @router.get("/events")
 async def project_events(
@@ -48,7 +63,8 @@ async def project_events(
     """Subscribe to this project's change stream.
 
     Yields `graph.changed` frames — an invalidation hint the client answers by
-    refetching the one thing it is already showing.
+    refetching the one thing it is already showing — and, on the local API only,
+    `hardware.devices_changed` (SOLUSDEV-250, `hardware/device_watch.py`).
     """
     hub = request.app.state.graph_hub
     project_id = ctx.project.id
@@ -87,7 +103,7 @@ async def project_events(
                 except TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                yield f"event: graph.changed\ndata: {payload}\n\n"
+                yield f"event: {_frame_event_type(payload)}\ndata: {payload}\n\n"
         finally:
             hub.unsubscribe(project_id, queue)
             logger.info("events unsubscribe project=%s user=%s", project_id, user_id)

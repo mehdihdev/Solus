@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "accounts": {
+    "00000000-0000-4000-8000-000000000001": {
+      "sources": {
+        "00000000-0000-4000-8000-000000000002": {
+          "path": "/workspace/calibration.json",
+          "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "bindings": {
+        "00000000-0000-4000-8000-000000000003": {
+          "lastSeenPath": "/dev/example-port"
+        }
+      }
+    }
+  }
+}

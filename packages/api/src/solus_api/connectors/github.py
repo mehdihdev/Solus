@@ -285,6 +285,7 @@ class GitHubConnector(OAuthConnector):
         response = await client.get(
             f"{GITHUB_API}/repos/{repo}/commits/{ref}", headers={"If-None-Match": etag}
         )
+        self._raise_for_error(response)
         return response.status_code == 304
 
     # -------------------------------------------------------- graph building
@@ -429,16 +430,29 @@ class GitHubConnector(OAuthConnector):
 
     @classmethod
     def _ok_json(cls, response: httpx.Response) -> Any:
-        if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ConnectorError("github_error", f"GitHub request failed ({response.status_code}).")
+        cls._raise_for_error(response)
         return response.json()
 
     @staticmethod
-    def _repo_json(response: httpx.Response) -> dict[str, Any]:
-        if response.status_code == httpx.codes.NOT_FOUND:
-            raise ConnectorError("repo_not_found", "Repository, branch, or commit not found.")
+    def _raise_for_error(response: httpx.Response) -> None:
+        if response.status_code == 429 or (
+            response.status_code == 403
+            and (
+                response.headers.get("Retry-After", "").strip()
+                or response.headers.get("X-RateLimit-Remaining") == "0"
+            )
+        ):
+            raise ConnectorError(
+                "rate_limited", "GitHub is rate limiting requests; try again later."
+            )
         if response.status_code >= httpx.codes.BAD_REQUEST:
             raise ConnectorError("github_error", f"GitHub request failed ({response.status_code}).")
+
+    @classmethod
+    def _repo_json(cls, response: httpx.Response) -> dict[str, Any]:
+        if response.status_code == httpx.codes.NOT_FOUND:
+            raise ConnectorError("repo_not_found", "Repository, branch, or commit not found.")
+        cls._raise_for_error(response)
         data = response.json()
         if not isinstance(data, dict):
             raise ConnectorError("github_error", "Unexpected GitHub response shape.")

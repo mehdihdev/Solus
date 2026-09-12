@@ -167,7 +167,8 @@ function SideColumn({
           Project Overview): machine-local, re-scoped by "Switch to" on a card. */}
       <LocalFolderSection currentProject={currentProject} />
       {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
-          once; each project picks what it tracks on its Sources page. */}
+
+        once; each project picks what it tracks under Workspace integrations. */}
       <ConnectedAccountsCard currentProject={currentProject} onNavigate={onNavigate} />
       {/* The current project's .solus (SOLUSDEV-253): what SOL knows about the
           project, readable and editable here. "How you engineer" (HOME H3,

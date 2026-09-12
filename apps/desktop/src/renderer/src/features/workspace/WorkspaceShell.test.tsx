@@ -188,6 +188,13 @@ describe('WorkspaceShell — chrome', () => {
     expect(useShellStore.getState().lastMain).toBe('home')
   })
 
+  it('mounts no corner orb — SOL is the rail item and the SOL window (SOLUSDEV-252)', () => {
+    renderShell()
+    expect(screen.getByLabelText('SOL')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Ask SOL')).toBeNull()
+    expect(screen.queryByTitle('Ask SOL')).toBeNull()
+  })
+
   it('no longer carries the Overview hub or the Sources page in the rail (SOLUSDEV-244)', () => {
     renderShell()
     expect(screen.queryByLabelText('Overview')).toBeNull()

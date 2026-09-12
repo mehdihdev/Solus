@@ -1,11 +1,12 @@
 """Keyless-safe real MCP server specs + the BYO-license catalog (MCP-01/MCP-05).
 
 Safe to ship without keys or licenses: `required_secrets` are checked against
-the SecretStore BEFORE any connection attempt, stdio commands point at
-provisional vendored-launcher paths that do not exist yet (MCP-03 vendoring),
-so nothing here can spawn or reach a network in tests. Credential DELIVERY
-(secret → server) is deliberately unbuilt: presence is checked, values never
-leave the store.
+the SecretStore BEFORE any connection attempt, and every stdio command is an
+absolute path to a Solus-authored `bin/launch` inside a vendored fork — so a
+spec whose fork is not vendored yet simply fails closed, and nothing here can
+spawn or reach a network in tests. Credential DELIVERY is declared by NAME
+(`secret_env`: child env var → SecretStore ref) and resolved at spawn by
+`mcp_tool._resolve_env`; values never live in a spec, a log line, or a result.
 
 ONSHAPE IS DELIBERATELY ABSENT (SOLUS-ONS-A1). It used to sit here as a
 streamable-http spec against `mcp.onshape.com` with an API KEY PAIR
@@ -58,14 +59,22 @@ def _fork_launcher(relative_path: str) -> str:
     return str(_REPO_ROOT / relative_path)
 
 
+# SOLUSDEV-252 P6: the vendored Brave Search fork (ADR-031 Pattern 1), launched
+# CLOUD-SIDE by the API — the companion ships no Node. The constant name is kept
+# (`core/startup_checks.py` and `scripts/seed-provider-keys.py` import it); the
+# SERVER name is `brave`, matching the fork directory and its allowlist.yaml, so
+# the discovery filter and the launcher's own roster trimming agree.
+#
+# `secret_env` declares key delivery by NAME: the value is read from the
+# SecretStore at spawn and put only into the child environment. `passthrough_env`
+# forwards the absolute Node path when one is not at a fixed location (nvm boxes);
+# `bin/launch` refuses a relative or PATH-shaped value.
 WEB_SEARCH = MCPServerSpec(
-    name="web_search",
-    # TODO(MCP-03): pin to a vendored launcher path — `npx` is PATH-resolved and
-    # fetches third-party code from the npm registry (CLAUDE.md §7 requires pinned
-    # binaries). Unreachable until then: the keyless credential gate precedes any spawn.
-    command="npx",
-    args=("-y", "@modelcontextprotocol/server-brave-search"),
+    name="brave",
+    command=_fork_launcher("integrations/mcp/brave/bin/launch"),
     required_secrets=("brave_api_key",),
+    secret_env={"BRAVE_API_KEY": "brave_api_key"},
+    passthrough_env=("SOLUS_NODE_BIN",),
 )
 
 # MCP-05 free tier — usable on any plan, no customer license. Phase 4 H4:

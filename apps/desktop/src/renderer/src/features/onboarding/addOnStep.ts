@@ -10,7 +10,7 @@
 // connector that works without it, and the vendor may simply not have sold the
 // customer the app yet — a failure there must not cost them their Onshape
 // source. Whatever happens, the durable state lands on the source and the
-// Sources page renders the recovery path (subscribe / check again / retry).
+// Home's connected-accounts card renders the recovery path (subscribe / check again / retry).
 import type { ConnectionState } from './onboardingStore'
 import type { IntegrationHosted } from '../../lib/api/resources'
 import type { OAuthBridge } from '../auth/githubOAuth'
@@ -78,7 +78,7 @@ export function addOnStep(deps: AddOnStepDeps): AddOnStep {
       return status.state === 'ready' ? `${hosted.display_name} enabled` : null
     } catch {
       // Swallowed on purpose. The connection itself succeeded, the state is
-      // recorded on the source, and the Sources page is where a user picks this
+      // recorded on the source, and Home is where a user picks this
       // back up — erroring here would throw away a working connector because an
       // optional extra did not land.
       return null

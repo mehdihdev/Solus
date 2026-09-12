@@ -46,12 +46,18 @@ def compute_call_credits(
     cost: CostConfig,
     *,
     entry: ModelCatalogEntry | None = None,
+    tokens_cached_in: int = 0,
 ) -> int:
     """Convert a completed call's token usage → credits to debit (ADR-024). Pure and
     deterministic given (model, tokens, cost, entry).
 
         dollars = tokens_in/1e6 * price_in + tokens_out/1e6 * price_out
         credits = ceil(dollars * margin_multiplier * credits_per_dollar)
+
+    Prompt caching (S1): `tokens_cached_in` (a subset of `tokens_in`) bills at the
+    entry's `price_cached_in` when the entry carries one and the call is below the
+    long-context breakpoint. Above the breakpoint everything bills at the long
+    rates. # ponytail: no cached-long rate; over-bills a cached >272K call, never under.
 
     Breakpoint pricing (MO-02b): pass the routed model's catalog `entry`; when it
     carries long-context pricing and tokens_in EXCEEDS its threshold, the whole
@@ -71,8 +77,21 @@ def compute_call_credits(
         and entry.price_out_long is not None
     ):
         price_in, price_out = entry.price_in_long, entry.price_out_long
-    dollars = (tokens_in / 1_000_000) * price_in + (tokens_out / 1_000_000) * price_out
-    return math.ceil(dollars * cost.margin_multiplier * cost.credits_per_dollar)
+        tokens_cached_in = 0
+    cached = min(max(tokens_cached_in, 0), tokens_in)
+    price_cached = entry.price_cached_in if entry is not None else None
+    if price_cached is None:
+        cached = 0
+        price_cached = 0.0
+    dollars = (
+        ((tokens_in - cached) / 1_000_000) * price_in
+        + (cached / 1_000_000) * price_cached
+        + (tokens_out / 1_000_000) * price_out
+    )
+    # Round away binary-float noise before ceil: 1.1 * 2.0 * 100 is
+    # 220.00000000000003 in floats and would bill 221. Six decimals of a credit
+    # is far below anything a price table can express.
+    return math.ceil(round(dollars * cost.margin_multiplier * cost.credits_per_dollar, 6))
 
 
 async def has_sufficient_credits(
@@ -114,6 +133,7 @@ async def track_cost(
     entry: ModelCatalogEntry | None = None,
     enqueue: EnqueueFn | None = None,
     extension_id: uuid.UUID | None = None,
+    tokens_cached_in: int = 0,
 ) -> None:
     """POST-call hook (phase 3): runs AFTER the model responds (`tokens_out` is only
     known then). Computes credits via `compute_call_credits` (with MO-02b breakpoint
@@ -132,7 +152,9 @@ async def track_cost(
     worker cron sweeps every minute; when `enqueue` is configured, the sweep is
     additionally enqueued immediately (`RECONCILE_JOB_NAME`). This hook NEVER
     raises."""
-    amount = compute_call_credits(model, tokens_in, tokens_out, cost, entry=entry)
+    amount = compute_call_credits(
+        model, tokens_in, tokens_out, cost, entry=entry, tokens_cached_in=tokens_cached_in
+    )
     if amount <= 0:
         return
     attrs = {
@@ -142,6 +164,8 @@ async def track_cost(
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
     }
+    if tokens_cached_in:
+        attrs["tokens_cached_in"] = tokens_cached_in
     try:
         await credits.debit_credits(
             session,

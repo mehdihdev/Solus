@@ -52,6 +52,12 @@ beforeEach(() => {
 })
 
 describe('UsagePanel', () => {
+  it('names the product reasoner, never a model', async () => {
+    render(<UsagePanel creditsExhausted={false} />)
+    await waitFor(() => expect(screen.getByText('This cycle')).toBeInTheDocument())
+    expect(screen.getByText('Reasoner · sol-reasoner-1')).toBeInTheDocument()
+  })
+
   it('shows the credit meter for this cycle', async () => {
     render(<UsagePanel creditsExhausted={false} />)
     await waitFor(() => expect(screen.getByText('This cycle')).toBeInTheDocument())

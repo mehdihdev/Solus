@@ -18,6 +18,8 @@ unique) — with failed debits deferred to the ARQ reconciliation job. See
 gateway.py's identity-gating warning before exposing anything over HTTP.
 """
 
+from typing import Final
+
 from solus_api.orchestration.choice import ModelChoice
 from solus_api.orchestration.complexity import estimate_complexity
 from solus_api.orchestration.config import (
@@ -84,6 +86,25 @@ from solus_api.orchestration.type_estimator import (
     estimate_type,
 )
 
+#: S1-W3: the PRODUCT name every user-facing surface shows for SOL's reasoning.
+#: Never a model id — which model answers is a models.yaml decision the UI
+#: cannot see, so a swap there is invisible to the product.
+SOL_REASONER_NAME: Final = "sol-reasoner-1"
+
+_NEXT_TIER: Final = {
+    Complexity.TRIVIAL: Complexity.STANDARD,
+    Complexity.STANDARD: Complexity.HARD,
+    Complexity.HARD: Complexity.HARD,
+}
+assert set(_NEXT_TIER) == set(Complexity), "bump_complexity: add the new tier to _NEXT_TIER"
+
+
+def bump_complexity(tier: Complexity) -> Complexity:
+    """ "Think harder": one tier up, HARD stays HARD. Shared by the runtime and the
+    classify preview so the preview cannot disagree with the real call."""
+    return _NEXT_TIER[tier]
+
+
 __all__ = [
     "ANTHROPIC_API_KEY_NAME",
     "CONTEXT_COMPLEXITY_DEFAULTS",
@@ -117,11 +138,13 @@ __all__ = [
     "ProviderCredentialsMissingError",
     "ProviderError",
     "RouteType",
+    "SOL_REASONER_NAME",
     "UnknownProviderError",
     "Usage",
     "account_spend",
     "assert_can_spend",
     "build_adapter_registry",
+    "bump_complexity",
     "check_frequency_cap",
     "complete",
     "compute_call_credits",

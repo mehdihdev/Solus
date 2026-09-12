@@ -2581,6 +2581,244 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/sources/{source_id}/revisions": {
+      "get": {
+        "summary": "Revisions",
+        "operationId": "revisions_api_v1_projects__project_id__sources__source_id__revisions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionsEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sources/{source_id}/view": {
+      "get": {
+        "summary": "View",
+        "operationId": "view_api_v1_projects__project_id__sources__source_id__view_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceViewEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Select View",
+        "operationId": "select_view_api_v1_projects__project_id__sources__source_id__view_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceViewPut"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceViewEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear View",
+        "operationId": "clear_view_api_v1_projects__project_id__sources__source_id__view_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceViewEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/sources": {
       "get": {
         "summary": "List Sources",
@@ -3320,6 +3558,246 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/local-folder": {
+      "get": {
+        "summary": "Get Local Folder",
+        "operationId": "get_local_folder_api_v1_projects__project_id__local_folder_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Local Folder Api V1 Projects  Project Id  Local Folder Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Link Local Folder",
+        "operationId": "link_local_folder_api_v1_projects__project_id__local_folder_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalFolderLink"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Link Local Folder Api V1 Projects  Project Id  Local Folder Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/local-folder/{source_id}/open": {
+      "post": {
+        "summary": "Open In Tool",
+        "operationId": "open_in_tool_api_v1_projects__project_id__local_folder__source_id__open_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalFolderOpen"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Open In Tool Api V1 Projects  Project Id  Local Folder  Source Id  Open Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/code-environment": {
+      "get": {
+        "summary": "Get Code Environment",
+        "operationId": "get_code_environment_api_v1_projects__project_id__code_environment_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Code Environment Api V1 Projects  Project Id  Code Environment Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}": {
       "get": {
         "summary": "Hosted Status",
@@ -3833,7 +4311,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SolusEntryIn"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SolusEntryIn"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SolusConfigEntryIn"
+                  }
+                ],
+                "title": "Body"
               }
             }
           }
@@ -3963,6 +4449,362 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/entities": {
+      "post": {
+        "summary": "Create Hardware Entity",
+        "operationId": "create_hardware_entity_api_v1_projects__project_id__hardware_entities_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HardwareEntityCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Hardware Entity Api V1 Projects  Project Id  Hardware Entities Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/entities/{entity_id}/config": {
+      "get": {
+        "summary": "Get Entity Config",
+        "operationId": "get_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Entity Config Api V1 Projects  Project Id  Hardware Entities  Entity Id  Config Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace Entity Config",
+        "operationId": "replace_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,9})$",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntityConfigIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Replace Entity Config Api V1 Projects  Project Id  Hardware Entities  Entity Id  Config Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/parts/{part_id}/parent": {
+      "patch": {
+        "summary": "Change Parent",
+        "operationId": "change_parent_api_v1_projects__project_id__hardware_parts__part_id__parent_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "part_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Part Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Change Parent Api V1 Projects  Project Id  Hardware Parts  Part Id  Parent Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/parts": {
+      "get": {
+        "summary": "List Hardware Parts",
+        "operationId": "list_hardware_parts_api_v1_projects__project_id__hardware_parts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "ownership",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "unassigned",
+                "all"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Ownership"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Hardware Parts Api V1 Projects  Project Id  Hardware Parts Get"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -7843,6 +8685,184 @@
         }
       }
     },
+    "/api/v1/corpus/manifest": {
+      "get": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Get Manifest",
+        "operationId": "get_manifest_api_v1_corpus_manifest_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Manifest Api V1 Corpus Manifest Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/corpus/search": {
+      "get": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Search",
+        "operationId": "search_api_v1_corpus_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "title": "Q"
+            }
+          },
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Topic"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Search Api V1 Corpus Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/corpus/chunks/{chunk_id}": {
+      "get": {
+        "tags": [
+          "corpus"
+        ],
+        "summary": "Get Chunk",
+        "operationId": "get_chunk_api_v1_corpus_chunks__chunk_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chunk_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chunk Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Chunk Api V1 Corpus Chunks  Chunk Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/webhooks/{provider}/{source_id}/{token}": {
       "post": {
         "tags": [
@@ -7903,7 +8923,7 @@
           "live"
         ],
         "summary": "Project Events",
-        "description": "Subscribe to this project's change stream.\n\nYields `graph.changed` frames \u2014 an invalidation hint the client answers by\nrefetching the one thing it is already showing.",
+        "description": "Subscribe to this project's change stream.\n\nYields `graph.changed` frames \u2014 an invalidation hint the client answers by\nrefetching the one thing it is already showing \u2014 and, on the local API only,\n`hardware.devices_changed` (SOLUSDEV-250, `hardware/device_watch.py`).",
         "operationId": "project_events_api_v1_projects__project_id__events_get",
         "security": [
           {
@@ -8599,7 +9619,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PatchBody"
+                "$ref": "#/components/schemas/solus_api__routers__extensions__installs__PatchBody"
               }
             }
           }
@@ -8946,6 +9966,108 @@
         }
       }
     },
+    "/api/v1/users/me/extension-pins": {
+      "get": {
+        "summary": "List Pins",
+        "operationId": "list_pins_api_v1_users_me_extension_pins_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Pins Api V1 Users Me Extension Pins Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/extension-pins/{slug}": {
+      "put": {
+        "summary": "Pin Extension",
+        "operationId": "pin_extension_api_v1_users_me_extension_pins__slug__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unpin Extension",
+        "operationId": "unpin_extension_api_v1_users_me_extension_pins__slug__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teams/{team_id}/extensions/policies": {
       "get": {
         "summary": "List Policies",
@@ -9224,6 +10346,262 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/widgets/bom/rows": {
+      "get": {
+        "summary": "List Rows",
+        "operationId": "list_rows_api_v1_projects__project_id__widgets_bom_rows_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Rows Api V1 Projects  Project Id  Widgets Bom Rows Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Row",
+        "operationId": "create_row_api_v1_projects__project_id__widgets_bom_rows_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Row Api V1 Projects  Project Id  Widgets Bom Rows Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/widgets/bom/rows/{key}": {
+      "patch": {
+        "summary": "Patch Row",
+        "operationId": "patch_row_api_v1_projects__project_id__widgets_bom_rows__key__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/solus_api__widgets__bom__routes__PatchBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Patch Row Api V1 Projects  Project Id  Widgets Bom Rows  Key  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Row",
+        "operationId": "delete_row_api_v1_projects__project_id__widgets_bom_rows__key__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/widgets/bom/export.csv": {
+      "get": {
+        "summary": "Export Csv",
+        "operationId": "export_csv_api_v1_projects__project_id__widgets_bom_export_csv_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/widgets/fixture-bundle/notes": {
       "get": {
         "summary": "List Notes",
@@ -9310,6 +10688,395 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Create Note Api V1 Projects  Project Id  Widgets Fixture Bundle Notes Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sourcing/rules": {
+      "get": {
+        "summary": "Get Rules",
+        "operationId": "get_rules_api_v1_projects__project_id__sourcing_rules_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Rules Api V1 Projects  Project Id  Sourcing Rules Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Rules",
+        "operationId": "put_rules_api_v1_projects__project_id__sourcing_rules_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcingRules"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Rules Api V1 Projects  Project Id  Sourcing Rules Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sourcing/torque": {
+      "post": {
+        "summary": "Derive Torque Route",
+        "operationId": "derive_torque_route_api_v1_projects__project_id__sourcing_torque_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TorqueBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sourcing/requests": {
+      "post": {
+        "summary": "Create Request",
+        "operationId": "create_request_api_v1_projects__project_id__sourcing_requests_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Requests",
+        "operationId": "list_requests_api_v1_projects__project_id__sourcing_requests_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Requests Api V1 Projects  Project Id  Sourcing Requests Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sourcing/requests/{request_id}": {
+      "get": {
+        "summary": "Get Request",
+        "operationId": "get_request_api_v1_projects__project_id__sourcing_requests__request_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Request Api V1 Projects  Project Id  Sourcing Requests  Request Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sourcing/requests/{request_id}/select": {
+      "post": {
+        "summary": "Select Candidate",
+        "operationId": "select_candidate_api_v1_projects__project_id__sourcing_requests__request_id__select_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Select Candidate Api V1 Projects  Project Id  Sourcing Requests  Request Id  Select Post"
                 }
               }
             }
@@ -9492,6 +11259,9 @@
               },
               {
                 "$ref": "#/components/schemas/RobotRealConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HardwareRealConfig"
               }
             ],
             "title": "Config",
@@ -9499,6 +11269,7 @@
               "propertyName": "provider",
               "mapping": {
                 "gazebo": "#/components/schemas/GazeboSimConfig",
+                "hardware": "#/components/schemas/HardwareRealConfig",
                 "mcap-replay": "#/components/schemas/McapSimConfig",
                 "mujoco": "#/components/schemas/MujocoSimConfig",
                 "robot": "#/components/schemas/RobotRealConfig",
@@ -9514,6 +11285,24 @@
           "config"
         ],
         "title": "BenchSessionIn"
+      },
+      "BranchItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "commit": {
+            "type": "string",
+            "title": "Commit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "commit"
+        ],
+        "title": "BranchItem"
       },
       "BusMapEntry": {
         "properties": {
@@ -9674,6 +11463,11 @@
             "type": "array",
             "maxItems": 64,
             "title": "Attachments"
+          },
+          "think_harder": {
+            "type": "boolean",
+            "title": "Think Harder",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -9725,6 +11519,78 @@
         ],
         "title": "Complexity",
         "description": "Routing tier, derived automatically by the Step-1 gateway \u2014 never supplied\nby the end user (see `router.derive_complexity`)."
+      },
+      "ConfigDraft": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2,
+            "title": "Schema Version",
+            "default": 2
+          },
+          "component": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortableTransportBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProtocolBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bus_map": {
+            "items": {
+              "$ref": "#/components/schemas/BusMapEntry"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "title": "Bus Map"
+          },
+          "disambiguated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "user"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disambiguated By"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ProvenanceRecord"
+            },
+            "type": "object",
+            "maxProperties": 2048,
+            "title": "Provenance"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConfigDraft",
+        "description": "Portable creation fields. The server supplies the new subject's UUID."
       },
       "ConfigIn": {
         "properties": {
@@ -9904,6 +11770,161 @@
         "title": "DocumentAdd",
         "description": "Track one more of the account's documents in this project (SOLUSDEV-241).\nThe id is validated by the CONNECTOR's own rule before it can reach a\nrequest path \u2014 the schema only bounds it."
       },
+      "EngineeringPreferences": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "default": 1
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          },
+          "freeText": {
+            "type": "string",
+            "maxLength": 2400,
+            "title": "Freetext",
+            "default": ""
+          },
+          "codeStyle": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Codestyle",
+            "default": ""
+          },
+          "mechanical": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Mechanical",
+            "default": ""
+          },
+          "electrical": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Electrical",
+            "default": ""
+          },
+          "documentation": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Documentation",
+            "default": ""
+          },
+          "unitsStandards": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Unitsstandards",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EngineeringPreferences",
+        "description": "The desktop's copy of `~/.solus/preferences.json`, validated at the boundary."
+      },
+      "EntityConfigIn": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/EntityHardwareConfig"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "config"
+        ],
+        "title": "EntityConfigIn"
+      },
+      "EntityHardwareConfig": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2,
+            "title": "Schema Version",
+            "default": 2
+          },
+          "component": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortableTransportBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProtocolBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bus_map": {
+            "items": {
+              "$ref": "#/components/schemas/BusMapEntry"
+            },
+            "type": "array",
+            "maxItems": 256,
+            "title": "Bus Map"
+          },
+          "disambiguated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "user"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disambiguated By"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ProvenanceRecord"
+            },
+            "type": "object",
+            "maxProperties": 2048,
+            "title": "Provenance"
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entity Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entity_id"
+        ],
+        "title": "EntityHardwareConfig",
+        "description": "One physical graph subject's configuration; driver aggregates are resolved at runtime."
+      },
       "EventBatch": {
         "properties": {
           "events": {
@@ -9922,6 +11943,29 @@
           "events"
         ],
         "title": "EventBatch"
+      },
+      "ExcludedSupplier": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Reason",
+            "default": "Excluded by the project's .solus rules"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ExcludedSupplier"
       },
       "ExistingRobotTarget": {
         "properties": {
@@ -10135,6 +12179,101 @@
         ],
         "title": "HardwareConfig"
       },
+      "HardwareEntityCreate": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "robot",
+              "part"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sensors",
+                  "actuators",
+                  "controllers",
+                  "end_effectors",
+                  "power",
+                  "structure",
+                  "wiring"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfigDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "title": "HardwareEntityCreate"
+      },
+      "HardwareRealConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "hardware",
+            "title": "Provider"
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entity Id"
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "entity_id"
+        ],
+        "title": "HardwareRealConfig"
+      },
       "HostedExchange": {
         "properties": {
           "state": {
@@ -10220,6 +12359,111 @@
         ],
         "title": "InviteCreate"
       },
+      "ItemBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "raw_material",
+              "purchase"
+            ],
+            "title": "Category"
+          },
+          "quantity": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "default": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "ordered",
+              "received",
+              "installed",
+              "retired"
+            ],
+            "title": "State",
+            "default": "planned"
+          },
+          "part_number": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part Number"
+          },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manufacturer"
+          },
+          "supplier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supplier"
+          },
+          "unit_cost": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Cost"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "category"
+        ],
+        "title": "ItemBody"
+      },
       "JobKind": {
         "type": "string",
         "enum": [
@@ -10228,7 +12472,8 @@
           "proving",
           "fingerprint_scan",
           "sim_rebuild",
-          "extension_review"
+          "extension_review",
+          "sourcing"
         ],
         "title": "JobKind"
       },
@@ -10311,6 +12556,63 @@
         ],
         "title": "LifecycleState"
       },
+      "LocalFolderLink": {
+        "properties": {
+          "machine_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Machine Id"
+          },
+          "machine_name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Machine Name"
+          },
+          "folder_name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Folder Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "machine_id",
+          "machine_name",
+          "folder_name"
+        ],
+        "title": "LocalFolderLink",
+        "description": "Link THIS machine's working copy to the project (SOLUSDEV-249). The path\nnever travels: the companion scans its own workspace. `machine_id` is the\ncompanion instance id (`~/.solus/companion_id`)."
+      },
+      "LocalFolderOpen": {
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entity Id"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "kicad",
+              "altium",
+              "vscode",
+              "system"
+            ],
+            "title": "Tool"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entity_id",
+          "tool"
+        ],
+        "title": "LocalFolderOpen",
+        "description": "Open one detected project in a tool on the source's machine (SOLUSDEV-249)."
+      },
       "McapSimConfig": {
         "properties": {
           "provider": {
@@ -10387,6 +12689,11 @@
             "$ref": "#/components/schemas/ActionMode",
             "default": "guide"
           },
+          "think_harder": {
+            "type": "boolean",
+            "title": "Think Harder",
+            "default": false
+          },
           "mentions": {
             "items": {
               "type": "string",
@@ -10395,6 +12702,26 @@
             "type": "array",
             "maxItems": 8,
             "title": "Mentions"
+          },
+          "preferences": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngineeringPreferences"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screenshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -10670,6 +12997,67 @@
         "title": "PanelLinkApprove",
         "description": "Reject unknown fields: this endpoint hands out a 90-day credential."
       },
+      "ParentIn": {
+        "properties": {
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "expected_parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Id"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Version"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sensors",
+                  "actuators",
+                  "controllers",
+                  "end_effectors",
+                  "power",
+                  "structure",
+                  "wiring"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "parent_id",
+          "expected_parent_id",
+          "version"
+        ],
+        "title": "ParentIn"
+      },
       "PartCalibration": {
         "properties": {
           "mode": {
@@ -10898,36 +13286,6 @@
         "type": "object",
         "title": "PartLimits"
       },
-      "PatchBody": {
-        "properties": {
-          "enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Enabled"
-          },
-          "settings": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Settings"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "PatchBody"
-      },
       "PhysicalRobotCreate": {
         "properties": {
           "type": {
@@ -11036,6 +13394,108 @@
         "type": "object",
         "title": "PolicyWrite",
         "description": "\u00a710 PUT body: `extra=\"forbid\"`, at least one key, never blocked AND default."
+      },
+      "PortableTransportBinding": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TransportKind"
+          },
+          "binding": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[^/\\s]+$",
+            "title": "Binding"
+          },
+          "vid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 65535.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vid"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 65535.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "binding"
+        ],
+        "title": "PortableTransportBinding"
+      },
+      "PreferencesBody": {
+        "properties": {
+          "mechanical": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mechanical"
+          },
+          "electrical": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Electrical"
+          },
+          "unitsStandards": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unitsstandards"
+          },
+          "freeText": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freetext"
+          }
+        },
+        "type": "object",
+        "title": "PreferencesBody",
+        "description": "The `~/.solus/preferences.json` sections the engine reads (engine.PREFERENCE_KEYS) \u2014\nranking context only. Other sections of the user's file are dropped at the boundary, never\nstored (security review M3)."
       },
       "ProjectCreate": {
         "properties": {
@@ -11207,6 +13667,249 @@
         "type": "object",
         "title": "RejectIn"
       },
+      "RequestBody": {
+        "properties": {
+          "assembly_entity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly Entity Id"
+          },
+          "pivot_mm": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array",
+                "maxItems": 3,
+                "minItems": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pivot Mm"
+          },
+          "masses": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number",
+                  "maximum": 1000000.0,
+                  "minimum": 0.0
+                },
+                "propertyNames": {
+                  "format": "uuid"
+                },
+                "type": "object",
+                "maxProperties": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masses"
+          },
+          "load_kg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Kg"
+          },
+          "arm_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arm M"
+          },
+          "safety_factor": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Safety Factor",
+            "default": 1.5
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RequirementSpec",
+            "default": {
+              "text": "",
+              "part_class": "motor"
+            }
+          },
+          "door": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "bom"
+            ],
+            "title": "Door",
+            "default": "bom"
+          },
+          "preferences": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreferencesBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RequestBody"
+      },
+      "RequirementSpec": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Text",
+            "default": ""
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol"
+          },
+          "voltage_v": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voltage V"
+          },
+          "load_kg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Kg"
+          },
+          "arm_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arm M"
+          },
+          "part_class": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Part Class",
+            "default": "motor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RequirementSpec",
+        "description": "What the person typed (or the CAD door derived) \u2014 untrusted text."
+      },
+      "RevisionsEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/RevisionsResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "RevisionsEnvelope"
+      },
+      "RevisionsResponse": {
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "title": "Supported"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "git_branch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BranchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "supported",
+          "kind",
+          "items",
+          "next_page"
+        ],
+        "title": "RevisionsResponse"
+      },
       "RobotRealConfig": {
         "properties": {
           "provider": {
@@ -11246,6 +13949,133 @@
         ],
         "title": "RouteType",
         "description": "Query kind, routed to the frontier model whose strength matches it. A REAL\nv1 input (not a no-op): e.g. Gemini-class models are strong for VISUAL_LOG /\nLONG_CONTEXT, Claude-class for CODE. `GENERAL` is the fallback when `type` is\nNone. Truly-specialist future models (e.g. spatial reasoning) get new members\nhere without touching routing code."
+      },
+      "ScreenshotIn": {
+        "properties": {
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "title": "Media Type"
+          },
+          "data": {
+            "type": "string",
+            "title": "Data"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 8192.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 8192.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "media_type",
+          "data"
+        ],
+        "title": "ScreenshotIn",
+        "description": "SOLUSDEV-252 S3 (sol-window.md \u00a78): one screenshot on this turn.\n\n`data` is deliberately NOT length-capped here: a pydantic failure echoes the\noffending input back in the 422 body, and this field is megabytes of pixels.\n`agent/screen.py` caps it (3.5 MiB encoded, 2.5 MiB decoded) and sniffs the\nmagic bytes; the route turns its reason into a 422 that never echoes data."
+      },
+      "ScreenshotSource": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "App"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Title"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "app",
+          "title"
+        ],
+        "title": "ScreenshotSource",
+        "description": "Best-effort foreground window (sol-window.md \u00a76) \u2014 untrusted text, capped."
+      },
+      "SelectBody": {
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "title": "Candidate Id"
+          },
+          "category_entity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Entity Id"
+          },
+          "quantity": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "candidate_id"
+        ],
+        "title": "SelectBody"
       },
       "SerialRealConfig": {
         "properties": {
@@ -11400,6 +14230,28 @@
         "type": "object",
         "title": "SettingsUpdate"
       },
+      "SolusConfigEntryIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "config",
+            "title": "Kind"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "payload"
+        ],
+        "title": "SolusConfigEntryIn",
+        "description": "SOLUSDEV-252: `{kind: \"config\", payload}` \u2014 a code environment document, validated\nby the section's model (`validate_config_payload`). Lives beside the route rather than\nin `schemas.SolusEntryIn` so the W1 text/artifact shape is untouched."
+      },
       "SolusEntryIn": {
         "properties": {
           "kind": {
@@ -11482,7 +14334,8 @@
               "kicad",
               "onshape",
               "ros",
-              "altium"
+              "altium",
+              "local"
             ],
             "title": "Type"
           },
@@ -11562,6 +14415,163 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SourceUpdate"
+      },
+      "SourceViewEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SourceViewResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "SourceViewEnvelope"
+      },
+      "SourceViewPut": {
+        "properties": {
+          "branch": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Branch"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "branch"
+        ],
+        "title": "SourceViewPut"
+      },
+      "SourceViewResponse": {
+        "properties": {
+          "base_source_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Base Source Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "default",
+              "pending",
+              "ready",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Id"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_source_id",
+          "status",
+          "source_id",
+          "branch",
+          "commit",
+          "error"
+        ],
+        "title": "SourceViewResponse"
+      },
+      "SourcingRules": {
+        "properties": {
+          "excluded_suppliers": {
+            "items": {
+              "$ref": "#/components/schemas/ExcludedSupplier"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Excluded Suppliers",
+            "default": []
+          },
+          "required_certifications": {
+            "items": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Required Certifications",
+            "default": []
+          },
+          "max_voltage_v": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Voltage V"
+          },
+          "allowed_protocols": {
+            "items": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Allowed Protocols",
+            "default": []
+          },
+          "preferred_suppliers": {
+            "items": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Preferred Suppliers",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SourcingRules"
       },
       "SubscriptionUpdate": {
         "properties": {
@@ -11704,6 +14714,95 @@
         ],
         "title": "ToolFamily",
         "description": "Tools Solus models the UI of. Closed: a new tool is a decision, not a value."
+      },
+      "TorqueBody": {
+        "properties": {
+          "assembly_entity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly Entity Id"
+          },
+          "pivot_mm": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array",
+                "maxItems": 3,
+                "minItems": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pivot Mm"
+          },
+          "masses": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number",
+                  "maximum": 1000000.0,
+                  "minimum": 0.0
+                },
+                "propertyNames": {
+                  "format": "uuid"
+                },
+                "type": "object",
+                "maxProperties": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masses"
+          },
+          "load_kg": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Kg"
+          },
+          "arm_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arm M"
+          },
+          "safety_factor": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Safety Factor",
+            "default": 1.5
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TorqueBody",
+        "description": "Either an assembly (geometry + masses) or a plain spec (load at arm)."
       },
       "TransportBinding": {
         "properties": {
@@ -11974,6 +15073,124 @@
           "y"
         ],
         "title": "WorkspacePosition"
+      },
+      "solus_api__routers__extensions__installs__PatchBody": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PatchBody"
+      },
+      "solus_api__widgets__bom__routes__PatchBody": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "planned",
+                  "ordered",
+                  "received",
+                  "installed",
+                  "retired"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "supplier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supplier"
+          },
+          "unit_cost": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Cost"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PatchBody"
       }
     },
     "securitySchemes": {

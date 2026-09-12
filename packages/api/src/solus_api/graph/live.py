@@ -82,6 +82,21 @@ def graph_changed_frame(
     }
 
 
+def hardware_devices_frame(
+    *, project_id: uuid.UUID, devices: list[dict[str, Any]], at: str
+) -> dict[str, Any]:
+    """SOLUSDEV-250 hot-detect. A FULL current list — a deliberate departure from the
+    hint-only rule above: the data is small, ephemeral and machine-local (there is no server
+    state to refetch), and absence from the list IS the removal. Delivered only through
+    `publish_local`; it never rides Redis."""
+    return {
+        "type": "hardware.devices_changed",
+        "project_id": str(project_id),
+        "devices": devices,
+        "at": at,
+    }
+
+
 class LiveHub:
     """Project-scoped fan-out. Redis-optional, per the repo's convention."""
 
@@ -108,6 +123,9 @@ class LiveHub:
     def subscriber_count(self, project_id: uuid.UUID) -> int:
         return len(self._subscribers.get(project_id, ()))
 
+    def subscribed_project_ids(self) -> list[uuid.UUID]:
+        return list(self._subscribers)
+
     # ------------------------------------------------------------- publishing
 
     async def publish(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
@@ -126,6 +144,12 @@ class LiveHub:
             except Exception:  # noqa: BLE001 — never fail a sync on fan-out
                 logger.warning("redis publish failed; delivering locally instead")
         self._deliver(project_id, payload)
+
+    def publish_local(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
+        """Deliver to THIS process's subscribers only — never Redis. For frames that describe
+        this machine (its enumerated devices): one machine's list must never reach another
+        machine's session."""
+        self._deliver(project_id, json.dumps(frame, separators=(",", ":")))
 
     def _deliver(self, project_id: uuid.UUID, payload: str) -> None:
         # SSE frames are newline-delimited, so a payload containing a blank line

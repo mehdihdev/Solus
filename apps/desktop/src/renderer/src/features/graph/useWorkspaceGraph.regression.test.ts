@@ -1,4 +1,4 @@
-// Live summary for the Context Model screen: real counts from getProject
+// Live summary for the Workspace screen: real counts from getProject
 // (whose payload already carries the sources array) plus the full entity list
 // via the cursor-following listAllEntities. Failures are classified with
 // classifyFetchError so an answering-but-refusing API is never rendered as
@@ -13,7 +13,12 @@ import * as resources from '../../lib/api/resources'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
-  return { ...actual, getProject: vi.fn(), listAllEntities: vi.fn() }
+  return {
+    ...actual,
+    getProject: vi.fn(),
+    listAllEntities: vi.fn(),
+    listAllSources: vi.fn().mockResolvedValue([])
+  }
 })
 
 vi.mock('../../lib/api/workspace', () => ({ listAllRelations: vi.fn().mockResolvedValue([]) }))
@@ -185,4 +190,46 @@ it('does not retain a failed list', async () => {
   const second = renderHook(() => useWorkspaceGraph())
   await waitFor(() => expect(second.result.current.entities).toEqual([ENTITY]))
   expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(2)
+})
+
+// SOLUSDEV-250 P6: a revision bump (local onGraphChanged or SSE graph.changed)
+// runs the cheap detail read; the pages are walked only when the version moved.
+it('validates a reconnect against the retained snapshot and walks only on a changed version', async () => {
+  linkProject()
+  vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+  vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+  const view = renderHook(({ revision }) => useWorkspaceGraph(0, revision), {
+    initialProps: { revision: 0 }
+  })
+  await waitFor(() => expect(view.result.current.status).toBe('ready'))
+  expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(1)
+
+  view.rerender({ revision: 1 })
+  await waitFor(() => expect(vi.mocked(resources.getProject)).toHaveBeenCalledTimes(2))
+  expect(view.result.current.entities).toEqual([ENTITY])
+  expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(1)
+
+  const added = { ...ENTITY, id: 'e2' }
+  vi.mocked(resources.getProject).mockResolvedValue({
+    ...DETAIL,
+    graph_updated_at: '2026-09-07T00:00:01Z'
+  })
+  vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY, added])
+  view.rerender({ revision: 2 })
+  await waitFor(() => expect(view.result.current.entities).toEqual([ENTITY, added]))
+  expect(vi.mocked(resources.listAllEntities)).toHaveBeenCalledTimes(2)
+})
+
+it('refreshes graph event revisions even when timestamp and counts are unchanged', async () => {
+  linkProject()
+  vi.mocked(resources.getProject).mockResolvedValue(DETAIL)
+  vi.mocked(resources.listAllEntities).mockResolvedValue([ENTITY])
+  const { result, rerender } = renderHook(({ revision }) => useWorkspaceGraph(revision), {
+    initialProps: { revision: 0 }
+  })
+  await waitFor(() => expect(result.current.entities).toEqual([ENTITY]))
+  const changed = { ...ENTITY, name: 'committed later with older timestamp' }
+  vi.mocked(resources.listAllEntities).mockResolvedValue([changed])
+  rerender({ revision: 1 })
+  await waitFor(() => expect(result.current.entities).toEqual([changed]))
 })

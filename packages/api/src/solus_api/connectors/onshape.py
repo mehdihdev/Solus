@@ -34,8 +34,11 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import random
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, ClassVar
 from urllib.parse import urlencode
 
@@ -91,9 +94,8 @@ _REQUEST_TIMEOUT = 30.0
 #: Onshape rate-caps private OAuth apps, and one sync fires a translation job
 #: per assembly plus ~1/s status polls — so a 429 is an expected operating
 #: condition, not a failure. Retries are bounded (§7: never an unbounded loop
-#: against a third-party API) and the server's Retry-After is honored but
-#: capped, because the header is untrusted upstream input and must never park
-#: a sync worker.
+#: against a third-party API). Retry-After is honored; waits beyond the worker
+#: bound fail without retrying early or parking a sync worker.
 #: SOLUSDEV-167: was 3 (four attempts). Two ladders hang off this — `request`
 #: and `_download_bounded` — so one export's worst case was 16 attempts against
 #: a provider already telling us to stop. Against an ANNUAL quota, retrying into
@@ -242,12 +244,24 @@ def _owner_name(document: dict[str, Any]) -> str:
 
 
 def _retry_wait(response: httpx.Response, attempt: int) -> float:
-    """Seconds to wait before retrying a 429. Honors Retry-After when it is a
-    plain integer, falls back to exponential backoff — capped either way,
-    because the header is untrusted upstream input (CLAUDE.md §7)."""
+    """Honor the server's minimum delay or defer the operation without retrying."""
     header = response.headers.get("Retry-After", "").strip()
-    wait = float(header) if header.isdigit() else _RATE_LIMIT_BACKOFF_SECONDS * (2**attempt)
-    return min(wait, _RATE_LIMIT_MAX_WAIT_SECONDS)
+    wait: float | None = None
+    if header.isascii() and header.isdigit():
+        wait = float(header)
+    elif header:
+        try:
+            deadline = parsedate_to_datetime(header)
+            if deadline.tzinfo is not None:
+                wait = max(0.0, (deadline - datetime.now(UTC)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            pass
+    if wait is None:
+        ceiling = min(_RATE_LIMIT_BACKOFF_SECONDS * (2**attempt), _RATE_LIMIT_MAX_WAIT_SECONDS)
+        wait = random.uniform(ceiling / 2, ceiling)  # noqa: S311 — scheduling jitter, not a secret
+    if wait > _RATE_LIMIT_MAX_WAIT_SECONDS:
+        raise ConnectorError("rate_limited", "Onshape requested a longer wait; try again later.")
+    return wait
 
 
 def _safe_upstream_id(value: str) -> str:
@@ -449,25 +463,17 @@ class OnshapeConnector(OAuthConnector):
     # ----------------------------------------------------------- identity
 
     async def validate_credentials(self, creds: Credentials) -> AccountInfo:
-        """Identify the authorized account.
+        """Prefer the provider's display name, then email, without exposing its id.
 
-        `OAuth2Read` alone carries NO PII: `sessioninfo` returns `email`/`name`
-        as empty, and only the opaque user `id` is populated (confirmed against a
-        live tenant — `oauth2Scopes: 1`). The old fallback invented the string
-        "onshape-user", which then became the source's display name and told the
-        user nothing about which account they had connected. Fall back to the
-        real account id instead: opaque, but true and distinguishable. Widening
-        to the PII scope for a nicer label is deliberately NOT done —
-        `docs/integrations/onshape-setup.md` §2 forbids it.
+        Read-only grants may return neither. Keep the stable external id for
+        matching while presenting a neutral label; do not widen OAuth scope.
         """
         async with self.http(creds) as client:
             body = await self.get_json(client, "/api/users/sessioninfo", what="session info")
         external_id = _text(body.get("id"))
         return AccountInfo(
             external_id=external_id,
-            # `login` must be non-empty (connector conformance), so the id is the
-            # last resort rather than a fabricated name.
-            login=_text(body.get("email")) or _text(body.get("name")) or external_id or "onshape",
+            login=_text(body.get("name")) or _text(body.get("email")) or "Onshape account",
             name=_text(body.get("name")) or None,
         )
 

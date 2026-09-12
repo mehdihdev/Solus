@@ -16,14 +16,13 @@ import {
   type NavigationIndex,
   type ProjectedLink
 } from './graphIndex'
-import { layoutLevel, levelBounds, type LevelBounds } from './layout'
+import { layoutLevel, levelBounds, ORIGIN, type LevelBounds } from './layout'
 
 export const MAX_VISIBLE_NODES = 24
 const EMPTY_ENTITIES: readonly Entity[] = []
-const ORIGIN: Point = { x: 0, y: 0 }
 const WHEEL_TRANSITION_MS = 350
 const EDITABLE =
-  'input, textarea, select, [contenteditable="true"], .graph-node-content, .graph-links-list, .graph-navigator-toolbar, .graph-pagination'
+  'input, textarea, select, [contenteditable="true"], .graph-node-content, .graph-links-list, .graph-corner, .graph-pagination'
 
 interface Location {
   parentId: string | null
@@ -52,6 +51,7 @@ export interface NavigationModel {
   rootRef: RefObject<HTMLElement | null>
   viewportRef: RefObject<HTMLDivElement | null>
   key: string
+  select: (entity: Entity) => void
   enter: (entity: Entity) => boolean
   back: () => boolean
   go: (entity: Entity | null) => void
@@ -64,9 +64,12 @@ function childrenOf(index: NavigationIndex, parentId: string | null): readonly E
   return parentId ? (index.children.get(parentId) ?? EMPTY_ENTITIES) : index.roots
 }
 
-function usePositions(visible: readonly Entity[], positions: Record<string, Point>) {
+function usePositions(visible: readonly Entity[], positions: Record<string, Point>, anchor: Point) {
   const [drafts, setDrafts] = useState<Record<string, DraftPoint>>({})
-  const defaults = useMemo(() => layoutLevel(visible, positions), [visible, positions])
+  const defaults = useMemo(
+    () => layoutLevel(visible, positions, anchor),
+    [visible, positions, anchor]
+  )
   const points = useMemo(() => {
     const result = { ...defaults }
     for (const [id, draft] of Object.entries(drafts)) {
@@ -74,11 +77,14 @@ function usePositions(visible: readonly Entity[], positions: Record<string, Poin
     }
     return result
   }, [defaults, positions, drafts])
-  const preview = (entityId: string, point: Point): void => {
-    setDrafts((current) => ({ ...current, [entityId]: { point, baseline: positions[entityId] } }))
-  }
+  const preview = useCallback(
+    (entityId: string, point: Point): void => {
+      setDrafts((current) => ({ ...current, [entityId]: { point, baseline: positions[entityId] } }))
+    },
+    [positions]
+  )
   // Preview changes never shift the coordinate origin or move neighboring cards during a drag.
-  return { points, bounds: levelBounds(defaults), preview }
+  return { points, bounds: levelBounds(defaults, anchor), preview }
 }
 
 function hoveredEntity(event: WheelEvent, index: NavigationIndex): Entity | undefined {
@@ -128,7 +134,9 @@ function useViewportFocus(
     if (!viewport) return
     const stage = viewport.firstElementChild
     if (!(stage instanceof HTMLElement)) return
-    viewport.scrollLeft = Math.max(0, (stage.scrollWidth - viewport.clientWidth) / 2)
+    // The device rail reserves a right padding; centre in the content box, not under the rail.
+    const railPad = parseFloat(getComputedStyle(viewport).paddingRight) || 0
+    viewport.scrollLeft = Math.max(0, (stage.scrollWidth - viewport.clientWidth + railPad) / 2)
     viewport.scrollTop = Math.max(0, (stage.scrollHeight - viewport.clientHeight) / 2)
     const anchor = location.screenAnchor
     if (anchor) {
@@ -185,17 +193,23 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
     () => level.slice(page * MAX_VISIBLE_NODES, (page + 1) * MAX_VISIBLE_NODES),
     [level, page]
   )
-  const geometry = usePositions(visible, positions)
+  const geometry = usePositions(visible, positions, location.origin)
   const links = useProjectedLinks(index, visible)
   const trail = parent ? [...index.pathTo(parent.id).map((step) => step.entity), parent] : []
   const rootRef = useRef<HTMLElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const select = useCallback(
+    (entity: Entity): void => onSelect(entity, index.pathTo(entity.id)),
+    [index, onSelect]
+  )
   const go = useCallback(
     (entity: Entity | null): void => {
       if (entity) onSelect(entity, index.pathTo(entity.id))
-      setLocation(atLevel(entity?.id ?? null))
+      // Up or across, a level packs around its parent's saved point, as entering it would.
+      const origin = entity ? layoutLevel([entity], positions)[entity.id] : ORIGIN
+      setLocation({ ...atLevel(entity?.id ?? null), origin })
     },
-    [index, onSelect]
+    [index, onSelect, positions]
   )
   const enter = useCallback(
     (entity: Entity): boolean => {
@@ -218,12 +232,15 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
     return true
   }, [index, parent, go])
   const showLinked = (entity: Entity): void => {
-    const ancestor = index.parent.get(entity.id)?.id ?? null
-    const siblings = childrenOf(index, ancestor)
+    const ancestorId = index.parent.get(entity.id)?.id ?? null
+    const ancestor = index.entities.get(ancestorId ?? '')
+    const siblings = childrenOf(index, ancestorId)
     const targetPage = Math.floor(
       siblings.findIndex((candidate) => candidate.id === entity.id) / MAX_VISIBLE_NODES
     )
-    setLocation({ ...atLevel(ancestor, Math.max(0, targetPage)), revealedId: entity.id })
+    // The revealed level packs around its parent's saved point, as entering it would.
+    const origin = ancestor ? layoutLevel([ancestor], positions)[ancestor.id] : ORIGIN
+    setLocation({ ...atLevel(ancestorId, Math.max(0, targetPage)), origin, revealedId: entity.id })
     onSelect(entity, index.pathTo(entity.id))
   }
   const key = `${parent?.id ?? 'root'}:${page}`
@@ -242,6 +259,7 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
     rootRef,
     viewportRef,
     key,
+    select,
     enter,
     back,
     go,

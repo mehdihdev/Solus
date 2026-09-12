@@ -20,6 +20,7 @@ from fastapi import APIRouter
 
 from solus_api.core.responses import envelope
 from solus_api.deps import CurrentUser
+from solus_api.orchestration import SOL_REASONER_NAME, bump_complexity, estimate_complexity
 from solus_api.orchestration.config import OrchestrationConfig
 from solus_api.orchestration.enums import Complexity, RouteType
 from solus_api.orchestration.gateway import default_orchestration_config
@@ -28,6 +29,13 @@ from solus_api.orchestration.type_estimator import AttachmentHint
 from solus_api.schemas import ClassifyRequest
 
 router = APIRouter(prefix="/api/v1")
+
+#: S1-W3: what the user sees instead of a tier's model — effort on ONE reasoner.
+_EFFORT: dict[Complexity, str] = {
+    Complexity.TRIVIAL: "quick",
+    Complexity.STANDARD: "standard",
+    Complexity.HARD: "deep",
+}
 
 
 def _cost_tier(price_out: float, config: OrchestrationConfig) -> str:
@@ -50,7 +58,6 @@ def _option(resolved: ResolvedRouting, value: str, config: OrchestrationConfig) 
         "value": value,
         "viable": resolved.fits,
         "reason": resolved.reason,
-        "model": resolved.choice.model_name,
         "cost_tier": _cost_tier(resolved.choice.price_out, config),
     }
 
@@ -59,9 +66,16 @@ def _option(resolved: ResolvedRouting, value: str, config: OrchestrationConfig) 
 async def classify(body: ClassifyRequest, user: CurrentUser) -> dict[str, Any]:
     config = default_orchestration_config()
     attachments = tuple(AttachmentHint(kind=a.kind, tokens=a.tokens) for a in body.attachments)
+    complexity = body.complexity
+    if body.think_harder:
+        # Mirrors LlmRunner: bump the (explicit or estimated) tier and pass it
+        # EXPLICITLY, so an overflow refuses rather than escalates — same call.
+        complexity = bump_complexity(
+            complexity or estimate_complexity(body.query, config=config.estimator)
+        )
     headline = resolve_routing(
         body.query,
-        complexity=body.complexity,
+        complexity=complexity,
         context=body.context,
         type=body.type,
         attachments=attachments,
@@ -101,9 +115,9 @@ async def classify(body: ClassifyRequest, user: CurrentUser) -> dict[str, Any]:
         {
             "complexity": headline.choice.complexity.value,
             "type": headline.choice.route_type.value,
-            "model": {
-                "name": headline.choice.model_name,
-                "provider": headline.choice.provider,
+            "reasoner": {
+                "name": SOL_REASONER_NAME,
+                "effort": _EFFORT[headline.choice.complexity],
             },
             "cost_tier": _cost_tier(headline.choice.price_out, config),
             "source": {

@@ -5,7 +5,7 @@
 import { Mono } from '../../components/ui/Mono'
 
 export interface ScreenEmptyStateProps {
-  /** Muted leading glyph (an Icons.* element or the SolOrb). */
+  /** Muted leading glyph (an Icons.* element). */
   icon?: React.ReactNode
   title: string
   body: React.ReactNode

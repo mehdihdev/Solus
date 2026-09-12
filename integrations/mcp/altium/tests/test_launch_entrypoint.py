@@ -315,9 +315,7 @@ def test_launch_child_env_is_scrubbed_to_the_allowlist(tmp_path: Path) -> None:
     }
     import subprocess  # noqa: PLC0415 — test-local, argv list only, no shell
 
-    subprocess.run(
-        [str(fork / "bin" / "launch")], env=parent, check=True, timeout=30
-    )
+    subprocess.run([str(fork / "bin" / "launch")], env=parent, check=True, timeout=30)
 
     observed = {
         line.split("=", 1)[0]

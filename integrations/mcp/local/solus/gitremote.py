@@ -27,8 +27,7 @@ MAX_PACKED_REFS_BYTES = 1024 * 1024
 MAX_URL_CHARS = 2048
 #: `head` is reported in git's short form.
 SHORT_SHA_LEN = 12
-#: scp-style `user@host:path` — the `user` part is refused only when it
-#: carries a `:` (i.e. `user:token@host:`); a bare `git@host:` is fine.
+#: SCP-style userinfo is stripped except the conventional literal git user.
 _SCP_STYLE_RE = re.compile(r"^([^@/:]*(?::[^@/]*)?)@([^/:]+:.*)$")
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -44,6 +43,8 @@ class GitInfo(TypedDict):
 def _read_bounded(path: Path, limit: int) -> bytes | None:
     """The file's bytes, or None when missing/unreadable/over `limit`."""
     try:
+        if any(part.is_symlink() for part in (path, *path.parents)):
+            return None
         if not path.is_file() or path.stat().st_size > limit:
             return None
         with path.open("rb") as handle:
@@ -64,6 +65,8 @@ def _git_dirs(root: Path, home: Path | None) -> tuple[Path, Path] | None:
     `.git` (directory or `gitdir:` pointer file) or a pointer/redirect leads
     outside both the folder and `home`."""
     dot_git = root / ".git"
+    if dot_git.is_symlink():
+        return None
     if dot_git.is_dir():
         gitdir = dot_git
     else:
@@ -87,7 +90,7 @@ def strip_userinfo(url: str) -> str:
     """The origin URL without credentials. `scheme://` URLs drop everything
     between `://` and the `@` of the authority (only the authority — an `@`
     in the path is untouched); scp-style URLs drop the userinfo only when it
-    contains a `:` (a password/token)."""
+    is anything other than the conventional literal `git` user."""
     if "://" in url:
         scheme, _, rest = url.partition("://")
         authority, slash, path = rest.partition("/")
@@ -95,7 +98,7 @@ def strip_userinfo(url: str) -> str:
             authority = authority.rsplit("@", 1)[1]
         return f"{scheme}://{authority}{slash}{path}"
     match = _SCP_STYLE_RE.match(url)
-    if match and ":" in match.group(1):
+    if match and match.group(1) != "git":
         return match.group(2)
     return url
 
@@ -106,19 +109,22 @@ def _inside_root_or_home(path: Path, root: Path, home: Path | None) -> bool:
     return home is not None and path.is_relative_to(home)
 
 
-def _origin_url(commondir: Path) -> str | None:
+def _origin_url(commondir: Path, branch: str | None) -> str | None:
     text = _read_text(commondir / "config", MAX_CONFIG_BYTES)
     if text is None:
         return None
     parser = configparser.ConfigParser(strict=False, interpolation=None)
     try:
         parser.read_string("\n".join(line.strip() for line in text.splitlines()))
-        url = parser.get('remote "origin"', "url", fallback=None)
+        tracking = parser.get(f'branch "{branch}"', "remote", fallback=None) if branch else None
+        url = parser.get(f'remote "{tracking}"', "url", fallback=None) if tracking else None
+        if not url:
+            url = parser.get('remote "origin"', "url", fallback=None)
     except (configparser.Error, ValueError):
         return None
     if not url:
         return None
-    url = strip_userinfo(url.strip().strip('"'))
+    url = strip_userinfo(url.strip().strip('"')).split("?", 1)[0].split("#", 1)[0]
     return url if 0 < len(url) <= MAX_URL_CHARS else None
 
 
@@ -148,6 +154,8 @@ def _head(gitdir: Path, commondir: Path) -> tuple[str | None, str | None]:
     match = _HEAD_REF_RE.match(line)
     if match:
         ref = match.group(1)
+        if any(part in {"", ".", ".."} for part in ref.split("/")) or "\\" in ref:
+            return None, None
         return ref.removeprefix("refs/heads/"), _resolve_ref(commondir, ref)
     return None, (line if _SHA_RE.match(line) else None)
 
@@ -169,10 +177,10 @@ def git_info(root: Path, *, home: Path | None = None) -> GitInfo | None:
         if dirs is None:
             return None
         gitdir, commondir = dirs
-        remote_url = _origin_url(commondir)
+        branch, full_sha = _head(gitdir, commondir)
+        remote_url = _origin_url(commondir, branch)
         if remote_url is None:
             return None
-        branch, full_sha = _head(gitdir, commondir)
         head = full_sha[:SHORT_SHA_LEN] if full_sha else None
     except Exception:  # noqa: BLE001 - a scan must never fail on git metadata
         return None

@@ -6,10 +6,16 @@ export interface RobotRemoval {
   retained_part_ids: string[]
 }
 
-export function createPhysicalRobot(projectId: string, client: ApiClient = api): Promise<Entity> {
+/** A name is enough for a robot to exist (ADR-012); none → the server's default.
+ *  `name` trails `client` so existing positional callers keep working. */
+export function createPhysicalRobot(
+  projectId: string,
+  client: ApiClient = api,
+  name?: string
+): Promise<Entity> {
   return client.request<Entity>(`/projects/${projectId}/entities`, {
     method: 'POST',
-    body: { type: 'physical_robot' }
+    body: name ? { type: 'physical_robot', name } : { type: 'physical_robot' }
   })
 }
 

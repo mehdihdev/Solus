@@ -303,15 +303,22 @@ async def engine(_schema: None) -> AsyncIterator[AsyncEngine]:
 
 
 @pytest.fixture
-def app(settings: Settings, engine: AsyncEngine) -> FastAPI:
+async def app(settings: Settings, engine: AsyncEngine, tmp_path: Path) -> AsyncIterator[FastAPI]:
+    from solus_api.hardware.runtime_owner import RuntimeOwner
+
     application = create_app(settings=settings, engine=engine)
+    application.state.hardware_connections.owner = RuntimeOwner(home=tmp_path, location=tmp_path)
+    close_connections = application.state.hardware_connections.aclose
     # The shipped runner is `LlmRunner`, which makes a real provider call. The
     # transport suites (loop guard, timeout, error masking, pagination) are about
     # the plumbing around a runner, not about the model, so they run against the
     # model-free scaffold. Tests that DO exercise the model swap in their own
     # scripted adapter (see test_sol_red_team.py).
     application.state.agent_runner = ScaffoldRunner()
-    return application
+    try:
+        yield application
+    finally:
+        await close_connections()
 
 
 @pytest.fixture
@@ -465,18 +472,27 @@ def bridge_settings(**overrides: Any) -> Settings:
 
 
 @pytest.fixture
-def make_app() -> Iterator[Callable[..., FastAPI]]:
+def make_app(tmp_path: Path) -> Iterator[Callable[..., FastAPI]]:
     """App factory for sync WS tests (starlette TestClient). TestClient runs
     its own event loop, so the shared async `engine` fixture (bound to the
     pytest-asyncio loop) cannot be used; each app gets a NullPool engine —
     every connection opens and closes inside TestClient's loop."""
 
+    from solus_api.hardware.runtime_owner import RuntimeOwner
+
+    owners: list[RuntimeOwner] = []
+
     def _make(**overrides: Any) -> FastAPI:
         engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
-        return create_app(settings=bridge_settings(**overrides), engine=engine)
+        application = create_app(settings=bridge_settings(**overrides), engine=engine)
+        owner = RuntimeOwner(home=tmp_path, location=tmp_path / str(len(owners)))
+        application.state.hardware_connections.owner = owner
+        owners.append(owner)
+        return application
 
     yield _make
-
+    for owner in owners:
+        owner.close()
     asyncio.run(_truncate_all_tables())
 
 

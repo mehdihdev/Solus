@@ -6,6 +6,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from solus_api.bridge.previews import (
     PREVIEWABLE_TOOLS,
     kicad_project_path,
@@ -336,19 +337,15 @@ async def test_code_previews_show_the_servers_own_argv() -> None:
     ]
 
 
-async def test_code_preview_renders_a_refusal_and_survives_a_failed_read() -> None:
-    refused = _Reader(
-        {"ok": False, "argv": [], "cwd": ".", "reason": "package name may not start with -"}
-    )
-    rows = await preview_builder("code.run", refused)({"script": "-x.py"})  # type: ignore[misc]
-    assert rows[0]["after"] == ""
-    assert rows[2] == {
-        "label": "refused",
-        "before": None,
-        "after": "package name may not start with -",
-    }
-    rows = await preview_builder("code.test", _Reader(None))({"target": "tests"})  # type: ignore[misc]
-    assert rows[0]["after"] is None and len(rows) == 2
-    hostile = _Reader({"ok": True, "argv": "rm -rf /", "cwd": 5})
-    rows = await preview_builder("code.test", hostile)({"target": "tests"})  # type: ignore[misc]
-    assert rows[0]["after"] is None  # a non-list argv is never rendered as a command
+async def test_code_preview_refuses_unavailable_or_invalid_plans() -> None:
+    from solus_api.agent.tools.tool import ToolException
+
+    for plan in (
+        {"ok": False, "argv": [], "cwd": ".", "reason": "package name may not start with -"},
+        None,
+        {"ok": True, "argv": "rm -rf /", "cwd": 5},
+    ):
+        builder = preview_builder("code.run", _Reader(plan))
+        assert builder is not None
+        with pytest.raises(ToolException):
+            await builder({"script": "-x.py"})

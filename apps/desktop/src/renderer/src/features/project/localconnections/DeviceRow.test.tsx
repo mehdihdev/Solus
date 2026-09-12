@@ -1,5 +1,5 @@
 // SOLUSDEV-72 — device row honesty: render exactly what the backend claims
-// (usb_bridge ⇒ "MCU unknown", confidence shown), always show the identity
+// (usb_bridge ⇒ "something on USB", never a guessed board), always show the identity
 // discriminator (serial or its absence), require an explicit user pick for
 // ambiguous/serial-less devices, and persist user labels by serial number.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -66,9 +66,10 @@ beforeEach(() => {
 })
 
 describe('DeviceRow — honesty', () => {
-  it('a usb_bridge device reads "USB-serial bridge — MCU unknown", never a guessed board', () => {
+  it('a usb_bridge device reads "something on USB", never a guessed board or "MCU unknown"', () => {
     renderRow(device())
-    expect(screen.getByText('USB-serial bridge — MCU unknown')).toBeInTheDocument()
+    expect(screen.getByText('something on USB')).toBeInTheDocument()
+    expect(screen.queryByText(/MCU unknown/)).not.toBeInTheDocument()
     expect(screen.getByText(/CONFIDENCE 0\.3/)).toBeInTheDocument()
   })
 

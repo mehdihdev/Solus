@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 #: SOLUS-ONS-A1 removed `onshape`: it was an API-KEY-PAIR spec, a credential
 #: that authenticates the developer rather than the customer. Onshape is now
 #: reached through the customer OAuth grant as in-process tools, not MCP.
-FREE_SERVERS = {"web_search", "kicad", "fusion"}
+FREE_SERVERS = {"brave", "kicad", "fusion"}
 BYO_SERVERS = {"altium", "solidworks", "autocad"}
 
 
@@ -60,10 +60,10 @@ def test_catalog_tiers_rosters_and_license_keys() -> None:
 
 
 def test_new_stdio_specs_are_pinned_paths_not_package_runners() -> None:
-    # MCP-03 rule: no npx/uvx/PATH-resolved names for NEW specs (WEB_SEARCH is
-    # the flagged pre-existing TODO). Provisional launcher paths cannot spawn or
-    # reach a network — the paths do not exist yet.
-    for name in (FREE_SERVERS | BYO_SERVERS) - {"onshape", "web_search"}:
+    # MCP-03 rule: no npx/uvx/PATH-resolved names. `brave` was the last
+    # PATH-resolved holdout and is now a vendored fork (SOLUSDEV-252 P6), so
+    # there is no exemption left — every stdio spec is a pinned launcher path.
+    for name in (FREE_SERVERS | BYO_SERVERS) - {"onshape"}:
         spec = MCP_SERVER_CATALOG[name]
         if spec.url is not None:
             continue  # vendor-run, not a fork we launch — see below

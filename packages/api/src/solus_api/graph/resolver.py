@@ -15,6 +15,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import GraphEntity
 
 
@@ -87,6 +88,7 @@ class DbEntityResolver:
             select(GraphEntity.id)
             .where(
                 GraphEntity.project_id == project_id,
+                current_scope(project_id).entity_predicate(),
                 GraphEntity.external_ref == device_id,
                 GraphEntity.deleted_at.is_(None),
             )

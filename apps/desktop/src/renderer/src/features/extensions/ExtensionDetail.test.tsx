@@ -135,7 +135,7 @@ describe('ExtensionDetail — install flow', () => {
     render(<ExtensionDetail view={viewOf({ connected: ['eda'] })} actions={a} onBack={vi.fn()} />)
     await userEvent.click(screen.getByRole('button', { name: 'Install' }))
     expect(screen.getByRole('dialog', { name: 'Install BOM' })).toBeInTheDocument()
-    expect(screen.getByText('Read the context model')).toBeInTheDocument()
+    expect(screen.getByText('Read the workspace graph')).toBeInTheDocument()
     expect(screen.getByText('https://api.octopart.com')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Grant and install' }))
     expect(a.install).toHaveBeenCalledWith('bom', {
@@ -211,7 +211,7 @@ describe('ExtensionDetail — update flow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Update to 1.3.0' }))
     expect(await screen.findByRole('dialog', { name: 'Update BOM' })).toBeInTheDocument()
     expect(screen.getByText('Read telemetry streams')).toBeInTheDocument()
-    expect(screen.queryByText('Read the context model')).not.toBeInTheDocument()
+    expect(screen.queryByText('Read the workspace graph')).not.toBeInTheDocument()
     expect(screen.getByText('https://x.example')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Grant and update' }))
     expect(a.update).toHaveBeenLastCalledWith('bom', {
@@ -233,7 +233,7 @@ describe('ExtensionDetail — tabs', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Settings' }))
     expect(screen.getByRole('switch', { name: 'Enable in this project' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-    expect(screen.getByText('Read the context model')).toBeInTheDocument()
+    expect(screen.getByText('Read the workspace graph')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Back to Store' }))
     expect(onBack).toHaveBeenCalledOnce()
   })

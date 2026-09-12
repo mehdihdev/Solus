@@ -10,6 +10,8 @@ import {
   confirmDetected,
   createHardwarePart,
   getHardwareConfig,
+  getEntityHardwareConfig,
+  putEntityHardwareConfig,
   getLibraryDefinition,
   importLibraryPart,
   importLibraryPlatform,
@@ -52,6 +54,20 @@ const suggestion: HardwareSuggestion = {
 }
 
 describe('hardware API client', () => {
+  it('keeps absent v2 configs nullable and sends the exact expected version', async () => {
+    const api = client()
+    const absent = { entry_id: null, entity_id: 'r1', version: 0, config: null }
+    vi.mocked(api.request).mockResolvedValue(absent)
+    expect(await getEntityHardwareConfig('p1', 'r1', api)).toEqual(absent)
+    expect(api.request).toHaveBeenLastCalledWith('/projects/p1/hardware/entities/r1/config')
+    const document = { schema_version: 2 as const, entity_id: 'r1', provenance: {} }
+    await putEntityHardwareConfig('p1', 'r1', document, 0, api)
+    expect(api.request).toHaveBeenLastCalledWith('/projects/p1/hardware/entities/r1/config', {
+      method: 'PUT',
+      body: { config: document },
+      ifMatch: 0
+    })
+  })
   it('reads and replaces the robot config through the documented routes', async () => {
     const api = client()
     const out = { entry_id: 'e1', robot_entity_id: 'r1', config }

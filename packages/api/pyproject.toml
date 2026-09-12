@@ -30,6 +30,7 @@ dependencies = [
     "mcp>=1.28.1,<2.0",
     "sentry-sdk>=2.0",
     "packaging>=26.2",
+    "pypdfium2==5.13.0",
 ]
 
 [project.scripts]

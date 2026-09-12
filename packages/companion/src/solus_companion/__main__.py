@@ -21,7 +21,9 @@ from solus_companion.config import (
     config_from_env,
     discover_servers,
 )
+from solus_companion.machine.server import MachineServer
 from solus_companion.supervisor import Supervisor
+from solus_companion.watch import workspace_path
 
 logger = logging.getLogger("solus.companion")
 
@@ -73,7 +75,14 @@ async def _stdin_token_loop(box: TokenBox) -> None:
 
 
 async def _amain(config: CompanionConfig) -> int:
-    supervisor = Supervisor(config.servers)
+    # S5: the built-in `machine` server — advertises nothing (and fails closed)
+    # until a project workspace is linked (SOLUS_COMPANION_WORKSPACE).
+    # `workspace_path` is the same fail-closed resolution channel.py uses: an
+    # unset OR non-existent SOLUS_COMPANION_WORKSPACE means NO workspace, so the
+    # server advertises nothing rather than confining to a directory that is not
+    # there.
+    machine = MachineServer(workspace_path(config.workspace))
+    supervisor = Supervisor(config.servers, builtins=(machine,))
     await supervisor.start_all()
     channel = asyncio.create_task(run_channel(config, supervisor))
     side_tasks = [asyncio.create_task(_health_loop(supervisor))]

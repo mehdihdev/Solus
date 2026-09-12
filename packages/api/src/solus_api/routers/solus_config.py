@@ -6,15 +6,18 @@ an entry. All scoped through `ProjectCtx` (§7 tenant isolation; non-member → 
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request, Response
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
+from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
-from solus_api.models import Artifact, Role, SolusEntryKind
+from solus_api.models import Artifact, Role, SolusEntryKind, SolusSection
 from solus_api.schemas import SolusEntryIn, SolusEntryPatch
+from solus_api.services.code_env import CodeEnvironment, upsert_code_environment
 from solus_api.services.events import emit_event
 from solus_api.services.solus_config import (
     add_artifact_entry,
@@ -26,10 +29,21 @@ from solus_api.services.solus_config import (
     parse_section,
     serialize_entry,
     update_text,
+    validate_config_payload,
 )
 from solus_api.storage import ArtifactStore
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/solus")
+
+
+class SolusConfigEntryIn(BaseModel):
+    """SOLUSDEV-252: `{kind: "config", payload}` — a code environment document, validated
+    by the section's model (`validate_config_payload`). Lives beside the route rather than
+    in `schemas.SolusEntryIn` so the W1 text/artifact shape is untouched."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["config"]
+    payload: dict[str, Any]
 
 
 def _emit_solus_event(
@@ -55,12 +69,24 @@ async def get_solus(ctx: ProjectCtx, session: SessionDep) -> dict[str, Any]:
 
 @router.post("/{section}/entries", status_code=201)
 async def add_entry(
-    section: str, body: SolusEntryIn, ctx: ProjectCtx, session: SessionDep
+    section: str,
+    body: SolusEntryIn | SolusConfigEntryIn,
+    ctx: ProjectCtx,
+    session: SessionDep,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     parsed = parse_section(section)
     artifact: Artifact | None = None
-    if body.kind == "artifact":
+    if isinstance(body, SolusConfigEntryIn):
+        if parsed is not SolusSection.CODE:
+            # Hardware configs are written only through the hardware routes (solus.md §2).
+            raise APIError(422, "validation_error", "Only the code section accepts config entries")
+        env = validate_config_payload(parsed, body.payload)
+        assert isinstance(env, CodeEnvironment)
+        entry = await upsert_code_environment(
+            session, ctx.project.id, env, created_by=ctx.user.id, author="user"
+        )
+    elif body.kind == "artifact":
         assert body.artifact_id is not None and body.name is not None  # SolusEntryIn validator
         entry = await add_artifact_entry(
             session,

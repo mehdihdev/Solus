@@ -188,6 +188,52 @@ def test_frame_before_hello_closes_4400(bridge_app: FastAPI) -> None:
         _expect_close(ws, 4400)
 
 
+def _fat_hello(payload_bytes: int) -> str:
+    """A hello whose inventory is `payload_bytes` of tool descriptions — the
+    shape a real companion sends: every fork's every tool, JSON schema and all.
+    Two vendored forks put the live frame at 22 KB (SOLUSDEV-252, measured)."""
+    filler = "d" * payload_bytes
+    return _hello_frame(
+        servers=[
+            {
+                "server": "mock",
+                "tools": [
+                    {"name": "echo", "description": filler, "input_schema": {"type": "object"}}
+                ],
+            }
+        ]
+    )
+
+
+def test_realistic_multi_fork_hello_is_accepted(bridge_app: FastAPI) -> None:
+    """A hello bigger than the CONTROL cap still connects. The inventory grows
+    with the number of vendored forks, so sizing it like a ping is how the
+    bridge came to refuse every real companion (live, SOLUSDEV-252)."""
+    client = TestClient(bridge_app)
+    alice = bearer(**ALICE)
+    _team_id, project_id = _setup_project(client, alice)
+    settings = bridge_app.state.settings
+    assert settings.bridge_hello_frame_max_bytes > settings.bridge_control_frame_max_bytes
+    with _connect(client, project_id, alice) as ws:
+        ws.send_text(_fat_hello(settings.bridge_control_frame_max_bytes * 2))
+        assert json.loads(ws.receive_text())["type"] == "hello_ack"
+
+
+def test_oversize_hello_closes_4413_with_an_honest_code(bridge_app: FastAPI) -> None:
+    """Past the hello cap it is still refused — but as oversize, not as
+    "expected_hello / update required", which sends the operator hunting a
+    protocol mismatch that does not exist."""
+    client = TestClient(bridge_app)
+    alice = bearer(**ALICE)
+    _team_id, project_id = _setup_project(client, alice)
+    cap = bridge_app.state.settings.bridge_hello_frame_max_bytes
+    with _connect(client, project_id, alice) as ws:
+        ws.send_text(_fat_hello(cap + 1024))
+        err = json.loads(ws.receive_text())
+        assert err["data"]["code"] == "oversize_hello"
+        _expect_close(ws, 4413)
+
+
 def test_supersede_closes_old_socket_4409_and_emits_event(bridge_app: FastAPI) -> None:
     client = TestClient(bridge_app)
     alice = bearer(**ALICE)

@@ -303,12 +303,18 @@ async def test_import_part_into_a_robot(
     assert entity["properties"]["provenance"] == "library"
     assert entity["properties"]["manufacturer"] == "Bosch"
     assert data["config_entry_id"] == robot["config_entry_id"]
+    saved = await client.get(
+        f"/api/v1/projects/{project_id}/hardware/entities/{entity['id']}/config",
+        headers=alice_headers,
+    )
+    assert saved.json()["data"]["config"]["entity_id"] == entity["id"]
+    assert saved.json()["data"]["entry_id"] != robot["config_entry_id"]
 
     config = await _config(client, alice_headers, project_id, robot_id)
     slot = config["parts"][entity["id"]]
     assert slot["lifecycle"] == "planned"
     assert {c["name"] for c in slot["telemetry"]} == {"bmp390.pressure", "bmp390.temperature"}
-    assert config["provenance"][f"parts.{entity['id']}"] == {
+    assert config["provenance"][f"parts.{entity['id']}.lifecycle"] == {
         "by": "library",
         "source": "part:bmp390",
     }

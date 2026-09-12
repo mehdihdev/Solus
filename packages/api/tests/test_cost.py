@@ -57,6 +57,12 @@ def test_compute_call_credits_known_value() -> None:
     assert compute_call_credits(_model(), 1_000_000, 1_000_000, cost) == 3600
 
 
+def test_compute_call_credits_ignores_float_noise() -> None:
+    # $1.10 * 2.0 * 100 is 220.00000000000003 in binary floats; ceil must bill 220, not 221.
+    noisy = _model().model_copy(update={"price_in": 1.1, "price_out": 0.0})
+    assert compute_call_credits(noisy, 1_000_000, 0, CostConfig(credits_per_dollar=100.0)) == 220
+
+
 def test_compute_call_credits_rounds_up_nonzero() -> None:
     # A tiny real call still bills at least 1 credit (ceil), never 0.
     cost = CostConfig(credits_per_dollar=100.0)
@@ -334,3 +340,101 @@ async def test_account_spend_reports_all_time_usage(db: AsyncSession) -> None:
     assert await account_spend(user.id, session=db) == credits
     nobody = await _seed_user(db, balance=None)
     assert await account_spend(nobody.id, session=db) == 0
+
+
+# --- S1 prompt caching: tokens_cached_in bills at price_cached_in ------------
+
+
+def _cached_entry(**overrides: object) -> ModelCatalogEntry:
+    """A $2/$12 entry with a $0.5 cache-read rate (float-exact sums); `overrides`
+    add breakpoint fields."""
+    return ModelCatalogEntry(
+        provider="openai",
+        name="cached-shaped",
+        price_in=2.0,
+        price_out=12.0,
+        price_cached_in=0.5,
+        context_window=1_000_000,
+        roles=["longctx_hard"],
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
+def _cached_model() -> ModelChoice:
+    return ModelChoice(
+        provider="openai",
+        model_name="cached-shaped",
+        price_in=2.0,
+        price_out=12.0,
+        context_window=1_000_000,
+        role="longctx_hard",
+        complexity=Complexity.HARD,
+        route_type=RouteType.LONG_CONTEXT,
+    )
+
+
+def test_cached_tokens_bill_at_cached_rate_below_breakpoint() -> None:
+    # 500K uncached @ $2 + 500K cached @ $0.5 = $1.0 + $0.25 = $1.25; * 2.0 * 100 = 250.
+    credits = compute_call_credits(
+        _cached_model(), 1_000_000, 0, _COST, entry=_cached_entry(), tokens_cached_in=500_000
+    )
+    assert credits == 250
+
+
+def test_cached_discount_is_ignored_above_breakpoint() -> None:
+    """Above the breakpoint EVERYTHING bills at the long rates (no cached-long
+    rate is modeled — over-bills a cached long call, never under)."""
+    entry = _cached_entry(
+        long_context_threshold_tokens=272_000, price_in_long=4.0, price_out_long=18.0
+    )
+    with_cache = compute_call_credits(
+        _cached_model(), 1_000_000, 1_000_000, _COST, entry=entry, tokens_cached_in=500_000
+    )
+    without = compute_call_credits(_cached_model(), 1_000_000, 1_000_000, _COST, entry=entry)
+    assert with_cache == without == 4400  # 1M @ $4 + 1M @ $18 = $22 * 200
+
+
+def test_cached_tokens_are_clamped_to_tokens_in() -> None:
+    # A provider over-report can't push billing negative: everything bills cached.
+    credits = compute_call_credits(
+        _cached_model(), 1_000_000, 0, _COST, entry=_cached_entry(), tokens_cached_in=5_000_000
+    )
+    assert credits == 100  # 1M @ $0.5 = $0.5 * 200
+    assert (
+        compute_call_credits(
+            _cached_model(), 1_000_000, 0, _COST, entry=_cached_entry(), tokens_cached_in=-7
+        )
+        == 400
+    )  # negative -> 0 cached: 1M @ $2 = $2 * 200
+
+
+def test_entry_without_cached_price_ignores_cached_tokens() -> None:
+    flat = _long_priced_entry()  # no price_cached_in
+    with_cache = compute_call_credits(
+        _long_model(), 100_000, 0, _COST, entry=flat, tokens_cached_in=90_000
+    )
+    assert with_cache == compute_call_credits(_long_model(), 100_000, 0, _COST, entry=flat) == 40
+
+
+async def test_track_cost_stores_cached_tokens_in_attrs_only_when_nonzero(
+    db: AsyncSession,
+) -> None:
+    user = await _seed_user(db, balance=500)
+    await track_cost(
+        "call-cached",
+        user.id,
+        _cached_model(),
+        10_000,
+        5_000,
+        session=db,
+        cost=_COST,
+        entry=_cached_entry(),
+        tokens_cached_in=4_000,
+    )
+    (row,) = await _ledger_rows(db, "call-cached")
+    assert row.attrs["tokens_cached_in"] == 4_000
+    assert row.amount == -compute_call_credits(
+        _cached_model(), 10_000, 5_000, _COST, entry=_cached_entry(), tokens_cached_in=4_000
+    )
+    # The zero case is pinned by test_track_cost_debits_ledger_and_balance_atomically
+    # (exact attrs dict without the key).

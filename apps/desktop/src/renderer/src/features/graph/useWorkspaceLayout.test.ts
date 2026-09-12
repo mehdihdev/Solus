@@ -169,6 +169,15 @@ it('filters a removed entity out of an in-flight save result and the queued move
   expect(result.current.positions).toEqual({ motor: { x: 40, y: 50 } })
 })
 
+it('ignores a move for an id outside the live set, e.g. a synthetic account anchor', async () => {
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true, ['e1']))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  act(() => result.current.move('account:c1', { x: 10, y: 20 }))
+  expect(workspace.saveWorkspaceLayout).not.toHaveBeenCalled()
+  expect(result.current.positions).toEqual({})
+  expect(result.current.status).toBe('ready')
+})
+
 it('never writes before loading or while offline', () => {
   const { result } = renderHook(() => useWorkspaceLayout('p1', false))
   act(() => result.current.move('e1', { x: 10, y: 20 }))

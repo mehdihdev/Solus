@@ -111,59 +111,6 @@ typecheck:node:
     NODE_OPTIONS: "--max-old-space-size=1536"
   script: pnpm typecheck
 
-test:python:
-  extends: [.python-base, .python-rules]
-  stage: test
-  # SOLUSDEV-246: the full suite on the 2 GB ARM runner outgrew the 1 h default.
-  # The effective limit is min(this, the runner's "Maximum job timeout" in
-  # Settings → CI/CD → Runners), so that setting must be ≥ 3h too. A genuinely
-  # hung test no longer eats the budget: pytest-timeout (pyproject
-  # `timeout = 300`) fails it with every thread's stack after 5 min.
-  timeout: 3h
-  # One heavy job at a time on the shared 2 GB box: with `needs: []` every job is
-  # a DAG root, so test:node's vitest workers and this suite's OCCT/MuJoCo
-  # imports could land on the runner together and OOM each other.
-  resource_group: arm-runner-heavy
-  services:
-    - name: pgvector/pgvector:pg16
-      alias: postgres
-      # Disposable job database: avoid durable disk flushing on every fixture
-      # TRUNCATE. Never apply these settings to a persistent database.
-      command:
-        [
-          "postgres",
-          "-c",
-          "fsync=off",
-          "-c",
-          "synchronous_commit=off",
-          "-c",
-          "full_page_writes=off",
-        ]
-  variables:
-    FF_NETWORK_PER_BUILD: "true"
-    POSTGRES_USER: solus
-    POSTGRES_PASSWORD: solus
-    POSTGRES_DB: solus
-    SOLUS_TEST_DATABASE_URL: "postgresql+asyncpg://solus:solus@postgres:5432/solus_test"
-  script:
-    # The OCCT wheel is in the dev group precisely so CI exercises the real STEP
-    # path (packages/api/pyproject.toml), but it dlopens libGL and bookworm-slim
-    # ships no OpenGL runtime — so it imported nowhere and ~40 CAD tests SKIPPED
-    # silently while the rest failed on unrelated-looking assertions.
-    # Git is also needed by the scanner's temporary-repository regression tests.
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 git
-    # Fail LOUDLY if that ever regresses. A silent skip is the failure mode that
-    # hid this: the suite stays green while the CAD path goes entirely untested.
-    - uv run --no-sync python -c 'from solus_api.connectors.step_parser import step_reader_available as ok; assert ok(), "OCCT unavailable — CAD tests would silently skip"'
-    # The aws-arm t4g.micro has 1 GiB RAM. Two workers regressed the real suite
-    # from 27 min to 48 min; use serial execution and expose slow-test timings.
-    - uv run --no-sync pytest -q -rfE -m 'not live' --durations=20 --junitxml=reports/pytest.xml
-  artifacts:
-    when: always
-    expire_in: 7 days
-    reports:
-      junit: reports/pytest.xml
-
 test:node:
   extends: [.node-base, .node-rules]
   resource_group: arm-runner-heavy

@@ -30,7 +30,7 @@ function NoProject(): React.JSX.Element {
       <ScreenEmptyState
         icon={<Icons.bench size={30} />}
         title="Live Bench watches the focused part"
-        body="Open a project and select an entity in the Context Model — its live telemetry, signals, and observer events stream here."
+        body="Open a project and select an entity in the Workspace — its live telemetry, signals, and observer events stream here."
         status="NO PROJECT OPEN"
       />
     </div>

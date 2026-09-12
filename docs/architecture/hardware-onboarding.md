@@ -1,148 +1,179 @@
-# Architecture — Robot onboarding (SOLUSDEV-248: R5 → R3 → R1 → R2 → R4)
+# Architecture — Physical hardware ownership and onboarding
 
-Product source: the SOLUSDEV-248 ticket brief (no docs/design spec exists in the repo).
-Governing decisions: ADR-005 (clean seams), ADR-012 (heuristics + human confirmation), ADR-027
-(graph conventions), ADR-029 (runtime data is untrusted model input), ADR-030 (live data never
-rides the Connector sync path), ADR-031 Pattern 2 (telemetry is never an MCP tool), ADR-034
-(2026-09-06 amendment: a Hardware-configs entry may carry a schema-validated structured payload,
-one per Physical Robot, provenance on every field). Routes: `docs/api/hardware.md`. UX:
-`docs/wireflows/hardware-onboarding.md`. Companion docs: `local-connections.md` (the bench-session
-seam this extends), `workspace-navigation.md` §Phase 4 (`PhysicalRobotService`, the R2 hook),
-`docs/contracts/telemetry-packet.md` (the packet and its `units` map).
+**Last updated:** 2026-09-11. **Status:** integrated 251/250 architecture with explicitly
+labeled later SOLUSDEV-253/256 targets,
+extending R1–R5 (SOLUSDEV-248). Implementation status and measured results belong in each ticket's
+completion report. Governing decisions: ADR-005/012/025/027/029/030/031 and ADR-034 amendment
+2026-09-07. [Routes](../api/hardware.md), [wireflow](../wireflows/hardware-onboarding.md),
+[storage/migration](../schemas/hardware-config.md), [local runner](local-connections.md),
+[workspace](workspace-navigation.md), [private state](../contracts/local-state.md).
 
-The thesis: plugging a machine into Solus yields a **proposal, not a form**, and one code path
-onboards a Feetech arm, a PX4 drone, an ODrive base and a bare Arduino. Vendors live in plugins and
-definition files; everything on the path between the USB port and the graph is vendor-free.
+The same path handles a loose battery, bracket, controller, custom machine or detected robot.
+Saving hardware creates project graph context without requiring a connection, calibration,
+CAD, ROS or simulator. Identification produces evidence for review, never asserted ownership.
+Vendors remain in plugins and definition data; the path between transport and graph is generic.
 
 ```mermaid
 flowchart LR
-  Enum[enumerate<br/>hotplug · adverts · mDNS · heartbeat] --> Ident[identify<br/>DeviceIdentity transport:binding]
-  Ident --> Interr[interrogate<br/>Interrogator registry, safety ≤ ping/listen]
-  Interr --> Prop[propose<br/>evidence + bus map + repo-config match]
-  Prop --> Conf[confirm<br/>user accepts rows, picks target robot]
-  Conf --> Robot[PhysicalRobotService<br/>robot + category parts, origin=manual]
-  Conf --> Cfg[HardwareConfig<br/>.solus Hardware-configs entry, kind=config]
-  Cfg --> Live[LiveConnection<br/>ProtocolDriver registry opens the channel]
-  Live --> Plumb[TelemetryPlumbing.ingest<br/>resolves external_ref == packet.device_id]
-  Sugg[link suggestions<br/>hardware_suggestions, pending] -. accept .-> Conf
+  Enum[Local lightweight enumeration] --> Watch[API DeviceWatcher full local list]
+  Watch --> Review[Inline device proposal and user review]
+  Graph[Authorized graph and v2 configurations] --> Review
+  Review --> Save[Atomic graph and per-entity CONFIG commit]
+  Save --> Response[201 and connecting node]
+  Save --> Coordinator[Application-owned connection coordinator]
+  Files[Picker-authorized opaque source refs] --> Verify[Private digest verification]
+  Verify --> Coordinator
+  Coordinator --> Resolve[Current v2 configs assembled as runtime input]
+  Resolve --> Driver[Existing driver and LiveConnection]
+  Driver --> Ingest[Project-scoped telemetry resolver]
+  Coordinator --> State[Attempt-scoped connection metadata and graph.changed]
 ```
 
-## Identity — `transport:binding`
+## Graph ownership and configuration
 
-`DeviceRef = f"{transport}:{binding}"`: `usb:5B42134331`, `can:<iface>:<adapter-serial>`,
-`ble:<addr>`, `ip:<mac-or-ip>`. A part on a bus is `f"{device_ref}/{address}"` —
-`usb:5B42134331/1`. The identity is the USB serial (or the transport's equivalent), never a tty
-path: paths swap between runs, serials do not. `DeviceIdentity` carries
-`(transport, binding, vid, pid, last_seen_path)`; `last_seen_path` is informational only.
+Every physical entity belongs to its project. A part may have no robot parent. Optional ownership
+is a manual edge to a live manual robot/category, separate from provider containment and physical
+connection/bus mappings. Do not invent a robot for a part, or arbitrary nesting for provider
+assemblies. Assignment, detachment, reassignment and robot removal preserve part UUIDs,
+configuration entry IDs, values, provenance, source identity, canonical links and coordinates.
+Canvas dragging never changes ownership. Retained and new unassigned parts use the same query
+and remain reachable even when a provider document is their presentation parent.
 
-The ref is what confirm writes to `graph_entity.external_ref`, and `external_ref` is what telemetry
-resolves on (`graph/resolver.py`: `external_ref == packet.device_id`). So the key must never carry
-a vendor — the confirm schema's regex is a **transport-prefix allowlist**; the driver id lives in
-the config, not the identity. Reconnect re-resolves the binding (USB serial → `/dev/serial/by-id`)
-inside the factory closure on every cycle, so a replug into a different port reopens the same
-physical machine without touching the `PacketSource` protocol.
+Each configured entity has at most one active `.solus` CONFIG entry. `EntityHardwareConfig`
+schema 2 identifies `entity_id`; optional `component` holds that subject's calibration, limits,
+telemetry, firmware and lifecycle. An optional identity/protocol/bus map belongs to the entity
+providing the connection, including a controller/gateway part. There is no stored robot-level
+copy of all mutable part configs. `configured_entity_id`, version and manual `configures` edge
+provide indexed, validated subject lookup; only manual entities may carry a convenience
+`hardware_config_ref` attribute. Provider-owned properties and external_ref are untouched.
 
-## Layout — shared vs plugin (ratchet-enforced)
+The hardware runtime boundary assembles current referenced component configs into the existing
+v1 driver input. Drivers retain their current protocol and do not learn storage, tenancy or
+ownership rules. Multiple controllers use actual entities/configs. GET is read-only; deleting
+a config does not recreate it on a later read. Expected-version writes, reviewed proposals and
+operation idempotency protect concurrency. Graph/config/operation persistence is atomic and
+commits before any optional connection; a failed connection leaves the saved node usable.
 
-| path                                                              | vendor names | contents                                                                                                  |
-| ----------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------- |
-| `livebench/src/livebench/hardware/identity.py`                    | forbidden    | `DeviceRef`, `DeviceIdentity`                                                                             |
-| `livebench/src/livebench/hardware/transport/`                     | forbidden    | `Channel` protocol (open/read/write/close/identity); `usb_serial`, `usb_can`, `bluetooth`, `network`, `ros2` (presence-only); registry |
-| `livebench/src/livebench/hardware/drivers/`                       | forbidden    | `ProtocolDriver` protocol: `driver_id`, `param_schema`, `open(channel, params, definitions) -> PacketSource`; registry (`ConnectorRegistry` pattern) |
-| `livebench/src/livebench/hardware/interrogators/`                 | forbidden    | `Interrogator` protocol: `id`, `transports`, `safety ∈ {passive, ping, listen}`, `probe(channel) -> Interrogation`; registry |
-| `livebench/src/livebench/hardware/detection/`                     | forbidden    | `enumerate.py`, `interrogate.py`, `propose.py` (proposal + repo-config match + disambiguation), `repo_config/` (generic YAML/JSON/TOML/py-AST readers + `RepoConfigParser` registry) |
-| `livebench/src/livebench/hardware/definitions/usb_boards.py`      | data only    | the VID/PID table                                                                                         |
-| `livebench/src/livebench/plugins/<vendor>/`                       | allowed      | `feetech`, `dynamixel`, `odrive`, `myactuator`, `mavlink`, `lb06`, `jsonlines`, `raw`, `repo_configs/lerobot.py` — codec, driver, interrogator per plugin |
-| `packages/api/src/solus_api/hardware/`                            | forbidden    | `config.py` (HardwareConfig), `lifecycle.py`, `links.py` (suggestion engine), `library.py`, `router.py`, models |
-| `packages/api/src/solus_api/hardware/definitions/{parts,platforms}/*.yaml` | allowed | the Solus-curated seed library; `definitions/vendor/` is the typed ingest seam for vendor-shipped files (not live this cycle) |
-| `libs/solus-telemetry/`                                           | n/a          | MIT emitter library: `python/` (uv member), `arduino/`, `micropython/`                                    |
+Provenance names every operational valued leaf. Plugin/library/repo/detected observations
+remain evidence and cannot silently replace saved decisions. Ambiguous unit modes remain
+unresolved; do not infer degrees from a conditional branch or assume position telemetry on every
+part. Supported channels derive from capability evidence. Saved, connectable, session-open,
+receiving actual packets and setup-required are distinct statuses.
 
-`Interrogation` is `(evidence: list[ModalityMatch], bus_map: list[BusEntry], driver_id | None,
-confidence)` — the one output shape, so R5 persists with zero translation and the CTR-08 hardware
-modalities (`BUS_ENUMERATION`, `FIRMWARE_SYMBOL`, `TELEMETRY_CHANNEL`) become load-validated.
-Dynamixel framing and ODrive heartbeat parsing move out of `recognition/passive.py` into their
-plugins; `passive.enumerate_usb_serial` / `identify_port` stay shared and are reused by `enumerate`.
+## Identity, leases and telemetry
 
-## HardwareConfig — the `.solus` document (R5)
+Stable identity is transport-specific, such as `usb:<serial>` or `can:<adapter-binding>`, never
+a tty path or vendor/driver name. A part endpoint is `<device_ref>/<address>`. Stable refs are
+optional at enumeration. Current serial-less devices use `usb:port-<location>` only when a
+USB topology position exists. This identifies a port, not a board; moving it fails resolution,
+and absent/ambiguous bindings cannot be proposed. Cards and sidebar explain “no serial number —
+identity is tied to this USB port; keep it plugged in here”. The shared binding rule is
+`recognition/passive.binding_key`. Opaque observation IDs and attachment generations are the
+later 253/256 selection model; do not claim they are supplied by the current enumeration schema.
+A prior local port hint is not durable reconnect permission. Reliable bindings are re-resolved
+after unplug/replug; ambiguous endpoints need fresh user selection.
 
-One entry per Physical Robot in the Hardware-configs section: `solus_entries` gains
-`SolusEntryKind.CONFIG` and a JSONB `payload` validated by the `HardwareConfig` Pydantic model on
-every write; `physical_robot.attrs.hardware_config_ref` holds the entry id. Parts stay in the graph;
-the entry references them by entity id. This is configuration, not a second store of graph facts.
+The approved later 253/256 lease design requires one runner-owned machine-wide lease for every open path: selected interrogation, raw
+serial, active sessions and reconnect. An active session owns its port and is not interrupted by
+background discovery. Another project sees only generic busy state. Probes have an overall
+deadline and cooperative cancellation; cancellation closes/releases resources before a new
+owner can open them. HTTP abort alone does not stop a blocking worker. Reconnect factory opens
+run inside retry/error handling and re-resolve the current binding each attempt.
 
-```
-schema_version, robot_entity_id,
-identity: {transport, binding, vid, pid, last_seen_path},
-protocol: {driver_id, params: {baud, timeout_s, protocol_version, …}},   ← validated by the
-bus_map: [{protocol, address, part_entity_id, model}],                     driver's param_schema
-parts: {<part_entity_id>: {calibration: {values, mode, source, owner: repo|solus},
-                           limits: {values, provenance},
-                           telemetry: {channels: [{name, unit}]},
-                           firmware: {…},
-                           lifecycle: planned|ordered|received|installed|live}},
-disambiguated_by: user|null
-```
+The existing project-scoped `EntityResolver.resolve(project_id, device_id)` resolves a unique
+validated configuration binding, retaining legacy manual external_ref support. Never rewrite an
+imported external_ref. Ambiguous live mappings resolve to no target/error instead of first-row
+selection. Config/ownership/binding/deletion changes invalidate positive resolver caches. Packet
+shape and `LiveConnection`/`PacketSource` interfaces stay unchanged; unclaimed signals remain
+unresolved. A ping is not a live data packet or permission for motion.
 
-Every leaf is `{value, provenance, source?}` with `provenance ∈ library|repo|user|sol|detected`.
-Layers apply **library → repo → user → detected; later wins; provenance records who won**
-(`sol` marks a value a SOL action wrote through the confirmation gate — it lands with the user's
-confirmation and takes the user layer's slot). Parameters live in config, not code: baud, ids,
-timeouts are values the driver validates, never constants a driver hardcodes.
+## Local sources and reviewed proposals
 
-- Units derive from calibration mode: `degrees → deg`, `range_0_100 → %`, `range_m100_100 → %`,
-  legacy `LINEAR → mm`. Signals are named `<part>.<quantity>` (`shoulder_pan.position`) with the
-  unit in the packet `units` map — never units in names (`telemetry-packet.md` addendum).
-- Repo-owned calibration (`owner: repo`, e.g. lerobot's HF-cache JSON) re-imports on
-  `detect_changes` via a stat fingerprint of `source`; solus-owned edits offer write-back through
-  the confirmation gate. Provenance records the machine-local path it came from.
-- **Lifecycle** is a config edit keyed by the part's entity id: promotion `planned → ordered →
-  received → installed → live` never changes the id or any graph edge.
-- Detected and authored parts carry `origin="manual"` (keeps `editableRobot` rights, keeps
-  connector sweeps off the rows); provenance lives in the config, not in `origin`.
+MAIN stores picker-authorized paths/digests and connection hints only in the authenticated
+project/account's private `~/.solus/projects/<projectId>/hardware.json`. The exact TS/Python
+contract, limits, file modes and corruption/newer-version behavior are in local-state.md.
+Shared `.solus` configuration contains portable source references and verified values. Neither
+cloud API nor model context receives a local path; a remote repo_root is not read authority.
+The local reader canonicalizes the authorized source and verifies bytes against its digest.
+Missing/changed bytes require explicit relinking/review, not automatic calibration replacement.
+Shared references are `source:<UUID>`; MAIN uses the bare UUID in the account/project private
+store. Migrated references can be explicitly relinked through the native picker; selecting a
+known file normally reuses its reference, while historical aliases remain valid. Relinking
+changes private authorization only and preserves stored calibration values and provenance.
+Non-null request `repo_root` is refused before filesystem access, even if a local registry is
+missing. Parser/proposal expansion using verified source bytes remains later 253 work.
 
-## Link suggestions (R5) — precision over recall
+The local API's `DeviceWatcher` diffs lightweight detection at about 1 Hz only while
+subscribed. It opens no ports and publishes full `hardware.devices_changed` lists with
+`LiveHub.publish_local`; no device list travels through Redis or the companion. No local
+runtime means no watcher. The desktop uses one scoped detected-device store for the canvas
+rail and Add panel, discards obsolete generations, and never lets a delayed seed overwrite a
+newer full frame. Unknown, board and protocol evidence remain distinct.
 
-`hardware_suggestions` (`project_id`, `subject_ref`, `candidate_robot_id`, `confidence`,
-`evidence` JSONB of `ModalityMatch`, `status pending|accepted|rejected`). Confidence tiers are the
-CTR-08 bands: bus-enumerated ≤ 0.92, firmware ≤ 0.55, telemetry-shape ≤ 0.30. Two plausible robots
-→ two rows; below threshold → no row; **nothing auto-accepts** (ADR-012). A library-imported robot
-plus a detected device yields one suggestion, never a second robot. Routes:
-`GET /hardware/suggestions?status=`, `POST /hardware/suggestions/{id}/accept|reject`.
+Current proposals use a bounded cache to avoid duplicate interrogation. Confirmation still
+checks present-device identity; a cached proposal is not authority to bind an unplugged device.
+The later generation/revision review design also requires current accepted-address, config,
+source and ownership checks. Model suggestions remain evidence, not user names or accepted
+config choices. Private file parsing and expanded review are not silently enabled by this merge.
 
-## Transport host
+## Save before asynchronous connection
 
-Transports live in `livebench/`, loaded by the local API process through the existing `load_local`
-seam (`app.state.bench_local`, `local-connections.md`). The companion owns no ports and
-`bridge-protocol.md` bans telemetry (and binary framing) on its channel, so "companion-side" is
-not literally possible today. Companion hosting is a later ticket; the seam is preserved — routes,
-`LiveConnection` and the tap contract stay, only the host of `livebench.local` + the pump moves.
-`BenchSessionIn` gains `{provider: "robot", robot_entity_id}`: the session opens from the robot's
-config via the driver registry (`local.open_robot(config)`). Driver-built connections set
-`provider` and implement `aclose()`, the two traps `PacketStreamLiveConnection` leaves open.
+The confirmation transaction saves independent v2 CONFIG entries and, when opening is requested,
+`properties.connection` with `managed_by: local_runtime`, an API-owned `runtime_id`, an attempt
+UUID and status `connecting`.
+The response returns before driver opening. An application-owned coordinator uses fresh scoped
+sessions, current configurations and the private-source reader; it validates attempt, ownership
+and participating versions before opening and accepting completion. Terminal states are
+`connected`, `failed` and `disconnected`; session UUIDs and portable errors accompany them where
+appropriate. State changes use the existing project-scoped `graph.changed` hint.
 
-## Safety
+Stale completion closes its session. Deletion cancels pending work and closes any associated
+session, including acquisitions running in worker threads; shutdown drains the coordinator before
+session manager/hub teardown. Startup resets only metadata matching this API's private persisted
+runtime identity. A lifetime lock prevents another process using that identity concurrently.
+Legacy/unidentified and foreign-runtime metadata remain untouched, as do hardware/configuration.
+Saving never claims streaming: only received packets do.
+Confirmation latency excludes background opening; correlated receipt/render and connection
+measurements are reported separately, with overlap and replug cases included.
 
-Interrogators declare `safety`; the detection loop runs only `passive`, `ping` and `listen` probes
-(a broadcast ping or a read of a heartbeat is safe on every supported bus). Anything that commands
-motion — RBT-04 active identification included — stays behind `request_confirmation` with the
-concrete action shown, regardless of how the request originated (CLAUDE.md §7).
+## Existing implementation seams
 
-## Routes (tier-1 plan `docs/api/hardware.md`, prefix `/projects/{id}`)
+| Area                 | Existing entry points / responsibility                                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Transport            | `livebench/src/livebench/hardware/channel.py`, `usb_serial.py`, `usb_can.py`, `bluetooth.py`, `network.py`: port/channel operations behind the existing seam.                        |
+| Registry and probing | `hardware/registries.py`, `driver.py`, `interrogator.py`, `detection.py`, `repo_config.py` under livebench: shared registries, enumeration, bounded parsing.                         |
+| Plugins              | `livebench/src/livebench/plugins/`: vendor codecs, drivers, interrogators and config parsers; definitions and fixtures may contain vendor specifics.                                 |
+| API state            | `packages/api/src/solus_api/hardware/config.py`, `store.py`, `detect.py`, `hardware_router.py`, `library_router.py`: project-scoped storage and reviewed operations.                 |
+| Manual robots        | `packages/api/src/solus_api/services/physical_robots.py`: atomic real robot/category creation and retention on removal.                                                              |
+| Runtime              | `packages/api/src/solus_api/livebench/sessions.py`, `livebench/src/livebench/local.py`, `hardware/connection.py`: runtime-optional loading, session ownership and config adaptation. |
 
-`GET /hardware/detected` · `POST /hardware/detected/{device_ref}/propose` ·
-`POST /hardware/detected/{device_ref}/confirm` · `GET|PUT /hardware/robots/{robot_id}/config` ·
-`POST /hardware/robots/{robot_id}/parts` (Authored: name, category, specs) ·
-`POST …/parts/{part_id}/lifecycle` · `GET /hardware/library?q=` ·
-`GET /hardware/library/{kind}/{id}` · `POST /hardware/library/platforms/{id}/import` ·
-`POST /hardware/library/parts/{id}/import {robot_id, category}` · suggestions as above. Every
-route: `ProjectCtx`, MEMBER on writes, a cross-tenant test, events emitted on every mutation.
+These are actual existing files, not a mandate to create a parallel detection package. New
+lease/ownership helpers extend these seams with exact file ownership in the execution plan.
+`livebench` is loaded by the local API through `load_local`; the companion does not own ports,
+telemetry never rides its MCP bridge, and cloud ARQ is not a local-device host. A cloud image
+without the local runner returns honest unavailability. A future runner-host move preserves
+these boundaries and requires its own documented decision.
 
-## Generalisation proof (Phase 6)
+## Migration, safety and proof
 
-- **Three machines, one path**: PX4 (recorded UDP), ODrive (recorded CAN) and an Arduino rover
-  (recorded float dump) run enumerate → … → `LiveConnection` from fixtures; a `sys.setprofile`
-  module tracer asserts the set of executed non-plugin modules is identical across the three.
-- **Vendor-hygiene ratchet**: a word-boundary regex over `livebench/hardware`, `solus_api/hardware`,
-  the detection loop, the config schema and the transports (allowlist: `plugins/`, `definitions/`,
-  fixtures), plus a vitest twin over the desktop's shared hardware code — both in existing CI jobs,
-  so a desktop-only or docs-only MR cannot slip a vendor past a Python-only check.
+Separate schema/data revisions preflight all CONFIG history, including deleted owners,
+duplicate subject configs, conflicting embedded part values, invalid references and private
+paths. Preserve existing graph/robot-config IDs; extract independent part-config entries without
+changing part IDs or provenance. Conflicting values are not enabled as limits/calibration.
+Replace shared private paths with opaque references without reading legacy paths or guessing
+their machine. Validate transformed state before enforcing uniqueness; fail an unrepresentable
+v1 downgrade. Reassignment disables stale bindings until reviewed. See storage doc for exact
+constraints and the 24-hour project/user operation ledger.
+
+Interrogation allows declared passive/ping/listen actions only. Motion, flashing, deployment,
+write-back and destructive changes retain concrete existing confirmation. Simulation is a
+separate supported action and never proof of physical safety. No generated driver, per-device
+container, OpenUSD or new simulator is part of this design. All device/document/model content is
+untrusted; existing graph auth, prompt fencing, budgets and tool admission remain authoritative.
+
+Verify tenant isolation, migration/idempotency races, source-safe imported binding, lease
+contention/cancellation, typed recovery, capability honesty and stale scope rejection. Keep the
+existing vendor-hygiene ratchets and three-machine fixture proof (recorded UDP/CAN/serial) green.
+Record real Electron and available LeRobot tests separately from fixtures; unavailable ELEGOO
+is not verified. Measure enumeration/proposal/confirmation/first-packet spans before choosing
+optimizations, and do not infer runtime performance from unit test success.

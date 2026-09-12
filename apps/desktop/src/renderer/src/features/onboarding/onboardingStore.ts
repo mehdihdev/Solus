@@ -81,7 +81,7 @@ export function connectedCount(connections: Record<string, ConnectionState>): nu
   return Object.values(connections).filter((c) => c.phase === 'done').length
 }
 
-/** Whether enough sources are connected to build the context model. */
+/** Whether enough sources are connected to build the workspace. */
 export function canBuildModel(connections: Record<string, ConnectionState>): boolean {
   return connectedCount(connections) >= MIN_SOURCES_TO_BUILD
 }

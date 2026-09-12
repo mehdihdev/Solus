@@ -52,6 +52,26 @@ def error_response(
     return JSONResponse(status_code=status_code, content=jsonable_encoder(body))
 
 
+#: SOLUSDEV-252 review H2: a 422 must never echo a payload. pydantic puts the
+#: PARENT object in `input` for `missing` errors, so one absent field next to a
+#: screenshot used to return megabytes of base64. Short scalars stay — they are
+#: what makes "name: 7" debuggable.
+_MAX_ECHOED_INPUT_CHARS = 256
+
+
+def _redact_input(error: dict[str, Any]) -> dict[str, Any]:
+    """One validation error with its `input` bounded: long strings and any
+    dict/list are replaced by a placeholder; loc/msg/type stay intact."""
+    if "input" not in error:
+        return error
+    value = error["input"]
+    if isinstance(value, dict | list):
+        return {**error, "input": "<redacted>"}
+    if isinstance(value, str) and len(value) > _MAX_ECHOED_INPUT_CHARS:
+        return {**error, "input": f"<redacted: {len(value)} chars>"}
+    return error
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(APIError)
     async def _api_error(_request: Request, exc: APIError) -> JSONResponse:
@@ -63,7 +83,10 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
         return error_response(
-            422, "validation_error", "Request validation failed", list(exc.errors())
+            422,
+            "validation_error",
+            "Request validation failed",
+            [_redact_input(e) for e in exc.errors()],
         )
 
     @app.exception_handler(StarletteHTTPException)

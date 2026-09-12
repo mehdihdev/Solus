@@ -78,6 +78,23 @@ def _k(tokens: int) -> str:
     return f"{max(1, round(tokens / 1000))}K" if tokens >= 1000 else str(tokens)
 
 
+def _resolve_complexity(
+    query: str,
+    complexity: Complexity | None,
+    context: InteractionContext | None,
+    estimate_from: str | None,
+    config: OrchestrationConfig,
+) -> tuple[Complexity, Source]:
+    """explicit -> estimator(estimate_from) -> context default -> estimator(query)."""
+    if complexity is not None:
+        return complexity, "explicit"
+    if estimate_from is not None:
+        return estimate_complexity(estimate_from, config=config.estimator), "estimator"
+    if context is not None:
+        return derive_complexity(context), "context"
+    return estimate_complexity(query, config=config.estimator), "estimator"
+
+
 def resolve_routing(
     query: str,
     *,
@@ -85,18 +102,21 @@ def resolve_routing(
     context: InteractionContext | None = None,
     type: RouteType | None = None,
     attachments: Sequence[AttachmentHint] | None = None,
+    estimate_from: str | None = None,
     config: OrchestrationConfig,
 ) -> ResolvedRouting:
-    """Pure and deterministic: same (inputs, config) -> same ResolvedRouting."""
-    if complexity is not None:
-        resolved_complexity, complexity_source = complexity, "explicit"
-    elif context is not None:
-        resolved_complexity, complexity_source = derive_complexity(context), "context"
-    else:
-        resolved_complexity, complexity_source = (
-            estimate_complexity(query, config=config.estimator),
-            "estimator",
-        )
+    """Pure and deterministic: same (inputs, config) -> same ResolvedRouting.
+
+    `estimate_from` (S1): run the complexity ESTIMATOR on this text instead of
+    `query`, ahead of the context default. A SOL turn hands the gateway a whole
+    fenced conversation as `query` (right for token measurement) but only the
+    person's live message says how hard the question is; the context default
+    (SOL_OPEN_QUESTION -> HARD) would otherwise send every "what is I2C" to the
+    top tier. Still SYSTEM-routed: the window policy escalates rather than refuses.
+    """
+    resolved_complexity, complexity_source = _resolve_complexity(
+        query, complexity, context, estimate_from, config
+    )
     if type is not None:
         resolved_type, type_source = type, "explicit"
     elif context is not None:
@@ -121,7 +141,7 @@ def resolve_routing(
     ) -> ResolvedRouting:
         return ResolvedRouting(
             choice=final,
-            complexity_source=complexity_source,  # type: ignore[arg-type]
+            complexity_source=complexity_source,
             type_source=type_source,  # type: ignore[arg-type]
             tokens_estimate=tokens,
             fits=fits,

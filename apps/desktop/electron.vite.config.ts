@@ -2,7 +2,7 @@ import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import type { PluginOption } from 'vite'
+import { loadEnv, type PluginOption } from 'vite'
 import { assertProdAuthEnv } from './src/renderer/src/lib/prodAuthGuard'
 import { apiOriginForCsp, widenConnectSrc } from './src/renderer/src/lib/cspConnect'
 
@@ -76,6 +76,14 @@ const bundleWorkspaceContracts = externalizeDepsPlugin({ exclude: ['@solus/share
 // reaching a bundle. Do NOT widen envPrefix to '' here; that would ship them to the client.
 const ENV_DIR = resolve(__dirname, '../..')
 
+// Renderer dev-server port. Several worktrees run this app on one machine at once
+// (docs/WORKTREES.md), and Vite's silent fallback to the next free port would hand
+// the API a CORS origin nobody configured. Override with VITE_DEV_PORT (shell or
+// root .env); strictPort makes a busy port a loud failure instead.
+const DEV_PORT =
+  Number(process.env.VITE_DEV_PORT ?? loadEnv('development', ENV_DIR, 'VITE_').VITE_DEV_PORT) ||
+  5173
+
 export default defineConfig({
   main: { envDir: ENV_DIR, plugins: [bundleWorkspaceContracts] },
   preload: { envDir: ENV_DIR, plugins: [bundleWorkspaceContracts] },
@@ -93,6 +101,8 @@ export default defineConfig({
     // pnpm hoists deps (e.g. @fontsource) to the monorepo-root node_modules, which sits above
     // the renderer root — let the dev server serve from there (cwd is apps/desktop → repo root).
     server: {
+      port: DEV_PORT,
+      strictPort: true,
       fs: {
         allow: [resolve('../..')]
       }

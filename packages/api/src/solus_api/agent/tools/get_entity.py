@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import Domain, GraphEntity
 
 GET_ENTITY_DESCRIPTOR = ToolDescriptor(
@@ -77,6 +78,8 @@ def build_get_entity_tool(
     `project_id` here (Solus code), so the model can only reach entities in the project
     the invocation is already scoped to."""
 
+    read_scope = current_scope(project_id)
+
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         entity_id = uuid.UUID(args["entity_id"])  # already validated as a uuid by the registry
         async with session_factory() as session:
@@ -85,6 +88,7 @@ def build_get_entity_tool(
                     GraphEntity.id == entity_id,
                     GraphEntity.project_id == project_id,
                     GraphEntity.deleted_at.is_(None),
+                    read_scope.entity_predicate(),
                     # SOLUSDEV-246 ST2: the workspace layer is not the model's
                     # to read — NOT_FOUND, exactly like an out-of-scope id.
                     GraphEntity.domain != Domain.WORKSPACE,

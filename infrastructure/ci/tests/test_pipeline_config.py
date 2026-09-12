@@ -12,7 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 CONFIG = yaml.safe_load((ROOT / ".gitlab-ci.yml").read_text())
-PYTHON_JOBS = {"lint:python", "typecheck:python", "test:python"}
+PYTHON_JOBS = {"lint:python", "typecheck:python"}
 NODE_JOBS = {"lint:node", "typecheck:node", "test:node"}
 SCAN = {"security:gitleaks"}
 DEPLOY = {"build:api-image", "deploy:staging"}
@@ -141,32 +141,25 @@ def test_python_lint_uses_only_the_lockfile_pinned_ruff_image() -> None:
 
 def test_python_installation_is_locked_and_execution_does_not_resync() -> None:
     assert CONFIG[".python-base"]["before_script"] == ["uv sync --all-packages --locked"]
-    for name in ["typecheck:python", "test:python"]:
-        script = _job(name)["script"]
-        for line in [script] if isinstance(script, str) else script:
-            if line.startswith("uv run "):
-                assert "--no-sync" in shlex.split(line)
+    script = _job("typecheck:python")["script"]
+    for line in [script] if isinstance(script, str) else script:
+        if line.startswith("uv run "):
+            assert "--no-sync" in shlex.split(line)
 
 
-def test_python_suite_is_serial_reports_durations_and_excludes_live_providers() -> None:
-    script = _job("test:python")["script"]
-    command = next(line for line in script if "pytest " in line)
-    args = shlex.split(command)
-    assert "-n" not in args and "--numprocesses" not in args
-    assert args[args.index("-m") + 1] == "not live"
-    assert any(arg.startswith("--durations=") for arg in args)
-    assert any(arg.startswith("--junitxml=") for arg in args)
-    assert _job("test:python")["artifacts"]["when"] == "always"
+def test_python_suite_is_local_only_and_keeps_ci_regression_discovery() -> None:
+    assert "test:python" not in CONFIG
+    for name in CONFIG:
+        if name.startswith(".") or not isinstance(CONFIG[name], dict):
+            continue
+        assert "pytest" not in str(_job(name).get("script", ""))
     with (ROOT / "pyproject.toml").open("rb") as stream:
         project = tomllib.load(stream)
     assert "infrastructure/ci/tests" in project["tool"]["pytest"]["ini_options"]["testpaths"]
 
 
-def test_non_durable_settings_are_limited_to_the_disposable_test_database() -> None:
-    service = _job("test:python")["services"][0]
-    assert service["alias"] == "postgres"
+def test_deployment_keeps_durable_database_settings() -> None:
     for setting in ["fsync=off", "synchronous_commit=off", "full_page_writes=off"]:
-        assert setting in service["command"]
         for name in DEPLOY:
             assert setting not in str(_job(name))
 
@@ -175,8 +168,3 @@ def test_secret_scan_uses_complete_history_for_range_validation() -> None:
     scan = _job("security:gitleaks")
     assert str(scan["variables"]["GIT_DEPTH"]) == "0"
     assert scan["script"] == "sh infrastructure/ci/scan-secrets.sh"
-
-
-def test_python_test_image_installs_git_for_the_repository_fixtures() -> None:
-    install = next(line for line in _job("test:python")["script"] if "apt-get install" in line)
-    assert "git" in shlex.split(install)

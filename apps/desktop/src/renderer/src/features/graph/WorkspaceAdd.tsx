@@ -8,11 +8,14 @@ interface WorkspaceAddProps {
   projectId: string | null
   onSelected: SelectService
   hardware?: React.ReactNode
+  /** A sequence-keyed request (like the navigator's `reveal`) to open the panel on a tab. */
+  openRequest?: { tab: 'service' | 'hardware'; sequence: number }
 }
 export function WorkspaceAdd({
   projectId,
   onSelected,
-  hardware
+  hardware,
+  openRequest
 }: WorkspaceAddProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
@@ -26,6 +29,14 @@ export function WorkspaceAdd({
     if (open && enabled) void project.session.load()
   }, [open, enabled, project.session])
   useAddDismiss(open, anchor, close)
+  // Keyed by sequence, not object identity: a re-render never re-opens a closed panel.
+  const requestedTab = openRequest?.tab
+  const requestSequence = openRequest?.sequence
+  useEffect(() => {
+    if (requestSequence === undefined || !requestedTab) return
+    setTab(requestedTab)
+    setOpen(true)
+  }, [requestSequence, requestedTab])
   return (
     <div className="workspace-add" ref={anchor}>
       <button type="button" aria-expanded={open} disabled={!enabled} onClick={() => setOpen(!open)}>
@@ -46,7 +57,7 @@ export function WorkspaceAdd({
               aria-selected={tab === 'service'}
               onClick={() => setTab('service')}
             >
-              From a service
+              Integrations
             </button>
             <button
               type="button"

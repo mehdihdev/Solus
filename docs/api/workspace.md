@@ -1,4 +1,7 @@
-# Workspace navigation API — SOLUSDEV-242
+# Workspace navigation API
+
+**Last updated:** 2026-09-07. Approved amendments for SOLUSDEV-251/254 extend
+SOLUSDEV-242. Target design; completion reports record implementation status.
 
 Authority: `docs/architecture/workspace-navigation.md`, API.md §2.4, ADR-025/027.
 Additive tier-1 route plan, approved direction from the combined Workspace request.
@@ -34,7 +37,32 @@ snapshot, rendering at most 24 cards per level; it does not increase graph trave
 depth or read from providers. Project detail validates the snapshot on a screen return,
 with a five-minute TTL and explicit invalidation after graph mutations.
 
-Subsequent phases amend this plan before adding node mutation or cache-only surfaces.
+### Approved canvas/layout amendment (SOLUSDEV-254)
+
+Initial generated positions are persisted once. A subsequent import adds only missing real
+entity UUIDs; it does not rewrite earlier defaults. A pending save retains later moved-node
+changes; stale-version recovery combines the user's changed positions with the latest server
+layout only after explicit conflict resolution. Arrange/reset remains a user action. Ordinary
+scroll/pinch/camera state does not call this route until an actual layout move needs saving.
+
+If movable account group headers are implemented, extend the same GET/PUT payload with
+`groups: {<group key>: {x,y}}` (default `{}`, maximum 256), separate from `positions` and under
+the same version. Group keys are server-derived from provider plus proven provider account
+identity, or distinct connection/source fallback where identity is unavailable. Validate every
+key against project-visible source metadata; reject unknown/cross-project groups with 404. They
+are never entity UUIDs and cannot be sent as Focus/entity IDs. Coordinates retain the existing
+finite/range checks. Do not invent graph entities to persist header placement. This extension
+must be reflected in the schema/model migration and generated clients before use.
+
+### Integration display metadata (SOLUSDEV-254)
+
+Existing connection/source responses add optional `account_name: string|null` alongside the
+unchanged account_login/provider external identity. Persist a supplied AccountInfo.name from
+the existing authorized provider response and mirror it to project sources; no extra provider
+request/OAuth scope is implied. Missing names use an honest renderer fallback. Group by proven
+identity, never the name. Owner-only connection catalogs continue to populate Add, while
+project-scoped source metadata provides attached teammate groups without exposing their private
+account-wide listings. Exact source attachment identity/matching remains unchanged.
 
 ## Phase 4 — Physical Robot instances
 
@@ -42,21 +70,23 @@ These implement the previously planned entity mutation paths in API.md §2.4 for
 one supported manual subtype. Generic manual CRUD remains deferred. Existing
 entity serialization and response envelopes apply; no new graph schema is needed.
 
-- `POST /entities`: `{type: "physical_robot", name?: string}` → 201 with the
-  created root entity. An omitted name uses the project's name. Explicit names
-  are trimmed, nonblank and at most 512 characters; unknown fields are rejected.
+- `POST /entities`: `{type: "physical_robot", name: string}` → 201 with the
+  created root entity. Names are required, trimmed, nonblank and at most 512
+  characters; unknown fields are rejected. Project/model names are not defaults.
   Each call atomically creates a new root, seven distinct `robot_category`
   entities, and seven manual `contains` edges. Categories use `category` keys
   `sensors`, `actuators`, `controllers`, `end_effectors`, `power`, `structure`,
   `wiring`, plus `robot_id` in properties. Containers have domain `project`.
-  Root properties contain `hardware_config_ref: null` and `transport_refs: null`;
-  these references cannot yet be supplied or edited by the client.
+  Root references may initially be null. Configurations are created and versioned
+  through the hardware routes; clients cannot write convenience references directly.
 - `PATCH /entities/{entity_id}`: `{name: string}` → updated root entity. Requires
   `If-Match: <integer version>`; names follow the creation validation.
 - `DELETE /entities/{entity_id}`: requires the same `If-Match`; after concrete UI
   confirmation, returns `{deleted_entity_id, retained_part_ids: UUID[]}`. It
   soft-deletes the root, explicitly owned categories and containment edges only.
-  Actual parts, their identity/properties and unrelated relationships survive.
+  Actual parts, their identity/properties, independent CONFIG entry IDs/values/provenance
+  and unrelated relationships survive. Disable stale connection bindings; do not transfer
+  endpoints automatically or recreate retained-part configs with defaults.
 - `GET /entities?orphaned_from_robot=true`: existing paginated entity payload,
   limited to live parts formerly owned through a deleted manual robot/category
   containment edge and not owned by another live robot. This retained evidence
@@ -71,9 +101,13 @@ live project, reread the entity, and compare its version before writes. Missing
 or malformed If-Match returns 422; a stale version returns 409 `conflict` with
 the current version/name. Successful mutations increment the root version.
 
-`PhysicalRobotService.create(project_id, name=None)` is the transaction-scoped
-creation hook for later R2 hardware detection. Every invocation creates an
-instance; it is not a project singleton. It does not call providers or commit.
+`PhysicalRobotService.create` is the transaction-scoped robot/category creation hook used by
+manual and reviewed hardware creation. Every accepted operation creates an independent
+instance with the required supplied name; the outer hardware service handles idempotency.
+It does not call providers or commit. New generic hardware creation, part configuration,
+assignment and unified retained/unassigned reads use [hardware.md](hardware.md) §§1–3. Existing
+robot routes remain compatibility adapters; they cannot restore implicit/default naming or
+robot-owned copies of part config.
 
 Project detail adds `graph_updated_at: ISO timestamp | null`, the greatest graph
 entity/edge modification time including soft-deleted rows. Snapshot validation

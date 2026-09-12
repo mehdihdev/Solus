@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { graphVersionOf } from './graphCache'
+import { graphVersionOf, mergeOptimistic } from './graphCache'
 import type { ProjectDetail } from '../../lib/api/resources'
 
 const DETAIL: ProjectDetail = {
@@ -40,5 +40,36 @@ describe('graphVersionOf', () => {
 
   it('tolerates sources of unknown shape', () => {
     expect(() => graphVersionOf({ ...DETAIL, sources: [null, 3, 'x'] })).not.toThrow()
+  })
+})
+
+describe('mergeOptimistic', () => {
+  const part = (id: string): import('../../lib/api/resources').Entity => ({
+    id,
+    type: 'part',
+    domain: 'mechanical',
+    name: id,
+    source_key: ''
+  })
+  const relations = [{ id: 'r', type: 'contains', from_entity_id: 'a', to_entity_id: 'b' }]
+
+  it('appends what the snapshot lacks and leaves relations untouched', () => {
+    const graph = { entities: [part('a')], relations }
+    const merged = mergeOptimistic(graph, [part('b')])
+    expect(merged.entities.map((e) => e.id)).toEqual(['a', 'b'])
+    expect(merged.relations).toBe(relations)
+  })
+
+  it('dedupes by id — the snapshot wins, and a repeated optimistic id lands once', () => {
+    const snapshot = { ...part('a'), name: 'authoritative' }
+    const graph = { entities: [snapshot], relations }
+    const merged = mergeOptimistic(graph, [part('a'), part('b'), part('b')])
+    expect(merged.entities).toEqual([snapshot, part('b')])
+  })
+
+  it('returns the same graph object when nothing is missing', () => {
+    const graph = { entities: [part('a')], relations }
+    expect(mergeOptimistic(graph, [part('a')])).toBe(graph)
+    expect(mergeOptimistic(graph, [])).toBe(graph)
   })
 })

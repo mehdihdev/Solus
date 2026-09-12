@@ -19,6 +19,7 @@ ingress redaction masks any 40+ char high-entropy string (a 64-hex sha256, a
 """
 
 import hashlib
+import json
 import logging
 import os
 from collections.abc import Iterator
@@ -27,7 +28,7 @@ from typing import IO, Any, TypedDict
 
 from .deps import collect_dependencies
 from .detect import tools_installed
-from .gitremote import git_info
+from .gitremote import GitInfo, git_info
 from .toolmap import HASH_CHUNK_BYTES, MAX_FILES, MAX_HASH_BYTES, SKIP_DIRS, tool_for
 
 logger = logging.getLogger("solus.local.scan")
@@ -98,11 +99,13 @@ def _entry(rel: str, absolute: Path) -> FileEntry | None:
     }
 
 
-def compute_digest(files: list[FileEntry]) -> str:
+def compute_digest(files: list[FileEntry], git: GitInfo | None = None) -> str:
     digest = hashlib.blake2b(digest_size=16)
     for entry in files:
         joined = "/".join(entry["parts"])
         digest.update(f"{joined}:{entry['hash'] or entry['size']}\n".encode())
+    if git is not None:
+        digest.update(json.dumps(git, sort_keys=True, separators=(",", ":")).encode())
     return digest.hexdigest()
 
 
@@ -132,15 +135,16 @@ def _collect(root: Path) -> tuple[list[FileEntry], bool]:
 def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str, Any]:
     """The full §4 `scan_folder` shape for `root`."""
     files, truncated = _collect(root)
+    git = git_info(root)
     dependencies, truncated_dependencies = collect_dependencies(
         root, [entry["parts"] for entry in files]
     )
     return {
         "schema_version": SCHEMA_VERSION,
         "root_name": root.name,
-        "git": git_info(root),
+        "git": git,
         "files": files,
-        "digest": compute_digest(files),
+        "digest": compute_digest(files, git),
         "truncated": truncated,
         "tools_installed": dict(tools) if tools is not None else dict(tools_installed()),
         "dependencies": dependencies,
@@ -151,4 +155,4 @@ def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str
 def folder_digest(root: Path) -> dict[str, Any]:
     """`{digest, truncated}` — the same digest `scan_folder` reports."""
     files, truncated = _collect(root)
-    return {"digest": compute_digest(files), "truncated": truncated}
+    return {"digest": compute_digest(files, git_info(root)), "truncated": truncated}

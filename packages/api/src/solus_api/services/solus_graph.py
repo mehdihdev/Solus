@@ -26,7 +26,7 @@ from solus_api.models import (
 
 SOLUS_KIND = "solus_config"
 DOCUMENT_KIND = "document"
-CONFIG_NODE_KIND = "hardware_config"  # a Physical Robot's HardwareConfig entry (SOLUSDEV-248)
+CONFIG_NODE_KIND = "hardware_config"  # a physical entity's hardware configuration
 ORIGIN = "manual"
 SECTION_LABELS: dict[SolusSection, str] = {
     SolusSection.HARDWARE: "Hardware configs",
@@ -88,10 +88,32 @@ class SolusGraph:
     @classmethod
     async def ensure(cls, session: AsyncSession, project_id: uuid.UUID) -> SolusGraph:
         await lock_project(session, project_id)
+        deleted_config_identity = (
+            select(GraphEntity.id)
+            .where(
+                GraphEntity.id == SolusEntry.entity_id,
+                GraphEntity.project_id == project_id,
+                GraphEntity.kind == CONFIG_NODE_KIND,
+                GraphEntity.domain == Domain.PROJECT,
+                GraphEntity.origin == ORIGIN,
+                GraphEntity.source_id.is_(None),
+                GraphEntity.deleted_at.is_not(None),
+            )
+            .exists()
+        )
         entries = list(
             await session.scalars(
                 select(SolusEntry).where(
-                    SolusEntry.project_id == project_id, SolusEntry.deleted_at.is_(None)
+                    SolusEntry.project_id == project_id,
+                    SolusEntry.deleted_at.is_(None),
+                    # Deleted CONFIG graph identities are history, not candidates
+                    # for navigation repair. Foreign or malformed references still
+                    # reach attach_entry's fail-closed validation below.
+                    or_(
+                        SolusEntry.kind != SolusEntryKind.CONFIG,
+                        SolusEntry.section != SolusSection.HARDWARE,
+                        ~deleted_config_identity,
+                    ),
                 )
             )
         )
@@ -175,7 +197,7 @@ class SolusGraph:
             raise APIError(404, "not_found", "Entry not found")
         if entry.kind == SolusEntryKind.ARTIFACT:
             kind = DOCUMENT_KIND
-        elif entry.kind == SolusEntryKind.CONFIG:
+        elif entry.kind == SolusEntryKind.CONFIG and entry.section == SolusSection.HARDWARE:
             kind = CONFIG_NODE_KIND
         else:
             kind = "solus_error" if entry.section == SolusSection.ERRORS else "solus_note"

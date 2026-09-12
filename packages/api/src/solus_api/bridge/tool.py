@@ -8,6 +8,7 @@ retryable; companion-reported errors carry their (capped, untrusted) message.
 """
 
 import logging
+import shlex
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -15,6 +16,7 @@ from typing import Any
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolError, ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import UNTRUSTED_TEXT_CAP
+from solus_api.bridge.allowlist import supports_dry_run
 from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.bridge.service import dispatch
 
@@ -32,8 +34,44 @@ def _raise_companion_error(tool_name: str, error: ToolError) -> None:
     )
 
 
+def _row(label: str, value: str) -> dict[str, Any]:
+    return {"label": label, "before": None, "after": value}
+
+
+def _plan_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """A companion dry-run plan as consent rows (action-gate.md `DiffRow`).
+
+    Covers both plan shapes the machine server returns: one command
+    (`argv`/`cwd`/`env`) and an ordered multi-step build (`steps`), plus the
+    file a `dockerfile` environment would write. Unknown keys are ignored rather
+    than dumped — a row a person cannot read is not consent.
+    """
+    rows: list[dict[str, Any]] = []
+    if isinstance(plan.get("argv"), list):
+        rows.append(_row("command", shlex.join(str(part) for part in plan["argv"])))
+    for key in ("cwd", "kind", "name", "path", "content"):
+        if isinstance(plan.get(key), str):
+            rows.append(_row(key, plan[key]))
+    env = plan.get("env")
+    # ponytail: of the whole resolved environment only the activated venv is
+    # decision-relevant (a conda activation is already visible in the argv
+    # prefix); render more of it only if an approval ever turns on another var.
+    if isinstance(env, dict) and isinstance(env.get("VIRTUAL_ENV"), str):
+        rows.append(_row("environment", env["VIRTUAL_ENV"]))
+    steps = plan.get("steps")
+    for index, step in enumerate(steps if isinstance(steps, list) else [], start=1):
+        if isinstance(step, list):
+            rows.append(_row(f"step {index}", shlex.join(str(part) for part in step)))
+    return rows
+
+
 class BridgeTool:
     """One allowlisted tool on the requesting user's connected companion."""
+
+    #: Set ONLY for allowlist entries that opt into `dry_run`. It is duck-typed
+    #: by `confirmations._build_preview`, so a tool that cannot plan its own
+    #: change simply has no attribute here and the card shows argument rows.
+    preview: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]]
 
     def __init__(
         self,
@@ -62,6 +100,8 @@ class BridgeTool:
         # ToolException. Runs FIRST — an entitlement refusal must win over
         # "bridge offline" so a blocked user sees the upgrade path.
         self._preflight = preflight
+        if supports_dry_run(descriptor.name):
+            self.preview = self._preview
 
     @property
     def descriptor(self) -> ToolDescriptor:
@@ -85,3 +125,22 @@ class BridgeTool:
         raise ToolException(  # pragma: no cover — the ToolResult invariant forbids this
             f"bridge tool {self._descriptor.name!r} returned an empty result"
         )
+
+    async def _preview(self, args: dict[str, Any]) -> list[dict[str, Any]]:
+        """What this call would ACTUALLY run, from the companion itself.
+
+        The same call down the same session, with one flag: the machine tools
+        answer `dry_run: true` with the resolved plan and execute nothing. Only
+        the companion can resolve it — the argv gains a `conda run -n <env>`
+        prefix, an install resolves an interpreter the caller never named, and
+        a create_environment is several commands. Argument rows show none of
+        that, so the person was approving something other than what would run.
+
+        Raising is the documented degrade path (`_build_preview` catches and
+        falls back to argument rows): a preview that fails must never make the
+        action unapprovable.
+        """
+        plan = await self.invoke({**args, "dry_run": True})
+        # `dry_run: false` coming back means it RAN — an execution result, not a
+        # plan. Render nothing rather than pass it off as a preview.
+        return _plan_rows(plan) if plan.get("dry_run") is True else []

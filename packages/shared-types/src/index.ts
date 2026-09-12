@@ -160,6 +160,19 @@ export {
 /** Fixture typing support — see src/json.ts. */
 export type { JsonShapeOf } from "./json";
 
+// ADR-034, SOLUSDEV-251 — private hardware source references and port hints.
+export {
+  HARDWARE_LOCAL_STATE_SCHEMA_VERSION,
+  HARDWARE_LOCAL_STATE_FILENAME,
+  HARDWARE_LOCAL_STATE_MAX_BYTES,
+  emptyHardwareLocalState,
+  parseHardwareLocalState,
+  type HardwareLocalSource,
+  type HardwareLocalBinding,
+  type HardwareLocalAccount,
+  type HardwareLocalState,
+} from "./hardware-local-state";
+
 // SOLUSDEV-235 (ADR-035) — the extension.toml manifest. docs/contracts/extension-manifest.md
 export {
   BACKEND_FIELDS,

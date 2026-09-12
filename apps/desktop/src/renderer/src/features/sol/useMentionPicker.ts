@@ -17,6 +17,7 @@ import {
   type PickedMention
 } from './mentionToken'
 import { useMentionSearch } from './useMentionSearch'
+import { useSourceViewVersion } from '../graph/sourceViewEvents'
 
 export interface MentionPicker {
   listOpen: boolean
@@ -41,11 +42,22 @@ export function useMentionPicker(
   input: string,
   setInput: (text: string) => void
 ): MentionPicker {
+  const viewVersion = useSourceViewVersion(projectId)
   const [caret, setCaret] = useState(0)
   const [picked, setPicked] = useState<readonly PickedMention[]>([])
   const [highlight, setHighlight] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const [pickedProject, setPickedProject] = useState(projectId)
+  const [pickedView, setPickedView] = useState(viewVersion)
+  if (pickedProject !== projectId || pickedView !== viewVersion) {
+    setPickedProject(projectId)
+    setPickedView(viewVersion)
+    setPicked([])
+    setHighlight(0)
+    setDismissed(false)
+    setCaret(0)
+  }
 
   const token = activeMentionToken(input, caret)
   const results = useMentionSearch(projectId, token?.query ?? null)

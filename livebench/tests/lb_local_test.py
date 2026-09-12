@@ -192,3 +192,49 @@ async def test_open_mujoco_compile_errors_are_sanitized() -> None:
     # Fixed message: the compiler's own text (which can leak host details for
     # probing inputs) is logged, never returned.
     assert str(excinfo.value) == "invalid MuJoCo model XML (compile failed)"
+
+
+# ── port-position binding (SOLUSDEV-250 Phase 2: serial-less devices) ───────────
+
+NO_SERIAL_AT_PORT = identify_port(
+    device="/dev/ttyUSB3", vid=0x1A86, pid=0x7523, serial=None, location="3-1.2"
+)
+
+
+def test_a_serial_less_device_with_a_location_is_not_ambiguous() -> None:
+    devices = list_devices(identities=[NO_SERIAL_AT_PORT, NO_SERIAL])
+    flags = {d.identity.device: d.ambiguous for d in devices}
+    assert flags["/dev/ttyUSB3"] is False and flags["/dev/ttyUSB0"] is True
+
+
+def test_two_serial_less_devices_on_one_location_are_ambiguous() -> None:
+    twin = replace(NO_SERIAL_AT_PORT, device="/dev/ttyUSB4")
+    assert all(d.ambiguous for d in list_devices(identities=[NO_SERIAL_AT_PORT, twin]))
+
+
+def test_resolve_by_port_binding_returns_the_device_path() -> None:
+    assert resolve_serial_device("port-3-1.2", identities=[NO_SERIAL_AT_PORT, TEENSY]) == (
+        "/dev/ttyUSB3"
+    )
+
+
+def test_resolve_by_port_binding_fails_closed_when_moved_or_duplicated() -> None:
+    with pytest.raises(DeviceNotFoundError):
+        resolve_serial_device("port-3-1.2", identities=[NO_SERIAL, TEENSY])
+    twin = replace(NO_SERIAL_AT_PORT, device="/dev/ttyUSB4")
+    with pytest.raises(AmbiguousDeviceError):
+        resolve_serial_device("port-3-1.2", identities=[NO_SERIAL_AT_PORT, twin])
+
+
+def test_a_port_binding_refuses_a_substitute_device_with_another_vid_pid() -> None:
+    substitute = replace(NO_SERIAL_AT_PORT, vid=0x2341, pid=0x0043)
+    with pytest.raises(DeviceNotFoundError):
+        resolve_serial_device("port-3-1.2", identities=[substitute, TEENSY], vid=0x1A86, pid=0x7523)
+    assert (
+        resolve_serial_device(
+            "port-3-1.2", identities=[NO_SERIAL_AT_PORT, TEENSY], vid=0x1A86, pid=0x7523
+        )
+        == "/dev/ttyUSB3"
+    )
+    # no vid/pid from the caller: today's behaviour, the port alone decides
+    assert resolve_serial_device("port-3-1.2", identities=[substitute, TEENSY]) == "/dev/ttyUSB3"

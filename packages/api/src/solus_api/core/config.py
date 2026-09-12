@@ -248,9 +248,14 @@ class Settings(BaseSettings):
     # server-side file read keyed off a request body is not a feature (§7).
     bench_data_root: str | None = None
     bridge_control_frame_max_bytes: int = 16_384
-    # SOLUSDEV-249: the hello inventory (every advertised tool's schema) needs
-    # more room than a status/ping frame — bounded at the tool_call size.
-    bridge_hello_frame_max_bytes: int = 131_072
+    #: `hello` alone is sized apart from the other control frames. It carries
+    #: the FULL tool inventory — every advertised tool's JSON schema, for every
+    #: running fork — so it grows with the number of vendored integrations, not
+    #: with anything a caller sends. Two forks plus the built-in `machine`
+    #: server measured 22 KB live (SOLUSDEV-252), and under the 16 KB control
+    #: cap that read as `expected_hello` → close 4400 "update required": the
+    #: bridge refused every real companion and blamed the protocol version.
+    bridge_hello_frame_max_bytes: int = 262_144
     bridge_tool_call_max_bytes: int = 262_144
     bridge_tool_result_max_bytes: int = 1_048_576
     bridge_msg_rate_per_second: float = 20.0

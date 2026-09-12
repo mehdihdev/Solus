@@ -31,4 +31,18 @@ export class NodeTypeRegistry {
   }
 }
 
-export const NODE_TYPES = new NodeTypeRegistry()
+const LOCAL_FOLDER: NodeTypeDefinition = {
+  children: (entity, graph) => [
+    ...CONTAINMENT.children(entity, graph),
+    ...(graph.outgoing.get(entity.id) ?? []).filter(
+      (edge) =>
+        edge.type === 'requires' &&
+        graph.entities.get(edge.to_entity_id)?.type === 'python_requirement'
+    )
+  ]
+}
+
+export const NODE_TYPES = new NodeTypeRegistry({
+  local_clone: LOCAL_FOLDER,
+  local_folder: LOCAL_FOLDER
+})

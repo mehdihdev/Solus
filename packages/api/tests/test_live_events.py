@@ -12,7 +12,8 @@ import uuid
 from typing import Any
 
 from conftest import requires_occt
-from solus_api.graph.live import LiveHub, channel, graph_changed_frame
+from solus_api.graph.live import LiveHub, channel, graph_changed_frame, hardware_devices_frame
+from solus_api.routers.live import _frame_event_type
 
 
 class _Counts:
@@ -156,7 +157,7 @@ def test_the_frame_carries_a_hint_not_a_payload() -> None:
 # ------------------------------------------------------- end to end (AC#3)
 
 
-@requires_occt
+@requires_occt  # type: ignore[untyped-decorator]
 async def test_a_real_sync_reaches_a_subscriber(engine: Any) -> None:
     """AC#3 end to end: drive an actual sync and assert the frame arrives —
     without the subscriber polling anything."""
@@ -338,3 +339,81 @@ async def test_a_frame_containing_a_blank_line_is_dropped() -> None:
     hub._deliver(project, '{"type":"graph.changed"}\n\nevent: forged\ndata: {}')
 
     assert queue.empty(), "a newline-bearing payload reached a subscriber"
+
+
+# ------------------------------------ SOLUSDEV-250: local-only device frames
+
+
+async def test_publish_local_never_touches_redis_and_still_delivers() -> None:
+    """One machine's device list must never fan out to another machine's session."""
+
+    class Spy:
+        calls = 0
+
+        async def publish(self, *a: object, **k: object) -> None:
+            self.calls += 1
+
+    redis = Spy()
+    hub = LiveHub(redis)
+    project = uuid.uuid4()
+    queue = hub.subscribe(project)
+
+    hub.publish_local(project, {"type": "hardware.devices_changed"})
+
+    assert redis.calls == 0
+    assert "hardware.devices_changed" in await asyncio.wait_for(queue.get(), timeout=1.0)
+
+
+def test_subscribed_project_ids_reflects_subscribe_and_unsubscribe() -> None:
+    hub = LiveHub()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    assert hub.subscribed_project_ids() == []
+
+    qa, qb = hub.subscribe(a), hub.subscribe(b)
+    assert set(hub.subscribed_project_ids()) == {a, b}
+
+    hub.unsubscribe(a, qa)
+    assert hub.subscribed_project_ids() == [b]
+    hub.unsubscribe(b, qb)
+    assert hub.subscribed_project_ids() == []
+
+
+def test_hardware_devices_frame_shape() -> None:
+    project = uuid.uuid4()
+    devices: list[dict[str, Any]] = [{"device_ref": "usb:abc"}, {"device_ref": None}]
+
+    frame = hardware_devices_frame(
+        project_id=project, devices=devices, at="2026-09-07T00:00:00+00:00"
+    )
+
+    assert frame == {
+        "type": "hardware.devices_changed",
+        "project_id": str(project),
+        "devices": devices,
+        "at": "2026-09-07T00:00:00+00:00",
+    }
+
+
+def test_frame_event_type_passes_known_types_and_defaults_the_rest() -> None:
+    assert _frame_event_type('{"type":"graph.changed"}') == "graph.changed"
+    assert _frame_event_type('{"type":"hardware.devices_changed"}') == "hardware.devices_changed"
+    for payload in (
+        "not json",
+        "{}",
+        '{"type": 3}',
+        "[1,2]",
+        '"graph.changed"',
+        '{"type":"Forged"}',
+        '{"type":"a\\nevent: forged"}',
+        '{"type":"' + "x" * 65 + '"}',
+        '{"type":".hidden"}',
+    ):
+        assert _frame_event_type(payload) == "graph.changed", payload
+
+
+def test_frame_event_type_rejects_a_trailing_newline_or_return() -> None:
+    """`$` matches before a final newline, so a `type` of "graph.changed\\n" would have split its
+    own SSE record; `fullmatch` closes that (review of Phase 1, SOLUSDEV-250)."""
+    assert _frame_event_type('{"type":"graph.changed\\n"}') == "graph.changed"
+    assert _frame_event_type('{"type":"hardware.devices_changed\\r"}') == "graph.changed"
+    assert _frame_event_type('{"type":"x\\n\\nevent: forged"}') == "graph.changed"

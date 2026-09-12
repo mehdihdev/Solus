@@ -196,10 +196,13 @@ async def _await_hello(ws: WebSocket, settings: Settings) -> HelloData:
         raise _CloseError(CLOSE_UNSUPPORTED_VERSION, "hello_timeout", "expected hello") from exc
     frame = parse_frame(
         raw,
-        control_cap=settings.bridge_control_frame_max_bytes,
+        # The inventory, not a caller's payload — see `bridge_hello_frame_max_bytes`.
+        control_cap=settings.bridge_hello_frame_max_bytes,
         tool_result_cap=settings.bridge_tool_result_max_bytes,
         hello_cap=settings.bridge_hello_frame_max_bytes,
     )
+    if isinstance(frame, FrameViolation) and frame.kind == "oversize":
+        raise _CloseError(CLOSE_OVERSIZE, "oversize_hello", frame.reason)
     if not (isinstance(frame, InboundFrame) and isinstance(frame.payload, HelloData)):
         raise _CloseError(CLOSE_UNSUPPORTED_VERSION, "expected_hello", "first frame must be hello")
     if frame.payload.protocol_version != PROTOCOL_VERSION:

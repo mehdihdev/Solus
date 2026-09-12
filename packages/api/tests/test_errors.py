@@ -57,3 +57,61 @@ async def test_uncaught_exception_returns_enveloped_500(app: FastAPI) -> None:
     assert body["error"]["code"] == "internal_error"
     assert body["error"]["message"] == "Internal server error"
     assert "details" in body["error"]
+
+
+# ------------------------------------------------ S3 review H2: 422 never echoes the input
+
+
+def test_redact_input_keeps_short_scalars_and_hides_long_or_structured_values() -> None:
+    from solus_api.core.errors import _redact_input
+
+    assert _redact_input({"loc": ["body", "n"], "msg": "x", "input": "short"})["input"] == "short"
+    assert _redact_input({"loc": [], "msg": "x", "input": 7})["input"] == 7
+    assert _redact_input({"loc": [], "msg": "x", "input": "a" * 257})["input"] == (
+        "<redacted: 257 chars>"
+    )
+    assert _redact_input({"loc": [], "msg": "x", "input": {"data": "a" * 5}})["input"] == (
+        "<redacted>"
+    )
+    assert _redact_input({"loc": [], "msg": "x", "input": [1, 2]})["input"] == "<redacted>"
+    assert _redact_input({"loc": ["body"], "msg": "x"}) == {"loc": ["body"], "msg": "x"}
+
+
+async def test_a_sibling_field_failure_does_not_echo_the_screenshot(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """pydantic sets `input` to the PARENT object for `missing` errors, so a
+    missing `content` next to a screenshot used to return the whole base64
+    payload in the 422 body."""
+    from conftest import create_project, create_team, me
+
+    await me(client, alice_headers)
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    convo = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations",
+        json={"title": "t"},
+        headers=alice_headers,
+    )
+    data = "A" * 5000
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo.json()['data']['id']}/messages",
+        json={
+            "screenshot": {"media_type": "image/png", "data": data, "width": 1, "height": 1},
+        },
+        headers=alice_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert data not in resp.text
+    [detail] = resp.json()["error"]["details"]
+    assert detail["loc"] == ["body", "content"] and detail["type"] == "missing"
+    assert detail["input"] == "<redacted>"
+
+
+async def test_a_short_field_failure_still_names_loc_and_msg(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    resp = await client.post("/api/v1/teams", json={"name": 7}, headers=alice_headers)
+    assert resp.status_code == 422
+    [detail] = resp.json()["error"]["details"]
+    assert detail["loc"] == ["body", "name"] and detail["msg"] and detail["input"] == 7

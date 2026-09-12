@@ -28,7 +28,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Final
@@ -37,6 +39,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.agent.errors_filing import file_tool_error
 from solus_api.agent.tools.exec import run_tool
 from solus_api.agent.tools.knowledge import record_write_outcome
 from solus_api.agent.tools.registry import ToolRegistry
@@ -112,6 +115,11 @@ def _summarize(descriptor: ToolDescriptor, args: dict[str, Any]) -> str:
     return text[:_SUMMARY_CAP]
 
 
+#: Whitespace that would break the row in two (or pad text off-screen).
+_CONTROL_WHITESPACE = re.compile(r"\s")
+_RUNS = re.compile(r" {2,}")
+
+
 def _single_line(value: object, cap: int) -> str:
     """A consent-card field, stripped to printable characters and capped.
 
@@ -125,8 +133,15 @@ def _single_line(value: object, cap: int) -> str:
     reverse its rendering with U+202E. Capping length stops neither: `str.isprintable`
     is False for control characters, bidi overrides and zero-width joiners, and
     True for the ASCII space, which is exactly the distinction wanted.
+
+    Line breaks collapse to ONE SPACE rather than vanishing. Deleting them fused
+    the lines of a file the person was approving into words nobody wrote — a
+    Dockerfile preview read `FROM python:3.12-slimWORKDIR /app` (SOLUSDEV-252,
+    live) — which is a misrepresentation of the change, not a defence against
+    one. The row still cannot become two rows, so the forgery is still closed.
     """
-    return "".join(ch for ch in str(value) if ch.isprintable())[:cap]
+    spaced = _CONTROL_WHITESPACE.sub(" ", str(value))
+    return _RUNS.sub(" ", "".join(ch for ch in spaced if ch.isprintable()))[:cap].strip()
 
 
 async def _build_preview(tool: Any, args: dict[str, Any]) -> list[dict[str, Any]]:
@@ -394,30 +409,22 @@ async def decide_confirmation(
     await _feed_back_outcome(
         session, tool_name, result, user_id=user_id, team_id=team_id, project_id=project_id
     )
-    await _file_failure(session, tool_name, result, user_id=user_id, project_id=project_id)
-    return result
-
-
-#: Confirmed commands whose non-zero exit is a project error worth filing (S5).
-_FILED_COMMAND_TOOLS: Final = frozenset({"code.run", "code.test"})
-_ERROR_STDERR_CAP: Final = 3000
-
-
-def failure_entry_text(tool: str, value: dict[str, Any]) -> str | None:
-    """The Error logging entry for a failed confirmed command, or None when the
-    result is not a failure (exit 0, a refusal with no exit, a non-command)."""
-    exit_code = value.get("exit_code")
-    if not isinstance(exit_code, int) or exit_code == 0:
-        return None
-    argv = value.get("argv")
-    command = (
-        " ".join(str(a) for a in argv)
-        if isinstance(argv, list) and all(isinstance(a, str) for a in argv)
-        else tool
+    # S5 Error logging (sol-artifacts.md §4). THIS is where a gated command,
+    # install or flash actually runs — the turn only parked it, so the runner's
+    # post-dispatch hook cannot see this execution at all and filed nothing.
+    # `executed=True` is a fact, not an inference: run_tool just returned.
+    # The caller's session is reused because the decide route owns the only one;
+    # `file_tool_error` rolls it back rather than poisoning it if filing fails.
+    await file_tool_error(
+        lambda: nullcontext(session),
+        project_id=project_id,
+        user_id=user_id,
+        call=stored,
+        result=result,
+        descriptor=descriptor,
+        executed=True,
     )
-    tail = output_tail(value, _ERROR_STDERR_CAP)
-    text = f"{command} exited {exit_code}"
-    return f"{text}\n\n{tail}" if tail else text
+    return result
 
 
 def output_tail(value: dict[str, Any], cap: int) -> str:
@@ -462,40 +469,6 @@ def command_outcome_text(value: dict[str, Any]) -> str | None:
         return "; the command exited 0"
     tail = output_tail(value, _OUTCOME_TAIL_CAP)
     return f"; the command exited {exit_code}" + (f" — output tail: {tail}" if tail else "")
-
-
-async def _file_failure(
-    session: AsyncSession,
-    tool_name: str,
-    result: ToolResult,
-    *,
-    user_id: uuid.UUID,
-    project_id: uuid.UUID,
-) -> None:
-    """SOLUSDEV-250 (S5): a confirmed `code.run`/`code.test` that exited non-zero
-    is filed as ONE entry in the project's `.solus` Error logging section. Best
-    effort, after the fact; never alters the result."""
-    if tool_name not in _FILED_COMMAND_TOOLS or not result.ok:
-        return
-    value = result.value if isinstance(result.value, dict) else {}
-    text = failure_entry_text(tool_name, value)
-    if text is None:
-        return
-    try:
-        from solus_api.models import SolusSection
-        from solus_api.services.solus_config import add_text_entry
-
-        await add_text_entry(
-            session, project_id, SolusSection.ERRORS, text, author="sol", created_by=user_id
-        )
-        await session.commit()
-        logger.info("filed a failed %s into Error logging", tool_name)
-    except Exception:  # noqa: BLE001 — filing never fails the action that ran
-        logger.warning("could not file the failed %s into Error logging", tool_name, exc_info=True)
-        try:
-            await session.rollback()
-        except Exception:  # noqa: BLE001
-            logger.warning("session rollback after error filing also failed")
 
 
 async def _feed_back_outcome(

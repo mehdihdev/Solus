@@ -36,6 +36,7 @@ from sqlalchemy.orm import InstrumentedAttribute
 from solus_api.agent.interfaces import ErrorHit, RagHit, RetrievalFilter
 from solus_api.corpus import retrieval as corpus_retrieval
 from solus_api.fingerprint.contract import SourceRef
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import EMBEDDING_DIM, Domain, ErrorSolution, GraphEntity
 
 if TYPE_CHECKING:
@@ -106,6 +107,7 @@ def _entity_scope(project_id: UUID, domains: list[Domain] | None) -> list[Column
     scope: list[ColumnElement[bool]] = [
         GraphEntity.project_id == project_id,  # IN-QUERY tenant scoping — the invariant
         GraphEntity.deleted_at.is_(None),
+        current_scope(project_id).entity_predicate(),
         # SOLUSDEV-246 ST2: the workspace layer is never retrievable as context,
         # whatever `domains` says.
         GraphEntity.domain != Domain.WORKSPACE,

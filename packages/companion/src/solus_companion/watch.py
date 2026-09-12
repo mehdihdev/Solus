@@ -54,28 +54,141 @@ DESIGN_SUFFIXES = frozenset(
 MAX_FILES = 2000
 
 
+SOURCE_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".ino",
+        ".c",
+        ".h",
+        ".cpp",
+        ".hpp",
+        ".rs",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".step",
+        ".stp",
+        ".sldprt",
+        ".sldasm",
+        ".iges",
+        ".igs",
+        ".f3d",
+    }
+)
+DEPENDENCY_NAMES = frozenset(
+    {
+        "pyproject.toml",
+        "environment.yml",
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "cargo.toml",
+        "cargo.lock",
+        "uv.lock",
+    }
+)
+SKIP_DIRS = frozenset(
+    {".git", "node_modules", ".venv", "venv", "__pycache__", "build", "dist", ARTIFACT_DIR_NAME}
+)
+MAX_ENTRIES = 10_000
+
+
+def _bounded_files(root: Path) -> Iterable[Path]:
+    """Bound inspected entries, including irrelevant files and directories."""
+    pending = [root]
+    remaining = MAX_ENTRIES
+    while pending and remaining > 0:
+        current = pending.pop()
+        children: list[Path] = []
+        with os.scandir(current) as entries:
+            for entry in entries:
+                remaining -= 1
+                if entry.is_symlink():
+                    pass
+                elif entry.is_dir(follow_symlinks=False):
+                    if entry.name not in SKIP_DIRS:
+                        children.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    yield Path(entry.path)
+                if remaining <= 0:
+                    break
+        pending.extend(sorted(children, reverse=True))
+
+
+def _pointer(path: Path) -> str | None:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+        return None
+    with path.open("rb") as handle:
+        data = handle.read(4097)
+    return data.decode("utf-8") if len(data) <= 4096 else None
+
+
+def _git_locations(root: Path) -> tuple[Path, Path] | None:
+    """Resolve only bounded worktree pointers within the workspace or home."""
+    dotgit = root / ".git"
+    if dotgit.is_symlink():
+        return None
+    gitdir = dotgit
+    if dotgit.is_file():
+        pointer = _pointer(dotgit)
+        if not pointer or not pointer.startswith("gitdir:"):
+            return None
+        gitdir = (root / pointer.split(":", 1)[1].strip()).resolve()
+    home = Path.home().resolve()
+    if not (gitdir.is_relative_to(root) or gitdir.is_relative_to(home)):
+        return None
+    if not gitdir.is_dir():
+        return None
+    common = gitdir
+    pointer = _pointer(gitdir / "commondir")
+    if pointer:
+        common = (gitdir / pointer.strip()).resolve()
+    if not (common.is_relative_to(root) or common.is_relative_to(home)):
+        return None
+    return gitdir, common
+
+
+def _git_files(root: Path) -> Iterable[Path]:
+    """Observe metadata only; never objects, logs, hooks or remote credentials."""
+    dotgit = root / ".git"
+    if dotgit.is_file() and not dotgit.is_symlink():
+        yield dotgit
+    locations = _git_locations(root)
+    if locations is None:
+        return
+    gitdir, common = locations
+    for path in (gitdir / "HEAD", gitdir / "commondir", common / "config", common / "packed-refs"):
+        if not any(part.is_symlink() for part in (path, *path.parents)) and path.is_file():
+            yield path
+    refs = common / "refs"
+    if refs.is_dir() and not refs.is_symlink():
+        yield from _bounded_files(refs)
+
+
 def design_files(root: Path) -> Iterable[Path]:
     seen = 0
-    for path in sorted(root.rglob("*")):
+    for path in _bounded_files(root):
+        name = path.name.lower()
+        if not (
+            path.suffix.lower() in DESIGN_SUFFIXES | SOURCE_SUFFIXES
+            or name in DEPENDENCY_NAMES
+            or (name.startswith("requirements") and name.endswith(".txt"))
+        ):
+            continue
+        yield path
+        seen += 1
         if seen >= MAX_FILES:
             logger.warning("workspace fingerprint truncated at %d files", MAX_FILES)
             return
-        if ARTIFACT_DIR_NAME in path.parts:
-            continue
-        if path.suffix.lower() not in DESIGN_SUFFIXES:
-            continue
-        if not path.is_file():
-            continue
-        seen += 1
-        yield path
 
 
 def fingerprint(root: Path | None) -> str:
     """One digest over (relative path, size, mtime_ns) of every design file.
 
-    `stat()` only — never opens a file, so it costs the same on a 2 MB schematic
-    as on an empty one, and cannot become a channel for file CONTENT to reach a
-    frame.
+    Saved source/design files and Git metadata are stat-only; the two worktree
+    pointer files alone are read (at most 4 KiB each) to locate metadata. No file
+    contents enter the payload-free change frame.
 
     Returns "" for CANNOT OBSERVE (no workspace, not a directory, unreadable),
     deliberately distinct from the digest of an empty workspace. Same principle
@@ -86,14 +199,15 @@ def fingerprint(root: Path | None) -> str:
         return ""
     digest = hashlib.blake2b(digest_size=16)
     try:
-        for path in design_files(root):
+        root = root.resolve()
+        for index, path in enumerate(sorted((*design_files(root), *_git_files(root)))):
             try:
                 stat = path.stat()
             except OSError:
                 continue
-            rel = path.relative_to(root).as_posix()
+            rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else f"git:{index}"
             digest.update(f"{rel}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
-    except OSError:
+    except (OSError, ValueError, RuntimeError):
         logger.warning("could not read workspace %s for fingerprinting", root)
         return ""
     return digest.hexdigest()

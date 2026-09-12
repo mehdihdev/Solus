@@ -60,3 +60,37 @@ await scan_project(session, project_id, embed=embed_one)
   merge).
 - Backfill job for existing canonical rows (one-off ARQ task once embed() exists).
 - Embedding refresh on canonical-text change (needs the text hash stored to diff).
+
+## Shared provider retry policy (SOLUSDEV-260)
+
+Streaming and embeddings share `retry_transient` and the process-wide provider
+circuit breaker. OpenAI, Anthropic and Google SDKs perform exactly one attempt;
+only the gateway retries, up to the configured total attempt limit. Google uses
+an explicitly owned HTTPX client to avoid the optional aiohttp transport's
+independent reconnect retry; transport errors are normalized and the client
+closes on success, failure or cancellation. Streaming
+retries stop once any output has been delivered, preserving tool and billing
+semantics. Model routing, output budgets, spending gates and the per-user
+frequency cap remain unchanged; a provider account's RPM/TPM tier is a separate
+limit and does not replace the per-user abuse cap.
+
+- Transient HTTP 408/429/5xx, supported connection failures and recognized
+  OpenAI stream overload codes are retryable. Authentication, model permission,
+  invalid requests, OpenAI billing/quota failures and Anthropic's structured
+  `enforced_spend_limit_reached` are permanent failures.
+- `Retry-After` seconds or HTTP date and Google's `google.rpc.RetryInfo` duration
+  are minimum waits. Without valid timing metadata, exponential backoff adds
+  random jitter. Each interactive retry wait is bounded to 30 seconds: a longer
+  provider deadline immediately defers the call, never retries before that
+  deadline, and remains available as safe exception metadata.
+- Provider deadlines are shared within an API/worker process. New calls fail
+  fast during the cooldown, including after an unrelated in-flight call
+  succeeds. A waiting retry cannot override a newer provider deadline. This is
+  process-local resilience, not a distributed account-wide RPM/TPM allocator.
+- Errors expose allow-listed codes and numeric retry timing, never raw provider
+  bodies or SDK exception chains. Embedding permission failures degrade to the
+  existing no-signal behavior; reasoning models cannot substitute for vectors.
+
+Timing references: [OpenAI rate limits](https://developers.openai.com/api/docs/guides/rate-limits),
+[Anthropic rate limits](https://platform.claude.com/docs/en/api/rate-limits),
+[Google RetryInfo](https://cloud.google.com/java/docs/reference/proto-google-common-protos/latest/com.google.rpc.RetryInfo).

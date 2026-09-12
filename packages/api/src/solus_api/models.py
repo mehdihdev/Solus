@@ -877,7 +877,21 @@ class SolusEntry(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     `document` graph identity and the retained `artifacts` row."""
 
     __tablename__ = "solus_entries"
-    __table_args__ = (Index("ix_solus_entries_project_section", "project_id", "section"),)
+    __table_args__ = (
+        Index("ix_solus_entries_project_section", "project_id", "section"),
+        Index(
+            "uq_solus_config_subject_live",
+            "project_id",
+            "configured_entity_id",
+            unique=True,
+            postgresql_where=text("kind = 'config' AND deleted_at IS NULL"),
+        ),
+        CheckConstraint(
+            "config_version >= 0 AND (kind = 'config' OR "
+            "(configured_entity_id IS NULL AND config_version = 0))",
+            name="ck_solus_config_subject",
+        ),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
@@ -899,6 +913,33 @@ class SolusEntry(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # CONFIG only: the HardwareConfig document, validated by its Pydantic model on every
     # write (solus_api.hardware.config) — never free-form JSON (ADR-034 amendment).
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+
+    configured_entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("graph_entity.id", ondelete="RESTRICT"), default=None
+    )
+    config_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class HardwareOperation(UuidPkMixin, Base):
+    """A reviewed hardware write and its saved result; never a transient connection result."""
+
+    __tablename__ = "hardware_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "user_id", "idempotency_key", name="uq_hardware_operation_scope"
+        ),
+        CheckConstraint(
+            "octet_length(response::text) <= 65536", name="ck_hardware_operation_response_size"
+        ),
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    idempotency_key: Mapped[uuid.UUID] = mapped_column(Uuid)
+    operation: Mapped[str] = mapped_column(String(64))
+    payload_digest: Mapped[str] = mapped_column(String(64))
+    response: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class SuggestionStatus(enum.StrEnum):
@@ -1059,6 +1100,10 @@ class Source(UuidPkMixin, TimestampMixin, Base):
 
     __tablename__ = "sources"
 
+    revision_base_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), default=None, index=True
+    )
+
     connection_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("account_connections.id", ondelete="SET NULL"), default=None, index=True
     )
@@ -1083,6 +1128,51 @@ class Source(UuidPkMixin, TimestampMixin, Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     last_error: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
+
+
+class SourceRevision(UuidPkMixin, TimestampMixin, Base):
+    """An immutable acquired commit graph, shared only within its base source."""
+
+    __tablename__ = "source_revisions"
+    __table_args__ = (UniqueConstraint("base_source_id", "commit_id"),)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    base_source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), index=True
+    )
+    materialized_source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), unique=True
+    )
+    commit_id: Mapped[str] = mapped_column(String(64))
+    branch: Mapped[str] = mapped_column(String(255))
+
+
+class SourceViewSelection(UuidPkMixin, TimestampMixin, Base):
+    """A caller's active view plus a replaceable acquisition request."""
+
+    __tablename__ = "source_view_selections"
+    __table_args__ = (
+        UniqueConstraint("user_id", "base_source_id"),
+        CheckConstraint("status IN ('pending', 'ready', 'failed')", name="ck_source_view_status"),
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    base_source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), index=True
+    )
+    active_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("source_revisions.id", ondelete="SET NULL"), default=None, index=True
+    )
+    active_branch: Mapped[str | None] = mapped_column(String(255), default=None)
+    requested_branch: Mapped[str | None] = mapped_column(String(255), default=None)
+    request_generation: Mapped[uuid.UUID] = mapped_column(Uuid)
+    status: Mapped[str] = mapped_column(String(16))
+    error: Mapped[str | None] = mapped_column(String(512), default=None)
 
 
 # The connector graph writes to graph_entity/graph_edge (unified in Decision A,

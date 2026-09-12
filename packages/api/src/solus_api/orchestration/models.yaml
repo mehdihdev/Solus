@@ -6,50 +6,77 @@
 # data (ADR-024). Model identity lives ONLY here — never hardcoded in code.
 # Swapping which model serves a role is a config edit.
 #
-# Model IDs & prices VERIFIED 2026-07-11 against provider docs:
-#   - platform.claude.com/docs/en/about-claude/pricing (Anthropic)
-#   - ai.google.dev/gemini-api/docs/pricing (Google)
-#   - developers.openai.com/api/docs/models/gpt-5.6-sol (OpenAI)
+# Model IDs & prices VERIFIED 2026-09-07 (SOLUSDEV-252) against provider docs:
+#   - platform.claude.com/docs/en/about-claude/pricing + models overview (Anthropic)
+#   - developers.openai.com/api/docs/pricing + /models/gpt-6-astra (OpenAI)
+#   - ai.google.dev/gemini-api/docs/pricing (Google — last verified 2026-07-11)
 # Exceptions are marked UNVERIFIED inline. Re-verify before production.
 #
 # Roles are named `<strength>_<tier>`. A role must be filled by exactly ONE
-# catalog entry (enforced) so routing is deterministic. The `openai_*` bench
-# roles are deliberately NOT referenced by the matrix — they exist so pointing
-# any matrix cell at OpenAI is a one-line edit here.
+# catalog entry (enforced) so routing is deterministic. The matrix (SOLUSDEV-252,
+# human-decided): hard general+code -> gpt-6-astra; standard code -> Claude Fable
+# 5.1; standard general -> gpt-5.6-sol; trivial general -> gpt-5.6-luna; trivial
+# code -> Claude Haiku 4.5; visual_log/long_context rows stay Gemini (ADR-029).
+# Unreferenced catalog entries (claude-sonnet-5 as default_role fallback,
+# claude-opus-4-8, gpt-5.6-terra) are BENCH roles: pointing any cell at them is
+# a one-line edit here.
 #
 # Long-context (breakpoint) pricing: models whose provider charges more above
 # an input-token threshold carry `long_context_threshold_tokens` +
 # `price_in_long`/`price_out_long` (all three or none). Flat-priced models
 # simply omit them. `cost.compute_call_credits` bills the long rates when
 # tokens_in exceeds the threshold.
+#
+# `price_cached_in`: USD per 1M prompt-cache-READ tokens (must be <= price_in).
+# Billed for `Usage.tokens_cached_in` below the breakpoint only — above it the
+# whole call bills the long rates (no cached-long rate is modeled; over-bills,
+# never under). `reasoning_effort`: the provider effort knob for that entry
+# (OpenAI only today; Anthropic/Gemini adapters carry no thinking mapping yet).
+#
+# `accepts_images` (default true): every entry below is vision-capable, so none
+# sets it. A text-only model MUST set `accepts_images: false` and may then fill
+# only long_context roles — a GENERAL, CODE or VISUAL_LOG cell (any tier) or
+# default_role pointing at it fails at config load (SOLUSDEV-252 S3 review M2).
 # ============================================================================
 version: 1
 
 # --- Model catalog: concrete models + the role(s) each fills -----------------
 # prices are USD per 1,000,000 tokens (price_unit below).
+# Anthropic cache reads: 0.1x input (0.025x on Fable 5.1) — verified 2026-09-07.
 catalog:
   - provider: anthropic
     name: claude-haiku-4-5
     price_in: 1.0
     price_out: 5.0
+    price_cached_in: 0.1
     context_window: 200000
-    roles: [general_trivial]
+    roles: [general_trivial] # trivial.code: cheap, with a code-quality floor
 
   - provider: anthropic
     name: claude-sonnet-5
-    # Intro pricing $2/$10 through 2026-08-31; pinned at the standard rate that
-    # starts 2026-09-01 so credit billing never under-charges after the switch.
-    price_in: 3.0
-    price_out: 15.0
+    # $2/$10 was introductory through 2026-08-31; Anthropic made it the standard
+    # price (the 2026-09-01 increase to $3/$15 was cancelled — verified 2026-09-07).
+    price_in: 2.0
+    price_out: 10.0
+    price_cached_in: 0.2
     context_window: 1000000 # full 1M window at standard pricing (verified)
-    roles: [general_standard, code_standard]
+    roles: [general_standard] # default_role fallback only — no matrix cell points here
+
+  - provider: anthropic
+    name: claude-fable-5-1
+    price_in: 10.0
+    price_out: 50.0
+    price_cached_in: 0.25 # 0.025x input on Fable 5.1 (verified 2026-09-07)
+    context_window: 1000000 # 1M window, 128K max output (verified 2026-09-07)
+    roles: [code_standard] # standard.code: strongest CODE reasoning
 
   - provider: anthropic
     name: claude-opus-4-8
-    price_in: 5.0 # was wrongly 15/75 (Opus 4.1-era prices) before 2026-07-11
+    price_in: 5.0
     price_out: 25.0
+    price_cached_in: 0.5
     context_window: 1000000 # full 1M window at standard pricing (verified)
-    roles: [general_hard, code_hard]
+    roles: [anthropic_hard] # bench role — unreferenced since SOLUSDEV-252
 
   - provider: google
     name: gemini-3.1-flash-lite
@@ -76,39 +103,72 @@ catalog:
     price_out_long: 18.0
     roles: [visual_hard, longctx_hard]
 
-  # --- OpenAI GPT-5.6 ladder (GA 2026-07-09): bench roles, not matrix-assigned.
-  # `gpt-5.6` is an alias for -sol; explicit IDs preferred. Family rule: >272K
-  # input tokens -> 2x input / 1.5x output for the full request (long_* below).
-  # Windows for terra/luna are family-assumed from sol — UNVERIFIED per-variant.
+  # --- OpenAI (Responses API). Prices verified 2026-09-07 at
+  # developers.openai.com/api/docs/pricing. Family rule: >272K input tokens ->
+  # long tier for the full request (long_* below; the long cached rate is 2x
+  # price_cached_in and is NOT modeled — see header). `gpt-5.6` is an alias for
+  # -sol; explicit IDs preferred. Windows for sol/terra/luna are family-assumed
+  # — UNVERIFIED per-variant.
+  - provider: openai
+    name: gpt-6-astra
+    price_in: 10.0
+    price_out: 50.0
+    price_cached_in: 1.0
+    context_window: 922000 # max input tokens, 128K max output (verified 2026-09-07)
+    long_context_threshold_tokens: 272000
+    price_in_long: 20.0
+    price_out_long: 75.0
+    reasoning_effort: medium # supports low..max ONLY — never "none"
+    roles: [general_hard, code_hard] # one entry, both hard cells
+
   - provider: openai
     name: gpt-5.6-sol
-    price_in: 5.0
-    price_out: 30.0
-    context_window: 1050000
+    price_in: 4.0
+    price_out: 20.0
+    price_cached_in: 0.4
+    context_window: 1050000 # UNVERIFIED — family-assumed
     long_context_threshold_tokens: 272000
-    price_in_long: 10.0
-    price_out_long: 45.0
-    roles: [openai_frontier]
+    price_in_long: 8.0
+    price_out_long: 30.0
+    reasoning_effort: medium
+    roles: [openai_standard] # standard.general
 
   - provider: openai
     name: gpt-5.6-terra
-    price_in: 2.5
-    price_out: 15.0
+    price_in: 2.0
+    price_out: 12.0
+    price_cached_in: 0.2
     context_window: 1050000 # UNVERIFIED — family-assumed
     long_context_threshold_tokens: 272000
-    price_in_long: 5.0
-    price_out_long: 22.5
-    roles: [openai_mid]
+    price_in_long: 4.0
+    price_out_long: 18.0
+    reasoning_effort: low
+    roles: [openai_mid] # bench role — unreferenced
 
   - provider: openai
     name: gpt-5.6-luna
-    price_in: 1.0
-    price_out: 6.0
+    price_in: 0.2
+    price_out: 1.2
+    price_cached_in: 0.02
     context_window: 1050000 # UNVERIFIED — family-assumed
     long_context_threshold_tokens: 272000
-    price_in_long: 2.0
-    price_out_long: 9.0
-    roles: [openai_cheap]
+    price_in_long: 0.4
+    price_out_long: 1.8
+    reasoning_effort: low
+    roles: [openai_trivial] # trivial.general
+
+# --- Provider stanzas (SOLUSDEV-252): connection shape for providers WITHOUT a
+# dedicated adapter. Config only — routing a catalog entry at `azure` raises
+# UnknownProviderError until an adapter is registered under that key
+# (providers.build_adapter_registry). Production wiring = fill this stanza +
+# add one adapter. `api_key_ref` is a SecretStore ref NAME, never a value.
+providers:
+  azure:
+    kind: openai_compatible
+    endpoint: "" # https://<resource>.openai.azure.com/openai/v1/ — fill at deploy
+    api_version: v1 # Azure OpenAI v1 GA API: no dated api-version (verified 2026-09-07)
+    api_key_ref: azure_openai_api_key
+    deployments: {} # catalog model name -> Azure deployment name
 
 # --- Embeddings (SYS-02, human-approved model choice 2026-08-07) --------------
 # The single embedding model behind orchestration.embeddings.embed() — feeds the
@@ -124,18 +184,18 @@ embeddings:
 # May be partial; a missing cell falls back to `default_role`.
 matrix:
   trivial:
-    general: general_trivial
-    code: general_trivial # cheap fast model with a code-quality floor (flash-lite/luna are cheaper — config lever)
+    general: openai_trivial # gpt-5.6-luna: cheapest text model in the catalog
+    code: general_trivial # claude-haiku-4-5: cheap fast model with a code-quality floor
     visual_log: visual_trivial # Flash-Lite: cheaper than Haiku AND ~1M window
     long_context: longctx_trivial # MUST be a large-window model — a long-but-simple input still needs to FIT
   standard:
-    general: general_standard
-    code: code_standard # Claude-class: strong CODE reasoning
+    general: openai_standard # gpt-5.6-sol
+    code: code_standard # claude-fable-5-1: strongest CODE reasoning
     visual_log: visual_standard # Gemini-class: strong for logs/telemetry/images
     long_context: longctx_standard # Gemini-class: large context window
   hard:
-    general: general_hard
-    code: code_hard
+    general: general_hard # gpt-6-astra
+    code: code_hard # gpt-6-astra (same entry, both hard cells)
     visual_log: visual_hard
     long_context: longctx_hard
 
@@ -357,7 +417,11 @@ limits:
   max_calls_per_minute: 20
   frequency_window_seconds: 60
   retry_max_attempts: 3
-  retry_backoff_seconds: 0.5 # base; doubles per retry
+  # Base delay, doubling per retry: 1s + 2s = 3s of waiting across 3 attempts.
+  # Raised from 0.5 (SOLUSDEV-252, observed live): a token-per-minute limit
+  # asks for ~2.7s, which the old 0.5+1.0=1.5s budget could never clear, so
+  # every retry hit the same closed window and the turn died as 'exhausted'.
+  retry_backoff_seconds: 1.0
 
 # --- Cost / credit conversion (ADR-024, all calibratable) --------------------
 cost:

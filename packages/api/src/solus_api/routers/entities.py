@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Query, Request
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
@@ -12,7 +12,8 @@ from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
 from solus_api.graph.live import graph_changed_frame
 from solus_api.graph.neighborhood import MAX_DEPTH, load_neighborhood
-from solus_api.models import Domain, GraphEdge, GraphEntity, Role, utcnow
+from solus_api.graph.read_scope import current_scope
+from solus_api.models import Domain, GraphEdge, GraphEntity, Role, Source, utcnow
 from solus_api.schemas import serialize_entity, serialize_relation
 from solus_api.services.events import emit_event
 from solus_api.services.physical_robots import (
@@ -31,10 +32,24 @@ IfMatch = Annotated[str, Header(pattern=r"^[0-9]+$", max_length=10)]
 
 
 async def _scoped_entity(session: SessionDep, ctx: ProjectCtx, entity_id: uuid.UUID) -> GraphEntity:
-    entity = await session.get(GraphEntity, entity_id)
+    entity = await session.scalar(
+        select(GraphEntity).where(
+            GraphEntity.id == entity_id, current_scope(ctx.project.id).entity_predicate()
+        )
+    )
     if entity is None or entity.project_id != ctx.project.id or entity.deleted_at is not None:
         raise APIError(404, "not_found", "Entity not found")
     return entity
+
+
+async def _refuse_snapshot_mutation(
+    session: SessionDep, ctx: ProjectCtx, entity_id: uuid.UUID
+) -> None:
+    entity = await _scoped_entity(session, ctx, entity_id)
+    if entity.source_id is not None:
+        source = await session.get(Source, entity.source_id)
+        if source is not None and source.revision_base_source_id is not None:
+            raise APIError(409, "immutable_revision", "Revision snapshots cannot be edited")
 
 
 def _domain(value: str) -> Domain:
@@ -69,7 +84,9 @@ async def list_entities(
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 200,
 ) -> dict[str, Any]:
     stmt = select(GraphEntity).where(
-        GraphEntity.project_id == ctx.project.id, GraphEntity.deleted_at.is_(None)
+        GraphEntity.project_id == ctx.project.id,
+        GraphEntity.deleted_at.is_(None),
+        current_scope(ctx.project.id).entity_predicate(),
     )
     if type is not None:
         stmt = stmt.where(GraphEntity.kind == type)
@@ -84,7 +101,19 @@ async def list_entities(
         # composer's `@`-mention typeahead, so `q` is text a person is typing,
         # and a bare `%` would match every entity in the project — a search box
         # that silently stops filtering.
-        stmt = stmt.where(GraphEntity.name.ilike(f"%{_like_literal(q)}%", escape="\\"))
+        pattern = f"%{_like_literal(q)}%"
+        stmt = stmt.where(
+            or_(
+                GraphEntity.name.ilike(pattern, escape="\\"),
+                and_(
+                    GraphEntity.kind.in_(("code_file", "code_module")),
+                    or_(
+                        GraphEntity.external_ref.ilike(pattern, escape="\\"),
+                        GraphEntity.attrs["path"].astext.ilike(pattern, escape="\\"),
+                    ),
+                ),
+            )
+        )
     if external_ref_prefix and external_ref_prefix.strip():
         # SOLUS-A7-01. Entities are keyed `{document_id}:{element_id}:{occurrence}`
         # (connectors/mechanical.py), so this prefix is the only join an Onshape
@@ -161,6 +190,7 @@ async def rename_entity(
     session: SessionDep,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    await _refuse_snapshot_mutation(session, ctx, entity_id)
     root = await PhysicalRobotService(session).rename(
         ctx.project.id, entity_id, int(if_match), body.name
     )
@@ -175,7 +205,16 @@ async def delete_entity(
     entity_id: uuid.UUID, if_match: IfMatch, request: Request, ctx: ProjectCtx, session: SessionDep
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    await _refuse_snapshot_mutation(session, ctx, entity_id)
+    root = await _scoped_entity(session, ctx, entity_id)
+    if root.version != int(if_match):
+        raise APIError(409, "conflict", "Entity version changed; reload before deleting")
+    request.app.state.hardware_connections.assert_deletable(root.attrs.get("connection"))
+    await request.app.state.hardware_connections.cancel_robot(ctx.project.id, entity_id)
     removal = await PhysicalRobotService(session).delete(ctx.project.id, entity_id, int(if_match))
+    # The service holds the project lock and refreshed attrs; a concurrent attempt
+    # cannot be accepted between this check and the deletion commit.
+    request.app.state.hardware_connections.assert_deletable(removal.root.attrs.get("connection"))
     await _commit_robot_change(request, ctx, session, removal.root, "removed", removal.counts)
     return envelope(
         {"deleted_entity_id": entity_id, "retained_part_ids": removal.retained_part_ids}
@@ -200,14 +239,21 @@ async def get_entity_relations(
 ) -> dict[str, Any]:
     await _scoped_entity(session, ctx, entity_id)
     stmt = select(GraphEdge).where(
-        GraphEdge.project_id == ctx.project.id, GraphEdge.deleted_at.is_(None)
+        GraphEdge.project_id == ctx.project.id,
+        GraphEdge.deleted_at.is_(None),
+        current_scope(ctx.project.id).edge_predicate(),
     )
     if direction == "in":
-        stmt = stmt.where(GraphEdge.dst_id == entity_id)
+        stmt = stmt.where(GraphEdge.dst_id.in_(current_scope(ctx.project.id).aliases([entity_id])))
     elif direction == "out":
-        stmt = stmt.where(GraphEdge.src_id == entity_id)
+        stmt = stmt.where(GraphEdge.src_id.in_(current_scope(ctx.project.id).aliases([entity_id])))
     else:
-        stmt = stmt.where(or_(GraphEdge.src_id == entity_id, GraphEdge.dst_id == entity_id))
+        stmt = stmt.where(
+            or_(
+                GraphEdge.src_id.in_(current_scope(ctx.project.id).aliases([entity_id])),
+                GraphEdge.dst_id.in_(current_scope(ctx.project.id).aliases([entity_id])),
+            )
+        )
     if type is not None:
         stmt = stmt.where(GraphEdge.relation_type == type)
     if cursor:
@@ -215,7 +261,10 @@ async def get_entity_relations(
     stmt = stmt.order_by(GraphEdge.created_at.desc(), GraphEdge.id.desc()).limit(limit + 1)
     rows = list((await session.scalars(stmt)).all())
     visible, meta = page_meta(rows, limit)
-    return envelope([serialize_relation(r) for r in visible], meta=meta)
+    return envelope(
+        [serialize_relation(current_scope(ctx.project.id).project_edge(r)) for r in visible],
+        meta=meta,
+    )
 
 
 def _csv(value: str | None) -> list[str] | None:
@@ -273,7 +322,9 @@ async def list_relations(
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 200,
 ) -> dict[str, Any]:
     stmt = select(GraphEdge).where(
-        GraphEdge.project_id == ctx.project.id, GraphEdge.deleted_at.is_(None)
+        GraphEdge.project_id == ctx.project.id,
+        GraphEdge.deleted_at.is_(None),
+        current_scope(ctx.project.id).edge_predicate(),
     )
     if type is not None:
         stmt = stmt.where(GraphEdge.relation_type == type)
@@ -282,4 +333,7 @@ async def list_relations(
     stmt = stmt.order_by(GraphEdge.created_at.desc(), GraphEdge.id.desc()).limit(limit + 1)
     rows = list((await session.scalars(stmt)).all())
     visible, meta = page_meta(rows, limit)
-    return envelope([serialize_relation(r) for r in visible], meta=meta)
+    return envelope(
+        [serialize_relation(current_scope(ctx.project.id).project_edge(r)) for r in visible],
+        meta=meta,
+    )

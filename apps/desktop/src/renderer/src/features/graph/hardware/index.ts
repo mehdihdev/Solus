@@ -1,6 +1,3 @@
 export { HardwareAddPanel, type HardwareAddPanelProps } from './HardwareAddPanel'
-export { AuthoredPartModal, NEW_ROBOT_OPTION, authoredSpecs } from './AuthoredPartModal'
-export { HARDWARE_CARDS, HARDWARE_SPEC_FIELDS, HARDWARE_COPY } from './hardware.constants'
-export { DetectedModal, type DetectedModalProps } from './DetectedModal'
-export { FromFileModal, type FromFileModalProps } from './FromFileModal'
-export { LibraryModal, type LibraryModalProps } from './LibraryModal'
+export { DevicesFound, type DevicesFoundProps } from './DevicesFound'
+export { HARDWARE_COPY, HARDWARE_SPEC_FIELDS, type HardwareSpecField } from './hardware.constants'

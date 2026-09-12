@@ -7,7 +7,7 @@ import { ClassifyIndicator } from './ClassifyIndicator'
 const PREVIEW: ClassifyPreview = {
   complexity: 'standard',
   type: 'code',
-  model: { name: 'claude-sonnet-5', provider: 'anthropic' },
+  reasoner: { name: 'sol-reasoner-1', effort: 'standard' },
   cost_tier: 'standard',
   source: { complexity: 'estimator', type: 'estimator' },
   tokens_estimate: 42,
@@ -20,38 +20,34 @@ const PREVIEW: ClassifyPreview = {
         value: 'trivial',
         viable: false,
         reason: 'Too many tokens for this tier (340K > 200K)',
-        model: 'claude-haiku-4-5',
         cost_tier: 'low'
       },
       {
         value: 'standard',
         viable: true,
         reason: null,
-        model: 'claude-sonnet-5',
         cost_tier: 'standard'
       },
-      { value: 'hard', viable: true, reason: null, model: 'claude-opus-4-8', cost_tier: 'premium' }
+      { value: 'hard', viable: true, reason: null, cost_tier: 'premium' }
     ],
     types: [
       {
         value: 'code',
         viable: true,
         reason: null,
-        model: 'claude-sonnet-5',
         cost_tier: 'standard'
       },
       {
         value: 'general',
         viable: true,
         reason: null,
-        model: 'claude-sonnet-5',
         cost_tier: 'standard'
       }
     ]
   }
 }
 
-const NO_OVERRIDE = { complexity: null, type: null }
+const NO_OVERRIDE = { complexity: null, type: null, thinkHarder: false }
 
 it('shows an honest idle line without a preview — the row never pops in and out', () => {
   // SOLUSDEV-233: the routing line is a permanent part of the composer. With
@@ -66,7 +62,7 @@ it('shows an honest idle line without a preview — the row never pops in and ou
     />
   )
   expect(screen.getByText(/auto routing/)).toBeInTheDocument()
-  expect(screen.queryByText(/claude-/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/sol-reasoner/)).not.toBeInTheDocument()
 })
 
 it('renders the muted one-line summary', () => {
@@ -79,7 +75,25 @@ it('renders the muted one-line summary', () => {
     />
   )
   const line = screen.getByTestId('classify-indicator')
-  expect(line.textContent).toContain('standard · code · claude-sonnet-5')
+  // S1-W3: the product reasoner + an effort label — never a model id.
+  expect(line.textContent).toContain('sol-reasoner-1 · standard · code')
+})
+
+it('offers a "Think harder" toggle in the popover that sets think_harder', () => {
+  const onOverride = vi.fn()
+  render(
+    <ClassifyIndicator
+      preview={PREVIEW}
+      override={NO_OVERRIDE}
+      onOverride={onOverride}
+      onReset={() => {}}
+    />
+  )
+  fireEvent.click(screen.getByTestId('classify-indicator'))
+  const toggle = screen.getByRole('switch', { name: 'Think harder' })
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  fireEvent.click(toggle)
+  expect(onOverride).toHaveBeenCalledWith({ thinkHarder: true })
 })
 
 it('is keyboard-accessible: Enter toggles the popover', () => {
@@ -134,7 +148,7 @@ it('marks overridden values and offers a one-click reset', () => {
   render(
     <ClassifyIndicator
       preview={PREVIEW}
-      override={{ complexity: 'hard', type: null }}
+      override={{ complexity: 'hard', type: null, thinkHarder: false }}
       onOverride={() => {}}
       onReset={onReset}
     />

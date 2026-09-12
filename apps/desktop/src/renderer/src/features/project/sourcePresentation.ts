@@ -1,6 +1,6 @@
 // Pure presentation helpers for connected sources (SOLUSDEV-164). Kept side by
 // side with the project screens and free of React so both the overview and the
-// Sources page render source status/type identically (DRY). Colors resolve to
+// connected-accounts rows render source status/type identically (DRY). Colors resolve to
 // theme tokens (apps/desktop CLAUDE.md — no hardcoded colors).
 import type { HostedState, Source, SourceError, SourceStatus } from '../../lib/api/resources'
 
@@ -71,7 +71,7 @@ function hostedEntry(source: Source, server: string): Record<string, unknown> | 
  * A hosted add-on's state for one source.
  *
  * SERVER-BACKED by design: the connect wizard cancels its attempt on close and
- * the Sources screen resets the onboarding store on mount, so a
+ * Home resets the onboarding store on mount, so a
  * renderer-resident flag would be lost on every navigation and would be wrong
  * for every teammate who did not run the connect themselves. Absent or
  * malformed means the backend has never recorded a grant, which IS

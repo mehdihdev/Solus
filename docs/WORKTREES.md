@@ -52,7 +52,8 @@ git worktree add ../solus-$LANE -b SOLUSDEV-$EPIC-lane-$LANE main
 cp .env ../solus-$LANE/               # secrets: never committed, one ROOT .env per checkout
 cd ../solus-$LANE
 make bootstrap                        # pnpm install + uv sync --all-packages + make hooks
-make seed-secrets                     # env-sourced keys -> the encrypted SecretStore
+make seed-secrets                     # root .env keys -> the encrypted SecretStore
+uv run --package solus-api python scripts/seed-provider-keys.py --check   # names+lengths only
 ```
 
 Notes that cost an hour each if skipped:
@@ -64,7 +65,9 @@ Notes that cost an hour each if skipped:
   by absolute path (`core/config.py`, desktop `envDir`) — there are no generated
   per-package `.env` files anymore (`env:sync`/`.env.mega` were retired in 698374c).
   Keys the code reads by SecretStore ref still need `make seed-secrets` once per
-  database.
+  database (it runs `uv run --package solus-api …` so `dotenv` resolves even in a
+  checkout not synced with `--all-packages`; `--check` reports present/missing refs
+  by name and the API logs the same at startup).
 - **The test database is already per-worktree.** `packages/api/tests/conftest.py:64-74`
   derives `solus_test_<sha1(abs path to packages/api)[:8]>` and creates it on demand, so
   two worktrees never share a suite DB. You only need to export

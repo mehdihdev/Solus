@@ -171,4 +171,3 @@ class TestPathTraversal:
         findings = extract_firmware_findings(repo)
 
         assert findings == []
-

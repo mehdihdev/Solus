@@ -20,11 +20,11 @@ export function useCustomInstruction(): CustomInstructionData {
     fetchEnabled ? 'loading' : 'offline'
   )
 
+  // Unlinked ⇒ offline, settled during render rather than one effect later.
+  if (!fetchEnabled && status !== 'offline') setStatus('offline')
+
   useEffect(() => {
-    if (!fetchEnabled) {
-      setStatus('offline')
-      return
-    }
+    if (!fetchEnabled) return
     let stale = false
     getSettings()
       .then((settings) => {

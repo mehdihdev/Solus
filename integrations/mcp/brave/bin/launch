@@ -1,0 +1,75 @@
+#!/bin/sh
+# integrations/mcp/brave/bin/launch — Solus-authored ADR-031 entrypoint for the
+# vendored @brave/brave-search-mcp-server fork. Launched CLOUD-SIDE by the API
+# (`agent/tools/mcp_tool.py::_open_session`, spec `mcp_servers.WEB_SEARCH`) —
+# the companion does not ship Node (docs/architecture/sol-research.md).
+#
+# Guarantees (locked by ../tests/test_launch_entrypoint.py):
+#   * fixed argv — no caller-argument passthrough;
+#   * scrubbed child environment — env -i plus the declared allowlist below;
+#   * zero network I/O and zero installs at launch (ADR-031). Dependencies are
+#     materialized at install time from ../package-lock.json
+#     (`npm ci --omit=dev --ignore-scripts`, scripts/install-mcp-forks.sh) into
+#     ../node_modules, which upstream/dist resolves by walking up;
+#   * the Node interpreter is never PATH-resolved: SOLUS_NODE_BIN (set by the
+#     API process) or one of a FIXED list of absolute paths, verified >= 22;
+#   * the key arrives ONLY as BRAVE_API_KEY in the child env (secret_env in the
+#     spec → resolved from the SecretStore at spawn); an empty key refuses
+#     (exit 78) instead of spawning a server that would only report an error;
+#   * fork-side trimming: BRAVE_MCP_ENABLED_TOOLS pins the server to exactly
+#     the ../allowlist.yaml roster, so unexposed handlers are never registered.
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+
+refuse() {
+  echo "brave/bin/launch: $1" >&2
+  exit 78
+}
+
+# Interpreter resolution: an explicit absolute SOLUS_NODE_BIN, else the fixed
+# candidates. Relative or PATH-shaped values are refused, never searched.
+NODE=""
+if [ -n "${SOLUS_NODE_BIN:-}" ]; then
+  case "$SOLUS_NODE_BIN" in
+    /*) [ -x "$SOLUS_NODE_BIN" ] || refuse "SOLUS_NODE_BIN is not an executable file" ;;
+    *) refuse "SOLUS_NODE_BIN must be an absolute path" ;;
+  esac
+  NODE="$SOLUS_NODE_BIN"
+else
+  for candidate in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node; do
+    if [ -x "$candidate" ]; then
+      NODE="$candidate"
+      break
+    fi
+  done
+fi
+[ -n "$NODE" ] || refuse "no Node interpreter: set SOLUS_NODE_BIN or install node >= 22 at /usr/bin/node"
+
+# Version gate: the vendored server needs Node >= 22 (upstream README).
+NODE_MAJOR=$("$NODE" --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
+[ -n "$NODE_MAJOR" ] || refuse "$NODE did not report a version"
+[ "$NODE_MAJOR" -ge 22 ] || refuse "$NODE is v$NODE_MAJOR; the brave fork needs Node >= 22"
+
+[ -n "${BRAVE_API_KEY:-}" ] || refuse "BRAVE_API_KEY not provided (the API resolves it from the SecretStore ref brave_api_key at spawn)"
+
+[ -d "$FORK_DIR/node_modules" ] || refuse "dependencies not installed: run scripts/install-mcp-forks.sh"
+
+# cwd is the fork dir: upstream's config.js calls dotenv.config() against the
+# CURRENT DIRECTORY, so the cwd must be one that can never carry a .env.
+cd -- "$FORK_DIR"
+
+# Declared child-environment allowlist — everything else is dropped by env -i.
+# PATH is a fixed constant (never inherited). Changing this set is a
+# PROVENANCE re-review trigger.
+exec /usr/bin/env -i \
+  HOME="${HOME:-}" \
+  LANG="${LANG:-}" \
+  TMPDIR="${TMPDIR:-}" \
+  PATH="/usr/bin:/bin" \
+  BRAVE_API_KEY="$BRAVE_API_KEY" \
+  BRAVE_MCP_TRANSPORT="stdio" \
+  BRAVE_MCP_LOG_LEVEL="warning" \
+  BRAVE_MCP_ENABLED_TOOLS="brave_web_search brave_llm_context brave_news_search brave_summarizer" \
+  "$NODE" "$FORK_DIR/upstream/dist/index.js" --transport stdio

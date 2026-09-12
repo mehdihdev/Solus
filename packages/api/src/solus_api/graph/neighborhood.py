@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from solus_api.agent.interfaces import EdgeRead, EntityRead, GraphContext
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import Domain, GraphEdge, GraphEntity
 
 #: Hard ceiling on traversal depth. Anything deeper is a query, not a neighbourhood — and ADR-027
@@ -95,6 +96,7 @@ async def _load_entities(
         .options(defer(GraphEntity.embedding, raiseload=True))
         .where(
             GraphEntity.project_id == project_id,
+            current_scope(project_id).entity_predicate(),
             GraphEntity.deleted_at.is_(None),
             GraphEntity.id.in_(ids),
         )
@@ -123,8 +125,10 @@ async def _adjacent_ids(
     `MAX_EDGE_SCAN`: a hub node with an edge to every file in a monorepo would otherwise make one
     click scan the entire project, and feed an unbounded id list into the next query's `IN (...)`.
     """
+    frontier = current_scope(project_id).aliases(list(frontier))
     stmt = select(GraphEdge.src_id, GraphEdge.dst_id).where(
         GraphEdge.project_id == project_id,
+        current_scope(project_id).edge_predicate(),
         GraphEdge.deleted_at.is_(None),
         or_(GraphEdge.src_id.in_(frontier), GraphEdge.dst_id.in_(frontier)),
     )
@@ -144,7 +148,10 @@ async def _adjacent_ids(
     touched: list[UUID] = []
     seen: set[UUID] = set()
     for src_id, dst_id in rows[:MAX_EDGE_SCAN]:
-        for endpoint in (src_id, dst_id):
+        for endpoint in (
+            current_scope(project_id).project_id_for_entity(src_id),
+            current_scope(project_id).project_id_for_entity(dst_id),
+        ):
             if endpoint not in seen:
                 seen.add(endpoint)
                 touched.append(endpoint)
@@ -170,8 +177,10 @@ async def _induced_edges(
     """
     if not entity_ids:
         return [], False
+    entity_ids = current_scope(project_id).aliases(list(entity_ids))
     stmt = select(GraphEdge).where(
         GraphEdge.project_id == project_id,
+        current_scope(project_id).edge_predicate(),
         GraphEdge.deleted_at.is_(None),
         GraphEdge.src_id.in_(entity_ids),
         GraphEdge.dst_id.in_(entity_ids),
@@ -180,7 +189,7 @@ async def _induced_edges(
         stmt = stmt.where(GraphEdge.relation_type.in_(relation_types))
     stmt = stmt.order_by(GraphEdge.created_at, GraphEdge.id).limit(limit + 1)
     rows = list((await session.scalars(stmt)).all())
-    return rows[:limit], len(rows) > limit
+    return [current_scope(project_id).project_edge(row) for row in rows[:limit]], len(rows) > limit
 
 
 async def load_neighborhood(

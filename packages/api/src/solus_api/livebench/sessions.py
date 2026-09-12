@@ -18,6 +18,7 @@ the router must catch them without importing livebench; `livebench.local`
 imports and raises them along the legal dependency direction.
 """
 
+import asyncio
 import importlib
 import importlib.util
 import logging
@@ -90,6 +91,35 @@ class TappableConnection(Protocol):
     def status(self) -> LiveStatus: ...
 
     async def aclose(self) -> None: ...
+
+
+async def drain_task(task: asyncio.Future[Any]) -> Any:
+    """Finish owned resource cleanup even when its caller receives cancellation again."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    return task.result()
+
+
+async def _acquire_connection(
+    open_conn: Callable[[], Awaitable[TappableConnection]],
+) -> TappableConnection:
+    """Retain acquisition through cancellation, including non-cancellable worker threads."""
+    opening = asyncio.ensure_future(open_conn())
+    try:
+        return await asyncio.shield(opening)
+    except asyncio.CancelledError:
+        try:
+            connection = await drain_task(opening)
+        except Exception as exc:
+            logger.debug("cancelled connection acquisition failed: %s", type(exc).__name__)
+        else:
+            await drain_task(asyncio.ensure_future(connection.aclose()))
+        raise
 
 
 class BenchSessionOut(BaseModel):
@@ -170,6 +200,10 @@ class SessionManager:
         self._active: dict[UUID, dict[UUID, _Session]] = {}
         self._ended: dict[UUID, deque[_Session]] = {}
         self._ended_kept = ended_kept
+        self._starting: set[asyncio.Task[Any]] = set()
+        self._closing = False
+        self.on_ended: Callable[[UUID, UUID], Awaitable[None]] | None = None
+        self._ending: dict[UUID, asyncio.Task[None]] = {}
 
     async def start(
         self,
@@ -182,7 +216,11 @@ class SessionManager:
         window_seconds: float = DEFAULT_WINDOW_SECONDS,
         device: dict[str, Any] | None = None,
     ) -> BenchSessionOut:
+        if self._closing:
+            raise RuntimeError("Session manager is shutting down")
         await self._sweep_dead(project_id)
+        if self._closing:
+            raise RuntimeError("Session manager is shutting down")
         active = self._active.setdefault(project_id, {})
         if len(active) >= self._cap:
             raise TooManySessionsError(f"{self._cap} sessions already active in this project")
@@ -198,14 +236,29 @@ class SessionManager:
             device=device,
         )
         active[session.id] = session
+        task = asyncio.current_task()
+        assert task is not None
+        self._starting.add(task)
+        conn: TappableConnection | None = None
         try:
-            conn = await open_conn()
+            conn = await _acquire_connection(open_conn)
+            if self._closing or session.ended_at is not None or task.cancelling():
+                raise asyncio.CancelledError
             conn.tap = self._tap_for(session)
             handle = await conn.subscribe(TelemetryWindow(duration_seconds=window_seconds))
+            if self._closing or session.ended_at is not None or task.cancelling():
+                raise asyncio.CancelledError
             conn.on_batch(handle, self._summary_sink(session))
         except BaseException:
             active.pop(session.id, None)  # a failed start never holds a slot
+            if conn is not None:
+                try:
+                    await drain_task(asyncio.ensure_future(conn.aclose()))
+                except Exception:
+                    logger.warning("failed session connection cleanup: session=%s", session.id)
             raise
+        finally:
+            self._starting.discard(task)
         session.conn = conn
         logger.info(
             "bench session started: project=%s session=%s provider=%s",
@@ -269,7 +322,10 @@ class SessionManager:
 
     async def stop(self, project_id: UUID, session_id: UUID) -> BenchSessionOut:
         session = self._find(project_id, session_id)
-        if session.ended_at is not None:  # idempotent: stopping ended is a no-op
+        if session.ended_at is not None:  # concurrent callers also wait for teardown
+            ending = self._ending.get(session.id)
+            if ending is not None:
+                await drain_task(ending)
             return session.out(device_ids_kept=self._device_ids_kept)
         if session.conn is None:
             raise SessionStillStartingError(str(session_id))
@@ -277,6 +333,17 @@ class SessionManager:
         return session.out(device_ids_kept=self._device_ids_kept)
 
     async def _end(self, session: _Session) -> None:
+        ending = self._ending.get(session.id)
+        if ending is None:
+            ending = asyncio.create_task(self._close_session(session))
+            self._ending[session.id] = ending
+        try:
+            await drain_task(ending)
+        finally:
+            if ending.done():
+                self._ending.pop(session.id, None)
+
+    async def _close_session(self, session: _Session) -> None:
         # Bookkeeping FIRST, synchronously — no await between the ended_at check
         # in `stop` and these lines, so a concurrent second stop sees `ended_at`
         # set and returns idempotently instead of double-closing the connection
@@ -290,9 +357,16 @@ class SessionManager:
                 # aclose only — it cancels the pump and flushes the pending partial
                 # window (the contract's teardown); unsubscribe would KeyError.
                 await conn.aclose()
-            except Exception:
+            except Exception as exc:
                 # The session IS ended; a teardown error must not 500 the stop.
-                logger.exception("bench session close failed: session=%s", session.id)
+                logger.warning(
+                    "bench session close failed: project=%s session=%s error=%s",
+                    session.project_id,
+                    session.id,
+                    type(exc).__name__,
+                )
+        if self.on_ended is not None:
+            await self.on_ended(session.project_id, session.id)
 
     async def _sweep_dead(self, project_id: UUID) -> None:
         """End active sessions whose pump has finished (duration elapsed, replay
@@ -305,6 +379,14 @@ class SessionManager:
 
     async def aclose_all(self) -> None:
         """Shutdown teardown: close every active session's pump/subprocesses/ports."""
+        self._closing = True
+        starting = list(self._starting)
+        for task in starting:
+            task.cancel()
+        await asyncio.gather(*starting, return_exceptions=True)
         for project_sessions in list(self._active.values()):
             for session in list(project_sessions.values()):
                 await self._end(session)
+
+        for ending in list(self._ending.values()):
+            await drain_task(ending)

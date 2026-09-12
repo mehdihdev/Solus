@@ -1,4 +1,4 @@
-// Keyboard navigation for the `@`-mention picker. OrbChat.test.tsx covers the
+// Keyboard navigation for the `@`-mention picker. SolChat.test.tsx covers the
 // mouse path and the wire; this covers the keys, which are the part a
 // keyboard-only user depends on entirely.
 import { act, fireEvent, render, screen } from '@testing-library/react'

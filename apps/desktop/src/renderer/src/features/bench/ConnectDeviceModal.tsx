@@ -1,5 +1,5 @@
 // "Connect a device" on Live Bench (SOLUSDEV-244; the flow lived on the
-// retired Sources page, SOLUSDEV-72): every USB-serial device the backend
+// retired per-project source list, SOLUSDEV-72): every USB-serial device the backend
 // enumerated for THIS machine, with exactly what recognition claims, a real
 // Connect that starts a serial session on the open project, and the running
 // sessions with Stop. Offline / runner-absent degrade to honest copy with dead

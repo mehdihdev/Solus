@@ -188,9 +188,10 @@ tree, with the loss recorded on the Sync row.
 
 `OAuth2Read` alone carries **no PII**. Confirmed against a live tenant
 (`sessioninfo.oauth2Scopes == 1`): `email` and `name` come back empty and only the opaque user
-`id` is populated. So a connected Onshape source can show its account **id**, never a name or
-address. The connector used to invent the login `"onshape-user"`, which then became the source's
-display name and told the user nothing — it now falls back to the real account id instead.
+`id` is populated. SOLUSDEV-260 keeps that id for account matching but never uses it as
+an account label. When the provider supplies identity fields, the label prefers its display
+name, then email. If neither is available, it shows **Onshape account**; it does not substitute
+the Solus user's email or claim that the grant exposed an address.
 
 Do **not** widen to the PII scope for a friendlier label; §2 forbids it, and a leaked token would
 then carry the customer's identity for no capability Solus uses.

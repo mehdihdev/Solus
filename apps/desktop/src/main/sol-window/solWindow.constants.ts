@@ -1,8 +1,17 @@
-// SOLX-02: the sol-window invoke channel names, in ONE module (the orb-overlay
+// SOLUSDEV-252 S3: the SOL window channel names, in ONE module (the orb-overlay
 // lesson — a renamed literal compiles clean on both sides). main/index.ts
-// registers the handlers; preload/index.ts exposes the invokes. The ratchet in
-// solWindow.test.ts keeps stray literals out of main/ and preload/.
+// registers the invokes and pushes; preload/solBridge.ts exposes them. The
+// ratchet in solWindow.test.ts keeps stray `sol:` literals out of main/ and
+// preload/.
 export const SOL_WINDOW_CHANNELS = {
-  detach: 'sol-window:detach',
-  attach: 'sol-window:attach'
+  open: 'sol:open',
+  getState: 'sol:get-state',
+  setMode: 'sol:set-mode',
+  setScreenIntelligence: 'sol:set-screen-intelligence',
+  setAlwaysOnTop: 'sol:set-always-on-top',
+  setHotkeys: 'sol:set-hotkeys',
+  /** main → every app renderer: the SolState snapshot. */
+  state: 'sol:state',
+  /** main → the SOL window only: a captured region. */
+  region: 'sol:region'
 } as const

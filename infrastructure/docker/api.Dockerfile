@@ -1,8 +1,19 @@
 # solus-api container. Requires BuildKit (default since Docker 23; CI uses
 # docker:27) for the COPY <<'EOF' heredoc below.
+# Node 22 for the vendored MCP forks that are Node servers (today: the Brave
+# search fork, launched cloud-side by this API — integrations/mcp/brave). Taken
+# from the official image rather than a distro/NodeSource repo so the version is
+# PINNED and reproducible, and because node:22-bookworm-slim shares glibc with
+# python:3.12-slim (both bookworm). `bin/launch` looks for /usr/local/bin/node,
+# one of its fixed candidates, so nothing is PATH-resolved at spawn.
+FROM node:22.22.3-bookworm-slim AS node
+
 FROM python:3.12-slim
 WORKDIR /app
 RUN pip install --no-cache-dir uv
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 
 # Third-party deps first (cached layer) — only re-runs if manifests change.
 # --no-install-workspace is load-bearing: without it, uv builds solus-api
@@ -28,6 +39,18 @@ RUN uv sync --frozen --no-dev --package solus-api
 # bridge rather than a failure anyone would notice. After the second
 # `uv sync` deliberately: editing an allowlist must not re-run the install.
 COPY integrations/mcp ./integrations/mcp
+
+# The Node forks' dependency trees. `bin/launch` does ZERO installs and ZERO
+# network I/O (ADR-031), so node_modules/ has to exist in the image: `npm ci`
+# installs exactly the committed integrity-pinned lock, `--ignore-scripts`
+# refuses every dependency lifecycle hook, `--omit=dev` keeps it to what runs.
+# npm itself is then REMOVED: nothing in the running container may install
+# anything, and the image stays lean. (Same contract as scripts/install-mcp-forks.sh.)
+RUN for lock in integrations/mcp/*/package-lock.json; do \
+      [ -e "$lock" ] || continue; \
+      (cd "$(dirname "$lock")" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund); \
+    done \
+ && rm -rf /usr/local/bin/npm /usr/local/lib/node_modules/npm /root/.npm
 
 # Boot sequence: migrate (bounded, fail-fast, logged) → serve.
 # - `alembic upgrade head` is idempotent; a fresh RDS database gets its schema

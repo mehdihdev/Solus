@@ -4,7 +4,7 @@
 // (SimulatorStartModal), and the running sessions beneath, each with Stop.
 // The inventory is the OPEN project's `GET /projects/{id}/bench/sources`; a
 // start is `POST …/bench/sessions` on that project — the same calls the
-// Sources page made. No open project means nothing can honestly start, and
+// retired per-project source list made. No open project means nothing can honestly start, and
 // the panel says so; an unreachable API says that, never a fabricated list.
 import { useState } from 'react'
 import {

@@ -56,7 +56,7 @@ export const SOURCE_KIND_DESCRIPTION: Readonly<Record<SourceKind, string>> = {
 export const PERMISSION_TEXT: Readonly<Record<PermissionScope, { title: string; detail: string }>> =
   {
     'graph.read': {
-      title: 'Read the context model',
+      title: 'Read the workspace graph',
       detail: 'Entities, relations and neighbourhoods of this project.'
     },
     'telemetry.read': {

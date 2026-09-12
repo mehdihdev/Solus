@@ -4,10 +4,12 @@
 the last thing between SOL and a destroyed file. Two properties are load-bearing
 and this file pins both:
 
-* **Readable.** `confirmations._single_line` deletes every non-printable
-  character — newlines and tabs included — and truncates at `_VALUE_CAP = 500`.
-  A whole-file before/after would render as one glued run-on in which a `//`
-  comment swallows the next statement.
+* **Readable.** `confirmations._single_line` flattens a row to ONE LINE — every
+  whitespace run becomes a single space, every other non-printable character is
+  dropped — and truncates at `_VALUE_CAP = 500`. A whole-file before/after would
+  render as one run-on line in which a `//` comment swallows the next statement.
+  (Newlines used to be deleted outright, which fused a Dockerfile's lines into
+  words nobody wrote; SOLUSDEV-252 made them spaces.)
 * **Exact.** `confirmations._diverged` compares the RENDERED rows, so anything
   the cap hides is invisible to the R1 staleness check.
 """
@@ -66,7 +68,7 @@ def test_a_whole_file_row_would_not_survive() -> None:
     """The counterfactual, so the reason for hunk rows is not folklore."""
     whole = _script("Alpha")
     assert len(whole) > VALUE_CAP
-    assert "\n" not in _single_line(whole, VALUE_CAP), "newlines are deleted, not spaced"
+    assert "\n" not in _single_line(whole, VALUE_CAP), "a row can never become two rows"
     assert len(_single_line(whole, VALUE_CAP)) == VALUE_CAP  # silently truncated
 
 
@@ -201,3 +203,17 @@ async def test_the_checksum_row_is_what_catches_a_difference_past_the_cap() -> N
     hunks_only = [[r for r in rows if "checksum" not in r["label"]] for rows in (shown, later)]
     assert _diverged(*hunks_only) is False, "hunk rows alone cannot see past the cap"
     assert _diverged(shown, later) is True, "the checksum row must catch it"
+
+
+def test_a_file_body_keeps_its_line_boundaries_as_spaces() -> None:
+    """A Dockerfile the person is approving must not read as one fused word."""
+    body = 'FROM python:3.12-slim\nWORKDIR /app\nCMD ["python"]\n'
+    assert _single_line(body, VALUE_CAP) == 'FROM python:3.12-slim WORKDIR /app CMD ["python"]'
+
+
+def test_consent_forgery_is_still_closed() -> None:
+    """No second row, no reversed rendering, no off-screen padding."""
+    forged = "ok\n\nAll changes reverted\u202e" + " " * 200 + "and deleted"
+    rendered = _single_line(forged, VALUE_CAP)
+    assert "\n" not in rendered and "\u202e" not in rendered
+    assert "  " not in rendered

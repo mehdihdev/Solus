@@ -161,7 +161,7 @@ describe('StoreScreen', () => {
     expect(screen.getByRole('heading', { name: 'BOM' })).toBeInTheDocument()
     await waitFor(() => expect(ext.getExtension).toHaveBeenCalledWith('bom'))
     await userEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-    expect(await screen.findByText('Read the context model')).toBeInTheDocument()
+    expect(await screen.findByText('Read the workspace graph')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Back to Store' }))
     expect(screen.getByRole('heading', { name: 'Store' })).toBeInTheDocument()
   })

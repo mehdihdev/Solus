@@ -25,15 +25,19 @@ if TYPE_CHECKING:
     from solus_contracts.extension_manifest import ExtensionManifest
 
     from solus_api.agent.confirmations import ParkedCall
+    from solus_api.agent.tools.mcp_tool import MCPTool
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
+    from solus_api.services.code_environment_adapter import EnvironmentFetch
+    from solus_api.storage import ArtifactStore
     from solus_api.widgets.capability import WidgetCapability
 
     #: Parks a gated call for approval; None when the call is not gated.
     ParkFn = Callable[[_ToolCallHint], Awaitable[ParkedCall | None]]
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -41,8 +45,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from solus_api.agent import prompt, reason
+from solus_api.agent import prompt, reason, screen
 from solus_api.agent.context import Context, build_context
+from solus_api.agent.errors_filing import file_tool_error
 from solus_api.agent.interfaces import GraphScope, SolSystems
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.stream import AgentEvent
@@ -57,15 +62,19 @@ from solus_api.agent.tools import (
 )
 from solus_api.agent.tools.exec import run_tool
 from solus_api.models import SolMode
-from solus_api.orchestration import gateway
-from solus_api.orchestration.enums import InteractionContext
+from solus_api.orchestration import bump_complexity, estimate_complexity, gateway
+from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
 from solus_api.orchestration.providers import ToolConversation, ToolOutcome, Turn
 from solus_api.orchestration.router import derive_complexity
+from solus_api.orchestration.type_estimator import estimate_tokens
 
 # §7 loop/recursion guard: an upper bound on tool calls per turn so a runaway loop
 # can never fan out unboundedly. The scaffold proposes ≤1; the guard protects the seam
 # for the real runner that swaps in later.
 MAX_TOOL_CALLS = 8
+#: The companion's ungated inventory read, by its composed bridge name. Feeds
+#: `link_environment` the facts the model is not allowed to supply.
+_CODE_ENVIRONMENTS: Final = "code.probe_environment"
 # Graph traversal depth for the scaffold's W0-07 context pull (the 2-degree perf lever).
 _CONTEXT_DEGREE = 1
 
@@ -92,33 +101,50 @@ def build_sol_registry(
     hosted_inventory: "Mapping[str, Any] | None" = None,
     redis: Any | None = None,
     bundle_capabilities: "Sequence[tuple[WidgetCapability, ExtensionManifest]] | None" = None,
+    artifact_store: "ArtifactStore | None" = None,
+    enqueue: Any | None = None,
+    artifact_ttl_seconds: int | None = None,
+    brave_tools: "Sequence[MCPTool] | None" = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
     tools are registered here, never proposed by a model.
 
     When a bridge session registry + full scope are supplied (SOLUSDEV-154), one
-    BridgeTool per entry of the LIVE session's cloud-validated inventory is added —
+    BridgeTool per model-facing entry of the LIVE cloud-validated inventory is added —
     the turn's tool set reflects the requesting user's connected companion at turn
     start, fixed here before any model or ingested content is seen. The bridge
     package relays JSON only, so the reasoning import graph stays MCP-free."""
     registry = ToolRegistry()
     registry.register(build_get_entity_tool(session_factory, project_id))
+    # The bridge tools come FIRST: the machine's own `list_environments` read is
+    # what `link_environment` (a user tool) files from, and a tool cannot be built
+    # from an inventory that has not been walked yet.
+    fetch_environments: EnvironmentFetch | None = None
+    if bridge is not None and user_id is not None and team_id is not None:
+        fetch_environments = _register_bridge_tools(
+            registry,
+            session_factory,
+            project_id,
+            bridge=bridge,
+            user_id=user_id,
+            team_id=team_id,
+            bridge_call_cap_bytes=bridge_call_cap_bytes,
+            secret_store=secret_store,
+        )
     if user_id is not None:
-        # SOLUSDEV-240: SOL may file a note into the project `.solus` as the
-        # requesting user. Function-local import (house pattern).
-        from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
-
-        registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
-        # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
-        # graph, never the model's. Function-local import (house pattern).
-        from solus_api.agent.tools.environment import build_resolve_environment_tool
-        from solus_api.sourcing.tools import build_derive_torque_tool
-
-        # SOLUSDEV-250: the Code environment proposal (read-only, project-bound).
-        registry.register(build_resolve_environment_tool(session_factory, project_id))
-
-        registry.register(build_derive_torque_tool(session_factory, project_id))
+        _register_user_tools(
+            registry,
+            session_factory,
+            project_id,
+            user_id=user_id,
+            artifact_store=artifact_store,
+            secret_store=secret_store,
+            redis=redis,
+            enqueue=enqueue,
+            artifact_ttl_seconds=artifact_ttl_seconds,
+            fetch_environments=fetch_environments,
+        )
     if systems is not None:
         # SYS-03: the four builtin reads (query_graph / get_telemetry /
         # retrieve_errors / run_checkers) as thin closures over the real
@@ -130,6 +156,20 @@ def build_sol_registry(
         for tool in build_builtin_tools(systems, project_id):
             registry.register(tool)
     if connectors is not None:
+        from solus_api.agent.tools.read_code_file import build_read_code_file_tool
+
+        registry.register(
+            build_read_code_file_tool(
+                session_factory,
+                project_id,
+                secret_store=secret_store,
+                connectors=connectors,
+                bridge=bridge,
+                user_id=user_id,
+                team_id=team_id,
+                bridge_call_cap_bytes=bridge_call_cap_bytes,
+            )
+        )
         # SOLUS-ONS-A1: Onshape operations as in-process tools. Function-local
         # import for the same reason the bridge one is — the reasoning import
         # graph must not grow a connector dependency. Each tool is bound to THIS
@@ -169,21 +209,110 @@ def build_sol_registry(
             hosted_inventory=hosted_inventory,
             redis=redis,
         )
-    if bridge is not None and user_id is not None and team_id is not None:
-        _register_bridge_tools(
-            registry,
-            session_factory,
-            project_id,
-            bridge=bridge,
-            user_id=user_id,
-            team_id=team_id,
-            bridge_call_cap_bytes=bridge_call_cap_bytes,
-            secret_store=secret_store,
-        )
     _register_bundle_tools(
         registry, session_factory, project_id, user_id=user_id, bundles=bundle_capabilities or ()
     )
+    _register_research_tool(registry, brave_tools or ())
     return registry
+
+
+def _register_research_tool(registry: ToolRegistry, brave_tools: "Sequence[MCPTool]") -> None:
+    """SOLUSDEV-252 P6: the web `research` tool. Discovery is async and spawns the
+    vendored Brave fork, so it happens in `deps.get_sol_registry` (request scope)
+    and only its RESULT reaches this synchronous assembly. With no brave tools
+    the loop is not registered at all — SOL learns from the capability's absence
+    rather than from a failure per call.
+
+    ponytail: nothing bounds research per team beyond MAX_MODEL_ROUNDS, and every
+    tenant shares one `brave_api_key` — per-team research budgets are the named
+    upgrade path (ADR-019)."""
+    if not brave_tools:
+        return
+    from solus_api.agent.tools.research_tool import register_research_tool
+
+    register_research_tool(registry, brave_tools=brave_tools)
+
+
+def _register_user_tools(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID,
+    artifact_store: "ArtifactStore | None",
+    secret_store: "SecretStore | None" = None,
+    redis: Any | None = None,
+    enqueue: Any | None = None,
+    artifact_ttl_seconds: int | None = None,
+    fetch_environments: "EnvironmentFetch | None" = None,
+) -> None:
+    """Tools that act AS the requesting user (their id is recorded on every row).
+    Function-local imports throughout (house pattern)."""
+    # SOLUSDEV-240: SOL may file a note into the project `.solus`.
+    from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
+
+    registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
+    # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
+    # graph, never the model's.
+    from solus_api.sourcing.tools import build_derive_torque_tool
+
+    registry.register(build_derive_torque_tool(session_factory, project_id))
+    from solus_api.agent.tools.environment import build_resolve_environment_tool
+
+    registry.register(build_resolve_environment_tool(session_factory, project_id))
+    if artifact_store is not None:
+        # SOLUSDEV-252 S5: SOL draws a diagram into a TTL artifact (ungated, like
+        # add_solus_entry — see make_diagram.py). Needs the store the artifacts
+        # route serves from, so the reference it returns is fetchable.
+        from solus_api.agent.tools.make_diagram import register_diagram_tools
+
+        register_diagram_tools(
+            registry,
+            session_factory=session_factory,
+            store=artifact_store,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        # SOLUSDEV-252 S5: the GATED `.solus` writers (edit / delete / hardware
+        # config field). Every one carries a preview and requires_confirmation,
+        # so they reach dispatch through the same park-and-approve gate as any
+        # other destructive tool — the registry stays a pure dispatcher.
+        from solus_api.agent.tools.solus_tools import register_solus_write_tools
+
+        register_solus_write_tools(
+            registry,
+            session_factory=session_factory,
+            store=artifact_store,
+            project_id=project_id,
+            user_id=user_id,
+            # Present only with a connected companion: `link_environment` files
+            # what the machine reports, so with no machine there is nothing to
+            # offer (S5, "creates and links environments").
+            fetch_environments=fetch_environments,
+        )
+        if secret_store is not None:
+            # SOLUSDEV-252 S5c: read a datasheet (fetch or a stored artifact),
+            # render it, and extract specs with page citations; the second tool
+            # (proposing a part definition) is gated. Needs the secret store,
+            # redis and the enqueue seam because the extraction is a METERED
+            # model call through the gateway.
+            from solus_api.agent.tools.read_document import register_document_tools
+
+            register_document_tools(
+                registry,
+                session_factory=session_factory,
+                store=artifact_store,
+                project_id=project_id,
+                user_id=user_id,
+                secret_store=secret_store,
+                redis=redis,
+                enqueue=enqueue,
+                **(
+                    {"artifact_ttl_seconds": artifact_ttl_seconds}
+                    if artifact_ttl_seconds is not None
+                    else {}
+                ),
+            )
 
 
 def _register_bundle_tools(
@@ -279,8 +408,17 @@ def _register_bridge_tools(
     team_id: uuid.UUID,
     bridge_call_cap_bytes: int,
     secret_store: "SecretStore | None",
-) -> None:
-    """One BridgeTool per entry of the LIVE session's cloud-validated inventory.
+) -> "EnvironmentFetch | None":
+    """Register model-facing entries from the live cloud-validated inventory.
+
+    Native graph-reader primitives stay internal to their scoped wrappers.
+
+    Returns the machine's environment read (`code.probe_environment`) as a
+    plain callable when this companion advertises it, so `link_environment` can
+    file OBSERVED environments without reaching into the registry. This is the
+    only place a tool handle is invoked outside the gated dispatcher, and it is
+    deliberate: `list_environments` is the ungated read of the same inventory the
+    model already sees, and the write it feeds is itself gated (SEC-H4).
 
     Function-local imports like BridgeTool itself: the reasoning import graph
     stays MCP-ignorant; the catalog is consulted only when a bridge is wired."""
@@ -294,8 +432,16 @@ def _register_bridge_tools(
 
     session = bridge.get(user_id, team_id, project_id)
     if session is None:
-        return
+        return None
+    environments: EnvironmentFetch | None = None
+    tools: list[BridgeTool] = []
     for spec in session.inventory:
+        # Automatic code reads must resolve graph identity and the turn's selected
+        # revision through read_code_file. Keep this native primitive available to
+        # that wrapper's internal dispatch, never as a model-visible fallback.
+        # The separate general machine.read_file remains confirmation-gated.
+        if spec.descriptor.name == "machine.read_code_file":
+            continue
         # MCP-05: byo_paid servers get the invoke-time license gate;
         # free-tier and uncataloged servers get zero new checks.
         catalog_spec = MCP_SERVER_CATALOG.get(spec.server)
@@ -308,27 +454,52 @@ def _register_bridge_tools(
                 team_id=team_id,
                 secret_store=secret_store,
             )
-        registry.register(
-            BridgeTool(
-                descriptor=spec.descriptor,
-                sessions=bridge,
-                user_id=user_id,
-                team_id=team_id,
-                project_id=project_id,
-                call_cap_bytes=bridge_call_cap_bytes,
-                preflight=preflight,
-                # SOLUSDEV-251: a companion WRITE previews by reading through the
-                # same bridge first, so the approval card shows before → after.
-                # The reader carries the SAME license preflight as the tool
-                # (review M1): a BYO-paid server never yields a free read.
-                preview=preview_builder(
-                    spec.descriptor.name,
-                    _bridge_reader(
-                        bridge, user_id, team_id, project_id, bridge_call_cap_bytes, preflight
-                    ),
+        tool = BridgeTool(
+            descriptor=spec.descriptor,
+            sessions=bridge,
+            user_id=user_id,
+            team_id=team_id,
+            project_id=project_id,
+            call_cap_bytes=bridge_call_cap_bytes,
+            preflight=preflight,
+            # SOLUSDEV-251: a companion WRITE previews by reading through the
+            # same bridge first, so the approval card shows before → after.
+            # The reader carries the SAME license preflight as the tool
+            # (review M1): a BYO-paid server never yields a free read.
+            preview=preview_builder(
+                spec.descriptor.name,
+                _bridge_reader(
+                    bridge, user_id, team_id, project_id, bridge_call_cap_bytes, preflight
                 ),
-            )
+            ),
         )
+        tools.append(tool)
+        # BOTH conditions, every time. The name pins WHICH tool and the gate flag
+        # pins WHAT KIND of tool may be reached this way: a rename in the machine
+        # allowlist must lose `link_environment`, and a gated tool must never be
+        # reachable from here even if it somehow answered to this name. The
+        # default-argument bind is what keeps the closure on THIS spec rather
+        # than late-binding to the last one in the loop.
+        if spec.descriptor.name == _CODE_ENVIRONMENTS and not spec.descriptor.requires_confirmation:
+
+            async def environments(
+                environment: str | None = None, _tool: "BridgeTool" = tool
+            ) -> Any:
+                from solus_api.services.code_environment_adapter import observed_environments
+
+                return observed_environments(
+                    await _tool.invoke(
+                        {"environment": environment} if environment is not None else {}
+                    )
+                )
+
+    from solus_api.services.code_environment_adapter import with_environment_recording
+
+    for tool in tools:
+        registry.register(
+            with_environment_recording(tool, environments, session_factory, project_id, user_id)
+        )
+    return environments
 
 
 def _bridge_reader(
@@ -417,6 +588,11 @@ class AgentRunContext:
     #: (see modes.build_mode_dispatch), this field just makes the choice explicit
     #: and inspectable. Guide is the safe default — it never mutates.
     action_mode: ActionMode = ActionMode.GUIDE
+    #: S1-W3: the composer's "Think harder". One tier above what the estimator
+    #: says the live message needs (HARD stays HARD), passed to the gateway as an
+    #: EXPLICIT tier — so on window overflow it refuses rather than escalates,
+    #: the documented override semantics. Never a model name.
+    think_harder: bool = False
     #: SOLUSDEV-233: the user's saved preference note. Reaches the prompt only
     #: through prompt.system_prompt's fenced data block, never as raw text.
     custom_instruction: str | None = None
@@ -455,6 +631,11 @@ class AgentRunContext:
     #: rather than as the user's own words — the extension's text is fenced
     #: data under Solus-authored framing, never first-class user text.
     extension_slug: str | None = None
+    #: SOLUSDEV-252 S3 (sol-window.md §8): the screenshot the person attached,
+    #: already decoded and sniffed by the route. Pixels for THIS turn only: the
+    #: extractor pass reads them, the live user Turn carries them, the
+    #: transcript never sees them.
+    screenshot: "screen.ScreenshotBlock | None" = None
 
 
 #: A proposed call → its result. The gate is inside; see `build_dispatch`.
@@ -651,13 +832,31 @@ class ScaffoldRunner:
 #: tool calls forever. One guard per concern — the runner does not re-count tool
 #: calls, and the transport does not count rounds.
 MAX_MODEL_ROUNDS: Final = 5
-#: A tool loop needs more headroom than the gateway's 4096 text default.
-SOL_MAX_TOKENS: Final = 8192
+#: A tool loop needs more headroom than the gateway's 4096 text default — and
+#: Responses-style providers count REASONING tokens against max_output_tokens
+#: (OpenAI recommends headroom), so 8192 could truncate a reasoned tool round.
+SOL_MAX_TOKENS: Final = 16384
 
 _ROUND_LIMIT = (
     "I stopped after several rounds of tool calls without reaching an answer. "
     "Try narrowing the question."
 )
+
+
+def _preferences_tokens(preferences: "Mapping[str, str] | None", estimator: Any) -> int:
+    """What the system prompt spends on the root `~/.solus` preferences — the
+    preferences layer carries no text of its own, only this count (S5).
+    ponytail: counted off the same mapping prompt.system_prompt JSON-encodes;
+    the answer-styling `custom_instruction` is a different layer's business."""
+    if not preferences:
+        return 0
+    return estimate_tokens(json.dumps(dict(preferences), default=str), config=estimator)
+
+
+def _conversation_tokens(history: "tuple[TurnView, ...]", live: str, estimator: Any) -> int:
+    """The surrounding turns plus the live message — the conversation layer's
+    text lives in the runner's Turns, so the layer reports only this count."""
+    return estimate_tokens("\n".join((*(turn.content for turn in history), live)), config=estimator)
 
 
 class LlmRunner:
@@ -683,13 +882,17 @@ class LlmRunner:
             raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
 
         system = prompt.system_prompt(
-            ctx.sol_mode, ctx.custom_instruction, ctx.engineering_preferences
+            ctx.sol_mode,
+            ctx.custom_instruction,
+            ctx.engineering_preferences,
+            with_screenshot=ctx.screenshot is not None,
         )
         tools = prompt.tool_specs(ctx.tools)
         nonce = prompt.new_nonce()
         # SOL-02: plan what to pull (deterministic, no model call), assemble
         # the W0-07 context, and hand it to the model as fenced data blocks.
         plan = reason.plan_query(ctx.prompt, mentions=ctx.mentions)
+        estimator = gateway.default_orchestration_config().type_estimator
         context = await build_context(
             ctx.systems,
             ctx.prompt,
@@ -701,19 +904,51 @@ class LlmRunner:
             # CORPUS C2 (ADR-036): mode only orders corpus ties — Guide reads
             # fundamentals first, Expert reference first. Never a filter.
             mode=ctx.sol_mode,
+            # S5 (sol-context-layers.md): the request's sessionmaker loads THIS
+            # project's live `.solus` entries into the project layer — without it
+            # the layer reported ".solus not loaded" on every real turn — and
+            # `preferences_tokens` is what the system prompt above already spent
+            # on the person's root preferences, so the layer reports it honestly
+            # instead of claiming "no preferences" while carrying them.
+            sessionmaker=ctx.sessionmaker,
+            preferences_tokens=_preferences_tokens(ctx.engineering_preferences, estimator),
         )
+        if ctx.screenshot is not None:
+            # S3: the VISUAL_LOG extractor pass — THE vision call of the turn.
+            # Degrades to an honest string on any failure; never fails the turn.
+            async with ctx.sessionmaker() as session:
+                screen_read = await screen.read_screen(
+                    ctx.screenshot,
+                    secret_store=ctx.secret_store,
+                    user_id=ctx.user_id,
+                    session=session,
+                    redis=ctx.redis,
+                    enqueue=ctx.enqueue,
+                    adapters=self._adapters,
+                    extension_id=ctx.extension_id,
+                )
+            # Into the screen LAYER rather than appended after the context: the
+            # read reached the model either way, but it was absent from the
+            # manifest and rendered out of precedence order.
+            context = context.with_screen(
+                screen.screen_section(nonce, ctx.screenshot, screen_read),
+                max(1, estimate_tokens(screen_read, config=estimator)),
+            )
+        context = context.with_conversation(
+            tokens=_conversation_tokens(ctx.history, ctx.prompt, estimator)
+        )
+        sections = [
+            {"kind": s.kind, "citation": s.citation, "tokens": s.tokens} for s in context.sections
+        ]
         # SOLUSDEV-233: declare the turn's context up front so clients can show
         # what SOL is grounded in. Manifest only — no section text.
         yield AgentEvent.context_used(
-            sections=[
-                {"kind": s.kind, "citation": s.citation, "tokens": s.tokens}
-                for s in context.sections
-            ],
-            truncated=context.truncated,
-            dropped=len(context.dropped),
+            sections=sections, truncated=context.truncated, dropped=len(context.dropped)
         )
         turns = self._opening_turns(ctx, nonce, context)
         completion = None
+        complexity = self._complexity_override(ctx)
+        route_type: RouteType | None = None
 
         for _ in range(MAX_MODEL_ROUNDS):
             completion = None
@@ -721,7 +956,17 @@ class LlmRunner:
                 stream = gateway.stream(
                     prompt.flatten(turns),
                     secret_store=ctx.secret_store,
+                    # The context derives the route TYPE; the tier comes from the
+                    # estimator on the person's live message (S1), never from the
+                    # context's HARD default — unless "think harder" made it explicit.
+                    # From round 2 on, BOTH axes are pinned to round 1's choice: the
+                    # growing conversation must not escalate the model mid-turn,
+                    # because `provider_items` (encrypted reasoning) are bound to
+                    # the model that produced them and would 400 on another.
                     context=ctx.interaction_context,
+                    estimate_from=ctx.prompt,
+                    complexity=complexity,
+                    type=route_type,
                     conversation=ToolConversation(system=system, messages=turns, tools=tools),
                     user_id=ctx.user_id,
                     session=session,
@@ -744,6 +989,7 @@ class LlmRunner:
 
             if completion is None:
                 break
+            complexity, route_type = completion.model.complexity, completion.model.route_type
             if not completion.tool_calls:
                 # Post-process: prose stripped of any model-authored Sources
                 # line; verified citations travel as STRUCTURED data the model
@@ -754,7 +1000,14 @@ class LlmRunner:
 
             turns = (
                 *turns,
-                Turn(role="assistant", text=completion.text, tool_uses=completion.tool_calls),
+                Turn(
+                    role="assistant",
+                    text=completion.text,
+                    tool_uses=completion.tool_calls,
+                    # Opaque replay items ride to the next round only; the
+                    # transcript never sees them (_persist_turn builds from events).
+                    provider_items=completion.provider_items,
+                ),
             )
             outcomes: list[ToolOutcome] = []
             for use in completion.tool_calls:
@@ -769,12 +1022,33 @@ class LlmRunner:
                 )
                 yield AgentEvent.tool_call(call)
                 result = await ctx.dispatch(call)  # gates, then invokes
+                descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
+                # S5 Error logging: a failed local-machine action is filed into the
+                # project's .solus errors section BEFORE the client sees the result,
+                # so the Workspace already has the note. Never raises.
+                await file_tool_error(
+                    ctx.sessionmaker,
+                    project_id=ctx.project_id,
+                    user_id=ctx.user_id,
+                    call=call,
+                    result=result,
+                    descriptor=descriptor,
+                    # A `requires_confirmation` tool is NEVER executed from inside
+                    # a turn: the gate parks it and Guide mode refuses it, both off
+                    # this same flag. Its refusal is `ok=False`, so filing on
+                    # `not ok` alone filed a false Errors row per model round the
+                    # moment SOL PROPOSED the action. Its real failure is filed
+                    # where it really runs — confirmations.decide_confirmation.
+                    executed=descriptor is not None and not descriptor.requires_confirmation,
+                )
                 # EVERY outcome goes back to the model, including a parked one.
                 # A failure it can correct (NOT_FOUND for a hallucinated tool,
                 # INVALID_ARGS, TIMEOUT) it corrects; a park it is told to leave
                 # alone and work around. See the note below the loop.
                 yield AgentEvent.tool_result(result)
-                descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
+                artifact = AgentEvent.artifact_from_result(call.tool, result)
+                if artifact is not None:
+                    yield artifact  # a reference the renderer can view/file; never bytes
                 outcomes.append(
                     prompt.contain_result(
                         call, result, cap=descriptor.result_cap if descriptor else None
@@ -812,10 +1086,28 @@ class LlmRunner:
         yield AgentEvent.message(prose, citations=citations)
 
     @staticmethod
+    def _complexity_override(ctx: AgentRunContext) -> Complexity | None:
+        """None (the gateway's estimator decides) unless "think harder": the
+        estimator's tier for the live message, one up, made explicit."""
+        if not ctx.think_harder:
+            return None
+        estimator = gateway.default_orchestration_config().estimator
+        tier = bump_complexity(estimate_complexity(ctx.prompt, config=estimator))
+        logger.info(
+            "think harder: tier=%s user_id=%s project_id=%s",
+            tier.value,
+            ctx.user_id,
+            ctx.project_id,
+        )
+        return tier
+
+    @staticmethod
     def _opening_turns(ctx: AgentRunContext, nonce: str, context: "Context") -> tuple[Turn, ...]:
         """History, then the reasoning context, then the live message — every
         ingested string fenced as DATA (context sections fence themselves via
-        Context.fenced)."""
+        Context.fenced). The S3 screen read is a section of the context's screen
+        LAYER (`with_screen`), so it renders in precedence order rather than
+        after it. The screenshot's pixels ride the same live turn as `images`."""
         turns: list[Turn] = []
         if ctx.history:
             turns.append(
@@ -834,5 +1126,8 @@ class LlmRunner:
             if ctx.extension_slug
             else prompt.data_block(nonce, "user_message", ctx.prompt)
         )
-        turns.append(Turn(role="user", text=context.fenced(nonce) + "\n" + live))
+        images = (ctx.screenshot.image,) if ctx.screenshot is not None else ()
+        turns.append(
+            Turn(role="user", text="\n".join((context.fenced(nonce), live)), images=images)
+        )
         return tuple(turns)

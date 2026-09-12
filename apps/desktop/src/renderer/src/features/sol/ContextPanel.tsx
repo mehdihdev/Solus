@@ -8,13 +8,7 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import type { ContextUsedInfo } from './solStream'
 import { useCustomInstruction } from './useCustomInstruction'
-
-/** Strip the citation's [connector:ref] wrapper down to a readable label. */
-export function citationLabel(citation: string): string {
-  const inner = citation.replace(/^\[/, '').replace(/\]$/, '')
-  const at = inner.indexOf(':')
-  return at === -1 ? inner : inner.slice(at + 1)
-}
+import { citationLabel } from './citationLabel'
 
 const INSTRUCTION_CAP = 500
 
@@ -185,6 +179,19 @@ function manifestFootnote(context: ContextUsedInfo): string | null {
   return parts.length > 0 ? parts.join(' · ') : null
 }
 
+/** SOLUSDEV-252 S3: the VISUAL_LOG extractor's read of the circled region —
+ *  a proposal, labelled as such (sol-window.md §8). */
+function ScreenLine({ tokens }: { tokens: number }): React.JSX.Element {
+  return (
+    <Card pad={12} className="sol-panel-in" style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <div style={{ fontSize: 12, fontWeight: 600 }}>Screen (tentative read)</div>
+        <Mono size={9.5}>{tokens} tokens</Mono>
+      </div>
+    </Card>
+  )
+}
+
 function ManifestCards({ context }: { context: ContextUsedInfo | null }): React.JSX.Element {
   if (!context) {
     return (
@@ -206,10 +213,12 @@ function ManifestCards({ context }: { context: ContextUsedInfo | null }): React.
     ...graphCited.map((s) => citationLabel(s.citation ?? '')),
     ...(graphUncited > 0 ? [`graph context ×${graphUncited}`] : [])
   ]
+  const screen = context.sections.find((s) => s.kind === 'screen')
   return (
     <>
       <ContextFilesCard labels={documents.map((s) => citationLabel(s.citation ?? ''))} />
       <GraphChipsCard labels={graphLabels} footnote={manifestFootnote(context)} />
+      {screen && <ScreenLine tokens={screen.tokens} />}
     </>
   )
 }

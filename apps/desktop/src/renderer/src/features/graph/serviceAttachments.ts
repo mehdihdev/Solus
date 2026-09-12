@@ -40,7 +40,7 @@ export async function attachServiceDocument(options: AttachOptions): Promise<Ser
   if (options.connection.status !== 'connected')
     throw new Error('Reconnect this account in Home first.')
   if (!supportsWorkspaceService(options.connection.provider))
-    throw new Error('Open this integration in Sources.')
+    throw new Error('Open this integration from Home › Connected accounts.')
   return options.connection.provider === 'onshape'
     ? attachOnshape(options)
     : attachRepository(options)
@@ -114,12 +114,13 @@ export async function waitForServiceJob({
     if (job.status === 'succeeded') return
     if (job.status === 'failed' || job.status === 'cancelled')
       throw new Error(
-        job.error?.message ?? 'The document import did not finish. Check Sources for details.'
+        job.error?.message ??
+          'The document import did not finish. Check Home › Connected accounts for details.'
       )
     await sleep(2000)
   }
   throw new Error(
-    'The import is still running. Check Sources for progress; it has not been restarted.'
+    'The import is still running. Check Home › Connected accounts for progress; it has not been restarted.'
   )
 }
 

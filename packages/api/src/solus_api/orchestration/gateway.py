@@ -133,6 +133,11 @@ class Completion(BaseModel):
     #: so existing callers are unaffected. Proposals only — Solus code decides
     #: whether any of them runs.
     tool_calls: tuple[ToolUse, ...] = ()
+    #: Cached-prefix subset of `tokens_in` (prompt caching); 0 when unknown.
+    tokens_cached_in: int = 0
+    #: Opaque provider replay items (see `providers.Usage.provider_items`). The
+    #: runner copies them onto the next assistant `Turn`; nothing else reads them.
+    provider_items: tuple[dict[str, Any], ...] = ()
 
 
 def _select_adapter(provider: str, adapters: Mapping[str, ProviderAdapter]) -> ProviderAdapter:
@@ -173,6 +178,7 @@ async def _fire_cost_hook(
         entry=config.entry_for_role(model.role),
         enqueue=enqueue,
         extension_id=extension_id,
+        tokens_cached_in=usage.tokens_cached_in,
     )
 
 
@@ -330,15 +336,18 @@ class CompletionStream:
             model=self._model,
             call_id=self._call_id,
             tool_calls=tuple(self._tool_uses),
+            tokens_cached_in=usage.tokens_cached_in,
+            provider_items=tuple(usage.provider_items),
         )
         logger.info(
             "model call done call_id=%s provider=%s model=%s role=%s "
-            "tokens_in=%d tokens_out=%d duration_ms=%d",
+            "tokens_in=%d tokens_cached_in=%d tokens_out=%d duration_ms=%d",
             self._call_id,
             self._model.provider,
             self._model.model_name,
             self._model.role,
             usage.tokens_in,
+            usage.tokens_cached_in,
             usage.tokens_out,
             int((time.monotonic() - self._started) * 1000),
         )
@@ -377,6 +386,7 @@ def stream(
     enqueue: EnqueueFn | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     extension_id: uuid.UUID | None = None,
+    estimate_from: str | None = None,
 ) -> CompletionStream:
     """Streaming variant of the gateway. Routing and adapter selection happen
     here (synchronously); gates and the provider call start on first iteration.
@@ -416,6 +426,7 @@ def stream(
         context=context,
         type=type,
         attachments=attachments,
+        estimate_from=estimate_from,
         config=resolved_config,
     )
     if not resolved.fits:
@@ -445,6 +456,11 @@ def stream(
         choice.complexity,
         choice.route_type,
     )
+    # `reasoning_effort` rides only when the catalog entry sets one, so adapters
+    # (and test fakes) for non-reasoning entries keep the pre-S1 call shape.
+    effort_kw: dict[str, str] = (
+        {"reasoning_effort": choice.reasoning_effort} if choice.reasoning_effort else {}
+    )
     return CompletionStream(
         lambda: adapter.stream(
             choice.model_name,
@@ -452,6 +468,7 @@ def stream(
             max_tokens=max_tokens,
             images=images,
             conversation=conversation,
+            **effort_kw,
         ),
         call_id=call_id,
         model=choice,
@@ -482,6 +499,7 @@ async def complete(
     enqueue: EnqueueFn | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     extension_id: uuid.UUID | None = None,
+    estimate_from: str | None = None,
 ) -> Completion:
     """Request-response gateway call: drains the streaming path (one code path,
     identical usage numbers) and returns the full `Completion`. Routing, window
@@ -503,6 +521,7 @@ async def complete(
         enqueue=enqueue,
         max_tokens=max_tokens,
         extension_id=extension_id,
+        estimate_from=estimate_from,
     )
     async for _ in completion_stream:
         pass

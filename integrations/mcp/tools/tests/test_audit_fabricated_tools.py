@@ -115,7 +115,7 @@ def test_a_target_whose_handle_is_missing_would_report_a_vacuous_zero(tmp_path: 
     CAD_HANDLES is per-target and must be checked against the tree first."""
     unknown_seam = NEVER_TOUCHES_CAD.replace(
         'return {"status": "success", "material"',
-        'result = await some_unlisted_seam.get_material()\n'
+        "result = await some_unlisted_seam.get_material()\n"
         '    return {"status": "success", "material"',
     )
 

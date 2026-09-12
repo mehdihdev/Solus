@@ -25,7 +25,7 @@ import math
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from solus_api.fingerprint.contract import MatchState, Modality, ModalityMatch, SourceRef
 
@@ -33,10 +33,14 @@ from livebench.definitions.usb_boards import BOARD_TABLE, Board, BoardClass
 
 __all__ = [
     "BOARD_TABLE",
+    "BindingBasis",
     "Board",
     "BoardClass",
     "PortIdentity",
+    "PORT_BINDING_PREFIX",
     "StreamShape",
+    "binding_key",
+    "binding_of",
     "characterize_stream",
     "enumerate_usb_serial",
     "identify_port",
@@ -64,13 +68,43 @@ class PortIdentity:
     board: Board | None
     mcu_known: bool
     evidence: ModalityMatch
+    #: USB topology position (`3-1.4.2`) — the honest fallback binding for a device that
+    #: carries no serial number. It identifies the PORT, so a move is a new device.
+    location: str | None = None
+
+
+PORT_BINDING_PREFIX: Final = "port-"
+BindingBasis = Literal["serial", "port_position", "none"]
+
+
+def binding_of(identity: PortIdentity) -> tuple[str | None, BindingBasis]:
+    """The transport binding this device can honestly carry, and which branch produced it:
+    its USB serial, else its USB port position as `port-<location>` (identity from the port —
+    a move is a new device), else nothing. A device-supplied serial is untrusted (§7): one
+    that claims the `port-` prefix can never mint a port key and is treated as absent."""
+    if identity.serial and not identity.serial.startswith(PORT_BINDING_PREFIX):
+        return identity.serial, "serial"
+    if identity.location:
+        return f"{PORT_BINDING_PREFIX}{identity.location}", "port_position"
+    return None, "none"
+
+
+def binding_key(identity: PortIdentity) -> str | None:
+    return binding_of(identity)[0]
+
+
+def _location_of(raw: str | None) -> str | None:
+    """`3-1.4.1.1.3:1.0` → `3-1.4.1.1.3` (the text before the interface suffix)."""
+    return raw.split(":", 1)[0] or None if raw else None
 
 
 def resolve_board(vid: int, pid: int) -> Board | None:
     return BOARD_TABLE.get((vid, pid))
 
 
-def identify_port(*, device: str, vid: int, pid: int, serial: str | None) -> PortIdentity:
+def identify_port(
+    *, device: str, vid: int, pid: int, serial: str | None, location: str | None = None
+) -> PortIdentity:
     board = resolve_board(vid, pid)
     ref = SourceRef(source_connector="usb", external_ref=f"{device}/{vid:04x}:{pid:04x}")
     if board is None:
@@ -85,7 +119,7 @@ def identify_port(*, device: str, vid: int, pid: int, serial: str | None) -> Por
                 "note": "unknown VID/PID — reported as unknown, never guessed",
             },
         )
-        return PortIdentity(device, vid, pid, serial, None, False, match)
+        return PortIdentity(device, vid, pid, serial, None, False, match, location)
     if board.kind is BoardClass.USB_BRIDGE:
         match = ModalityMatch(
             modality=Modality.BUS_ENUMERATION,
@@ -101,7 +135,7 @@ def identify_port(*, device: str, vid: int, pid: int, serial: str | None) -> Por
                 ),
             },
         )
-        return PortIdentity(device, vid, pid, serial, board, False, match)
+        return PortIdentity(device, vid, pid, serial, board, False, match, location)
     match = ModalityMatch(
         modality=Modality.BUS_ENUMERATION,
         source_ref=ref,
@@ -113,7 +147,7 @@ def identify_port(*, device: str, vid: int, pid: int, serial: str | None) -> Por
             "note": f"{board.name}; {_PART_NOT_JOINT}",
         },
     )
-    return PortIdentity(device, vid, pid, serial, board, True, match)
+    return PortIdentity(device, vid, pid, serial, board, True, match, location)
 
 
 def enumerate_usb_serial() -> list[PortIdentity]:
@@ -125,7 +159,13 @@ def enumerate_usb_serial() -> list[PortIdentity]:
         if port.vid is None or port.pid is None:
             continue  # not USB (platform serial); nothing to claim
         identities.append(
-            identify_port(device=port.device, vid=port.vid, pid=port.pid, serial=port.serial_number)
+            identify_port(
+                device=port.device,
+                vid=port.vid,
+                pid=port.pid,
+                serial=port.serial_number,
+                location=_location_of(port.location),
+            )
         )
     return identities
 

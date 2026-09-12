@@ -12,7 +12,7 @@ from typing import Any
 from conftest import add_member, bearer, create_project, create_team
 from fastapi import FastAPI
 from httpx import AsyncClient
-from solus_api.agent.confirmations import failure_entry_text
+from solus_api.agent.errors_filing import run_failure
 from solus_api.agent.tools.environment import resolve_environment
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolResult
 from solus_api.bridge.allowlist import BridgeToolSpec
@@ -272,36 +272,36 @@ async def test_resolve_tool_reads_only_this_project(db: AsyncSession) -> None:
 
 
 def test_failure_entry_text_only_for_real_failures() -> None:
-    assert failure_entry_text("code.test", {"exit_code": 0, "argv": ["x"]}) is None
+    from solus_api.agent.errors_filing import format_error_entry
+    from solus_api.agent.tools.shapes import ToolCall, ToolResult
+
+    assert run_failure(ToolResult.success("fixture", {"exit_code": 0})) is None
     assert (
-        failure_entry_text("code.test", {"ok": False, "exit_code": None, "reason": "refused"})
+        run_failure(
+            ToolResult.success("fixture", {"ok": False, "exit_code": None, "reason": "refused"})
+        )
         is None
     )
-    text = failure_entry_text(
-        "code.test",
-        {
-            "exit_code": 1,
-            "argv": [".venv/bin/python", "-m", "pytest", "-q"],
-            "stderr_tail": "E   assert 1 == 2",
-        },
+    value = {
+        "exit_code": 1,
+        "argv": [".venv/bin/python", "-m", "pytest", "-q"],
+        "stdout_tail": "FAILED tests/test_policy.py::test_reward_is_positive",
+        "stderr_tail": "warning: x",
+    }
+    text = format_error_entry(
+        ToolCall(tool="code.test", args={}), ToolResult.success("fixture", value)
     )
-    assert text is not None and text.startswith(".venv/bin/python -m pytest -q exited 1")
-    assert "assert 1 == 2" in text
-    # pytest reports on STDOUT: the failing test's name must reach the entry.
-    both = failure_entry_text(
-        "code.test",
-        {
-            "exit_code": 1,
-            "argv": ["p"],
-            "stdout_tail": "F\nFAILED tests/test_policy.py::test_reward_is_positive\n",
-            "stderr_tail": "warning: x\n",
-        },
-    )
-    assert both is not None and "test_reward_is_positive" in both and "warning: x" in both
-    assert both.index("test_reward_is_positive") < both.index("warning: x")
+    assert "exit 1" in text
+    assert "test_reward_is_positive" in text and "warning: x" in text
+    assert text.index("test_reward_is_positive") < text.index("warning: x")
     assert (
-        len(failure_entry_text("code.run", {"exit_code": 2, "stderr_tail": "x" * 10000}) or "")
-        < 3200
+        len(
+            format_error_entry(
+                ToolCall(tool="code.run", args={}),
+                ToolResult.success("fixture", {"exit_code": 2, "stderr_tail": "x" * 10000}),
+            )
+        )
+        <= 4000
     )
 
 
@@ -346,6 +346,7 @@ async def test_failed_confirmed_test_is_filed_into_error_logging(
                 params={"type": "object", "properties": {"target": {"type": "string"}}},
                 returns={"type": "object"},
                 requires_confirmation=True,
+                files_errors=True,
             ),
             failing_test,
         )
@@ -371,7 +372,8 @@ async def test_failed_confirmed_test_is_filed_into_error_logging(
             user_id=user_id,
         )
         await session.commit()
-    assert result.ok is True and result.value["exit_code"] == 1
+    assert result.ok is True and result.value is not None
+    assert result.value["exit_code"] == 1
     async with maker() as session:
         entries = (
             await session.scalars(
@@ -381,7 +383,10 @@ async def test_failed_confirmed_test_is_filed_into_error_logging(
             )
         ).all()
     assert len(entries) == 1
-    assert entries[0].text.startswith(".venv/bin/python -m pytest -q -- tests exited 1")
+    assert entries[0].text is not None
+    assert entries[0].text.startswith("Tool failure: code.test")
+    assert '[".venv/bin/python", "-m", "pytest", "-q", "--", "tests"]' in entries[0].text
+    assert "exit 1" in entries[0].text
     assert "test_reward" in entries[0].text
     assert entries[0].author == "sol"
 
@@ -462,5 +467,6 @@ def test_the_code_allowlist_bounds_exceed_the_servers_own_cap() -> None:
     )
     bounds = {tool.name: tool.timeout_seconds for tool in parsed.tools}
     for name in ("create_environment", "install", "run", "test"):
-        assert bounds[name] is not None and bounds[name] > 600, name
+        timeout = bounds[name]
+        assert timeout is not None and timeout > 600, name
     assert bounds["probe_environment"] is None and bounds["plan"] is None

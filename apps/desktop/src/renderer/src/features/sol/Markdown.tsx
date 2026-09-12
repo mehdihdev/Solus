@@ -12,6 +12,7 @@
 import { memo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { splitSettled, stableTail } from './markdownSplit'
 
 const REMARK_PLUGINS = [remarkGfm]
 
@@ -24,17 +25,30 @@ export interface SolMarkdownProps {
   content: string
 }
 
-// memo: during a stream every token patch re-renders the message list; all the
-// SETTLED messages keep their content string, so memo skips their re-parse and
-// only the growing message pays for one (bounded by MAX_TURN_CHARS upstream).
+// One parse. memo: its string only changes when a block settles (or the tail
+// grows), so a settled prefix is parsed once per block, not once per token.
+const Blocks = memo(function Blocks({ content }: SolMarkdownProps): React.JSX.Element | null {
+  if (!content) return null
+  return (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} skipHtml components={COMPONENTS}>
+      {content}
+    </ReactMarkdown>
+  )
+})
+
+// SOLUSDEV-252 S2: two parses in ONE `.sol-md` container — the settled prefix
+// (re-parsed only when a block completes) and the block still being written
+// (re-parsed per token, but it is one block, not the whole reply). Sharing the
+// container keeps the block-margin rules identical across the seam. memo on
+// the outer component skips every settled MESSAGE entirely.
 export const SolMarkdown = memo(function SolMarkdown({
   content
 }: SolMarkdownProps): React.JSX.Element {
+  const { settled, tail } = splitSettled(content)
   return (
     <div className="sol-md" style={{ fontSize: 12.5, lineHeight: 1.6 }}>
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} skipHtml components={COMPONENTS}>
-        {content}
-      </ReactMarkdown>
+      <Blocks content={settled} />
+      <Blocks content={stableTail(tail)} />
     </div>
   )
 })

@@ -63,6 +63,8 @@ beforeEach(() => {
 it('keeps the account dropdown mounted through close/reopen with zero extra reads', async () => {
   render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+  expect(screen.getByRole('tab', { name: 'Integrations' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.queryByRole('tab', { name: 'From a service' })).toBeNull()
   await userEvent.click(await screen.findByRole('button', { name: 'onshape · builder' }))
   expect(await screen.findByRole('button', { name: 'Arm · Added' })).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'Close Add' }))
@@ -172,4 +174,31 @@ it('requires explicit loading for an uncached listing and shows job failures wit
   expect(resources.addSourceDocument).toHaveBeenCalledOnce()
   expect(resources.triggerSync).not.toHaveBeenCalled()
   expect(selected).not.toHaveBeenCalled()
+})
+
+it('opens on the requested tab when a sequence-keyed request arrives', async () => {
+  const view = render(<WorkspaceAdd projectId="p1" onSelected={selected} hardware={<p>HW</p>} />)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  view.rerender(
+    <WorkspaceAdd
+      projectId="p1"
+      onSelected={selected}
+      hardware={<p>HW</p>}
+      openRequest={{ tab: 'hardware', sequence: 1 }}
+    />
+  )
+  expect(await screen.findByRole('tab', { name: 'Hardware', selected: true })).toBeInTheDocument()
+  expect(screen.getByText('HW')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Close Add' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  // The same request again is not a new request.
+  view.rerender(
+    <WorkspaceAdd
+      projectId="p1"
+      onSelected={selected}
+      hardware={<p>HW</p>}
+      openRequest={{ tab: 'hardware', sequence: 1 }}
+    />
+  )
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })

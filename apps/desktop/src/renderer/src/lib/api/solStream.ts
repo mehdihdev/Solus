@@ -16,6 +16,7 @@ export type SolEventType =
   | 'tool_call'
   | 'tool_result'
   | 'tool_confirmation'
+  | 'artifact'
   | 'message'
   | 'error'
   | 'done'
@@ -66,6 +67,36 @@ export function toPendingConfirmation(event: SolEvent): PendingConfirmation | nu
     tool,
     summary: typeof summary === 'string' ? summary : tool,
     preview: asRows(preview)
+  }
+}
+
+/** A tool's large/binary output, referenced never inlined (agent-tool.md §4;
+ *  SOLUSDEV-252 S5). `uri` is the API content route — bytes need the bearer. */
+export interface SolArtifact {
+  readonly artifactId: string
+  readonly uri: string
+  readonly mediaType: string
+  readonly title: string
+  readonly sourceTool: string | null
+  readonly summary: string | null
+}
+
+const optionalText = (value: unknown): string | null => (typeof value === 'string' ? value : null)
+
+/** Read an `artifact` event's payload, or null when it cannot name its bytes. */
+export function toSolArtifact(event: SolEvent): SolArtifact | null {
+  const { artifact_id: id, uri, media_type: mediaType, title, source_tool, summary } = event.data
+  if (typeof id !== 'string' || typeof uri !== 'string' || typeof mediaType !== 'string') {
+    return null
+  }
+  const sourceTool = optionalText(source_tool)
+  return {
+    artifactId: id,
+    uri,
+    mediaType,
+    title: optionalText(title) ?? sourceTool ?? 'Artifact',
+    sourceTool,
+    summary: optionalText(summary)
   }
 }
 

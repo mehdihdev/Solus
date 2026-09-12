@@ -78,6 +78,12 @@ _PACKAGED_TREE = "mcp"
 #: `server:` so the companion keeps its no-YAML-dependency posture.
 _URL_LINE_RE = re.compile(r"^url:\s*[\"\']?(\S+?)[\"\']?\s*$")
 
+#: `launched_by:` in an allowlist — who starts the server. Anything other than
+#: `companion` is not ours to launch: `cloud` is a fork the API spawns (the brave
+#: fork needs Node, which we do not ship) and `builtin` is a server this process
+#: implements natively, so neither has a `bin/launch` to find. Absent = companion.
+_LAUNCHED_BY_RE = re.compile(r"^launched_by:\s*[\"\']?([a-z]+)[\"\']?\s*$")
+
 #: Hostnames that mean "this machine". Compared exactly — a name that merely
 #: STARTS with one (`127.0.0.1.evil.com`) is a different host.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
@@ -323,6 +329,20 @@ def is_loopback_url(url: str) -> bool:
         return False
 
 
+def _launched_by(allowlist: Path) -> str:
+    """Who starts this server, per its allowlist. Unreadable or undeclared means
+    the historical default: a vendored fork this companion launches."""
+    try:
+        text = allowlist.read_text(encoding="utf-8")
+    except OSError:
+        return "companion"
+    for line in text.splitlines():
+        match = _LAUNCHED_BY_RE.match(line)
+        if match is not None:
+            return match.group(1)
+    return "companion"
+
+
 def _server_url(allowlist: Path, name: str) -> str | None:
     """The declared vendor-run endpoint, or None for a vendored stdio fork."""
     try:
@@ -408,6 +428,13 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
                 name,
                 server_dir.name,
             )
+            continue
+        owner = _launched_by(allowlist)
+        if owner != "companion":
+            # Not ours to start. Skipping is the WHOLE behaviour: trying anyway
+            # is how a cloud-side fork (no Node here) took the bridge down with
+            # an abnormal session end before `hello` (SOLUSDEV-252, live).
+            logger.info("server %r is launched by %s; not starting it here", name, owner)
             continue
         url = _server_url(allowlist, name)
         if url == "":  # declared, but refused as non-loopback

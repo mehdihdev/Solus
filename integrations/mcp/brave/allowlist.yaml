@@ -1,0 +1,29 @@
+# integrations/mcp/brave/allowlist.yaml — the Solus-owned tool allowlist for the
+# vendored @brave/brave-search-mcp-server fork (SOLUSDEV-252 P6 draft; the
+# WHOLE file is human-ratified at the MR — integrations/mcp/CLAUDE.md rule 2).
+#
+# Single source of truth (../README.md): the API's discovery filter
+# (`mcp_tool._stdio_server_allowlist`) and the fork-side trimming
+# (BRAVE_MCP_ENABLED_TOOLS in bin/launch) both derive from THIS roster; the
+# exposed/total ratio lives in PROVENANCE.md ("Exposed tools": 4 of 8).
+#
+# Every tool here is a READ against api.search.brave.com — no local file, no
+# subprocess, no mutation anywhere — so none carries the confirmation gate.
+# Composed-name bound: every `brave.{name}` here is <= 128 chars.
+server: brave
+# The API spawns this fork (it needs Node, which the companion does not ship),
+# so a companion that discovers this directory must skip it rather than fail.
+launched_by: cloud
+tools:
+  - name: brave_web_search
+    requires_confirmation: false
+    reason: read-only web search (titles, descriptions, URLs) via the Brave Search API
+  - name: brave_llm_context
+    requires_confirmation: false
+    reason: read-only page-content retrieval (extracted text chunks per URL) via the Brave LLM Context API
+  - name: brave_news_search
+    requires_confirmation: false
+    reason: read-only news search via the Brave Search API
+  - name: brave_summarizer
+    requires_confirmation: false
+    reason: read-only AI summary of a prior web search (needs the summarizer key that search returned)

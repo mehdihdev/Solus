@@ -204,11 +204,29 @@ Validated by `OrchestrationConfig` (`orchestration/config.py`). Structure:
 
 - `version: int`
 - `catalog: [ {provider, name, price_in, price_out, context_window, roles: […]} ]` — each entry is
-  a concrete model and the role(s) it fills.
+  a concrete model and the role(s) it fills. Optional per-entry fields:
+  - `long_context_threshold_tokens` + `price_in_long` + `price_out_long` (all three or none) —
+    breakpoint pricing; the whole call bills the long rates when `tokens_in` exceeds the threshold.
+  - `price_cached_in` (SOLUSDEV-252) — USD per 1M prompt-cache **read** tokens, validated
+    `<= price_in`. `compute_call_credits(tokens_cached_in=…)` bills that subset of `tokens_in` at
+    this rate **below the breakpoint only**; above it everything bills the long rates (no
+    cached-long rate is modeled — over-bills a cached long call, never under). `tokens_cached_in`
+    is clamped to `[0, tokens_in]`; an entry without `price_cached_in` ignores it. `track_cost`
+    records `tokens_cached_in` in the ledger `attrs` only when non-zero.
+  - `reasoning_effort` (SOLUSDEV-252) — the provider effort knob for this entry (`ModelChoice`
+    carries it to the adapter; an allow-list `none|minimal|low|medium|high|xhigh|max` validated at config load — a value a given model rejects, e.g. `none` on gpt-6-astra, still fails loudly as a `ProviderError`). Set on the OpenAI
+    entries (`gpt-6-astra` is `medium` and may never be `none`); Anthropic/Gemini entries omit it.
 - `matrix: { <complexity>: { <route_type>: <role> } }` — the `(complexity × type) → role` map
   (may be partial).
 - `default_role: str` — fallback for missing matrix cells.
 - `cost: { margin_multiplier, credits_per_dollar, price_unit: usd_per_million_tokens }`.
+- `providers: { <provider>: ProviderStanza }` (SOLUSDEV-252, default `{}`) — connection shape for
+  providers that have **no dedicated adapter**. `ProviderStanza` (`extra=forbid`):
+  `kind: "openai_compatible"`, `endpoint: str` (may be empty until deploy), `api_version: str`,
+  `api_key_ref: str` (a SecretStore ref **name**, e.g. `azure_openai_api_key` — never a value),
+  `deployments: {catalog model name → deployment name}`. Config only: a catalog entry on `azure`
+  loads, but routing to it raises `UnknownProviderError` naming the missing adapter until one is
+  registered in `build_adapter_registry`. Production wiring = fill the stanza + add one adapter.
 
 Prices/names shipped in the example are **ILLUSTRATIVE and provisional** — verify against provider
 pricing before production. Loaded via `load_orchestration_config(path=None)` (defaults to the
@@ -277,14 +295,33 @@ PROPOSALS: the shape carries no way to execute itself, and Solus code decides.
 
 | provider | tool calling |
 | --- | --- |
-| anthropic | implemented |
-| openai | raises `ToolCallingUnsupportedError` |
+| anthropic | implemented (Messages API) |
+| openai | implemented (Responses API — SOLUSDEV-252 lane W1, same ticket) |
 | google (gemini) | raises `ToolCallingUnsupportedError` |
+| azure | config stanza only — no adapter, `UnknownProviderError` at dispatch |
 
 `ToolCallingUnsupportedError` is a `ProviderError` but deliberately **not** a
 `ProviderTransientError` — MO-03 backoff must not retry a structural gap.
 
 This makes `models.yaml` load-bearing in a new way: a matrix cell that SOL routes to must name a
-tool-capable provider. Today `SOL_OPEN_QUESTION → HARD → general_hard → claude-opus-4-8`. Repointing
-that cell at a Gemini role fails **loudly** on the next SOL turn rather than silently dropping the
-tools array and returning prose — which would look like the model simply choosing not to act.
+tool-capable provider. Repointing a SOL-reachable cell at a Gemini role fails **loudly** on the next
+SOL turn rather than silently dropping the tools array and returning prose — which would look like
+the model simply choosing not to act.
+
+### The shipped matrix and `estimate_from` (SOLUSDEV-252)
+
+The matrix shipped today (human-decided; every cell is still a config edit): **hard** general and
+code → `gpt-6-astra` (one entry, two roles); **standard** code → `claude-fable-5-1`, standard
+general → `gpt-5.6-sol`; **trivial** general → `gpt-5.6-luna`, trivial code → `claude-haiku-4-5`;
+the `visual_log` / `long_context` rows stay Gemini (ADR-029). `default_role` remains
+`general_standard` (`claude-sonnet-5`), now a fallback/bench role no cell points at, alongside
+`claude-opus-4-8` and `gpt-5.6-terra`.
+
+Which tier a SOL turn lands in is no longer the context default. `resolve_routing(...,
+estimate_from=)` (and `gateway.stream/complete(estimate_from=)`) runs the complexity **estimator on
+the person's live message** — ahead of the context default — while `query` stays the whole fenced
+conversation (right for token measurement and the window policy). Without it
+`SOL_OPEN_QUESTION → HARD` sent every "what is I2C" to the top tier. The chain is now: explicit
+`complexity` → estimator(`estimate_from`) → context default → estimator(`query`). Routing stays
+SYSTEM-routed (the window policy escalates rather than refuses) unless the tier was passed
+explicitly.

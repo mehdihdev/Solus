@@ -39,7 +39,7 @@ variables always win over the file.
 
 Values are literal; there is no `${VAR}` expansion. `env.example` documents every key.
 
-The only key that blocks startup is **`SOLUS_SUPABASE_JWT_SECRET`** (Supabase dashboard →
+An authentication key required for startup is **`SOLUS_SUPABASE_JWT_SECRET`** (Supabase dashboard →
 Project Settings → API → JWT Secret); without it the API exits immediately. For real
 sign-in also set `SOLUS_SUPABASE_URL`, plus `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`
 for the **same** project. Without those the desktop app runs a dev-bypass login: the UI
@@ -52,10 +52,42 @@ provider key is lost on each reload.
 ## Run
 
 ```bash
-pnpm dev:all            # Postgres + API (:8000) + desktop + companion + Stripe forwarder
+pnpm dev:all            # Postgres + configured Redis + API + desktop/companion + optional Stripe
 ```
 
-Ctrl+C tears it all down. Individual pieces:
+The launcher checks the selected database schema and configured Redis before starting the
+API, then waits for API readiness before opening the desktop. It never runs migrations or
+installs dependencies on startup. Run `make bootstrap` and `make mcp-forks` once after cloning;
+after schema changes, back up existing data and run the Alembic command from Setup.
+Ctrl+C stops only this launch's application processes; Docker data and services remain available.
+The selected Node executable (including nvm Node ≥ 22) is pinned for API-side MCP tools.
+
+Compose defaults to a volume scoped to this checkout's project name. To reuse a known existing
+local database, create the gitignored `docker-compose.local.yml` before starting:
+
+```yaml
+volumes:
+  solus-pgdata:
+    external: true
+    name: YOUR_EXISTING_VOLUME_NAME
+```
+
+Inspect the existing container's mounts first, back up its database, and stop that container
+before attaching its volume to another PostgreSQL container. Never delete volumes to fix
+startup. The launcher includes this override in every Compose operation. Manual Compose
+commands for this selection must include both `-f docker-compose.dev.yml` and
+`-f docker-compose.local.yml`; plain `make db-up` does not load the local override.
+External database/Redis URLs remain external; only configured default loopback dependencies
+are started in Compose. Configured services owned by another checkout are refused.
+
+Local MCP tools require the Electron desktop, a signed-in selected project, and a linked
+folder under Home → Local folder for workspace operations. KiCad's fork is installed by
+`make mcp-forks`; native CLI operations also need KiCad installed. Fusion is a separate
+vendor-run server: open Fusion and enable Preferences → General → API → Fusion MCP Server
+(port 27182). A missing native app/server remains unavailable; installing Python forks cannot
+start Fusion. See `integrations/mcp/README.md` for tool prerequisites.
+
+Individual pieces:
 
 | Command                                 | What                                                          |
 | --------------------------------------- | ------------------------------------------------------------- |

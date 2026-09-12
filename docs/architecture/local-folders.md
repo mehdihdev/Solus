@@ -61,8 +61,8 @@ machine) and says so.
 
 ## The change signal: doorbell vs evidence
 
-The companion's existing `change` frame is a stat-fingerprint doorbell over `DESIGN_SUFFIXES`
-(SOLUSDEV-167) — payload-free, coalesced, rate-limited, and hint-only. On a hint the API runs the
+The companion's existing `change` frame is a stat-fingerprint doorbell over design, source and dependency files plus bounded Git metadata
+(SOLUSDEV-260) — payload-free, coalesced, rate-limited, and hint-only. On a hint the API runs the
 freshness gate: `LocalFolderConnector.cheap_probe = True` opts an auth-none connector into
 `run_sync`'s probe (read duck-typed, like the registry reads `selection`), and the probe is one
 `local.folder_digest` compared to `cursor.digest`. Equal → `_commit_skipped`, no scan paid for;
@@ -99,3 +99,18 @@ never a fingerprint: a clone knows its remote.
   `POST …/open`, which dispatches `local.open_in_tool` to the caller's own companion. When SOL
   proposes a launch, `requires_confirmation: true` in the allowlist routes it through the
   approval card.
+
+## Personal branch and local identity follow-up
+
+The change sensor covers saved source/dependency files and Git metadata, with a
+bounded directory walk that skips virtualenv/build directories and symlinks. It
+reads only stat metadata except for bounded 4 KiB gitdir/commondir pointers needed
+to observe worktree HEAD changes. Both local scan and freshness probe include
+normalized remote, branch and HEAD in their digest. Tracking remotes take precedence
+over origin. Credential-bearing portions are removed before metadata leaves the
+machine.
+
+Derived clone matching excludes internal revision snapshot sources, prefers a
+unique exact-branch match, otherwise accepts one unique repository match. Ambiguous
+matches produce no guessed edge. The local folder root remains named after the
+folder; its packages are nested for presentation while requires semantics remain.

@@ -2,7 +2,7 @@
 // BrowserWindow at `#/ext-window/<id>` (wireflow §3, main/extensions/
 // extensionWindow.ts). Same renderer, minimal chrome under the OS title bar,
 // one ExtensionFrame in `window` mode bound to the project the main window has
-// open (shared persisted workspace store). Like OrbWindow it guards its own
+// open (shared persisted workspace store). Like the SOL window it guards its own
 // auth: signing in stays a main-window flow, so an unauthenticated window says
 // so instead of fetching anything.
 import { useParams } from 'react-router-dom'

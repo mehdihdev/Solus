@@ -8,10 +8,23 @@ import type { EngineeringPreferences } from '@solus/shared-types'
 import { api, joinUrl, type ApiClient } from '../../lib/api/client'
 import { resolveApiBaseUrl } from '../../lib/cspConnect'
 import { ApiError } from '../../lib/api/envelope.types'
+import { unwrapEnvelope } from '../../lib/api/client'
 import { createSolStreamParser, type SolStreamEvent } from './solStream'
 
 /** How SOL may act on one message: explain and point, or operate tools (SOLX-01). */
 export type SolActionMode = 'guide' | 'do'
+
+/** The one screen capture a turn may carry (SOLUSDEV-252 S3, sol-window.md §8):
+ *  the crop the user circled plus the downscaled surrounding screen, both
+ *  base64 PNG, held in memory for exactly one send. Never cached, never logged. */
+export interface SolScreenshot {
+  media_type: 'image/png'
+  data: string
+  width: number
+  height: number
+  source: { app: string; title: string } | null
+  context: string | null
+}
 
 export interface SolConversation {
   id: string
@@ -111,6 +124,9 @@ export interface StreamSolMessageInput {
   conversationId: string
   content: string
   actionMode: SolActionMode
+  /** S1-W3: the composer's "Think harder" — one routing tier up for this turn.
+   *  Sent only when on, so the default body shape is unchanged. */
+  thinkHarder?: boolean
   /**
    * Graph entity ids the user pointed at with `@`. Sent alongside the text
    * rather than encoded in it, so the composer's `trim()` and any later edit to
@@ -124,6 +140,8 @@ export interface StreamSolMessageInput {
    * when there is nothing written, so the body shape stays minimal.
    */
   preferences?: EngineeringPreferences | null
+  /** The attached screen region, when the user circled one for this turn. */
+  screenshot?: SolScreenshot
   /** Receives each validated stream event in arrival order. */
   onEvent: (event: SolStreamEvent) => void
   signal?: AbortSignal
@@ -148,7 +166,9 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
       content: input.content,
       action_mode: input.actionMode,
       mentions: input.mentions ?? [],
-      ...(input.preferences ? { preferences: input.preferences } : {})
+      ...(input.thinkHarder ? { think_harder: true } : {}),
+      ...(input.preferences ? { preferences: input.preferences } : {}),
+      ...(input.screenshot ? { screenshot: input.screenshot } : {})
     }),
     signal: input.signal
   }
@@ -180,4 +200,36 @@ export async function streamSolMessage(input: StreamSolMessageInput): Promise<vo
       input.onEvent(event)
     }
   }
+}
+
+export interface ArtifactTransport {
+  fetchImpl?: typeof fetch
+  getToken?: () => Promise<string | null>
+  baseUrl?: string
+}
+
+/** GET …/artifacts/{id}/content as a Blob (SOLUSDEV-252 S5, artifacts.md §4).
+ *  The route needs the bearer, so an `<img src=uri>` can never work — fetch
+ *  here, hand back bytes for an object URL. A refusal is the envelope error. */
+export async function fetchArtifactBlob(
+  projectId: string,
+  artifactId: string,
+  transport: ArtifactTransport = {}
+): Promise<Blob> {
+  const token = await (transport.getToken ?? defaultToken)()
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  const path = `/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/content`
+  const res = await (transport.fetchImpl ?? globalThis.fetch)(
+    joinUrl(transport.baseUrl ?? DEFAULT_BASE_URL, path),
+    { headers }
+  )
+  if (res.ok) return res.blob()
+  let body: unknown = null
+  try {
+    body = JSON.parse(await res.text())
+  } catch {
+    body = null
+  }
+  return unwrapEnvelope<Blob>(res.status, body)
 }

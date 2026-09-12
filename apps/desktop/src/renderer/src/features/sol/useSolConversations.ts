@@ -19,34 +19,40 @@ export function useSolConversations(
   activeConversationId: string | null
 ): SolConversationsData {
   const [conversations, setConversations] = useState<readonly SolConversation[]>([])
-  const [status, setStatus] = useState<SolConversationsStatus>('ready')
   const [version, setVersion] = useState(0)
+  // Status is derived, not stored (the UsagePanel pattern): 'loading' until the
+  // fetch for THIS key has answered.
+  const key = `${projectId}|${activeConversationId}|${version}`
+  const [answered, setAnswered] = useState<{ key: string; status: 'ready' | 'offline' } | null>(
+    null
+  )
+  if (!projectId && conversations.length > 0) setConversations([])
 
   const refresh = useCallback(() => setVersion((v) => v + 1), [])
 
   useEffect(() => {
-    if (!projectId) {
-      setConversations([])
-      setStatus('ready')
-      return
-    }
+    if (!projectId) return
     let stale = false
     // The previous list stays in state during a refetch, so renderers can keep
     // showing rows and reserve the loading state for a first, empty load.
-    setStatus('loading')
     listSolConversations(projectId)
       .then((list) => {
         if (stale) return
         setConversations(list)
-        setStatus('ready')
+        setAnswered({ key, status: 'ready' })
       })
       .catch(() => {
-        if (!stale) setStatus('offline')
+        if (!stale) setAnswered({ key, status: 'offline' })
       })
     return () => {
       stale = true
     }
-  }, [projectId, activeConversationId, version])
+  }, [projectId, key])
 
+  const status: SolConversationsStatus = !projectId
+    ? 'ready'
+    : answered?.key === key
+      ? answered.status
+      : 'loading'
   return { conversations, status, refresh }
 }

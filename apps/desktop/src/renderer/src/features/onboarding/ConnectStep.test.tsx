@@ -278,7 +278,7 @@ describe('ConnectStep — skip path (FND-08)', () => {
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
-    expect(screen.getByRole('button', { name: /Build context model/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Build workspace/ })).toBeDisabled()
   })
 
   it('hides Skip once the recommended sources are connected', async () => {
@@ -288,6 +288,6 @@ describe('ConnectStep — skip path (FND-08)', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     expect(screen.queryByRole('button', { name: 'Skip for now' })).toBeNull()
-    expect(screen.getByRole('button', { name: /Build context model/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /Build workspace/ })).toBeEnabled()
   })
 })

@@ -27,6 +27,21 @@ export function askSolMessage(sectionLabel: string, query: string): string {
   return `Find for .solus › ${sectionLabel}: ${query.trim()}`
 }
 
+/** How an entry is named in menus, lists and confirmations. Pure. */
+export function entryTitle(entry: SolusEntry): string {
+  return entry.name ?? entry.text?.slice(0, 120) ?? 'this note'
+}
+
+/** The entry behind a graph node, if the node is a .solus entry. Pure. */
+export function findSolusEntry(
+  sections: SolusState['sections'],
+  entityId: string
+): SolusEntry | undefined {
+  return Object.values(sections)
+    .flat()
+    .find((entry) => entry.entity_id === entityId)
+}
+
 export function formatSize(bytes: number | null): string {
   if (bytes === null) return ''
   if (bytes < 1024) return `${bytes} B`
@@ -187,8 +202,9 @@ export function entryMenuItems(
   onCompose: (composer: Composer) => void,
   onDelete: (entry: SolusEntry) => void
 ): ContextMenuItem[] {
+  // Files have no text; config entries are written by their own routes (PATCH → 409).
   const edit: ContextMenuItem[] =
-    entry.kind === 'artifact'
+    entry.kind === 'artifact' || entry.kind === 'config'
       ? []
       : [
           {

@@ -1,5 +1,5 @@
 // Solus wordmark (logo + SOLUS). SOLUSDEV-233: the brand mark is the bundled
-// logo now; the orb remains SOL's presence on the SOL surfaces only.
+// logo; SOL itself lives on the SOL page and the SOL window (SOLUSDEV-252).
 import { SolusLogo } from './SolusLogo'
 
 interface WordmarkProps {

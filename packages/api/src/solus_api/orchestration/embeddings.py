@@ -39,6 +39,7 @@ from solus_api.orchestration.providers import (
     UnknownProviderError,
     Usage,
     _BaseAdapter,
+    normalize_provider_error,
 )
 from solus_api.orchestration.retry import retry_transient
 
@@ -117,20 +118,8 @@ class OpenAIEmbeddingAdapter(_BaseAdapter):
                 response = await client.embeddings.create(
                     model=model_name, input=list(texts), dimensions=dimensions
                 )
-        except (
-            openai.RateLimitError,
-            openai.InternalServerError,
-            openai.APIConnectionError,  # includes APITimeoutError
-        ) as exc:
-            raise ProviderTransientError(
-                f"openai transient failure for model {model_name}: {type(exc).__name__}"
-            ) from exc
         except openai.OpenAIError as exc:
-            # Residual SDK errors (auth, bad request, …) are wrapped so callers
-            # catching ProviderError never surface a raw provider response body.
-            raise ProviderError(
-                f"openai embedding failure for model {model_name}: {type(exc).__name__}"
-            ) from exc
+            raise normalize_provider_error(self.provider, model_name, exc) from None
         ordered = sorted(response.data, key=lambda item: item.index)
         if [item.index for item in ordered] != list(range(len(texts))):
             # Duplicate/missing indices with a correct total would silently

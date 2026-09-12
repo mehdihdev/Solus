@@ -64,8 +64,8 @@ export function ConnectStep({ onBuild }: ConnectStepProps): React.JSX.Element {
         Connect your tools
       </h2>
       <p style={{ color: 'var(--mut)', fontSize: 13.5, marginTop: 8, lineHeight: 1.55 }}>
-        Each source becomes a domain in your context model. Connect at least two — cross-domain
-        checks need something to cross.
+        Each source becomes a domain in your workspace. Connect at least two — cross-domain checks
+        need something to cross.
       </p>
       <ConnectCatalog
         projectId={workspace.linked && workspace.project ? workspace.project.id : null}
@@ -108,14 +108,14 @@ function StepFooter({
         </Mono>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           {/* Connections never gate the workspace (FND-08): tools can always
-              be connected later from the Sources page. */}
+              be connected later from Home › Connected accounts. */}
           {!ready && (
             <Button kind="ghost" size="lg" onClick={onBuild} aria-label="Skip for now">
               Skip for now
             </Button>
           )}
           <Button kind="primary" size="lg" disabled={!ready} onClick={onBuild}>
-            Build context model <Icons.arrowR size={14} />
+            Build workspace <Icons.arrowR size={14} />
           </Button>
         </div>
       </div>

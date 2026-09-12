@@ -867,6 +867,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/sources/{source_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Revisions */
+        get: operations["revisions_api_v1_projects__project_id__sources__source_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sources/{source_id}/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** View */
+        get: operations["view_api_v1_projects__project_id__sources__source_id__view_get"];
+        /** Select View */
+        put: operations["select_view_api_v1_projects__project_id__sources__source_id__view_put"];
+        post?: never;
+        /** Clear View */
+        delete: operations["clear_view_api_v1_projects__project_id__sources__source_id__view_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/sources": {
         parameters: {
             query?: never;
@@ -1020,6 +1056,58 @@ export interface paths {
          *     its entities away (soft-delete); other projects tracking it are untouched.
          */
         delete: operations["remove_document_api_v1_projects__project_id__sources__source_id__documents__document_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/local-folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Local Folder */
+        get: operations["get_local_folder_api_v1_projects__project_id__local_folder_get"];
+        put?: never;
+        /** Link Local Folder */
+        post: operations["link_local_folder_api_v1_projects__project_id__local_folder_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/local-folder/{source_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open In Tool */
+        post: operations["open_in_tool_api_v1_projects__project_id__local_folder__source_id__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/code-environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Code Environment */
+        get: operations["get_code_environment_api_v1_projects__project_id__code_environment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1215,6 +1303,75 @@ export interface paths {
         head?: never;
         /** Patch Entry */
         patch: operations["patch_entry_api_v1_projects__project_id__solus_entries__entry_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Hardware Entity */
+        post: operations["create_hardware_entity_api_v1_projects__project_id__hardware_entities_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/entities/{entity_id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Entity Config */
+        get: operations["get_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_get"];
+        /** Replace Entity Config */
+        put: operations["replace_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/parts/{part_id}/parent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change Parent */
+        patch: operations["change_parent_api_v1_projects__project_id__hardware_parts__part_id__parent_patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/hardware/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Hardware Parts */
+        get: operations["list_hardware_parts_api_v1_projects__project_id__hardware_parts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/projects/{project_id}/hardware/robots/{robot_id}/config": {
@@ -2098,6 +2255,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/corpus/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Manifest */
+        get: operations["get_manifest_api_v1_corpus_manifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/corpus/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search */
+        get: operations["search_api_v1_corpus_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/corpus/chunks/{chunk_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Chunk */
+        get: operations["get_chunk_api_v1_corpus_chunks__chunk_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/webhooks/{provider}/{source_id}/{token}": {
         parameters: {
             query?: never;
@@ -2127,7 +2335,8 @@ export interface paths {
          * @description Subscribe to this project's change stream.
          *
          *     Yields `graph.changed` frames — an invalidation hint the client answers by
-         *     refetching the one thing it is already showing.
+         *     refetching the one thing it is already showing — and, on the local API only,
+         *     `hardware.devices_changed` (SOLUSDEV-250, `hardware/device_watch.py`).
          */
         get: operations["project_events_api_v1_projects__project_id__events_get"];
         put?: never;
@@ -2359,6 +2568,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/extension-pins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pins */
+        get: operations["list_pins_api_v1_users_me_extension_pins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/extension-pins/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Pin Extension */
+        put: operations["pin_extension_api_v1_users_me_extension_pins__slug__put"];
+        post?: never;
+        /** Unpin Extension */
+        delete: operations["unpin_extension_api_v1_users_me_extension_pins__slug__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams/{team_id}/extensions/policies": {
         parameters: {
             query?: never;
@@ -2440,6 +2684,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/widgets/bom/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Rows */
+        get: operations["list_rows_api_v1_projects__project_id__widgets_bom_rows_get"];
+        put?: never;
+        /** Create Row */
+        post: operations["create_row_api_v1_projects__project_id__widgets_bom_rows_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/widgets/bom/rows/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Row */
+        delete: operations["delete_row_api_v1_projects__project_id__widgets_bom_rows__key__delete"];
+        options?: never;
+        head?: never;
+        /** Patch Row */
+        patch: operations["patch_row_api_v1_projects__project_id__widgets_bom_rows__key__patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/widgets/bom/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Csv */
+        get: operations["export_csv_api_v1_projects__project_id__widgets_bom_export_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/widgets/fixture-bundle/notes": {
         parameters: {
             query?: never;
@@ -2456,6 +2753,93 @@ export interface paths {
          *     install-write budget before this handler ran (widget-bundles.md §3).
          */
         post: operations["create_note_api_v1_projects__project_id__widgets_fixture_bundle_notes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sourcing/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Rules */
+        get: operations["get_rules_api_v1_projects__project_id__sourcing_rules_get"];
+        /** Put Rules */
+        put: operations["put_rules_api_v1_projects__project_id__sourcing_rules_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sourcing/torque": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Derive Torque Route */
+        post: operations["derive_torque_route_api_v1_projects__project_id__sourcing_torque_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sourcing/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Requests */
+        get: operations["list_requests_api_v1_projects__project_id__sourcing_requests_get"];
+        put?: never;
+        /** Create Request */
+        post: operations["create_request_api_v1_projects__project_id__sourcing_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sourcing/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Request */
+        get: operations["get_request_api_v1_projects__project_id__sourcing_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/sourcing/requests/{request_id}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Candidate */
+        post: operations["select_candidate_api_v1_projects__project_id__sourcing_requests__request_id__select_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2532,7 +2916,14 @@ export interface components {
              */
             mode: "sim" | "real";
             /** Config */
-            config: components["schemas"]["MujocoSimConfig"] | components["schemas"]["GazeboSimConfig"] | components["schemas"]["McapSimConfig"] | components["schemas"]["SerialRealConfig"] | components["schemas"]["RobotRealConfig"];
+            config: components["schemas"]["MujocoSimConfig"] | components["schemas"]["GazeboSimConfig"] | components["schemas"]["McapSimConfig"] | components["schemas"]["SerialRealConfig"] | components["schemas"]["RobotRealConfig"] | components["schemas"]["HardwareRealConfig"];
+        };
+        /** BranchItem */
+        BranchItem: {
+            /** Name */
+            name: string;
+            /** Commit */
+            commit: string;
         };
         /**
          * BusMapEntry
@@ -2584,6 +2975,11 @@ export interface components {
             type?: components["schemas"]["RouteType"] | null;
             /** Attachments */
             attachments?: components["schemas"]["AttachmentIn"][];
+            /**
+             * Think Harder
+             * @default false
+             */
+            think_harder: boolean;
         };
         /** ClientEvent */
         ClientEvent: {
@@ -2603,6 +2999,29 @@ export interface components {
          * @enum {string}
          */
         Complexity: "trivial" | "standard" | "hard";
+        /**
+         * ConfigDraft
+         * @description Portable creation fields. The server supplies the new subject's UUID.
+         */
+        ConfigDraft: {
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version: 2;
+            component?: components["schemas"]["PartConfig"] | null;
+            identity?: components["schemas"]["PortableTransportBinding"] | null;
+            protocol?: components["schemas"]["ProtocolBinding"] | null;
+            /** Bus Map */
+            bus_map?: components["schemas"]["BusMapEntry"][];
+            /** Disambiguated By */
+            disambiguated_by?: "user" | null;
+            /** Provenance */
+            provenance?: {
+                [key: string]: components["schemas"]["ProvenanceRecord"];
+            };
+        };
         /** ConfigIn */
         ConfigIn: {
             config: components["schemas"]["HardwareConfig"];
@@ -2677,10 +3096,95 @@ export interface components {
             /** Id */
             id: string;
         };
+        /**
+         * EngineeringPreferences
+         * @description The desktop's copy of `~/.solus/preferences.json`, validated at the boundary.
+         */
+        EngineeringPreferences: {
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: number;
+            /** Updatedat */
+            updatedAt?: string | null;
+            /**
+             * Freetext
+             * @default
+             */
+            freeText: string;
+            /**
+             * Codestyle
+             * @default
+             */
+            codeStyle: string;
+            /**
+             * Mechanical
+             * @default
+             */
+            mechanical: string;
+            /**
+             * Electrical
+             * @default
+             */
+            electrical: string;
+            /**
+             * Documentation
+             * @default
+             */
+            documentation: string;
+            /**
+             * Unitsstandards
+             * @default
+             */
+            unitsStandards: string;
+        };
+        /** EntityConfigIn */
+        EntityConfigIn: {
+            config: components["schemas"]["EntityHardwareConfig"];
+        };
+        /**
+         * EntityHardwareConfig
+         * @description One physical graph subject's configuration; driver aggregates are resolved at runtime.
+         */
+        EntityHardwareConfig: {
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version: 2;
+            component?: components["schemas"]["PartConfig"] | null;
+            identity?: components["schemas"]["PortableTransportBinding"] | null;
+            protocol?: components["schemas"]["ProtocolBinding"] | null;
+            /** Bus Map */
+            bus_map?: components["schemas"]["BusMapEntry"][];
+            /** Disambiguated By */
+            disambiguated_by?: "user" | null;
+            /** Provenance */
+            provenance?: {
+                [key: string]: components["schemas"]["ProvenanceRecord"];
+            };
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
+        };
         /** EventBatch */
         EventBatch: {
             /** Events */
             events: components["schemas"]["ClientEvent"][];
+        };
+        /** ExcludedSupplier */
+        ExcludedSupplier: {
+            /** Name */
+            name: string;
+            /**
+             * Reason
+             * @default Excluded by the project's .solus rules
+             */
+            reason: string;
         };
         /** ExistingRobotTarget */
         ExistingRobotTarget: {
@@ -2765,6 +3269,39 @@ export interface components {
                 [key: string]: components["schemas"]["ProvenanceRecord"];
             };
         };
+        /** HardwareEntityCreate */
+        HardwareEntityCreate: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "robot" | "part";
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id?: string | null;
+            /** Category */
+            category?: ("sensors" | "actuators" | "controllers" | "end_effectors" | "power" | "structure" | "wiring") | null;
+            config?: components["schemas"]["ConfigDraft"] | null;
+        };
+        /** HardwareRealConfig */
+        HardwareRealConfig: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "hardware";
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
+            /**
+             * Window Seconds
+             * @default 1
+             */
+            window_seconds: number;
+        };
         /**
          * HostedExchange
          * @description The desktop posts back what its loopback captured.
@@ -2802,11 +3339,42 @@ export interface components {
              */
             role: "admin" | "member" | "viewer";
         };
+        /** ItemBody */
+        ItemBody: {
+            /** Name */
+            name: string;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "raw_material" | "purchase";
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity: number;
+            /**
+             * State
+             * @default planned
+             * @enum {string}
+             */
+            state: "planned" | "ordered" | "received" | "installed" | "retired";
+            /** Part Number */
+            part_number?: string | null;
+            /** Manufacturer */
+            manufacturer?: string | null;
+            /** Supplier */
+            supplier?: string | null;
+            /** Unit Cost */
+            unit_cost?: number | null;
+            /** Notes */
+            notes?: string | null;
+        };
         /**
          * JobKind
          * @enum {string}
          */
-        JobKind: "sync" | "check_run" | "proving" | "fingerprint_scan" | "sim_rebuild" | "extension_review";
+        JobKind: "sync" | "check_run" | "proving" | "fingerprint_scan" | "sim_rebuild" | "extension_review" | "sourcing";
         /**
          * JobStatus
          * @enum {string}
@@ -2836,6 +3404,36 @@ export interface components {
          * @enum {string}
          */
         LifecycleState: "planned" | "ordered" | "received" | "installed" | "live";
+        /**
+         * LocalFolderLink
+         * @description Link THIS machine's working copy to the project (SOLUSDEV-249). The path
+         *     never travels: the companion scans its own workspace. `machine_id` is the
+         *     companion instance id (`~/.solus/companion_id`).
+         */
+        LocalFolderLink: {
+            /** Machine Id */
+            machine_id: string;
+            /** Machine Name */
+            machine_name: string;
+            /** Folder Name */
+            folder_name: string;
+        };
+        /**
+         * LocalFolderOpen
+         * @description Open one detected project in a tool on the source's machine (SOLUSDEV-249).
+         */
+        LocalFolderOpen: {
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
+            /**
+             * Tool
+             * @enum {string}
+             */
+            tool: "kicad" | "altium" | "vscode" | "system";
+        };
         /** McapSimConfig */
         McapSimConfig: {
             /**
@@ -2867,8 +3465,15 @@ export interface components {
             content: string;
             /** @default guide */
             action_mode: components["schemas"]["ActionMode"];
+            /**
+             * Think Harder
+             * @default false
+             */
+            think_harder: boolean;
             /** Mentions */
             mentions?: string[];
+            preferences?: components["schemas"]["EngineeringPreferences"] | null;
+            screenshot?: components["schemas"]["ScreenshotIn"] | null;
         };
         /** MujocoSimConfig */
         MujocoSimConfig: {
@@ -2973,6 +3578,17 @@ export interface components {
             /** User Code */
             user_code: string;
         };
+        /** ParentIn */
+        ParentIn: {
+            /** Parent Id */
+            parent_id: string | null;
+            /** Expected Parent Id */
+            expected_parent_id: string | null;
+            /** Version */
+            version: number;
+            /** Category */
+            category?: ("sensors" | "actuators" | "controllers" | "end_effectors" | "power" | "structure" | "wiring") | null;
+        };
         /** PartCalibration */
         PartCalibration: {
             mode?: components["schemas"]["CalibrationMode"] | null;
@@ -3035,15 +3651,6 @@ export interface components {
                 [key: string]: number;
             };
         };
-        /** PatchBody */
-        PatchBody: {
-            /** Enabled */
-            enabled?: boolean | null;
-            /** Settings */
-            settings?: {
-                [key: string]: unknown;
-            } | null;
-        };
         /** PhysicalRobotCreate */
         PhysicalRobotCreate: {
             /**
@@ -3085,6 +3692,32 @@ export interface components {
             default_settings?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** PortableTransportBinding */
+        PortableTransportBinding: {
+            kind: components["schemas"]["TransportKind"];
+            /** Binding */
+            binding: string;
+            /** Vid */
+            vid?: number | null;
+            /** Pid */
+            pid?: number | null;
+        };
+        /**
+         * PreferencesBody
+         * @description The `~/.solus/preferences.json` sections the engine reads (engine.PREFERENCE_KEYS) —
+         *     ranking context only. Other sections of the user's file are dropped at the boundary, never
+         *     stored (security review M3).
+         */
+        PreferencesBody: {
+            /** Mechanical */
+            mechanical?: string | null;
+            /** Electrical */
+            electrical?: string | null;
+            /** Unitsstandards */
+            unitsStandards?: string | null;
+            /** Freetext */
+            freeText?: string | null;
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -3133,6 +3766,79 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** RequestBody */
+        RequestBody: {
+            /** Assembly Entity Id */
+            assembly_entity_id?: string | null;
+            /** Pivot Mm */
+            pivot_mm?: number[] | null;
+            /** Masses */
+            masses?: {
+                [key: string]: number;
+            } | null;
+            /** Load Kg */
+            load_kg?: number | null;
+            /** Arm M */
+            arm_m?: number | null;
+            /**
+             * Safety Factor
+             * @default 1.5
+             */
+            safety_factor: number;
+            /**
+             * @default {
+             *       "text": "",
+             *       "part_class": "motor"
+             *     }
+             */
+            spec: components["schemas"]["RequirementSpec"];
+            /**
+             * Door
+             * @default bom
+             * @enum {string}
+             */
+            door: "workspace" | "bom";
+            preferences?: components["schemas"]["PreferencesBody"] | null;
+        };
+        /**
+         * RequirementSpec
+         * @description What the person typed (or the CAD door derived) — untrusted text.
+         */
+        RequirementSpec: {
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /** Protocol */
+            protocol?: string | null;
+            /** Voltage V */
+            voltage_v?: number | null;
+            /** Load Kg */
+            load_kg?: number | null;
+            /** Arm M */
+            arm_m?: number | null;
+            /**
+             * Part Class
+             * @default motor
+             */
+            part_class: string;
+        };
+        /** RevisionsEnvelope */
+        RevisionsEnvelope: {
+            data: components["schemas"]["RevisionsResponse"];
+        };
+        /** RevisionsResponse */
+        RevisionsResponse: {
+            /** Supported */
+            supported: boolean;
+            /** Kind */
+            kind: "git_branch" | null;
+            /** Items */
+            items: components["schemas"]["BranchItem"][];
+            /** Next Page */
+            next_page: number | null;
+        };
         /**
          * RobotRealConfig
          * @description A session from a Physical Robot's HardwareConfig (docs/api/hardware.md §6).
@@ -3164,6 +3870,53 @@ export interface components {
          * @enum {string}
          */
         RouteType: "code" | "visual_log" | "long_context" | "general";
+        /**
+         * ScreenshotIn
+         * @description SOLUSDEV-252 S3 (sol-window.md §8): one screenshot on this turn.
+         *
+         *     `data` is deliberately NOT length-capped here: a pydantic failure echoes the
+         *     offending input back in the 422 body, and this field is megabytes of pixels.
+         *     `agent/screen.py` caps it (3.5 MiB encoded, 2.5 MiB decoded) and sniffs the
+         *     magic bytes; the route turns its reason into a 422 that never echoes data.
+         */
+        ScreenshotIn: {
+            /**
+             * Media Type
+             * @enum {string}
+             */
+            media_type: "image/png" | "image/jpeg";
+            /** Data */
+            data: string;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            source?: components["schemas"]["ScreenshotSource"] | null;
+            /** Context */
+            context?: string | null;
+        };
+        /**
+         * ScreenshotSource
+         * @description Best-effort foreground window (sol-window.md §6) — untrusted text, capped.
+         */
+        ScreenshotSource: {
+            /** App */
+            app: string;
+            /** Title */
+            title: string;
+        };
+        /** SelectBody */
+        SelectBody: {
+            /** Candidate Id */
+            candidate_id: string;
+            /** Category Entity Id */
+            category_entity_id?: string | null;
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity: number;
+        };
         /** SerialRealConfig */
         SerialRealConfig: {
             /**
@@ -3204,6 +3957,23 @@ export interface components {
             onboarding_step?: ("about" | "connect" | "build" | "done") | null;
         };
         /**
+         * SolusConfigEntryIn
+         * @description SOLUSDEV-252: `{kind: "config", payload}` — a code environment document, validated
+         *     by the section's model (`validate_config_payload`). Lives beside the route rather than
+         *     in `schemas.SolusEntryIn` so the W1 text/artifact shape is untouched.
+         */
+        SolusConfigEntryIn: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "config";
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * SolusEntryIn
          * @description POST /solus/{section}/entries (docs/api/solus.md): typed text, or an
          *     already-uploaded artifact to file as a document node.
@@ -3236,7 +4006,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "github" | "gitlab" | "kicad" | "onshape" | "ros" | "altium";
+            type: "github" | "gitlab" | "kicad" | "onshape" | "ros" | "altium" | "local";
             /** Name */
             name: string;
             /** Config */
@@ -3256,6 +4026,64 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** SourceViewEnvelope */
+        SourceViewEnvelope: {
+            data: components["schemas"]["SourceViewResponse"];
+        };
+        /** SourceViewPut */
+        SourceViewPut: {
+            /** Branch */
+            branch: string;
+        };
+        /** SourceViewResponse */
+        SourceViewResponse: {
+            /**
+             * Base Source Id
+             * Format: uuid
+             */
+            base_source_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "default" | "pending" | "ready" | "failed";
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /** Branch */
+            branch: string | null;
+            /** Commit */
+            commit: string | null;
+            /** Error */
+            error: string | null;
+        };
+        /** SourcingRules */
+        SourcingRules: {
+            /**
+             * Excluded Suppliers
+             * @default []
+             */
+            excluded_suppliers: components["schemas"]["ExcludedSupplier"][];
+            /**
+             * Required Certifications
+             * @default []
+             */
+            required_certifications: string[];
+            /** Max Voltage V */
+            max_voltage_v?: number | null;
+            /**
+             * Allowed Protocols
+             * @default []
+             */
+            allowed_protocols: string[];
+            /**
+             * Preferred Suppliers
+             * @default []
+             */
+            preferred_suppliers: string[];
         };
         /** SubscriptionUpdate */
         SubscriptionUpdate: {
@@ -3306,6 +4134,29 @@ export interface components {
          * @enum {string}
          */
         ToolFamily: "fusion" | "onshape" | "solidworks" | "autocad" | "kicad" | "altium" | "spice";
+        /**
+         * TorqueBody
+         * @description Either an assembly (geometry + masses) or a plain spec (load at arm).
+         */
+        TorqueBody: {
+            /** Assembly Entity Id */
+            assembly_entity_id?: string | null;
+            /** Pivot Mm */
+            pivot_mm?: number[] | null;
+            /** Masses */
+            masses?: {
+                [key: string]: number;
+            } | null;
+            /** Load Kg */
+            load_kg?: number | null;
+            /** Arm M */
+            arm_m?: number | null;
+            /**
+             * Safety Factor
+             * @default 1.5
+             */
+            safety_factor: number;
+        };
         /**
          * TransportBinding
          * @description Binding identity: USB serial / BT address / MAC / IP. `last_seen_path` is informational
@@ -3398,6 +4249,30 @@ export interface components {
             x: number;
             /** Y */
             y: number;
+        };
+        /** PatchBody */
+        solus_api__routers__extensions__installs__PatchBody: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Settings */
+            settings?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** PatchBody */
+        solus_api__widgets__bom__routes__PatchBody: {
+            /** Name */
+            name?: string | null;
+            /** Quantity */
+            quantity?: number | null;
+            /** State */
+            state?: ("planned" | "ordered" | "received" | "installed" | "retired") | null;
+            /** Supplier */
+            supplier?: string | null;
+            /** Unit Cost */
+            unit_cost?: number | null;
+            /** Notes */
+            notes?: string | null;
         };
     };
     responses: never;
@@ -5128,6 +6003,140 @@ export interface operations {
             };
         };
     };
+    revisions_api_v1_projects__project_id__sources__source_id__revisions_get: {
+        parameters: {
+            query?: {
+                page?: number;
+            };
+            header?: never;
+            path: {
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionsEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    view_api_v1_projects__project_id__sources__source_id__view_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceViewEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_view_api_v1_projects__project_id__sources__source_id__view_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceViewPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceViewEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_view_api_v1_projects__project_id__sources__source_id__view_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceViewEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_sources_api_v1_projects__project_id__sources_get: {
         parameters: {
             query?: {
@@ -5525,6 +6534,151 @@ export interface operations {
             };
         };
     };
+    get_local_folder_api_v1_projects__project_id__local_folder_get: {
+        parameters: {
+            query: {
+                machine_id: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_local_folder_api_v1_projects__project_id__local_folder_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalFolderLink"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_in_tool_api_v1_projects__project_id__local_folder__source_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalFolderOpen"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_code_environment_api_v1_projects__project_id__code_environment_get: {
+        parameters: {
+            query: {
+                machine_id: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     hosted_status_api_v1_projects__project_id__sources__source_id__hosted__server__get: {
         parameters: {
             query?: never;
@@ -5811,7 +6965,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SolusEntryIn"];
+                "application/json": components["schemas"]["SolusEntryIn"] | components["schemas"]["SolusConfigEntryIn"];
             };
         };
         responses: {
@@ -5882,6 +7036,194 @@ export interface operations {
                 "application/json": components["schemas"]["SolusEntryPatch"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_hardware_entity_api_v1_projects__project_id__hardware_entities_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HardwareEntityCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entity_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_put: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                entity_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntityConfigIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_parent_api_v1_projects__project_id__hardware_parts__part_id__parent_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                part_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ParentIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_hardware_parts_api_v1_projects__project_id__hardware_parts_get: {
+        parameters: {
+            query?: {
+                ownership?: "unassigned" | "all";
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -7915,6 +9257,97 @@ export interface operations {
             };
         };
     };
+    get_manifest_api_v1_corpus_manifest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    search_api_v1_corpus_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                domain?: string[] | null;
+                topic?: string[] | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_chunk_api_v1_corpus_chunks__chunk_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chunk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     provider_webhook_api_v1_webhooks__provider___source_id___token__post: {
         parameters: {
             query?: never;
@@ -8377,7 +9810,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PatchBody"];
+                "application/json": components["schemas"]["solus_api__routers__extensions__installs__PatchBody"];
             };
         };
         responses: {
@@ -8566,6 +9999,88 @@ export interface operations {
             };
         };
     };
+    list_pins_api_v1_users_me_extension_pins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    pin_extension_api_v1_users_me_extension_pins__slug__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpin_extension_api_v1_users_me_extension_pins__slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_policies_api_v1_teams__team_id__extensions_policies_get: {
         parameters: {
             query?: {
@@ -8734,6 +10249,175 @@ export interface operations {
             };
         };
     };
+    list_rows_api_v1_projects__project_id__widgets_bom_rows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_row_api_v1_projects__project_id__widgets_bom_rows_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_row_api_v1_projects__project_id__widgets_bom_rows__key__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_row_api_v1_projects__project_id__widgets_bom_rows__key__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["solus_api__widgets__bom__routes__PatchBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_csv_api_v1_projects__project_id__widgets_bom_export_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_notes_api_v1_projects__project_id__widgets_fixture_bundle_notes_get: {
         parameters: {
             query?: never;
@@ -8779,6 +10463,253 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["NoteBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_rules_api_v1_projects__project_id__sourcing_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_rules_api_v1_projects__project_id__sourcing_rules_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourcingRules"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    derive_torque_route_api_v1_projects__project_id__sourcing_torque_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TorqueBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_requests_api_v1_projects__project_id__sourcing_requests_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_request_api_v1_projects__project_id__sourcing_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_request_api_v1_projects__project_id__sourcing_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_candidate_api_v1_projects__project_id__sourcing_requests__request_id__select_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectBody"];
             };
         };
         responses: {

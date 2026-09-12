@@ -12,9 +12,15 @@ never a guess. Pure otherwise; nothing here raises.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import shlex
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
+
+from solus_api.agent.tools.shapes import ToolErrorCode
+from solus_api.agent.tools.tool import ToolException
 
 logger = logging.getLogger("solus.bridge.previews")
 
@@ -111,29 +117,55 @@ def _code_action(action: str) -> Callable[[BridgeReader], PreviewBuilder]:
             except Exception:  # noqa: BLE001 — a preview never blocks the park
                 logger.warning("code preview plan failed for %s", action)
                 plan = None
-            argv = plan.get("argv") if isinstance(plan, dict) else None
-            command = (
-                " ".join(str(a) for a in argv)
-                if isinstance(argv, list) and all(isinstance(a, str) for a in argv)
-                else None
-            )
-            rows: list[dict[str, Any]] = [
-                {"label": "command", "before": None, "after": _text(command)},
-                {
-                    "label": "cwd",
-                    "before": None,
-                    "after": _text(plan.get("cwd", ".") if isinstance(plan, dict) else None),
-                },
-            ]
-            if isinstance(plan, dict) and plan.get("ok") is False:
-                rows.append(
-                    {"label": "refused", "before": None, "after": _text(plan.get("reason"))}
-                )
-            return rows
+            return code_plan_rows(plan)
 
         return build
 
     return factory
+
+
+def code_plan_rows(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """One lossless, bounded presentation; a plan that cannot fit cannot execute."""
+    if not isinstance(plan, dict) or plan.get("ok") is not True:
+        raise ToolException(
+            "I3 could not produce an executable plan; no command was run.",
+            code=ToolErrorCode.INVALID_ARGS,
+        )
+    argv, cwd = plan.get("argv"), plan.get("cwd")
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or not all(isinstance(arg, str) for arg in argv)
+        or not isinstance(cwd, str)
+    ):
+        raise ToolException("I3 returned an invalid command plan.", code=ToolErrorCode.INVALID_ARGS)
+    command = shlex.join(argv)
+    if len(command) > 18000 or len(cwd) > 500 or any(not ch.isprintable() for ch in command + cwd):
+        raise ToolException(
+            "The command plan cannot fit the approval card; split the action.",
+            code=ToolErrorCode.INVALID_ARGS,
+        )
+    # Chunk before the confirmation layer's 500-character/50-row bounds. A
+    # digest captures even whitespace and quoting changes normalized by that UI.
+    chunks = [command[start : start + 400] for start in range(0, len(command), 400)]
+    digest = hashlib.sha256(
+        json.dumps({"argv": argv, "cwd": cwd}, sort_keys=True).encode()
+    ).hexdigest()
+    return [
+        {
+            "label": "command" if len(chunks) == 1 else f"command {index + 1}/{len(chunks)}",
+            "before": None,
+            "after": chunk,
+        }
+        for index, chunk in enumerate(chunks)
+    ] + [
+        {"label": "cwd", "before": None, "after": cwd},
+        {
+            "label": "plan fingerprint",
+            "before": None,
+            "after": ":".join(digest[start : start + 16] for start in range(0, 64, 16)),
+        },
+    ]
 
 
 PREVIEWABLE_TOOLS: Final[dict[str, Callable[[BridgeReader], PreviewBuilder]]] = {

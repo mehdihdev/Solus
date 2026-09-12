@@ -37,6 +37,21 @@ describe('physical robot API', () => {
     })
   })
 
+  it('sends a name only when one is given', async () => {
+    const api = client()
+    vi.mocked(api.request).mockResolvedValue(robot)
+    await createPhysicalRobot('p1', api, 'Rover')
+    expect(api.request).toHaveBeenLastCalledWith('/projects/p1/entities', {
+      method: 'POST',
+      body: { type: 'physical_robot', name: 'Rover' }
+    })
+    await createPhysicalRobot('p1', api, '')
+    expect(api.request).toHaveBeenLastCalledWith('/projects/p1/entities', {
+      method: 'POST',
+      body: { type: 'physical_robot' }
+    })
+  })
+
   it('renames and removes with the exact entity version', async () => {
     const api = client()
     await renamePhysicalRobot('p1', robot, 'Leader', api)

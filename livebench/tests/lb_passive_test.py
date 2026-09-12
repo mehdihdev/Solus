@@ -126,3 +126,41 @@ def test_live_enumeration_reports_the_real_ch343_as_bridge_with_unknown_mcu() ->
     assert ch343[0].board is not None
     assert ch343[0].board.kind is BoardClass.USB_BRIDGE
     assert ch343[0].mcu_known is False
+
+
+class TestPortLocation:
+    def test_location_is_the_usb_topology_before_the_interface_suffix(self) -> None:
+        from livebench.recognition.passive import _location_of
+
+        assert _location_of("3-1.4.1.1.3:1.0") == "3-1.4.1.1.3"
+        assert _location_of("3-1.2") == "3-1.2"
+        assert _location_of(None) is None and _location_of("") is None
+
+    def test_identify_port_carries_the_location(self) -> None:
+        identity = identify_port(
+            device="/dev/ttyUSB0", vid=0x1A86, pid=0x7523, serial=None, location="3-1.2"
+        )
+        assert identity.location == "3-1.2"
+        assert identify_port(device="/dev/x", vid=1, pid=2, serial="S").location is None
+
+
+class TestBindingOf:
+    def test_a_device_supplied_serial_can_never_mint_a_port_key(self) -> None:
+        from livebench.recognition.passive import binding_key, binding_of
+
+        forged = identify_port(device="/dev/x", vid=1, pid=2, serial="port-3-1.2", location="3-1.9")
+        assert binding_of(forged) == ("port-3-1.9", "port_position")
+        assert binding_key(forged) == "port-3-1.9"
+        homeless = identify_port(device="/dev/x", vid=1, pid=2, serial="port-x")
+        assert binding_of(homeless) == (None, "none")
+        assert binding_key(homeless) is None
+
+    def test_binding_of_names_the_branch_that_produced_the_key(self) -> None:
+        from livebench.recognition.passive import binding_of
+
+        assert binding_of(identify_port(device="/dev/x", vid=1, pid=2, serial="S1")) == (
+            "S1",
+            "serial",
+        )
+        at_port = identify_port(device="/dev/x", vid=1, pid=2, serial=None, location="3-1.2")
+        assert binding_of(at_port) == ("port-3-1.2", "port_position")

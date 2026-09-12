@@ -91,6 +91,81 @@ def test_matrix_role_absent_from_catalog_is_rejected() -> None:
         OrchestrationConfig.model_validate(_minimal("does_not_exist"))
 
 
+# --- SOLUSDEV-252 S3 review M2: routing must not be modality-blind ------------
+
+
+def test_shipped_catalog_is_vision_capable_everywhere_a_screenshot_can_land() -> None:
+    config = load_orchestration_config()
+    assert all(entry.accepts_images for entry in config.catalog)
+    for row in config.matrix.values():
+        for route_type in (RouteType.GENERAL, RouteType.CODE):
+            assert config.entry_for_role(row[route_type]).accepts_images is True
+
+
+def test_a_text_only_model_on_a_general_cell_fails_at_load_naming_the_cell() -> None:
+    data = _minimal("general_standard")
+    data["catalog"][0]["accepts_images"] = False
+    with pytest.raises(ValidationError, match="standard/general") as info:
+        OrchestrationConfig.model_validate(data)
+    assert "accepts_images" in str(info.value) and "'m'" in str(info.value)
+
+
+def test_a_text_only_model_on_a_code_cell_fails_at_load() -> None:
+    data = _minimal("general_standard")
+    data["catalog"].append(
+        {
+            "provider": "openai",
+            "name": "text-only",
+            "price_in": 1.0,
+            "price_out": 2.0,
+            "context_window": 1000,
+            "roles": ["code_hard"],
+            "accepts_images": False,
+        }
+    )
+    data["matrix"]["hard"] = {"code": "code_hard"}
+    with pytest.raises(ValidationError, match="hard/code"):
+        OrchestrationConfig.model_validate(data)
+
+
+def test_a_text_only_model_on_a_long_context_only_role_is_fine() -> None:
+    data = _minimal("general_standard")
+    data["catalog"].append(
+        {
+            "provider": "google",
+            "name": "longctx-text",
+            "price_in": 1.0,
+            "price_out": 2.0,
+            "context_window": 2_000_000,
+            "roles": ["longctx_standard"],
+            "accepts_images": False,
+        }
+    )
+    data["matrix"]["standard"]["long_context"] = "longctx_standard"
+    config = OrchestrationConfig.model_validate(data)
+    assert config.entry_for_role("longctx_standard").accepts_images is False
+    assert config.entry_for_role("general_standard").accepts_images is True  # the default
+
+
+def test_a_text_only_model_on_a_visual_log_cell_fails_at_load() -> None:
+    """VISUAL_LOG is exactly where the extractor sends pixels (security re-check M2)."""
+    data = _minimal("general_standard")
+    data["catalog"].append(
+        {
+            "provider": "google",
+            "name": "visual-text",
+            "price_in": 1.0,
+            "price_out": 2.0,
+            "context_window": 2_000_000,
+            "roles": ["visual_standard"],
+            "accepts_images": False,
+        }
+    )
+    data["matrix"]["standard"]["visual_log"] = "visual_standard"
+    with pytest.raises(ValueError, match="standard/visual_log"):
+        OrchestrationConfig.model_validate(data)
+
+
 def test_shipped_estimator_section_loads_with_real_keyword_lists() -> None:
     est = load_orchestration_config().estimator
     assert est.tool_keywords
@@ -240,3 +315,117 @@ def test_duplicate_role_across_entries_is_rejected() -> None:
     )
     with pytest.raises(ValidationError):
         OrchestrationConfig.model_validate(data)
+
+
+# --- SOLUSDEV-252 S1: the new matrix, cached pricing, reasoning effort, azure --
+
+
+def test_shipped_matrix_fills_the_s1_cells() -> None:
+    """Human-decided matrix (SOLUSDEV-252): astra fills BOTH hard cells, fable
+    fills code_standard, the GPT-5.6 ladder fills standard/trivial general;
+    Gemini rows unchanged (ADR-029); default_role stays a Sonnet fallback."""
+    config = load_orchestration_config()
+
+    def name(complexity: Complexity, route_type: RouteType) -> str:
+        return config.entry_for_role(config.matrix[complexity][route_type]).name
+
+    assert name(Complexity.HARD, RouteType.GENERAL) == "gpt-6-astra"
+    assert name(Complexity.HARD, RouteType.CODE) == "gpt-6-astra"
+    assert name(Complexity.STANDARD, RouteType.CODE) == "claude-fable-5-1"
+    assert name(Complexity.STANDARD, RouteType.GENERAL) == "gpt-5.6-sol"
+    assert name(Complexity.TRIVIAL, RouteType.GENERAL) == "gpt-5.6-luna"
+    assert name(Complexity.TRIVIAL, RouteType.CODE) == "claude-haiku-4-5"
+    for complexity in Complexity:
+        assert config.entry_for_role(config.matrix[complexity][RouteType.VISUAL_LOG]).provider == (
+            "google"
+        )
+        assert (
+            config.entry_for_role(config.matrix[complexity][RouteType.LONG_CONTEXT]).provider
+            == "google"
+        )
+    assert config.default_role == "general_standard"
+    assert config.entry_for_role(config.default_role).name == "claude-sonnet-5"
+    # Bench-only entries stay in the catalog, unreferenced by the matrix.
+    referenced = {role for row in config.matrix.values() for role in row.values()}
+    by_name = {entry.name: entry for entry in config.catalog}
+    assert not referenced & set(by_name["claude-opus-4-8"].roles)
+    assert not referenced & set(by_name["gpt-5.6-terra"].roles)
+
+
+def test_shipped_catalog_cached_prices_and_reasoning_effort() -> None:
+    config = load_orchestration_config()
+    by_name = {entry.name: entry for entry in config.catalog}
+    astra = by_name["gpt-6-astra"]
+    assert (astra.price_in, astra.price_cached_in, astra.price_out) == (10.0, 1.0, 50.0)
+    assert astra.long_context_threshold_tokens == 272_000
+    assert (astra.price_in_long, astra.price_out_long) == (20.0, 75.0)
+    assert astra.reasoning_effort == "medium"
+    assert by_name["gpt-5.6-sol"].reasoning_effort == "medium"
+    assert by_name["gpt-5.6-terra"].reasoning_effort == "low"
+    assert by_name["gpt-5.6-luna"].reasoning_effort == "low"
+    for entry in config.catalog:
+        if entry.provider == "openai":
+            assert entry.price_cached_in is not None
+        else:
+            assert entry.reasoning_effort is None
+    # Anthropic cache reads: 0.1x input (0.025x on Fable 5.1) — verified 2026-09-07.
+    assert by_name["claude-haiku-4-5"].price_cached_in == 0.1
+    assert by_name["claude-fable-5-1"].price_cached_in == 0.25
+    assert by_name["claude-fable-5-1"].price_in == 10.0
+
+
+def test_cached_price_above_input_price_is_rejected() -> None:
+    data = _minimal("general_standard")
+    data["catalog"][0]["price_cached_in"] = 1.5  # price_in is 1.0
+    with pytest.raises(ValidationError, match="price_cached_in"):
+        OrchestrationConfig.model_validate(data)
+
+
+def test_shipped_providers_stanza_loads() -> None:
+    """The azure stanza is config-only (no adapter): production wiring is
+    fill endpoint/deployments + register one adapter."""
+    providers = load_orchestration_config().providers
+    azure = providers["azure"]
+    assert azure.kind == "openai_compatible"
+    assert azure.api_key_ref == "azure_openai_api_key"
+    assert azure.deployments == {}
+
+
+def test_providers_stanza_defaults_and_rejects_unknowns() -> None:
+    data = _minimal("general_standard")
+    assert OrchestrationConfig.model_validate(data).providers == {}
+    data["providers"] = {
+        "azure": {"kind": "openai_compatible", "api_version": "v1", "api_key_ref": "k"}
+    }
+    stanza = OrchestrationConfig.model_validate(data).providers["azure"]
+    assert stanza.endpoint == ""
+    assert stanza.deployments == {}
+    data["providers"]["azure"]["kind"] = "grpc"
+    with pytest.raises(ValidationError):
+        OrchestrationConfig.model_validate(data)
+    data["providers"]["azure"] = {
+        "kind": "openai_compatible",
+        "api_version": "v1",
+        "api_key_ref": "k",
+        "region": "eastus",
+    }
+    with pytest.raises(ValidationError):
+        OrchestrationConfig.model_validate(data)
+
+
+def test_catalog_entry_may_name_a_stanza_only_provider() -> None:
+    """A catalog entry on `azure` LOADS (the stanza is the contract) — the
+    missing adapter surfaces at dispatch, not at config load (test_gateway)."""
+    data = _minimal("general_standard")
+    data["catalog"][0]["provider"] = "azure"
+    data["providers"] = {
+        "azure": {
+            "kind": "openai_compatible",
+            "api_version": "v1",
+            "api_key_ref": "azure_openai_api_key",
+            "deployments": {"m": "m-deployment"},
+        }
+    }
+    config = OrchestrationConfig.model_validate(data)
+    assert config.entry_for_role("general_standard").provider == "azure"
+    assert config.providers["azure"].deployments["m"] == "m-deployment"

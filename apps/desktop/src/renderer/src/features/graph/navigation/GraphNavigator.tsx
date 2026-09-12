@@ -1,8 +1,9 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import type { Entity, Relation } from '../../../lib/api/resources'
 import type { Point } from '../../../lib/api/workspace'
 import { GraphCard } from './GraphCard'
 import { GraphLinkDrawing, GraphLinkList } from './GraphLinks'
+import { HelpPopover } from './HelpPopover'
 import type { NavigationStep } from './graphIndex'
 import { MAX_VISIBLE_NODES, useGraphNavigation, type NavigationModel } from './useGraphNavigation'
 import './navigation.css'
@@ -21,53 +22,13 @@ export interface GraphNavigatorProps {
   renderContent?: (entity: Entity) => ReactNode
   toolbar?: ReactNode
   reveal?: { entityId: string; sequence: number }
+  /** Docked at the viewport's right edge; stays put while the stage scrolls. */
+  overlay?: ReactNode
 }
 
 /** Project key resets transient navigation/drag state before another tenant can render. */
 export function GraphNavigator(props: GraphNavigatorProps): React.JSX.Element {
   return <Navigator key={props.projectId} {...props} />
-}
-
-function NavigationToolbar({
-  model,
-  toolbar
-}: {
-  model: NavigationModel
-  toolbar?: ReactNode
-}): React.JSX.Element {
-  const { trail, parent, go, back } = model
-  return (
-    <>
-      <div className="graph-navigator-toolbar">
-        {toolbar}
-        <nav aria-label="Graph navigation path" className="graph-breadcrumbs">
-          <button type="button" aria-label="Project overview" onClick={() => go(null)}>
-            Project
-          </button>
-          {trail.map((entity, i) => (
-            <span key={entity.id}>
-              <span aria-hidden="true">/</span>
-              <button
-                type="button"
-                aria-label={`Back to ${entity.name}`}
-                aria-current={i === trail.length - 1 ? 'location' : undefined}
-                onClick={() => go(entity)}
-              >
-                {entity.name}
-              </button>
-            </span>
-          ))}
-        </nav>
-        <button type="button" disabled={!parent} onClick={back} aria-label="Zoom out one level">
-          ↑ Up
-        </button>
-      </div>
-      <div className="graph-level-meta">
-        <span>{parent ? `Inside ${parent.name}` : 'Project overview'}</span>
-        <span>Hover + scroll to explore · double-click or → to enter</span>
-      </div>
-    </>
-  )
 }
 
 function NavigationViewport({
@@ -87,11 +48,12 @@ function NavigationViewport({
     parent,
     visible,
     index,
+    select,
     enter,
     back,
     preview
   } = model
-  const offset = { x: bounds.left, y: bounds.top }
+  const offset = useMemo(() => ({ x: bounds.left, y: bounds.top }), [bounds.left, bounds.top])
   return (
     <div className="graph-viewport" ref={viewportRef}>
       <div
@@ -107,7 +69,14 @@ function NavigationViewport({
           } as CSSProperties
         }
       >
-        <GraphLinkDrawing links={links} points={points} offset={offset} parentName={parent?.name} />
+        <GraphLinkDrawing
+          links={links}
+          points={points}
+          offset={offset}
+          anchor={location.origin}
+          parentName={parent?.name}
+          onBack={back}
+        />
         {visible.map((entity) => (
           <GraphCard
             key={entity.id}
@@ -116,13 +85,13 @@ function NavigationViewport({
             offset={offset}
             focused={props.focusedId === entity.id}
             childCount={index.children.get(entity.id)?.length ?? 0}
-            onSelect={() => props.onSelect(entity, index.pathTo(entity.id))}
-            onEnter={() => enter(entity)}
+            onSelect={select}
+            onEnter={enter}
             onBack={back}
-            onPreview={(point) => preview(entity.id, point)}
-            onMove={(point) => props.onMove(entity.id, point)}
+            onPreview={preview}
+            onMove={props.onMove}
             onContextMenu={props.onContextMenu}
-            content={props.renderContent?.(entity)}
+            renderContent={props.renderContent}
           />
         ))}
         {visible.length === 0 && <p className="graph-empty-level">No nodes in this level.</p>}
@@ -136,7 +105,7 @@ function NavigationPagination({ model }: { model: NavigationModel }): React.JSX.
   return (
     <div className="graph-pagination">
       <span className="graph-edge-legend">
-        <i /> containment <i /> cross-links
+        <i /> cross-links
       </span>
       <button
         type="button"
@@ -173,8 +142,14 @@ function Navigator(props: GraphNavigatorProps): React.JSX.Element {
       data-depth={model.trail.length}
       aria-label="Project graph navigator"
     >
-      <NavigationToolbar model={model} toolbar={props.toolbar} />
-      <NavigationViewport model={model} props={props} />
+      <div className="graph-viewport-frame">
+        <NavigationViewport model={model} props={props} />
+        <div className="graph-corner graph-corner-left">{props.toolbar}</div>
+        <div className="graph-corner graph-corner-right">
+          <HelpPopover trail={model.trail} onOverview={() => model.go(null)} />
+        </div>
+        {props.overlay && <div className="graph-overlay">{props.overlay}</div>}
+      </div>
       <NavigationPagination model={model} />
       <GraphLinkList
         key={model.key}

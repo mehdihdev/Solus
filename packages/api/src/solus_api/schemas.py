@@ -37,6 +37,7 @@ from solus_api.models import (
     Role,
     SolMode,
     Source,
+    SourceType,
     SubscriptionStatus,
     Sync,
     Team,
@@ -70,6 +71,8 @@ class ClassifyRequest(StrictModel):
     complexity: Complexity | None = None
     type: RouteType | None = None
     attachments: list[AttachmentIn] = Field(default_factory=list, max_length=64)
+    #: S1-W3: preview the composer's "Think harder" — one tier up, like the runtime.
+    think_harder: bool = False
 
 
 def _not_blank(value: str | None) -> str | None:
@@ -301,6 +304,15 @@ class OAuthExchange(StrictModel):
 # --- Response serializers (snake_case dicts inside the §1.4 envelope) ---
 
 
+def _account_label(account: Source | AccountConnection) -> str | None:
+    provider = account.type if isinstance(account, Source) else account.provider
+    if provider is SourceType.ONSHAPE and (
+        not account.account_login or account.account_login == account.account_external_id
+    ):
+        return "Onshape account"
+    return account.account_login
+
+
 def serialize_source(
     source: Source,
     *,
@@ -308,11 +320,18 @@ def serialize_source(
     quota: "QuotaState | None" = None,
 ) -> dict[str, Any]:
     """Source view for the API — secrets (secret_ref/token) are never included."""
+    name = source.name
+    if (
+        source.type is SourceType.ONSHAPE
+        and source.account_external_id
+        and name == f"Onshape · {source.account_external_id}"
+    ):
+        name = _account_label(source) or "Onshape account"
     data: dict[str, Any] = {
         "id": source.id,
         "project_id": source.project_id,
         "type": source.type.value,
-        "name": source.name,
+        "name": name,
         "status": source.status.value,
         # Defensive: drop transient/underscore-prefixed and bulk config keys.
         "config": {
@@ -320,7 +339,7 @@ def serialize_source(
             for k, v in source.config.items()
             if not k.startswith("_") and k not in _BULK_CONFIG_KEYS
         },
-        "account_login": source.account_login,
+        "account_login": _account_label(source),
         # SOLUSDEV-241: the account grant this source rides, when it rides one.
         "connection_id": source.connection_id,
         "last_synced_at": source.last_synced_at,
@@ -368,7 +387,7 @@ def serialize_connection(
         "id": connection.id,
         "provider": connection.provider.value,
         "status": connection.status.value,
-        "account_login": connection.account_login,
+        "account_login": _account_label(connection),
         "access": config.get("access"),
         # SOLUSDEV-242 (H2): Home offers Re-authorize when the last handshake failed.
         "needs_reauth": "token_error" if connection.status is ConnectionStatus.ERROR else None,

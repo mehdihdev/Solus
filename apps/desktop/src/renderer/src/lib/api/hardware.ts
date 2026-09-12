@@ -8,6 +8,7 @@ import type { Entity } from './resources'
 import type { components } from './schema'
 
 export type HardwareConfig = components['schemas']['HardwareConfig']
+export type EntityHardwareConfig = components['schemas']['EntityHardwareConfig']
 export type PartIn = components['schemas']['PartIn']
 export type ConfigIn = components['schemas']['ConfigIn']
 export type LifecycleIn = components['schemas']['LifecycleIn']
@@ -54,6 +55,35 @@ export interface HardwareConfigOut {
   entry_id: string
   robot_entity_id: string
   config: HardwareConfig
+}
+
+export interface EntityHardwareConfigOut {
+  entry_id: string | null
+  entity_id: string
+  version: number
+  config: EntityHardwareConfig | null
+}
+
+export function getEntityHardwareConfig(
+  projectId: string,
+  entityId: string,
+  client: ApiClient = api
+): Promise<EntityHardwareConfigOut> {
+  return client.request(`/projects/${projectId}/hardware/entities/${entityId}/config`)
+}
+
+export function putEntityHardwareConfig(
+  projectId: string,
+  entityId: string,
+  config: EntityHardwareConfig,
+  version: number,
+  client: ApiClient = api
+): Promise<EntityHardwareConfigOut> {
+  return client.request(`/projects/${projectId}/hardware/entities/${entityId}/config`, {
+    method: 'PUT',
+    body: { config },
+    ifMatch: version
+  })
 }
 
 export interface HardwarePartOut {
@@ -113,6 +143,9 @@ export interface ModalityMatch {
   evidence: Record<string, unknown>
 }
 
+/** How the backend told this device apart from its neighbours. */
+export type IdentityBasis = 'serial' | 'port_position' | 'none'
+
 export interface DetectedDeviceOut {
   transport: string
   /** Stable `transport:binding` identity, or null when the device has none. */
@@ -124,11 +157,14 @@ export interface DetectedDeviceOut {
   mcu_known: boolean
   confidence: number
   evidence: ModalityMatch[]
-  /** Two+ devices share the binding — the Sources screen picks the port explicitly. */
+  /** Two+ devices share the binding — the Detected dialog picks the port explicitly. */
   ambiguous: boolean
   last_seen_path: string | null
   vid?: number | null
   pid?: number | null
+  /** The backend's own one-line title (SOLUSDEV-250 P2); older servers omit it. */
+  headline?: string
+  identity_basis?: IdentityBasis
 }
 
 export interface RepoMatchOut {
@@ -158,6 +194,18 @@ export interface DisambiguationOut {
   options: string[]
 }
 
+/** Confidence as tone, never a number: the label the heading leads with. */
+export type ProposalTone = 'looks_like' | 'probably' | 'something'
+
+/** What a passive listen saw on the wire, when the device streamed anything. */
+export interface StreamOut {
+  framing: string
+  channel_count: number
+  update_hz: number
+  channel_names: string[] | null
+  declared_hz: number | null
+}
+
 export interface ProposalOut {
   device_ref: string
   identity?: TransportBinding | null
@@ -171,6 +219,13 @@ export interface ProposalOut {
   confidence: number
   evidence: ModalityMatch[]
   calibration_source?: string | null
+  /** SOLUSDEV-250 P2 wire fields; older servers omit them — default in code. */
+  headline?: string
+  tone?: ProposalTone
+  stream?: StreamOut | null
+  identity_basis?: IdentityBasis
+  /** Pending link suggestions for this device (a library-imported robot it may BE). */
+  suggestions?: HardwareSuggestion[]
 }
 
 /** 201 from confirm — the robot exists even when the session did not start. */

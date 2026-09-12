@@ -19,7 +19,7 @@ export function LocalBridgeConnectModal({
       <div style={{ fontSize: 16, fontWeight: 600 }}>Connect {tool.display_name}</div>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
         {tool.display_name} runs its own local server; the Solus companion bridges it — no account
-        to link. Its status appears under Local Connections on the Sources page.
+        to link. Its status appears under Live Bench › Connect a device.
       </div>
       <div style={{ fontSize: 12.5, marginTop: 10, lineHeight: 1.55 }}>{tool.connect_notice}</div>
       <div style={{ marginTop: 10 }}>

@@ -7,6 +7,9 @@ import { useFocusStore } from './focusStore'
 import { useShellStore } from './shellStore'
 import { useExtensionsStore } from '../extensions/extensionsStore'
 import { selectSession, useSolChatStore, EMPTY_SESSION } from '../sol/solChatStore'
+import { selectConversationId, useSolSessionStore } from '../sol/solSessionStore'
+import { useSolWindowStore } from '../sol/solWindowStore'
+import { SOL_REGION } from '../sol/solWindow.fixtures'
 import * as ext from '../../lib/api/resources.extensions'
 import type { Neighborhood } from '../../lib/api/resources'
 
@@ -78,6 +81,8 @@ beforeEach(() => {
   useShellStore.getState().reset()
   useExtensionsStore.getState().reset()
   useSolChatStore.setState({ sessions: {} })
+  useSolSessionStore.setState({ conversationByProject: {} })
+  useSolWindowStore.setState({ region: null })
   useAuthStore.setState({ status: 'unauthenticated', user: null })
 })
 
@@ -106,6 +111,24 @@ describe('switchWorkspaceProject', () => {
     expect(session.items.flatMap((m) => m.confirmations)).toEqual([])
     // A's session is intact for when the user returns — parked, not lost.
     expect(selectSession(useSolChatStore.getState(), 'p-a').items[0]?.confirmations).toHaveLength(1)
+  })
+
+  it('keeps the SOL window session keyed by project: B selects no conversation, A keeps its own (SOLUSDEV-252)', () => {
+    seedProjectA()
+    useSolSessionStore.getState().setConversation('p-a', 'conv-a')
+    switchWorkspaceProject(B, 'home')
+    const session = useSolSessionStore.getState()
+    expect(selectConversationId(session, useWorkspaceStore.getState().project?.id ?? null)).toBe(
+      null
+    )
+    expect(selectConversationId(session, 'p-a')).toBe('conv-a')
+  })
+
+  it('drops the circled screen region — pixels of the previous project (SOLUSDEV-252 FIX-2-R H1)', () => {
+    seedProjectA()
+    useSolWindowStore.getState().setRegion(SOL_REGION)
+    switchWorkspaceProject(B, 'home')
+    expect(useSolWindowStore.getState().region).toBeNull()
   })
 
   it('switching to no project clears the same state', () => {

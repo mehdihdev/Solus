@@ -329,3 +329,61 @@ async def test_retained_artifacts_survive_the_sweep(
     assert kept_row is not None and kept_row.deleted_at is None
     assert swept_row is not None and swept_row.deleted_at is not None
     assert _is_expired(kept_row, ttl_seconds=0) is False
+
+
+async def test_selected_revision_does_not_override_shared_widget_defaults(db: AsyncSession) -> None:
+    import json
+    from pathlib import Path
+
+    from solus_api.graph.read_scope import GraphReadScope, bind_scope
+    from solus_api.models import Project, Source, SourceType, Team
+    from solus_api.widgets.solus_config import SOLUS_CONFIG_KIND, read_bundle_config
+    from solus_contracts.extension_manifest import parse_extension_manifest
+
+    manifest_data = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "shared-types"
+            / "fixtures"
+            / "extension-manifest"
+            / "manifest-v2-first-party.json"
+        ).read_text()
+    )
+    manifest_data["settings"] = {
+        "fields": [{"key": "limit", "type": "number", "label": "Limit", "default": 1}]
+    }
+    manifest = parse_extension_manifest(manifest_data)
+    team = Team(name="T")
+    db.add(team)
+    await db.flush()
+    project = Project(team_id=team.id, name="P")
+    db.add(project)
+    await db.flush()
+    base = Source(project_id=project.id, team_id=team.id, type=SourceType.GITHUB, name="base")
+    db.add(base)
+    await db.flush()
+    snapshot = Source(
+        project_id=project.id,
+        team_id=team.id,
+        type=SourceType.GITHUB,
+        name="snapshot",
+        revision_base_source_id=base.id,
+    )
+    db.add(snapshot)
+    await db.flush()
+    for source, value in ((base, 2), (snapshot, 99)):
+        db.add(
+            GraphEntity(
+                project_id=project.id,
+                source_id=source.id,
+                kind=SOLUS_CONFIG_KIND,
+                domain=Domain.CODE,
+                origin="connector",
+                name="project.toml",
+                attrs={"ext": {"fixture-bundle": {"limit": value}}},
+                updated_at=utcnow(),
+            )
+        )
+        await db.flush()
+    with bind_scope(GraphReadScope(project.id, ((base.id, snapshot.id),))):
+        assert await read_bundle_config(db, project.id, "fixture-bundle", manifest) == {"limit": 2}

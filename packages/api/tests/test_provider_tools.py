@@ -97,7 +97,7 @@ def test_the_refusal_is_not_retryable() -> None:
     assert not issubclass(ToolCallingUnsupportedError, ProviderTransientError)
 
 
-@pytest.mark.parametrize("provider", ["openai", "google"])
+@pytest.mark.parametrize("provider", ["google"])
 async def test_a_provider_without_tool_calling_refuses(provider: str) -> None:
     from solus_api.orchestration.providers import GeminiAdapter, OpenAIAdapter
 
@@ -115,7 +115,7 @@ async def test_a_provider_without_tool_calling_refuses(provider: str) -> None:
             pass
 
 
-@pytest.mark.parametrize("provider", ["openai", "google"])
+@pytest.mark.parametrize("provider", ["google"])
 async def test_a_conversation_without_tools_is_still_refused(provider: str) -> None:
     """A multi-turn conversation is just as unsupported as a tool array — these
     adapters send exactly one user message. Accepting the turns and dropping all
@@ -294,6 +294,7 @@ class _ToolAdapter:
         max_tokens: int,
         images: object = None,
         conversation: ToolConversation | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str | ToolUse | Usage]:
         self.seen = conversation
         yield "Let me "
@@ -332,7 +333,9 @@ async def test_a_text_only_call_reports_no_tool_calls() -> None:
     adapter = _ToolAdapter()
 
     result = await complete(
-        "hello", secret_store=InMemorySecretStore(), adapters={"anthropic": adapter}
+        "hello",
+        secret_store=InMemorySecretStore(),
+        adapters={"anthropic": adapter, "openai": adapter},
     )
 
     assert result.tool_calls == ()
@@ -351,7 +354,7 @@ async def test_the_conversation_reaches_the_adapter_intact() -> None:
     await complete(
         "hi",
         secret_store=InMemorySecretStore(),
-        adapters={"anthropic": adapter},
+        adapters={"anthropic": adapter, "openai": adapter},
         conversation=conversation,
     )
 

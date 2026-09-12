@@ -1,6 +1,6 @@
 // Workspace shell: title row (project pill), menu row (Solus · View · Robot ·
 // Help + bridge / search / bell / sign out), icon rail, notifications popover,
-// toast, mini orb, and the workspace screens plus the alert detail view and
+// toast, and the workspace screens plus the alert detail view and
 // the installed extensions' page views (rail entries AFTER the Store, behind a
 // separator, pinned ones first — EXT-14 as amended by SOLUSDEV-246 STORE ST3).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
@@ -16,7 +16,6 @@ import { WorkspaceScreen } from '../graph/WorkspaceScreen'
 import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
 import { SolScreen } from '../sol/SolScreen'
-import { MiniOrb } from '../sol/MiniOrb'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
@@ -46,9 +45,7 @@ import type { RailExtensionEntry } from './extensionRail'
 /** Screen labels (the data-screen-label hook for tests; the topbar breadcrumb is gone — SOLUSDEV-235). */
 const SCREEN_TITLES: Readonly<Record<string, string>> = {
   home: 'Home',
-  overview: 'Overview',
   workspace: 'Workspace',
-  sources: 'Sources',
   bench: 'Live Bench',
   sol: 'SOL',
   store: 'Store',
@@ -93,7 +90,7 @@ function useShellNavigation(): ShellNavigation {
     // Every project-scoped store is swapped in ONE place (SOLUSDEV-242).
     switchWorkspaceProject(p, 'home')
     // Opening a project from Home lands on its Workspace (SOLUSDEV-244): the
-    // Overview hub and the Sources page are retired — Home carries their tasks.
+    // Overview hub and the per-project source list are retired — Home carries their tasks.
     go('workspace')
   }
   const switchProject = (p: WorkspaceProject): void => {
@@ -242,7 +239,6 @@ export function WorkspaceShell(): React.JSX.Element {
         </div>
       </div>
       <ToastView onView={nav.viewToast} />
-      <MiniOrb hidden={name === 'sol'} onClick={() => go('sol')} />
     </div>
   )
 }

@@ -21,6 +21,14 @@ class BoardClass(enum.StrEnum):
 class Board:
     name: str
     kind: BoardClass
+    headline: str | None = None  # the plain-words card title when the exact name is too much
+
+
+#: Card copy for what a USB identity can honestly claim. These literals live ONLY here.
+BRIDGE_STREAM_HEADLINE: Final = "Arduino-class board on USB"
+UNKNOWN_HEADLINE: Final = "something on USB"
+#: USB vendor id → family, for a catalogued vendor's uncatalogued product id.
+VENDOR_FAMILY_TABLE: Final[dict[int, str]] = {0x2341: "an Arduino", 0x303A: "an ESP32"}
 
 
 BOARD_TABLE: Final[dict[tuple[int, int], Board]] = {
@@ -29,7 +37,7 @@ BOARD_TABLE: Final[dict[tuple[int, int], Board]] = {
     (0x2341, 0x0043): Board("Arduino Uno R3", BoardClass.MCU_BOARD),
     (0x2341, 0x8036): Board("Arduino Leonardo", BoardClass.MCU_BOARD),
     (0x2341, 0x0042): Board("Arduino Mega 2560", BoardClass.MCU_BOARD),
-    (0x303A, 0x1001): Board("Espressif ESP32-S3 native USB", BoardClass.MCU_BOARD),
+    (0x303A, 0x1001): Board("Espressif ESP32-S3 native USB", BoardClass.MCU_BOARD, "an ESP32"),
     (0x239A, 0x80F4): Board("Adafruit Feather RP2040", BoardClass.MCU_BOARD),
     (0x2E8A, 0x0005): Board("Raspberry Pi Pico (RP2040, MicroPython)", BoardClass.MCU_BOARD),
     # USB-UART bridges — the chip is known; the MCU behind it is NOT

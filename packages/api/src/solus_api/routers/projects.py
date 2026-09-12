@@ -5,12 +5,13 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SecretStoreDep, SessionDep, TeamCtx, require_role
+from solus_api.graph.read_scope import current_scope, resolve_scopes
 from solus_api.models import (
     GraphEdge,
     GraphEntity,
@@ -19,6 +20,7 @@ from solus_api.models import (
     ProjectMembership,
     Role,
     Source,
+    SourceViewSelection,
     utcnow,
 )
 from solus_api.routers.users import delete_projects_cascade
@@ -40,11 +42,19 @@ project_router = APIRouter(prefix="/api/v1/projects")
 
 
 async def _count_by_project(
-    session: SessionDep, model: type[GraphEntity] | type[Source], project_ids: list[uuid.UUID]
+    session: SessionDep,
+    model: type[GraphEntity] | type[Source],
+    project_ids: list[uuid.UUID],
+    user_id: uuid.UUID,
 ) -> dict[uuid.UUID, int]:
     if not project_ids:
         return {}
     stmt = select(model.project_id, func.count()).where(model.project_id.in_(project_ids))
+    if model is Source:
+        stmt = stmt.where(Source.revision_base_source_id.is_(None))
+    else:
+        scopes = (await resolve_scopes(session, project_ids, user_id)).values()
+        stmt = stmt.where(or_(*(scope.entity_predicate() for scope in scopes)))
     deleted_at = getattr(model, "deleted_at", None)  # Source is not soft-deletable
     if deleted_at is not None:
         stmt = stmt.where(deleted_at.is_(None))
@@ -69,8 +79,8 @@ async def list_projects(
     visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
     # Dashboard summary counts in two grouped queries, not N+1 (FND-04).
     ids = [p.id for p in visible]
-    entity_counts = await _count_by_project(session, GraphEntity, ids)
-    source_counts = await _count_by_project(session, Source, ids)
+    entity_counts = await _count_by_project(session, GraphEntity, ids, ctx.user.id)
+    source_counts = await _count_by_project(session, Source, ids, ctx.user.id)
     return envelope(
         [
             serialize_project(
@@ -147,28 +157,48 @@ async def _project_detail(ctx: ProjectCtx, session: SessionDep) -> dict[str, Any
     entity_count = await session.scalar(
         select(func.count())
         .select_from(GraphEntity)
-        .where(GraphEntity.project_id == ctx.project.id, GraphEntity.deleted_at.is_(None))
+        .where(
+            GraphEntity.project_id == ctx.project.id,
+            GraphEntity.deleted_at.is_(None),
+            current_scope(ctx.project.id).entity_predicate(),
+        )
     )
     relation_count = await session.scalar(
         select(func.count())
         .select_from(GraphEdge)
-        .where(GraphEdge.project_id == ctx.project.id, GraphEdge.deleted_at.is_(None))
+        .where(
+            GraphEdge.project_id == ctx.project.id,
+            GraphEdge.deleted_at.is_(None),
+            current_scope(ctx.project.id).edge_predicate(),
+        )
     )
     sources = (
         await session.scalars(
             select(Source)
-            .where(Source.project_id == ctx.project.id)
+            .where(Source.project_id == ctx.project.id, Source.revision_base_source_id.is_(None))
             .order_by(Source.created_at.desc())
         )
     ).all()
     graph_updated_at = await session.scalar(
         select(
             func.greatest(
+                select(func.max(SourceViewSelection.updated_at))
+                .where(
+                    SourceViewSelection.project_id == ctx.project.id,
+                    SourceViewSelection.user_id == ctx.user.id,
+                )
+                .scalar_subquery(),
                 select(func.max(GraphEntity.updated_at))
-                .where(GraphEntity.project_id == ctx.project.id)
+                .where(
+                    GraphEntity.project_id == ctx.project.id,
+                    current_scope(ctx.project.id).entity_predicate(),
+                )
                 .scalar_subquery(),
                 select(func.max(GraphEdge.updated_at))
-                .where(GraphEdge.project_id == ctx.project.id)
+                .where(
+                    GraphEdge.project_id == ctx.project.id,
+                    current_scope(ctx.project.id).edge_predicate(),
+                )
                 .scalar_subquery(),
             )
         )

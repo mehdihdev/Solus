@@ -7,7 +7,7 @@ import { manifest, viewOf } from '../testing/fixtures'
 describe('PermissionsTab', () => {
   it('lists each declared scope with GRANTED from the install row', () => {
     render(<PermissionsTab view={viewOf({ install: {} })} />)
-    expect(screen.getByText('Read the context model')).toBeInTheDocument()
+    expect(screen.getByText('Read the workspace graph')).toBeInTheDocument()
     expect(screen.getByText('List connected sources')).toBeInTheDocument()
     expect(screen.getAllByText('GRANTED')).toHaveLength(3)
     expect(screen.getByText('https://api.octopart.com')).toBeInTheDocument()

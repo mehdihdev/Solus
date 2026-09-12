@@ -38,7 +38,9 @@ from solus_api.deps import ProjectCtx, SessionDep, require_role
 from solus_api.graph.codec import PacketDecodeError, from_wire
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.hardware.config import TransportKind
-from solus_api.hardware.store import ensure_config, robot_root
+from solus_api.hardware.local_runtime import open_local_hardware, prepare_local_hardware
+from solus_api.hardware.runtime import resolve_runtime_config
+from solus_api.hardware.store import hardware_entity, robot_root
 from solus_api.livebench.sessions import (
     AmbiguousDeviceError,
     DeviceNotFoundError,
@@ -312,12 +314,25 @@ class RobotRealConfig(BaseModel):
     window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
 
 
+class HardwareRealConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["hardware"]
+    entity_id: uuid.UUID
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+
+
 class BenchSessionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["sim", "real"]
     config: Annotated[
-        MujocoSimConfig | GazeboSimConfig | McapSimConfig | SerialRealConfig | RobotRealConfig,
+        MujocoSimConfig
+        | GazeboSimConfig
+        | McapSimConfig
+        | SerialRealConfig
+        | RobotRealConfig
+        | HardwareRealConfig,
         Field(discriminator="provider"),
     ]
 
@@ -477,11 +492,19 @@ def _session_opener(
 
 
 async def _robot_opener(
-    local: Any, session: AsyncSession, project_id: uuid.UUID, cfg: RobotRealConfig
+    local: Any,
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    cfg: RobotRealConfig | HardwareRealConfig,
+    account_id: uuid.UUID,
 ) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any]]:
     """(open_conn, label, device) for a robot session: the config document is the truth."""
-    robot = await robot_root(session, project_id, cfg.robot_entity_id)
-    _, config = await ensure_config(session, project_id, robot, created_by=None)
+    robot = (
+        await robot_root(session, project_id, cfg.robot_entity_id)
+        if isinstance(cfg, RobotRealConfig)
+        else await hardware_entity(session, project_id, cfg.entity_id)
+    )
+    config = await resolve_runtime_config(session, project_id, robot.id)
     if config.identity is None or config.protocol is None:
         raise APIError(
             422,
@@ -489,17 +512,30 @@ async def _robot_opener(
             "the robot's config has no transport identity or protocol yet — detect it or "
             "configure it before starting a session",
         )
-    document = config.model_dump(mode="json")
+    from solus_api.hardware.store import read_entity_config
+
+    entry, owner_config = await read_entity_config(session, project_id, robot.id)
+    if entry is None:
+        raise APIError(422, "validation_error", "Configure this hardware before connecting.")
+    document = await asyncio.to_thread(
+        prepare_local_hardware,
+        local,
+        config,
+        project_id,
+        account_id,
+        entry.id,
+        owner_config=owner_config,
+    )
     identity, protocol = config.identity, config.protocol
 
     async def open_robot() -> Any:
-        return await local.open_robot(document, project_id=project_id)
+        return await open_local_hardware(local, document, project_id)
 
     device = {
         "device_ref": identity.device_ref,
         "driver_id": protocol.driver_id,
         "serial_number": identity.binding if identity.kind is TransportKind.USB_SERIAL else None,
-        "device_path": identity.last_seen_path,
+        "device_path": getattr(identity, "last_seen_path", None),
         "baud": protocol.params.get("baud"),
     }
     return open_robot, f"Robot {robot.name} ({identity.device_ref})", device
@@ -515,8 +551,10 @@ async def start_session(
         raise APIError(503, "source_unavailable", _RUNNER_ABSENT)
     settings = request.app.state.settings
     device: dict[str, Any] | None
-    if isinstance(body.config, RobotRealConfig):
-        open_conn, label, device = await _robot_opener(local, session, ctx.project.id, body.config)
+    if isinstance(body.config, (RobotRealConfig, HardwareRealConfig)):
+        open_conn, label, device = await _robot_opener(
+            local, session, ctx.project.id, body.config, ctx.user.id
+        )
     else:
         open_conn, label, device = _session_opener(local, settings, ctx.project.id, body)
     manager = get_session_manager(request)

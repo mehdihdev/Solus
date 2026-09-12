@@ -17,7 +17,6 @@
     "start": "electron-vite preview",
     "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "npm run gen:api && npm run typecheck && electron-vite build",
-    "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
@@ -38,6 +37,9 @@
     "smol-toml": "1.8.0",
     "yauzl": "3.4.0",
     "zustand": "5.0.14"
+  },
+  "optionalDependencies": {
+    "uiohook-napi": "1.5.5"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.0",

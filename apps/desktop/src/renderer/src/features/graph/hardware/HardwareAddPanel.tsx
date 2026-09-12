@@ -1,28 +1,51 @@
-// The Hardware tab of the workspace Add panel (SOLUSDEV-248 R1): five entry
-// cards in a compact 2-column grid, each opening its own ModalShell flow.
-// Offline → every card is disabled with honest copy; nothing is fabricated.
-// Sourced (SOLUSDEV-246 ST5) opens the same sourcing panel the BOM uses, on
-// its Workspace door: the chosen candidate lands in a robot category as a
-// PLANNED part and the robot view reloads through `onCreated`.
-import { useState } from 'react'
+// The Hardware tab of the workspace Add panel (SOLUSDEV-250 P3,
+// docs/wireflows/hardware-onboarding.md): Devices found · Search · Describe something
+// new · Sourced, then the collapsed Unassigned parts. No card grid, no modals except the
+// sourcing panel (SOLUSDEV-246 ST5) behind one button. Offline → one honest line and
+// disabled controls; nothing is fabricated.
+import { useState, type ReactNode } from 'react'
+import { Button } from '../../../components/ui/Button'
 import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
-import { AuthoredPartModal } from './AuthoredPartModal'
-import { DetectedModal } from './DetectedModal'
-import { FromFileModal } from './FromFileModal'
-import { HardwareCard } from './HardwareCard'
-import { HARDWARE_CARDS, HARDWARE_COPY, type HardwareCardId } from './hardware.constants'
-import { LibraryModal } from './LibraryModal'
 import { SourcingModal } from '../../sourcing/SourcingModal'
+import { DescribeNew } from './DescribeNew'
+import { DevicesFound } from './DevicesFound'
+import { HARDWARE_COPY } from './hardware.constants'
+import { HardwareSearch } from './HardwareSearch'
+import { UnassignedParts } from './UnassignedParts'
 
 export interface HardwareAddPanelProps {
   projectId: string
   online: boolean
   mode: SolMode
-  /** Existing physical_robot entities for the Detected, From a file, Library and Authored targets. */
+  /** Existing physical_robot entities — the targets every surface offers. */
   robots: readonly Entity[]
-  createRobot: () => Promise<string>
+  /** The workspace's current entities (null = not loaded) — the device cards read bindings. */
+  entities: readonly Entity[] | null
   onCreated: (entity: Entity) => void
+}
+
+const OFFLINE = 'Connect this project to add hardware.'
+const BODY_STYLE = {
+  fontSize: 12,
+  color: 'var(--mut)',
+  margin: '0 0 8px',
+  lineHeight: 1.5
+} as const
+const HEADING_STYLE = {
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: 'var(--tx)',
+  margin: '14px 0 4px'
+} as const
+
+function Section({ title, children }: { title: string; children: ReactNode }): React.JSX.Element {
+  return (
+    <section aria-label={title}>
+      <h3 style={HEADING_STYLE}>{title}</h3>
+      {children}
+    </section>
+  )
 }
 
 export function HardwareAddPanel({
@@ -30,66 +53,57 @@ export function HardwareAddPanel({
   online,
   mode,
   robots,
-  createRobot,
+  entities,
   onCreated
 }: HardwareAddPanelProps): React.JSX.Element {
-  const [open, setOpen] = useState<HardwareCardId | null>(null)
-  const close = (): void => setOpen(null)
+  const [sourcing, setSourcing] = useState(false)
+  const disabled = !online
   return (
     <div className="hardware-add">
-      <p style={{ fontSize: 12, color: 'var(--mut)', margin: '0 0 12px', lineHeight: 1.5 }}>
-        {HARDWARE_COPY.intro[mode]}
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        {HARDWARE_CARDS.map((card) => (
-          <HardwareCard
-            key={card.id}
-            card={card}
-            disabled={!online || card.disabled === true}
-            onOpen={() => setOpen(card.id)}
+      <p style={BODY_STYLE}>{HARDWARE_COPY.intro[mode]}</p>
+      {disabled && <p style={BODY_STYLE}>{OFFLINE}</p>}
+      <Section title="Devices found">
+        <p style={BODY_STYLE}>{HARDWARE_COPY.devices[mode]}</p>
+        {online && (
+          <DevicesFound
+            projectId={projectId}
+            mode={mode}
+            robots={robots}
+            entities={entities}
+            onCreated={onCreated}
           />
-        ))}
-      </div>
-      {!online && (
-        <p style={{ fontSize: 12, color: 'var(--mut)' }}>Connect this project to add hardware.</p>
-      )}
-      {open === 'detected' && (
-        <DetectedModal
+        )}
+      </Section>
+      <Section title="Search">
+        <p style={BODY_STYLE}>{HARDWARE_COPY.search[mode]}</p>
+        <HardwareSearch
+          projectId={projectId}
+          robots={robots}
+          onCreated={onCreated}
+          disabled={disabled}
+        />
+      </Section>
+      <Section title="Describe something new">
+        <DescribeNew
           projectId={projectId}
           mode={mode}
           robots={robots}
           onCreated={onCreated}
-          onClose={close}
+          disabled={disabled}
         />
-      )}
-      {open === 'file' && (
-        <FromFileModal projectId={projectId} mode={mode} robots={robots} onClose={close} />
-      )}
-      {open === 'library' && (
-        <LibraryModal
-          projectId={projectId}
-          mode={mode}
-          robots={robots}
-          onCreated={onCreated}
-          onClose={close}
-        />
-      )}
-      {open === 'sourced' && (
+      </Section>
+      <Section title="Sourced">
+        <Button size="sm" disabled={disabled} onClick={() => setSourcing(true)}>
+          Find a part from suppliers
+        </Button>
+      </Section>
+      <UnassignedParts projectId={projectId} mode={mode} robots={robots} disabled={disabled} />
+      {sourcing && (
         <SourcingModal
           projectId={projectId}
           door="workspace"
           onSelected={onCreated}
-          onClose={close}
-        />
-      )}
-      {open === 'authored' && (
-        <AuthoredPartModal
-          projectId={projectId}
-          robots={robots}
-          mode={mode}
-          createRobot={createRobot}
-          onCreated={onCreated}
-          onClose={close}
+          onClose={() => setSourcing(false)}
         />
       )}
     </div>

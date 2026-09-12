@@ -1,46 +1,21 @@
-// Add › Hardware surface data (SOLUSDEV-248 R1, docs/wireflows/hardware-onboarding.md).
-// The five entry cards and the per-category spec fields for authored parts.
-// Spec fields are generic to a category, never to a product family — a
-// pneumatic valve, an ESC and a servo fill the same actuator fields. No vendor
-// or product name appears in this directory.
+// Add › Hardware surface data (SOLUSDEV-250 P3, docs/wireflows/hardware-onboarding.md):
+// the new-robot select option, the per-category spec fields (the sidebar's, later)
+// and the copy per SOL mode. Spec fields are generic to a category, never to a
+// product family — a pneumatic valve, an ESC and a servo fill the same actuator
+// fields. No vendor or product name appears in this directory.
 import type { RobotCategory } from '../../../lib/api/hardware'
 import type { SolMode } from '../../../store/settingsStore'
+import { MODAL_INPUT_STYLE } from '../../workspace/modals'
 
-export type HardwareCardId = 'detected' | 'file' | 'library' | 'sourced' | 'authored'
-
-export interface HardwareCard {
-  id: HardwareCardId
-  title: string
-  /** One-line kind subtitle. */
-  kind: string
-  /** Status footer copy. */
-  status: string
-  /** Rendered aria-disabled with no modal (wireflow Flow 4). */
-  disabled?: boolean
-}
-
-export const HARDWARE_CARDS: readonly HardwareCard[] = [
-  { id: 'detected', title: 'Detected', kind: 'Devices on this machine', status: 'Enumerate' },
-  {
-    id: 'file',
-    title: 'From a file',
-    kind: 'Parts from connected sources',
-    status: 'Assign parts'
-  },
-  {
-    id: 'library',
-    title: 'Library',
-    kind: 'Curated parts and platforms',
-    status: 'Search and import'
-  },
-  {
-    id: 'sourced',
-    title: 'Sourced',
-    kind: 'Parts from suppliers',
-    status: 'Find a part'
-  },
-  { id: 'authored', title: 'Authored', kind: 'Describe a part yourself', status: 'Create a part' }
-]
+/** The "new Physical Robot" value in a robot select. */
+/** Field chrome shared by every Add › Hardware input and select. */
+export const FIELD_LABEL_STYLE = {
+  display: 'block',
+  marginTop: 12,
+  fontSize: 11,
+  color: 'var(--mut)'
+} as const
+export const FIELD_CONTROL_STYLE = { ...MODAL_INPUT_STYLE, marginTop: 4 } as const
 
 export interface HardwareSpecField {
   key: string
@@ -128,54 +103,39 @@ export const HARDWARE_SPEC_FIELDS: Record<RobotCategory, readonly HardwareSpecFi
   ]
 }
 
-/** Copy per SOL mode (ADR-016). Live claims — device titles, errors — are never rephrased. */
+/** Copy per SOL mode (ADR-016). Live claims — headlines, summaries, errors — are never rephrased. */
 export const HARDWARE_COPY: Record<
-  'intro' | 'detected' | 'noDevices' | 'proposal' | 'file' | 'library' | 'authored',
+  'intro' | 'devices' | 'search' | 'describe' | 'unassigned',
   Record<SolMode, string>
 > = {
   intro: {
     Guide:
-      'Add hardware to a Physical Robot. Detected devices, parts from your connected sources, ' +
-      'the library and hand-authored parts all land under the robot’s seven categories.',
-    Expert: 'Add hardware under a Physical Robot’s categories.'
+      'Everything here becomes part of a Physical Robot. A name is enough for a robot to exist ' +
+      'and stream — the rest can follow.',
+    Expert: 'Add hardware to a Physical Robot. A name is enough.'
   },
-  detected: {
+  devices: {
     Guide:
-      'These are the devices Solus can see on this machine right now, named only as far as the ' +
-      'evidence goes — a bridge chip never implies the board behind it.',
-    Expert: 'Devices on this machine, named to the level known.'
+      'Devices this machine can see right now, named only as far as the evidence goes. Each ' +
+      'card asks one question; nothing is added to your project until you confirm.',
+    Expert: 'Devices on this machine, named to the level known. Nothing written before Add.'
   },
-  noDevices: {
+  search: {
     Guide:
-      'No devices detected. Plug in a USB device or CAN adapter, or join the robot’s network, ' +
-      'then reopen this list.',
-    Expert: 'No devices detected. Check USB, CAN adapter or network, then reopen.'
+      'Curated parts and platforms. A platform becomes a new robot; a part lands under a robot ' +
+      'in its default category.',
+    Expert: 'Library parts and platforms.'
   },
-  proposal: {
+  describe: {
     Guide:
-      'Solus interrogated the device safely (ping and listen only) and lists what answered. ' +
-      'Each row is a proposal with its evidence — accept, rename or reject it. Confirm writes ' +
-      'the robot, its parts and config, then opens a bench session; nothing is written before.',
-    Expert: 'Rows are proposals. Confirm writes robot, parts, config and opens a session.'
+      'Name what you have. The category is guessed from the name — change it if it is wrong. ' +
+      'Specs come later — from SOL, from a datasheet, or never.',
+    Expert: 'Name it. Category guessed, changeable. Specs later.'
   },
-  file: {
+  unassigned: {
     Guide:
-      'Parts from your connected CAD, schematic and BOM sources that no robot owns yet. Pick ' +
-      'the ones that belong to a robot and the category they go under — their source identity ' +
-      'and cross-domain edges stay as they are.',
-    Expert: 'Unassigned connector parts. Select, pick robot and category, attach.'
-  },
-  library: {
-    Guide:
-      'Curated parts and whole platforms with their specs and configs. Search, preview a ' +
-      'definition, then import a part under one of a robot’s categories or a platform as a new ' +
-      'robot — every imported value is marked as coming from the library.',
-    Expert: 'Search, preview, import a part into a robot or a platform as a new robot.'
-  },
-  authored: {
-    Guide:
-      'Describe a part in your own words. Pick the robot it belongs to (or start a new one), its ' +
-      'category, and the key specs that fit — every field is optional except the name.',
-    Expert: 'Name, robot, category, specs, lifecycle. Only the name is required.'
+      'Parts from your connected sources, and parts a deleted robot left behind, that no robot ' +
+      'owns. Say which robot each belongs to.',
+    Expert: 'Parts no robot owns. Pick robot and category.'
   }
 }

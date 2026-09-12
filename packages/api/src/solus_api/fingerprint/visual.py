@@ -125,8 +125,8 @@ def _load(image: bytes | Path | ArtifactRef) -> ImageBlock | None:
                 logger.warning("vision: %s over the size cap — skipping", image.name)
                 return None
             image = image.read_bytes()
-        except OSError:
-            logger.warning("vision: could not read image path — skipping", exc_info=True)
+        except OSError as exc:
+            logger.warning("vision: could not read image path (%s) — skipping", type(exc).__name__)
             return None
     if len(image) > MAX_IMAGE_BYTES:
         logger.warning("vision: image over the %d-byte cap — skipping", MAX_IMAGE_BYTES)
@@ -209,8 +209,9 @@ async def identify_from_image(
             enqueue=enqueue,
             max_tokens=_MAX_ANSWER_TOKENS,
         )
-    except Exception:  # noqa: BLE001 — vision is best-effort, never load-bearing
-        logger.warning("vision extraction failed; treating as no-signal", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — vision is best-effort, never load-bearing
+        # Class name only: a provider 400's cause chain can quote the image bytes.
+        logger.warning("vision extraction failed (%s); treating as no-signal", type(exc).__name__)
         return []
     return _parse_candidates(completion.text, config)
 

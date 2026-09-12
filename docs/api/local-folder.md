@@ -127,8 +127,9 @@ path. Composed names: `local.scan_folder`, `local.folder_digest`, `local.open_in
 - `git` is null when there is no `.git` (directory OR the worktree `gitdir:` file form), when
   `config` is unreadable, over 64 KiB, or has no `[remote "origin"]` url. `head` is the 12-char
   short sha of the resolved commit when HEAD is readable, else null.
-- `digest` = blake2b(16) over `"/".join(parts):hash-or-size\n` in order — the same function
-  `folder_digest` computes, so the cloud compares like with like.
+- `digest` includes the ordered relative file paths/hashes and sanitized Git identity
+  (remote, branch, HEAD). Both `scan_folder` and `folder_digest` use the same
+  algorithm, so metadata-only changes invalidate the probe.
 - **Why segments, 32-hex hashes and a short head (found in the live run):** every bridge result
   passes the cloud's ingress redaction (`agent/tools/untrusted.py`, a §7 invariant that is never
   weakened) which masks any string ≥ 40 chars of `[A-Za-z0-9+/=_.-]` with ≥ 16 distinct
@@ -187,3 +188,14 @@ Paths in properties are folder-relative; absolute paths never enter the graph.
 A sync with no matching live bridge session does not fail the source: the connector raises
 `ConnectorError("api_unreachable")` (a no-signal code), the run records the skip, and the next
 `change` frame or manual sync tries again.
+
+## SOLUSDEV-260 Git identity freshness follow-up
+
+A local clone remains a real named folder root (for example ForgeTS); dependency
+packages are children in presentation while their semantic requires edges remain.
+Git discovery supports directory/worktree metadata, branch tracking remotes and
+origin fallback. Remote identity is normalized without credentials, and ambiguous
+matches are not guessed. Branch, HEAD and normalized remote changes participate in
+the scan digest. The companion change sensor observes bounded source and Git
+metadata changes so branch-only changes can trigger a fresh scan. Saved local files
+are the working-copy content; editor buffers are not claimed readable.

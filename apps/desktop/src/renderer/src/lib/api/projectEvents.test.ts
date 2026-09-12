@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest'
-import { streamProjectEvents } from './projectEvents'
+import type { DetectedDeviceOut } from './hardware'
+import { streamProjectEvents, toDetectedDevices, type ProjectEvent } from './projectEvents'
 
 function response(chunks: string[]): Response {
   return new Response(
@@ -11,8 +12,8 @@ function response(chunks: string[]): Response {
     })
   )
 }
-async function collect(fetchImpl: typeof fetch, signal?: AbortSignal): Promise<string[]> {
-  const events: string[] = []
+async function collect(fetchImpl: typeof fetch, signal?: AbortSignal): Promise<ProjectEvent[]> {
+  const events: ProjectEvent[] = []
   for await (const event of streamProjectEvents({
     projectId: 'p1',
     baseUrl: 'https://api.test',
@@ -66,4 +67,58 @@ it('does not send an already cancelled subscription', async () => {
   const fetchImpl = vi.fn()
   await expect(collect(fetchImpl, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
   expect(fetchImpl).not.toHaveBeenCalled()
+})
+
+const device: DetectedDeviceOut = {
+  transport: 'usb_serial',
+  device_ref: 'usb_serial:AB12',
+  identity: null,
+  level: 'board',
+  board: 'Dev board',
+  board_class: 'mcu',
+  mcu_known: true,
+  confidence: 0.8,
+  evidence: [],
+  ambiguous: false,
+  last_seen_path: null
+}
+const frame = (projectId: string, devices: unknown): string =>
+  `event: hardware.devices_changed\ndata: ${JSON.stringify({ type: 'hardware.devices_changed', project_id: projectId, devices, at: 1 })}\n\n`
+
+it('yields typed device frames for this project and drops malformed or foreign ones', async () => {
+  const fetchImpl = vi.fn().mockResolvedValue(
+    response([
+      frame('foreign', [device]),
+      frame('p1', { not: 'an array' }),
+      frame('p1', [{ ...device, level: undefined }]),
+      frame(
+        'p1',
+        Array.from({ length: 65 }, () => device)
+      ),
+      frame('p1', [device])
+    ])
+  )
+  expect(await collect(fetchImpl)).toEqual([
+    { type: 'hardware.devices_changed', devices: [device] }
+  ])
+})
+
+it.each([
+  ['non-array', { devices: [] }],
+  ['too many', Array.from({ length: 65 }, () => device)],
+  ['missing level', [{ ...device, level: undefined }]],
+  ['bad level', [{ ...device, level: 'guess' }]],
+  ['non-boolean ambiguous', [{ ...device, ambiguous: 'no' }]],
+  ['missing evidence', [{ ...device, evidence: undefined }]],
+  ['non-string board', [{ ...device, board: 7 }]],
+  ['non-number confidence', [{ ...device, confidence: '0.8' }]],
+  ['non-object item', ['x']],
+  ['null', null]
+])('toDetectedDevices rejects %s without throwing', (_, value) => {
+  expect(toDetectedDevices(value)).toBeNull()
+})
+
+it('toDetectedDevices accepts an empty list and a 64-item well-formed list', () => {
+  expect(toDetectedDevices([])).toEqual([])
+  expect(toDetectedDevices(Array.from({ length: 64 }, () => device))).toHaveLength(64)
 })

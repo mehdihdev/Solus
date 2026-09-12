@@ -53,8 +53,10 @@ async def test_onshape_read_operate_write_read_back() -> None:
     scope = {"document_id": DOCUMENT, "element_id": ELEMENT, "_documents": [DOCUMENT]}
 
     async def run(name: str, args: dict[str, Any]) -> Any:
+        operation = operation_by_name(name)
+        assert operation is not None, name
         async with connector.http(creds) as client:
-            return await operation_by_name(name).run(connector, client, dict(args))
+            return await operation.run(connector, client, dict(args))
 
     # READ — the variable table.
     before = _names(await run("onshape.get_variables", scope))
@@ -66,6 +68,7 @@ async def test_onshape_read_operate_write_read_back() -> None:
     # WRITE — preview shows before → after; then the read-merge-write lands ONE entry
     # while every other variable travels back untouched.
     op = operation_by_name("onshape.set_variable")
+    assert op is not None
     assert op.requires_confirmation and op.preview is not None
     args = {**scope, "name": VARIABLE, "expression": "42 mm"}
     async with connector.http(creds) as client:

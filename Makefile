@@ -41,7 +41,7 @@ companion-bin: ## build the companion binary + vendored MCP servers into dist/co
 	bash scripts/build-companion.sh
 
 seed-secrets: ## seed every env-sourced SecretStore ref from the root .env (idempotent; prints names+lengths only)
-	uv run python scripts/seed-provider-keys.py
+	uv run --package solus-api python scripts/seed-provider-keys.py
 
 gen-openapi: ## regenerate packages/api/openapi.json + desktop TS types (run after model changes)
 	cd packages/api && SOLUS_SUPABASE_JWT_SECRET=openapi-dump-dummy uv run python -c "import json, pathlib; from solus_api.main import create_app; pathlib.Path('openapi.json').write_text(json.dumps(create_app().openapi(), indent=2) + '\n')"

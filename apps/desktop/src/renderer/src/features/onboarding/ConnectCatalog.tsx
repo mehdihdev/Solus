@@ -1,6 +1,6 @@
 // The shared connect surface (SOLUSDEV-165): the live catalog as launcher
 // tiles plus the connect wizard for the entry being connected. Onboarding and
-// the per-project Sources page both render THIS, so connecting a tool is one
+// Home's connected-accounts card both render THIS, so connecting a tool is one
 // implementation and one experience everywhere.
 //
 // Local-bridge tiles (SOLUSDEV-72) are the one exception to the wizard: they

@@ -30,9 +30,8 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   the project name, plus `· GROUNDED IN N CONNECTIONS` **only when N is the
   project's real connected-source count from the server** (SOLUSDEV-152
   charter: never a fabricated number; no server truth → no line).
-- Right of header: the universal Guide/Expert mode toggle (ADR-016). It
-  persists to `PATCH /users/me/settings` with optimistic revert — the server's
-  stored mode is what the next turn's prompt reads.
+- The header has no Guide/Expert selector. The universal tone preference remains
+  in Settings (ADR-016); the stored server mode still governs the next turn.
 - Transcript: user bubbles right, assistant markdown left, mono tool lines in
   the backend's persisted format (`tool → outcome`), citations region,
   confirmation cards (unchanged CTR-03 flow). Messages enter with a short
@@ -45,13 +44,15 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   never a fabricated tier.
   Typing `@` in the input opens a **graph-entity picker** (SOLUSDEV-168): a
   listbox above the composer, debounced ~400ms against
-  `GET /projects/{id}/entities?q=&limit=8`, arrow keys + Enter to pick, Escape to
+  `GET /projects/{id}/entities?q=&limit=8`, matching names and connected code paths,
+  arrow keys + Enter to pick, Escape to
   dismiss. Picking splices `@Name` into the text and carries the entity **id**
   alongside the message, so SOL grounds on the node the user meant instead of
   whatever similarity search ranked first. A mention deleted from the text is not
   sent. Mentions arrive back as `graph` sections in `context_used`, so they render
   in "From the graph" with no extra UI. A failed search shows no list and never
-  blocks Send.
+  blocks Send. Code results show their stored path to distinguish duplicate filenames.
+  Changing projects immediately invalidates old results and selected mentions.
   The action-mode toggle **defaults to Do** (SOLUSDEV-168) and sticks for the
   panel instance. Guide refuses exactly the tools the CTR-03 gate already parks,
   so a Guide default only replaced an approval card with a "switch to Do mode"

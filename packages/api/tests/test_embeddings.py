@@ -269,3 +269,44 @@ async def test_embed_oversized_batch_rejected_before_adapter() -> None:
             allow_unmetered=True,
         )
     assert mock.calls == []
+
+
+@pytest.mark.parametrize("status", [403, 429])
+async def test_embedding_adapter_preserves_safe_retry_metadata(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+    cls = openai.PermissionDeniedError if status == 403 else openai.RateLimitError
+    error = cls(
+        "private source text",
+        response=httpx.Response(status, request=request, headers={"retry-after": "6"}),
+        body={"code": "model_not_found" if status == 403 else "rate_limit_exceeded"},
+    )
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["max_retries"] == 0
+            self.embeddings = self
+
+        async def __aenter__(self) -> "Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def create(self, **kwargs: object) -> None:
+            raise error
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", Client)
+    store = InMemorySecretStore()
+    await store.put("openai_api_key", "test")
+    with pytest.raises(ProviderError) as failure:
+        await OpenAIEmbeddingAdapter(store).embed("m", ["q"], dimensions=4)
+    assert isinstance(failure.value, ProviderTransientError) == (status == 429)
+    if isinstance(failure.value, ProviderTransientError):
+        assert failure.value.retry_after_seconds == 6.0
+    assert failure.value.__suppress_context__ and failure.value.__cause__ is None
+    assert "private" not in str(failure.value)

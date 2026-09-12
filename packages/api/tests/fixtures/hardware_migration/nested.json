@@ -1,0 +1,12 @@
+{
+  "robot_entity_id": "00000000-0000-4000-8000-000000000001",
+  "identity": {"kind": "usb_serial", "binding": "fixture-adapter", "last_seen_path": "/dev/ttyFixture"},
+  "protocol": {"driver_id": "fixture", "params": {"baud": 115200}},
+  "bus_map": [{"protocol": "fixture", "address": "1", "part_entity_id": "00000000-0000-4000-8000-000000000002"}],
+  "firmware": {"version": "1"},
+  "parts": {
+    "00000000-0000-4000-8000-000000000002": {"calibration": {"mode": "degrees", "values": {"offset": 7}, "source": "/fixture/private/calibration.json", "owner": "repo"}, "lifecycle": "installed"},
+    "00000000-0000-4000-8000-000000000003": {"calibration": {"mode": "degrees", "values": {"offset": 9}, "source": "/fixture/private/calibration.json", "owner": "repo"}, "lifecycle": "received"}
+  },
+  "provenance": {"identity": {"by": "detected"}, "protocol": {"by": "library"}, "bus_map": {"by": "detected"}, "firmware": {"by": "repo"}, "parts": {"by": "repo", "source": "/fixture/private/calibration.json"}}
+}

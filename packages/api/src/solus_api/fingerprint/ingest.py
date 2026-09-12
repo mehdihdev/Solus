@@ -60,6 +60,7 @@ from solus_api.fingerprint.contract import (
     SourceRef,
 )
 from solus_api.fingerprint.matcher import match, observations_from_hints
+from solus_api.graph.read_scope import GraphReadScope
 from solus_api.models import EMBEDDING_DIM, Domain, GraphEntity, utcnow
 
 logger = logging.getLogger(__name__)
@@ -258,7 +259,12 @@ async def resolve(
     )
     if observation is None or observation.canonical_part_id is None:
         return observation
-    canonical = await session.get(GraphEntity, observation.canonical_part_id)
+    canonical = await session.scalar(
+        select(GraphEntity).where(
+            GraphEntity.id == observation.canonical_part_id,
+            GraphReadScope(project_id).entity_predicate(),
+        )
+    )
     if (
         canonical is not None
         and canonical.project_id == project_id
@@ -285,7 +291,11 @@ async def _resolve_observation(
     read path (`resolve`) keeps the fallback for tombstone-resync convenience.
     """
     if ref.graph_entity_id is not None:
-        row = await session.get(GraphEntity, ref.graph_entity_id)
+        row = await session.scalar(
+            select(GraphEntity).where(
+                GraphEntity.id == ref.graph_entity_id, GraphReadScope(project_id).entity_predicate()
+            )
+        )
         if row is not None:
             if row.project_id != project_id:
                 # Cross-tenant guard: a foreign-project id never resolves.
@@ -301,7 +311,7 @@ async def _resolve_observation(
             await session.scalars(
                 select(GraphEntity)
                 .where(
-                    GraphEntity.project_id == project_id,
+                    GraphReadScope(project_id).entity_predicate(),
                     GraphEntity.source_connector == ref.source_connector,
                     GraphEntity.external_ref == ref.external_ref,
                     GraphEntity.deleted_at.is_(None),
@@ -348,7 +358,7 @@ async def _locked_canonical_row(
             await session.execute(
                 select(GraphEntity)
                 .where(
-                    GraphEntity.project_id == project_id,
+                    GraphReadScope(project_id).entity_predicate(),
                     GraphEntity.canonical_key == key,
                     GraphEntity.deleted_at.is_(None),
                 )
@@ -581,7 +591,7 @@ async def scan_project(
         await session.scalars(
             select(GraphEntity)
             .where(
-                GraphEntity.project_id == project_id,
+                GraphReadScope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
                 GraphEntity.modality_hints.cast(Text) != "{}",
             )
@@ -627,7 +637,7 @@ async def scan_project(
         await session.scalars(
             select(GraphEntity)
             .where(
-                GraphEntity.project_id == project_id,
+                GraphReadScope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
                 func.jsonb_exists(GraphEntity.attrs, _STAMP_KEY),
             )
@@ -651,7 +661,7 @@ async def scan_project(
         await session.scalars(
             select(GraphEntity)
             .where(
-                GraphEntity.project_id == project_id,
+                GraphReadScope(project_id).entity_predicate(),
                 GraphEntity.deleted_at.is_(None),
                 GraphEntity.kind == CANONICAL_KIND,
                 GraphEntity.canonical_key.is_not(None),

@@ -29,6 +29,11 @@ yarn-error.log*
 # Dependencies / build output (safety net across any sub-folder)
 node_modules/
 dist/
+# ADR-031 vendored MCP forks ship their upstream's COMPILED entry point — it is
+# the only code `bin/launch` execs, and PROVENANCE pins its tree hash. Without
+# this negation the fork is absent from a clean checkout and unreviewable.
+!integrations/mcp/*/upstream/dist/
+!integrations/mcp/*/upstream/dist/**
 build/
 # electron-builder buildResources are SOURCE, not output (SOLUSDEV-233 app icon)
 !apps/desktop/build/
@@ -60,3 +65,9 @@ dmypy.json
 # that resolves outside the tree), and thousands of files. The lockfile is the
 # committed artifact; the venv never is.
 integrations/mcp/*/.venv/
+
+# Codex harness runtime state (mirrors .claude/state/ — CLAUDE.md §3)
+.Codex/
+
+# Machine-local selection of existing Docker volumes; never shared automatically.
+/docker-compose.local.yml

@@ -1,5 +1,5 @@
 // Project detail is the version validator for retained workspace snapshots.
-import type { ProjectDetail } from '../../lib/api/resources'
+import type { Entity, ProjectDetail } from '../../lib/api/resources'
 
 export const GRAPH_CACHE_TTL_MS = 5 * 60_000
 
@@ -35,4 +35,20 @@ export function graphVersionOf(detail: ProjectDetail): string {
     detail.graph_updated_at,
     stamps
   ])
+}
+
+/** Append the optimistic entities the snapshot lacks, id-deduped; relations
+ *  untouched (SOLUSDEV-250 P6). Returns `graph` itself when nothing is missing. */
+export function mergeOptimistic<G extends { entities: readonly Entity[] }>(
+  graph: G,
+  entities: readonly Entity[]
+): G {
+  const known = new Set(graph.entities.map((entity) => entity.id))
+  const added: Entity[] = []
+  for (const entity of entities) {
+    if (known.has(entity.id)) continue
+    known.add(entity.id)
+    added.push(entity)
+  }
+  return added.length === 0 ? graph : { ...graph, entities: [...graph.entities, ...added] }
 }

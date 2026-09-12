@@ -247,6 +247,7 @@ async def test_scheduled_sync_falls_back_to_source_created_by(
     )
 
     def acquirer_factory(ctx: ConnectorContext, tool_name: str) -> BridgeExportAcquirer:
+        assert ctx.project_id is not None and ctx.team_id is not None
         return BridgeExportAcquirer(
             sessions=sessions,
             sessionmaker=sessionmaker_fixture,
@@ -303,6 +304,7 @@ async def test_neither_manual_nor_created_by_skips_live_acquisition(
     )
 
     def acquirer_factory(ctx: ConnectorContext, tool_name: str) -> BridgeExportAcquirer:
+        assert ctx.project_id is not None and ctx.team_id is not None
         return BridgeExportAcquirer(
             sessions=sessions,
             sessionmaker=sessionmaker_fixture,
@@ -360,6 +362,7 @@ async def test_cross_team_scope_never_dispatches_end_to_end(
     )
 
     def acquirer_factory(ctx: ConnectorContext, tool_name: str) -> BridgeExportAcquirer:
+        assert ctx.project_id is not None and ctx.team_id is not None
         return BridgeExportAcquirer(
             sessions=sessions,
             sessionmaker=sessionmaker_fixture,

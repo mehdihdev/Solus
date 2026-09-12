@@ -41,7 +41,7 @@ async def _robot(client: AsyncClient, headers: dict[str, str], project_id: str) 
     resp = await client.post(
         f"/api/v1/projects/{project_id}/entities",
         headers=headers,
-        json={"type": "physical_robot"},
+        json={"type": "physical_robot", "name": "Fixture robot"},
     )
     assert resp.status_code == 201, resp.text
     return dict(resp.json()["data"])
@@ -74,6 +74,34 @@ def _serial_arm_for(robot_id: str) -> dict[str, Any]:
     return dict(raw)
 
 
+async def _saved_serial_arm(
+    client: AsyncClient, headers: dict[str, str], project_id: str, robot_id: str
+) -> dict[str, Any]:
+    from test_hardware_ownership import _create
+
+    raw = _serial_arm_for(robot_id)
+    mapping = {}
+    for old_id in raw["parts"]:
+        part = await _create(
+            client,
+            headers,
+            project_id,
+            kind="part",
+            name="Fixture actuator",
+            parent_id=robot_id,
+            category="actuators",
+        )
+        mapping[old_id] = part["entity"]["id"]
+    raw["parts"] = {mapping[key]: value for key, value in raw["parts"].items()}
+    for item in raw["bus_map"]:
+        item["part_entity_id"] = mapping[item["part_entity_id"]]
+    raw["provenance"] = {
+        next((key.replace(old, new) for old, new in mapping.items() if old in key), key): value
+        for key, value in raw["provenance"].items()
+    }
+    return raw
+
+
 def _link_suggestion(subject_ref: str, candidate_robot_id: uuid.UUID) -> LinkSuggestion:
     return LinkSuggestion(
         subject_ref=subject_ref,
@@ -104,7 +132,7 @@ async def _consent(db: AsyncSession) -> None:
 # --------------------------------------------------------------------- config
 
 
-async def test_get_config_on_a_fresh_robot_creates_an_empty_document_and_backfills_the_ref(
+async def test_get_config_on_a_fresh_robot_leaves_the_document_absent(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     project_id, _ = await _hw_project(client, alice_headers)
@@ -119,14 +147,12 @@ async def test_get_config_on_a_fresh_robot_creates_an_empty_document_and_backfil
     refreshed = await client.get(
         f"/api/v1/projects/{project_id}/entities/{robot['id']}", headers=alice_headers
     )
-    assert refreshed.json()["data"]["properties"]["hardware_config_ref"] == entry_id
+    assert entry_id is None
+    assert refreshed.json()["data"]["properties"].get("hardware_config_ref") is None
 
     solus = await client.get(f"/api/v1/projects/{project_id}/solus", headers=alice_headers)
     hardware_entries = solus.json()["data"]["sections"]["hardware"]
-    assert len(hardware_entries) == 1
-    assert hardware_entries[0]["kind"] == "config"
-    assert hardware_entries[0]["payload"] is not None
-    assert hardware_entries[0]["entity_id"] is not None
+    assert hardware_entries == []
 
 
 async def test_get_config_is_idempotent_across_repeat_reads(
@@ -138,7 +164,7 @@ async def test_get_config_is_idempotent_across_repeat_reads(
     second = await _hw_get_config(client, alice_headers, project_id, robot["id"])
     assert first["entry_id"] == second["entry_id"]
     solus = await client.get(f"/api/v1/projects/{project_id}/solus", headers=alice_headers)
-    assert len(solus.json()["data"]["sections"]["hardware"]) == 1
+    assert solus.json()["data"]["sections"]["hardware"] == []
 
 
 async def test_put_config_replaces_the_document(
@@ -149,7 +175,7 @@ async def test_put_config_replaces_the_document(
     resp = await client.put(
         _hw_url(project_id, "robots", robot["id"], "config"),
         headers=alice_headers,
-        json={"config": _serial_arm_for(robot["id"])},
+        json={"config": await _saved_serial_arm(client, alice_headers, project_id, robot["id"])},
     )
     assert resp.status_code == 200, resp.text
     fetched = await _hw_get_config(client, alice_headers, project_id, robot["id"])
@@ -290,7 +316,10 @@ async def test_post_parts_creates_a_contained_planned_part_recorded_in_the_confi
         key
         for key, record in provenance.items()
         if record["by"] == "user"
-        and (f"parts.{part_id}" == key or f"parts.{part_id}".startswith(f"{key}."))
+        and (
+            f"parts.{part_id}.lifecycle" == key
+            or f"parts.{part_id}.lifecycle".startswith(f"{key}.")
+        )
     ]
     assert resolved
 
@@ -559,7 +588,7 @@ async def test_a_non_member_gets_404_on_every_hardware_route(
     assert resp.status_code == 404, resp.text
 
 
-async def test_a_viewer_can_read_config_but_cannot_write(
+async def test_a_viewer_cannot_read_or_write_hardware_config(
     client: AsyncClient,
     alice_headers: dict[str, str],
     bob_headers: dict[str, str],
@@ -584,7 +613,7 @@ async def test_a_viewer_can_read_config_but_cannot_write(
     read = await client.get(
         _hw_url(project_id, "robots", robot["id"], "config"), headers=bob_headers
     )
-    assert read.status_code == 200, read.text
+    assert read.status_code == 403, read.text
 
     put = await client.put(
         _hw_url(project_id, "robots", robot["id"], "config"),
@@ -621,12 +650,13 @@ async def test_write_routes_emit_data_events_when_consented(
 ) -> None:
     project_id, _ = await _hw_project(client, alice_headers)
     robot = await _robot(client, alice_headers, project_id)
+    raw = await _saved_serial_arm(client, alice_headers, project_id, robot["id"])
     await _consent(db)
 
     put = await client.put(
         _hw_url(project_id, "robots", robot["id"], "config"),
         headers=alice_headers,
-        json={"config": _serial_arm_for(robot["id"])},
+        json={"config": raw},
     )
     assert put.status_code == 200, put.text
 

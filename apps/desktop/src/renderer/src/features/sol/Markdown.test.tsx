@@ -4,7 +4,10 @@
 // anchors, images never load.
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { SolMarkdown } from './Markdown'
+import { buildBenchMarkdown } from './streamBench'
 
 describe('SolMarkdown', () => {
   it('renders headings, emphasis, lists and inline code as elements', () => {
@@ -53,5 +56,69 @@ describe('SolMarkdown', () => {
   it('renders plain prose unchanged', () => {
     render(<SolMarkdown content="Just a sentence with no markup." />)
     expect(screen.getByText('Just a sentence with no markup.')).toBeInTheDocument()
+  })
+})
+
+// SOLUSDEV-252 S2: the settled/tail two-parse render. Settled blocks are
+// parsed once and reused; only the block being written re-parses per token.
+describe('SolMarkdown two-parse streaming render', () => {
+  function oneParse(content: string): string {
+    const { container, unmount } = render(
+      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+        {content}
+      </ReactMarkdown>
+    )
+    const html = container.innerHTML
+    unmount()
+    return html
+  }
+
+  it('renders the same DOM as a single parse for settled content', () => {
+    for (const content of [
+      buildBenchMarkdown(),
+      '# T\n\npara one\n\n- a\n- b\n\n```c\nint x;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nend.\n',
+      'no blank lines at all\nstill one paragraph'
+    ]) {
+      const expected = oneParse(content)
+      const { container, unmount } = render(<SolMarkdown content={content} />)
+      expect(container.querySelector('.sol-md')?.innerHTML).toBe(expected)
+      unmount()
+    }
+  })
+
+  it('a growing fenced code block stays ONE reused <pre> across renders', () => {
+    const head = 'Intro paragraph.\n\n```c\nint a;\n'
+    const { container, rerender } = render(<SolMarkdown content={head} />)
+    const pres = container.querySelectorAll('pre')
+    expect(pres).toHaveLength(1)
+    const first = pres[0]
+    rerender(<SolMarkdown content={`${head}int b;\nint c;\n`} />)
+    const after = container.querySelectorAll('pre')
+    expect(after).toHaveLength(1)
+    expect(after[0]).toBe(first) // same DOM node, not a re-created block
+    expect(after[0].textContent).toContain('int c;')
+  })
+
+  it('holds a half-typed table header back instead of toggling paragraph ↔ table', () => {
+    const { container, rerender } = render(<SolMarkdown content={'See:\n\n| Signal | Addr'} />)
+    expect(container.querySelector('table')).toBeNull()
+    expect(container.textContent).not.toContain('| Signal')
+    rerender(<SolMarkdown content={'See:\n\n| Signal | Addr |\n|---|---|\n| imu | 0x28 |'} />)
+    expect(container.querySelector('table')).not.toBeNull()
+  })
+
+  it('keeps the security posture across both parses (no HTML, no anchors, no images)', () => {
+    render(
+      <SolMarkdown
+        content={
+          '<b>x</b> [l](https://e.example)\n\n![i](https://e.example/i.png) <img src=x> [m](https://e.example)'
+        }
+      />
+    )
+    expect(document.querySelector('b')).toBeNull()
+    expect(document.querySelector('img')).toBeNull()
+    expect(document.querySelector('a')).toBeNull()
+    expect(screen.getByText('l')).toBeInTheDocument()
+    expect(screen.getByText('m')).toBeInTheDocument()
   })
 })

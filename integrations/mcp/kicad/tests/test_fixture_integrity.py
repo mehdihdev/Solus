@@ -309,7 +309,6 @@ def test_large_netlist_parses_with_zero_warnings(
 # conftest under a whole-repo pytest run — SOLUSDEV-100 integration fix) ---
 
 
-
 @pytest.fixture(scope="session")
 def solus_sample_dir() -> Path:
     return paths.SOLUS_SAMPLE_DIR

@@ -18,10 +18,12 @@ for (or crash on) `import mujoco`.
 """
 
 import asyncio
+import dataclasses
 import importlib.util
 import logging
 import re
 import shutil
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,7 +41,12 @@ from solus_api.hardware.config import (
 )
 from solus_api.livebench.sessions import AmbiguousDeviceError, DeviceNotFoundError
 
-from livebench.recognition.passive import PortIdentity, enumerate_usb_serial
+from livebench.recognition.passive import (
+    PORT_BINDING_PREFIX,
+    PortIdentity,
+    binding_key,
+    enumerate_usb_serial,
+)
 from livebench.telemetry.stream_live import PacketStreamLiveConnection
 
 if TYPE_CHECKING:
@@ -155,21 +162,18 @@ def list_devices(
 ) -> list[LocalDevice]:
     """Enumerated USB-serial devices with by-id paths and ambiguity flags.
 
-    A device is ambiguous when its serial is absent or shared with another
-    device — exactly the cases where binding by serial cannot discriminate and
-    the UI must make the user pick explicitly.
+    A device is ambiguous when it has no binding key or shares it with another
+    device — exactly the cases where binding cannot discriminate and the UI must
+    make the user pick explicitly.
     """
     found = enumerate_usb_serial() if identities is None else identities
     by_id = _by_id_map(by_id_dir)
-    serial_counts: dict[str, int] = {}
-    for identity in found:
-        if identity.serial is not None:
-            serial_counts[identity.serial] = serial_counts.get(identity.serial, 0) + 1
+    counts = Counter(key for identity in found if (key := binding_key(identity)) is not None)
     return [
         LocalDevice(
             identity=identity,
             by_id_path=by_id.get(identity.device),
-            ambiguous=identity.serial is None or serial_counts[identity.serial] > 1,
+            ambiguous=(key := binding_key(identity)) is None or counts[key] > 1,
         )
         for identity in found
     ]
@@ -181,13 +185,18 @@ def resolve_serial_device(
     identities: list[PortIdentity] | None = None,
     by_id_dir: Path = Path("/dev/serial/by-id"),
     confirmed_device_path: str | None = None,
+    vid: int | None = None,
+    pid: int | None = None,
 ) -> str:
-    """The path to OPEN for one physical device, bound by USB serial.
+    """The path to OPEN for one physical device, bound by USB serial (or, for a
+    serial-less device, its `port-<location>` position — see `binding_key`).
 
     Prefers the `/dev/serial/by-id` alias (stable across re-enumeration, and it
     embeds the serial — reopening it re-verifies identity by construction).
-    Refuses rather than guesses: unknown serial, duplicated serial, or a
-    serial-less device without an explicit confirmed pick all raise.
+    Refuses rather than guesses: unknown binding, duplicated binding, or a
+    binding-less device without an explicit confirmed pick all raise. A port
+    binding names the PORT, so when the caller knows the bound device's vid/pid
+    whatever sits there now must still carry them — else reconnect it to verify.
     """
     devices = list_devices(identities=identities, by_id_dir=by_id_dir)
     if serial_number is None:
@@ -201,9 +210,15 @@ def resolve_serial_device(
                 f"confirmed path {confirmed_device_path!r} is not an enumerated device"
             )
         return confirmed_device_path
-    matches = [d for d in devices if d.identity.serial == serial_number]
+    matches = [d for d in devices if binding_key(d.identity) == serial_number]
     if not matches:
-        raise DeviceNotFoundError(f"no device with serial {serial_number!r}")
+        raise DeviceNotFoundError(f"no device with binding {serial_number!r}")
+    if vid is not None and pid is not None and serial_number.startswith(PORT_BINDING_PREFIX):
+        matches = [d for d in matches if (d.identity.vid, d.identity.pid) == (vid, pid)]
+        if not matches:
+            raise DeviceNotFoundError(
+                f"{serial_number!r} now fronts a different device — reconnect it to verify"
+            )
     if len(matches) > 1:
         if confirmed_device_path is not None and any(
             confirmed_device_path in (d.identity.device, d.by_id_path) for d in matches
@@ -340,6 +355,8 @@ def _detected_wire(device: Any) -> dict[str, Any]:
         "last_seen_path": device.last_seen_path,
         "vid": device.vid,
         "pid": device.pid,
+        "headline": device.headline,
+        "identity_basis": device.identity_basis,
     }
 
 
@@ -403,6 +420,10 @@ def _proposal_wire(proposal: Any) -> dict[str, Any]:
         "confidence": proposal.confidence,
         "evidence": [m.model_dump(mode="json") for m in proposal.evidence],
         "calibration_source": proposal.calibration_source,
+        "headline": proposal.headline,
+        "tone": proposal.tone,
+        "stream": dataclasses.asdict(proposal.stream) if proposal.stream is not None else None,
+        "identity_basis": proposal.identity_basis,
     }
 
 

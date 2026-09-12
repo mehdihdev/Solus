@@ -12,7 +12,12 @@
 // - `citations` must be a string array (SOL-02: the structured provenance
 //   surface — a frame that can't prove that shape is malformed).
 
-import { toPendingConfirmation, type PendingConfirmation } from '../../lib/api/solStream'
+import {
+  toPendingConfirmation,
+  toSolArtifact,
+  type PendingConfirmation,
+  type SolArtifact
+} from '../../lib/api/solStream'
 
 /** One entry of the turn's context manifest (SOLUSDEV-233) — labels only. */
 export interface ContextSectionInfo {
@@ -33,6 +38,7 @@ export type SolStreamEvent =
   | { type: 'tool_call'; callId: string; tool: string }
   | { type: 'tool_result'; callId: string; ok: boolean; errorCode: string | null }
   | { type: 'tool_confirmation'; pending: PendingConfirmation }
+  | { type: 'artifact'; artifact: SolArtifact }
   | { type: 'message'; role: string; content: string; citations: string[] }
   | { type: 'error'; code: string; message: string }
   | { type: 'done'; conversationId: string; turnId: string }
@@ -95,6 +101,12 @@ const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
   tool_confirmation: (d) => {
     const pending = toPendingConfirmation({ type: 'tool_confirmation', data: d })
     return pending ? { type: 'tool_confirmation', pending } : null
+  },
+  // SOLUSDEV-252 S5: a tool's ArtifactRef, after its tool_result. A reference
+  // only — the bytes are fetched by the card with the bearer, never inlined.
+  artifact: (d) => {
+    const artifact = toSolArtifact({ type: 'artifact', data: d })
+    return artifact ? { type: 'artifact', artifact } : null
   },
   message: (d) => {
     if (!str(d.role) || !str(d.content)) return null

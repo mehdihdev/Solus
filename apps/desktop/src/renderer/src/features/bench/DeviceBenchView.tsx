@@ -162,7 +162,7 @@ export function DeviceBenchView({
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', padding: 20 }}>
       <div style={{ fontSize: 12.5, color: 'var(--mut)', marginBottom: 12 }}>
-        Streaming devices from active bench sessions. Focus an entity in the Context Model for the
+        Streaming devices from active bench sessions. Focus an entity in the Workspace for the
         entity-scoped view.
       </div>
       {visible.map((deviceId) => (

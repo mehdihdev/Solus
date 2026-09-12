@@ -5,21 +5,27 @@ request to keep the CI fix on the existing branch. Governed by root `AGENTS.md`,
 ADR-006/007/032, and `infrastructure/aws/README.md`. No application API, wireflow,
 contract, or architecture topology changes.
 
+Updated 2026-09-12 on SOLUSDEV-260 at the user's explicit request: `test:python`
+is removed from CI. Python lint and type checking remain, along with Node
+validation and Gitleaks. Run Python tests locally before review; the pipeline
+no longer provides a Python test result or JUnit artifact. The September 6
+timings and implementation evidence below describe the former test job.
+
 ## Pipeline split
 
-| Pipeline            | Jobs                                                                   |
-| ------------------- | ---------------------------------------------------------------------- |
-| Merge request       | Relevant Python/Node lint, type checks and tests; secret scan          |
-| Main                | `build:api-image` → `deploy:staging` only                              |
-| Tag                 | Both validation groups and full-history secret scan; no staging deploy |
-| Feature-branch push | No duplicate branch pipeline                                           |
+| Pipeline            | Jobs                                                                              |
+| ------------------- | --------------------------------------------------------------------------------- |
+| Merge request       | Relevant Python lint/type checks, Node lint/type checks/tests; secret scan        |
+| Main                | `build:api-image` → `deploy:staging` only                                         |
+| Tag                 | Python lint/type checks, Node lint/type checks/tests, full secret scan; no deploy |
+| Feature-branch push | No duplicate branch pipeline                                                      |
 
 Verified GitLab project safeguards: `main` rejects direct pushes; merging requires
 a successful pipeline; skipped pipelines cannot merge. Keep these settings in
 place. Changes to CI run both validation groups; Python scripts and the root
 Vitest configuration are also covered by the appropriate change filters.
 
-## Evidence and changes
+## September 6 evidence and changes (historical)
 
 The AWS runner is `t4g.micro` (1 GiB RAM), not the larger machine described by old
 CI comments. Recent jobs execute sequentially on runner `53798823`; `needs: []`
@@ -98,6 +104,18 @@ To run the local CI checks:
 
 ```sh
 uv run --locked --all-packages pytest infrastructure/ci/tests -q
+```
+
+To run the Python suite locally, start disposable PostgreSQL with pgvector
+(`make db-up`), install the locked workspace dependencies and ensure Git and
+the OCCT/OpenGL runtime are available. The default test database is isolated
+by checkout; an explicit `SOLUS_TEST_DATABASE_URL` must also name a disposable
+test database. The migration fixtures derive a separate database from that
+base, including when the base is named `solus_test`.
+
+```sh
+uv sync --all-packages --locked
+uv run --no-sync pytest -q -rfE -m 'not live' --durations=20
 ```
 
 To validate proposed YAML without starting a pipeline:

@@ -160,7 +160,7 @@ Every catalog spec (`MCP_SERVER_CATALOG` in
 
 | tier       | servers (current roster)                                           | what it means                                                                                                                                                                                               |
 | ---------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `free`     | `kicad`, `onshape`, `fusion` (personal/free license), `web_search` | Usable on any plan. No customer license credential; zero extra checks at invoke time.                                                                                                                       |
+| `free`     | `kicad`, `onshape`, `fusion` (personal/free license), `brave`      | Usable on any plan. No customer license credential; zero extra checks at invoke time.                                                                                                                       |
 | `byo_paid` | `altium`, `solidworks`, `autocad`                                  | **Bring your own license.** The customer's own paid vendor license, plan-entitled (`byo_paid_tools` limit — BASIC blocked, PRO unlimited, ENTERPRISE per deal) AND license-credential gated at invoke time. |
 
 **License credentials are the CUSTOMER's own.** They are captured in the Solus companion

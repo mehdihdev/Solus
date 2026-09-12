@@ -12,6 +12,7 @@ from conftest import create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.livebench.sessions import DeviceNotFoundError
+from sqlalchemy.ext.asyncio import AsyncSession
 from test_bench_router import FakeLocal, TapConn
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hardware"
@@ -53,6 +54,11 @@ async def _configure(
 ) -> None:
     raw = json.loads((FIXTURES / "serial_arm.json").read_text())
     raw["robot_entity_id"] = robot_id
+    raw["parts"] = {}
+    raw["bus_map"] = []
+    raw["provenance"] = {
+        k: v for k, v in raw["provenance"].items() if not k.startswith(("parts.", "bus_map."))
+    }
     resp = await client.put(
         f"/api/v1/projects/{project_id}/hardware/robots/{robot_id}/config",
         headers=headers,
@@ -197,3 +203,41 @@ async def test_serial_config_bounds_driver_params(
         },
     )
     assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.parametrize("state", ["saved", "absent", "deleted", "foreign"])
+async def test_hardware_provider_uses_saved_part_connection(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    robot_local: _RobotLocal,
+    db: AsyncSession,
+    state: str,
+) -> None:
+    from solus_api.models import GraphEntity, utcnow
+    from test_hardware_lifecycle_phase3 import _connection, _save
+    from test_hardware_ownership import _create
+
+    project, _ = await _robot_project(client, alice_headers)
+    part = (await _create(client, alice_headers, project, kind="part", name="Controller"))["entity"]
+    if state != "absent":
+        await _save(client, alice_headers, project, _connection(part["id"]))
+    if state == "deleted":
+        node = await db.get(GraphEntity, uuid.UUID(part["id"]))
+        assert node is not None
+        node.deleted_at = utcnow()
+        await db.commit()
+    if state == "foreign":
+        project, _ = await _robot_project(client, alice_headers)
+    response = await client.post(
+        f"/api/v1/projects/{project}/bench/sessions",
+        headers=alice_headers,
+        json={"mode": "real", "config": {"provider": "hardware", "entity_id": part["id"]}},
+    )
+    assert response.status_code == (
+        201 if state == "saved" else 422 if state == "absent" else 404
+    ), response.text
+    if state == "saved":
+        assert response.json()["data"]["device"]["device_path"] is None
+        assert robot_local.opened[0]["config"]["robot_entity_id"] == part["id"]
+    else:
+        assert robot_local.opened == []

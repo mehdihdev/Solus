@@ -48,7 +48,8 @@ async def test_tools_advertise_object_schemas_and_required_args() -> None:
     tools = {tool.name: tool for tool in await server.build_server().list_tools()}
     for name in roster.TOOL_ROSTER:
         assert tools[name].outputSchema is not None and tools[name].outputSchema["type"] == "object"
-    assert tools["probe_environment"].inputSchema["properties"] == {}
+    assert tools["probe_environment"].inputSchema["properties"]["environment"]["default"] is None
+    assert "required" not in tools["probe_environment"].inputSchema
     assert set(tools["plan"].inputSchema["required"]) == {"action"}
     assert set(tools["install"].inputSchema["required"]) == {"packages"}
     assert set(tools["run"].inputSchema["required"]) == {"script"}
@@ -193,3 +194,19 @@ def test_never_raises_when_every_internal_step_explodes(
 def test_plan_rejects_non_string_actions_without_raising(ws: Path) -> None:
     assert server.tool_plan(None, {})["ok"] is False
     assert server.tool_plan("run", "not-a-dict")["ok"] is False
+
+
+@pytest.mark.parametrize("arguments", [{}, {"environment": "sim"}])
+async def test_probe_forwards_optional_named_environment(
+    ws: Path, monkeypatch: pytest.MonkeyPatch, arguments: dict[str, str]
+) -> None:
+    seen: list[tuple[Path, str | None]] = []
+
+    def observe(root: Path, *, environment: str | None = None) -> dict[str, Any]:
+        seen.append((root, environment))
+        return dict(server.empty_probe())
+
+    monkeypatch.setattr(server, "probe_environment", observe)
+    _, structured = await server.build_server().call_tool("probe_environment", arguments)
+    assert structured == server.empty_probe()
+    assert seen == [(ws, arguments.get("environment"))]

@@ -344,9 +344,7 @@ async def test_at_cap_limit_reaches_the_bridge(
     assert len(bridge.commands) == 1
 
 
-async def test_absurd_limit_is_refused(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_absurd_limit_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     tools, bridge, _ = write_tool_setup(monkeypatch, tmp_path)
 
     result = await call_tool(tools["proj_get_nets"], limit=10**12)

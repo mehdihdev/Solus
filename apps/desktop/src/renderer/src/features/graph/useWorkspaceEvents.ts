@@ -1,26 +1,28 @@
 import { useWorkspaceSessionGeneration, workspaceSessionGeneration } from './workspaceSession'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { apiBaseUrl } from '../../lib/api/client'
 import { ApiError } from '../../lib/api/envelope.types'
+import type { DetectedDeviceOut } from '../../lib/api/hardware'
 import { streamProjectEvents, type ProjectEvent } from '../../lib/api/projectEvents'
 import { useAuthStore } from '../../store/authStore'
+import { markSafely } from '../../lib/perf/marks'
 
-/** Listen only to Solus's existing committed-graph event stream. Reconnects
- * refresh graph data to recover missed hints, never provider data. */
+/** Listen only to Solus's existing committed-graph event stream. `ready` (first
+ * connect and every reconnect) runs the cheap validation in onReady; only
+ * `graph.changed` runs onChanged. Never provider data. */
 export function useWorkspaceEvents(
   projectId: string | null,
   onChanged: () => void,
-  onReady?: () => void
+  onReady?: () => void,
+  onDevices?: (devices: DetectedDeviceOut[]) => void
 ): string | null {
   const generation = useWorkspaceSessionGeneration()
   const token = useAuthStore((state) => state.accessToken)
   const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
   const [error, setError] = useState<string | null>(null)
-  const connected = useRef<string | null>(null)
   useEffect(() => {
     setError(null)
     if (!projectId || !token) return
-    const key = `${identity}:${projectId}`
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const current = (): boolean => {
@@ -33,9 +35,11 @@ export function useWorkspaceEvents(
     }
     const receive = (event: ProjectEvent): void => {
       setError(null)
-      if (event === 'ready' && connected.current !== key) onReady?.()
-      if (event === 'graph.changed' || connected.current === key) onChanged()
-      connected.current = key
+      if (typeof event === 'object') {
+        markSafely('hw:frame_received')
+        onDevices?.(event.devices)
+      } else if (event === 'ready') onReady?.()
+      else onChanged()
     }
     const listen = async (): Promise<void> => {
       try {
@@ -67,6 +71,6 @@ export function useWorkspaceEvents(
       controller.abort()
       clearTimeout(timer)
     }
-  }, [projectId, identity, token, onChanged, onReady, generation])
+  }, [projectId, identity, token, onChanged, onReady, onDevices, generation])
   return error
 }

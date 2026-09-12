@@ -329,6 +329,7 @@ class _OneShotModel:
         max_tokens: int,
         images: Any = None,
         conversation: ToolConversation | None = None,
+        **_: Any,
     ) -> AsyncIterator[str | Usage]:
         yield "ok"
         yield Usage(tokens_in=10_000, tokens_out=5_000)

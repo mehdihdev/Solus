@@ -7,7 +7,7 @@ import { SignupPage } from '../features/auth/SignupPage'
 import { ResetPasswordPage } from '../features/auth/ResetPasswordPage'
 import { Onboarding } from '../features/onboarding/Onboarding'
 import { OverlayWindow } from '../features/overlay/OverlayWindow'
-import { OrbWindow } from '../features/sol/OrbWindow'
+import { SolWindow } from '../features/sol/SolWindow'
 import { ExtensionWindowRoot } from '../features/extensions/pageview/ExtensionWindowRoot'
 import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
 import { Spinner } from '../components/ui/Spinner'
@@ -92,13 +92,14 @@ export function AppRoutes(): React.JSX.Element {
           </RequireOnboarding>
         }
       />
-      {/* SOLX-02: the detached always-on-top orb window (guards its own auth). */}
-      <Route path="/orb" element={<OrbWindow />} />
+      {/* SOLUSDEV-252 S3: the SOL window, summoned by double-tap Ctrl or the
+          circle gesture — guards its own auth like the extension window. */}
+      <Route path="/sol-window" element={<SolWindow />} />
       {/* SOLX-03/TU-10: the click-through guide overlay window. No auth guard —
-          it renders only what the orb hands it over CTR-06, never fetched data. */}
+          it renders only what the SOL window hands it over CTR-06, never fetched data. */}
       <Route path="/overlay" element={<OverlayWindow />} />
       {/* SOLUSDEV-235 / EXT-13: an extension's window view — the second
-          BrowserWindow main opens (guards its own auth, like the orb). */}
+          BrowserWindow main opens (guards its own auth, like the SOL window). */}
       <Route path="/ext-window/:extensionId" element={<ExtensionWindowRoot />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

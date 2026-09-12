@@ -76,13 +76,14 @@ describe('deviceTitle', () => {
     expect(deviceTitle(device({ board: null, board_class: 'unknown' }))).toBe('Unknown device')
   })
 
-  it('never guesses a board behind a USB-serial bridge', () => {
+  it('never guesses a board behind a USB-serial bridge — "something on USB", not a verdict', () => {
     const bridged = device({
       board: 'WCH CH343/CH9102 USB-serial bridge',
       board_class: 'usb_bridge',
       mcu_known: false
     })
-    expect(deviceTitle(bridged)).toBe('USB-serial bridge — MCU unknown')
+    expect(deviceTitle(bridged)).toBe('something on USB')
+    expect(deviceTitle(bridged)).not.toMatch(/MCU unknown/)
   })
 })
 

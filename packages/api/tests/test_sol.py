@@ -10,9 +10,10 @@ tool call.
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, MutableMapping
 from typing import Any
 
+import pytest
 from conftest import (
     BOB,
     add_member,
@@ -21,13 +22,15 @@ from conftest import (
     me,
 )
 from fastapi import FastAPI
+from fixtures.screenshot import JPEG_MAGIC, PNG_MAGIC, b64, context_png, screenshot_body, tiny_png
 from httpx import AsyncClient
 from solus_api.agent.conversation import ConversationService
 from solus_api.agent.runtime import MAX_TOOL_CALLS
+from solus_api.agent.screen import MAX_DECODED_BYTES, ScreenshotBlock
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools import ToolCall
-from solus_api.models import Domain, GraphEntity, TurnRole
-from sqlalchemy import select
+from solus_api.models import CreditBalance, Domain, GraphEntity, TurnRole
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -320,22 +323,26 @@ async def test_mentions_reach_the_runner_as_graph_anchors(
     assert runner.ctx.mentions == (entity_id,)
 
 
-async def test_a_mention_from_another_team_is_inert_not_an_error(
+async def test_nonvisible_mentions_are_refused_before_admission(
     app: Any,
     client: AsyncClient,
     alice_headers: dict[str, str],
     bob_headers: dict[str, str],
     db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Deliberately NOT a 403/404. `load_neighborhood` is project-scoped, so a
-    foreign id yields an empty neighbourhood — the same posture `get_entity`
-    takes. Answering differently for "exists elsewhere" than for "does not
-    exist" would hand any member a cross-tenant existence oracle."""
+    """Absent and foreign IDs receive the same refreshable refusal, with no spend."""
+    from unittest.mock import AsyncMock
+
     _, alice_project = await _project(client, alice_headers)
     _, bob_project = await _project(client, bob_headers)
     bob_entity = await _seed_entity(db, bob_project["id"], name="Bob Secret Part")
     convo = await _create_conversation(client, alice_headers, alice_project["id"])
     app.state.agent_runner = _RecordingRunner()
+    admission = AsyncMock()
+    credits = AsyncMock()
+    monkeypatch.setattr("solus_api.routers.sol.check_frequency_cap", admission)
+    monkeypatch.setattr("solus_api.routers.sol.has_sufficient_credits", credits)
 
     foreign = await client.post(
         f"/api/v1/projects/{alice_project['id']}/sol/conversations/{convo['id']}/messages",
@@ -348,8 +355,13 @@ async def test_a_mention_from_another_team_is_inert_not_an_error(
         headers=alice_headers,
     )
 
-    assert foreign.status_code == absent.status_code == 200
+    assert foreign.status_code == absent.status_code == 409
     assert "Bob Secret Part" not in foreign.text
+
+    assert foreign.json()["error"]["code"] == absent.json()["error"]["code"] == "stale_mentions"
+    assert app.state.agent_runner.ctx is None
+    admission.assert_not_called()
+    credits.assert_not_called()
 
 
 async def test_preferences_reach_the_runner_as_labelled_sections(
@@ -784,3 +796,337 @@ async def test_rename_requires_member_role(
         headers=bob_headers,
     )
     assert resp.status_code == 403, resp.text
+
+
+async def test_think_harder_reaches_the_runner_and_defaults_off(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """S1-W3: the composer's "Think harder" toggle is a request-level flag the
+    runner turns into a one-tier bump. Off by default; unknown fields still 422."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    resp = await client.post(url, json={"content": "what is I2C"}, headers=alice_headers)
+    assert resp.status_code == 200
+    default_ctx = runner.ctx
+
+    resp = await client.post(
+        url, json={"content": "what is I2C", "think_harder": True}, headers=alice_headers
+    )
+    assert resp.status_code == 200
+    assert (default_ctx.think_harder, runner.ctx.think_harder) == (False, True)
+
+    resp = await client.post(
+        url, json={"content": "what is I2C", "model": "sol-reasoner-1"}, headers=alice_headers
+    )
+    assert resp.status_code == 422
+
+
+# ------------------------------------------------ S3: screenshot attachments (sol-window.md §8)
+
+
+async def test_a_screenshot_reaches_the_runner_and_the_transcript_keeps_no_pixels(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    from solus_api.models import ConversationTurn
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    png = tiny_png()
+
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "what is this?", "screenshot": screenshot_body(png)},
+        headers=alice_headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    shot = runner.ctx.screenshot
+    assert isinstance(shot, ScreenshotBlock)
+    assert shot.image.data == png and shot.image.media_type == "image/png"
+    assert shot.source is not None and (shot.source.app, shot.source.title) == (
+        "Onshape",
+        "bracket v3",
+    )
+    turns = (await db.scalars(select(ConversationTurn))).all()
+    user_turn = next(t for t in turns if t.role is TurnRole.USER)
+    assert (user_turn.attrs or {})["screenshot"] == {"width": 2, "height": 2, "app": "Onshape"}
+    for turn in turns:
+        assert b64(png) not in (turn.content or "") and b64(png) not in json.dumps(turn.attrs or {})
+
+
+async def test_a_message_without_a_screenshot_hands_the_runner_none(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "hi"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+    assert runner.ctx.screenshot is None
+
+
+async def test_a_bad_screenshot_is_422_naming_the_reason_never_echoing_the_data(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    async def post(shot: dict[str, object]) -> Any:
+        return await client.post(
+            url, json={"content": "hi", "screenshot": shot}, headers=alice_headers
+        )
+
+    mismatch = await post(screenshot_body(tiny_png(), media_type="image/jpeg"))
+    assert mismatch.status_code == 422, mismatch.text
+    assert mismatch.json()["error"]["code"] == "validation_error"
+    assert "media type" in mismatch.json()["error"]["message"]
+    assert b64(tiny_png()) not in mismatch.text
+
+    garbage = await post({**screenshot_body(), "data": "not*base64!"})
+    assert garbage.status_code == 422 and "base64" in garbage.json()["error"]["message"]
+
+    too_big = await post(
+        screenshot_body(JPEG_MAGIC + b"\x00" * MAX_DECODED_BYTES, media_type="image/jpeg")
+    )
+    assert too_big.status_code == 422 and "2.5 MiB" in too_big.json()["error"]["message"]
+
+    unknown_field = await post({**screenshot_body(), "kind": "screenshot"})
+    assert unknown_field.status_code == 422
+    webp = await post(screenshot_body(media_type="image/webp"))
+    assert webp.status_code == 422
+    huge_dims = await post(screenshot_body(width=9000))
+    assert huge_dims.status_code == 422
+    bad_header = await post(screenshot_body(PNG_MAGIC + b"\x00" * 40))
+    assert bad_header.status_code == 422
+    assert "header is not a valid PNG/JPEG" in bad_header.json()["error"]["message"]
+
+
+async def test_screenshot_dims_are_read_from_the_bytes_and_the_request_fields_are_optional(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """Review L1: the transcript summary trusts the header, not the caller."""
+    from solus_api.models import ConversationTurn
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    lying = await client.post(
+        url,
+        json={"content": "hi", "screenshot": screenshot_body(tiny_png(3, 1), width=2, height=2)},
+        headers=alice_headers,
+    )
+    assert lying.status_code == 200, lying.text
+    assert (runner.ctx.screenshot.width, runner.ctx.screenshot.height) == (3, 1)
+
+    absent = await client.post(
+        url,
+        json={
+            "content": "hi",
+            "screenshot": screenshot_body(tiny_png(4, 5), width=None, height=None),
+        },
+        headers=alice_headers,
+    )
+    assert absent.status_code == 200, absent.text
+    assert (runner.ctx.screenshot.width, runner.ctx.screenshot.height) == (4, 5)
+    turns = (await db.scalars(select(ConversationTurn))).all()
+    summaries = [(t.attrs or {}).get("screenshot") for t in turns if t.role is TurnRole.USER]
+    assert all(isinstance(summary, dict) for summary in summaries), summaries
+    dims = {
+        (summary["width"], summary["height"]) for summary in summaries if isinstance(summary, dict)
+    }
+    assert dims == {(3, 1), (4, 5)}
+
+
+async def test_a_context_image_reaches_the_runner_next_to_the_crop(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "what is this?", "screenshot": screenshot_body(context=context_png())},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    shot = runner.ctx.screenshot
+    assert shot.image.data == tiny_png()
+    assert shot.context is not None and shot.context.data == context_png()
+    assert shot.context.media_type == "image/png"
+    assert shot.summary() == {"width": 2, "height": 2, "app": "Onshape"}
+
+
+async def test_a_bad_context_image_is_422_naming_the_reason_never_echoing_it(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    from solus_api.agent.screen import MAX_CONTEXT_DECODED_BYTES
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    async def post(context: bytes | str) -> Any:
+        shot = screenshot_body()
+        shot["context"] = context if isinstance(context, str) else b64(context)
+        return await client.post(
+            url, json={"content": "hi", "screenshot": shot}, headers=alice_headers
+        )
+
+    jpeg = await post(JPEG_MAGIC + b"\xe0not-a-png")
+    assert jpeg.status_code == 422, jpeg.text
+    assert "context" in jpeg.json()["error"]["message"]
+    assert "PNG" in jpeg.json()["error"]["message"]
+    assert b64(JPEG_MAGIC + b"\xe0not-a-png") not in jpeg.text
+
+    garbage = await post("not*base64!")
+    assert garbage.status_code == 422 and "context" in garbage.json()["error"]["message"]
+    assert "not*base64!" not in garbage.text
+
+    too_big = await post(PNG_MAGIC + b"\x00" * MAX_CONTEXT_DECODED_BYTES)
+    assert too_big.status_code == 422, too_big.text
+    assert "MiB" in too_big.json()["error"]["message"]
+    assert "AAAA" not in too_big.text
+
+
+# ------------------------------------------------ S3 review L4: the screenshot costs credits
+
+
+async def _set_balance(db: AsyncSession, user_id: str, balance: int) -> None:
+    await db.execute(
+        update(CreditBalance)
+        .where(CreditBalance.user_id == uuid.UUID(user_id))
+        .values(balance=balance)
+    )
+    await db.commit()
+
+
+async def test_a_screenshot_raises_the_credit_preflight(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    from solus_api.routers.sol import SCREENSHOT_EXTRA_CREDITS, SOL_TURN_CREDIT_ESTIMATE
+
+    user = await me(client, alice_headers)
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+    await _set_balance(db, user["id"], SOL_TURN_CREDIT_ESTIMATE + SCREENSHOT_EXTRA_CREDITS - 1)
+
+    with_shot = await client.post(
+        url, json={"content": "hi", "screenshot": screenshot_body()}, headers=alice_headers
+    )
+    assert with_shot.status_code == 402, with_shot.text
+    assert with_shot.json()["error"]["code"] == "insufficient_credits"
+
+    without = await client.post(url, json={"content": "hi"}, headers=alice_headers)
+    assert without.status_code == 200, without.text
+
+
+# ------------------------------------------------ S3 review M1: body size is checked before reading
+
+
+_SEVEN_MIB = 7 * 1024 * 1024
+
+
+async def test_an_oversized_message_body_is_413_before_it_is_read(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+    resp = await client.post(
+        url,
+        content=b"{" + b" " * _SEVEN_MIB + b"}",
+        headers={**alice_headers, "content-type": "application/json"},
+    )
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["error"]["code"] == "payload_too_large"
+
+
+async def test_a_message_body_without_content_length_is_411(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield json.dumps({"content": "hi"}).encode()
+
+    resp = await client.post(
+        url, content=chunks(), headers={**alice_headers, "content-type": "application/json"}
+    )
+    assert resp.status_code == 411, resp.text
+    assert resp.json()["error"]["code"] == "length_required"
+
+    # Another route: chunked bodies stay fine — the pre-check is scoped to SOL messages.
+    async def convo_chunks() -> AsyncIterator[bytes]:
+        yield json.dumps({"title": "chunked"}).encode()
+
+    other = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations",
+        content=convo_chunks(),
+        headers={**alice_headers, "content-type": "application/json"},
+    )
+    assert other.status_code == 201, other.text
+
+
+def test_the_body_limit_regex_tracks_the_real_messages_route() -> None:
+    """Review L2: the middleware's hand-written path regex must match the route
+    FastAPI actually mounts — composed here from the router, not retyped."""
+    from fastapi.routing import APIRoute
+    from solus_api.core.body_limits import _SOL_MESSAGES
+    from solus_api.routers import sol
+
+    ids = {"project_id": str(uuid.uuid4()), "conversation_id": str(uuid.uuid4())}
+    routes = [r for r in sol.router.routes if isinstance(r, APIRoute)]
+    [messages] = [r for r in routes if r.path.endswith("/messages") and "POST" in r.methods]
+    assert messages.path.startswith(sol.router.prefix)
+    assert _SOL_MESSAGES.match(messages.path.format(**ids))
+    [conversations] = [
+        r for r in routes if r.path.endswith("/conversations") and "GET" in r.methods
+    ]
+    assert not _SOL_MESSAGES.match(conversations.path.format(**ids))
+    assert not _SOL_MESSAGES.match(messages.path.format(**ids).replace("/sol/", "/agent/"))
+
+
+async def test_the_body_limit_middleware_rejects_without_calling_receive() -> None:
+    """Pure ASGI: a declared-oversized SOL message body never has `receive`
+    awaited — the point of checking before FastAPI buffers the JSON."""
+    from solus_api.core.body_limits import MAX_SOL_MESSAGE_BODY_BYTES, SolMessageBodyLimit
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        raise AssertionError("the app must not run")
+
+    async def receive() -> Any:
+        raise AssertionError("the body must not be read")
+
+    sent: list[MutableMapping[str, Any]] = []
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": f"/api/v1/projects/{uuid.uuid4()}/sol/conversations/{uuid.uuid4()}/messages",
+        "headers": [(b"content-length", str(MAX_SOL_MESSAGE_BODY_BYTES + 1).encode())],
+    }
+    await SolMessageBodyLimit(inner)(scope, receive, send)
+    assert sent[0]["status"] == 413
+    assert b"payload_too_large" in sent[1]["body"]

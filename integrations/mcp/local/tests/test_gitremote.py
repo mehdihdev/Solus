@@ -131,6 +131,7 @@ def test_worktree_gitdir_relative_path(tmp_path: Path) -> None:
         ("ssh://git@github.com/o/r.git", "ssh://github.com/o/r.git"),
         ("oauth2:glpat-x@gitlab.com:o/r.git", "gitlab.com:o/r.git"),
         ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+        ("credential-user@github.com:o/r.git", "github.com:o/r.git"),
         ("https://github.com/o/r.git", "https://github.com/o/r.git"),
         ("https://github.com/o/r@v2.git", "https://github.com/o/r@v2.git"),
     ],
@@ -148,7 +149,7 @@ def test_origin_url_never_carries_userinfo_credentials(
 def test_strip_userinfo_is_pure() -> None:
     assert gitremote.strip_userinfo("https://a:b@h/p") == "https://h/p"
     assert gitremote.strip_userinfo("a:b@h:p") == "h:p"
-    assert gitremote.strip_userinfo("a@h:p") == "a@h:p"
+    assert gitremote.strip_userinfo("a@h:p") == "h:p"
 
 
 def test_worktree_pointer_outside_home_is_none(tmp_path: Path) -> None:
@@ -263,3 +264,39 @@ def test_never_raises_even_when_reads_explode(
 
     monkeypatch.setattr(gitremote, "_read_bounded", boom)
     assert gitremote.git_info(tmp_path) is None
+
+
+def test_tracking_remote_precedes_origin(tmp_path: Path) -> None:
+    git = _git_dir(tmp_path)
+    (git / "config").write_text(
+        CONFIG.replace("remote = origin", "remote = upstream")
+        + '[remote "upstream"]\nurl = https://github.com/team/robot.git\n'
+    )
+    info = gitremote.git_info(tmp_path)
+    assert info is not None and info["remote_url"] == "https://github.com/team/robot.git"
+
+
+def test_metadata_symlink_is_not_read(tmp_path: Path) -> None:
+    git = _git_dir(tmp_path)
+    outside = tmp_path / "private"
+    outside.write_text(CONFIG)
+    (git / "config").unlink()
+    (git / "config").symlink_to(outside)
+    assert gitremote.git_info(tmp_path) is None
+
+
+def test_ref_parent_traversal_is_refused(tmp_path: Path) -> None:
+    git = _git_dir(tmp_path)
+    (git / "HEAD").write_text("ref: refs/heads/../../private\n")
+    (git / "private").write_text(SHA)
+    info = gitremote.git_info(tmp_path)
+    assert info is not None and info["head"] is None and info["branch"] is None
+
+
+def test_remote_query_credentials_are_removed(tmp_path: Path) -> None:
+    git = _git_dir(tmp_path)
+    (git / "config").write_text(
+        '[remote "origin"]\nurl = https://github.com/o/r.git?access_token=private#secret\n'
+    )
+    info = gitremote.git_info(tmp_path)
+    assert info is not None and info["remote_url"] == "https://github.com/o/r.git"

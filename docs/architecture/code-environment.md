@@ -24,14 +24,36 @@ linked folder ── local.scan_folder ──► FolderScan.dependencies ──�
                      the card's rows are the server's OWN `plan` argv)          argv-only, confined,
                                                                                 bounded, never raises)
                                                                           │
-                          exit ≠ 0 on run/test ─► ONE `.solus` Error logging entry (author sol)
+                          failed confirmed action ─► ONE `.solus` Error logging entry (author sol)
+                          successful create/install ─► probe exact target ─► CODE record
 ```
 
-The premise "reuse the Environment/probing work" had no referent in the repo (nothing probed
-interpreters or parsed dependencies); the reuse is the I2 scan (dependencies ride the same
-`scan_folder` answer, the same digest, the same redaction-safe segment shape) and the I2/I4
-bridge machinery (acquirer, previews, the confirmation gate, the post-approval hooks). No second
-path was built.
+I3 owns environment observation and execution. The SOLUSDEV-260 integration retains the I2
+scan and I2/I4 bridge machinery and adapts SOL's environment records to I3. The former
+`machine` environment executor is removed; SOL uses the existing `code` tools and confirmation
+path. The adapter neither launches processes nor introduces a second command dispatcher.
+
+## Observed environments and CODE records
+
+`code.probe_environment` accepts an optional workspace-relative environment path. Without it,
+the probe selects the first of `.venv`, `venv`, and `env`. An explicit target never falls back;
+the existing confinement and interpreter checks reject escaping paths and planted workspace
+executables. Failed or malformed package reads yield no venv facts. A genuine empty package
+list is valid; capped lists or shortened package strings are marked truncated.
+
+`services/code_environment_adapter.py` translates that probe into the inventory used by
+`link_environment`. The callback remains scoped to the authenticated user's team and project
+bridge. Linking probes the requested name; successful confirmed create/install also probes
+the exact action target before updating its CODE record with provenance `sol`. Repeated
+observations update the same identity. Missing, malformed or truncated observations preserve
+the existing record and report that recording is unavailable, without changing the command's
+outcome.
+
+Only observed facts are recorded. I3 supplies no host OS/architecture or venv interpreter path,
+so those fields remain null. Conda names and system interpreter summaries do not establish a
+complete writable environment; conda/docker environment creation and arbitrary command
+execution are not supplied by this adapter. CODE records retain their own renderer and graph
+identity, separate from HARDWARE CONFIG subjects.
 
 ## Why the checker is pure and the proposal is a plan
 
@@ -42,6 +64,11 @@ different exact pins across files; a WARNING is a pin another file's range exclu
 environment per requirement file that pins a conflicting package, carrying the shared,
 non-conflicting files too. It is a proposal, never an action — the `code` server executes only
 what the approval card showed, and the card shows the server's own `plan` argv.
+Plans that cannot fit the bounded card are refused. The card includes a fingerprint of the
+exact argv and cwd, so presentation normalization cannot hide a changed plan. The request-local
+adapter keeps at most 64 canonical-argument preview snapshots, consumes a matching snapshot
+once, and re-plans before invoking the existing tool. Missing or changed snapshots refuse
+execution; these checks supplement the central confirmation gate rather than granting approval.
 
 ## Why commands live in a fork (ADR-031, amended)
 
@@ -55,10 +82,10 @@ venv is the user's pip under their approval — never Solus's runtime fetching c
 
 ## S5, finally
 
-`confirmations.decide_confirmation` already ran the confirmed command; a non-zero exit from
-`code.run`/`code.test` now becomes one bounded text entry in the project's `.solus` Error
+`confirmations.decide_confirmation` runs the confirmed command; a failed `code` action
+becomes one bounded text entry in the project's `.solus` Error
 logging section (the `AUTO` half of the chip the section always advertised), through the same
-`add_text_entry` SOL's own filing tool uses. Success files nothing. Filing is best-effort and
+`add_text_entry` SOL's own filing tool uses. Successful commands file no Errors entry. Filing is best-effort and
 after the fact: it can never alter or lose the result.
 
 ## What was verified live

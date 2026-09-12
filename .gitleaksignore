@@ -17,3 +17,49 @@
 # the same literal to whichever commit is on the graft boundary, and that boundary
 # moves with every push — so a fingerprint here passes one pipeline and fails the
 # next. See the `regexes` block in .gitleaks.toml.
+
+# SOLUSDEV-260: reviewed historical false positives (31 detections, 30 unique
+# fingerprints; merge-parent patches repeat one finding). These exceptions are
+# bound to exact commits, paths, rules and lines. Future occurrences still scan.
+
+# generic-api-key matched a parts entity identifier in a recorded KeyError,
+# not authentication material.
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:docs/qa/PHASE0_SOLUSDEV-260_API_RESULTS.md:generic-api-key:308
+3d17ce657c4774bf0f34d4115accf38704523b63:docs/qa/PHASE0_SOLUSDEV-260_API_RESULTS.md:generic-api-key:308
+deaa93eea4571c37de0a5a79e85411fcaf85553e:docs/qa/PHASE0_SOLUSDEV-260_API_RESULTS.md:generic-api-key:308
+
+# generic-api-key matched the counted_layer keyword expression
+# for token counts and an empty-layer reason; no credential is present.
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/src/solus_api/agent/layers.py:generic-api-key:128
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/src/solus_api/agent/layers.py:generic-api-key:128
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/src/solus_api/agent/layers.py:generic-api-key:128
+
+# github-pat and curl-auth-header matched synthetic redaction fixtures
+# in test stderr and assertions that the fixture is removed.
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_error_filing.py:curl-auth-header:165
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_error_filing.py:github-pat:165
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_error_filing.py:github-pat:183
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_error_filing.py:curl-auth-header:165
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_error_filing.py:github-pat:165
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_error_filing.py:github-pat:183
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_error_filing.py:curl-auth-header:165
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_error_filing.py:github-pat:165
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_error_filing.py:github-pat:183
+
+# github-pat, curl-auth-header and generic-api-key matched synthetic
+# fixtures testing bare-token, path-segment and punctuation redaction.
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_untrusted.py:curl-auth-header:95
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_untrusted.py:generic-api-key:72
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_untrusted.py:github-pat:77
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_untrusted.py:github-pat:95
+0f0157e9e921783a3f2e79e3b0891c7a165f48bd:packages/api/tests/test_untrusted.py:github-pat:97
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_untrusted.py:curl-auth-header:95
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_untrusted.py:generic-api-key:72
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_untrusted.py:github-pat:77
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_untrusted.py:github-pat:95
+2536a5fa6802662b8bbd08d155479f276dd7f0be:packages/api/tests/test_untrusted.py:github-pat:97
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:curl-auth-header:95
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:generic-api-key:72
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:github-pat:77
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:github-pat:95
+deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:github-pat:97

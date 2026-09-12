@@ -307,3 +307,25 @@ def test_apply_token_line_garbage_ignored(line: bytes) -> None:
     apply_token_line(box, line)  # must not raise
     assert box() == "keep"
     assert box.available.is_set()
+
+
+def test_discovery_skips_servers_this_companion_does_not_launch(tmp_path: Path) -> None:
+    """SOLUSDEV-252, found live: the companion discovered the cloud-side brave
+    fork, tried to launch it, and the failed session took the bridge down before
+    `hello`. A server declares who starts it; anything not ours is skipped
+    silently rather than attempted."""
+    root = tmp_path / "mcp"
+    for name, extra in (
+        ("ours", ""),
+        ("cloudy", "launched_by: cloud\n"),
+        ("native", "launched_by: builtin\n"),
+    ):
+        d = root / name
+        (d / "bin").mkdir(parents=True)
+        (d / "allowlist.yaml").write_text(f"server: {name}\n{extra}tools: []\n", encoding="utf-8")
+        launcher = d / "bin" / "launch"
+        launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        launcher.chmod(0o755)
+
+    names = {s.name for s in discover_servers(root)}
+    assert names == {"ours"}, names

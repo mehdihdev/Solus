@@ -19,7 +19,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -50,6 +50,23 @@ class UnknownToolError(Exception):
 
 class ServerUnavailableError(Exception):
     """The server is down and a restart attempt did not bring it back."""
+
+
+class BuiltinServer(Protocol):
+    """A native in-process server (SOLUSDEV-252 `machine`): no child process, no
+    session — READY from construction. Same inventory/result shapes as a fork so
+    the cloud gate and dispatch treat it identically. `inventory()` returns None
+    to advertise nothing (e.g. no workspace linked) while `status_entry` still
+    lists it."""
+
+    name: str
+    tool_names: frozenset[str]
+
+    def inventory(self) -> dict[str, Any] | None: ...
+
+    def status_entry(self) -> dict[str, Any]: ...
+
+    async def call_tool(self, tool: str, args: dict[str, Any]) -> CallToolResult: ...
 
 
 def child_env(
@@ -278,12 +295,14 @@ class Supervisor:
         self,
         servers: Sequence[ServerLaunch],
         *,
+        builtins: Sequence[BuiltinServer] = (),
         ping_timeout: float = DEFAULT_PING_TIMEOUT_SECONDS,
     ) -> None:
         self.status_changed = asyncio.Event()
         self._handles: dict[str, ServerHandle] = {
             launch.name: ServerHandle(launch, self.status_changed.set) for launch in servers
         }
+        self._builtins: dict[str, BuiltinServer] = {server.name: server for server in builtins}
         self._ping_timeout = ping_timeout
 
     @property
@@ -296,18 +315,26 @@ class Supervisor:
 
     def inventory(self) -> list[dict[str, Any]]:
         """The hello `servers` payload — cached tool listings, verbatim."""
-        return [
+        forks = [
             {"server": handle.launch.name, "tools": list(handle.tools)}
             for handle in self._handles.values()
             if handle.state is ServerState.READY
         ]
+        builtins = [server.inventory() for server in self._builtins.values()]
+        return forks + [entry for entry in builtins if entry is not None]
 
     def status_snapshot(self) -> list[dict[str, Any]]:
         """FULL BRG-03 snapshot of every known server — never a delta."""
-        return [handle.status_entry() for handle in self._handles.values()]
+        forks = [handle.status_entry() for handle in self._handles.values()]
+        return forks + [server.status_entry() for server in self._builtins.values()]
 
     async def call_tool(self, server: str, tool: str, args: dict[str, Any]) -> CallToolResult:
         """Forward one call; ONE restart attempt if the session is dead."""
+        builtin = self._builtins.get(server)
+        if builtin is not None:
+            if tool not in builtin.tool_names:
+                raise UnknownToolError(f"unknown tool {server}.{tool}")
+            return await builtin.call_tool(tool, args)
         handle = self._handles.get(server)
         if handle is None or (handle.tool_names and tool not in handle.tool_names):
             raise UnknownToolError(f"unknown tool {server}.{tool}")

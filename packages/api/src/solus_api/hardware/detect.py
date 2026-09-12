@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from solus_api.core.errors import APIError
 from solus_api.fingerprint.contract import ModalityMatch
@@ -40,6 +40,7 @@ from solus_api.hardware.links import (
     persist_suggestions,
     suggest_links,
 )
+from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import (
     PART_KIND,
     attach_part,
@@ -55,12 +56,18 @@ from solus_api.models import (
     SuggestionStatus,
 )
 from solus_api.services.physical_robots import ROBOT_CATEGORIES, PhysicalRobotService, RobotName
+from solus_api.services.solus_graph import lock_project
 
 Category = Literal[
     "sensors", "actuators", "controllers", "end_effectors", "power", "structure", "wiring"
 ]
+
 MAX_ACCEPTED_ROWS = 256
 MAX_REPO_ROOT_CHARS = 4096
+MAX_STREAM_CHANNELS = 64
+PROPOSE_TIMEOUT_S: Final = 30.0
+IdentityBasis = Literal["serial", "port_position", "none"]
+Tone = Literal["looks_like", "probably", "something"]
 
 
 class _Wire(BaseModel):
@@ -83,6 +90,20 @@ class DetectedDeviceOut(_Wire):
     last_seen_path: str | None
     vid: int | None = None
     pid: int | None = None
+    headline: str = Field(default="", max_length=128)
+    identity_basis: IdentityBasis = "serial"
+
+
+class StreamOut(_Wire):
+    """A line stream's shape, with the columns named when the user's repo agrees."""
+
+    framing: str = Field(max_length=32)
+    channel_count: int = Field(ge=0, le=MAX_STREAM_CHANNELS)
+    update_hz: float = Field(ge=0)
+    channel_names: list[Annotated[str, StringConstraints(max_length=128)]] | None = Field(
+        default=None, max_length=MAX_STREAM_CHANNELS
+    )
+    declared_hz: float | None = None
 
 
 class RepoPartOut(_Wire):
@@ -91,18 +112,18 @@ class RepoPartOut(_Wire):
     model: str | None = None
     calibration_mode: CalibrationMode | None = None
     calibration: dict[str, float | int] | None = None
-    calibration_source: str | None = None
+    calibration_source: str | None = Field(default=None, max_length=1024)
 
 
 class RepoMatchOut(_Wire):
     config_id: str = Field(max_length=256)
     parser_id: str
-    label: str
-    source: str
+    label: str = Field(max_length=256)
+    source: str = Field(max_length=1024)
     protocol_hint: str | None = None
     parts: list[RepoPartOut] = Field(default_factory=list, max_length=MAX_ACCEPTED_ROWS)
     port_hint: str | None = None
-    calibration_source: str | None = None
+    calibration_source: str | None = Field(default=None, max_length=1024)
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -138,7 +159,7 @@ class ProposalOut(_Wire):
     device_ref: str
     identity: TransportBinding | None = None
     level: Literal["transport", "board", "protocol", "platform"]
-    summary: str
+    summary: str = Field(max_length=1024)
     driver_id: str | None
     params: dict[str, Any]
     rows: list[ProposalRowOut] = Field(max_length=MAX_ACCEPTED_ROWS)
@@ -146,7 +167,11 @@ class ProposalOut(_Wire):
     disambiguation: DisambiguationOut | None
     confidence: float = Field(ge=0, le=1)
     evidence: list[ModalityMatch] = Field(default_factory=list)
-    calibration_source: str | None = None
+    calibration_source: str | None = Field(default=None, max_length=1024)
+    headline: str = Field(default="", max_length=128)
+    tone: Tone = "something"  # confidence shown as tone (SOLUSDEV-250)
+    stream: StreamOut | None = None
+    identity_basis: IdentityBasis = "serial"
     # API-side additions (the local runtime never sends these):
     bound_repo_configs: list[str] = Field(default_factory=list)
     port_repair: PortRepair | None = None
@@ -193,22 +218,38 @@ class ConfirmIn(BaseModel):
 
 
 def validated_repo_root(raw: str | None) -> str | None:
-    """An absolute, existing directory the local runner may read — or nothing."""
+    """A request path is not picker authorization, even on a local API host."""
     if raw is None:
         return None
-    path = Path(raw)
-    if not path.is_absolute() or not path.is_dir():
-        raise APIError(422, "validation_error", "repo_root must be an absolute existing directory")
-    return str(path)
+    raise APIError(
+        422,
+        "validation_error",
+        "A directory path cannot authorize local files. Relink sources using the file picker.",
+    )
+
+
+def detected_devices_wire(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Validate the local enumeration shared by HTTP and device events."""
+    return [DetectedDeviceOut.model_validate(item).model_dump(mode="json") for item in raw]
 
 
 async def propose_via_local(
     local: Any, device_ref: str, *, repo_root: str | None, budget_s: float
 ) -> ProposalOut:
     """Run the local runtime's interrogation off-loop and re-validate its proposal."""
-    raw = await asyncio.to_thread(
-        local.propose_device, device_ref, repo_root=repo_root, budget_s=budget_s
-    )
+    try:
+        raw = await asyncio.wait_for(
+            asyncio.to_thread(
+                local.propose_device, device_ref, repo_root=repo_root, budget_s=budget_s
+            ),
+            PROPOSE_TIMEOUT_S,
+        )
+    except TimeoutError as exc:
+        # The worker thread cannot be cancelled and finishes on its own; the request just
+        # stops waiting for it.
+        raise APIError(
+            503, "source_unavailable", "the local runner did not answer in time"
+        ) from exc
     if raw is None:
         raise APIError(404, "device_not_found", f"{device_ref} is not connected to this machine")
     try:
@@ -342,21 +383,28 @@ async def _already_confirmed(
 
 async def robot_candidates(session: AsyncSession, project_id: uuid.UUID) -> list[RobotCandidate]:
     """Every live manual robot in the project that has a config (the link engine's input)."""
-    entries = await session.scalars(
-        select(SolusEntry).where(
+    config_node = aliased(GraphEntity)
+    robots = await session.scalars(
+        select(GraphEntity)
+        .join(SolusEntry, SolusEntry.configured_entity_id == GraphEntity.id)
+        .join(config_node, config_node.id == SolusEntry.entity_id)
+        .where(
             SolusEntry.project_id == project_id,
             SolusEntry.kind == SolusEntryKind.CONFIG,
             SolusEntry.deleted_at.is_(None),
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == "physical_robot",
+            GraphEntity.origin == "manual",
+            GraphEntity.source_id.is_(None),
+            GraphEntity.deleted_at.is_(None),
+            config_node.project_id == project_id,
+            config_node.kind == "hardware_config",
+            config_node.deleted_at.is_(None),
         )
     )
     candidates: list[RobotCandidate] = []
-    for entry in entries:
-        if not entry.payload:
-            continue
-        config = HardwareConfig.model_validate(entry.payload)
-        robot = await session.get(GraphEntity, config.robot_entity_id)
-        if robot is None or robot.deleted_at is not None or robot.kind != "physical_robot":
-            continue
+    for robot in robots:
+        config = await resolve_runtime_config(session, project_id, robot.id)
         candidates.append(RobotCandidate(robot_entity_id=robot.id, name=robot.name, config=config))
     return candidates
 
@@ -472,6 +520,52 @@ class ConfirmResult(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
+def _merge_confirmation(saved: HardwareConfig, additions: HardwareConfig) -> HardwareConfig:
+    """Append reviewed new parts without replacing the owner's saved decisions."""
+    _check_saved_connection(saved, additions)
+    document = saved.model_dump(mode="json")
+    provenance = {
+        path: saved.provenance_of(path).model_dump(mode="json") for path in saved.leaf_paths()
+    }
+    incoming = additions.model_dump(mode="json")
+    for field in ("identity", "protocol", "disambiguated_by"):
+        if document[field] is None:
+            document[field] = incoming[field]
+            for path in additions.leaf_paths():
+                if path == field or path.startswith(f"{field}."):
+                    provenance[path] = additions.provenance_of(path).model_dump(mode="json")
+    document["parts"].update(incoming["parts"])
+    for path in additions.leaf_paths():
+        if path.startswith("parts."):
+            provenance[path] = additions.provenance_of(path).model_dump(mode="json")
+    offset = len(document["bus_map"])
+    document["bus_map"].extend(incoming["bus_map"])
+    for index, row in enumerate(incoming["bus_map"]):
+        for key, value in row.items():
+            if value is not None:
+                provenance[f"bus_map.{offset + index}.{key}"] = additions.provenance_of(
+                    f"bus_map.{index}.{key}"
+                ).model_dump(mode="json")
+    document["provenance"] = provenance
+    return HardwareConfig.model_validate(document)
+
+
+def _check_saved_connection(saved: HardwareConfig, additions: HardwareConfig) -> None:
+    """A review for adding parts cannot authorize replacing an existing connection."""
+    if saved.identity is not None and additions.identity is not None:
+        if saved.identity.identity_key() != additions.identity.identity_key():
+            raise APIError(
+                409, "proposal_changed", "Saved device identity differs; review configuration"
+            )
+    if saved.protocol is not None and saved.protocol != additions.protocol:
+        raise APIError(409, "proposal_changed", "Saved protocol differs; review configuration")
+    endpoints = {(row.protocol, row.address) for row in saved.bus_map}
+    if any((row.protocol, row.address) in endpoints for row in additions.bus_map):
+        raise APIError(
+            409, "proposal_changed", "A proposed bus address already has a saved binding"
+        )
+
+
 async def confirm_proposal(
     session: AsyncSession,
     *,
@@ -491,12 +585,15 @@ async def confirm_proposal(
     chosen = _chosen_repo_config(proposal, body.repo_config_id)
     repo_parts = {p.address: p for p in chosen.parts} if chosen is not None else {}
 
+    saved: HardwareConfig | None = None
     if body.target.kind == "new":
         robot = await PhysicalRobotService(session).create(project_id, body.target.name)
         created = True
     else:
+        await lock_project(session, project_id)
         robot = await robot_root(session, project_id, body.target.robot_id)
         created = False
+        saved = await resolve_runtime_config(session, project_id, robot.id)
 
     detected: dict[str, Any] = {
         "identity": proposal.identity.model_dump(mode="json"),
@@ -560,6 +657,8 @@ async def confirm_proposal(
     if chosen is not None and proposal.disambiguation is not None:
         layers.append(ConfigLayer(by=FieldProvenance.USER, document={"disambiguated_by": "user"}))
     config = merge_layers(robot.id, layers)
+    if saved is not None:
+        config = _merge_confirmation(saved, config)
     entry = await put_config(session, project_id, robot, config, created_by=created_by)
     return ConfirmResult(
         robot=robot,
@@ -581,6 +680,7 @@ __all__ = [
     "bind_device",
     "bound_repo_config_ids",
     "confirm_proposal",
+    "detected_devices_wire",
     "exclude_bound",
     "propose_via_local",
     "reconcile_device",

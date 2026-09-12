@@ -83,6 +83,7 @@ class MockAdapter:
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str | ToolUse | Usage]:
         self.calls.append(model_name)
         self.images_seen.append(images)
@@ -154,17 +155,18 @@ async def test_default_config_path_uses_shipped_yaml_and_loads_it_once(
         "hi",
         secret_store=_store(),
         complexity=Complexity.STANDARD,
-        adapters={"anthropic": mock},
+        adapters={"openai": mock},
     )
     second = await complete(
         "hi",
         secret_store=_store(),
         complexity=Complexity.STANDARD,
-        adapters={"anthropic": mock},
+        adapters={"openai": mock},
     )
-    # STANDARD × GENERAL under the shipped yaml → general_standard on anthropic.
-    assert first.model.role == "general_standard"
-    assert first.model.provider == "anthropic"
+    # STANDARD × GENERAL under the shipped yaml → openai_standard on openai
+    # (SOLUSDEV-252 matrix: the GPT-5.6 ladder serves general questions).
+    assert first.model.role == "openai_standard"
+    assert first.model.provider == "openai"
     assert second.model == first.model
     assert len(loads) == 1
 
@@ -385,6 +387,19 @@ async def test_unknown_provider_raises() -> None:
             secret_store=_store(),
             config=_config("mystery"),
             adapters={"anthropic": MockAdapter()},
+        )
+
+
+async def test_stanza_only_provider_has_no_adapter_until_one_is_registered() -> None:
+    """SOLUSDEV-252: `azure` is a config stanza (models.yaml `providers:`) with
+    NO adapter. Routing to it must fail loudly, naming the missing adapter —
+    production wiring = fill the stanza + register one adapter here."""
+    with pytest.raises(UnknownProviderError, match="'azure'"):
+        await complete(
+            "hi",
+            secret_store=_store(),
+            config=_config("azure"),
+            adapters=build_adapter_registry(_store()),
         )
 
 
@@ -692,6 +707,7 @@ class TransientMockAdapter:
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str | ToolUse | Usage]:
         self.starts += 1
         if self.starts <= self.fail_times:
@@ -715,6 +731,7 @@ class MidStreamTransientAdapter:
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncIterator[str | ToolUse | Usage]:
         self.starts += 1
         yield "partial"
@@ -742,7 +759,9 @@ async def test_provider_transient_errors_are_retried_with_backoff(
     )
     assert result.text == "ok"
     assert adapter.starts == 3
-    assert recorded_sleeps == [0.25, 0.5]  # exponential: base, base*2
+    assert len(recorded_sleeps) == 2
+    assert 0.25 <= recorded_sleeps[0] <= 0.5
+    assert 0.5 <= recorded_sleeps[1] <= 1.0
 
 
 async def test_retry_exhaustion_surfaces_clear_transient_error(
@@ -754,7 +773,9 @@ async def test_retry_exhaustion_surfaces_clear_transient_error(
         await complete("hi", secret_store=_store(), config=config, adapters={"anthropic": adapter})
     assert "exhaust" in str(excinfo.value).lower()
     assert adapter.starts == 3
-    assert recorded_sleeps == [0.25, 0.5]
+    assert len(recorded_sleeps) == 2
+    assert 0.25 <= recorded_sleeps[0] <= 0.5
+    assert 0.5 <= recorded_sleeps[1] <= 1.0
 
 
 async def test_no_retry_after_first_streamed_chunk(recorded_sleeps: list[float]) -> None:

@@ -556,28 +556,51 @@ async def test_rate_limiting_that_never_lifts_is_a_typed_error(
     assert excinfo.value.code == "rate_limited"
 
 
+@pytest.mark.parametrize("download", [False, True])
 @respx.mock
-async def test_the_retry_wait_honors_but_bounds_the_retry_after_header(
+async def test_long_retry_after_fails_without_sleep_or_second_request(
     monkeypatch: pytest.MonkeyPatch,
+    download: bool,
 ) -> None:
-    """Retry-After is untrusted upstream input: honored when sane, capped always,
-    so a hostile header can never park a sync worker."""
     waits: list[float] = []
 
-    async def _record(delay: float) -> None:
+    async def record(delay: float) -> None:
         waits.append(delay)
 
-    monkeypatch.setattr("asyncio.sleep", _record)
-    respx.get(f"{ONSHAPE_API_BASE}/api/users/sessioninfo").mock(
+    monkeypatch.setattr("asyncio.sleep", record)
+    path = "/export" if download else "/api/users/sessioninfo"
+    route = respx.get(f"{ONSHAPE_API_BASE}{path}").mock(
         side_effect=[
             httpx.Response(429, headers={"Retry-After": "999999"}),
             httpx.Response(200, json=SESSION_INFO),
         ]
     )
+    with pytest.raises(ConnectorError) as error:
+        if download:
+            async with httpx.AsyncClient(base_url=ONSHAPE_API_BASE) as client:
+                await _connector()._download_bounded(client, path)
+        else:
+            await _connector().validate_credentials(Credentials(token="access"))
+    assert error.value.code == "rate_limited"
+    assert waits == []
+    assert route.call_count == 1
 
-    await _connector().validate_credentials(Credentials(token="access", refresh_token="refresh"))
 
-    assert waits and all(wait <= 30.0 for wait in waits)
+def test_retry_after_http_date_is_honored() -> None:
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
+
+    from solus_api.connectors.onshape import _retry_wait
+
+    header = format_datetime(datetime.now(UTC) + timedelta(seconds=20), usegmt=True)
+    assert 18 <= _retry_wait(httpx.Response(429, headers={"Retry-After": header}), 0) <= 20
+
+
+@pytest.mark.parametrize("header", ["invalid", "-1", "NaN", "inf"])
+def test_malformed_retry_after_uses_bounded_backoff(header: str) -> None:
+    from solus_api.connectors.onshape import _retry_wait
+
+    assert 0 < _retry_wait(httpx.Response(429, headers={"Retry-After": header}), 0) <= 2
 
 
 @requires_occt
@@ -1265,20 +1288,23 @@ async def test_a_deleted_document_settles_instead_of_scheduling_syncs_forever() 
 
 
 @respx.mock
-async def test_identity_falls_back_to_the_account_id_when_the_scope_carries_no_pii() -> None:
-    """`OAuth2Read` alone returns empty email/name (confirmed on a live tenant),
-    and the old code invented "onshape-user" — which became the source's display
-    name and told the user nothing about which account they had connected. The
-    opaque account id is at least true and distinguishable."""
+@pytest.mark.parametrize(
+    ("name", "email", "expected"),
+    [
+        ("Maya", "maya@example.com", "Maya"),
+        (None, "maya@example.com", "maya@example.com"),
+        (None, None, "Onshape account"),
+    ],
+)
+async def test_identity_prefers_display_name_then_email_without_opaque_label(
+    name: str | None, email: str | None, expected: str
+) -> None:
     respx.get(f"{ONSHAPE_API_BASE}/api/users/sessioninfo").mock(
         return_value=httpx.Response(
-            200, json={"id": "6a6119601e205a332af613d8", "email": None, "name": None}
+            200, json={"id": "6a6119601e205a332af613d8", "email": email, "name": name}
         )
     )
-
     account = await _connector().validate_credentials(Credentials(token="at"))
-
     assert account.external_id == "6a6119601e205a332af613d8"
-    assert account.login == "6a6119601e205a332af613d8"
-    assert "onshape-user" not in account.login
-    assert account.name is None
+    assert account.login == expected
+    assert account.name == name

@@ -27,3 +27,6 @@ class ModelChoice(BaseModel):
     complexity: Complexity  # routing metadata: the tier that selected it
     route_type: RouteType  # routing metadata: the resolved type (None → GENERAL)
     rationale: str | None = None  # optional human-readable "why this model"
+    #: Provider reasoning-effort knob for this entry (config, `models.yaml`);
+    #: None = the provider's default / a non-reasoning model.
+    reasoning_effort: str | None = None

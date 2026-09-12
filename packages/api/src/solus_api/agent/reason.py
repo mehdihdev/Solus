@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 
 from solus_api.agent.context import Context
 from solus_api.agent.interfaces import ContextBudget, GraphScope, TelemetryWindow
+from solus_api.agent.layers import LayerBudget, LayeredContextBudget
 
 #: Standard UUID literal. THE shared instance — runtime.py imports it too
 #: (review: a security-relevant parser must not drift between copies).
@@ -76,6 +77,8 @@ class QueryPlan(BaseModel):
 
     scope: GraphScope
     window: TelemetryWindow | None
+    #: A LayeredContextBudget in practice (S5: per-layer caps ride along); typed
+    #: as the base so every SolSystems pull keeps its contract.
     budget: ContextBudget
     k: int
 
@@ -104,7 +107,11 @@ def plan_query(query: str, *, mentions: Sequence[uuid.UUID] = ()) -> QueryPlan:
         window=(
             TelemetryWindow(duration_seconds=_TELEMETRY_WINDOW_SECONDS) if runtime_shaped else None
         ),
-        budget=ContextBudget(max_tokens=_CONTEXT_MAX_TOKENS, max_entities=_MAX_ENTITIES),
+        # S5: layer caps ride with the total; the total (_CONTEXT_MAX_TOKENS)
+        # still binds every packed section — layers.py has the per-layer defaults.
+        budget=LayeredContextBudget(
+            max_tokens=_CONTEXT_MAX_TOKENS, max_entities=_MAX_ENTITIES, layers=LayerBudget()
+        ),
         k=_RETRIEVAL_K,
     )
 

@@ -51,6 +51,39 @@ describe('solStream framing', () => {
     expect(JSON.stringify(event)).not.toContain('hunter2')
   })
 
+  it('parses an artifact frame into a validated reference (SOLUSDEV-252 S5)', () => {
+    const parser = createSolStreamParser()
+    const events = parser.push(
+      frame('artifact', {
+        artifact_id: 'a1',
+        uri: '/api/v1/projects/p1/artifacts/a1/content',
+        media_type: 'image/svg+xml',
+        title: 'Power tree',
+        source_tool: 'solus.make_diagram',
+        summary: null
+      })
+    )
+    expect(events).toEqual([
+      {
+        type: 'artifact',
+        artifact: {
+          artifactId: 'a1',
+          uri: '/api/v1/projects/p1/artifacts/a1/content',
+          mediaType: 'image/svg+xml',
+          title: 'Power tree',
+          sourceTool: 'solus.make_diagram',
+          summary: null
+        }
+      }
+    ])
+  })
+
+  it('drops an artifact frame that cannot identify its bytes', () => {
+    const parser = createSolStreamParser()
+    expect(parser.push(frame('artifact', { title: 'x', media_type: 'image/png' }))).toEqual([])
+    expect(parser.push(frame('artifact', { artifact_id: 'a1', uri: '/u' }))).toEqual([])
+  })
+
   it('surfaces the error code of a failed tool result', () => {
     const parser = createSolStreamParser()
     const events = parser.push(

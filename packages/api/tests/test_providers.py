@@ -22,8 +22,11 @@ from solus_api.orchestration.providers import (
     ProviderCredentialsMissingError,
     ProviderError,
     ProviderTransientError,
+    ToolOutcome,
+    Turn,
     Usage,
     anthropic_content,
+    anthropic_messages,
     build_adapter_registry,
     gemini_contents,
     openai_content,
@@ -336,13 +339,12 @@ def test_openai_content_data_url_shape() -> None:
     content = openai_content("extract markings", [_image()])
     assert isinstance(content, list)
     image_block, text_block = content
-    assert image_block["type"] == "image_url"
-    url_holder = image_block["image_url"]
-    assert isinstance(url_holder, dict)
-    url = str(url_holder["url"])
+    # Responses API input shape: image_url is a bare data-URL string.
+    assert image_block["type"] == "input_image"
+    url = str(image_block["image_url"])
     assert url.startswith("data:image/png;base64,")
     assert base64.b64decode(url.split(",", 1)[1]) == _image().data
-    assert text_block == {"type": "text", "text": "extract markings"}
+    assert text_block == {"type": "input_text", "text": "extract markings"}
 
 
 def test_image_block_is_frozen_and_strict() -> None:
@@ -372,3 +374,230 @@ def test_gemini_contents_parts_shape() -> None:
     assert isinstance(contents, list)
     assert contents[-1] == "extract markings"
     assert recorded == [{"data": _image().data, "mime_type": "image/png"}]
+
+
+# --- Turn.images (SOLUSDEV-252 S3, sol-window.md §8.2) ---------------------------
+
+
+def test_a_user_turn_with_images_becomes_image_then_text_blocks() -> None:
+    [message] = anthropic_messages([Turn(role="user", text="what is this?", images=(_image(),))])
+    assert message["role"] == "user"
+    content = message["content"]
+    assert isinstance(content, list)
+    image_block, text_block = content
+    assert image_block["type"] == "image"
+    source = image_block["source"]
+    assert isinstance(source, dict)
+    assert source["media_type"] == "image/png"
+    assert base64.b64decode(str(source["data"])) == _image().data
+    assert text_block == {"type": "text", "text": "what is this?"}
+
+
+def test_a_text_only_turn_is_unchanged_by_the_images_field() -> None:
+    assert anthropic_messages([Turn(role="user", text="hi")]) == [{"role": "user", "content": "hi"}]
+
+
+def test_images_ride_only_on_a_plain_user_turn() -> None:
+    with pytest.raises(ValidationError):
+        Turn(role="assistant", text="x", images=(_image(),))
+    with pytest.raises(ValidationError):
+        Turn(role="user", tool_results=(ToolOutcome(id="1", content="x"),), images=(_image(),))
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "google"])
+@pytest.mark.parametrize("header", ["9", "Thu, 01 Jan 1970 00:16:49 GMT"])
+def test_provider_retry_metadata_is_safe_and_honors_headers(provider: str, header: str) -> None:
+    import httpx
+    from solus_api.orchestration import providers
+
+    error = SimpleNamespace(
+        status_code=429,
+        code=429 if provider == "google" else "rate_limit_exceeded",
+        response=httpx.Response(429, headers={"retry-after": header}),
+        body={"message": "private prompt and key"},
+        details={},
+    )
+    normalized = providers.normalize_provider_error(provider, "model", error, now=1000.0)
+    assert isinstance(normalized, ProviderTransientError)
+    assert normalized.retry_after_seconds == 9.0
+    assert "private" not in str(normalized)
+
+
+@pytest.mark.parametrize("code", ["insufficient_quota", "billing_hard_limit_reached"])
+def test_openai_quota_429_is_permanent(code: str) -> None:
+    from solus_api.orchestration import providers
+
+    error = SimpleNamespace(status_code=429, code=code, body={"code": code})
+    normalized = providers.normalize_provider_error("openai", "model", error)
+    assert isinstance(normalized, ProviderError)
+    assert not isinstance(normalized, ProviderTransientError)
+
+
+@pytest.mark.parametrize("code", ["slow_down", "server_is_overloaded"])
+def test_openai_in_stream_overload_codes_are_transient(code: str) -> None:
+    from solus_api.orchestration import providers
+
+    normalized = providers.normalize_provider_error("openai", "model", SimpleNamespace(code=code))
+    assert isinstance(normalized, ProviderTransientError)
+
+
+def test_google_retry_info_is_honored() -> None:
+    from google.genai.errors import ClientError
+    from solus_api.orchestration import providers
+
+    error = ClientError(
+        429,
+        {
+            "error": {
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12.5s"}
+                ],
+            }
+        },
+    )
+    normalized = providers.normalize_provider_error("google", "model", error)
+    assert isinstance(normalized, ProviderTransientError)
+    assert normalized.retry_after_seconds == 12.5
+
+
+def test_anthropic_monthly_spend_limit_is_permanent() -> None:
+    from solus_api.orchestration import providers
+
+    error = SimpleNamespace(
+        status_code=429,
+        body={
+            "error": {
+                "type": "rate_limit_error",
+                "details": {"error_code": "enforced_spend_limit_reached"},
+            }
+        },
+    )
+    assert not isinstance(
+        providers.normalize_provider_error("anthropic", "model", error), ProviderTransientError
+    )
+
+
+@pytest.mark.parametrize("header", ["garbage", "nan", "inf", "-2"])
+def test_invalid_retry_headers_fall_back(header: str) -> None:
+    import httpx
+    from solus_api.orchestration import providers
+
+    error = SimpleNamespace(
+        status_code=429, response=httpx.Response(429, headers={"retry-after": header})
+    )
+    normalized = providers.normalize_provider_error("openai", "m", error)
+    assert isinstance(normalized, ProviderTransientError)
+    assert normalized.retry_after_seconds is None
+
+
+async def test_gemini_disables_sdk_retries_and_masks_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.genai import errors, types
+
+    options: list[types.HttpOptions] = []
+    closed: list[bool] = []
+
+    async def generate(**kwargs: object) -> None:
+        raise errors.ClientError(403, {"error": {"message": "private prompt"}})
+
+    async def close() -> None:
+        closed.append(True)
+
+    def client(**kwargs: object) -> SimpleNamespace:
+        option = kwargs["http_options"]
+        assert isinstance(option, types.HttpOptions)
+        options.append(option)
+        return SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate), aclose=close
+            )
+        )
+
+    monkeypatch.setattr("google.genai.Client", client)
+    store = InMemorySecretStore()
+    await store.put(GOOGLE_API_KEY_NAME, "test")
+    with pytest.raises(ProviderError) as error:
+        async for _ in GeminiAdapter(store).stream("m", "q", max_tokens=8):
+            pass
+    assert not isinstance(error.value, ProviderTransientError)
+    assert error.value.__suppress_context__ and error.value.__cause__ is None
+    assert "private" not in str(error.value)
+    assert options[0].retry_options is not None
+    assert options[0].retry_options.attempts == 1
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("kind", ["ReadTimeout", "ConnectError", "RemoteProtocolError"])
+async def test_gemini_transport_failure_is_safe_and_closes_owned_client(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    import httpx
+    from google.genai import types
+
+    options: list[types.HttpOptions] = []
+    closed: list[bool] = []
+
+    async def generate(**kwargs: object) -> None:
+        error_cls = getattr(httpx, kind)
+        raise error_cls("private prompt and credential")
+
+    async def close() -> None:
+        closed.append(True)
+
+    def client(**kwargs: object) -> SimpleNamespace:
+        option = kwargs["http_options"]
+        assert isinstance(option, types.HttpOptions)
+        options.append(option)
+        return SimpleNamespace(
+            aio=SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate),
+                aclose=close,
+            )
+        )
+
+    monkeypatch.setattr("google.genai.Client", client)
+    store = InMemorySecretStore()
+    await store.put(GOOGLE_API_KEY_NAME, "test")
+    with pytest.raises(ProviderTransientError) as error:
+        async for _ in GeminiAdapter(store).stream("m", "q", max_tokens=8):
+            pass
+    assert "private" not in str(error.value)
+    assert error.value.__suppress_context__ and error.value.__cause__ is None
+    transport = options[0].httpx_async_client
+    assert isinstance(transport, httpx.AsyncClient)
+    assert transport.is_closed
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_gemini_sdk_transport_failure_sends_once(
+    monkeypatch: pytest.MonkeyPatch,
+    cancelled: bool,
+) -> None:
+    import asyncio
+
+    import httpx
+    from google import genai  # load the real SDK before substituting our transport
+
+    calls = 0
+
+    async def send(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if cancelled:
+            raise asyncio.CancelledError
+        raise httpx.ReadTimeout("private transport data", request=request)
+
+    transport = httpx.AsyncClient(transport=httpx.MockTransport(send))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: transport)
+    assert genai.Client is not None
+    store = InMemorySecretStore()
+    await store.put(GOOGLE_API_KEY_NAME, "test")
+    with pytest.raises(asyncio.CancelledError if cancelled else ProviderTransientError):
+        async for _ in GeminiAdapter(store).stream("m", "q", max_tokens=8):
+            pass
+    assert calls == 1
+    assert transport.is_closed

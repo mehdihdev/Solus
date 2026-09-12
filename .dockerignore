@@ -15,6 +15,9 @@
 **/.uv-cache
 **/.pnpm-store
 **/dist
+# …except a vendored fork's compiled server, which the API image spawns.
+!integrations/mcp/*/upstream/dist
+!integrations/mcp/*/upstream/dist/**
 **/out
 **/.next
 **/node-compile-cache

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SOLUSDEV-55 — run the whole stack with one command:
-#   Postgres (docker) → FastAPI backend (:8000) → Electron desktop app.
+#   Postgres/Redis (docker) → FastAPI + ARQ worker → Electron desktop app.
 # Ctrl+C tears all of them down.
 set -uo pipefail
 # Job control, deliberately, in a non-interactive script: it puts every
@@ -10,7 +10,10 @@ set -m
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-COMPOSE="docker compose -f docker-compose.dev.yml"
+COMPOSE=(docker compose -f docker-compose.dev.yml)
+if [ -f docker-compose.local.yml ]; then
+  COMPOSE+=(-f docker-compose.local.yml)
+fi
 
 require() { command -v "$1" >/dev/null 2>&1 || { echo "[dev:all] missing '$1' — please install it."; exit 1; }; }
 require docker
@@ -31,19 +34,97 @@ if ! grep -qE '^VITE_SUPABASE_(URL|ANON_KEY)=..' .env 2>/dev/null; then
   echo "          (UI works, but API calls will be rejected). Set them for the real flow."
 fi
 
-echo "[dev:all] starting Postgres…"
-$COMPOSE up -d db
-
-echo "[dev:all] waiting for Postgres to be ready…"
-for _ in $(seq 1 30); do
-  if $COMPOSE exec -T db pg_isready -U solus -d solus >/dev/null 2>&1; then break; fi
-  sleep 1
+# Resolve only this worktree's app ports; never source executable env text.
+require lsof
+if ! APP_PORTS="$(uv run --no-sync python scripts/dev_ports.py)"; then exit 1; fi
+read -r API_PORT DESKTOP_PORT DATABASE_MODE <<< "$APP_PORTS"
+for port in "$API_PORT" "$DESKTOP_PORT"; do
+  # Inspect only the configured listening sockets, never process arguments.
+  holders="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null)"
+  result=$?
+  if [ "$result" -gt 1 ]; then
+    echo "[dev:all] could not inspect port $port — refusing to start."
+    exit 1
+  fi
+  if [ -n "$holders" ]; then
+    echo "[dev:all] port $port is occupied (PID(s): $(tr '\n' ' ' <<< "$holders")) — refusing to start."
+    exit 1
+  fi
+  if ! uv run --no-sync python scripts/dev_ports.py --check-port "$port"; then exit 1; fi
 done
+export VITE_DEV_PORT="$DESKTOP_PORT"
+
+if [ "$DATABASE_MODE" = "compose" ]; then
+  # An occupied dependency port is reusable only when this checkout's Compose
+  # service already owns it. A foreign database is never stopped or adopted.
+  DB_HOLDERS="$(lsof -nP -t -iTCP:5432 -sTCP:LISTEN 2>/dev/null)"
+  DB_SCAN_RESULT=$?
+  if [ "$DB_SCAN_RESULT" -gt 1 ]; then
+    echo "[dev:all] could not inspect database port 5432 — refusing to start."
+    exit 1
+  fi
+  if [ -n "$DB_HOLDERS" ] || ! uv run --no-sync python scripts/dev_ports.py --check-port 5432 >/dev/null 2>&1; then
+    DB_CONTAINER="$("${COMPOSE[@]}" ps -q --status running db 2>/dev/null)"
+    DB_BINDING="$("${COMPOSE[@]}" port db 5432 2>/dev/null)"
+    if [ -z "$DB_CONTAINER" ] || [[ "$DB_BINDING" != *:5432 ]]; then
+      echo "[dev:all] database port 5432 is occupied outside this checkout's Compose service — refusing to start."
+      exit 1
+    fi
+  fi
+  echo "[dev:all] starting Postgres…"
+  if ! "${COMPOSE[@]}" up -d db; then exit 1; fi
+  echo "[dev:all] waiting for Postgres to be ready…"
+  DB_READY=""
+  for _ in $(seq 1 30); do
+    if "${COMPOSE[@]}" exec -T db pg_isready -U solus -d solus </dev/null >/dev/null 2>&1; then
+      DB_READY=1
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$DB_READY" ]; then
+    echo "[dev:all] database did not become ready — refusing to start the API."
+    exit 1
+  fi
+else
+  echo "[dev:all] using the configured external database."
+fi
+
+# A configured local Redis is a real dependency, including admission limiting.
+if ! REDIS_MODE="$(uv run --no-sync python scripts/dev_dependencies.py --redis-mode)"; then exit 1; fi
+if [ "$REDIS_MODE" = "compose" ]; then
+  if ! uv run --no-sync python scripts/dev_ports.py --check-port 6379 >/dev/null 2>&1; then
+    REDIS_CONTAINER="$("${COMPOSE[@]}" ps -q --status running redis 2>/dev/null)"
+    REDIS_BINDING="$("${COMPOSE[@]}" port redis 6379 2>/dev/null)"
+    if [ -z "$REDIS_CONTAINER" ] || [[ "$REDIS_BINDING" != *:6379 ]]; then
+      echo "[dev:all] Redis port 6379 belongs to another service — refusing to start."
+      exit 1
+    fi
+  fi
+  if ! "${COMPOSE[@]}" up -d redis; then exit 1; fi
+fi
+if ! uv run --no-sync python scripts/dev_dependencies.py --schema; then exit 1; fi
+
+# Resolve the developer's selected runtime once; forks receive an absolute pin.
+# Never source shell profiles or let a fork search PATH for its interpreter.
+require node
+if [ -z "${SOLUS_NODE_BIN:-}" ]; then
+  SOLUS_NODE_BIN="$(node -p process.execPath)"
+fi
+case "$SOLUS_NODE_BIN" in
+  /*) ;;
+  *) echo "[dev:all] SOLUS_NODE_BIN must be an absolute Node >= 22 executable."; exit 1 ;;
+esac
+if ! "$SOLUS_NODE_BIN" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'; then
+  echo "[dev:all] Node >= 22 required; select it before running pnpm dev:all."
+  exit 1
+fi
+export SOLUS_NODE_BIN
 
 pids=()
 # Kill process GROUPS, not the subshells in front of them.
 #
-# `(cd packages/api && uv run uvicorn …) &` records the SUBSHELL's pid in $!.
+# `(cd packages/api && uv run --no-sync uvicorn …) &` records the SUBSHELL's pid in $!.
 # Killing just that pid was measured (2026-08-14) to leave THREE processes alive
 # and :8000 still bound. The stubborn one is uvicorn's `--reload` worker: it is a
 # multiprocessing spawn child that appears as a bare `python3`, so it survives
@@ -103,65 +184,45 @@ if grep -qE '^SOLUS_STRIPE_(PLAN_PRICES|WEBHOOK_SECRET)=..' .env 2>/dev/null; th
   fi
 fi
 
-# Refuse to start onto an occupied port, and say WHO has it. uvicorn's own
-# "[Errno 98] Address already in use" names neither the offender nor the fix,
-# and the usual offender is an orphaned API from an earlier session that no
-# terminal can Ctrl-C — so "just restart your shell" does not help either.
-#
-# Deliberately does NOT kill it: a dev script silently killing a process it did
-# not start is how someone loses a debugger they had attached. Print the command
-# and let a human decide.
-# Two separate questions, because they have different answers: is the port taken
-# (any LISTEN), and can we name the owner (only for processes this user owns —
-# a root-owned listener shows no pid= at all). Reporting the first without the
-# second still beats Errno 98.
-port_taken() { [ -n "$(ss -ltnH "sport = :$1" 2>/dev/null)" ]; }
-port_holder() { ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1; }
-if port_taken 8000; then
-  API_PORT_PID="$(port_holder 8000)"
-  echo "[dev:all] port 8000 is already in use — not starting a second API."
-  if [ -n "$API_PORT_PID" ]; then
-    # The socket is usually held by uvicorn's --reload WORKER, and killing only
-    # the worker invites the supervisor to respawn it. Report the whole group and
-    # suggest killing that, so one command actually frees the port.
-    API_PORT_PGID="$(ps -o pgid= -p "$API_PORT_PID" 2>/dev/null | tr -d ' ')"
-    ps -o pid,pgid,lstart,args -p "$API_PORT_PID" 2>/dev/null | tail -n +2 | cut -c1-140 | sed 's/^/          /'
-    if [ -n "${API_PORT_PGID:-}" ]; then
-      echo "          whole group:"
-      pgrep -g "$API_PORT_PGID" 2>/dev/null | while read -r p; do
-        ps -o pid,args -p "$p" 2>/dev/null | tail -n +2 | cut -c1-140 | sed 's/^/            /'
-      done
-    fi
-    echo
-    echo "          If that is a leftover API from an earlier session, free it with:"
-    if [ -n "${API_PORT_PGID:-}" ]; then
-      echo "              kill -- -$API_PORT_PGID     # the whole group, supervisor + worker"
-    else
-      echo "              kill $API_PORT_PID"
-    fi
-    echo "          (do not 'pkill -f uvicorn' — the --reload worker is a bare"
-    echo "           python3, so that misses the process actually holding the port)"
-  else
-    echo "          The owner belongs to another user (no pid visible). Try:"
-    echo "              sudo ss -ltnp 'sport = :8000'"
-  fi
-  exit 1
-fi
-
-echo "[dev:all] starting API on http://127.0.0.1:8000 (docs at /api/v1/docs)…"
+echo "[dev:all] starting API on http://127.0.0.1:$API_PORT (docs at /api/v1/docs)…"
 # The signing secret is passed to the API process ONLY (least privilege) — the
 # desktop app and forwarder never see it.
 if [ -n "${STRIPE_DEV_SECRET:-}" ]; then
-  (cd packages/api && SOLUS_STRIPE_WEBHOOK_SECRET="$STRIPE_DEV_SECRET" uv run uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port 8000 --reload) &
+  (cd packages/api && SOLUS_STRIPE_WEBHOOK_SECRET="$STRIPE_DEV_SECRET" uv run --no-sync uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port "$API_PORT" --reload) &
 else
-  (cd packages/api && uv run uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port 8000 --reload) &
+  (cd packages/api && uv run --no-sync uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port "$API_PORT" --reload) &
 fi
 pids+=($!)
+API_PID=$!
+API_READY=""
+for _ in $(seq 1 60); do
+  if ! kill -0 "$API_PID" 2>/dev/null; then break; fi
+  if uv run --no-sync python scripts/dev_dependencies.py --ready "$API_PORT"; then
+    API_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [ -z "$API_READY" ]; then
+  echo "[dev:all] API failed to become ready; see its startup error above."
+  exit 1
+fi
+
+# Queue-backed work needs a consumer whenever Redis is configured. The worker
+# reads the same anchored runtime Settings as the API, without receiving the
+# temporary Stripe webhook signing secret. It is a primary owned child.
+WORKER_PID=""
+if [ "$REDIS_MODE" != "disabled" ]; then
+  echo "[dev:all] starting background job worker…"
+  (cd packages/api && uv run --no-sync arq solus_api.worker_main.WorkerSettings </dev/null) &
+  WORKER_PID=$!
+  pids+=("$WORKER_PID")
+fi
 
 # The companion is skipped unless this is set (apps/desktop/src/main/companion.ts),
 # so without it the bridge pill can never leave "offline" in dev and no MCP tool
 # is reachable. Respects an existing value.
-export SOLUS_COMPANION_DEV_CMD="${SOLUS_COMPANION_DEV_CMD:-uv run python -m solus_companion}"
+export SOLUS_COMPANION_DEV_CMD="${SOLUS_COMPANION_DEV_CMD:-uv run --no-sync python -m solus_companion}"
 
 # A fork without its private virtualenv dies at spawn with
 # `.venv/bin/python3: No such file or directory`, three times, and the bridge
@@ -181,11 +242,41 @@ done
 echo "[dev:all] starting desktop app…"
 pnpm --filter @solus/desktop dev &
 pids+=($!)
+DESKTOP_PID=$!
 
 if [ -n "$STRIPE_FORWARD" ]; then
   echo "[dev:all] starting Stripe webhook forwarder (stripe listen)…"
-  stripe listen --forward-to http://127.0.0.1:8000/api/v1/webhooks/stripe &
+  stripe listen --forward-to "http://127.0.0.1:$API_PORT/api/v1/webhooks/stripe" &
   pids+=($!)
 fi
 
-wait
+# Only primary services determine stack lifetime. An optional forwarder exit
+# must not take down the API or desktop. A primary exit always reaps our tree.
+# Uvicorn's reload supervisor can survive a dead worker. Allow transient reload
+# gaps, but do not leave a desktop connected to a permanently unhealthy API.
+# Probe every five seconds, while checking child liveness twice per second.
+# Three consecutive failures allow normal reloads without repeated imports or
+# leaving a failed worker hidden behind a living reload supervisor.
+API_FAILURES=0
+API_HEALTH_TICKS=0
+while kill -0 "$API_PID" 2>/dev/null && kill -0 "$DESKTOP_PID" 2>/dev/null; do
+  if [ -n "$WORKER_PID" ] && ! kill -0 "$WORKER_PID" 2>/dev/null; then
+    echo "[dev:all] background job worker stopped; shutting down this launch."
+    exit 1
+  fi
+  if [ "$API_HEALTH_TICKS" -eq 0 ]; then
+    if uv run --no-sync python scripts/dev_dependencies.py --ready "$API_PORT"; then
+      API_FAILURES=0
+    else
+      API_FAILURES=$((API_FAILURES + 1))
+      if [ "$API_FAILURES" -ge 3 ]; then
+        echo "[dev:all] API remained unhealthy after reload grace; shutting down this launch."
+        exit 1
+      fi
+    fi
+  fi
+  API_HEALTH_TICKS=$(((API_HEALTH_TICKS + 1) % 10))
+  sleep 0.5
+done
+echo "[dev:all] API, desktop or background worker stopped; shutting down this launch."
+exit 1

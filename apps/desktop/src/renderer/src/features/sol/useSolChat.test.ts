@@ -1,12 +1,12 @@
 // SOLX-02: chat state — per-project history, conversation creation on first
 // send, streamed tokens folding into the pending assistant item, tool trace,
-// structured citations, and the orbStore streaming flag around a turn.
+// structured citations, and the session streaming flag around a turn.
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as solApi from './solApi'
 import type { SolStreamEvent } from './solStream'
 import { useShellStore } from '../workspace/shellStore'
-import { useOrbStore } from './orbStore'
+import { useSolSessionStore } from './solSessionStore'
 import { resetSolChatSessions } from './solChatStore'
 import { useSolChat } from './useSolChat'
 
@@ -43,18 +43,12 @@ beforeEach(() => {
   // Sessions outlive components (SOLUSDEV-233) — reset the singleton per test.
   resetSolChatSessions()
   useShellStore.getState().reset()
-  useOrbStore.setState({
-    corner: 'br',
-    expanded: false,
-    detached: false,
-    streaming: false,
-    conversationByProject: {}
-  })
+  useSolSessionStore.setState({ streaming: false, conversationByProject: {} })
 })
 
 describe('history', () => {
   it('loads the stored conversation, oldest first', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([turn('t2', 'assistant', 'Answer'), turn('t1', 'user', 'Q')])
     const { result } = renderHook(() => useSolChat('p1'))
     await waitFor(() => expect(result.current.status).toBe('ready'))
@@ -70,7 +64,7 @@ describe('history', () => {
   })
 
   it('degrades to offline when history cannot load', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockRejectedValue(new Error('down'))
     const { result } = renderHook(() => useSolChat('p1'))
     await waitFor(() => expect(result.current.status).toBe('offline'))
@@ -86,14 +80,14 @@ describe('send', () => {
       await result.current.send('hello', 'guide')
     })
     expect(createSolConversation).toHaveBeenCalledWith('p1', 'hello')
-    expect(useOrbStore.getState().conversationByProject).toEqual({ p1: 'c9' })
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c9' })
     expect(streamSolMessage).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'c9', content: 'hello', actionMode: 'guide' })
     )
   })
 
   it('passes the chosen action mode through to the stream', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     streamWith([])
     const { result } = renderHook(() => useSolChat('p1'))
@@ -103,12 +97,12 @@ describe('send', () => {
     expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
   })
 
-  it('folds tokens into the pending assistant item, finalizes on message, pulses orbStore', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+  it('folds tokens into the pending assistant item, finalizes on message, flags streaming', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     const seenStreaming: boolean[] = []
     streamSolMessage.mockImplementation(async ({ onEvent }) => {
-      seenStreaming.push(useOrbStore.getState().streaming)
+      seenStreaming.push(useSolSessionStore.getState().streaming)
       onEvent({ type: 'token', text: 'The ' })
       onEvent({ type: 'token', text: 'IMU.' })
       onEvent({ type: 'tool_call', callId: 'k1', tool: 'get_entity' })
@@ -126,7 +120,7 @@ describe('send', () => {
       await result.current.send('why?', 'guide')
     })
     expect(seenStreaming).toEqual([true]) // pulse on while the turn streams
-    expect(useOrbStore.getState().streaming).toBe(false) // and off after
+    expect(useSolSessionStore.getState().streaming).toBe(false) // and off after
     const [user, assistant] = result.current.items
     expect(user).toMatchObject({ role: 'user', content: 'why?' })
     expect(assistant).toMatchObject({
@@ -142,7 +136,7 @@ describe('send', () => {
   })
 
   it('surfaces the author-safe error frame on the assistant item', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     streamWith([{ type: 'error', code: 'timeout', message: 'The SOL turn timed out.' }])
     const { result } = renderHook(() => useSolChat('p1'))
@@ -156,7 +150,7 @@ describe('send', () => {
   })
 
   it('marks the turn failed when the transport rejects, and always clears the pulse', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     streamSolMessage.mockRejectedValue(new Error('ECONNREFUSED'))
     const { result } = renderHook(() => useSolChat('p1'))
@@ -165,7 +159,7 @@ describe('send', () => {
     })
     expect(result.current.items[1].error).toBe('SOL is unreachable right now.')
     expect(result.current.items[1].error).not.toContain('ECONNREFUSED')
-    expect(useOrbStore.getState().streaming).toBe(false)
+    expect(useSolSessionStore.getState().streaming).toBe(false)
   })
 
   it('ignores empty input and sends without a project', async () => {
@@ -196,7 +190,7 @@ describe('stream lifecycle (SOLX-02 → SOLUSDEV-233: sessions outlive the page)
       })
     })
     listSolTurns.mockResolvedValue([])
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
 
     const { result, unmount } = renderHook(() => useSolChat('p1'))
     await waitFor(() => expect(result.current.status).toBe('ready'))
@@ -214,12 +208,12 @@ describe('stream lifecycle (SOLX-02 → SOLUSDEV-233: sessions outlive the page)
     const { result: again } = renderHook(() => useSolChat('p1'))
     expect(again.current.items.at(-1)?.content).toBe('Done.')
     expect(again.current.streaming).toBe(false)
-    expect(useOrbStore.getState().streaming).toBe(false)
+    expect(useSolSessionStore.getState().streaming).toBe(false)
   })
 
   it('bounds per-turn content so a runaway stream cannot grow without limit', async () => {
     listSolTurns.mockResolvedValue([])
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     const flood: SolStreamEvent[] = Array.from(
       { length: 60 },
       (): SolStreamEvent => ({ type: 'token', text: 'x'.repeat(10_000) })
@@ -237,7 +231,7 @@ describe('stream lifecycle (SOLX-02 → SOLUSDEV-233: sessions outlive the page)
 
 describe('SOL page additions (SOLUSDEV-233)', () => {
   it('exposes the turn context manifest from the context_used frame', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     streamWith([
       {
@@ -261,7 +255,7 @@ describe('SOL page additions (SOLUSDEV-233)', () => {
 
   it('branches a 402 into the credits message and flag, and 429 into backoff', async () => {
     const { ApiError } = await import('../../lib/api/envelope.types')
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     streamSolMessage.mockRejectedValue(new ApiError(402, 'insufficient_credits', 'no'))
     const { result } = renderHook(() => useSolChat('p1'))
@@ -300,13 +294,13 @@ describe('SOL page additions (SOLUSDEV-233)', () => {
     })
     // The store now points at c9, but the just-created id must not trigger a
     // history reload that wipes the streamed items.
-    expect(useOrbStore.getState().conversationByProject).toEqual({ p1: 'c9' })
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c9' })
     expect(listSolTurns).not.toHaveBeenCalled()
     expect(result.current.items.map((m) => m.content)).toEqual(['hello', 'Answer.'])
   })
 
   it('selectConversation reloads history for the chosen chat', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
     const { result } = renderHook(() => useSolChat('p1'))
     await waitFor(() => expect(result.current.status).toBe('ready'))
@@ -319,7 +313,7 @@ describe('SOL page additions (SOLUSDEV-233)', () => {
   })
 
   it('startNewChat clears the active conversation and the transcript', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
     const { result } = renderHook(() => useSolChat('p1'))
     await waitFor(() => expect(result.current.items).toHaveLength(1))
@@ -327,13 +321,13 @@ describe('SOL page additions (SOLUSDEV-233)', () => {
     act(() => result.current.startNewChat())
     await waitFor(() => expect(result.current.items).toEqual([]))
     expect(result.current.activeConversationId).toBeNull()
-    expect(useOrbStore.getState().conversationByProject).toEqual({})
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({})
   })
 })
 
 describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', () => {
   it('a stale send’s cleanup leaves the newer live turn streaming and abortable', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     let rejectTurnA: (e: unknown) => void = () => undefined
     const signals: Array<AbortSignal | undefined> = []
@@ -360,7 +354,7 @@ describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', (
     await act(async () => {
       void result.current.send('turn B', 'guide')
     })
-    expect(useOrbStore.getState().streaming).toBe(true)
+    expect(useSolSessionStore.getState().streaming).toBe(true)
 
     // Turn A's aborted fetch settles LATE — its cleanup must not turn off the
     // pulse or orphan turn B's abort handle.
@@ -368,7 +362,7 @@ describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', (
       rejectTurnA(new Error('aborted'))
       await Promise.resolve()
     })
-    expect(useOrbStore.getState().streaming).toBe(true)
+    expect(useSolSessionStore.getState().streaming).toBe(true)
 
     // Teardown (sign-out path) must still be able to abort the live turn B —
     // unmount deliberately no longer does (sessions outlive the page).
@@ -376,13 +370,13 @@ describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', (
     expect(signals[1]?.aborted).toBe(false)
     resetSolChatSessions()
     expect(signals[1]?.aborted).toBe(true)
-    expect(useOrbStore.getState().streaming).toBe(false)
+    expect(useSolSessionStore.getState().streaming).toBe(false)
   })
 })
 
 describe('mid-stream credit exhaustion (security review L2)', () => {
   it('an insufficient_credits ERROR FRAME lights the top-up card too', async () => {
-    useOrbStore.getState().setConversation('p1', 'c1')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
     listSolTurns.mockResolvedValue([])
     streamWith([{ type: 'error', code: 'insufficient_credits', message: 'Not enough credits.' }])
     const { result } = renderHook(() => useSolChat('p1'))
@@ -451,5 +445,36 @@ describe('several parked actions in one turn (SOLUSDEV-168)', () => {
     })
 
     expect(result.current.items.at(-1)?.confirmations.map((c) => c.confirmationId)).toEqual(['cf2'])
+  })
+})
+
+describe('stable callbacks (SOLUSDEV-252 S2-A)', () => {
+  it('keeps send/selectConversation/startNewChat/decide identical across re-renders', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
+    const { result, rerender } = renderHook(({ pid }: { pid: string | null }) => useSolChat(pid), {
+      initialProps: { pid: 'p1' }
+    })
+    const first = result.current
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    rerender({ pid: 'p1' })
+    const again = result.current
+    expect(again).not.toBe(first) // items changed → a new view object…
+    expect(again.send).toBe(first.send) // …but every callback survived
+    expect(again.selectConversation).toBe(first.selectConversation)
+    expect(again.startNewChat).toBe(first.startNewChat)
+    expect(again.decide).toBe(first.decide)
+
+    rerender({ pid: 'p2' })
+    expect(result.current.send).not.toBe(first.send)
+    expect(result.current.decide).not.toBe(first.decide)
+  })
+
+  it('returns the same object when nothing it exposes changed', async () => {
+    const { result, rerender } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const first = result.current
+    rerender()
+    expect(result.current).toBe(first)
   })
 })

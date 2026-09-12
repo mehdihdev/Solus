@@ -58,6 +58,19 @@ FindingKind = Literal["attach_call", "pin_constant", "motor_constant"]
 
 _CPP_LANGUAGE: Final = Language(tree_sitter_cpp.language())
 _PY_LANGUAGE: Final = Language(tree_sitter_python.language())
+#: Public names for the repo-config parsers that share this module's tree-sitter setup.
+CPP_LANGUAGE: Final = _CPP_LANGUAGE
+PY_LANGUAGE: Final = _PY_LANGUAGE
+
+__all__ = [
+    "CPP_LANGUAGE",
+    "MAX_FILE_BYTES",
+    "MAX_FILES",
+    "PY_LANGUAGE",
+    "FirmwareFinding",
+    "extract_firmware_findings",
+    "node_text",
+]
 
 
 @dataclass(frozen=True)
@@ -103,6 +116,9 @@ def _name_hint(name: str) -> str | None:
 
 def _text(node: Node | None) -> str:
     return node.text.decode("utf-8", errors="replace") if node is not None and node.text else ""
+
+
+node_text = _text
 
 
 def _walk(root: Node) -> Iterator[Node]:

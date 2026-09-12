@@ -27,6 +27,7 @@ from solus_contracts.extension_manifest import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.graph.read_scope import GraphReadScope
 from solus_api.models import GraphEntity
 
 # NOT "solus_config": that kind is the project's `.solus` root node (SOLUSDEV-242,
@@ -147,11 +148,12 @@ async def read_bundle_config(
     session: AsyncSession, project_id: uuid.UUID, slug: str, manifest: ExtensionManifest
 ) -> dict[str, Scalar]:
     """This bundle's ``[ext.<slug>]`` team defaults for one project, typed; ``{}``
-    when the project has no committed config or none for this bundle."""
+    when the project has no committed config or none for this bundle. Personal
+    revision selection never changes shared defaults or backend tool behavior."""
     row = await session.scalar(
         select(GraphEntity)
         .where(
-            GraphEntity.project_id == project_id,
+            GraphReadScope(project_id).entity_predicate(),
             GraphEntity.kind == SOLUS_CONFIG_KIND,
             # Only a CONNECTOR may land the repo's config; a bundle-written or
             # manual row of the same kind is never mistaken for it.

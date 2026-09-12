@@ -4,7 +4,9 @@
 The link is DETERMINISTIC, not a fingerprint: the local source's sync cursor
 carries `remote` (`owner/name`, from `.git/config`) and `host`; a sibling
 GitHub/GitLab source in the same project whose `config["repo"]` matches
-(case-folded) owns the repo node (`code_host.REPO_ROOT_KEY`). One edge per
+(case-folded) owns the repo node (`code_host.REPO_ROOT_KEY`). Internal revision
+snapshots never participate. An exact branch match wins; otherwise the repository
+must have one unambiguous attached source. One edge per
 `(clone node, repo node)`, `origin="derived"`, filed under the LOCAL source's id
 so it dies with the source, and reconciled whenever either side syncs
 (`runtime._commit_success`). `apply_sync_result` reconciles only
@@ -44,7 +46,7 @@ async def _live_entity(session: AsyncSession, source_id: uuid.UUID, key: str) ->
 
 
 async def _repo_node_for(
-    session: AsyncSession, project_id: uuid.UUID, remote: str, host: str
+    session: AsyncSession, project_id: uuid.UUID, remote: str, host: str, branch: str | None
 ) -> GraphEntity | None:
     host_type = _HOST_TYPES.get(host)
     if host_type is None:
@@ -53,17 +55,26 @@ async def _repo_node_for(
         select(Source).where(
             Source.project_id == project_id,
             Source.type == host_type,
+            Source.revision_base_source_id.is_(None),
             Source.status != SourceStatus.DISCONNECTED,
         )
     )
     wanted = remote.casefold()
-    for sibling in siblings.all():
-        repo = sibling.config.get("repo")
-        if isinstance(repo, str) and repo.casefold() == wanted:
-            node = await _live_entity(session, sibling.id, REPO_ROOT_KEY)
-            if node is not None:
-                return node
-    return None
+    candidates = [
+        sibling
+        for sibling in siblings.all()
+        if isinstance(sibling.config.get("repo"), str)
+        and sibling.config["repo"].casefold() == wanted
+    ]
+    matching_branch = [
+        candidate
+        for candidate in candidates
+        if branch is not None and candidate.config.get("branch") == branch
+    ]
+    choices = matching_branch or candidates
+    if len(choices) != 1:
+        return None
+    return await _live_entity(session, choices[0].id, REPO_ROOT_KEY)
 
 
 async def _desired_edge(session: AsyncSession, local: Source) -> tuple[uuid.UUID, uuid.UUID] | None:
@@ -74,7 +85,10 @@ async def _desired_edge(session: AsyncSession, local: Source) -> tuple[uuid.UUID
     clone = await _live_entity(session, local.id, CLONE_KEY)
     if clone is None:
         return None
-    repo = await _repo_node_for(session, local.project_id, remote, host)
+    branch = local.cursor.get("branch")
+    repo = await _repo_node_for(
+        session, local.project_id, remote, host, branch if isinstance(branch, str) else None
+    )
     if repo is None:
         return None
     return (clone.id, repo.id)

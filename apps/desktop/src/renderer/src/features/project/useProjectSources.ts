@@ -1,5 +1,5 @@
 // Per-project source management (SOLUSDEV-164). Lists the sources connected to
-// the open project and exposes the actions the Sources page needs: sync now and
+// the open project and exposes the actions Home's connected-accounts rows need: sync now and
 // disconnect. Disconnect RETAINS already-synced graph data by default (the
 // source's entities are orphaned into manual nodes, not deleted). Degrades to
 // `offline` (dev bypass / no project / unreachable API) like the other

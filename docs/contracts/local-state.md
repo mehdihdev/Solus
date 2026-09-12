@@ -1,5 +1,7 @@
 # Local State — machine-local files under `~/.solus`
 
+**Last updated:** 2026-09-07. Hardware source/hint extension approved in-session for SOLUSDEV-251 (ADR-034).
+
 **Ratified:** in-session at the SOLUSDEV-166 MR (ADR-034). Design: `docs/architecture/solus-folder.md`.
 **Shapes:** `packages/shared-types/src/local-state.ts` (TypeScript) ·
 `packages/contracts/python/solus_contracts/local_state.py` (Python).
@@ -19,7 +21,7 @@ touches this directory.
 | `~/.solus/companion_id`               | 32-hex machine identity (pre-dates this)                                                                                                                                                                                                                                                                                                                                                                          | companion            | companion                             |
 | `~/.solus/projects.json`              | `ProjectRegistry` — project→working-copy                                                                                                                                                                                                                                                                                                                                                                          | desktop MAIN process | desktop main, companion               |
 | `~/.solus/config.json`                | machine prefs — **reserved**, schema TBD                                                                                                                                                                                                                                                                                                                                                                          | —                    | —                                     |
-| `~/.solus/projects/<id>/`             | `sol/<conversationId>.json` — SOL chat cache (`{schema_version: 1, items: [{role, content}]}`, 0600, atomic writes, 2 MB byte cap; ADR-034 amendment 2026-09-01). Other content **reserved**                                                                                                                                                                                                                      | desktop MAIN process | desktop main/renderer                 |
+| `~/.solus/projects/<id>/`             | `sol/<conversationId>.json` — SOL chat cache (`{schema_version: 1, items: [{role, content}]}`, 0600, atomic writes, 2 MB byte cap; ADR-034 amendment 2026-09-01). `hardware.json` is specified below; other content **reserved**                                                                                                                                                                                  | desktop MAIN process | desktop main/renderer                 |
 | `~/.solus/preferences.json`           | `EngineeringPreferences` — the user's engineering conventions (`schema_version` 1; `freeText` ≤ 2,400 chars, `codeStyle`/`mechanical`/`electrical`/`documentation`/`unitsStandards` ≤ 800 chars each, `updatedAt`); the one Layer-1 file the USER authors. 0600, atomic writes, 64 KiB byte cap; attached to each SOL turn by the desktop, never stored server-side (ADR-034 amendment 2026-09-06 / SOLUSDEV-244) | desktop MAIN process | desktop main/renderer                 |
 | `~/.solus/logs/`                      | log files — **reserved** (Ticket E)                                                                                                                                                                                                                                                                                                                                                                               | —                    | —                                     |
 | `~/.solus/extensions/<id>/<version>/` | extracted extension bundle — `extension.toml`, assets, entry HTML/JS (a machine-local CACHE of an installed version; the registry is the source of truth). 0600 files under 0700 dirs; content-hash verified before first use; **never executed by main** — served read-only to sandboxed frames via `solus-ext://`; deletable at any time (ADR-034 amendment 2026-09-03 / ADR-035)                               | desktop MAIN process | desktop main (`solus-ext://` handler) |
@@ -150,6 +152,82 @@ rules, and any format change amends ADR-034 and ADR-035 together.
   request body with its own Pydantic schema (ADR-034 amendment 2026-09-06).
 - One file per machine. Two accounts on one machine share it by design.
 
+## `projects/<projectId>/hardware.json` — private hardware sources and hints
+
+**Status:** approved contract for SOLUSDEV-251, ADR-034 amendment 2026-09-07. This section
+specifies the new file before its consumers are implemented. It does not change existing
+`projects.json`, extension, preference or chat-cache shapes.
+
+```json
+{
+  "schema_version": 1,
+  "accounts": {
+    "00000000-0000-4000-8000-000000000001": {
+      "sources": {
+        "00000000-0000-4000-8000-000000000002": {
+          "path": "/workspace/calibration.json",
+          "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "bindings": {
+        "00000000-0000-4000-8000-000000000003": {
+          "lastSeenPath": "/dev/example-port"
+        }
+      }
+    }
+  }
+}
+```
+
+| Field                       | Contract                                                                                                                                            |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`            | Required literal integer `1`; booleans are invalid.                                                                                                 |
+| `accounts`                  | Required map, at most 16 entries; keys are authenticated user UUIDs.                                                                                |
+| `sources`                   | Required map per account, at most 256 entries; keys are opaque source-reference UUIDs.                                                              |
+| `sources[id].path`          | Required absolute POSIX or Windows path, 1–4096 characters; reject control characters. Absolute-path validation is independent of the parsing host. |
+| `sources[id].contentSha256` | Required SHA-256 of the selected bytes, exactly 64 lowercase hexadecimal characters.                                                                |
+| `bindings`                  | Required map per account, at most 256 entries; keys are configuration-entry UUIDs.                                                                  |
+| `bindings[id].lastSeenPath` | Optional port hint, at most 512 characters; reject control characters. An empty binding object is valid.                                            |
+
+All UUID map keys use the canonical hyphenated `8-4-4-4-12` hexadecimal shape, including
+non-v4 graph IDs. Reject unknown fields at every object level, non-object maps, prototype keys,
+wrong scalar types, nonfinite numbers and files exceeding **256 KiB of UTF-8 JSON bytes**.
+Limits are rejection boundaries, never silent truncation. The empty document is
+`{"schema_version":1,"accounts":{}}`.
+
+**Contract twins:** `packages/shared-types/src/hardware-local-state.ts` exports
+`HARDWARE_LOCAL_STATE_SCHEMA_VERSION`, `HARDWARE_LOCAL_STATE_FILENAME`,
+`HARDWARE_LOCAL_STATE_MAX_BYTES`, `HardwareLocalSource`, `HardwareLocalBinding`,
+`HardwareLocalAccount`, `HardwareLocalState`, `parseHardwareLocalState` and
+`emptyHardwareLocalState`. The Python twin is
+`packages/contracts/python/solus_contracts/hardware_local_state.py`, with identical wire aliases
+(`contentSha256`, `lastSeenPath`) and bounds. Fixtures live in
+`packages/shared-types/fixtures/hardware-local-state/` and are exercised from both languages.
+
+The TypeScript parser returns `{ok:true,state}` or `{ok:false,reason:"invalid"|"newer"}`.
+A structurally recognizable future positive integer schema version returns `newer`, even when
+it contains unknown future fields. Python strict validation rejects invalid/newer documents;
+the local reader distinguishes the version before treating the file as relink-required.
+A newer version is read-only. Corruption produces an explicit relink state: do not erase it or
+automatically write an empty file. Absence permits a new empty document. Explicit user relinking
+can replace corrupt state only through the validated MAIN workflow.
+
+**Ownership and trust:** desktop MAIN alone writes the file through sender-gated, authenticated
+project/account picker or import operations. A renderer or remote request cannot authorize an
+arbitrary path by naming it. MAIN stores the canonical selected path and digest, validates
+symlink/canonical-path changes when reopening, and writes atomically through a same-directory
+temporary file and rename. File mode is 0600; all containing Solus directories are 0700. Validate
+before write and again before read. The local hardware runner resolves only the authenticated
+project/account's opaque reference and verifies its selected bytes and digest before parsing.
+A changed digest requires a newly reviewed proposal. The cloud has no local-file reader.
+
+The document is never synced, sent to the API as configuration, placed in shared history or
+included in model context. It contains no calibration values, capabilities, graph ownership,
+credentials, server-owned settings or durable permission to reconnect an ambiguous endpoint.
+Portable configuration records the opaque source reference and verified values; a private path
+is not provenance in the shared document. A saved port hint never establishes device identity,
+and detachment expires serial-less or duplicate-device selection.
+
 ## Ground rules (all `~/.solus` files)
 
 1. **JSON only** for machine-written files (the companion's zero-YAML posture stands).
@@ -162,8 +240,9 @@ rules, and any format change amends ADR-034 and ADR-035 together.
 6. **Newer `schema_version` ⇒ read-only.** A reader that finds a version above what it knows
    (TS: `{ ok: false, reason: "newer" }`; Python: `ValidationError`) must leave the file
    untouched — rewriting it would turn a downgrade into data loss.
-7. **Corrupt files never crash a reader**; parse failures degrade to the empty registry (and the
-   corrupt file may then be overwritten — only _newer_ files are protected).
+7. **Corrupt files never crash a reader**. Registry/cache parse failures degrade as specified
+   above. The hardware source/hint file is an exception: corruption requires explicit relinking
+   and must not be automatically overwritten. Newer files are always protected.
 
 ## The registry file is untrusted input
 

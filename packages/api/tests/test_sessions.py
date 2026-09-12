@@ -7,6 +7,7 @@ Route-level coverage (auth, cross-tenant 404s, config validation) lives in
 """
 
 import asyncio
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -156,6 +157,22 @@ async def test_stop_is_idempotent_and_closes_the_connection() -> None:
     assert again.status == "ended"
 
 
+async def test_close_failure_logs_type_without_private_driver_text(caplog: Any) -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+
+    class BrokenClose(FakeConn):
+        async def aclose(self) -> None:
+            raise RuntimeError("/private/calibration-close-sentinel")
+
+    record = await _start(manager, project, BrokenClose())
+    stopped = await manager.stop(project, record.id)
+    assert stopped.status == "ended"
+    assert "RuntimeError" in caplog.text
+    assert str(project) in caplog.text and str(record.id) in caplog.text
+    assert "/private/calibration-close-sentinel" not in caplog.text
+
+
 async def test_stop_while_starting_refuses() -> None:
     project = uuid.uuid4()
     manager, _ = _manager(project)
@@ -212,6 +229,113 @@ async def test_aclose_all_closes_every_active_session() -> None:
     assert conn_a.closed and conn_b.closed
     assert manager.list(project_a, status="active") == []
     assert manager.list(project_b, status="active") == []
+
+
+async def test_shutdown_closes_a_late_open_that_suppresses_cancellation() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    conn = FakeConn()
+
+    async def opening() -> FakeConn:
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            return conn
+        return conn
+
+    task = asyncio.create_task(
+        manager.start(project, mode="real", provider="robot", label="late", open_conn=opening)
+    )
+    await entered.wait()
+    closing = asyncio.create_task(manager.aclose_all())
+    await asyncio.sleep(0)
+    release.set()
+    await closing
+    assert task.done()
+    assert conn.closed
+    assert manager.list(project, status="active") == []
+
+
+async def test_subscribe_failure_closes_acquired_connection() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+
+    class Broken(FakeConn):
+        async def subscribe(self, window: TelemetryWindow) -> str:
+            raise ValueError("subscription unavailable")
+
+    conn = Broken()
+    with pytest.raises(ValueError):
+        await _start(manager, project, conn)
+    assert conn.closed
+    assert manager.list(project, status="active") == []
+
+
+async def test_cancellation_drains_thread_acquisition_and_closes_its_result() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    entered, release = threading.Event(), threading.Event()
+    conn = FakeConn()
+
+    def acquire() -> FakeConn:
+        entered.set()
+        release.wait()
+        return conn
+
+    async def opening() -> FakeConn:
+        return await asyncio.to_thread(acquire)
+
+    task = asyncio.create_task(
+        manager.start(project, mode="real", provider="robot", label="thread", open_conn=opening)
+    )
+    await asyncio.to_thread(entered.wait)
+    task.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert not task.done(), "Cancellation must retain the real in-flight acquisition"
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert conn.closed
+    assert manager.list(project, status="active") == []
+
+
+async def test_repeated_cancellation_cannot_interrupt_acquired_connection_close() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    entered, released, closing, closed = (asyncio.Event() for _ in range(4))
+
+    class SlowClose(FakeConn):
+        async def aclose(self) -> None:
+            closing.set()
+            await closed.wait()
+            await super().aclose()
+
+    conn = SlowClose()
+
+    async def opening() -> FakeConn:
+        entered.set()
+        await released.wait()
+        return conn
+
+    task = asyncio.create_task(
+        manager.start(project, mode="real", provider="robot", label="repeat", open_conn=opening)
+    )
+    await entered.wait()
+    task.cancel()
+    released.set()
+    await closing.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert not task.done()
+    finally:
+        closed.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert conn.closed
 
 
 async def test_tap_binds_the_requesting_project_never_packet_content() -> None:
@@ -286,3 +410,59 @@ async def test_dead_pump_session_frees_its_cap_slot() -> None:
     swept = manager.get(project, record.id)
     assert swept.status == "ended"
     assert dead.closed  # its port/subprocess was actually released
+
+
+async def test_repeated_cancel_during_subscribe_failure_cleanup_drains_close() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    subscribing, closing, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class Deferred(FakeConn):
+        async def subscribe(self, window: TelemetryWindow) -> str:
+            subscribing.set()
+            await asyncio.Event().wait()
+            return "unused"
+
+        async def aclose(self) -> None:
+            closing.set()
+            await release.wait()
+            await super().aclose()
+
+    conn = Deferred()
+    task = asyncio.create_task(_start(manager, project, conn))
+    await subscribing.wait()
+    task.cancel()
+    await closing.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert conn.closed
+
+
+async def test_shutdown_waits_for_already_closing_session() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    class Deferred(FakeConn):
+        async def aclose(self) -> None:
+            closing.set()
+            await release.wait()
+            await super().aclose()
+
+    conn = Deferred()
+    record = await _start(manager, project, conn)
+    stop = asyncio.create_task(manager.stop(project, record.id))
+    await closing.wait()
+    shutdown = asyncio.create_task(manager.aclose_all())
+    await asyncio.sleep(0)
+    try:
+        assert not shutdown.done()
+    finally:
+        release.set()
+        await asyncio.gather(stop, shutdown)
+    assert conn.closed

@@ -13,7 +13,8 @@ import {
 vi.mock('../../lib/api/resources', async (original) => ({
   ...(await original<typeof resources>()),
   getProject: vi.fn(),
-  listAllEntities: vi.fn()
+  listAllEntities: vi.fn(),
+  listAllSources: vi.fn()
 }))
 vi.mock('../../lib/api/workspace', () => ({ listAllRelations: vi.fn() }))
 
@@ -42,6 +43,28 @@ beforeEach(() => {
     { id: 'e', type: 'part', domain: 'mechanical', name: 'Part', source_key: '' }
   ])
   vi.mocked(workspace.listAllRelations).mockResolvedValue([])
+  vi.mocked(resources.listAllSources).mockResolvedValue([])
+})
+
+it('carries the project sources on the snapshot and retains them (SOLUSDEV-250 P5)', async () => {
+  const source = { id: 's1', project_id: 'p1', type: 'github' } as resources.Source
+  vi.mocked(resources.listAllSources).mockResolvedValue([source])
+  const first = renderHook(() => useWorkspaceGraph())
+  await waitFor(() => expect(first.result.current.status).toBe('ready'))
+  expect(first.result.current.sources).toEqual([source])
+  expect(resources.listAllSources).toHaveBeenCalledWith('p1', expect.anything())
+  first.unmount()
+  const second = renderHook(() => useWorkspaceGraph())
+  expect(second.result.current.sources).toEqual([source])
+})
+
+it('stays ready with no sources when the source listing fails', async () => {
+  vi.mocked(resources.listAllSources).mockRejectedValue(new Error('boom'))
+  const { result } = renderHook(() => useWorkspaceGraph())
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  expect(result.current.sources).toEqual([])
+  expect(result.current.entities).toHaveLength(1)
+  expect(result.current.errorMessage).toBeNull()
 })
 
 it('clears mounted and retained graphs when the signed-in account changes', async () => {

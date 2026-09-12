@@ -1,8 +1,10 @@
-// SOLX-02: the ORB side of the CTR-06 orb↔overlay handoff — a renderer-side
-// controller over an OrbPort (publish OrbToOverlay / subscribe OverlayToOrb).
-// In production the port wraps window.solus.orbOverlay via orbPortFromBridge;
-// in tests it is the contract's loopback + stub overlay. No overlay window
-// exists yet (LANE D builds it) — this seam is what it will meet.
+// SOLX-02 / SOLUSDEV-252 S3: the SOL side of the CTR-06 orb↔overlay handoff —
+// a renderer-side controller over an OrbPort (publish OrbToOverlay / subscribe
+// OverlayToOrb). The caller is the SOL window (`#/sol-window`, the CTR-06 host
+// since the corner orb was retired); the contract, its channel names and the
+// `Orb*` type names are unchanged. In production the port wraps
+// window.solus.orbOverlay via orbPortFromBridge; in tests it is the contract's
+// loopback + the LANE D overlay stub.
 //
 // Handoff binding (SOL-IPC-01 review H2): the wire only authenticates the
 // sending window; WHICH handoff is live is known only here. The controller

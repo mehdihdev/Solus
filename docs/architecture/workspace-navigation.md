@@ -1,118 +1,155 @@
-# Workspace graph navigation — SOLUSDEV-242
+# Architecture — Workspace navigation, Integrations and inspector
 
-Approved direction: the combined W1 fix + W2 + W3 + W4 request and the Phase 0
-approval in this session. Product source: the approved combined Workspace request; the
-design spec cited previously (`docs/design/screens/SPEC.md`) does not exist in the repository.
-Governing decisions: ADR-001, ADR-005, ADR-008, ADR-025, ADR-027, ADR-030, ADR-034.
-Focus remains `docs/contracts/focus.md`; integration reads follow
-`change-signal-spine.md`. No shared contract or new domain is required.
+**Last updated:** 2026-09-11. **Status:** integrated SOLUSDEV-250/260 navigation, retaining
+explicitly identified 254/255/256 follow-up design, extending
+W1–W4 (SOLUSDEV-240/242). Governing decisions: ADR-001/005/008/025/027/030/034.
+[Wireflow](../wireflows/workspace.md), [workspace routes](../api/workspace.md),
+[.solus routes](../api/solus.md), [hardware ownership](hardware-onboarding.md),
+[Focus contract](../contracts/focus.md), [change signals](change-signal-spine.md).
+No graph domain or Focus contract changes. Completion reports distinguish the approved target
+from implemented behavior and measured results.
 
 ```mermaid
 flowchart LR
-  DB[Project graph entities and relations] --> Read[Typed graph reads]
-  Read --> Index[Node type registry and containment index]
-  Index --> Level[One level, bounded page of children]
-  Level --> Canvas[Animated graph navigator]
-  Canvas --> Focus[Existing shared focus store]
-  Focus --> Widgets[Inspector and Live Bench]
-  Canvas --> Layout[Project shared coordinates and version]
-  Add[Add service document] --> I1[I1 account listing and project source binding]
-  I1 --> Sync[First selection or detected change]
-  Sync --> DB
+  Graph[Authorized project graph and source metadata] --> Index[Real containment and presentation index]
+  Accounts[Owner-only cached integration catalog] --> Add[Floating Add panel]
+  Add --> Attach[Existing exact source attachment]
+  Attach --> Graph
+  Index --> Groups[Account boundaries and native document hierarchy]
+  Groups --> Canvas[Bounded spatial canvas]
+  Canvas --> Layout[Versioned UUID positions and separate group placement]
+  Canvas --> Focus[Real entity Focus]
+  Focus --> Inspector[Cached summary then relationships and evidence]
+  Inspector --> Action[Explicit Ask SOL / note / import]
+  Action --> Existing[Existing project conversation and .solus entry services]
 ```
 
-## Navigation and layout
+## Real graph identity and presentation
 
-- The registry declares each node type's children from graph containment. `contains`
-  is parent → child; `part_of` is child → parent. Other relations remain cross-links.
-- Build a deterministic forest without changing graph identity: multi-parent containment
-  chooses one presentation parent; additional edges remain visible links. Break cycles
-  in the presentation only. The graph remains authoritative and unchanged.
-- Render at most 24 entity cards in a level; additional children use explicit paging.
-  Cross-links project onto visible ancestor cards, retaining counts and their real endpoints.
-  Links outside the current level are surfaced, never silently treated as containment.
-- Hover + wheel inward enters one level; outward goes up one level. Double-click/keyboard
-  and breadcrumbs provide equivalent navigation. Animate from the selected card to the
-  next level; honor reduced motion. Leaves do not trigger a new zoom or source sync.
-- Navigation depth is independent of the existing two-hop focus-query cap. Selection at
-  every depth addresses a real graph entity and supplies the path to the focus adapter.
-- `.solus` is the first centered top-level card at (0,0); new roots receive deterministic
-  surrounding positions. Dragging saves project-shared coordinates, separately from
-  connector properties. Version conflicts stay visible and are resolved against a fresh layout.
-- Existing graph reads may fetch the complete project snapshot; rendering and layout are
-  limited to the visible level. No simulation or force solver runs over hidden entities.
+`contains` is parent→child, `part_of` child→parent; other edges remain cross-links. A
+deterministic presentation forest resolves multiple parents/cycles without mutating the graph.
+Additional links retain their real endpoints and counts. Actual selection always addresses a
+real UUID with truthful graph ancestry, independently of the two-hop focus query cap.
 
-## Types added in sequence
+Integrations use presentation account groups keyed by provider plus proven provider account
+identity. If identity is unavailable, use distinct existing connection/source fallbacks until
+proven. Never key groups by display name or invent EntityRef/graph UUIDs for headers. Project
+source metadata supplies teammates' attached-source groups; the owner-only connection catalog
+supplies Add choices. It must not expose another account's private document/repository listing.
 
-1. Generic graph nodes and containment: fixture three levels, cross-domain links, focus.
-2. `.solus`: preserve its existing entity, artifact store, entry rows and action handlers.
-   Five `solus_section` entities and graph identities referencing note rows provide selectable
-   children. Add `contains` edges; preserve existing document `references` for Impact.
-   Migrate existing entries idempotently. Text remains in `solus_entries`, not duplicated facts.
-   Remove the panel and reuse its composers/menus on node cards.
-3. Service nodes: Onshape document roots contain existing assembly/part trees; Git roots
-   already contain directories/files. Source identity stays project-scoped and payload cache
-   identity stays account/document/version-scoped. Add uses existing I1 APIs. A mounted
-   account listing is reused on dropdown reopen; no node select or zoom invokes sync.
-   A cache-only listing read must expose an honest empty/missing state rather than silently
-   spending provider quota. Explicit listing refresh and first-select ingestion are distinct.
-4. `physical_robot`: independent manual graph instances with seven category children.
-   Default name is the project name. Hardware-config and transport references are nullable
-   placeholders for R5/R3, with no invented schemas. A single creation service is the R2 hook.
-   Confirmed deletion soft-deletes its containers/ownership edges, retains parts and their
-   unrelated edges, and shows unassigned parts with a prompt. No fingerprint auto-linking.
+Display provider logo and readable account name, then real imported document/repository roots
+and their native hierarchy. Preserve `AccountInfo.name` separately from login/external ID when
+already supplied by an authorized response, and mirror it into project source display metadata.
+For Onshape, prefer the authorized session display name, then account email; if neither is
+available use an honest provider account label, never the opaque provider id as the username. Do not broaden OAuth permissions to obtain display data.
+Onshape preserves document→assembly→part; Git preserves repository→directory→file. Exact
+account/document/repository/branch matching prevents duplicate imports. Unbound sources remain
+separate until identity is proven.
 
-## Security and verification
+`.solus` remains the real top-level configuration node with five section entities and real
+entry/artifact graph identities. Text remains authoritative in solus_entries. Robots remain
+independent manual roots with existing category nodes, but empty categories may collapse/hide
+in presentation. Parts may remain unassigned and independently configured. Retained parts are
+reachable through Hardware search and the inspector even when provider containment supplies
+their normal presentation parent. Group membership and canvas position never assign hardware.
 
-All backend access uses ProjectCtx; writes require member role. Graph mutations allow only
-manual-owned nodes. Cross-project coordinates, references and graph edges are rejected.
-Unknown fields, invalid coordinates and oversized payloads are rejected. Structured events
-record layout and node changes. Existing SOL confirmation/refusal and never-raises behavior,
-fingerprint identity and tool-knowledge tenancy boundaries are unchanged.
+## Canvas interaction and persistence
 
-Each phase has tests before implementation, a review and a local commit. Final verification
-includes a running application, bounded-render performance on 243+ entities, zero provider
-calls for dropdown reopen and node navigation, persistence, tenant isolation, robot orphaning,
-desktop build/typecheck/tests, backend ruff/mypy/tests, and a single Alembic head.
+Remove the full-width toolbar and retained-parts strip. Opaque Add anchors upper left; compact
+help/navigation anchors upper right. Back, save/conflict/error feedback and explicit arrange
+controls are discrete and do not obscure the canvas. Panel sizing follows available viewport
+and content with wrapping/scrolling, stable loading anchors, keyboard tabs and focus return.
 
-## Phase 3 service attachment and live refresh
+The incoming 250 navigator uses hover + wheel inward to enter the hovered card's immediate
+children and outward to go up one level. Double-click, keyboard, parent chip and Help → Project
+overview are equivalent hierarchy controls; leaves select without entering an empty level.
+Click selects; body drag excludes inputs/buttons and crosses a movement threshold. Coordinates
+remain transformed correctly and keyboard movement/reduced motion remain supported. This is the
+current integrated interaction; the earlier plain-wheel-pan redesign is not claimed implemented.
 
-`WorkspaceAdd` retains the I1 account catalog across panel visits and projects for the
-current identity. The first expansion uses `cache_only=true`; only **Load documents** /
-**Refresh documents** asks I1 to populate its shared listing. A project attachment controller
-reads every source page once, matches the exact account/document or repository/branch, and
-observes the accepted import job. Reselecting a completed document uses local state and graph
-focus only. Failed imports keep their error and Sources recovery guidance on reselection.
+Preserve UUID-keyed saved coordinates across reload/import/refresh. Generate initial positions
+once and persist them: subsequent imports place new nodes without rearranging existing defaults.
+Spatial account/group boundaries expose useful populated assemblies and individual parts.
+Current account anchors are client-only presentation nodes (`account:<key>`, integration domain
+sentinel), grouped by proven connection identity with source fallback. They never enter shared
+Focus or `PUT /workspace-layout`; dragging one is session-local. Real entity UUID coordinates
+remain project-shared. Persisted typed group placement is later work, not a fake graph UUID.
+Explicit arrange/reset is the only automatic layout rewrite requested by a user.
 
-Onshape emits a stable `cad_document` wrapper, keyed `<document_id>:document`, around the
-existing assembly/part identities. Migration `c7f242e9a842` adds wrappers to legacy graphs using
-local provenance; it does not fetch or re-export CAD. Git's existing repository hierarchy is
-reused. Per-project source/node identities remain separate from shared account/version payloads.
+Keep the documented 24-card visible bound and explicit additional-child navigation until measured
+rendering evidence justifies a separately documented bound. Project snapshots may be complete;
+render/layout work is bounded to visible content, with projected cross-links preserving actual
+endpoints. No force solver runs across hidden entities. Camera state is presentation state,
+not provider or ownership data.
 
-The existing authenticated `/projects/{id}/events` SSE stream invalidates the displayed graph
-on committed `graph.changed` hints. Initial readiness validates project version to close the
-snapshot/subscribe race without forcing an unchanged entity walk. Reconnection catches up by
-refreshing graph data. Every snapshot uses its own typed transport; obsolete requests cannot
-repopulate retained state. A monotonically increasing account/project session generation prevents
-pending work from reviving after A → B → A, including uploads and service attachments. No stream,
-selection, zoom, dropdown reopen or layout operation requests provider synchronization.
+Layout saves remain project-shared and versioned. Preserve the latest pending moved-node set
+while a write is in flight. On conflict, load the newest layout and offer explicit resolution;
+retry applies only the user's changed positions without erasing teammate coordinates. Unknown
+fields, cross-project IDs/group keys, nonfinite or oversized coordinates are rejected.
 
-## Phase 4 manual robot ownership
+## Cache, imports and live refresh
 
-`PhysicalRobotService` creates independent roots and seven category entities in
-one caller-owned transaction. The entity routes and later R2 detection share
-this creation hook. Root config/transport references are null placeholders.
-Names and deletion use entity versions under a project row lock. No manual
-mutation can edit connector, fingerprint or `.solus` entities through this path.
+Reuse the current cached I1 listing. First expansion is cache-only; Load documents and Refresh
+are explicit provider operations. Refresh accounts discovers new Home connections. Reopening a
+cached catalog, selecting nodes, entering levels, dragging, zooming or refreshing graph data
+performs no provider call. First selection attaches/syncs a real source; reselecting a completed
+source focuses its existing root. Errors remain inline with Integrations recovery guidance.
 
-Deletion removes only explicitly owned robot containers/containment edges.
-Soft-deleted ownership evidence supports a paginated query for retained parts
-without an active robot owner. The Workspace prompt reveals their real graph
-IDs even if a CAD document remains their presentation parent. It persists across
-reloads; no connector properties or unrelated edges are changed to mark orphans.
-Project detail's greatest graph modification time invalidates cached manual
-renames. Manual writes publish the existing SSE hint after commit with null
-source/sync IDs, keeping service synchronization out of this path.
-Focus reconciliation waits for the refreshed authoritative snapshot. Removed containers
-clear selection without a failing neighborhood read; retained parts keep their real
-identity and obtain the surviving containment path from the same navigator index.
+The existing authenticated project event stream invalidates snapshots on committed graph hints.
+Initial readiness validates project version to close the subscribe/snapshot race; reconnect
+refreshes Solus data only. A committed graph-change hint always invalidates the display, even
+when `MAX(updated_at)` and counts compare equal: timestamps are not commit-order revisions.
+Hardware full-list frames are local-only. Their authoritative arrival supersedes any pending
+GET seed; neither old stream nor old seed may repopulate another account/project scope. Permission failures stop retries. Every async operation is scoped by a
+monotonically increasing account/project generation; old results cannot revive after A→B→A.
+The existing local provenance migration for Onshape document wrappers preserves assembly/part
+IDs and makes no provider call. Manual robot edits publish graph hints after commit.
+
+## Sidebar and explicit SOL actions
+
+`NodeSidebar` replaces the inspector: robot/category routes to the robot sidebar; `.solus`
+root/section/entry routes to its sidebar; account anchors use local account details; other real
+entities show cached focus summary and neighbors. Per-robot detail refresh follows invalidation,
+not a graph refetch for every click. Connection metadata renders connecting/connected/failed/
+disconnected separately from actual packet reception. Serial-less identity copy appears here
+as well as on the device card. Import/note expansion for every arbitrary node remains follow-up
+work where no existing handler provides it.
+
+Render selected local/cached summary promptly. Load relationships, evidence and connection details
+progressively with honest loading/failure states. All supported nodes expose visible Import files,
+Ask SOL and Add note actions in addition to relevant type-specific controls. A retained part can
+be assigned/reassigned explicitly through the versioned ownership API.
+
+Selection makes no model call. Explicit Ask SOL opens the existing SOL window with the real
+selected node as subject, preserving current project/account context. Submission carries the UUID in existing
+`MessageCreate.mentions`, uses the current project conversation and consumes Guide/Expert mode,
+action mode, budget admission and confirmation infrastructure. Bind each submitted turn to its
+submitted entity, even if selection changes; stale account/project results are discarded. Do
+not create a fresh chat for every click or invent a parallel agent service.
+
+Notes/imports use existing project `.solus` sections, entry rows and artifact storage. A validated
+optional context entity adds a manual `references` edge to the new entry graph node. It does not
+edit source-owned content. Section/entry handlers, file/text limits, retention and deletion remain
+shared. A failed upload/entry write creates no context edge. All retrieved content stays untrusted
+model data and cannot change tool/auth scope.
+
+## Verification
+
+Use ProjectCtx/member writes; validate project-scoped IDs, versions and manual-edge permissions.
+Required regression cases include account identity/fallback and teammate visibility, cached
+provider-call counts, focus correctness, body drag versus controls, accessible responsive Add,
+persisted positions after repeated imports, concurrent layout changes, retained-part reveal,
+context isolation and no model call on selection. Preserve SOL budgets/refusal/confirmation tests.
+
+Measure actual Electron panel→paint, select→summary, drag frame durations and graph refresh on a
+representative 243+ entity graph with recorded machine/viewport/build/card counts and p50/p95/max.
+Targets are ≤100 ms local feedback and roughly 16.7 ms drag frames, not assumed results. Record
+actual desktop runs separately from component/API fixtures and fix review findings before handoff.
+
+## Performance evidence
+
+Confirmations use per-attempt marks rather than global marks that collide across devices.
+Repeated device appearances begin new receipt-to-card spans. These spans start at browser
+receipt, not physical plug-in; OS detection latency is measured separately. Target confirm
+response-to-node well under 500 ms, sidebar feedback under 100 ms, and bounded drag/render work.
+Targets and unit fixtures are not claims of measured native performance.

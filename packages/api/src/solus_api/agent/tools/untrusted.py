@@ -90,12 +90,39 @@ _ENTROPIC_MIN_DISTINCT = 16
 REDACTED = "[REDACTED]"
 
 
-def _looks_entropic(value: str) -> bool:
+#: Path-shaped values are judged per SEGMENT rather than whole. A long absolute
+#: path clears every bar the heuristic sets — the separator is inside the
+#: charset, and enough directory names make it long and varied — so whole paths
+#: were being redacted. That is not a cosmetic loss: the consent card renders
+#: `cwd` and `path` rows from the companion's dry-run plan, and a card that says
+#: the command runs in "[REDACTED]" cannot be consented to (SOLUSDEV-252, found
+#: live approving `machine.run_command`). Segments keep the detector honest — a
+#: key sitting in a path component is still one long high-entropy token.
+# ponytail: ANCHORED to an absolute / `~` / `./` / drive prefix, so a long
+# RELATIVE path (a deep workspace-relative one on a consent card) is still
+# judged whole and can still redact. Widening this to "contains a separator"
+# would exempt any slash-bearing blob, which is the bigger hole; the upgrade
+# path is a real secret detector, not a looser shape rule.
+_PATH_PREFIX = re.compile(r"^(?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|[\\/])")
+_PATH_SEPARATOR = re.compile(r"[\\/]")
+_BASE64_ONLY = re.compile(r"[+=]")
+
+
+def _entropic_token(value: str) -> bool:
     return (
         len(value) >= _ENTROPIC_MIN_LEN
         and _ENTROPIC_CHARSET.fullmatch(value) is not None
         and len(set(value)) >= _ENTROPIC_MIN_DISTINCT
     )
+
+
+def _looks_entropic(value: str) -> bool:
+    # `+` and `=` never appear in a path we would want to spare, and both are
+    # base64: a blob that merely STARTS with `/` gets judged whole, so the
+    # per-segment relaxation cannot become an escape hatch for one.
+    if _PATH_PREFIX.match(value) and not _BASE64_ONLY.search(value):
+        return any(_entropic_token(part) for part in _PATH_SEPARATOR.split(value))
+    return _entropic_token(value)
 
 
 def redact_value(value: Any) -> Any:
@@ -122,10 +149,43 @@ _SECRET_ASSIGNMENT = re.compile(
 )
 
 
+#: The charset as a SET, for `_trim`. Quotes, brackets and sentence punctuation
+#: around a token hid secrets from the old space-split scan — `\'ghp_…\'` and any
+#: newline-joined token went unexamined, and a shell trace or a JSON error is
+#: exactly where a secret sits next to punctuation.
+_CHARSET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_.-")
+_WHITESPACE_SPLIT = re.compile(r"(\s+)")
+
+
+def _trim(token: str) -> str:
+    """Drop leading and trailing characters outside the charset.
+
+    Two pointers, not the obvious `re.sub(r"^[^C]+|[^C]+$", ...)`: that pattern
+    backtracks from every start position, measuring 0.7 s on a 16 KB unbroken
+    non-charset run and growing quadratically — and this runs over the whole
+    output of a failing command, so a CJK build log or a progress bar would block
+    the event loop for minutes.
+    """
+    start, end = 0, len(token)
+    while start < end and token[start] not in _CHARSET:
+        start += 1
+    while end > start and token[end - 1] not in _CHARSET:
+        end -= 1
+    return token[start:end]
+
+
 def redact_text(text: str) -> str:
     """Scalar redaction for untrusted free text (SEC-M3): secret-shaped
     `key=value`/`key: value` assignments and entropic tokens are masked before
-    the text can reach model context or persistence."""
+    the text can reach model context or persistence.
+
+    Tokens are split on ANY whitespace (a command's output is lines, not one
+    space-separated line) and judged with their surrounding punctuation trimmed;
+    a token that reads as a secret is replaced whole, punctuation included.
+    """
     masked = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, text)
-    tokens = [REDACTED if _looks_entropic(token) else token for token in masked.split(" ")]
-    return " ".join(tokens)
+    parts = _WHITESPACE_SPLIT.split(masked)
+    return "".join(
+        REDACTED if part and not part.isspace() and _looks_entropic(_trim(part)) else part
+        for part in parts
+    )

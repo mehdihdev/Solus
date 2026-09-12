@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { createOrbOverlayBridge } from './orbOverlayBridge'
-import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
+import { createSolBridge } from './solBridge'
 import { EXT_CHANNELS } from '../main/extensions/extensions.constants'
 import type {
   ExtDevLoadResult,
@@ -16,6 +16,12 @@ import type {
 } from '../main/extensions/extensions.types'
 import type { ExtensionIndex } from '../main/extensions/extensionIndex'
 import type { EngineeringPreferences } from '@solus/shared-types'
+import type {
+  HardwareSourceList,
+  HardwareSourcePicked,
+  HardwareSourcePickInput,
+  HardwareSourceResult
+} from '../main/hardwareSources'
 
 export type {
   ExtDevLoadResult,
@@ -49,6 +55,19 @@ interface CloneResult {
 // orb↔overlay push wire (SOLUSDEV-223): validated publish/subscribe over the
 // shared channel constants.
 const api = {
+  hardware: {
+    sources: {
+      // MAIN verifies the active bridge token/project. No renderer-supplied paths or account IDs.
+      list: (): Promise<HardwareSourceResult<HardwareSourceList>> =>
+        ipcRenderer.invoke('hardware:sources:list'),
+      pick: (
+        input: HardwareSourcePickInput = {}
+      ): Promise<HardwareSourceResult<HardwareSourcePicked>> =>
+        ipcRenderer.invoke('hardware:sources:pick', input),
+      recheck: (sourceRef: string): Promise<HardwareSourceResult<HardwareSourcePicked>> =>
+        ipcRenderer.invoke('hardware:sources:recheck', { sourceRef })
+    }
+  },
   oauth: {
     getRedirectUrl: (): Promise<string> => ipcRenderer.invoke('oauth:github:redirect-url'),
     awaitGithub: (authorizeUrl: string): Promise<OAuthCallbackResult> =>
@@ -142,17 +161,14 @@ const api = {
 // window.api is vestigial (typed `unknown`, still zero renderer consumers) —
 // everything the renderer actually calls comes through window.solus, which is
 // `api` plus the surfaces below.
-// `solus.solWindow` detaches the orb to the always-on-top window / re-attaches
-// it (SOLX-02); channel names come from the shared constants module only.
+// `solus.sol` is the SOL window surface (SOLUSDEV-252 S3): state, mode,
+// sees-your-screen, always-on-top, open, and the state/region pushes.
 const solus = {
   ...api,
   // SOLUSDEV-235: the renderer draws the title row; on macOS it must inset for the traffic lights.
   platform: process.platform,
   orbOverlay: createOrbOverlayBridge(ipcRenderer),
-  solWindow: {
-    detach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.detach),
-    attach: (): Promise<{ detached: boolean }> => ipcRenderer.invoke(SOL_WINDOW_CHANNELS.attach)
-  },
+  sol: createSolBridge(ipcRenderer),
   // Extensions (SOLUSDEV-235 / ADR-035, EXT-05): the machine-local bundle cache,
   // developer mode, the window host, and the network egress proxy. The main
   // process re-validates every argument; nothing here holds a credential.

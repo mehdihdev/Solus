@@ -509,3 +509,37 @@ async def test_blob_fetch_failure_degrades_to_a_sync_error() -> None:
     result = await GitHubConnector().sync(_ctx())
     assert any(".solus/project.toml" in err.item for err in result.errors)
     assert {e.source_key for e in result.entities} >= {"src/main.py", ".solus/project.toml"}
+
+
+@pytest.mark.parametrize(
+    "status,headers,code",
+    [
+        (429, {}, "rate_limited"),
+        (403, {"Retry-After": "60"}, "rate_limited"),
+        (403, {"X-RateLimit-Remaining": "0"}, "rate_limited"),
+        (403, {}, "github_error"),
+    ],
+)
+@respx.mock
+async def test_conditional_probe_error_never_sends_second_request(
+    status: int,
+    headers: dict[str, str],
+    code: str,
+) -> None:
+    from solus_api.connectors.github import ETAG_KEY
+
+    route = respx.get(f"{API}/repos/{REPO_FULL_NAME}/commits/{DEFAULT_BRANCH}").mock(
+        return_value=httpx.Response(status, headers=headers)
+    )
+    with pytest.raises(ConnectorError) as error:
+        await GitHubConnector().detect_changes(
+            _ctx(
+                cursor={
+                    "branch": DEFAULT_BRANCH,
+                    "sha": "abc",
+                    ETAG_KEY: '"etag"',
+                }
+            )
+        )
+    assert error.value.code == code
+    assert route.call_count == 1

@@ -1,0 +1,86 @@
+import { randomUUID } from 'node:crypto';
+import express from 'express';
+import config from '../config.js';
+import createMcpServer from '../server.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createDnsRebindingGuard } from './rebinding.js';
+const yieldGenericServerError = (res) => {
+    res.status(500).json({
+        id: null,
+        jsonrpc: '2.0',
+        error: { code: -32603, message: 'Internal server error' },
+    });
+};
+const transports = new Map();
+const isListToolsRequest = (value) => ListToolsRequestSchema.safeParse(value).success;
+const getTransport = async (request) => {
+    // Check for an existing session
+    const sessionId = request.headers['mcp-session-id'];
+    if (sessionId && transports.has(sessionId)) {
+        return transports.get(sessionId);
+    }
+    // We have a special case where we'll permit ListToolsRequest w/o a session ID
+    if (!sessionId && isListToolsRequest(request.body)) {
+        const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+        });
+        const mcpServer = createMcpServer();
+        await mcpServer.connect(transport);
+        return transport;
+    }
+    let transport;
+    if (config.stateless) {
+        // Some contexts (e.g. AgentCore) may prefer or require a stateless transport
+        transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+        });
+    }
+    else {
+        // Otherwise, start a new transport/session
+        transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sessionId) => {
+                transports.set(sessionId, transport);
+            },
+        });
+    }
+    const mcpServer = createMcpServer();
+    await mcpServer.connect(transport);
+    return transport;
+};
+const createApp = () => {
+    const app = express();
+    app.use('/mcp', createDnsRebindingGuard({
+        allowedHosts: config.allowedHosts,
+        allowedOrigins: config.allowedOrigins,
+    }));
+    app.use('/mcp', express.json());
+    app.all('/mcp', async (req, res) => {
+        try {
+            const transport = await getTransport(req);
+            await transport.handleRequest(req, res, req.body);
+        }
+        catch (error) {
+            console.error(error);
+            if (!res.headersSent) {
+                yieldGenericServerError(res);
+            }
+        }
+    });
+    app.all('/ping', (req, res) => {
+        res.status(200).json({ message: 'pong' });
+    });
+    return app;
+};
+const start = () => {
+    if (!config.ready) {
+        console.error('Invalid configuration');
+        process.exit(1);
+    }
+    const app = createApp();
+    app.listen(config.port, config.host, () => {
+        console.log(`Server is running on http://${config.host}:${config.port}/mcp`);
+    });
+};
+export default { start, createApp };

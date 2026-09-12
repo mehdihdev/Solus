@@ -8,7 +8,7 @@ deterministic SSE frame the transport can write verbatim.
 
 import json
 
-from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
+from solus_api.agent.stream import ARTIFACT_TOOLS, AgentEvent, AgentEventType, format_sse
 from solus_api.agent.tools import ToolCall, ToolError, ToolErrorCode, ToolResult
 
 
@@ -65,3 +65,67 @@ def test_format_sse_is_deterministic() -> None:
     assert format_sse(event) == format_sse(event)
     # keys are sorted → stable wire regardless of insertion order
     assert '"conversation_id":"a"' in format_sse(event)
+
+
+# ---------------------------------------------------------------- artifact (S5)
+
+
+def test_artifact_event_carries_the_reference_never_bytes() -> None:
+    ref = {
+        "artifact_id": "019f9a00-0000-7000-8000-000000000001",
+        "uri": "/api/v1/projects/p/artifacts/a/content",
+        "media_type": "image/svg+xml",
+        "title": "Arm wiring",
+        "source_tool": "make_diagram",
+        "summary": "wiring diagram: 4 nodes",
+    }
+    event = AgentEvent.artifact(ref)
+    assert event.type is AgentEventType.ARTIFACT and event.type.value == "artifact"
+    assert event.data == ref
+
+
+def test_artifact_from_result_keys_on_the_allowlisted_tool_and_the_shape() -> None:
+    value = {
+        "artifact_id": "019f9a00-0000-7000-8000-000000000001",
+        "uri": "/api/v1/projects/p/artifacts/a/content",
+        "media_type": "image/svg+xml",
+        "title": "Arm wiring",
+        "summary": "s",
+        "unknown_pins": ["x"],
+        "bytes": "never-forwarded",
+    }
+    event = AgentEvent.artifact_from_result("make_diagram", ToolResult.success("c1", value))
+    assert event is not None
+    assert event.data == {
+        "artifact_id": value["artifact_id"],
+        "uri": value["uri"],
+        "media_type": "image/svg+xml",
+        "title": "Arm wiring",
+        "source_tool": "make_diagram",
+        "summary": "s",
+    }
+    # Not allowlisted → no event, even with the right shape.
+    assert AgentEvent.artifact_from_result("get_entity", ToolResult.success("c1", value)) is None
+    # Allowlisted but the shape is missing → no event (nothing to reference).
+    assert (
+        AgentEvent.artifact_from_result("make_diagram", ToolResult.success("c1", {"x": 1})) is None
+    )
+    failed = ToolResult.failure("c1", ToolError(code=ToolErrorCode.TOOL_ERROR, message="no"))
+    assert AgentEvent.artifact_from_result("make_diagram", failed) is None
+
+
+def test_a_non_mapping_tool_value_is_never_an_artifact() -> None:
+    """Defence in depth. `ToolResult` already rejects a non-mapping `value` at
+    construction, so this can only arise if a handler bypasses validation — and
+    then the artifact event must be absent, not an AttributeError inside the SSE
+    loop. Built with `model_construct` precisely because the validated path
+    cannot express it."""
+    from solus_api.agent.tools.shapes import ToolResult
+
+    tool = next(iter(ARTIFACT_TOOLS))
+    for bad in ("artifact_id", 7, ["artifact_id"], None):
+        result = ToolResult.model_construct(call_id="call-1", ok=True, value=bad)
+        assert AgentEvent.artifact_from_result(tool, result) is None
+    # A mapping that simply lacks the required keys is equally not an artifact.
+    partial = ToolResult.model_construct(call_id="call-1", ok=True, value={"uri": "/a"})
+    assert AgentEvent.artifact_from_result(tool, partial) is None

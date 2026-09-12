@@ -7,6 +7,7 @@ import {
   parseSseFrame,
   streamSolTurn,
   toPendingConfirmation,
+  toSolArtifact,
   type SolEvent
 } from './solStream'
 
@@ -91,6 +92,53 @@ describe('toPendingConfirmation', () => {
 
   it('tolerates a missing preview — not every tool can describe its change', () => {
     expect(toPendingConfirmation(event({ confirmation_id: 'c1', tool: 't' }))?.preview).toEqual([])
+  })
+})
+
+// SOLUSDEV-252 S5: a tool's large/binary output arrives as an `artifact` frame
+// (docs/contracts/agent-tool.md §4). The payload crosses a process boundary,
+// so anything that cannot prove the ArtifactRef shape is dropped.
+describe('toSolArtifact', () => {
+  const DATA = {
+    artifact_id: 'a1',
+    uri: '/api/v1/projects/p1/artifacts/a1/content',
+    media_type: 'image/svg+xml',
+    title: 'Power tree',
+    source_tool: 'solus.make_diagram',
+    summary: 'Battery → regulators → loads'
+  }
+
+  it('reads the reference verbatim', () => {
+    expect(toSolArtifact({ type: 'artifact', data: DATA })).toEqual({
+      artifactId: 'a1',
+      uri: '/api/v1/projects/p1/artifacts/a1/content',
+      mediaType: 'image/svg+xml',
+      title: 'Power tree',
+      sourceTool: 'solus.make_diagram',
+      summary: 'Battery → regulators → loads'
+    })
+  })
+
+  it('falls back to the tool name, then a generic title, when no title is sent', () => {
+    const noTitle = { ...DATA, title: undefined }
+    expect(toSolArtifact({ type: 'artifact', data: noTitle })?.title).toBe('solus.make_diagram')
+    const bare = { ...noTitle, source_tool: undefined }
+    expect(toSolArtifact({ type: 'artifact', data: bare })?.title).toBe('Artifact')
+  })
+
+  it('returns null without an id, uri or media type', () => {
+    expect(toSolArtifact({ type: 'artifact', data: { ...DATA, artifact_id: 7 } })).toBeNull()
+    expect(toSolArtifact({ type: 'artifact', data: { ...DATA, uri: null } })).toBeNull()
+    expect(toSolArtifact({ type: 'artifact', data: { ...DATA, media_type: undefined } })).toBeNull()
+  })
+
+  it('treats a non-string summary or source_tool as absent, never as text', () => {
+    const artifact = toSolArtifact({
+      type: 'artifact',
+      data: { ...DATA, summary: { evil: true }, source_tool: 12 }
+    })
+    expect(artifact?.summary).toBeNull()
+    expect(artifact?.sourceTool).toBeNull()
   })
 })
 

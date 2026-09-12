@@ -20,6 +20,7 @@ from solus_api.agent.interfaces import EntityRead, GraphContext
 from solus_api.agent.tools.shapes import ToolDescriptor
 from solus_api.agent.tools.tool import InProcessTool, Tool
 from solus_api.checkers.environment import REQUIREMENT_KIND, propose_environments
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import GraphEntity
 
 MAX_REQUIREMENT_NODES: Final = 2000
@@ -53,6 +54,7 @@ async def requirement_context(session: AsyncSession, project_id: uuid.UUID) -> G
         select(GraphEntity)
         .where(
             GraphEntity.project_id == project_id,
+            current_scope(project_id).entity_predicate(),
             GraphEntity.kind == REQUIREMENT_KIND,
             GraphEntity.deleted_at.is_(None),
         )

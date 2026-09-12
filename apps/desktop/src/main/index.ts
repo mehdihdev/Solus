@@ -1,4 +1,18 @@
-import { app, shell, dialog, BrowserWindow, ipcMain, protocol, screen } from 'electron'
+import {
+  app,
+  shell,
+  dialog,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  nativeImage,
+  protocol,
+  screen,
+  systemPreferences,
+  Tray,
+  type NativeImage
+} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -31,10 +45,25 @@ import { isAllowedAppStoreUrl } from './appStoreUrl'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { preferencesIpc, realPreferencesStoreDeps } from './preferencesStore'
+import { HardwareLocalStore } from './hardwareLocalState'
+import { HardwareSources, authorizeHardwareScope, readHardwareSource } from './hardwareSources'
+import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
 import { externalOpenHandler } from './externalUrl'
-import { createSolBrowserWindow, registerSolWindowHandlers } from './sol-window/solWindow'
+import {
+  createSolBrowserWindow,
+  createSolWindowManager,
+  registerSolIpcHandlers,
+  type SolState,
+  type SolWindowManager
+} from './sol-window/solWindow'
+import { createSolSettings } from './solSettings'
+import { createScreenCapture, realScreenCaptureDeps, type Rect } from './capture/screenCapture'
+import { createTray, paintDot, type SolTray } from './tray'
+import { detectPlatformBasics, staticCapabilities } from './platform/capabilities'
+import { enableShortcutPortal } from './hotkeys/globalHotkeys'
+import { startHotkeys, type HotkeysHandle, type HotkeyStatus, type KeyHookLoad } from './hotkeys'
 import { realExtensionFs } from './extensions/extensionFs'
 import {
   createExtProtocolHandler,
@@ -49,6 +78,11 @@ import {
 } from './extensions/extensionWindow'
 import { createExtensionsIpc, registerExtensionsIpc } from './extensions/extensionsIpc'
 import { realNetProxyDeps } from './extensions/netProxy'
+
+enableShortcutPortal(
+  app.commandLine,
+  detectPlatformBasics(process.env, process.platform, process.arch)
+)
 
 // Extensions (SOLUSDEV-235 / ADR-035 §1): the read-only solus-ext:// origin the
 // sandboxed frames load their bundles from. A privileged scheme MUST be declared
@@ -78,6 +112,11 @@ async function openAppStoreUrl(url: string): Promise<{ ok: boolean }> {
 let mainWindow: BrowserWindow | null = null
 // Extension windows (SOLUSDEV-235): closed on sign-out and with the main window.
 let extensionWindows: ExtensionWindowManager | null = null
+let hardwareSources: HardwareSources | null = null
+// SOL window / tray / hotkeys (SOLUSDEV-252 S3): torn down on before-quit.
+let solWindows: SolWindowManager | null = null
+let solTray: SolTray | null = null
+let hotkeys: HotkeysHandle | null = null
 
 /**
  * The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
@@ -154,6 +193,57 @@ function registerPreferencesHandlers(): void {
   )
 }
 
+/** Private source authority stays in MAIN. The renderer gets portable references;
+ * membership is independently verified against the configured API for each operation. */
+function registerHardwareSourceHandlers(): void {
+  const sources = new HardwareSources({
+    store: new HardwareLocalStore(app.getPath('home')),
+    authorize: (token, projectId, signal) =>
+      authorizeHardwareScope(
+        token,
+        projectId,
+        signal,
+        resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+      ),
+    readFile: readHardwareSource,
+    pickFile: async () => {
+      if (mainWindow === null) return null
+      const picked = await dialog.showOpenDialog(mainWindow, {
+        title: 'Choose hardware configuration',
+        properties: ['openFile', 'dontAddToRecent'],
+        filters: [
+          { name: 'Hardware configuration', extensions: ['json', 'yaml', 'yml', 'toml', 'py'] }
+        ]
+      })
+      return picked.canceled || picked.filePaths.length !== 1 ? null : picked.filePaths[0]
+    },
+    confirmDigestChange: async ({ displayName, previousDigest, contentSha256 }) => {
+      if (mainWindow === null) return false
+      const result = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Review changed hardware configuration',
+        message: `Use the changed ${displayName}?`,
+        detail: `Previous SHA-256: ${previousDigest}\nSelected SHA-256: ${contentSha256}\nThe changed contents require a new hardware proposal before they can be applied.`,
+        buttons: ['Cancel', 'Use selected file'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      })
+      return result.response === 1
+    }
+  })
+  hardwareSources = sources
+  const allowed = (event: Electron.IpcMainInvokeEvent): boolean =>
+    isMainRendererSender(event) && event.senderFrame === mainWindow?.webContents.mainFrame
+  ipcMain.handle('hardware:sources:list', (event) => sources.list(allowed(event)))
+  ipcMain.handle('hardware:sources:pick', (event, input: unknown) =>
+    sources.pick(allowed(event), input)
+  )
+  ipcMain.handle('hardware:sources:recheck', (event, input: unknown) =>
+    sources.recheck(allowed(event), input)
+  )
+}
+
 /** Extensions (SOLUSDEV-235 / EXT-05, ADR-035): serve installed bundles + dev
  *  folders read-only over solus-ext://, and wire the install / dev-mode /
  *  window / network-proxy invokes. Every channel is sender-gated; every
@@ -181,6 +271,171 @@ function registerExtensionHandlers(): void {
  *  `senderGate.ts`, where it can be tested. */
 function isMainRendererSender(event: Electron.IpcMainInvokeEvent): boolean {
   return isFromWindow(event.sender, mainWindow)
+}
+
+/** The SOL channels admit the main renderer OR the SOL window's own renderer
+ *  (the same trusted bundle at #/sol-window); the checkout window stays out. */
+function isSolSender(event: Electron.IpcMainInvokeEvent): boolean {
+  return isMainRendererSender(event) || (solWindows?.isSender(event.sender) ?? false)
+}
+
+const TRAY_ICON_PX = 22
+
+/** What the hook loader answers while the setting is off: no hook, and the
+ *  status line says why (§7 — the consent surface for a global keyboard hook). */
+const HOTKEYS_OFF: KeyHookLoad = {
+  hook: null,
+  state: { status: 'unavailable', message: 'Hold-Ctrl gestures are turned off in Settings.' }
+}
+
+/**
+ * SOL window, screen capture, tray and global hotkeys (SOLUSDEV-252 S3 —
+ * docs/architecture/sol-window.md §2, §6, §7; wireflow §A, §E). Settings →
+ * capture → window manager → tray → hotkeys. Every platform-touching piece
+ * degrades with a plain-language message rather than throwing: the app must
+ * boot on a box with no hook, no indicator host and no capture.
+ */
+function startSol(): void {
+  const basics = detectPlatformBasics(process.env, process.platform, process.arch)
+  const settings = createSolSettings(realLocalStateDeps)
+  const capture = createScreenCapture({
+    ...realScreenCaptureDeps(basics),
+    // §7 "off means no capture ever": gated inside captureRegion, not per caller.
+    isEnabled: () => settings.get().screenIntelligence
+  })
+  let hotkeyStatus: HotkeyStatus | null = null
+  let lastRegionRefused = false
+  const state = (): SolState => {
+    const { actionMode, screenIntelligence, hotkeys: hotkeysEnabled, alwaysOnTop } = settings.get()
+    return {
+      actionMode,
+      screenIntelligence,
+      hotkeysEnabled,
+      alwaysOnTop,
+      capture: capture.capability(),
+      hotkeys: hotkeyStatus,
+      lastRegionRefused
+    }
+  }
+  const windows = createSolWindowManager({
+    createWindow: (bounds, alwaysOnTop) =>
+      createSolBrowserWindow(
+        bounds,
+        alwaysOnTop,
+        ipcMain,
+        process.platform === 'linux' ? icon : undefined
+      ),
+    screen,
+    settings,
+    // The main window only (the manager adds the SOL window itself). Never the
+    // checkout window (remote Stripe content) nor extension windows (third-party
+    // bundles) — sol:state is for the app's own renderers (security M2).
+    allWindows: () => (mainWindow ? [mainWindow] : [])
+  })
+  solWindows = windows
+  const publish = (): void => {
+    const snapshot = state()
+    windows.pushState(snapshot)
+    solTray?.update(snapshot)
+  }
+  let hotkeysOn = settings.get().hotkeys
+  settings.onChange((next) => {
+    if (next.screenIntelligence) lastRegionRefused = false
+    if (next.hotkeys !== hotkeysOn) {
+      hotkeysOn = next.hotkeys
+      runHotkeys()
+    }
+    publish()
+  })
+  registerSolIpcHandlers(ipcMain, { windows, settings, state }, isSolSender)
+
+  // Tray: the mark at tray size, and the same mark with the sees-screen dot.
+  const trayOff = nativeImage
+    .createFromPath(icon)
+    .resize({ width: TRAY_ICON_PX, height: TRAY_ICON_PX })
+  const size = trayOff.getSize()
+  const trayOn = nativeImage.createFromBitmap(
+    paintDot(trayOff.toBitmap(), size.width, size.height),
+    size
+  )
+  solTray = createTray({
+    basics,
+    env: process.env,
+    icons: { off: trayOff, on: trayOn },
+    createTray: (image) => new Tray(image as NativeImage),
+    buildMenu: (template) => Menu.buildFromTemplate(template),
+    onOpen: () => windows.open(),
+    onSetMode: (mode) => settings.setMode(mode),
+    onSetScreenIntelligence: (on) => settings.setScreenIntelligence(on),
+    onSetHotkeys: (on) => settings.setHotkeys(on),
+    onQuit: () => app.quit(),
+    warn: (message) => console.warn(message)
+  })
+
+  // A closed loop: capture (setting on) → open + region; setting off → the
+  // capture answers `disabled` and the window opens with the one-line refusal
+  // (§7 "off means no capture ever"). Nothing pixel-shaped is logged or persisted.
+  const onRegion = async (region: Rect): Promise<void> => {
+    const result = await capture.captureRegion(region)
+    windows.open()
+    if ('reason' in result) {
+      lastRegionRefused = result.reason === 'disabled'
+      if (!lastRegionRefused) console.warn(`[sol] region capture skipped: ${result.reason}`)
+      publish()
+      return
+    }
+    lastRegionRefused = false
+    publish()
+    windows.pushRegion({
+      pngBase64: result.png.toString('base64'),
+      contextPngBase64: result.contextPng.toString('base64'),
+      width: result.width,
+      height: result.height,
+      source: result.window,
+      capturedAt: Date.now()
+    })
+  }
+
+  // Boot and every flip of the hotkeys setting go through here: stop what runs,
+  // then start again — with no hook at all while the setting is off.
+  function runHotkeys(): void {
+    hotkeys?.stop()
+    hotkeys = null
+    try {
+      hotkeys = startHotkeys({
+        capabilities: staticCapabilities(basics),
+        globalShortcut,
+        getCursor: () => screen.getCursorScreenPoint(),
+        displayFor: (point) => screen.getDisplayNearestPoint(point),
+        now: Date.now,
+        scheduler: { setInterval, clearInterval },
+        ...(settings.get().hotkeys ? {} : { loadHook: () => HOTKEYS_OFF }),
+        ...(process.platform === 'darwin'
+          ? {
+              isTrustedAccessibilityClient: () =>
+                systemPreferences.isTrustedAccessibilityClient(false)
+            }
+          : {}),
+        onSummon: () => windows.open(),
+        onToggleMode: () => void settings.toggleMode(),
+        onRegion: (region) => void onRegion(region),
+        onStatus: (status) => {
+          hotkeyStatus = status
+          publish()
+        },
+        // SOLUS_DEBUG_GESTURE=1: cursor samples + evaluations (coordinates only).
+        ...(process.env['SOLUS_DEBUG_GESTURE']
+          ? { debug: (line: string) => console.warn(`[gesture] ${line}`) }
+          : {})
+      })
+    } catch (error) {
+      console.warn(
+        `[sol] hotkeys unavailable: ${error instanceof Error ? error.message : 'unknown'}`
+      )
+    }
+  }
+  runHotkeys()
+  publish()
 }
 
 /** Preferred main-window size, clamped to the primary display's work area so a
@@ -221,7 +476,11 @@ function createWindow(): void {
     win.show()
   })
   win.on('closed', () => {
-    if (mainWindow === win) mainWindow = null
+    if (mainWindow === win) {
+      mainWindow = null
+      hardwareSources?.setToken(null)
+      hardwareSources?.setProject(null)
+    }
     // No main window → no session to host an extension bridge under.
     extensionWindows?.closeAll()
   })
@@ -305,6 +564,7 @@ if (!app.requestSingleInstanceLock()) {
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
     registerPreferencesHandlers()
+    registerHardwareSourceHandlers()
 
     registerExtensionHandlers()
 
@@ -327,10 +587,9 @@ if (!app.requestSingleInstanceLock()) {
         : { status: 'blocked' }
     )
 
-    // Detached SOL orb (SOLX-02): the always-on-top second window at #/orb.
-    // The renderer initiates both directions over these invokes; the CTR-06
-    // orb↔overlay wire is attached to the window at creation.
-    registerSolWindowHandlers(ipcMain, () => createSolBrowserWindow(ipcMain), isMainRendererSender)
+    // The SOL window, tray and hotkeys (SOLUSDEV-252 S3); the window is the
+    // CTR-06 host — the orb↔overlay wire is attached to it at creation.
+    startSol()
 
     // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
     // Supabase authorize URL, then hands it back for the system-browser round-trip.
@@ -369,6 +628,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('bridge:token', (event, token: unknown) => {
       if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
         sendAccessToken(token)
+        hardwareSources?.setToken(token)
         if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
       }
     })
@@ -379,6 +639,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('bridge:project', (event, projectId: unknown) => {
       if (isMainRendererSender(event) && (typeof projectId === 'string' || projectId === null)) {
         setCompanionProject(projectId)
+        hardwareSources?.setProject(projectId)
       }
     })
     // BYO-license capture (SOLUSDEV-102 / MCP-05): relay license credentials
@@ -406,6 +667,10 @@ if (!app.requestSingleInstanceLock()) {
   // stop (SIGTERM → 3 s grace → SIGKILL), then resume it.
   let companionStopped = false
   app.on('before-quit', (event) => {
+    hotkeys?.stop()
+    hotkeys = null
+    solTray?.destroy()
+    solTray = null
     if (companionStopped) return
     companionStopped = true
     event.preventDefault()

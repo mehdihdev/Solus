@@ -8,7 +8,8 @@ import pytest
 from conftest import create_project, create_team, me
 from httpx import AsyncClient
 from solus_api.core.errors import APIError
-from solus_api.hardware.config import FieldProvenance, LifecycleState
+from solus_api.hardware.config import EntityHardwareConfig, FieldProvenance, LifecycleState
+from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import (
     CONFIG_NODE_KIND,
     PART_KIND,
@@ -17,6 +18,7 @@ from solus_api.hardware.store import (
     ensure_config,
     promote,
     put_config,
+    read_entity_config,
     robot_root,
 )
 from solus_api.models import GraphEdge, GraphEntity, SolusEntry, SolusEntryKind, SolusSection
@@ -55,7 +57,8 @@ async def test_ensure_config_creates_one_entry_and_references_it_from_the_robot(
     assert again.id == entry.id
     assert entry.kind is SolusEntryKind.CONFIG and entry.section is SolusSection.HARDWARE
     assert config.robot_entity_id == robot_id and config.parts == {}
-    assert config_of(entry) == config
+    assert isinstance(config_of(entry), EntityHardwareConfig)
+    assert await resolve_runtime_config(db, project_id, robot_id) == config
     refreshed = await db.get(GraphEntity, robot_id)
     assert refreshed is not None
     assert refreshed.attrs["hardware_config_ref"] == str(entry.id)
@@ -129,9 +132,10 @@ async def test_create_part_lands_under_the_category_and_in_the_config(
         )
     )
     assert edge is not None and edge.origin == "manual" and edge.source_id is None
-    config = config_of(entry)
-    assert config.parts[str(part.id)].lifecycle is LifecycleState.PLANNED
-    assert config.provenance_of(f"parts.{part.id}.lifecycle").by is FieldProvenance.USER
+    _, config = await read_entity_config(db, project_id, part.id)
+    assert config is not None and config.component is not None
+    assert config.component.lifecycle is LifecycleState.PLANNED
+    assert config.provenance_of("component.lifecycle").by is FieldProvenance.USER
 
 
 async def test_create_part_refuses_an_unknown_category(

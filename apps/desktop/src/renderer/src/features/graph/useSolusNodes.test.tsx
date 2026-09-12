@@ -5,6 +5,7 @@ import * as resources from '../../lib/api/resources'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useShellStore } from '../workspace/shellStore'
+import { useFocusStore } from '../workspace/focusStore'
 import { useSolChatStore } from '../sol/solChatStore'
 import * as chat from '../sol/solChatStore'
 import { useSolusNodes } from './useSolusNodes'
@@ -20,7 +21,8 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     addSolusEntry: vi.fn(),
     updateSolusEntry: vi.fn(),
     deleteSolusEntry: vi.fn(),
-    uploadArtifact: vi.fn()
+    uploadArtifact: vi.fn(),
+    getGraphNeighborhood: vi.fn()
   }
 })
 
@@ -56,6 +58,7 @@ const graphChanged = vi.fn()
 function SolusNodesHarness(): React.JSX.Element {
   const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
   const nodes = useSolusNodes(projectId, graphChanged)
+  const focusedId = useFocusStore((s) => s.focusedEntityId)
   const entities: resources.Entity[] = resources.SOLUS_SECTIONS.flatMap((section) => [
     {
       id: `section-${section}`,
@@ -81,6 +84,7 @@ function SolusNodesHarness(): React.JSX.Element {
           {nodes.renderContent(entity)}
         </article>
       ))}
+      <aside>{entities.filter((entity) => entity.id === focusedId).map(nodes.renderSidebar)}</aside>
       {nodes.overlays}
     </>
   )
@@ -94,8 +98,14 @@ beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
   useShellStore.getState().reset()
+  useFocusStore.getState().reset()
   useSolChatStore.setState({ sessions: {} })
   vi.mocked(resources.getSolus).mockResolvedValue(config())
+  vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+    entities: [],
+    edges: [],
+    truncated: false
+  })
 })
 
 describe('pure helpers', () => {
@@ -228,7 +238,7 @@ describe('SolusNodesHarness — type and import', () => {
 describe('SolusNodesHarness — SOL and editing', () => {
   it('Ask SOL sends a turn through the chat store and reports what was filed', async () => {
     link()
-    vi.mocked(chat.sendMessage).mockResolvedValue(undefined)
+    vi.mocked(chat.sendMessage).mockResolvedValue(true)
     render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Documentation'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Ask SOL to find…' }))
@@ -259,7 +269,7 @@ describe('SolusNodesHarness — SOL and editing', () => {
 
   it('Ask SOL says so when SOL filed nothing', async () => {
     link()
-    vi.mocked(chat.sendMessage).mockResolvedValue(undefined)
+    vi.mocked(chat.sendMessage).mockResolvedValue(true)
     render(<SolusNodesHarness />)
     fireEvent.contextMenu(await screen.findByText('Documentation'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Ask SOL to find…' }))
@@ -302,6 +312,9 @@ describe('SolusNodesHarness — deletion', () => {
     )
     fireEvent.contextMenu(await screen.findByText('Spec: 48 V bus'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    // The menu's Delete focuses the entry and arms the sidebar's confirm step — no modal.
+    expect(useFocusStore.getState().focusedEntityId).toBe('e1-node')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(resources.deleteSolusEntry).not.toHaveBeenCalled()
     await userEvent.click(screen.getByRole('button', { name: 'Delete note' }))
     await waitFor(() =>
@@ -330,8 +343,8 @@ describe('SolusNodesHarness — deletion', () => {
     fireEvent.contextMenu(await screen.findByText('rules.pdf'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     expect(vi.mocked(resources.deleteSolusEntry)).not.toHaveBeenCalled()
-    expect(screen.getByText(/Permanently delete/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /Delete file/ }))
+    expect(screen.getByText(/stored bytes go with it/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Delete file' }))
     await waitFor(() =>
       expect(vi.mocked(resources.deleteSolusEntry)).toHaveBeenCalledWith('p1', 'e2')
     )
@@ -419,4 +432,29 @@ describe('pending file import scope', () => {
       useAuthStore.setState(previousAuth)
     }
   )
+})
+
+it('offers deletion of a CODE config record without a text editor or environment removal', async () => {
+  link()
+  const environment = entry({
+    section: 'code',
+    kind: 'config',
+    text: 'perception',
+    payload: {
+      type: 'venv',
+      name: 'perception',
+      packages: [],
+      provenance: 'detected',
+      detected_on: null
+    }
+  })
+  vi.mocked(resources.getSolus).mockResolvedValue({
+    entity_id: 'solus-1',
+    sections: { ...emptySections(), code: [environment] }
+  })
+  render(<SolusNodesHarness />)
+  fireEvent.contextMenu(await screen.findByText('perception'))
+  expect(screen.queryByText('Edit')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByText('Delete'))
+  expect(screen.getByText(/The environment remains on your computer/)).toBeInTheDocument()
 })

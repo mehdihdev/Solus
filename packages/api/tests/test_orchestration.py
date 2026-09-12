@@ -1,13 +1,17 @@
 """MO-04 classify endpoint: preview-doesn't-lie, viability options, no side effects."""
 
+import json
+import re
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
 from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.models import CreditLedger, CreditTxnType
+from solus_api.orchestration import SOL_REASONER_NAME, bump_complexity
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
-from solus_api.orchestration.gateway import complete
+from solus_api.orchestration.gateway import complete, default_orchestration_config
+from solus_api.orchestration.router import route
 from solus_api.orchestration.type_estimator import AttachmentHint
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +26,7 @@ class MockAdapter:
         max_tokens: int,
         images: object = None,
         conversation: object = None,
+        **_: Any,
     ) -> Any:
         yield "ok"
         from solus_api.orchestration.providers import Usage
@@ -50,8 +55,9 @@ async def test_classify_returns_the_routing_decision(
     data = resp.json()["data"]
     assert data["complexity"] == "hard"  # two diagnostic hits (MO-02 fixture behavior)
     assert data["type"] == "general"
-    assert data["model"]["name"]
-    assert data["model"]["provider"]
+    assert data["reasoner"] == {"name": SOL_REASONER_NAME, "effort": "deep"}
+    assert "model" not in data
+    assert all("model" not in o for axis in data["options"].values() for o in axis)
     assert data["source"] == {"complexity": "estimator", "type": "estimator"}
     assert data["cost_tier"] in {"low", "standard", "premium"}
     assert isinstance(data["tokens_estimate"], int)
@@ -108,8 +114,9 @@ async def test_preview_does_not_lie(
         ),
         adapters=_mock_registry(),
     )
-    assert preview["model"]["name"] == result.model.model_name
-    assert preview["model"]["provider"] == result.model.provider
+    # S1: the preview names the PRODUCT reasoner, never a model; (complexity,
+    # type) fully determine the model via the same deterministic route().
+    assert preview["reasoner"]["name"] == SOL_REASONER_NAME
     assert preview["complexity"] == result.model.complexity.value
     assert preview["type"] == result.model.route_type.value
 
@@ -167,25 +174,81 @@ async def test_classify_marks_nonviable_downgrades_with_reason(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     """The tiny-downgrade-message contract: an option whose model can't hold the
-    request is viable=false with a short factual reason."""
+    request is viable=false with a short factual reason. Catalog-agnostic: the
+    attachment is sized just past the SMALLEST general-type window."""
+    config = default_orchestration_config()
+    windows = {
+        tier: route("", tier, RouteType.GENERAL, config=config).context_window
+        for tier in Complexity
+    }
+    smallest = min(windows.values())
+    if smallest == max(windows.values()):
+        pytest.skip("every tier shares one window — nothing can be non-viable")
     resp = await client.post(
         "/api/v1/orchestration/classify",
         json={
-            # 14 words -> STANDARD; explicit GENERAL type; 250K attached tokens.
             "query": "please summarize the attached build output and list the "
             "failing steps in order now",
             "type": "general",
-            "attachments": [{"kind": "file", "tokens": 250_000}],
+            "attachments": [{"kind": "file", "tokens": smallest + 1}],
         },
         headers=alice_headers,
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
-    assert data["viable"] is True  # standard × general -> 1M-window model fits
+    assert data["viable"] is True  # system-routed: escalates to a tier that fits
     by_value = {o["value"]: o for o in data["options"]["complexities"]}
-    trivial = by_value["trivial"]  # 200K-window model cannot hold 250K tokens
-    assert trivial["viable"] is False
-    assert trivial["reason"] is not None
-    assert "Too many tokens for this tier" in trivial["reason"]
-    assert by_value["standard"]["viable"] is True
-    assert by_value["hard"]["viable"] is True
+    for tier, window in windows.items():
+        option = by_value[tier.value]
+        if window == smallest:
+            assert option["viable"] is False
+            assert option["reason"] is not None
+            assert "Too many tokens for this tier" in option["reason"]
+        else:
+            assert option["viable"] is True
+
+
+_MODEL_NAME = re.compile(r"(claude|gemini)-[\w.-]*\d|gpt-\d")
+
+
+async def test_classify_never_leaks_a_model_name(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """S1-W3: model identity lives ONLY in models.yaml — the preview shows the
+    product reasoner + an effort label, at every depth of the JSON."""
+    resp = await client.post(
+        "/api/v1/orchestration/classify",
+        json={"query": "why is my SLAM drifting when the robot turns"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert _MODEL_NAME.search(json.dumps(resp.json())) is None
+
+
+def test_bump_complexity_is_one_tier_and_capped() -> None:
+    assert bump_complexity(Complexity.TRIVIAL) is Complexity.STANDARD
+    assert bump_complexity(Complexity.STANDARD) is Complexity.HARD
+    assert bump_complexity(Complexity.HARD) is Complexity.HARD
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"query": "hi"}, "standard"),  # estimator TRIVIAL -> bumped one tier
+        ({"query": "hi", "complexity": "trivial"}, "standard"),  # explicit pick bumped
+        ({"query": "why is my SLAM drifting when the robot turns"}, "hard"),  # HARD stays
+    ],
+)
+async def test_think_harder_bumps_the_preview_one_tier(
+    client: AsyncClient, alice_headers: dict[str, str], payload: dict[str, Any], expected: str
+) -> None:
+    resp = await client.post(
+        "/api/v1/orchestration/classify",
+        json={**payload, "think_harder": True},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["complexity"] == expected
+    assert data["source"]["complexity"] == "explicit"
+    assert data["reasoner"]["effort"] == {"standard": "standard", "hard": "deep"}[expected]

@@ -1,43 +1,40 @@
 // SOL screen (SOLUSDEV-233 redesign): three columns — the caller's saved chats,
-// the chat column (the same OrbChat surface the orb panel uses, driven by ONE
+// the chat column (the same SolChat surface the SOL window uses, driven by ONE
 // shared chat instance), and the CONTEXT IN USE / SOL USAGE panel. The header
-// keeps SOL's visual identity, the universal Guide/Expert mode (ADR-016, now
-// persisted to the server so the next turn's prompt actually follows it), and
+// keeps the SOL wordmark, the window opener, and
 // a grounded line driven by the project's REAL connected-source count
 // (SOLUSDEV-152 charter: never a fabricated number).
 import { useEffect, useState } from 'react'
+import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
-import { Segmented } from '../../components/ui/Segmented'
-import { SolOrb } from '../../components/ui/SolOrb'
-import { getProject, updateSolMode } from '../../lib/api/resources'
-import { useSettingsStore, type SolMode } from '../../store/settingsStore'
+import { getProject } from '../../lib/api/resources'
+import { getDesktopSolBridge } from '../../lib/desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 import { ChatsSidebar } from './ChatsSidebar'
 import { ContextPanel } from './ContextPanel'
-import { OrbChat } from './OrbChat'
+import { SolChat } from './SolChat'
 import { UsagePanel } from './UsagePanel'
-import { selectOrbPulse, useOrbStore } from './orbStore'
 import { useSolChat } from './useSolChat'
 
-/** The project's real connected-source count, or null while unknown/offline. */
+/** The project's real connected-source count, or null while unknown/offline.
+ *  Keyed by project and derived, so a switch reads null until ITS count lands. */
 function useGroundedSources(projectId: string | null): number | null {
   const fetchEnabled = useWorkspaceFetchEnabled()
-  const [count, setCount] = useState<number | null>(null)
+  const [loaded, setLoaded] = useState<{ projectId: string; count: number } | null>(null)
   useEffect(() => {
-    setCount(null)
     if (!projectId || !fetchEnabled) return
     let stale = false
     getProject(projectId)
       .then((detail) => {
-        if (!stale) setCount(detail.sources.length)
+        if (!stale) setLoaded({ projectId, count: detail.sources.length })
       })
       .catch(() => undefined)
     return () => {
       stale = true
     }
   }, [projectId, fetchEnabled])
-  return count
+  return fetchEnabled && loaded?.projectId === projectId ? loaded.count : null
 }
 
 export function SolScreen(): React.JSX.Element {
@@ -56,7 +53,7 @@ export function SolScreen(): React.JSX.Element {
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <SolHeader projectName={project?.name ?? null} sourceCount={sourceCount} />
-        <OrbChat projectId={projectId} layout="page" chat={chat} />
+        <SolChat projectId={projectId} layout="page" chat={chat} />
       </div>
       <div
         style={{
@@ -81,15 +78,9 @@ function SolHeader({
   projectName: string | null
   sourceCount: number | null
 }): React.JSX.Element {
-  const pulse = useOrbStore(selectOrbPulse)
-  const solMode = useSettingsStore((s) => s.solMode)
-  const changeMode = (mode: SolMode): void => {
-    const previous = useSettingsStore.getState().solMode
-    useSettingsStore.getState().setSolMode(mode)
-    // ADR-016: the server's stored mode is what the next turn's prompt reads —
-    // persist, and revert the optimistic flip if the PATCH fails.
-    updateSolMode(mode).catch(() => useSettingsStore.getState().setSolMode(previous))
-  }
+  // SOLUSDEV-252 S3 (wireflow §F): the summon-free way into the SOL window —
+  // the path that still works where hotkeys cannot (Wayland). Electron only.
+  const solBridge = getDesktopSolBridge()
   const grounded =
     sourceCount !== null && sourceCount > 0
       ? ` · GROUNDED IN ${sourceCount} CONNECTION${sourceCount === 1 ? '' : 'S'}`
@@ -107,7 +98,6 @@ function SolHeader({
         boxSizing: 'border-box'
       }}
     >
-      <SolOrb size={48} pulse={pulse} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 600 }}>SOL</div>
         <Mono size={9.5} color="var(--mut)">
@@ -115,17 +105,11 @@ function SolHeader({
           {grounded}
         </Mono>
       </div>
-      <div style={{ textAlign: 'right' }}>
-        <Segmented
-          options={['Guide', 'Expert']}
-          value={solMode}
-          onChange={changeMode}
-          ariaLabel="SOL mode"
-        />
-        <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 5 }}>
-          {solMode === 'Guide' ? 'explains and teaches' : 'terse, direct'}
-        </div>
-      </div>
+      {solBridge && (
+        <Button kind="ghost" size="sm" onClick={() => void solBridge.open()}>
+          Open SOL window
+        </Button>
+      )}
     </div>
   )
 }

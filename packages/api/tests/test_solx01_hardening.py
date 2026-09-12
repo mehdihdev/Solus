@@ -324,3 +324,33 @@ def test_the_app_wires_a_redis_client_for_the_frequency_cap() -> None:
         Settings(_env_file=None, supabase_jwt_secret="x" * 32, redis_url=None)  # type: ignore[call-arg]
     )
     assert getattr(without.state, "redis", None) is None
+
+
+def test_a_provider_rate_limit_is_not_reported_as_an_internal_failure() -> None:
+    """A 10k-TPM window is the provider's answer, not a Solus crash. Reported as
+    `internal` it reads as an outage, and the person retries the same instant
+    (SOLUSDEV-252, live: "Please try again in 39.456s")."""
+    import json
+    import uuid
+
+    from solus_api.orchestration.providers import ProviderTransientError
+    from solus_api.routers.sol import _turn_failure_sse
+
+    frame = _turn_failure_sse(
+        ProviderTransientError("openai/gpt-5.6-sol is rate-limiting"), uuid.uuid4()
+    )
+    payload = json.loads(frame.split("data: ", 1)[1].strip())
+    assert payload["code"] == "provider_unavailable"
+    # No model name, no org id, no provider wording from the upstream message (§7).
+    assert "gpt" not in frame and "openai" not in frame.lower()
+
+
+def test_an_unexpected_error_is_still_masked_as_internal() -> None:
+    import json
+    import uuid
+
+    from solus_api.routers.sol import _turn_failure_sse
+
+    frame = _turn_failure_sse(RuntimeError("secret detail"), uuid.uuid4())
+    payload = json.loads(frame.split("data: ", 1)[1].strip())
+    assert payload["code"] == "internal" and "secret detail" not in frame

@@ -10,6 +10,7 @@ this loop never needs to know what an attempt is made of.
 from __future__ import annotations
 
 import logging
+import random
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from solus_api.orchestration.config import LimitsConfig
 
 logger = logging.getLogger("solus.orchestration.retry")
+
+# Bound interactive waiting; longer provider deadlines defer instead of retrying early.
+MAX_RETRY_WAIT_SECONDS = 30.0
 
 
 class CircuitOpenError(ProviderTransientError):
@@ -65,8 +69,24 @@ class CircuitBreaker:
         self._window = failure_window_seconds
         self._clock = clock
         self._states: dict[str, _BreakerState] = {}
+        self._retry_deadlines: dict[str, float] = {}
 
-    def check(self, key: str) -> None:
+    def defer(self, key: str, delay: float) -> float:
+        deadline = max(self._retry_deadlines.get(key, 0.0), self._clock() + delay)
+        self._retry_deadlines[key] = deadline
+        return deadline
+
+    def remaining_delay(self, key: str) -> float:
+        return max(0.0, self._retry_deadlines.get(key, 0.0) - self._clock())
+
+    def check(self, key: str, *, own_deadline: float | None = None) -> None:
+        deadline = self._retry_deadlines.get(key, 0.0)
+        remaining = self.remaining_delay(key)
+        if remaining > 0 and deadline != own_deadline:
+            raise CircuitOpenError(
+                f"provider '{key}' cooling down; retry later",
+                retry_after_seconds=remaining,
+            )
         state = self._states.get(key)
         if state is None or state.consecutive_failures < self._threshold:
             return
@@ -80,7 +100,8 @@ class CircuitBreaker:
             return
         raise CircuitOpenError(
             f"provider '{key}' circuit open after {state.consecutive_failures} "
-            f"transient failures; failing fast for {self._cooldown - elapsed:.1f}s more"
+            f"transient failures; failing fast for {self._cooldown - elapsed:.1f}s more",
+            retry_after_seconds=max(remaining, self._cooldown - elapsed),
         )
 
     def record_success(self, key: str) -> None:
@@ -108,6 +129,7 @@ class CircuitBreaker:
     def reset(self) -> None:
         """Test hygiene seam (conftest) — production never calls this."""
         self._states.clear()
+        self._retry_deadlines.clear()
 
 
 #: The process-wide default breaker every provider call path shares: one
@@ -126,7 +148,7 @@ async def retry_transient[T](
     breaker_key: str | None = None,
 ) -> T:
     """Run `attempt` under the MO-03 transient policy: exponential backoff
-    (`retry_backoff_seconds * 2^(n-1)`), at most `retry_max_attempts` total
+    with jitter, honoring provider minimum waits; at most `retry_max_attempts` total
     tries, only `ProviderTransientError` retried — everything else propagates
     untouched. `label` is "provider/model" for messages; `sleep` is the
     caller's patchable seam so existing tests keep recording delays.
@@ -138,20 +160,35 @@ async def retry_transient[T](
     callers' postures are unchanged."""
     active_breaker = breaker if breaker is not None else DEFAULT_BREAKER
     key = breaker_key if breaker_key is not None else label
-    active_breaker.check(key)
     attempt_number = 1
+    own_deadline: float | None = None
     while True:
+        active_breaker.check(key, own_deadline=own_deadline)
         try:
             result = await attempt()
         except ProviderTransientError as exc:
             active_breaker.record_failure(key)
+            base = min(
+                MAX_RETRY_WAIT_SECONDS, limits.retry_backoff_seconds * (2 ** (attempt_number - 1))
+            )
+            delay = exc.retry_after_seconds
+            if delay is None:
+                delay = min(MAX_RETRY_WAIT_SECONDS, base + random.uniform(0, base))  # noqa: S311 — scheduling jitter
+            own_deadline = active_breaker.defer(key, delay)
+            delay = max(delay, active_breaker.remaining_delay(key))
             if attempt_number >= limits.retry_max_attempts:
                 raise ProviderTransientError(
                     f"{label} is rate-limiting or overloaded; retries exhausted "
-                    f"after {attempt_number} attempts"
+                    f"after {attempt_number} attempts",
+                    retry_after_seconds=delay,
                 ) from exc
-            active_breaker.check(key)  # threshold crossed mid-loop → fail fast now
-            delay = limits.retry_backoff_seconds * (2 ** (attempt_number - 1))
+            active_breaker.check(key, own_deadline=own_deadline)
+            if delay > MAX_RETRY_WAIT_SECONDS:
+                raise ProviderTransientError(
+                    f"{label} requested a longer cooldown; retry later",
+                    retry_after_seconds=delay,
+                ) from exc
+
             logger.info(
                 "transient provider error; retrying call_id=%s label=%s attempt=%d/%d delay=%.2fs",
                 call_id,

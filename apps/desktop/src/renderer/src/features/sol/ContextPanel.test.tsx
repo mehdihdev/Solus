@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as resources from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { ContextPanel, citationLabel } from './ContextPanel'
+import { ContextPanel } from './ContextPanel'
+import { citationLabel } from './citationLabel'
 import type { ContextUsedInfo } from './solStream'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
@@ -61,6 +62,21 @@ describe('ContextPanel', () => {
     expect(screen.getByText('graph context ×1')).toBeInTheDocument()
     expect(screen.getByText(/1 telemetry\/error section/)).toBeInTheDocument()
     expect(screen.getByText(/truncated to budget/)).toBeInTheDocument()
+  })
+
+  it('lists the screen read as its own tentative line with its token count (SOLUSDEV-252)', () => {
+    render(
+      <ContextPanel
+        contextUsed={{
+          ...CONTEXT,
+          sections: [...CONTEXT.sections, { kind: 'screen', citation: null, tokens: 412 }]
+        }}
+      />
+    )
+    expect(screen.getByText('Screen (tentative read)')).toBeInTheDocument()
+    expect(screen.getByText('412 tokens')).toBeInTheDocument()
+    // Not folded into the telemetry/error footnote count.
+    expect(screen.getByText(/1 telemetry\/error section/)).toBeInTheDocument()
   })
 
   it('shows an honest empty state before the first turn', () => {

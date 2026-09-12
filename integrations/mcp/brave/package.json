@@ -1,0 +1,13 @@
+{
+  "name": "solus-mcp-brave-fork-deps",
+  "private": true,
+  "description": "Solus-authored dependency manifest for the vendored @brave/brave-search-mcp-server fork (integrations/mcp/brave). Runtime dependencies copied VERBATIM from upstream/package.json; devDependencies deliberately omitted. `npm ci --omit=dev --ignore-scripts` here materialises node_modules/ that upstream/dist resolves by walking up (Node module resolution).",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "commander": "14.0.3",
+    "dotenv": "17.3.1",
+    "express": "5.2.1",
+    "zod": "4.3.6"
+  }
+}

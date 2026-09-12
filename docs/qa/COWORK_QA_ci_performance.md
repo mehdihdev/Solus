@@ -1,5 +1,9 @@
 # Cowork QA — CI performance
 
+Updated 2026-09-12: the user requested removal of `test:python`. Python tests
+are now local verification; Python lint/type checks, Node checks and Gitleaks
+remain in CI. Historical timings in the CI README are not current job claims.
+
 ## Setup
 
 - [ ] Use GitLab project `solus9903722/Solus`, with the reviewed CI commits applied
@@ -16,23 +20,24 @@
 1. [ ] Run GitLab CI Lint using the command in the CI README. Expect a valid main
        simulation containing exactly `build:api-image` and `deploy:staging`.
 2. [ ] Open the human-pushed CI MR pipeline. A `.gitlab-ci.yml` change must select
-       Python and Node lint/typecheck/test jobs plus the secret scan; no deployment.
+       Python lint/typecheck, Node lint/typecheck/test, and the secret scan; no
+       `test:python` job or deployment.
 3. [ ] Inspect Python lint: expect the lockfile-pinned Ruff image, no workspace
        dependency installation, and the existing lint check passing.
-4. [ ] Inspect Python tests: Git and libGL install; the CAD availability assertion
-       succeeds; pytest runs serially without “bringing up nodes”; the suite passes.
-       Expect a Tests/JUnit report and a list of slow tests even when a test fails.
-5. [ ] Compare the Python test execution and total pipeline time against the
-       27-minute serial and 48-minute two-worker baselines. Separate queue wait,
-       installation, execution and cache time; do not infer improvement from queue
-       time alone.
+4. [ ] Run Python tests locally using the CI README setup and command. Ensure
+       Git, pgvector and the OCCT/OpenGL runtime are available. Expect a passing
+       suite and local slow-test timings. No Python JUnit artifact is expected
+       from the pipeline after removal of the job.
+5. [ ] Confirm the pipeline no longer queues a Python test job. Record remaining
+       job and queue durations separately; the removed job's historical timing
+       is not evidence of faster Python tests.
 6. [ ] Inspect caches on a second run: Node lint and Python typecheck upload;
        other jobs restore only. A missing cache must reinstall and still pass.
 7. [ ] Confirm the secret scan covers the MR commit range, including deleted
        content. A change to `.gitleaks.toml` or `.gitleaksignore` must trigger a full
        history scan. No real credentials are needed for testing.
 8. [ ] Run `uv run --locked --all-packages pytest infrastructure/ci/tests -q` locally.
-       Expect 60 passing checks, including merge-only content, discarded policy edits,
+       Expect passing checks, including merge-only content, discarded policy edits,
        invalid revisions and scanner exit propagation.
 
 ## Selection and failure paths

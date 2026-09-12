@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -29,17 +29,22 @@ from solus_api.connectors.registry import (
     build_registry,
 )
 from solus_api.connectors.secrets import build_secret_store
+from solus_api.core.body_limits import SolMessageBodyLimit
 from solus_api.core.config import Settings
 from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.core.errors import register_error_handlers
+from solus_api.core.logging import configure_logging
 from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
+from solus_api.core.startup_checks import report_provider_refs
 from solus_api.corpus import router as corpus_router
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.hardware import hardware_router, library_router
+from solus_api.hardware.connections import HardwareConnections
+from solus_api.hardware.device_watch import DeviceWatcher, watcher_wanted
 from solus_api.livebench.bench_router import BenchEventRing
 from solus_api.livebench.bench_router import router as bench_router
 from solus_api.livebench.sessions import SessionManager, load_local
@@ -222,16 +227,29 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
 
     @asynccontextmanager
     async def lifespan(served: FastAPI) -> AsyncIterator[None]:
+        configure_logging()
         if resolved_settings.auto_create_tables:
             await create_all_tables(resolved_engine)
+        # SOLUSDEV-252: name the missing provider refs at boot (never fatal).
+        try:
+            await report_provider_refs(served.state.secret_store, resolved_settings)
+        except Exception:
+            logging.getLogger("solus.main").exception("provider ref check failed")
         # SOLUSDEV-167: begin relaying cross-process graph frames. No-op without
         # Redis, in which case the hub still fans out within this process.
-        await served.state.graph_hub.start()
-        yield
-        await served.state.graph_hub.stop()
-        # SOLUSDEV-72: close every live bench session — pump tasks, gz
-        # subprocesses, and open serial ports must not outlive the server.
-        await served.state.bench_sessions.aclose_all()
+        async with AsyncExitStack() as cleanup:
+            # Register before startup so partial startup and body failures also
+            # release resources. ExitStack still closes later resources if one fails.
+            cleanup.push_async_callback(served.state.graph_hub.stop)
+            cleanup.push_async_callback(served.state.bench_sessions.aclose_all)
+            cleanup.push_async_callback(served.state.hardware_connections.aclose)
+            if served.state.device_watch is not None:
+                cleanup.push_async_callback(served.state.device_watch.stop)
+            await served.state.graph_hub.start()
+            await served.state.hardware_connections.startup()
+            if served.state.device_watch is not None:
+                await served.state.device_watch.start()
+            yield
 
     app = FastAPI(
         title="Solus API",
@@ -334,6 +352,21 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # livebench it is None and every local source reports honestly unavailable.
     app.state.bench_sessions = SessionManager(app.state.telemetry_plumbing)
     app.state.bench_local = load_local()
+    app.state.hardware_connections = HardwareConnections(
+        sessions=app.state.sessionmaker,
+        manager=app.state.bench_sessions,
+        local=app.state.bench_local,
+        hub=app.state.graph_hub,
+    )
+    # SOLUSDEV-250: hot-detect — diff the machine's device list at ~1 Hz and push
+    # it to subscribed sessions on THIS process only (never Redis).
+    # A production API never watches its own host's ports for tenants, even if a future
+    # image ships livebench: the watcher exists only for the local runtime.
+    app.state.device_watch = (
+        DeviceWatcher(app.state.graph_hub, app.state.bench_local)
+        if watcher_wanted(resolved_settings.app_env, app.state.bench_local)
+        else None
+    )
     # SYS-04 (SOLUSDEV-138): SOL answers from the REAL W0-07 feeds — graph,
     # telemetry buffer, SYS-02 retrieval — never from canned fixtures. Sits after
     # the telemetry plumbing it wraps. Embeds at this seam are unmetered by
@@ -364,6 +397,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
 
     register_error_handlers(app)
+    # SOLUSDEV-252 review M1: innermost, so a 411/413 still carries CORS headers
+    # and counts against the write budget like any other rejected write.
+    app.add_middleware(SolMessageBodyLimit)
     # Starlette wraps each add_middleware around the previous, so the LAST one
     # added is outermost. The limiter goes first so CORS ends up outside it:
     # preflight OPTIONS are answered by CORS, never counted, and a 429 still
@@ -407,6 +443,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(connections.router)
     app.include_router(billing.router)
     app.include_router(billing.actions_router)
+    from solus_api.routers import source_revisions
+
+    app.include_router(source_revisions.router)
     app.include_router(sources.router)
     app.include_router(local_folder.router)
     app.include_router(code_environment.router)

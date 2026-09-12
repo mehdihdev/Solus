@@ -127,3 +127,81 @@ async def test_q_composes_with_the_other_filters(
         "Camera Bracket"
     }
     assert await _names(client, alice_headers, project, q="brack", type="cad_body") == set()
+
+
+async def test_code_paths_match_without_widening_scope_or_types(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    from solus_api.models import utcnow
+
+    project = await _project(client, alice_headers)
+    other = await _project(client, bob_headers)
+    entries = [
+        (project, "code_file", "src/main.py", {}, False),
+        (project, "code_file", "opaque", {"path": "tests/main.py"}, False),
+        (project, "code_module", "src/nested", {}, False),
+        (project, "part", "src/private", {"path": "src/private"}, False),
+        (project, "code_file", "src/deleted.py", {}, True),
+        (other, "code_file", "src/foreign.py", {}, False),
+    ]
+    for pid, kind, path, properties, deleted in entries:
+        db.add(
+            GraphEntity(
+                project_id=uuid.UUID(pid),
+                kind=kind,
+                domain=Domain.CODE,
+                name="main.py",
+                external_ref=path,
+                attrs=properties,
+                origin="connector",
+                deleted_at=utcnow() if deleted else None,
+            )
+        )
+    await db.commit()
+
+    async def refs(**params: str) -> set[str]:
+        response = await client.get(
+            f"/api/v1/projects/{project}/entities", headers=alice_headers, params=params
+        )
+        assert response.status_code == 200
+        return {row["source_key"] for row in response.json()["data"]}
+
+    assert await refs(q="SRC/") == {"src/main.py", "src/nested"}
+    assert await refs(q="tests/main") == {"opaque"}
+    assert await refs(q="src/", type="code_file") == {"src/main.py"}
+    assert await refs(q="src/", source_id=str(uuid.uuid4())) == set()
+    assert await refs(q="src/", domain="mechanical") == set()
+    assert await refs(q="main.py") == {"src/main.py", "opaque", "src/nested", "src/private"}
+    denied = await client.get(
+        f"/api/v1/projects/{other}/entities", headers=alice_headers, params={"q": "src/"}
+    )
+    assert denied.status_code == 404
+
+
+async def test_code_path_wildcards_are_literal(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    project = await _project(client, alice_headers)
+    paths = [r"src/100%/a_b\main.py", "src/100x/axb/main.py"]
+    for path in paths:
+        db.add(
+            GraphEntity(
+                project_id=uuid.UUID(project),
+                kind="code_file",
+                domain=Domain.CODE,
+                name="main.py",
+                external_ref=path,
+                attrs={"path": path},
+                origin="connector",
+            )
+        )
+    await db.commit()
+    for query in ["100%", "a_b", r"b\main"]:
+        response = await client.get(
+            f"/api/v1/projects/{project}/entities", headers=alice_headers, params={"q": query}
+        )
+        assert response.status_code == 200
+        assert [row["source_key"] for row in response.json()["data"]] == [paths[0]]

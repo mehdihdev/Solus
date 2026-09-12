@@ -3,9 +3,9 @@ import { ApiError } from '../../../lib/api/envelope.types'
 import {
   createPhysicalRobot,
   deletePhysicalRobot,
-  listRobotOrphans,
   renamePhysicalRobot
 } from '../../../lib/api/physicalRobots'
+import { listUnassignedParts } from '../../../lib/api/hardware'
 import type { Entity } from '../../../lib/api/resources'
 import { useAuthStore } from '../../../store/authStore'
 
@@ -112,14 +112,19 @@ export class RobotSession {
     this.publish({ loading: true, readError: null })
     try {
       // Fresh clients prevent an older identical GET from absorbing an invalidation.
-      const page = await listRobotOrphans(
+      const page = await listUnassignedParts(
         this.projectId,
         cursors.at(-1) ?? null,
         this.client(current)
       )
       if (!current() || sequence !== this.readSequence) return
       const next = verifyPage(page, this.projectId, cursors)
-      this.publish({ parts: page.data, next, cursors, loading: false })
+      this.publish({
+        parts: [...new Map(page.data.map((part) => [part.id, part])).values()],
+        next,
+        cursors,
+        loading: false
+      })
     } catch (error) {
       if (current() && sequence === this.readSequence)
         this.publish({ loading: false, readError: messageOf(error) })

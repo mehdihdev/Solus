@@ -3,9 +3,10 @@
 // callers can degrade gracefully instead of crashing.
 import type { OAuthBridge } from '../features/auth/githubOAuth'
 import type { ExtensionsBridge } from '../../../preload/index'
+import type { SolBridge } from '../../../preload/solBridge'
 import type { EngineeringPreferences } from '@solus/shared-types'
 
-export type { ExtensionsBridge }
+export type { ExtensionsBridge, SolBridge }
 
 /** Preload's `solus.bridge` namespace: relays the Supabase access token to the
  *  local companion (SOLUSDEV-154 / BRG-04). Null token means signout. */
@@ -65,6 +66,7 @@ interface SolusWindow {
     platform?: string
     extensions?: ExtensionsBridge
     hosted?: HostedBridge
+    sol?: SolBridge
   }
 }
 
@@ -104,4 +106,10 @@ export function getDesktopHostedBridge(): HostedBridge | null {
 export function getDesktopPreferencesBridge(): PreferencesBridge | null {
   const w = window as unknown as SolusWindow
   return w.solus?.preferences ?? null
+}
+
+/** The SOL window surface (SOLUSDEV-252 S3): action mode, sees-your-screen,
+ *  always-on-top, open, and the state/region pushes. Null outside Electron. */
+export function getDesktopSolBridge(): SolBridge | null {
+  return (window as unknown as SolusWindow).solus?.sol ?? null
 }

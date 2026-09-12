@@ -3,7 +3,9 @@ level is known; propose interrogates safely and asks when the repo matches twice
 creates the robot, its parts (external_ref = <device ref>/<address>), the config with
 provenance, and opens the session. Nothing is accepted that the body did not name."""
 
+import json
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -152,9 +154,11 @@ class _DetectLocal(FakeLocal):
 
 
 @pytest.fixture
-def detect_local(app: FastAPI) -> _DetectLocal:
+def detect_local(app: FastAPI, tmp_path: Path) -> _DetectLocal:
     fake = _DetectLocal()
     app.state.bench_local = fake
+    if hasattr(app.state, "hardware_connections"):
+        app.state.hardware_connections.local = fake
     return fake
 
 
@@ -236,7 +240,7 @@ async def test_propose_returns_the_proposal_and_records_an_event(
     assert len(events) == 1 and events[0].payload["rows"] == 2
 
 
-async def test_propose_passes_a_validated_repo_root_and_surfaces_disambiguation(
+async def test_propose_refuses_remote_paths_and_preserves_disambiguation(
     client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal, tmp_path: Any
 ) -> None:
     project_id, _ = await _detect_project(client, alice_headers)
@@ -246,10 +250,17 @@ async def test_propose_passes_a_validated_repo_root_and_surfaces_disambiguation(
         headers=alice_headers,
         json={"repo_root": str(tmp_path)},
     )
+    assert resp.status_code == 422, resp.text
+    assert detect_local.propose_calls == []
+    resp = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "propose"),
+        headers=alice_headers,
+        json={},
+    )
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     assert data["disambiguation"]["options"] == ["repo:cfg0", "repo:cfg1"]
-    assert detect_local.propose_calls[0]["repo_root"] == str(tmp_path)
+    assert detect_local.propose_calls[0]["repo_root"] is None
 
 
 async def test_propose_rejects_a_repo_root_that_is_not_a_directory(
@@ -284,6 +295,7 @@ async def test_confirm_creates_the_robot_parts_config_and_optionally_the_session
     alice_headers: dict[str, str],
     detect_local: _DetectLocal,
     db: AsyncSession,
+    app: FastAPI,
 ) -> None:
     project_id, _ = await _detect_project(client, alice_headers)
     resp = await client.post(
@@ -297,7 +309,9 @@ async def test_confirm_creates_the_robot_parts_config_and_optionally_the_session
     assert robot["type"] == "physical_robot" and robot["name"] == "Follower"
     assert robot["origin"] == "manual"
     assert len(data["part_ids"]) == 2
-    assert data["session_id"] is not None
+    assert data["session_id"] is None
+    assert robot["properties"]["connection"]["status"] == "connecting"
+    await app.state.hardware_connections.drain()
     assert detect_local.opened[0]["kind"] == "robot"
 
     parts = list(
@@ -329,7 +343,7 @@ async def test_confirm_creates_the_robot_parts_config_and_optionally_the_session
     )
     config = config_resp.json()["data"]["config"]
     assert config["identity"]["binding"] == "5B42134331"
-    assert config["identity"]["last_seen_path"] == "/dev/serial/by-id/usb-1a86-5B42134331"
+    assert config["identity"]["last_seen_path"] is None
     assert config["protocol"] == {
         "driver_id": "demo-bus",
         "params": {"baud": 1_000_000, "protocol_version": 0},
@@ -380,7 +394,9 @@ async def test_confirm_with_a_chosen_repo_config_imports_calibration_with_repo_p
     assert shoulder["calibration"]["mode"] == "degrees"
     assert shoulder["calibration"]["values"]["homing_offset"] == -2042
     assert shoulder["calibration"]["owner"] == "repo"
-    assert shoulder["calibration"]["source"] == "/cal/cfg1.json"
+    assert shoulder["calibration"]["source"] == "source:" + str(
+        uuid.uuid5(uuid.UUID(project_id), "/cal/cfg1.json")
+    )
     assert shoulder["telemetry"] == [{"name": "shoulder_pan.position", "unit": "deg"}]
     gripper = next(p for p in parts.values() if p["telemetry"][0]["name"] == "gripper.position")
     assert gripper["telemetry"] == [{"name": "gripper.position", "unit": "%"}]
@@ -716,3 +732,419 @@ async def test_detection_routes_are_tenant_scoped(
         json=_confirm_body(),
     )
     assert confirm.status_code == 403, confirm.text
+
+
+# ── SOLUSDEV-250 Phase 2: headline, tone, stream, identity basis on the wire ────
+
+
+def _wire_stream_proposal() -> dict[str, Any]:
+    proposal = _wire_proposal()
+    proposal.update(
+        {
+            "headline": "a board on USB",
+            "tone": "probably",
+            "stream": {
+                "framing": "csv",
+                "channel_count": 4,
+                "update_hz": 49.6,
+                "channel_names": ["motor_l", "motor_r", "dist", "batt"],
+                "declared_hz": 50.0,
+            },
+            "identity_basis": "port_position",
+        }
+    )
+    return proposal
+
+
+async def test_propose_carries_headline_tone_stream_and_identity_basis(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    detect_local.proposal = _wire_stream_proposal()
+    resp = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "propose"), headers=alice_headers, json={}
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["headline"] == "a board on USB" and data["tone"] == "probably"
+    assert data["identity_basis"] == "port_position"
+    assert data["stream"]["channel_names"] == ["motor_l", "motor_r", "dist", "batt"]
+    assert data["stream"]["update_hz"] == pytest.approx(49.6)
+    assert data["stream"]["declared_hz"] == pytest.approx(50.0)
+
+
+async def test_a_pre_phase_2_wire_still_validates_with_defaults(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    resp = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "propose"), headers=alice_headers, json={}
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["headline"] == "" and data["tone"] == "something"
+    assert data["stream"] is None and data["identity_basis"] == "serial"
+    listed = await client.get(_detect_url(project_id, "detected"), headers=alice_headers)
+    [device] = listed.json()["data"]
+    assert device["headline"] == "" and device["identity_basis"] == "serial"
+
+
+async def test_detected_carries_headline_and_identity_basis(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    detect_local.devices = [
+        {**_wire_device(), "headline": "something on USB", "identity_basis": "port_position"}
+    ]
+    resp = await client.get(_detect_url(project_id, "detected"), headers=alice_headers)
+    assert resp.status_code == 200, resp.text
+    [device] = resp.json()["data"]
+    assert device["headline"] == "something on USB"
+    assert device["identity_basis"] == "port_position"
+
+
+def test_stream_wire_is_bounded() -> None:
+    from pydantic import ValidationError
+    from solus_api.hardware.detect import ProposalOut, StreamOut
+
+    StreamOut.model_validate({"framing": "csv", "channel_count": 64, "update_hz": 0})
+    with pytest.raises(ValidationError):
+        StreamOut.model_validate({"framing": "csv", "channel_count": 65, "update_hz": 1})
+    with pytest.raises(ValidationError):
+        StreamOut.model_validate(
+            {"framing": "csv", "channel_count": 1, "update_hz": 1, "channel_names": ["x" * 129]}
+        )
+    with pytest.raises(ValidationError):
+        ProposalOut.model_validate({**_wire_stream_proposal(), "tone": "certainly"})
+
+
+# ── Phase 2 review fixes: a stalled runner, repo_root confinement, wire bounds ──
+
+
+async def test_a_stalled_runner_is_unavailable_not_a_hang(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from solus_api.core.errors import APIError
+    from solus_api.hardware import detect
+
+    class _Stalled(_DetectLocal):
+        def propose_device(
+            self, device_ref: str, *, repo_root: str | None = None, budget_s: float = 0.5
+        ) -> dict[str, Any] | None:
+            time.sleep(0.2)
+            return super().propose_device(device_ref, repo_root=repo_root, budget_s=budget_s)
+
+    monkeypatch.setattr(detect, "PROPOSE_TIMEOUT_S", 0.01)
+    with pytest.raises(APIError) as excinfo:
+        await detect.propose_via_local(_Stalled(), DEVICE_REF, repo_root=None, budget_s=0.5)
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.code == "source_unavailable"
+
+
+def _registry(path: Path, entries: dict[str, str]) -> Path:
+    path.write_text(
+        json.dumps({"schema_version": 1, "projects": {k: {"path": v} for k, v in entries.items()}})
+    )
+    return path
+
+
+async def test_linked_directory_is_not_private_file_authorization(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    app: FastAPI,
+    tmp_path: Path,
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    linked, other, elsewhere = tmp_path / "linked", tmp_path / "other", tmp_path / "elsewhere"
+    for folder in (linked / "sub", other, elsewhere):
+        folder.mkdir(parents=True)
+    _registry(tmp_path / "projects.json", {project_id: str(linked), str(uuid.uuid4()): str(other)})
+    url = _detect_url(project_id, "detected", DEVICE_REF, "propose")
+    for root in (linked, linked / "sub", elsewhere, other, tmp_path):
+        resp = await client.post(url, headers=alice_headers, json={"repo_root": str(root)})
+        assert resp.status_code == 422, resp.text
+        assert "file picker" in resp.json()["error"]["message"]
+    confirm = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "confirm"),
+        headers=alice_headers,
+        json=_confirm_body(repo_root=str(other)),
+    )
+    assert confirm.status_code == 422, confirm.text
+    assert detect_local.propose_calls == []
+
+
+async def test_a_corrupt_registry_refuses_every_repo_root_with_a_clear_message(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    app: FastAPI,
+    tmp_path: Path,
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    registry = tmp_path / "projects.json"
+    registry.write_text("{not json")
+    resp = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "propose"),
+        headers=alice_headers,
+        json={"repo_root": str(tmp_path)},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "file picker" in resp.json()["error"]["message"].lower()
+    assert detect_local.propose_calls == []
+
+
+async def test_without_a_registry_file_raw_directory_still_refused(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    app: FastAPI,
+    tmp_path: Path,
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    resp = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "propose"),
+        headers=alice_headers,
+        json={"repo_root": str(tmp_path)},
+    )
+    assert resp.status_code == 422, resp.text
+    assert detect_local.propose_calls == []
+
+
+async def test_an_over_long_summary_from_the_runner_is_refused(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    url = _detect_url(project_id, "detected", DEVICE_REF, "propose")
+    detect_local.proposal = {**_wire_proposal(), "summary": "s" * 1024}
+    resp = await client.post(url, headers=alice_headers, json={})
+    assert resp.status_code == 200, resp.text
+    detect_local.proposal = {**_wire_proposal(), "summary": "s" * 1025}
+    resp = await client.post(url, headers=alice_headers, json={})
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["error"]["code"] == "source_unavailable"
+
+
+def test_the_remaining_wire_bounds_hold() -> None:
+    from pydantic import ValidationError
+    from solus_api.hardware.detect import DetectedDeviceOut, ProposalOut, RepoMatchOut, StreamOut
+
+    match = _wire_proposal(repo_matches=1)["repo_matches"][0]
+    RepoMatchOut.model_validate({**match, "label": "l" * 256, "source": "s" * 1024})
+    for over in ({"label": "l" * 257}, {"source": "s" * 1025}, {"calibration_source": "c" * 1025}):
+        with pytest.raises(ValidationError):
+            RepoMatchOut.model_validate({**match, **over})
+    part = match["parts"][0]
+    with pytest.raises(ValidationError):
+        RepoMatchOut.model_validate(
+            {**match, "parts": [{**part, "calibration_source": "c" * 1025}]}
+        )
+    with pytest.raises(ValidationError):
+        StreamOut.model_validate({"framing": "f" * 33, "channel_count": 1, "update_hz": 1})
+    for over in ({"headline": "h" * 129}, {"calibration_source": "c" * 1025}):
+        with pytest.raises(ValidationError):
+            ProposalOut.model_validate({**_wire_proposal(), **over})
+    with pytest.raises(ValidationError):
+        DetectedDeviceOut.model_validate({**_wire_device(), "headline": "h" * 129})
+
+
+# ── SOLUSDEV-250 Phase 6: confirm reuses the preceding proposal (≤ 60 s) ─────────
+
+
+async def _propose_then_confirm(
+    client: AsyncClient,
+    headers: dict[str, str],
+    project_id: str,
+    *,
+    confirm_body: dict[str, Any] | None = None,
+    between: Any = None,
+) -> Any:
+    resp = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "propose"), headers=headers, json={}
+    )
+    assert resp.status_code == 200, resp.text
+    if between is not None:
+        between()
+    return await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "confirm"),
+        headers=headers,
+        json=confirm_body or _confirm_body(),
+    )
+
+
+async def test_confirm_reuses_the_proposal_the_propose_route_just_built(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    resp = await _propose_then_confirm(client, alice_headers, project_id)
+    assert resp.status_code == 201, resp.text
+    assert len(detect_local.propose_calls) == 1  # the runner was not asked twice
+    assert len(resp.json()["data"]["part_ids"]) == 2
+
+
+async def test_cached_proposal_cannot_confirm_a_disconnected_device(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    db: AsyncSession,
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    response = await _propose_then_confirm(
+        client, alice_headers, project_id, between=lambda: detect_local.devices.clear()
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "device_not_found"
+    assert len(detect_local.propose_calls) == 1
+    assert (
+        await db.scalar(
+            select(GraphEntity.id).where(
+                GraphEntity.project_id == uuid.UUID(project_id),
+                GraphEntity.kind == "physical_robot",
+            )
+        )
+        is None
+    )
+
+
+async def test_confirm_with_a_row_the_proposal_lacks_re_interrogates(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    body = _confirm_body(accepted=[{"row_id": f"{DEVICE_REF}/9", "function_name": "ghost"}])
+    resp = await _propose_then_confirm(client, alice_headers, project_id, confirm_body=body)
+    assert resp.status_code == 422, resp.text
+    assert len(detect_local.propose_calls) == 2
+
+
+async def test_a_proposal_older_than_the_ttl_is_re_interrogated(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from solus_api.hardware import proposal_cache
+
+    project_id, _ = await _detect_project(client, alice_headers)
+    now = proposal_cache.PROPOSALS.clock()
+
+    def _later() -> None:
+        monkeypatch.setattr(
+            proposal_cache.PROPOSALS, "clock", lambda: now + proposal_cache.TTL_S + 1
+        )
+
+    resp = await _propose_then_confirm(client, alice_headers, project_id, between=_later)
+    assert resp.status_code == 201, resp.text
+    assert len(detect_local.propose_calls) == 2
+
+
+async def test_a_reused_proposal_is_consumed_by_the_confirm(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    first = await _propose_then_confirm(client, alice_headers, project_id)
+    assert first.status_code == 201, first.text
+    second = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "confirm"),
+        headers=alice_headers,
+        json=_confirm_body(),
+    )
+    assert second.status_code == 409, second.text  # bound rows: the wire is asked again
+    assert len(detect_local.propose_calls) == 2
+
+
+async def test_a_proposal_never_crosses_projects(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    project_a, team_id = await _detect_project(client, alice_headers)
+    project_b = str((await create_project(client, alice_headers, team_id))["id"])
+    resp = await client.post(
+        _detect_url(project_a, "detected", DEVICE_REF, "propose"), headers=alice_headers, json={}
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        _detect_url(project_b, "detected", DEVICE_REF, "confirm"),
+        headers=alice_headers,
+        json=_confirm_body(),
+    )
+    assert resp.status_code == 201, resp.text
+    assert len(detect_local.propose_calls) == 2  # project B's confirm never saw A's entry
+
+
+async def test_a_reused_proposal_still_excludes_bound_configs(
+    client: AsyncClient, alice_headers: dict[str, str], detect_local: _DetectLocal
+) -> None:
+    """The second arm's proposal is cached BEFORE the first arm binds cfg0; its confirm
+    still runs `exclude_bound` against the bound set of the moment, not of the cache."""
+    project_id, _ = await _detect_project(client, alice_headers)
+    second_ref = "usb:5B42135040"
+    device, proposal = _second_device(second_ref)
+    detect_local.devices.append(device)
+    detect_local.proposals[second_ref] = proposal
+    detect_local.proposal = _wire_proposal(repo_matches=2)
+    proposed = await client.post(
+        _detect_url(project_id, "detected", second_ref, "propose"), headers=alice_headers, json={}
+    )
+    assert proposed.status_code == 200 and proposed.json()["data"]["disambiguation"] is not None
+    first = await client.post(
+        _detect_url(project_id, "detected", DEVICE_REF, "confirm"),
+        headers=alice_headers,
+        json=_confirm_body(repo_config_id="repo:cfg0"),
+    )
+    assert first.status_code == 201, first.text
+    calls_before = len(detect_local.propose_calls)
+    second = await client.post(
+        _detect_url(project_id, "detected", second_ref, "confirm"),
+        headers=alice_headers,
+        json=_confirm_body(
+            accepted=[{"row_id": f"{second_ref}/1", "function_name": "shoulder_pan"}]
+        ),
+    )
+    assert second.status_code == 201, second.text  # one config left → no question asked
+    assert len(detect_local.propose_calls) == calls_before  # served from the cache
+    config = (
+        await client.get(
+            _detect_url(project_id, "robots", second.json()["data"]["robot"]["id"], "config"),
+            headers=alice_headers,
+        )
+    ).json()["data"]["config"]
+    repo_sources = {r["source"] for r in config["provenance"].values() if r["by"] == "repo"}
+    assert repo_sources == {"repo:cfg1"}  # cfg0 was bound by the first arm → excluded
+
+
+async def test_confirm_logs_one_structured_timing_line(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    project_id, _ = await _detect_project(client, alice_headers)
+    with caplog.at_level("INFO", logger="solus_api.hardware.hardware_router"):
+        resp = await _propose_then_confirm(
+            client, alice_headers, project_id, confirm_body=_confirm_body(start_session=True)
+        )
+    assert resp.status_code == 201, resp.text
+    [record] = [r for r in caplog.records if r.getMessage() == "hardware.confirm timings"]
+    fields = record.__dict__
+    assert fields["device_ref"] == DEVICE_REF and fields["proposal_reused"] is True
+    assert all(fields[phase] >= 0.0 for phase in ("propose_s", "write_s", "session_s"))
+    assert "/dev/" not in caplog.text  # device_ref only, never a tty path
+
+
+def test_the_proposal_cache_is_bounded_and_forgets_on_take() -> None:
+    from solus_api.hardware.detect import ProposalOut
+    from solus_api.hardware.proposal_cache import ProposalCache
+
+    tick = [0.0]
+    cache = ProposalCache(max_entries=2, ttl_s=60.0, clock=lambda: tick[0])
+    proposal = ProposalOut.model_validate(_wire_proposal())
+    keys = [(uuid.uuid4(), DEVICE_REF, None) for _ in range(3)]
+    for key in keys:
+        cache.put(key, proposal)
+    rows = [f"{DEVICE_REF}/1"]
+    assert cache.take(keys[0], rows) is None  # evicted: oldest of three, bound two
+    assert cache.take(keys[1], rows) is proposal
+    assert cache.take(keys[1], rows) is None  # consumed
+    tick[0] = 61.0
+    assert cache.take(keys[2], rows) is None  # expired
+    cache.put(keys[2], proposal)
+    assert cache.take(keys[2], [f"{DEVICE_REF}/1", f"{DEVICE_REF}/7"]) is None  # unknown row

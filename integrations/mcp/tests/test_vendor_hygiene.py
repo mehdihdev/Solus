@@ -15,7 +15,6 @@ pytest tests that run under the root `uv run pytest` invocation:
    Solus-authored areas (`tests/`, `<fork>/solus/`, `<fork>/tests/`) stay in.
 """
 
-import inspect
 import logging
 import pathlib
 import re
@@ -26,7 +25,6 @@ from typing import Any
 
 import pytest
 import yaml
-from solus_api.agent.tools import mcp_servers
 from solus_api.agent.tools.mcp_servers import MCP_SERVER_CATALOG
 from solus_api.agent.tools.untrusted import SAFE_REMOTE_NAME
 from solus_api.bridge.allowlist import COMPOSED_NAME_MAX, SERVER_NAME, load_allowlist
@@ -45,8 +43,10 @@ FORBIDDEN_LAUNCHERS = frozenset({"npx", "uvx", "uv", "pip", "pipx", "python", "p
 # xfail: xfail would keep passing silently if the TODO were deleted, whereas
 # this fails loudly the moment the exemption's written justification (the TODO)
 # disappears or the spec gets vendored without the exemption being removed.
-PROVISIONAL_PATH_RESOLVED = frozenset({"web_search"})
-PROVISIONAL_TODO_MARKER = "TODO(MCP-03)"
+# Every stdio spec is a vendored fork with a pinned launcher: the provisional
+# PATH-resolved exemption died with `web_search` when brave was vendored
+# (SOLUSDEV-252 P6). Re-adding one needs a written justification here.
+PROVISIONAL_PATH_RESOLVED: frozenset[str] = frozenset()
 
 # The two vendored-tree shapes later tasks add (README fork skeleton).
 VENDORED_RUFF_GLOBS = ("integrations/mcp/*/upstream", "integrations/mcp/*/vendor")
@@ -122,14 +122,9 @@ def test_catalog_stdio_commands_are_vendored_launchers() -> None:
     for name, spec in MCP_SERVER_CATALOG.items():
         if spec.command is None:
             continue  # url transport: nothing runs on the customer machine
-        if name in PROVISIONAL_PATH_RESOLVED:
+        if name in PROVISIONAL_PATH_RESOLVED:  # pragma: no cover - empty by design
             assert "integrations/mcp/" not in spec.command, (
                 f"{name} is vendored now - remove it from PROVISIONAL_PATH_RESOLVED"
-            )
-            assert PROVISIONAL_TODO_MARKER in inspect.getsource(mcp_servers), (
-                f"{name} is exempt only while its {PROVISIONAL_TODO_MARKER} marker "
-                "survives in mcp_servers.py; the marker is gone, so either vendor "
-                "the server or restore the written justification"
             )
             continue
         assert spec.command not in FORBIDDEN_LAUNCHERS, (

@@ -83,10 +83,15 @@ def _guarded(
         return fallback()
 
 
-def tool_probe_environment() -> dict[str, Any]:
+def tool_probe_environment(environment: str | None = None) -> dict[str, Any]:
     """Probe this machine's Python interpreters, uv, conda, and the linked
-    folder's virtualenv (.venv / venv / env) with its installed packages."""
-    return _guarded("probe_environment", empty_probe, lambda: probe_environment(workspace_root()))
+    folder's requested virtualenv, or the first of .venv / venv / env when
+    omitted, with its installed packages. An explicit target never falls back."""
+    return _guarded(
+        "probe_environment",
+        empty_probe,
+        lambda: probe_environment(workspace_root(), environment=environment),
+    )
 
 
 def tool_plan(action: str, args: dict[str, Any] | None = None) -> dict[str, Any]:

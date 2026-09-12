@@ -42,7 +42,10 @@ strict = true
 warn_unreachable = true
 # Shared fork-test helpers (integrations/mcp/tests/_lib) are imported by bare
 # module name from each fork's tests/ (sys.path via per-fork conftest.py).
-mypy_path = ["integrations/mcp/tests/_lib"]
+# `packages/api/tests` so a NESTED test module (tests/sourcing/…) can resolve
+# the shared `fixtures.*` helpers: mypy searches the checked file's own
+# directory, which for a subdirectory is not where fixtures/ lives.
+mypy_path = ["integrations/mcp/tests/_lib", "packages/api/tests"]
 # Vendored MCP-server fork trees are third-party code; Solus-authored areas
 # (integrations/mcp/tests/, <fork>/solus/, <fork>/tests/) stay in scope.
 exclude = [

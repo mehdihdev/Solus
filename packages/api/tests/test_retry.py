@@ -55,7 +55,9 @@ async def test_transient_failures_back_off_exponentially_then_succeed() -> None:
         attempt, limits=_limits(attempts=3), label="p/m", call_id="c2", sleep=recorder.sleep
     )
     assert result == "ok"
-    assert recorder.delays == [0.5, 1.0]  # doubles per retry
+    assert len(recorder.delays) == 2
+    assert 0.5 <= recorder.delays[0] <= 1.0
+    assert 1.0 <= recorder.delays[1] <= 2.0
 
 
 async def test_retries_exhausted_raises_transient_with_attempt_count() -> None:
@@ -68,7 +70,8 @@ async def test_retries_exhausted_raises_transient_with_attempt_count() -> None:
         await retry_transient(
             attempt, limits=_limits(attempts=2), label="p/m", call_id="c3", sleep=recorder.sleep
         )
-    assert recorder.delays == [0.5]
+    assert len(recorder.delays) == 1
+    assert 0.5 <= recorder.delays[0] <= 1.0
 
 
 async def test_non_transient_errors_propagate_immediately() -> None:
@@ -201,6 +204,193 @@ async def test_retry_transient_feeds_the_breaker_both_ways() -> None:
         breaker_key="anthropic",
     )
     assert result == "ok"
+    clock.now += sum(recorder.delays)  # the fake sleep must advance this injected clock
     breaker.record_failure("anthropic")
     breaker.record_failure("anthropic")
     breaker.check("anthropic")  # the mid-retry success reset the streak: 2 < 3
+
+
+async def test_provider_delay_is_honored_and_shared_with_other_calls() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(clock=clock)
+    calls = 0
+    delays: list[float] = []
+
+    async def attempt() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ProviderTransientError("limited", retry_after_seconds=7.0)
+        return "ok"
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+        with pytest.raises(CircuitOpenError):
+            breaker.check("openai")
+        breaker.check("google")
+        clock.now += delay
+
+    assert (
+        await retry_transient(
+            attempt,
+            limits=_limits(),
+            label="openai/model",
+            call_id="delay",
+            sleep=sleep,
+            breaker=breaker,
+            breaker_key="openai",
+        )
+        == "ok"
+    )
+    assert delays == [7.0]
+    assert calls == 2
+
+
+async def test_long_retry_after_defers_without_retrying_early() -> None:
+    recorder = _Recorder()
+    calls = 0
+
+    async def attempt() -> str:
+        nonlocal calls
+        calls += 1
+        raise ProviderTransientError("limited", retry_after_seconds=120.0)
+
+    with pytest.raises(ProviderTransientError) as error:
+        await retry_transient(
+            attempt,
+            limits=_limits(),
+            label="p/long",
+            call_id="long",
+            sleep=recorder.sleep,
+            breaker=CircuitBreaker(),
+        )
+    assert error.value.retry_after_seconds == 120.0
+    assert calls == 1
+    assert recorder.delays == []
+
+
+async def test_fallback_backoff_adds_bounded_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("solus_api.orchestration.retry.random.uniform", lambda low, high: high)
+    recorder = _Recorder()
+    outcomes: list[Exception | str] = [ProviderTransientError("busy"), "ok"]
+
+    async def attempt() -> str:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    await retry_transient(
+        attempt,
+        limits=_limits(),
+        label="jitter",
+        call_id="jitter",
+        sleep=recorder.sleep,
+        breaker=CircuitBreaker(),
+    )
+    assert recorder.delays == [1.0]
+
+
+def test_inflight_success_cannot_clear_provider_cooldown() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(clock=clock)
+    breaker.defer("openai", 8.0)
+    breaker.record_success("openai")
+    with pytest.raises(CircuitOpenError):
+        breaker.check("openai")
+    clock.now += 8.0
+    breaker.check("openai")
+
+
+async def test_newer_parallel_cooldown_prevents_waiting_retry() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(clock=clock)
+    calls = 0
+
+    async def attempt() -> str:
+        nonlocal calls
+        calls += 1
+        raise ProviderTransientError("busy", retry_after_seconds=2.0)
+
+    async def sleep(delay: float) -> None:
+        breaker.defer("p", 10.0)
+        clock.now += delay
+
+    with pytest.raises(CircuitOpenError):
+        await retry_transient(
+            attempt, limits=_limits(), label="p", call_id="newer", sleep=sleep, breaker=breaker
+        )
+    assert calls == 1
+
+
+async def test_retry_loop_allows_half_open_probe_once() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(clock=clock, failure_threshold=1)
+    breaker.record_failure("p")
+    clock.now += 31.0
+
+    async def attempt() -> str:
+        return "ok"
+
+    assert (
+        await retry_transient(
+            attempt,
+            limits=_limits(),
+            label="p",
+            call_id="probe",
+            sleep=_Recorder().sleep,
+            breaker=breaker,
+        )
+        == "ok"
+    )
+
+
+async def test_fallback_delay_also_protects_parallel_calls() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(clock=clock)
+    outcomes: list[Exception | str] = [ProviderTransientError("busy"), "ok"]
+
+    async def attempt() -> str:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    async def sleep(delay: float) -> None:
+        with pytest.raises(CircuitOpenError):
+            breaker.check("p")
+        clock.now += delay
+
+    assert (
+        await retry_transient(
+            attempt, limits=_limits(), label="p", call_id="fallback", sleep=sleep, breaker=breaker
+        )
+        == "ok"
+    )
+
+
+async def test_concurrent_longer_deadline_is_not_shortened_by_this_error() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(clock=clock)
+    calls = 0
+    delays: list[float] = []
+
+    async def attempt() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            breaker.defer("p", 10.0)  # a concurrent request failed while ours was in flight
+            raise ProviderTransientError("busy", retry_after_seconds=2.0)
+        return "ok"
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+        clock.now += delay
+
+    assert (
+        await retry_transient(
+            attempt, limits=_limits(), label="p", call_id="concurrent", sleep=sleep, breaker=breaker
+        )
+        == "ok"
+    )
+    assert delays == [10.0]

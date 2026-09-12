@@ -20,6 +20,8 @@ from solus_api.orchestration.enums import Complexity, RouteType
 
 _DEFAULT_CONFIG_PATH = Path(__file__).with_name("models.yaml")
 
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
 
 class ModelCatalogEntry(BaseModel):
     """One concrete model and the role(s) it fills. Prices are USD per 1M tokens.
@@ -40,6 +42,28 @@ class ModelCatalogEntry(BaseModel):
     long_context_threshold_tokens: int | None = Field(default=None, gt=0)
     price_in_long: float | None = Field(default=None, ge=0)
     price_out_long: float | None = Field(default=None, ge=0)
+    #: USD per 1M CACHED input tokens (prompt-cache hits). None = no discount.
+    price_cached_in: float | None = Field(default=None, ge=0)
+    #: Reasoning-effort knob passed to the provider for this entry; None for
+    #: non-reasoning models or the provider default. The allow-list is the union
+    #: of the providers' ladders (OpenAI: none…max) so a typo fails at config
+    #: load, not on the first paid call; a model that rejects a listed value
+    #: (the frontier reasoning tier rejects "none") still fails loudly as a
+    #: ProviderError.
+    reasoning_effort: ReasoningEffort | None = None
+    #: SOLUSDEV-252 S3 (review M2): can this model take image blocks in a turn?
+    #: A screenshot rides the live turn of GENERAL/CODE routes, so those cells
+    #: must never resolve to a text-only model — enforced at config load.
+    accepts_images: bool = True
+
+    @model_validator(mode="after")
+    def _cached_price_is_a_discount(self) -> Self:
+        if self.price_cached_in is not None and self.price_cached_in > self.price_in:
+            raise ValueError(
+                f"catalog entry {self.name!r}: price_cached_in ({self.price_cached_in}) "
+                f"must be <= price_in ({self.price_in})"
+            )
+        return self
 
     @model_validator(mode="after")
     def _long_pricing_all_or_nothing(self) -> Self:
@@ -244,6 +268,22 @@ class LimitsConfig(BaseModel):
     retry_backoff_seconds: float = Field(default=0.5, ge=0)  # base; doubles per retry
 
 
+class ProviderStanza(BaseModel):
+    """Connection shape for a provider that has NO dedicated adapter yet
+    (SOLUSDEV-252: `azure`). Config only — the gateway still needs an adapter
+    registered under the same provider key before a catalog entry can route
+    there; until then dispatch raises `UnknownProviderError` by design.
+    `api_key_ref` is a SecretStore ref name, never a key value."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["openai_compatible"]
+    endpoint: str = ""  # may be empty until deploy fills it
+    api_version: str
+    api_key_ref: str
+    deployments: dict[str, str] = Field(default_factory=dict)  # catalog name -> deployment
+
+
 class OrchestrationConfig(BaseModel):
     """The whole routing contract as data. The matrix may be partial — a missing
     `(complexity, type)` cell falls back to `default_role` in `route()`."""
@@ -259,6 +299,7 @@ class OrchestrationConfig(BaseModel):
     type_estimator: TypeEstimatorConfig = Field(default_factory=TypeEstimatorConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     embeddings: EmbeddingConfig | None = None  # SYS-02: absent → embed() unavailable
+    providers: dict[str, ProviderStanza] = Field(default_factory=dict)  # adapter-less providers
 
     _role_index: dict[str, ModelCatalogEntry] = PrivateAttr(default_factory=dict)
 
@@ -281,6 +322,27 @@ class OrchestrationConfig(BaseModel):
         if missing:
             raise ValueError(f"matrix/default_role reference roles absent from catalog: {missing}")
         self._role_index = index
+        return self
+
+    @model_validator(mode="after")
+    def _screenshot_cells_accept_images(self) -> Self:
+        """Review M2: a text-only model pointed at a GENERAL or CODE cell (any
+        tier) — or at `default_role`, which fills any missing cell — fails here,
+        not on a paid call with pixels attached."""
+        cells = [
+            (f"{complexity.value}/{route_type.value}", row[route_type])
+            for complexity, row in self.matrix.items()
+            for route_type in (RouteType.GENERAL, RouteType.CODE, RouteType.VISUAL_LOG)
+            if route_type in row
+        ]
+        cells.append(("default_role", self.default_role))
+        for cell, role in cells:
+            entry = self._role_index[role]
+            if not entry.accepts_images:
+                raise ValueError(
+                    f"matrix cell {cell} routes to {entry.name!r}, which has accepts_images "
+                    "false; GENERAL, CODE and VISUAL_LOG cells carry images and need a vision model"
+                )
         return self
 
     def entry_for_role(self, role: str) -> ModelCatalogEntry:

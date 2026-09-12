@@ -288,3 +288,30 @@ def test_scan_probes_tools_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path:
     probed = {"kicad": True, "altium": False, "vscode": True}
     monkeypatch.setattr(scan, "tools_installed", lambda: probed)
     assert scan.scan_folder(tmp_path)["tools_installed"] == probed
+
+
+def test_git_identity_changes_both_digests(tmp_path: Path) -> None:
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "config").write_text('[remote "origin"]\nurl = https://github.com/o/r.git\n')
+    (git / "HEAD").write_text("a" * 40)
+    before = scan.folder_digest(tmp_path)["digest"]
+    (git / "HEAD").write_text("b" * 40)
+    result = scan.scan_folder(tmp_path, tools=_tools())
+    assert result["digest"] != before
+    assert result["digest"] == scan.folder_digest(tmp_path)["digest"]
+
+
+def test_branch_and_remote_alone_change_digest(tmp_path: Path) -> None:
+    git = tmp_path / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "config").write_text('[remote "origin"]\nurl = https://github.com/o/r.git\n')
+    for branch in ("main", "feature"):
+        (git / "refs" / "heads" / branch).write_text("a" * 40)
+    (git / "HEAD").write_text("ref: refs/heads/main")
+    before = scan.folder_digest(tmp_path)["digest"]
+    (git / "HEAD").write_text("ref: refs/heads/feature")
+    after = scan.folder_digest(tmp_path)["digest"]
+    assert after != before
+    (git / "config").write_text('[remote "origin"]\nurl = https://github.com/o/other.git\n')
+    assert scan.folder_digest(tmp_path)["digest"] != after

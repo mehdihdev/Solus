@@ -23,16 +23,16 @@ def test_derive_complexity_maps_starter_contexts() -> None:
 # (Flash-Lite class) — trivial.long_context on a 200K model was a hard failure
 # for long-but-simple inputs. A deliberate models.yaml change updates these.
 _MATRIX_GOLDENS = [
-    (Complexity.TRIVIAL, RouteType.GENERAL, "general_trivial", "anthropic"),
+    (Complexity.TRIVIAL, RouteType.GENERAL, "openai_trivial", "openai"),
     (Complexity.TRIVIAL, RouteType.CODE, "general_trivial", "anthropic"),
     (Complexity.TRIVIAL, RouteType.VISUAL_LOG, "visual_trivial", "google"),
     (Complexity.TRIVIAL, RouteType.LONG_CONTEXT, "longctx_trivial", "google"),
-    (Complexity.STANDARD, RouteType.GENERAL, "general_standard", "anthropic"),
+    (Complexity.STANDARD, RouteType.GENERAL, "openai_standard", "openai"),
     (Complexity.STANDARD, RouteType.CODE, "code_standard", "anthropic"),
     (Complexity.STANDARD, RouteType.VISUAL_LOG, "visual_standard", "google"),
     (Complexity.STANDARD, RouteType.LONG_CONTEXT, "longctx_standard", "google"),
-    (Complexity.HARD, RouteType.GENERAL, "general_hard", "anthropic"),
-    (Complexity.HARD, RouteType.CODE, "code_hard", "anthropic"),
+    (Complexity.HARD, RouteType.GENERAL, "general_hard", "openai"),
+    (Complexity.HARD, RouteType.CODE, "code_hard", "openai"),
     (Complexity.HARD, RouteType.VISUAL_LOG, "visual_hard", "google"),
     (Complexity.HARD, RouteType.LONG_CONTEXT, "longctx_hard", "google"),
 ]
@@ -59,7 +59,7 @@ def test_route_type_none_resolves_to_general() -> None:
     config = load_orchestration_config()
     choice = route("q", Complexity.STANDARD, None, config=config)
     assert choice.route_type is RouteType.GENERAL
-    assert choice.role == "general_standard"
+    assert choice.role == "openai_standard"
 
 
 def _partial_matrix_config() -> OrchestrationConfig:

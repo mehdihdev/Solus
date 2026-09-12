@@ -7,6 +7,7 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { getUsage, type UsageApi } from '../../lib/api/resources'
 import { useBillingData } from '../billing/useBillingData'
+import { SOL_REASONER_NAME } from './reasoner'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 /** Below this balance the top-up card shows even without a 402 (provisional). */
@@ -106,15 +107,15 @@ type UsageStatus = 'loading' | 'ready' | 'offline'
 export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }): React.JSX.Element {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const [usage, setUsage] = useState<UsageApi | null>(null)
-  const [status, setStatus] = useState<UsageStatus>(fetchEnabled ? 'loading' : 'offline')
+  const [fetched, setStatus] = useState<UsageStatus>('loading')
+  // Offline is derived, not stored: the effect below must never set state
+  // synchronously (react-hooks/set-state-in-effect).
+  const status: UsageStatus = fetchEnabled ? fetched : 'offline'
 
   // Refetch on a 402 (the balance just proved stale) — and on mount. A failed
   // fetch is surfaced honestly, never a forever-"Loading…" (review M2).
   useEffect(() => {
-    if (!fetchEnabled) {
-      setStatus('offline')
-      return
-    }
+    if (!fetchEnabled) return
     let stale = false
     getUsage()
       .then((u) => {
@@ -154,6 +155,9 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
             )}
             <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 8 }}>
               Balance: {formatCredits(usage.balance)} credits
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 4 }}>
+              Reasoner · {SOL_REASONER_NAME}
             </div>
           </>
         )}

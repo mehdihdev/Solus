@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import enum
 import json
+import math
+import re
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Final, Literal, Self
@@ -181,6 +183,89 @@ class PartConfig(FrozenModel):
     telemetry: list[TelemetryChannel] = Field(default_factory=list, max_length=MAX_CHANNELS)
     firmware: dict[str, Scalar] = Field(default_factory=dict)
     lifecycle: LifecycleState = LifecycleState.PLANNED
+
+
+def is_private_source(value: str) -> bool:
+    """Host-independent private source detection; never open paths during validation."""
+    return value.startswith(("/", "\\", "~/", "~\\", "file:")) or bool(
+        re.match(r"^[a-zA-Z]:[\\/]", value)
+    )
+
+
+class PortableTransportBinding(FrozenModel):
+    kind: TransportKind
+    binding: str = Field(min_length=1, max_length=128, pattern=r"^[^/\s]+$")
+    vid: int | None = Field(default=None, ge=0, le=0xFFFF)
+    pid: int | None = Field(default=None, ge=0, le=0xFFFF)
+
+    @property
+    def device_ref(self) -> str:
+        return f"{TRANSPORT_PREFIX[self.kind]}:{self.binding}"
+
+
+class ConfigDraft(FrozenModel):
+    """Portable creation fields. The server supplies the new subject's UUID."""
+
+    schema_version: Literal[2] = 2
+    component: PartConfig | None = None
+    identity: PortableTransportBinding | None = None
+    protocol: ProtocolBinding | None = None
+    bus_map: list[BusMapEntry] = Field(default_factory=list, max_length=MAX_BUS_ENTRIES)
+    disambiguated_by: Literal["user"] | None = None
+    provenance: dict[str, ProvenanceRecord] = Field(default_factory=dict, max_length=2048)
+
+    def _lookup(self, path: str) -> ProvenanceRecord | None:
+        segments = path.split(".")
+        for length in range(len(segments), 0, -1):
+            record = self.provenance.get(".".join(segments[:length]))
+            if record is not None:
+                return record
+        return None
+
+    def provenance_of(self, path: str) -> ProvenanceRecord:
+        record = self._lookup(path)
+        if record is None:
+            raise KeyError(path)
+        return record
+
+    @model_validator(mode="after")
+    def _portable_complete(self) -> Self:
+        document = self.model_dump(mode="json")
+        if len(json.dumps(document, ensure_ascii=False).encode("utf-8")) > MAX_DOCUMENT_BYTES:
+            raise ValueError(f"document exceeds {MAX_DOCUMENT_BYTES} bytes")
+        leaves = list(
+            _leaf_items(
+                {
+                    key: value
+                    for key, value in document.items()
+                    if key not in {"schema_version", "entity_id", "provenance"}
+                }
+            )
+        )
+        missing = [path for path, _ in leaves if self._lookup(path) is None]
+        if missing:
+            raise ValueError("provenance missing for " + ", ".join(missing[:8]))
+        if any(isinstance(value, float) and not math.isfinite(value) for _, value in leaves):
+            raise ValueError("configuration numbers must be finite")
+        sources = [record.source for record in self.provenance.values()]
+        if self.component and self.component.calibration:
+            sources.append(self.component.calibration.source)
+        if any(
+            source is not None
+            and (is_private_source(source) or any(ord(ch) < 32 or ord(ch) == 127 for ch in source))
+            for source in sources
+        ):
+            raise ValueError("source must be a portable reference, never a private path")
+        endpoints = [(entry.protocol, entry.address) for entry in self.bus_map]
+        if len(set(endpoints)) != len(endpoints):
+            raise ValueError("duplicate bus endpoint")
+        return self
+
+
+class EntityHardwareConfig(ConfigDraft):
+    """One physical graph subject's configuration; driver aggregates are resolved at runtime."""
+
+    entity_id: uuid.UUID
 
 
 def _leaf_items(value: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:

@@ -1,11 +1,13 @@
 // UNWIRED since SOLUSDEV-152 removed the scripted chat composer: no production
 // caller until SOLUSDEV-132/134 rebuilds the real SOL chat input around it.
 // MO-04: the subtle pre-flight routing indicator. Deliberately quiet — small
-// muted text the user can ignore (`standard · code · claude-sonnet-5`).
+// muted text the user can ignore (`sol-reasoner-1 · standard · code`). Never a
+// model id (S1-W3): the product reasoner plus an effort label.
 // Clicking opens a small popover to override tier/type FOR THIS CALL ONLY;
 // non-viable options are dimmed with the endpoint's short reason rendered as a
 // tiny muted line (a quiet fact, not an error). Never a banner, toast, or modal.
 import { useState } from 'react'
+import { Switch } from '../../components/ui/Switch'
 import type { ClassifyOption, ClassifyPreview } from '../../lib/api/resources'
 import type { OverrideState } from './useClassifyPreview'
 
@@ -49,8 +51,7 @@ function OptionRow({
           textAlign: 'left'
         }}
       >
-        <span style={{ minWidth: 84 }}>{option.value}</span>
-        <span style={{ ...MUTED, flex: 1 }}>{option.model}</span>
+        <span style={{ minWidth: 84, flex: 1 }}>{option.value}</span>
         <span style={MUTED}>{option.cost_tier}</span>
       </button>
       {!option.viable && option.reason && (
@@ -58,6 +59,21 @@ function OptionRow({
       )}
     </div>
   )
+}
+
+/** The two indicator labels, marked "(you)" where an override is in force. The
+ *  effort label IS the tier, worded for a person (quick/standard/deep). */
+function indicatorLabels(
+  preview: ClassifyPreview,
+  override: OverrideState
+): { overridden: boolean; effortLabel: string; typeLabel: string } {
+  const effortOverridden = override.complexity !== null || override.thinkHarder
+  const typeOverridden = override.type !== null
+  return {
+    overridden: effortOverridden || typeOverridden,
+    effortLabel: `${preview.reasoner.effort}${effortOverridden ? ' (you)' : ''}`,
+    typeLabel: `${preview.type}${typeOverridden ? ' (you)' : ''}`
+  }
 }
 
 export function ClassifyIndicator({
@@ -78,9 +94,7 @@ export function ClassifyIndicator({
       </div>
     )
   }
-  const overridden = override.complexity !== null || override.type !== null
-  const tierLabel = `${preview.complexity}${override.complexity ? ' (you)' : ''}`
-  const typeLabel = `${preview.type}${override.type ? ' (you)' : ''}`
+  const { overridden, effortLabel, typeLabel } = indicatorLabels(preview, override)
   return (
     <div style={{ position: 'relative' }}>
       {open && (
@@ -111,6 +125,22 @@ export function ClassifyIndicator({
               }}
             />
           ))}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '6px 8px 2px',
+              fontSize: 12
+            }}
+          >
+            <span>Think harder</span>
+            <Switch
+              checked={override.thinkHarder}
+              onChange={(thinkHarder) => onOverride({ thinkHarder })}
+              ariaLabel="Think harder"
+            />
+          </div>
           <div style={{ ...MUTED, margin: '8px 0 4px' }}>Type</div>
           {preview.options.types.map((option) => (
             <OptionRow
@@ -166,7 +196,7 @@ export function ClassifyIndicator({
           userSelect: 'none'
         }}
       >
-        {tierLabel} · {typeLabel} · {preview.model.name}
+        {preview.reasoner.name} · {effortLabel} · {typeLabel}
         {!preview.viable && preview.reason ? ` — ${preview.reason}` : ''}
       </div>
     </div>

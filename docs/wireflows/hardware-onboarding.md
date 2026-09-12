@@ -1,117 +1,201 @@
-# Wireflow — Hardware onboarding (SOLUSDEV-248: R1 / R2 / R4)
+# Wireflow — Hardware onboarding (SOLUSDEV-250/260 integration)
 
-Authority: the SOLUSDEV-248 ticket brief; `docs/architecture/hardware-onboarding.md`;
+Authority: the SOLUSDEV-248 and SOLUSDEV-250 ticket briefs; `docs/architecture/hardware-onboarding.md`;
 `docs/api/hardware.md` (routes). This file governs the flow; visual polish within it is
 implementer judgment (CLAUDE.md §3). Every claim a card makes comes from a live backend response —
 offline / runner-absent degrades to honest copy with disabled controls, never fabricated
 availability. Nothing on this surface auto-accepts: a proposal becomes a graph fact only when the
-user confirms it (ADR-012).
+user adds it (ADR-012). A name can save hardware context; driver/configuration and actual
+packets are separate requirements for connection and streaming. This document reconciles the
+current inline 250 flow with 251/260 storage and privacy rules. The later 253/256 two-screen
+review and standalone-part UI remain targets, not descriptions of shipped controls.
 
 ## Where it lives
 
-The **Hardware** tab of the workspace **Add** panel (`features/graph/WorkspaceAdd.tsx`, the
-`hardware` prop) — `HardwareAddPanel` replaces today's single "Add Physical Robot" button with
-five `ConnectTile`-style cards. Each card opens a `ModalShell` flow; Escape or an outside click
-closes the modal before affecting graph navigation (`workspace.md` §Add).
+Two places, one model:
+
+1. The **Hardware** tab of the workspace **Add** panel (`features/graph/WorkspaceAdd.tsx`, the
+   `hardware` prop → `HardwareAddPanel`). Inline sections lead to a collapsed unassigned
+   disclosure. Preserve the existing file/connector-parts flow and its private local-source
+   subsection alongside sourcing; replacing the old card grid must not remove relinking.
 
 ```
-| Add › Hardware                                                              |
-| [ Detected  n ] [ From a file  n ] [ Library ] [ Sourced ] [ Authored ]            |
+| Add › Hardware                                                            |
+| <intro line — SOL mode>                                                   |
+| Devices found            <live list of pending device cards>              |
+| Search                   [ Search parts and platforms — e.g. … ]          |
+|                          rows: name · part|platform · summary · action    |
+| Describe something new   [ What is it? ]  Category ▾ (guessed)  Part of ▾ |
+| Sourced                  [ Find a part from suppliers ]                   |
+| ▸ Unassigned parts                                                        |
 ```
 
-## Flow 1 — Detected (the proposal, not the form)
+2. **Pending device cards at the canvas edge** — the same cards, docked along the workspace edge
+   while a detected device is unbound, so a device plugged in mid-session is visible without
+   opening Add. A card is one entity in both places (`useDetectedDevices()` seeded on ready and kept
+   current by `hardware.devices_changed`); adding or dismissing it in either place clears both.
 
-1. Card shows the live device count from `GET /hardware/detected`. Open → a list of every
-   enumerated device **at whichever level is known** (`deviceTitle`): a board name, a machine name
-   when an interrogator answered, or "USB-serial bridge — MCU unknown" for a CH343 — never a
-   guessed board. The `transport:binding` identity (USB serial) is always shown; a device with no
-   serial is marked unverified after replug.
-2. Click a device → `POST /hardware/detected/{device_ref}/propose` → `RecognitionPanel` mounts
-   with real `MappingProposal`s: one row per proposed part (bus address, model, proposed name,
-   category), each with its **confidence** and its **evidence** (the `ModalityMatch` list: what was
-   pinged, what answered, which repo config matched). A row below threshold is shown as such, not
-   hidden and not pre-accepted.
-3. When more than one repo config matches (lerobot leader and follower are wire-identical) a
-   **disambiguation radio** asks once — "Which arm is this?" — and the answer is recorded as
-   `disambiguated_by: user`. The second device is offered the remaining config. No local checkout
-   linked → the panel says so and proposes from wire evidence only.
-4. Target: **Add as new Physical Robot** (default name is the project's name, editable) or
-   **Add to [robot ▾]** listing the project's existing robots. No robots yet → only the first
-   option is offered.
-5. Per row **Accept** / **Reject**; **Accept all** accepts every row at or above threshold. A
-   rejected row is dropped from confirm and recorded as rejected evidence.
-6. **Confirm** → `POST /hardware/detected/{device_ref}/confirm` with the accepted rows. Expected:
-   the robot exists (created through the same service as manual creation, or the chosen one),
-   accepted parts sit under their categories with `external_ref = <device_ref>/<address>`, the
-   robot's `.solus` Hardware-configs entry holds the config (provenance `detected` / `repo`), and a
-   bench session opens via `POST /bench/sessions {mode: real, config: {provider: robot,
-   robot_entity_id}}`. The navigator focuses the new robot; Live Bench shows named joints in their
-   real units (six joints in `deg`, gripper in `%` for the reference arm) and the link state is
-   derived, never asserted.
-7. If the matched repo config binds a port that no longer matches the device, SOL offers a
-   **port-path repair** confirmation card (DiffRow): it applies only when a local checkout path is
-   known; otherwise it shows the corrected command line and applies nothing.
+Escape or an outside click closes Add before affecting graph navigation (`workspace.md` §Add).
 
-## Flow 2 — From a file
+## Flow 1 — Devices found (the one-question card)
 
-1. Card shows the count of parts from connected CAD / schematic / BOM sources that no robot owns.
-   Open → the list, grouped by source document, with the part's real graph identity.
-2. Multi-select → **Add to [robot ▾]** and a category pick → the parts move under that category;
-   their source identity and cross-domain edges are untouched. No connected source with unassigned
-   parts → "No unassigned parts from connected sources." with a link to Add › From a service.
+One card per device the machine can see that is not yet bound in the graph and not dismissed.
+A card is **a sentence, one question, Add**:
 
-## Flow 3 — Library
+1. **Sentence** — the wire's `headline`, said by tone (`looks_like` · `probably` · `something`),
+   then the `summary` verbatim: "Probably · Arduino-class board on USB · 4 channels at 50 Hz · your
+   sketch names them motor_l, motor_r, dist, batt". Identity is shown as far as it is known: the
+   USB serial, or “no serial number — identity is tied to this USB port; keep it plugged in
+   here” for a port-bound serial-less device. The same explanation appears in the sidebar. A device with no binding at all cannot be proposed
+   and says so.
+2. **One question** — the card asks only what the wire could not settle:
+   - Nothing unsettled → **the name**, initially empty and required; the headline is only a
+     placeholder/suggestion. Existing robot names are preserved.
+   - Two repo configs match (leader and follower are wire-identical) → the wire's
+     `disambiguation.question` with its options as a radio ("Which arm is this?"); the answer is
+     recorded as `disambiguated_by: user` and the second device is offered the remaining option.
+   - A library robot already in the graph matches (a pending link suggestion names it) → **"It's
+     <robot>"** is the first choice, binding the device to that robot on Add; "a new robot" and the
+     project's other robots follow. Accepting resolves the suggestion; rejecting records it.
+   - Existing robots and no suggestion → **Part of ▾** (new robot first, then the robots).
+3. **Add** explicitly accepts the shown proposed rows and chosen target, using the current
+   propose/confirm routes or the existing suggestion acceptance flow. Proposals may use safe
+   ping/listen interrogation; passive enumeration itself opens no device. No motion is implied.
+   The renderer sends no raw `repo_root`: a non-null request path is refused. The transaction
+   saves the robot and independent per-entity v2 component/connection configs, preserving prior
+   fields and provenance. The navigator shows the saved node immediately as **Connecting…**
+   when session start was requested; confirmation does not wait for driver opening.
+   Existing project graph events refresh terminal connection state. A connection failure leaves
+   the saved node with a portable error and retry using its ID. Live Bench shows **Receiving
+   data** only after actual packets, with channels/units derived from verified capabilities.
+4. **Dismiss** hides the card for this session; the device stays in the store and returns on the
+   next removal/reappearance cycle; repeated unchanged full frames do not undo dismissal.
+5. Proposal rows and their evidence (the `ModalityMatch` list: what was pinged, what answered,
+   which repo config matched) stay one disclosure away on the card — shown, never hidden, never
+   pre-decided beyond the accept-all that Add means. A row below threshold is marked as such.
+6. A missing or changed calibration source requests explicit native relinking/review.
+   No port-path repair or repo write occurs automatically. An authorized future write-back must
+   show its concrete change through the existing confirmation gate.
 
-1. Open → a search box (`GET /hardware/library?q=`) returning **parts** and **platforms** as two
-   groups. Empty query shows the curated seed; no match → "Nothing in the library matches."
-2. Select → preview (`GET /hardware/library/{kind}/{id}`): a part shows its category and key
-   specs; a platform shows its part list and platform-only facts (gear-ratio tables).
-3. A part → **Import into [robot ▾]** + category → `POST /hardware/library/parts/{id}/import
-   {robot_id, category}`. A platform → **Import as new robot** →
-   `POST /hardware/library/platforms/{id}/import` → robot + parts + config, every value with
-   provenance `library`.
-4. A library robot later matched by a detected device produces one pending **link suggestion**
-   (`GET /hardware/suggestions?status=pending`), never a second robot; the user accepts or rejects
-   it (`POST /hardware/suggestions/{id}/accept|reject`).
+## Flow 2 — Unassigned parts (collapsed disclosure)
+
+1. Collapsed by default; **nothing is read until it opens** — never on mount, never on a graph
+   revision. Open → one paged list using the unified `GET /hardware/unassigned` query,
+   covering manual, retained and connector-sourced parts without a live manual owner. Do not
+   also fetch the orphan endpoint or show the same UUID twice. **Load more** extends this
+   source. Rows show names and types, never identifiers.
+2. Each row: **Part of ▾** (the project's robots, the first preselected) + **Category ▾**
+   (defaults to Structure) + **Add** → `POST /hardware/robots/{robot_id}/parts/attach
+{entity_ids: [id], category}`; the row leaves the list. Source identity, independent component config/provenance and cross-domain edges
+   are untouched. A stale owner/config returns 409; a deleted part returns 404. Preserve the
+   choice and show an honest recovery message rather than a successful attachment.
+3. No robot yet → the rows list with "No robot to add these to yet." and no target. The unified list
+   settled and empty → "Nothing unassigned."; a failed read shows the backend's error verbatim and
+   never claims emptiness over it.
+
+## Flow 3 — Search
+
+1. One box (`GET /hardware/library?q=`, 250 ms debounce; the empty query lists the curated seed).
+   Placeholder names no product. Results are one flat list: **name · kind (part | platform) ·
+   summary**. No match → "Nothing in the library matches."; a failed search shows the error verbatim.
+2. A **platform** row → **Add as new robot** reveals an inline name field (empty, placeholder =
+   the platform's name) + **Add** → `POST /hardware/library/platforms/{id}/import {name}` →
+   robot + parts + config with provenance `library`; the robot view reloads. When the import raised
+   link suggestions against detected devices the row says "A link suggestion is pending — the
+   device card offers it." (no ids).
+3. A **part** row → **Add to [robot ▾]** (the only robot preselected) →
+   `POST /hardware/library/parts/{id}/import {robot_id}` in the definition's default category. No
+   robot yet → **Add to a new robot** with an inline name field: the robot is created first
+   (explicit new-robot action with a required name) and the part imported under it. This is
+   not the standalone-part flow: the per-entity API supports unassigned parts without a robot,
+   while its dedicated inline creation control remains later work.
+4. Every row has a **Details** disclosure that lazily reads `GET /hardware/library/{kind}/{id}`
+   and lists the definition's facts as-is: maker, driver, notes, key specs (resolution,
+   calibration, telemetry channels) for a part; the slots (role · part @ address) for a platform.
+   No preview pane — nothing is hidden, and specs belong to the sidebar later.
 
 ## Flow 4 — Sourced
 
-Footer "Find a part". Open → the sourcing panel (STORE ST5, `sourcing.md`) on its **Workspace
-door**: the same two-door panel the BOM uses, defaulting to *From CAD* so SOL derives the torque
-from one of the project's assemblies; the selected candidate enters the chosen robot category as
-a PLANNED part and the robot view reloads (`onCreated`). Offline the card is disabled like the
-other four.
+One button, **Find a part from suppliers** → the sourcing panel (STORE ST5, `sourcing.md`) on
+its **Workspace door**, exactly as before: the same two-door panel the BOM uses, defaulting to
+_From CAD_ so SOL derives the torque from one of the project's assemblies; the selected candidate
+enters the chosen robot category as a PLANNED part and the robot view reloads (`onCreated`).
+Disabled offline like every other control.
 
-## Flow 5 — Authored
+## Flow 5 — Describe something new
 
-1. Open → form: **Name**, **Category** (the seven: Sensors, Actuators / motors, Controllers, End
-   effectors, Power, Structure, Wiring), **Lifecycle** (planned · ordered · received · installed ·
-   live), and **key specs by category**. Spec fields are generic to the category, not to a product
-   family: an actuator asks for interface (PWM, serial bus, CAN, pneumatic pilot, …), supply, and
-   a rated output with its unit — so a pneumatic valve (flow), an ESC (current) and a servo
-   (torque) fill the same fields as naturally. Manufacturer part number is optional everywhere.
-2. Target: **under [robot ▾]** or **new Physical Robot** (created first through the same service).
-3. **Create** → `POST /hardware/robots/{robot_id}/parts {name, category, specs}` → the part
-   appears under the chosen category with `origin=manual`, and the robot's config entry gains it
-   with provenance `user`. Later promotion goes through `POST …/parts/{part_id}/lifecycle` and
-   changes neither the part's id nor its edges.
+1. One field, **What is it?** As the user types, **Category ▾** follows a deterministic keyword
+   guess over the name (`categoryFromName`: motor / servo / pump / valve → Actuators; camera /
+   encoder / pressure → Sensors; battery / regulator → Power; controller / board → Controllers;
+   gripper / suction → End effectors; cable / connector → Wiring; else Structure) and is marked
+   **guessed** until the user picks one; the pick sticks. **Part of ▾** lists the robots, the
+   first preselected.
+2. **Add** with a robot → `POST /hardware/robots/{robot_id}/parts {name, category, specs: {},
+lifecycle: planned}` → the part appears under the category with `origin=manual`; the field
+   clears. **Add with no robot** → the described thing IS the robot: `POST /entities {type:
+physical_robot, name}`; the copy says so ("No robot yet — this becomes the robot.").
+3. No spec fields here. Guide mode says why: "Specs come later — from SOL, from a datasheet, or
+   never." Later promotion goes through `POST …/parts/{part_id}/lifecycle` and changes neither
+   the part's id nor its edges. `HARDWARE_SPEC_FIELDS` (generic per category, never per product
+   family) is kept for the sidebar.
 
 ## Empty / error / offline states (all honest)
 
-- Runner absent (livebench not loaded by the local API): Detected card disabled with that reason;
-  the other four cards stay usable — they are API-only.
-- API unreachable: the panel renders offline copy; counts are omitted, not invented.
-- No devices: "No devices detected." with the enumerate hint (USB, CAN adapter, network).
-- Propose / confirm failure: the backend's error verbatim (validation text, `device_ambiguous` +
-  candidates, `source_unavailable`, a device already confirmed to a robot names that robot).
-- Repo config found but its calibration file is missing: the proposal proceeds with the part names
-  and says calibration will import when the file appears.
-- Detected but no bench session cap slot: the robot and config are still created; the session
+- Offline (signed out or no project): one line — "Connect this project to add hardware." — and
+  every control disabled; no device list is rendered and nothing is read.
+- Runner absent (livebench not loaded by the local API): Devices found says so with the reason
+  verbatim; Search, Describe, Sourced and Unassigned parts stay usable — they are API-only.
+- No devices: "Nothing found yet" with the enumerate hint (USB, CAN adapter, network) — never a
+  count that was not observed; the store's never-seeded state reads as "looking", not as empty.
+- Propose / confirm failure: show the portable typed backend message for absent/ambiguous
+  devices, unavailable runner or conflicting configuration. Never show private paths or another
+  project's identifiers. Cached proposal + unplug still refuses confirmation without new nodes.
+- Missing/changed calibration file: preserve saved values and request relink/review. File
+  appearance never silently imports or replaces calibration.
+- Confirmed but no bench session cap slot: the robot and config are still created; the session
   error is shown on the robot with a Retry, never a silent success card.
+- Search / import / attach / describe failures: preserve the draft. Explain 404 as a deleted
+  or unavailable part and 409 as a version/ownership conflict requiring refresh and review.
 
 ## Copy (ADR-016 — SOL mode)
 
-Row and step copy consumes the user's mode. **Guide** explains the evidence ("Solus pinged bus ids
-1–6; each answered with model 777, which the library knows as STS3215…") and what confirm will
-write; **Expert** is terse ("6 × STS3215 on usb:5B42134331, config from lerobot"). Live engine
-claims — confidences, device titles, backend errors — are always shown verbatim, never rephrased.
+Section copy (`HARDWARE_COPY`: intro · devices · search · describe · unassigned) consumes the
+user's mode. **Guide** explains the surface and what Add will save; **Expert** is terse.
+Distinguish passive enumeration from the safe ping/listen work a proposal may perform. Neither
+permits motion. Headlines, summaries, confidence language and device identity reflect actual
+evidence. Error copy explains the portable typed failure without exposing raw backend internals.
+
+## Configuration, local source references and deletion
+
+Selecting a Hardware CONFIG opens the v2 editor for its configured subject, not a note editor.
+GET is pure; absence remains absent until explicit first save. Save sends the expected version,
+preserves unrelated fields and records changed leaves with user provenance. A 409 retains the
+draft and offers reload. CODE CONFIG keeps its separate environment view.
+
+The source subsection lists opaque references, opens MAIN's native picker and rechecks bytes.
+Shared `source:<UUID>` maps to a bare UUID IPC key. An approved migrated reference can be
+explicitly relinked; known same-file picks normally reuse their reference. Changed bytes require
+review before private authorization is updated. Paths stay in the account/project private store;
+shared calibration values and provenance never change merely because a file was relinked.
+Browser-only use shows honest native-picker unavailability. Unknown/corrupt/newer private state
+is not silently reset. Late list/pick/recheck and CONFIG read/write responses are discarded across
+account/project/entity changes, including A→B→A.
+
+Robot deletion uses the sidebar's concrete two-step confirmation, retains parts and independent
+configs, disables obsolete bindings, cancels pending connection work and releases the device.
+The same unified unassigned list exposes retained parts after reload. CONFIG deletion names its
+binding effects and cannot trigger recreation through a later GET.
+
+## Acceptance and later review design
+
+The approved later 253/256 two-screen journey unifies detected/library/authored/imported inputs,
+requires review and names for every newly materialized child, supports standalone part creation
+and separates Add from Add and connect. Its observation-generation/revision APIs are not implied
+by the current compatibility cards. Preserve these goals without describing absent controls as
+working features.
+
+Exercise the 250 33-step QA against the merged Electron build, including delete/reclaim,
+serial-less copy, two simultaneous confirms, replug and late-response rejection. Measure
+confirmation response-to-node separately from browser receipt-to-card and physical detection.
+Native picker, calibration relink and actual arm streaming remain unverified until exercised;
+fixture or API success alone does not establish those gates. No motion or flashing is part of QA.
