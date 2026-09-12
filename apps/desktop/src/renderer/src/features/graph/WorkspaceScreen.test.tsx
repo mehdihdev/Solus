@@ -17,7 +17,7 @@ import * as hardwareApi from '../../lib/api/hardware'
 import { clearWorkspaceGraphCache } from './useWorkspaceGraph'
 import { streamProjectEvents, type ProjectEvent } from '../../lib/api/projectEvents'
 import { useDetectedDevicesStore } from './hardware/detectedDevicesStore'
-import { placementNearRail } from './hardware/deviceCard'
+import { placementNearRail } from './hardware/deviceCardRules'
 import { resetDeviceProposals } from './hardware/useDeviceProposals'
 
 vi.mock('../../lib/api/projectEvents', () => ({ streamProjectEvents: vi.fn() }))

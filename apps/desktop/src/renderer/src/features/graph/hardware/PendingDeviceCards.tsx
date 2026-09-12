@@ -6,7 +6,7 @@ import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
 import { useDetectedDevices } from './detectedDevicesStore'
 import { DevicesFound } from './DevicesFound'
-import { pendingDevices } from './deviceCard'
+import { pendingDevices } from './deviceCardRules'
 
 export interface PendingDeviceCardsProps {
   projectId: string

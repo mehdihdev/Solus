@@ -17,7 +17,7 @@ import {
   evidenceNotes,
   type CardQuestion,
   type DeviceCardState
-} from './deviceCard'
+} from './deviceCardRules'
 import type { ConfirmInput } from './useDeviceProposals'
 import './hardware.css'
 

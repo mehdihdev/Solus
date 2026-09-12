@@ -8,7 +8,7 @@ import type { ConfirmOut, HardwareSuggestion, ProposalOut } from '../../../lib/a
 import type { Entity } from '../../../lib/api/resources'
 import { useDetectedDevicesStore } from './detectedDevicesStore'
 import { DevicesFound, type DevicesFoundProps } from './DevicesFound'
-import type { DeviceCardState } from './deviceCard'
+import type { DeviceCardState } from './deviceCardRules'
 import { useDeviceProposals, type DeviceProposals } from './useDeviceProposals'
 
 vi.mock('./useDeviceProposals', () => ({ useDeviceProposals: vi.fn() }))

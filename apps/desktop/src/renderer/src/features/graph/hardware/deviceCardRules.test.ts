@@ -21,7 +21,7 @@ import {
   evidenceNotes,
   pendingDevices,
   placementNearRail
-} from './deviceCard'
+} from './deviceCardRules'
 
 const device = (ref: string | null, extra: Partial<DetectedDeviceOut> = {}): DetectedDeviceOut => ({
   transport: 'usb_serial',

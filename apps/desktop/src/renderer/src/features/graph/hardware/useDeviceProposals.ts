@@ -24,7 +24,12 @@ import type { Entity } from '../../../lib/api/resources'
 import { awaitMark, startConfirmation } from '../../../lib/perf/marks'
 import { useWorkspaceSessionGeneration, workspaceSessionGeneration } from '../workspaceSession'
 import { hardwareErrorText, robotIdFromMessage } from './detected'
-import { AMBIGUOUS_NOTE, defaultAccepted, pendingDevices, type DeviceCardState } from './deviceCard'
+import {
+  AMBIGUOUS_NOTE,
+  defaultAccepted,
+  pendingDevices,
+  type DeviceCardState
+} from './deviceCardRules'
 
 export interface ConfirmInput {
   name?: string

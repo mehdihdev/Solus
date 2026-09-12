@@ -7,7 +7,7 @@ import { resetMarks, recordDeviceFrame } from '../../../lib/perf/marks'
 import type { HardwareSuggestion, ProposalOut } from '../../../lib/api/hardware'
 import type { Entity } from '../../../lib/api/resources'
 import { DeviceCard, type DeviceCardProps } from './DeviceCard'
-import type { DeviceCardState } from './deviceCard'
+import type { DeviceCardState } from './deviceCardRules'
 
 const robot: Entity = {
   id: 'robot-1',
