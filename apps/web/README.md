@@ -1,6 +1,6 @@
 # @solus/web
 
-The Solus marketing site: landing page, waitlist capture, and blog.
+The Solus marketing site: a single landing page with waitlist capture.
 
 This app is **deliberately self-contained**. It does not import from
 `packages/api`, `packages/shared-types`, or any other workspace package, and it
@@ -108,9 +108,9 @@ This uploads the directory as-is and does not read the repo-root lockfile, so
 Vercel resolves dependencies from `package.json` alone. Use it for a one-off;
 prefer the Git integration for anything ongoing.
 
-### Known weight
+### Dependency weight
 
-`googleapis` is 194 MB installed — the single largest dependency, pulled in for
-one `spreadsheets.values.append` call. Swapping it for `@googleapis/sheets`
-(~2 MB) would cut build time and serverless bundle size with no code change
-beyond the import. Worth doing if function size ever becomes a constraint.
+The app ships four runtime dependencies: `next`, `react`, `react-dom` and
+`@googleapis/sheets` (~620 KB — the Sheets-only client, rather than the umbrella
+`googleapis` package at ~194 MB). Nothing else is needed to build or serve the
+site.

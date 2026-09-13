@@ -12,12 +12,6 @@ import SolSection from "../components/landing/sol-section";
 import StoreSection from "../components/landing/store-section";
 import { WaitlistProvider } from "../components/landing/waitlist-context";
 
-export const metadata = {
-  title: "Solus | The Greatest Robotics Tool You Could Ever Have",
-  description:
-    "Solus links your repos, CAD files, schematics, and live telemetry into a single multimodal context — so that you, your team, and your agents get to work on what's actually important.",
-};
-
 export default function HomePage() {
   return (
     <WaitlistProvider>

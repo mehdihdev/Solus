@@ -12,14 +12,9 @@
     "test": "node --test \"lib/**/*.test.js\""
   },
   "dependencies": {
-    "googleapis": "171.4.0",
-    "gray-matter": "4.0.3",
-    "gsap": "3.14.2",
-    "lenis": "1.3.21",
+    "@googleapis/sheets": "^9.0.0",
     "next": "16.2.2",
     "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "remark": "15.0.1",
-    "remark-html": "16.0.1"
+    "react-dom": "19.2.4"
   }
 }

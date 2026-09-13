@@ -1,16 +1,25 @@
 /* Landing page — SOLUSDEV-300.
-   Ported from Claude Design "Solus Landing Waitlist.dc.html".
-   Scoped under .ln-root so the shared globals.css (blog, site chrome) is untouched. */
+   Ported from Claude Design "Solus Landing Waitlist.dc.html" and verified
+   pixel-for-pixel against it, so the declarations here are deliberately literal.
+   This is the site's only stylesheet; there is no shared reset to inherit. */
 
 /* ---------- base ---------- */
 
-body:has(.ln-root) {
-  background: #04060a;
-  transition: none;
+html {
+  scroll-behavior: smooth;
+  /* The page is dark-only, so UA surfaces (scrollbars, form chrome, autofill)
+     should be dark too. */
+  color-scheme: dark;
 }
 
-/* The source design renders with the browser default box model; globals.css
-   applies a border-box reset, so it is undone for the landing subtree. */
+body {
+  margin: 0;
+  background: #04060a;
+}
+
+/* The source design ships no CSS reset, so the whole subtree keeps the browser
+   default box model. Stated explicitly rather than relied upon, so adding a
+   reset later cannot silently reflow the page. */
 .ln-root,
 .ln-root *,
 .ln-root *::before,
@@ -19,8 +28,9 @@ body:has(.ln-root) {
 }
 
 .ln-root {
-  /* globals.css antialiases site-wide; the source design uses the browser
-     default rasterisation, which renders text slightly heavier. */
+  /* Default rasterisation, not `antialiased` — the source renders text slightly
+     heavier, and matching it is the difference between a pixel-exact port and a
+     visibly lighter one. */
   -webkit-font-smoothing: auto;
   -moz-osx-font-smoothing: auto;
   min-height: 100vh;

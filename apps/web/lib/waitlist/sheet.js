@@ -1,4 +1,6 @@
-import { google } from "googleapis";
+// @googleapis/sheets is the Sheets-only client (~620 KB). The umbrella
+// "googleapis" package bundles every Google API and installs at ~194 MB.
+import { auth, sheets as sheetsApi } from "@googleapis/sheets";
 
 /** Google Sheets persistence for waitlist signups. */
 
@@ -63,13 +65,13 @@ export function readSheetConfig() {
 export async function appendSignup({ email, source, submittedAt }) {
   const { spreadsheetId, range, clientEmail, privateKey } = readSheetConfig();
 
-  const auth = new google.auth.JWT({
+  const authClient = new auth.JWT({
     email: clientEmail,
     key: privateKey,
     scopes: SHEETS_SCOPE,
   });
 
-  const sheets = google.sheets({ version: "v4", auth });
+  const sheets = sheetsApi({ version: "v4", auth: authClient });
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
