@@ -313,6 +313,53 @@ body:has(.ln-root) {
   cursor: pointer;
 }
 
+/* The source design has no <form> element and this page is verified
+   pixel-for-pixel against it, so the wrapper is removed from layout entirely.
+   Semantics (submit on Enter) are unaffected. */
+.ln-wl-form,
+.ln-cta-form {
+  display: contents;
+}
+
+/* Off-screen bot trap. Never shown, never focusable, never announced. */
+.ln-wl-honeypot {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ln-wl-input:disabled {
+  opacity: 0.6;
+}
+
+.ln-wl-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ln-wl-button:disabled:hover {
+  background: #2f6bdc;
+  transform: none;
+}
+
+/* The hero has no hint line in the design; it appears only to report an error,
+   and takes a full row so it sits under the field rather than beside it. */
+.ln-hero-hint {
+  flex-basis: 100%;
+  margin-top: 10px;
+  font-size: 11px;
+  color: #48536a;
+}
+
+.ln-hero-hint.is-error,
+.ln-cta-hint.is-error {
+  color: #e0679a;
+}
+
 .ln-wl-done {
   display: flex;
   align-items: center;

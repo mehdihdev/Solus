@@ -1,107 +1,89 @@
-import { google } from "googleapis";
+import { consume } from "../../../lib/waitlist/rate-limit";
+import {
+  getClientKey,
+  isValidEmail,
+  readJsonBody,
+} from "../../../lib/waitlist/request";
+import { appendSignup } from "../../../lib/waitlist/sheet";
 
+// googleapis needs Node APIs, so this route cannot run on the edge runtime.
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const WAITLIST_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"];
-const DEFAULT_RANGE = "Waitlist!A:C";
+const SOURCE = "landing-page";
 
-function getServiceAccountCredentials() {
-  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+const MESSAGES = {
+  success: "Thanks for joining the Solus waitlist.",
+  invalidEmail: "Please enter a valid email address.",
+  rateLimited: "Too many attempts. Please try again in a few minutes.",
+  failure:
+    "We could not save your email right now. Please try again in a moment.",
+};
 
-  if (json) {
-    const parsed = JSON.parse(json);
-
-    return {
-      clientEmail: parsed.client_email,
-      privateKey: parsed.private_key,
-    };
-  }
-
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-
-  return {
-    clientEmail,
-    privateKey: privateKey?.replace(/\\n/g, "\n"),
-  };
+function json(body, status = 200, headers) {
+  return Response.json(body, { status, headers });
 }
 
-function validateEnvironment() {
-  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-  const range = process.env.GOOGLE_SHEETS_RANGE || DEFAULT_RANGE;
-  const { clientEmail, privateKey } = getServiceAccountCredentials();
+/** Keeps the local part out of logs while staying useful for debugging. */
+function redactEmail(email) {
+  const [local, domain] = email.split("@");
 
-  if (!spreadsheetId || !clientEmail || !privateKey) {
-    throw new Error(
-      "Missing Google Sheets configuration. Set GOOGLE_SHEETS_SPREADSHEET_ID and service account credentials.",
-    );
+  if (!domain) {
+    return "<malformed>";
   }
 
-  return {
-    spreadsheetId,
-    range,
-    clientEmail,
-    privateKey,
-  };
-}
-
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  return `${local.slice(0, 2)}***@${domain}`;
 }
 
 export async function POST(request) {
+  const clientKey = getClientKey(request);
+  const limit = consume(clientKey);
+
+  if (!limit.allowed) {
+    return json({ message: MESSAGES.rateLimited }, 429, {
+      "Retry-After": String(limit.retryAfterSeconds),
+    });
+  }
+
+  const body = await readJsonBody(request);
+
+  if (!body.ok) {
+    return json({ message: MESSAGES.invalidEmail }, 400);
+  }
+
+  const { email, company } = body.value;
+
+  // Honeypot: the field is off-screen and unlabelled, so a human never fills it.
+  // Answer 200 so a bot cannot tell it was caught, but write nothing.
+  if (typeof company === "string" && company.trim() !== "") {
+    return json({ message: MESSAGES.success });
+  }
+
+  const normalizedEmail =
+    typeof email === "string" ? email.trim().toLowerCase() : "";
+
+  if (!isValidEmail(normalizedEmail)) {
+    return json({ message: MESSAGES.invalidEmail }, 400);
+  }
+
   try {
-    const { email } = await request.json();
-    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
-
-    if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
-      return Response.json(
-        { message: "Enter a valid email address." },
-        { status: 400 },
-      );
-    }
-
-    const {
-      spreadsheetId,
-      range,
-      clientEmail,
-      privateKey,
-    } = validateEnvironment();
-
-    const auth = new google.auth.JWT({
-      email: clientEmail,
-      key: privateKey,
-      scopes: WAITLIST_SCOPE,
+    await appendSignup({
+      email: normalizedEmail,
+      source: SOURCE,
+      submittedAt: new Date(),
     });
 
-    const sheets = google.sheets({
-      version: "v4",
-      auth,
-    });
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range,
-      valueInputOption: "USER_ENTERED",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: {
-        values: [[normalizedEmail, new Date().toISOString(), "landing-page"]],
-      },
-    });
-
-    return Response.json({
-      message: "Thanks for joining the Solus waitlist.",
-    });
+    return json({ message: MESSAGES.success });
   } catch (error) {
-    console.error("Failed to append waitlist signup", error);
+    // Enough context to answer "why did this signup fail?" without leaking the
+    // address or the service-account key.
+    console.error("[waitlist] append failed", {
+      code: error?.code,
+      status: error?.status ?? error?.response?.status,
+      message: error?.message,
+      email: redactEmail(normalizedEmail),
+    });
 
-    return Response.json(
-      {
-        message:
-          "We could not save your email right now. Please try again in a moment.",
-      },
-      { status: 500 },
-    );
+    return json({ message: MESSAGES.failure }, 500);
   }
 }
-
