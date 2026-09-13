@@ -70,14 +70,47 @@ function logs without exposing anything to the caller.
 
 ## Deploying to Vercel
 
-1. **New Project** → import this repository.
-2. **Root Directory**: `apps/web`. Leave "Include files outside the root
-   directory" enabled so pnpm can resolve the workspace lockfile.
-3. **Framework Preset**: Next.js (auto-detected). No build command overrides.
-4. **Node.js Version**: 22.x — pinned by `engines.node` in this package.
-5. **Environment Variables**: add the table above for Production, Preview and
-   Development.
-6. Deploy, then submit a real address and confirm the row lands in the sheet.
+`vercel.json` in this directory carries the install command, so the only things
+to set by hand are the Root Directory and the environment variables.
 
-The waitlist route sets `runtime = "nodejs"`; `googleapis` needs Node APIs and
-will not run on the edge runtime.
+1. **New Project** → import this repository (GitLab). The branch must be pushed
+   first; Vercel deploys from the remote, not your working copy.
+2. **Root Directory**: `apps/web`. Leave "Include files outside the root
+   directory" **enabled** — the pnpm lockfile lives at the repo root.
+3. **Environment Variables**: add the table above for Production, Preview and
+   Development.
+4. Deploy, then submit a real address and confirm the row lands in the sheet.
+
+Everything else is picked up automatically: framework preset (Next.js), build
+command (`next build`), and Node 22 via `engines.node` in `package.json`.
+
+### Why the install command is overridden
+
+This repo sets `node-linker=hoisted` in `.npmrc`, and a plain `pnpm install`
+from `apps/web` resolves the **whole** workspace — all four projects, ~980
+packages, 1.3 GB, including a 272 MB Electron binary that the marketing site has
+no use for. `--filter` alone does not prune it, because the hoisted linker
+builds one tree for the entire workspace.
+
+Pairing the filter with `--node-linker=isolated` does prune it: 381 packages, no
+Electron, and `next build` and `next start` both verified against a clean clone.
+
+### Deploying without the Git integration
+
+To push a build straight from a working copy:
+
+```bash
+cd apps/web
+npx vercel --prod
+```
+
+This uploads the directory as-is and does not read the repo-root lockfile, so
+Vercel resolves dependencies from `package.json` alone. Use it for a one-off;
+prefer the Git integration for anything ongoing.
+
+### Known weight
+
+`googleapis` is 194 MB installed — the single largest dependency, pulled in for
+one `spreadsheets.values.append` call. Swapping it for `@googleapis/sheets`
+(~2 MB) would cut build time and serverless bundle size with no code change
+beyond the import. Worth doing if function size ever becomes a constraint.
