@@ -54,8 +54,8 @@ class KicadConnector(EdaExportConnector):
     provider: ClassVar[str] = "kicad"
     #: The two design inputs. `export` rides the family's acquisition chain;
     #: `board` is inline only (§5.2a). `project_path` (live acquisition of the
-    #: netlist, as Altium advertises) is still owed by a later ticket.
-    config_fields: ClassVar[tuple[str, ...]] = ("export", BOARD_CONFIG_KEY)
+    #: netlist) enables the generic source-row project binding UI.
+    config_fields: ClassVar[tuple[str, ...]] = ("export", BOARD_CONFIG_KEY, "project_path")
 
     def parse(self, text: str) -> Netlist:
         """The family's single-export entry point: the netlist (either format).

@@ -154,18 +154,7 @@ function MenuTrigger({
           aria-label={menu.label}
           className="popover-in"
           onClick={(e) => e.stopPropagation()}
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: '100%',
-            marginTop: 6,
-            minWidth: 220,
-            background: 'var(--sur)',
-            border: '1px solid var(--bd)',
-            borderRadius: 5,
-            boxShadow: '0 14px 44px rgba(0,0,0,0.5)',
-            padding: '4px 0'
-          }}
+          style={MENU_POPOVER_STYLE}
         >
           {menu.projectHint && !hasProject && (
             <div style={{ padding: '8px 12px 6px', fontSize: 11.5, color: 'var(--mut)' }}>
@@ -245,4 +234,17 @@ function MenuEntry({
       )}
     </MenuRow>
   )
+}
+
+const MENU_POPOVER_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  top: '100%',
+  marginTop: 6,
+  minWidth: 220,
+  background: 'var(--sur)',
+  border: '1px solid var(--bd)',
+  borderRadius: 5,
+  boxShadow: '0 14px 44px rgba(0,0,0,0.5)',
+  padding: '4px 0'
 }

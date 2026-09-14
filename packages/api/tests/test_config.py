@@ -429,3 +429,9 @@ def test_catalog_entry_may_name_a_stanza_only_provider() -> None:
     config = OrchestrationConfig.model_validate(data)
     assert config.entry_for_role("general_standard").provider == "azure"
     assert config.providers["azure"].deployments["m"] == "m-deployment"
+
+
+def test_hosted_mcp_does_not_advertise_an_unwired_annual_entitlement():
+    assert "onshape_fs_annual_call_allowance" not in Settings.model_fields
+    # The separately governed non-exempt REST policy is not this allocation.
+    assert "onshape_annual_call_allowance" in Settings.model_fields

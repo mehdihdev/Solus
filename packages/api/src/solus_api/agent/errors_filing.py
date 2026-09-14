@@ -31,6 +31,10 @@ logger = logging.getLogger("solus.agent.errors_filing")
 
 MAX_ENTRY_CHARS = MAX_TEXT_CHARS  # the section's own bound (4000)
 _FIELD_CAP = 1500
+UNCERTAIN_COMMAND_OUTCOME = (
+    "execution outcome is uncertain; the target may have changed. "
+    "Inspect its current state before proposing another action. Do not retry automatically."
+)
 #: Keys redacted by NAME on top of `redact_value` (which already covers token/
 #: secret/password/api_key/…): a bare `key` is a credential-shaped name too.
 _SECRET_NAME = re.compile(r"token|secret|passw|key", re.IGNORECASE)
@@ -97,6 +101,13 @@ def run_failure(result: ToolResult) -> str | None:
     value = result.value
     if not result.ok or not isinstance(value, dict) or value.get("dry_run") is True:
         return None
+    return command_failure(value)
+
+
+def command_failure(value: Mapping[str, Any]) -> str | None:
+    """Describe a reported command failure for error filing and confirmed history."""
+    if value.get("uncertain") is True:
+        return UNCERTAIN_COMMAND_OUTCOME
     outcome = _failed_outcome(value)
     if outcome is None:
         return None
@@ -109,6 +120,9 @@ def run_failure(result: ToolResult) -> str | None:
     tail = "".join(char for char in tail if char.isprintable() or char == "\n")
     if run.get("timed_out") is True:
         return f"{prefix}timed out after {run.get('duration_s', '?')}s. {tail}".strip()
+    if run.get("ok") is False and run.get("exit_code") in (0, None):
+        reason = str(run.get("reason") or "no verified successful outcome")
+        return f"{prefix}failed after starting: {reason}. {tail}".strip()
     return f"{prefix}exit {run.get('exit_code')}. {tail}".strip()
 
 
@@ -137,9 +151,11 @@ def _failed_run(run: Mapping[str, Any]) -> bool:
     if run.get("timed_out") is True:
         return True
     code = run.get("exit_code")
+    if run.get("ok") is False and run.get("started") is True:
+        return True
     if isinstance(code, bool) or not isinstance(code, (int, float)):
         return False
-    return code != 0
+    return code != 0 or run.get("ok") is False
 
 
 def should_file(result: ToolResult, descriptor: ToolDescriptor | None, *, executed: bool) -> bool:

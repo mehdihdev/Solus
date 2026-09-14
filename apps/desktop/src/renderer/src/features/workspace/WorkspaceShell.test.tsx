@@ -319,87 +319,8 @@ describe('WorkspaceShell — extension rail (SOLUSDEV-235 / EXT-14)', () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK3' }, linked: true })
     vi.mocked(ext.listProjectExtensions).mockReset()
   })
-
-  it('renders enabled page-view installs after the Store behind a separator, by install time (STORE ST3)', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
-      installsPage([
-        pageInstall('cam', '2026-09-02T00:00:00Z'),
-        pageInstall('bom', '2026-09-01T00:00:00Z'),
-        pageInstall('off', '2026-09-01T00:00:00Z', false)
-      ])
-    )
-    renderShell()
-    await screen.findByLabelText('BOM')
-    const ids = railIds()
-    expect(ids.slice(ids.indexOf('rail-sol'), ids.indexOf('rail-ext-cam') + 1)).toEqual([
-      'rail-sol',
-      'rail-store',
-      'rail-ext-bom',
-      'rail-ext-cam'
-    ])
-    // The separator sits between the Store and the tabs, and only when there are tabs.
-    const separator = screen.getByTestId('rail-separator')
-    expect(separator.compareDocumentPosition(screen.getByLabelText('Store'))).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING
-    )
-    expect(separator.compareDocumentPosition(screen.getByLabelText('BOM'))).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    )
-    expect(screen.queryByLabelText('OFF')).toBeNull()
-    expect(screen.getByLabelText('CAM')).toHaveAttribute('title', 'CAM')
-    // The Store keeps its emphasis; entries are ordinary rail items.
-    expect(screen.getByLabelText('Store')).toHaveAttribute('data-emphasis', 'true')
-    expect(screen.getByLabelText('BOM')).not.toHaveAttribute('data-emphasis')
-  })
-
-  it('draws the reduced manifest icon, or the neutral glyph when the icon is missing', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
-      installsPage([
-        pageInstall('bom', '2026-09-01T00:00:00Z'),
-        pageInstall('cam', '2026-09-02T00:00:00Z')
-      ])
-    )
-    renderShell()
-    const bom = await screen.findByLabelText('BOM')
-    await waitFor(() => expect(bom.querySelector('[data-testid="extension-icon"]')).not.toBeNull())
-    const cam = screen.getByLabelText('CAM')
-    expect(cam.querySelector('[data-testid="extension-icon"]')).toBeNull()
-    expect(cam.querySelector('[data-testid="rail-ext-fallback"]')).not.toBeNull()
-  })
-
-  it('opens the extension page from its rail entry and marks the entry active', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
-      installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
-    )
-    renderShell()
-    await userEvent.click(screen.getByText('Workspace'))
-    await userEvent.click(await screen.findByLabelText('CAM'))
-    expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:cam')
-    expect(screen.getByTestId('ext-page-screen').parentElement?.parentElement).toHaveAttribute(
-      'data-screen-label',
-      'Extension'
-    )
-    expect(screen.getByLabelText('CAM')).toHaveAttribute('data-active', 'true')
-    expect(screen.getByLabelText('Workspace')).not.toHaveAttribute('data-active')
-    // A detail route: the main-screen memory is untouched, so Back knows where to go.
-    expect(useShellStore.getState().lastMain).toBe('workspace')
-    await userEvent.click(screen.getByRole('button', { name: 'Back to shell' }))
-    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
-    expect(screen.getByLabelText('Workspace')).toHaveAttribute('data-active', 'true')
-  })
-
-  it('hands the page screen a way into the Store', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
-      installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
-    )
-    renderShell()
-    await userEvent.click(await screen.findByLabelText('CAM'))
-    await userEvent.click(screen.getByRole('button', { name: 'Open in Store' }))
-    expect(useShellStore.getState().lastMain).toBe('store')
-    // STORE ST3: it lands on THIS extension's detail page, one step from the catalog.
-    expect(useExtensionsStore.getState().selectedId).toBe('cam')
-    expect(screen.getByLabelText('Back to Store')).toBeInTheDocument()
-  })
+  extensionRailAppearanceTests()
+  extensionRailNavigationTests()
 })
 
 describe('WorkspaceShell — developer registrations in the rail (EXT-20)', () => {
@@ -507,131 +428,9 @@ describe('WorkspaceShell — pins and first-party pages (STORE ST3 / ST4)', () =
     vi.mocked(ext.listProjectExtensions).mockReset()
     usePinsStore.getState().reset()
   })
-
-  it('right-click on a tab offers "Pin for all projects" and pins through the server', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
-      installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
-    )
-    vi.mocked(ext.pinExtension).mockResolvedValue(pinRow('cam'))
-    renderShell()
-    const cam = await screen.findByLabelText('CAM')
-    expect(cam.querySelector('[data-testid="rail-pin-mark"]')).toBeNull()
-    fireEvent.contextMenu(cam, { clientX: 40, clientY: 200 })
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Pin for all projects' }))
-    expect(ext.pinExtension).toHaveBeenCalledWith('cam')
-    await waitFor(() =>
-      expect(
-        screen.getByLabelText('CAM').querySelector('[data-testid="rail-pin-mark"]')
-      ).not.toBeNull()
-    )
-    // Now the menu offers the reverse.
-    fireEvent.contextMenu(screen.getByLabelText('CAM'), { clientX: 40, clientY: 200 })
-    expect(screen.getByRole('menuitem', { name: 'Unpin from all projects' })).toBeInTheDocument()
-  })
-
-  it('a pinned extension shows in a project where it is not installed, and its tab is honest', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
-    vi.mocked(ext.listExtensionPins).mockResolvedValue([pinRow('cam')])
-    renderShell()
-    const cam = await screen.findByLabelText('CAM')
-    expect(screen.getByTestId('rail-separator')).toBeInTheDocument()
-    expect(cam).toHaveAttribute('data-dimmed', 'true')
-    expect(cam).toHaveAttribute('title', 'CAM — not installed here')
-    await userEvent.click(cam)
-    expect(screen.getByTestId('pinned-not-installed')).toHaveTextContent(
-      "CAM isn't installed in Rover MK3"
-    )
-    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
-    // "Install in this project" lands on the Store's detail page for that slug.
-    await userEvent.click(screen.getByRole('button', { name: 'Install in this project' }))
-    expect(useShellStore.getState().lastMain).toBe('store')
-    expect(useExtensionsStore.getState().selectedId).toBe('cam')
-  })
-
-  it('an installed first-party bundle opens its in-repo page, not a frame', async () => {
-    const row = pageInstall('bom', '2026-09-01T00:00:00Z')
-    const firstParty = {
-      ...row,
-      version: {
-        ...row.version,
-        manifest: { ...row.version.manifest, backend: { capability: 'bom', routes: true } }
-      }
-    }
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([firstParty]))
-    renderShell()
-    await userEvent.click(await screen.findByLabelText('BOM'))
-    expect(screen.getByTestId('bom-screen')).toBeInTheDocument()
-    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
-  })
-
-  it('a COMMUNITY bundle that carries a first-party slug still gets the sandboxed frame', async () => {
-    // The slug alone never picks the trusted page (security review M2): only a
-    // pinned manifest with a first-party table does, and the publish gate keeps
-    // those tables staff-only.
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
-      installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
-    )
-    renderShell()
-    await userEvent.click(await screen.findByLabelText('BOM'))
-    expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:bom')
-    expect(screen.queryByTestId('bom-screen')).toBeNull()
-  })
-
-  it('the context menu opens the Store detail and a dev registration cannot be pinned', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
-    useDevExtensionsStore.setState({
-      entries: {
-        lab: {
-          manifest: fakeManifest({
-            extension: { ...fakeManifest().extension, id: 'lab', name: 'Lab' },
-            views: { page: { entry: 'page.html', icon: 'lab.svg', label: 'Lab (dev)' } }
-          }),
-          devPath: '/code/lab',
-          loadedAt: '2026-09-05T00:00:00Z',
-          acknowledged: true,
-          problems: []
-        }
-      }
-    })
-    renderShell()
-    fireEvent.contextMenu(await screen.findByLabelText('Lab (dev)'), { clientX: 40, clientY: 200 })
-    expect(screen.getByRole('menuitem', { name: /Pin for all projects/ })).toHaveAttribute(
-      'aria-disabled',
-      'true'
-    )
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Open in Store' }))
-    expect(useShellStore.getState().lastMain).toBe('store')
-    expect(useExtensionsStore.getState().selectedId).toBe('lab')
-    useDevExtensionsStore.getState().reset()
-  })
-
-  it('a Store toast with a slug lands on that extension’s detail page', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
-    renderShell()
-    act(() =>
-      useShellStore.getState().setToast({
-        kind: 'ok',
-        title: 'BOM is now available',
-        body: 'An EDA tool is connected.',
-        action: 'View',
-        screen: 'store',
-        extensionSlug: 'bom'
-      })
-    )
-    const toast = screen.getByText('BOM is now available').closest('[class~="toast-in"]')
-    await userEvent.click(within(toast as HTMLElement).getByRole('button', { name: 'View' }))
-    expect(useShellStore.getState().lastMain).toBe('store')
-    expect(useExtensionsStore.getState().selectedId).toBe('bom')
-  })
-
-  it('clears the pins on sign-out', async () => {
-    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
-    vi.mocked(ext.listExtensionPins).mockResolvedValue([pinRow('cam')])
-    renderShell()
-    await screen.findByLabelText('CAM')
-    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
-    expect(usePinsStore.getState().pins).toEqual([])
-  })
+  extensionPinsTests()
+  firstPartyPageIsolationTests()
+  extensionStoreAndSignoutTests()
 })
 
 describe('WorkspaceShell — no scripted magic-moment toast', () => {
@@ -730,3 +529,219 @@ describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-2
     await waitFor(() => expect(clearWorkspaceGraphCache).toHaveBeenCalled())
   })
 })
+
+function extensionRailAppearanceTests(): void {
+  it('renders enabled page-view installs after the Store behind a separator, by install time (STORE ST3)', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([
+        pageInstall('cam', '2026-09-02T00:00:00Z'),
+        pageInstall('bom', '2026-09-01T00:00:00Z'),
+        pageInstall('off', '2026-09-01T00:00:00Z', false)
+      ])
+    )
+    renderShell()
+    await screen.findByLabelText('BOM')
+    const ids = railIds()
+    expect(ids.slice(ids.indexOf('rail-sol'), ids.indexOf('rail-ext-cam') + 1)).toEqual([
+      'rail-sol',
+      'rail-store',
+      'rail-ext-bom',
+      'rail-ext-cam'
+    ])
+    // The separator sits between the Store and the tabs, and only when there are tabs.
+    const separator = screen.getByTestId('rail-separator')
+    expect(separator.compareDocumentPosition(screen.getByLabelText('Store'))).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING
+    )
+    expect(separator.compareDocumentPosition(screen.getByLabelText('BOM'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+    expect(screen.queryByLabelText('OFF')).toBeNull()
+    expect(screen.getByLabelText('CAM')).toHaveAttribute('title', 'CAM')
+    // The Store keeps its emphasis; entries are ordinary rail items.
+    expect(screen.getByLabelText('Store')).toHaveAttribute('data-emphasis', 'true')
+    expect(screen.getByLabelText('BOM')).not.toHaveAttribute('data-emphasis')
+  })
+
+  it('draws the reduced manifest icon, or the neutral glyph when the icon is missing', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([
+        pageInstall('bom', '2026-09-01T00:00:00Z'),
+        pageInstall('cam', '2026-09-02T00:00:00Z')
+      ])
+    )
+    renderShell()
+    const bom = await screen.findByLabelText('BOM')
+    await waitFor(() => expect(bom.querySelector('[data-testid="extension-icon"]')).not.toBeNull())
+    const cam = screen.getByLabelText('CAM')
+    expect(cam.querySelector('[data-testid="extension-icon"]')).toBeNull()
+    expect(cam.querySelector('[data-testid="rail-ext-fallback"]')).not.toBeNull()
+  })
+}
+
+function extensionRailNavigationTests(): void {
+  it('opens the extension page from its rail entry and marks the entry active', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
+    )
+    renderShell()
+    await userEvent.click(screen.getByText('Workspace'))
+    await userEvent.click(await screen.findByLabelText('CAM'))
+    expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:cam')
+    expect(screen.getByTestId('ext-page-screen').parentElement?.parentElement).toHaveAttribute(
+      'data-screen-label',
+      'Extension'
+    )
+    expect(screen.getByLabelText('CAM')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByLabelText('Workspace')).not.toHaveAttribute('data-active')
+    // A detail route: the main-screen memory is untouched, so Back knows where to go.
+    expect(useShellStore.getState().lastMain).toBe('workspace')
+    await userEvent.click(screen.getByRole('button', { name: 'Back to shell' }))
+    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+    expect(screen.getByLabelText('Workspace')).toHaveAttribute('data-active', 'true')
+  })
+
+  it('hands the page screen a way into the Store', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
+    )
+    renderShell()
+    await userEvent.click(await screen.findByLabelText('CAM'))
+    await userEvent.click(screen.getByRole('button', { name: 'Open in Store' }))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    // STORE ST3: it lands on THIS extension's detail page, one step from the catalog.
+    expect(useExtensionsStore.getState().selectedId).toBe('cam')
+    expect(screen.getByLabelText('Back to Store')).toBeInTheDocument()
+  })
+}
+
+function extensionPinsTests(): void {
+  it('right-click on a tab offers "Pin for all projects" and pins through the server', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('cam', '2026-09-01T00:00:00Z')])
+    )
+    vi.mocked(ext.pinExtension).mockResolvedValue(pinRow('cam'))
+    renderShell()
+    const cam = await screen.findByLabelText('CAM')
+    expect(cam.querySelector('[data-testid="rail-pin-mark"]')).toBeNull()
+    fireEvent.contextMenu(cam, { clientX: 40, clientY: 200 })
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Pin for all projects' }))
+    expect(ext.pinExtension).toHaveBeenCalledWith('cam')
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText('CAM').querySelector('[data-testid="rail-pin-mark"]')
+      ).not.toBeNull()
+    )
+    // Now the menu offers the reverse.
+    fireEvent.contextMenu(screen.getByLabelText('CAM'), { clientX: 40, clientY: 200 })
+    expect(screen.getByRole('menuitem', { name: 'Unpin from all projects' })).toBeInTheDocument()
+  })
+
+  it('a pinned extension shows in a project where it is not installed, and its tab is honest', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
+    vi.mocked(ext.listExtensionPins).mockResolvedValue([pinRow('cam')])
+    renderShell()
+    const cam = await screen.findByLabelText('CAM')
+    expect(screen.getByTestId('rail-separator')).toBeInTheDocument()
+    expect(cam).toHaveAttribute('data-dimmed', 'true')
+    expect(cam).toHaveAttribute('title', 'CAM — not installed here')
+    await userEvent.click(cam)
+    expect(screen.getByTestId('pinned-not-installed')).toHaveTextContent(
+      "CAM isn't installed in Rover MK3"
+    )
+    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+    // "Install in this project" lands on the Store's detail page for that slug.
+    await userEvent.click(screen.getByRole('button', { name: 'Install in this project' }))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(useExtensionsStore.getState().selectedId).toBe('cam')
+  })
+}
+
+function firstPartyPageIsolationTests(): void {
+  it('an installed first-party bundle opens its in-repo page, not a frame', async () => {
+    const row = pageInstall('bom', '2026-09-01T00:00:00Z')
+    const firstParty = {
+      ...row,
+      version: {
+        ...row.version,
+        manifest: { ...row.version.manifest, backend: { capability: 'bom', routes: true } }
+      }
+    }
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([firstParty]))
+    renderShell()
+    await userEvent.click(await screen.findByLabelText('BOM'))
+    expect(screen.getByTestId('bom-screen')).toBeInTheDocument()
+    expect(screen.queryByTestId('ext-page-screen')).toBeNull()
+  })
+
+  it('a COMMUNITY bundle that carries a first-party slug still gets the sandboxed frame', async () => {
+    // The slug alone never picks the trusted page (security review M2): only a
+    // pinned manifest with a first-party table does, and the publish gate keeps
+    // those tables staff-only.
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(
+      installsPage([pageInstall('bom', '2026-09-01T00:00:00Z')])
+    )
+    renderShell()
+    await userEvent.click(await screen.findByLabelText('BOM'))
+    expect(screen.getByTestId('ext-page-screen')).toHaveTextContent('page:bom')
+    expect(screen.queryByTestId('bom-screen')).toBeNull()
+  })
+}
+
+function extensionStoreAndSignoutTests(): void {
+  it('the context menu opens the Store detail and a dev registration cannot be pinned', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
+    useDevExtensionsStore.setState({
+      entries: {
+        lab: {
+          manifest: fakeManifest({
+            extension: { ...fakeManifest().extension, id: 'lab', name: 'Lab' },
+            views: { page: { entry: 'page.html', icon: 'lab.svg', label: 'Lab (dev)' } }
+          }),
+          devPath: '/code/lab',
+          loadedAt: '2026-09-05T00:00:00Z',
+          acknowledged: true,
+          problems: []
+        }
+      }
+    })
+    renderShell()
+    fireEvent.contextMenu(await screen.findByLabelText('Lab (dev)'), { clientX: 40, clientY: 200 })
+    expect(screen.getByRole('menuitem', { name: /Pin for all projects/ })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    )
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Open in Store' }))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(useExtensionsStore.getState().selectedId).toBe('lab')
+    useDevExtensionsStore.getState().reset()
+  })
+
+  it('a Store toast with a slug lands on that extension’s detail page', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
+    renderShell()
+    act(() =>
+      useShellStore.getState().setToast({
+        kind: 'ok',
+        title: 'BOM is now available',
+        body: 'An EDA tool is connected.',
+        action: 'View',
+        screen: 'store',
+        extensionSlug: 'bom'
+      })
+    )
+    const toast = screen.getByText('BOM is now available').closest('[class~="toast-in"]')
+    await userEvent.click(within(toast as HTMLElement).getByRole('button', { name: 'View' }))
+    expect(useShellStore.getState().lastMain).toBe('store')
+    expect(useExtensionsStore.getState().selectedId).toBe('bom')
+  })
+
+  it('clears the pins on sign-out', async () => {
+    vi.mocked(ext.listProjectExtensions).mockResolvedValue(installsPage([]))
+    vi.mocked(ext.listExtensionPins).mockResolvedValue([pinRow('cam')])
+    renderShell()
+    await screen.findByLabelText('CAM')
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(usePinsStore.getState().pins).toEqual([])
+  })
+}

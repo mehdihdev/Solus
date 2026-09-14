@@ -62,6 +62,18 @@ beforeEach(() => {
 })
 
 describe('SimulationPanel', () => {
+  simulationAvailabilityTests()
+  simulationStartupTests()
+  simulationSessionControlsTests()
+})
+
+function simulationAvailabilityTests(): void {
+  it('omits a simulator presented through an owned companion flow', () => {
+    mockLocal({ sources: sources(), sessions: [] })
+    render(<SimulationPanel currentProject={ROVER} excludeKinds={['isaac']} />)
+    expect(screen.queryByRole('button', { name: 'Start Isaac Sim' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Start MuJoCo' })).toBeEnabled()
+  })
   it('asks for an open project before offering any start', () => {
     mockLocal(null)
     render(<SimulationPanel currentProject={null} />)
@@ -88,7 +100,9 @@ describe('SimulationPanel', () => {
     expect(screen.getByText('No live adapter for Isaac Sim.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Start Isaac Sim' })).toBeDisabled()
   })
+}
 
+function simulationStartupTests(): void {
   it('Start opens the start modal; MuJoCo runs the demo scene on the open project and refreshes', async () => {
     const refresh = mockLocal({ sources: sources(), sessions: [] })
     vi.mocked(resources.createBenchSession).mockResolvedValue(session())
@@ -141,7 +155,9 @@ describe('SimulationPanel', () => {
       })
     )
   })
+}
 
+function simulationSessionControlsTests(): void {
   it('disables every Start with the runner reason when livebench is missing', () => {
     mockLocal({
       sources: sources({ runner: { available: false, reason: 'livebench not installed' } }),
@@ -162,4 +178,4 @@ describe('SimulationPanel', () => {
     expect(resources.stopBenchSession).toHaveBeenCalledWith('p1', 's1')
     await waitFor(() => expect(refresh).toHaveBeenCalled())
   })
-})
+}

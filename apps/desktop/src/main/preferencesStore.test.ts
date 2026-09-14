@@ -69,6 +69,56 @@ const DOC: EngineeringPreferences = {
 }
 
 describe('preferencesStore', () => {
+  registerPreferencesDiskPersistenceTests()
+  registerPreferencesDiskFailuresTests()
+})
+
+describe('preferencesIpc (the gate itself is tested)', () => {
+  it('refuses a foreign sender on both channels', () => {
+    const m = memoryDeps()
+    writePreferences(DOC, m.deps)
+    expect(preferencesIpc.read(false, m.deps)).toBeNull()
+    expect(preferencesIpc.write(false, emptyEngineeringPreferences(), m.deps)).toEqual({
+      ok: false
+    })
+    expect(readPreferences(m.deps).preferences.freeText).toBe(DOC.freeText)
+  })
+
+  it('serves the document to the app renderer and re-validates what it writes', () => {
+    const m = memoryDeps()
+    expect(preferencesIpc.read(true, m.deps)).toEqual({
+      preferences: emptyEngineeringPreferences(),
+      readOnly: false
+    })
+    expect(preferencesIpc.write(true, 'not a document', m.deps)).toEqual({ ok: false })
+    expect(preferencesIpc.write(true, DOC, m.deps)).toEqual({ ok: true })
+    expect(preferencesIpc.read(true, m.deps)?.preferences.electrical).toBe(DOC.electrical)
+  })
+})
+
+describe('realPreferencesStoreDeps (SEC review L7 — the symlink refusal is real code)', () => {
+  it('sizes only a regular file; a symlink or a directory reads as absent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'solus-prefs-'))
+    try {
+      const regular = join(dir, 'regular.json')
+      writeFileSync(regular, '{"schema_version":1}')
+      const link = join(dir, 'link.json')
+      symlinkSync(regular, link)
+      const folder = join(dir, 'folder.json')
+      mkdirSync(folder)
+      expect(realPreferencesStoreDeps.fileSize(regular)).toBe(20)
+      expect(realPreferencesStoreDeps.fileSize(link)).toBeNull()
+      expect(realPreferencesStoreDeps.fileSize(folder)).toBeNull()
+      expect(realPreferencesStoreDeps.fileSize(join(dir, 'missing.json'))).toBeNull()
+      // And the temp write is exclusive: a planted file at the temp path is refused.
+      expect(() => realPreferencesStoreDeps.writeFile(regular, 'x', 0o600)).toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+function registerPreferencesDiskPersistenceTests(): void {
   it('reads the empty document when no file exists — never throws', () => {
     const m = memoryDeps()
     expect(readPreferences(m.deps)).toEqual({
@@ -128,7 +178,9 @@ describe('preferencesStore', () => {
     expect(writePreferences(oversized, m.deps)).toBe(true)
     expect(readPreferences(m.deps).preferences.mechanical).toHaveLength(PREFERENCES_FIELD_CAP)
   })
+}
 
+function registerPreferencesDiskFailuresTests(): void {
   it('refuses a malformed document instead of writing it', () => {
     const m = memoryDeps()
     expect(
@@ -148,49 +200,4 @@ describe('preferencesStore', () => {
     }
     expect(writePreferences(DOC, deps)).toBe(false)
   })
-})
-
-describe('preferencesIpc (the gate itself is tested)', () => {
-  it('refuses a foreign sender on both channels', () => {
-    const m = memoryDeps()
-    writePreferences(DOC, m.deps)
-    expect(preferencesIpc.read(false, m.deps)).toBeNull()
-    expect(preferencesIpc.write(false, emptyEngineeringPreferences(), m.deps)).toEqual({
-      ok: false
-    })
-    expect(readPreferences(m.deps).preferences.freeText).toBe(DOC.freeText)
-  })
-
-  it('serves the document to the app renderer and re-validates what it writes', () => {
-    const m = memoryDeps()
-    expect(preferencesIpc.read(true, m.deps)).toEqual({
-      preferences: emptyEngineeringPreferences(),
-      readOnly: false
-    })
-    expect(preferencesIpc.write(true, 'not a document', m.deps)).toEqual({ ok: false })
-    expect(preferencesIpc.write(true, DOC, m.deps)).toEqual({ ok: true })
-    expect(preferencesIpc.read(true, m.deps)?.preferences.electrical).toBe(DOC.electrical)
-  })
-})
-
-describe('realPreferencesStoreDeps (SEC review L7 — the symlink refusal is real code)', () => {
-  it('sizes only a regular file; a symlink or a directory reads as absent', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'solus-prefs-'))
-    try {
-      const regular = join(dir, 'regular.json')
-      writeFileSync(regular, '{"schema_version":1}')
-      const link = join(dir, 'link.json')
-      symlinkSync(regular, link)
-      const folder = join(dir, 'folder.json')
-      mkdirSync(folder)
-      expect(realPreferencesStoreDeps.fileSize(regular)).toBe(20)
-      expect(realPreferencesStoreDeps.fileSize(link)).toBeNull()
-      expect(realPreferencesStoreDeps.fileSize(folder)).toBeNull()
-      expect(realPreferencesStoreDeps.fileSize(join(dir, 'missing.json'))).toBeNull()
-      // And the temp write is exclusive: a planted file at the temp path is refused.
-      expect(() => realPreferencesStoreDeps.writeFile(regular, 'x', 0o600)).toThrow()
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-})
+}

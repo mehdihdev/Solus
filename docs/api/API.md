@@ -679,3 +679,83 @@ code paths (`external_ref`/`properties.path` for code entries), with literal wil
 escaping and existing source/type/deleted/tenant filters. No route or response shape
 changes. A selected mention anchors graph metadata; source-file contents require
 the existing authorized tool path.
+
+### Local-tool platform availability (SOLUSDEV-261)
+
+`GET /api/v1/integrations/local-tools` adds `supported_platforms`: null when no restriction is declared, otherwise an array of `linux`, `darwin`, and/or `win32`. An empty array means invalid platform metadata and disables connection. `display_name` and restrictions come from the Solus-owned `integrations/mcp/<server>/platform.json`, never from the API host OS or companion claims. Metadata is bounded to 4 KiB, validates unknown fields and platform names, and refuses paths outside the integrations root. Missing metadata preserves existing unrestricted tools. Authentication and catalog membership remain unchanged.
+
+### Development credit exception (SOLUSDEV-261)
+
+ADR-024 permits an explicit development-only account allowlist. `GET /api/v1/users/me/credits` returns `{user_id, balance, unlimited}`; `GET /api/v1/users/me/usage` adds the same boolean `unlimited`. Only the authenticated current user is evaluated. `balance` and `used` remain real ledger values. `unlimited` is true only when server configuration names that UUID and `app_env` is exactly `dev`. No client request can change this entitlement. Billing and the usage meter display “Unlimited (development)” when true. All production responses report false.
+
+### Build action policy (SOLUSDEV-261)
+
+The existing `action_mode: "do"` wire value represents Build. Its centrally
+classified routine tool operations execute after complete fresh validation without
+a pending human card; execution provenance is Build authorization. Destructive or
+unclassified tools still use the existing confirmation endpoints. Guide cannot
+mutate. This adds no endpoint, client risk flag, or privilege-elevation parameter.
+
+### SOLUSDEV-261 Onshape webhook amendment
+
+The existing provider webhook route may parse a bounded JSON body after source-token
+authentication to extract provider event identity and document/workspace hints for
+deduplication. This supersedes the earlier instruction to discard the entire body.
+No payload field grants tenant/project/source authority. Invalid/foreign hints cannot
+expand the source's tracked document selection. Authenticated hints are durably
+coalesced in internal source metadata, including arrivals during sync, and handed to
+ARQ. Rate limiting retains a pending dirty indication instead of losing freshness.
+Lifecycle and generation semantics follow `docs/architecture/change-signal-spine.md`.
+No new public route is introduced by this amendment.
+
+
+### Onshape verified grant and revision acquisition continuation — SOLUSDEV-261
+
+No new route or public request field is introduced. Existing OAuth completion binds
+private application identity only after successful grant verification and mirrors
+it through the existing account-to-source binding. REST metering and quota health
+use this verified application plus account identity. Changing configured client
+credentials alone does not reassign a grant or clear its counters. Legacy unbound
+grants retain their previous quota scope; old application records and exhaustion
+latches are retained. Secret rotation within the same application preserves its
+ledger. Public OAuth REST exemption and any observed hosted-service allocation
+remain separate policies; no annual MCP entitlement is inferred.
+
+Existing source-sync jobs now acquire immutable element/metadata revisions and
+verify workspace STEP translations before publishing `revision-v2-*` cache entries.
+The `cad-geometry-v2` cursor repairs existing tracked sources once after successful
+reingestion. All six feature-spec callers use immutable `/m/` specs selected from a
+fresh feature tree, with account/revision/collection isolation. Full details and
+cold/warm request costs are in `onshape-development.md`. Existing job identity,
+project authorization, complete-snapshot and no-automatic-write-replay rules remain
+unchanged.
+
+### SOLUSDEV-261: bounded multi-step Build turns
+
+The existing SOL turn route selects server-owned loop limits from its validated
+action mode. Guide retains 5 model rounds, 8 tool calls and 120 seconds. Build
+permits at most 16 model rounds, 24 tool calls and 300 seconds, reserving the last
+model round for tool-free synthesis. Short answers still terminate immediately.
+These are hard ceilings, not requests to consume the allowance. Every model round
+retains existing identity, rate, spend and credit gates; every integration request
+retains provider quota enforcement. The transport independently enforces tool
+count and wall-clock limits even for a runaway runner. No client-supplied numeric
+budget, tool output, account tier or development credit override can increase
+these bounds. Stream teardown has a separately bounded cleanup grace of at most
+5 seconds, never permission for additional model or tool dispatch. Cancellation
+closes the active stream and persists completed work;
+uncertain writes are not replayed. Action permissions and approval gates are
+unchanged. The change supports discovery, inspection and verified execution in
+one Build request rather than stopping before geometry can be inspected.
+
+### SOLUSDEV-261: deferred graph reconciliation within Build turns
+
+For an admitted native Onshape write in a SOL turn, durable dirty bookkeeping
+and a bounded server-owned source/turn hold precede invocation. Successful tool
+results may return `graph_sync.status=deferred` until turn cleanup releases its
+hold and enqueues one normal sync per affected source. Uncertain writes retain
+their error without replay; conservative dirty marking permits later read-only
+reconciliation. Scope, live account grants, tool policy and provider quotas remain
+authoritative. Confirmation decisions outside a running turn remain immediate.
+Expiry and independent owner holds follow `change-signal-spine.md`; the existing
+turn cleanup remains bounded, and failed cleanup cannot erase durable recovery.

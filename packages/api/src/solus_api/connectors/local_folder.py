@@ -181,6 +181,31 @@ class GitInfo(_Wire):
     _clean = field_validator("remote_url")(_no_credentials)
 
 
+class ScannedPin(_Wire):
+    operation: Literal["pinMode", "analogRead", "analogWrite", "digitalRead", "digitalWrite"]
+    pin: str | None = Field(default=None, pattern=r"^(?:A[0-9]{1,3}|[0-9]{1,3})$")
+    line: int = Field(ge=1, le=65536)
+
+
+class ScannedArduino(_Wire):
+    parts: list[str] = Field(min_length=1, max_length=MAX_PATH_PARTS)
+    pins: list[ScannedPin] = Field(default_factory=list, max_length=128)
+    buses: list[Literal["i2c", "spi", "uart"]] = Field(default_factory=list, max_length=3)
+    libraries: list[str] = Field(default_factory=list, max_length=64)
+    incomplete: bool = True
+    _parts = field_validator("parts")(_segments)
+
+    @field_validator("libraries")
+    @classmethod
+    def validate_libraries(cls, values: list[str]) -> list[str]:
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9_./-]{1,64}", value) or ".." in value.split("/")
+            for value in values
+        ):
+            raise ValueError("invalid library include")
+        return values
+
+
 class FolderScan(_Wire):
     """`local.scan_folder`'s answer (`docs/api/local-folder.md` §4) — untrusted,
     validated at this boundary. `extra="forbid"` so a companion cannot smuggle
@@ -197,6 +222,8 @@ class FolderScan(_Wire):
         default_factory=list, max_length=MAX_SCAN_DEPENDENCIES
     )
     truncated_dependencies: bool = False
+    arduino: list[ScannedArduino] = Field(default_factory=list, max_length=128)
+    truncated_arduino: bool = False
 
     @field_validator("tools_installed")
     @classmethod
@@ -487,6 +514,27 @@ def derive_local_graph(
         *_python_code(by_tool["python"], scan.root_name),
     ]
     root = _root_entity(scan, remote, machine_name)
+    for entity, _ in projects:
+        if entity.type == "arduino_sketch":
+            listed = {
+                file.path
+                for file in by_tool["arduino"]
+                if (_dir_of(file.path) or ".") == entity.properties["path"]
+            }
+            observations = []
+            for record in scan.arduino:
+                path = "/".join(record.parts)
+                if path in listed:
+                    observations.append(
+                        {"source_file": path, **record.model_dump(exclude={"parts"})}
+                    )
+                    listed.remove(path)
+            entity.properties["observations"] = observations
+            entity.properties["observations_incomplete"] = (
+                bool(listed)
+                or scan.truncated_arduino
+                or any(record["incomplete"] for record in observations)
+            )
     requirements = _requirements(scan)
     entities = [root, *(entity for entity, _ in projects), *requirements]
     relations = [
@@ -554,7 +602,10 @@ class LocalFolderConnector(Connector):
         digest = await self._acquirer.digest(dict(ctx.config))
         if digest is None:
             raise ConnectorError("api_unreachable", NO_SIGNAL_MESSAGE)
-        return digest != ctx.cursor.get("digest")
+        return (
+            digest != ctx.cursor.get("digest")
+            or ctx.cursor.get("projection_version") != "arduino-observations-v1"
+        )
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
         if self._acquirer is None:
@@ -593,6 +644,7 @@ class LocalFolderConnector(Connector):
                 )
             )
         cursor: dict[str, Any] = {
+            "projection_version": "arduino-observations-v1",
             "digest": scan.digest,
             "remote": graph.remote.repo if graph.remote else None,
             "host": graph.remote.host if graph.remote else None,

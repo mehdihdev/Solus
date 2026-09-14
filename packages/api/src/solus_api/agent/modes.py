@@ -52,8 +52,9 @@ def mode_refusal(call: ToolCall) -> ToolResult:
         ToolError(
             code=ToolErrorCode.UNAUTHORIZED,
             message=(
-                f"{call.tool} mutates the connected tool and guide mode never "
-                "dispatches a mutation; switch to Do mode to operate the tool"
+                f"{call.tool} changes the connected tool. Guide mode can explain "
+                "the change; switch to Build mode to carry it out. "
+                "Actions needing approval will still ask."
             ),
             retryable=False,
         ),

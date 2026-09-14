@@ -52,87 +52,9 @@ afterEach(() => {
 })
 
 describe('GraphNavigator', () => {
-  it('enters three levels, scopes a leaf with its real path, and returns through the parent chip and Help', () => {
-    const { props } = mount()
-    fireEvent.doubleClick(selectButton('root'))
-    fireEvent.doubleClick(selectButton('assembly'))
-    fireEvent.doubleClick(selectButton('part'))
-    expect(depth()).toBe('3')
-    fireEvent.click(selectButton('leaf'))
-    expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[3], [
-      { entity: props.entities[0], relation: 'contains' },
-      { entity: props.entities[1], relation: 'contains' },
-      { entity: props.entities[2], relation: 'contains' }
-    ])
-    fireEvent.doubleClick(selectButton('leaf'))
-    expect(depth()).toBe('3')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to part' }))
-    expect(depth()).toBe('2')
-    expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[1], [
-      { entity: props.entities[0], relation: 'contains' }
-    ])
-    expect(screen.queryByRole('button', { name: 'Project overview' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
-    expect(screen.getByRole('dialog', { name: 'Workspace help' })).toHaveTextContent(
-      'Project › root › assembly'
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Project overview' }))
-    expect(depth()).toBe('0')
-    expect(card('root')).toBeInTheDocument()
-    expect(screen.queryByRole('dialog')).toBeNull()
-  })
+  registerHierarchyNavigationTests()
 
-  it('shows Help top-right and closes it on Escape or an outside click without leaving the level', () => {
-    mount()
-    fireEvent.doubleClick(selectButton('root'))
-    const help = screen.getByRole('button', { name: 'Help' })
-    expect(help.closest('.graph-corner-right')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Back to root' })).toBeInTheDocument()
-    fireEvent.click(help)
-    fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
-    fireEvent.click(help)
-    fireEvent.pointerDown(card('assembly'))
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(depth()).toBe('1')
-  })
-
-  it('supports hover-wheel one level at a time and keyboard navigation', () => {
-    vi.useFakeTimers()
-    mount()
-    fireEvent.wheel(card('root'), { deltaY: -100 })
-    expect(depth()).toBe('1')
-    fireEvent.wheel(card('assembly'), { deltaY: -100 })
-    expect(depth()).toBe('1')
-    act(() => vi.advanceTimersByTime(400))
-    fireEvent.wheel(card('assembly'), { deltaY: -100 })
-    expect(depth()).toBe('2')
-    fireEvent.keyDown(selectButton('part'), { key: 'ArrowRight' })
-    expect(depth()).toBe('3')
-    fireEvent.keyDown(selectButton('leaf'), { key: 'ArrowLeft' })
-    expect(depth()).toBe('2')
-    act(() => vi.advanceTimersByTime(400))
-    fireEvent.wheel(screen.getByTestId('graph-navigator'), { deltaY: 100 })
-    expect(depth()).toBe('1')
-  })
-
-  it('renders at most 24 cards and pages 243 children without mounting hidden nodes', () => {
-    const children = Array.from({ length: 243 }, (_, i) =>
-      node(`part-${String(i).padStart(3, '0')}`)
-    )
-    mount({
-      entities: [node('root'), ...children],
-      relations: children.map((e) => edge('root', e.id))
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Zoom into root' }))
-    expect(screen.getAllByTestId(/^graph-node-/)).toHaveLength(24)
-    expect(screen.queryByTestId('graph-node-part-024')).not.toBeInTheDocument()
-    expect(screen.getByText('1–24 of 243')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Next nodes' }))
-    expect(screen.getAllByTestId(/^graph-node-/)).toHaveLength(24)
-    expect(card('part-024')).toBeInTheDocument()
-    expect(screen.queryByTestId('graph-node-part-000')).not.toBeInTheDocument()
-  })
+  registerBoundedRenderingTests()
 })
 
 describe('GraphNavigator anchor-relative packing', () => {
@@ -249,117 +171,9 @@ describe('GraphNavigator transition coordinates', () => {
 })
 
 describe('GraphNavigator editing and project isolation', () => {
-  it('moves nodes using pointer and keyboard world coordinates and preserves callbacks', () => {
-    const { props } = mount({
-      entities: [node('root')],
-      relations: [],
-      positions: { root: { x: 0, y: 0 } }
-    })
-    const handle = screen.getByRole('button', { name: 'Move root' })
-    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 10, clientY: 20, button: 0 })
-    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 110, clientY: 70 })
-    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 110, clientY: 70 })
-    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 100, y: 50 })
-    expect(card('root')).toHaveAttribute('data-x', '100')
-    fireEvent.keyDown(handle, { key: 'ArrowRight' })
-    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 140, y: 50 })
-  })
+  registerPointerMovementTests()
 
-  it('drags from the card body past 4px without selecting, while a plain click still selects', () => {
-    const { props } = mount({
-      entities: [node('root')],
-      relations: [],
-      positions: { root: { x: 0, y: 0 } }
-    })
-    const body = selectButton('root')
-    fireEvent.pointerDown(body, { pointerId: 2, clientX: 10, clientY: 20, button: 0 })
-    fireEvent.pointerMove(body, { pointerId: 2, clientX: 12, clientY: 21 })
-    expect(props.onMove).not.toHaveBeenCalled()
-    fireEvent.pointerMove(body, { pointerId: 2, clientX: 110, clientY: 70 })
-    expect(card('root')).toHaveClass('graph-node-dragging')
-    fireEvent.pointerUp(body, { pointerId: 2, clientX: 110, clientY: 70 })
-    fireEvent.click(body, { detail: 1 })
-    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 100, y: 50 })
-    expect(card('root')).toHaveAttribute('data-x', '100')
-    expect(card('root')).not.toHaveClass('graph-node-dragging')
-    expect(props.onSelect).not.toHaveBeenCalled()
-    fireEvent.pointerDown(body, { pointerId: 3, clientX: 10, clientY: 20, button: 0 })
-    fireEvent.pointerUp(body, { pointerId: 3, clientX: 11, clientY: 20 })
-    fireEvent.click(body, { detail: 1 })
-    expect(props.onSelect).toHaveBeenCalledTimes(1)
-    expect(props.onMove).toHaveBeenCalledTimes(1)
-  })
-
-  it('a body drag released on the footer zoom button moves the node without entering it', () => {
-    const { props } = mount({
-      entities: [node('root'), node('child')],
-      relations: [edge('root', 'child')],
-      positions: { root: { x: 0, y: 0 } }
-    })
-    const footer = screen.getByRole('button', { name: 'Zoom into root' })
-    fireEvent.pointerDown(footer, { pointerId: 4, clientX: 10, clientY: 20, button: 0 })
-    fireEvent.pointerMove(footer, { pointerId: 4, clientX: 110, clientY: 70 })
-    fireEvent.pointerUp(footer, { pointerId: 4, clientX: 110, clientY: 70 })
-    fireEvent.click(footer, { detail: 1 })
-    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 100, y: 50 })
-    expect(depth()).toBe('0')
-    expect(props.onSelect).not.toHaveBeenCalled()
-  })
-
-  it('a keyboard activation after a drag still selects (detail 0 is never a drag click)', () => {
-    const { props } = mount({
-      entities: [node('root')],
-      relations: [],
-      positions: { root: { x: 0, y: 0 } }
-    })
-    const body = selectButton('root')
-    fireEvent.pointerDown(body, { pointerId: 5, clientX: 10, clientY: 20, button: 0 })
-    fireEvent.pointerMove(body, { pointerId: 5, clientX: 110, clientY: 70 })
-    fireEvent.pointerUp(body, { pointerId: 5, clientX: 110, clientY: 70 })
-    fireEvent.click(body, { detail: 0 })
-    expect(props.onSelect).toHaveBeenCalledTimes(1)
-  })
-
-  it('resets navigation on project switch and excludes mismatched project entities', () => {
-    const { props, rerender } = mount()
-    fireEvent.doubleClick(selectButton('root'))
-    rerender(
-      <GraphNavigator
-        {...props}
-        projectId="p2"
-        entities={[
-          { ...node('new-root'), project_id: 'p2' },
-          { ...node('foreign'), project_id: 'p1' }
-        ]}
-        relations={[]}
-      />
-    )
-    expect(depth()).toBe('0')
-    expect(card('new-root')).toBeInTheDocument()
-    expect(screen.queryByTestId('graph-node-foreign')).not.toBeInTheDocument()
-  })
-
-  it('reuses context/content slots without interpreting embedded editor events as navigation', () => {
-    const onContextMenu = vi.fn()
-    mount({
-      onContextMenu,
-      renderContent: () => <textarea aria-label="Edit note" />,
-      toolbar: <button>Add</button>
-    })
-    fireEvent.contextMenu(card('root'))
-    expect(onContextMenu).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ id: 'root' })
-    )
-    fireEvent.wheel(screen.getByRole('textbox'), { deltaY: -100 })
-    expect(depth()).toBe('0')
-    expect(screen.getByRole('button', { name: 'Add' }).parentElement).toHaveClass(
-      'graph-corner-left'
-    )
-    expect(
-      screen.getByRole('button', { name: 'Add' }).closest('.graph-viewport-frame')
-    ).not.toBeNull()
-  })
+  registerNavigationBoundariesTests()
 })
 
 it('reveals an externally chosen service root from another level exactly once', () => {
@@ -453,3 +267,205 @@ describe('GraphNavigator render cost', () => {
     ).toEqual(['a', 'b'])
   })
 })
+
+function registerHierarchyNavigationTests(): void {
+  it('enters three levels, scopes a leaf with its real path, and returns through the parent chip and Help', () => {
+    const { props } = mount()
+    fireEvent.doubleClick(selectButton('root'))
+    fireEvent.doubleClick(selectButton('assembly'))
+    fireEvent.doubleClick(selectButton('part'))
+    expect(depth()).toBe('3')
+    fireEvent.click(selectButton('leaf'))
+    expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[3], [
+      { entity: props.entities[0], relation: 'contains' },
+      { entity: props.entities[1], relation: 'contains' },
+      { entity: props.entities[2], relation: 'contains' }
+    ])
+    fireEvent.doubleClick(selectButton('leaf'))
+    expect(depth()).toBe('3')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to part' }))
+    expect(depth()).toBe('2')
+    expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[1], [
+      { entity: props.entities[0], relation: 'contains' }
+    ])
+    expect(screen.queryByRole('button', { name: 'Project overview' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    expect(screen.getByRole('dialog', { name: 'Workspace help' })).toHaveTextContent(
+      'Project › root › assembly'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Project overview' }))
+    expect(depth()).toBe('0')
+    expect(card('root')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('shows Help top-right and closes it on Escape or an outside click without leaving the level', () => {
+    mount()
+    fireEvent.doubleClick(selectButton('root'))
+    const help = screen.getByRole('button', { name: 'Help' })
+    expect(help.closest('.graph-corner-right')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Back to root' })).toBeInTheDocument()
+    fireEvent.click(help)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(help)
+    fireEvent.pointerDown(card('assembly'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(depth()).toBe('1')
+  })
+
+  it('supports hover-wheel one level at a time and keyboard navigation', () => {
+    vi.useFakeTimers()
+    mount()
+    fireEvent.wheel(card('root'), { deltaY: -100 })
+    expect(depth()).toBe('1')
+    fireEvent.wheel(card('assembly'), { deltaY: -100 })
+    expect(depth()).toBe('1')
+    act(() => vi.advanceTimersByTime(400))
+    fireEvent.wheel(card('assembly'), { deltaY: -100 })
+    expect(depth()).toBe('2')
+    fireEvent.keyDown(selectButton('part'), { key: 'ArrowRight' })
+    expect(depth()).toBe('3')
+    fireEvent.keyDown(selectButton('leaf'), { key: 'ArrowLeft' })
+    expect(depth()).toBe('2')
+    act(() => vi.advanceTimersByTime(400))
+    fireEvent.wheel(screen.getByTestId('graph-navigator'), { deltaY: 100 })
+    expect(depth()).toBe('1')
+  })
+}
+
+function registerBoundedRenderingTests(): void {
+  it('renders at most 24 cards and pages 243 children without mounting hidden nodes', () => {
+    const children = Array.from({ length: 243 }, (_, i) =>
+      node(`part-${String(i).padStart(3, '0')}`)
+    )
+    mount({
+      entities: [node('root'), ...children],
+      relations: children.map((e) => edge('root', e.id))
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom into root' }))
+    expect(screen.getAllByTestId(/^graph-node-/)).toHaveLength(24)
+    expect(screen.queryByTestId('graph-node-part-024')).not.toBeInTheDocument()
+    expect(screen.getByText('1–24 of 243')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Next nodes' }))
+    expect(screen.getAllByTestId(/^graph-node-/)).toHaveLength(24)
+    expect(card('part-024')).toBeInTheDocument()
+    expect(screen.queryByTestId('graph-node-part-000')).not.toBeInTheDocument()
+  })
+}
+
+function registerPointerMovementTests(): void {
+  it('moves nodes using pointer and keyboard world coordinates and preserves callbacks', () => {
+    const { props } = mount({
+      entities: [node('root')],
+      relations: [],
+      positions: { root: { x: 0, y: 0 } }
+    })
+    const handle = screen.getByRole('button', { name: 'Move root' })
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 10, clientY: 20, button: 0 })
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 110, clientY: 70 })
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 110, clientY: 70 })
+    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 100, y: 50 })
+    expect(card('root')).toHaveAttribute('data-x', '100')
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 140, y: 50 })
+  })
+
+  it('drags from the card body past 4px without selecting, while a plain click still selects', () => {
+    const { props } = mount({
+      entities: [node('root')],
+      relations: [],
+      positions: { root: { x: 0, y: 0 } }
+    })
+    const body = selectButton('root')
+    fireEvent.pointerDown(body, { pointerId: 2, clientX: 10, clientY: 20, button: 0 })
+    fireEvent.pointerMove(body, { pointerId: 2, clientX: 12, clientY: 21 })
+    expect(props.onMove).not.toHaveBeenCalled()
+    fireEvent.pointerMove(body, { pointerId: 2, clientX: 110, clientY: 70 })
+    expect(card('root')).toHaveClass('graph-node-dragging')
+    fireEvent.pointerUp(body, { pointerId: 2, clientX: 110, clientY: 70 })
+    fireEvent.click(body, { detail: 1 })
+    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 100, y: 50 })
+    expect(card('root')).toHaveAttribute('data-x', '100')
+    expect(card('root')).not.toHaveClass('graph-node-dragging')
+    expect(props.onSelect).not.toHaveBeenCalled()
+    fireEvent.pointerDown(body, { pointerId: 3, clientX: 10, clientY: 20, button: 0 })
+    fireEvent.pointerUp(body, { pointerId: 3, clientX: 11, clientY: 20 })
+    fireEvent.click(body, { detail: 1 })
+    expect(props.onSelect).toHaveBeenCalledTimes(1)
+    expect(props.onMove).toHaveBeenCalledTimes(1)
+  })
+
+  it('a body drag released on the footer zoom button moves the node without entering it', () => {
+    const { props } = mount({
+      entities: [node('root'), node('child')],
+      relations: [edge('root', 'child')],
+      positions: { root: { x: 0, y: 0 } }
+    })
+    const footer = screen.getByRole('button', { name: 'Zoom into root' })
+    fireEvent.pointerDown(footer, { pointerId: 4, clientX: 10, clientY: 20, button: 0 })
+    fireEvent.pointerMove(footer, { pointerId: 4, clientX: 110, clientY: 70 })
+    fireEvent.pointerUp(footer, { pointerId: 4, clientX: 110, clientY: 70 })
+    fireEvent.click(footer, { detail: 1 })
+    expect(props.onMove).toHaveBeenLastCalledWith('root', { x: 100, y: 50 })
+    expect(depth()).toBe('0')
+    expect(props.onSelect).not.toHaveBeenCalled()
+  })
+}
+
+function registerNavigationBoundariesTests(): void {
+  it('a keyboard activation after a drag still selects (detail 0 is never a drag click)', () => {
+    const { props } = mount({
+      entities: [node('root')],
+      relations: [],
+      positions: { root: { x: 0, y: 0 } }
+    })
+    const body = selectButton('root')
+    fireEvent.pointerDown(body, { pointerId: 5, clientX: 10, clientY: 20, button: 0 })
+    fireEvent.pointerMove(body, { pointerId: 5, clientX: 110, clientY: 70 })
+    fireEvent.pointerUp(body, { pointerId: 5, clientX: 110, clientY: 70 })
+    fireEvent.click(body, { detail: 0 })
+    expect(props.onSelect).toHaveBeenCalledTimes(1)
+  })
+
+  it('resets navigation on project switch and excludes mismatched project entities', () => {
+    const { props, rerender } = mount()
+    fireEvent.doubleClick(selectButton('root'))
+    rerender(
+      <GraphNavigator
+        {...props}
+        projectId="p2"
+        entities={[
+          { ...node('new-root'), project_id: 'p2' },
+          { ...node('foreign'), project_id: 'p1' }
+        ]}
+        relations={[]}
+      />
+    )
+    expect(depth()).toBe('0')
+    expect(card('new-root')).toBeInTheDocument()
+    expect(screen.queryByTestId('graph-node-foreign')).not.toBeInTheDocument()
+  })
+
+  it('reuses context/content slots without interpreting embedded editor events as navigation', () => {
+    const onContextMenu = vi.fn()
+    mount({
+      onContextMenu,
+      renderContent: () => <textarea aria-label="Edit note" />,
+      toolbar: <button>Add</button>
+    })
+    fireEvent.contextMenu(card('root'))
+    expect(onContextMenu).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'root' })
+    )
+    fireEvent.wheel(screen.getByRole('textbox'), { deltaY: -100 })
+    expect(depth()).toBe('0')
+    expect(screen.getByRole('button', { name: 'Add' }).parentElement).toHaveClass(
+      'graph-corner-left'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Add' }).closest('.graph-viewport-frame')
+    ).not.toBeNull()
+  })
+}

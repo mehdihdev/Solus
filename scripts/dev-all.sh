@@ -20,6 +20,12 @@ require docker
 require uv
 require pnpm
 
+# Data-only local opt-in; explicit shell configuration takes precedence.
+if [ -z "${SOLUS_DEVELOPMENT_UNLIMITED_CREDIT_USER_IDS+x}" ] && [ -f .solus-dev-credits.json ]; then
+  if ! SOLUS_DEVELOPMENT_UNLIMITED_CREDIT_USER_IDS="$(uv run --no-sync python scripts/dev_credits.py)"; then exit 1; fi
+  export SOLUS_DEVELOPMENT_UNLIMITED_CREDIT_USER_IDS
+fi
+
 # ONE env file, at the repo root, read directly by every process (API via an
 # anchored env_file, desktop via Vite envDir, web via process.loadEnvFile). There
 # are no generated per-package copies to keep in step any more.

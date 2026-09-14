@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fixtures.screenshot import JPEG_MAGIC, PNG_MAGIC, b64, context_png, screenshot_body, tiny_png
 from httpx import AsyncClient
 from solus_api.agent.conversation import ConversationService
-from solus_api.agent.runtime import MAX_TOOL_CALLS
+from solus_api.agent.modes import ActionMode
 from solus_api.agent.screen import MAX_DECODED_BYTES, ScreenshotBlock
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools import ToolCall
@@ -543,31 +543,38 @@ class _ManyToolCallsRunner:
     the loop guard lives in the plumbing, not the runner (§7)."""
 
     async def run(self, ctx: Any) -> Any:
-        for i in range(MAX_TOOL_CALLS + 3):
-            yield AgentEvent.tool_call(
-                ToolCall(tool="get_entity", args={"entity_id": str(uuid.uuid4())}, call_id=f"c{i}")
-            )
-        yield AgentEvent.message("should never be reached")
+        try:
+            for i in range(30):
+                yield AgentEvent.tool_call(
+                    ToolCall(
+                        tool="get_entity", args={"entity_id": str(uuid.uuid4())}, call_id=f"c{i}"
+                    )
+                )
+            yield AgentEvent.message("should never be reached")
+        finally:
+            self.closed = True
 
 
+@pytest.mark.parametrize("action_mode,cap", [("guide", 8), ("do", 24)])
 async def test_loop_guard_is_enforced_by_the_plumbing(
-    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], action_mode: str, cap: int
 ) -> None:
     _, project = await _project(client, alice_headers)
     convo = await _create_conversation(client, alice_headers, project["id"])
     app.state.agent_runner = _ManyToolCallsRunner()
     resp = await client.post(
         f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
-        json={"content": "go"},
+        json={"content": "go", "action_mode": action_mode},
         headers=alice_headers,
     )
     events = _parse_sse(resp.text)
     kinds = [t for t, _ in events]
     # the runner offered MAX+3 calls; the plumbing cut it off at MAX
-    assert kinds.count("tool_call") == MAX_TOOL_CALLS
+    assert kinds.count("tool_call") == cap
     error = next(d for t, d in events if t == "error")
     assert error["code"] == "loop_limit"
     assert kinds[-1] == "done"
+    assert getattr(app.state.agent_runner, "closed", False)
 
 
 class _SlowRunner:
@@ -578,25 +585,38 @@ class _SlowRunner:
         yield AgentEvent.message("too late")
 
 
+@pytest.mark.parametrize("action_mode", ["guide", "do"])
 async def test_turn_timeout_is_enforced(
     app: Any,
     client: AsyncClient,
     alice_headers: dict[str, str],
     monkeypatch: Any,
+    action_mode: str,
 ) -> None:
+    from dataclasses import replace
+
+    from solus_api.agent.turn_limits import turn_limits
+
     _, project = await _project(client, alice_headers)
     convo = await _create_conversation(client, alice_headers, project["id"])
-    monkeypatch.setattr("solus_api.routers.sol.SOL_TURN_TIMEOUT_SECONDS", 0.05)
+    selected: list[Any] = []
+
+    def short_limits(mode: Any) -> Any:
+        selected.append(mode)
+        return replace(turn_limits(mode), timeout_seconds=0.05)
+
+    monkeypatch.setattr("solus_api.routers.sol.turn_limits", short_limits)
     app.state.agent_runner = _SlowRunner()
     resp = await client.post(
         f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
-        json={"content": "go"},
+        json={"content": "go", "action_mode": action_mode},
         headers=alice_headers,
     )
     events = _parse_sse(resp.text)
     error = next(d for t, d in events if t == "error")
     assert error["code"] == "timeout"
     assert [t for t, _ in events][-1] == "done"
+    assert selected == [ActionMode(action_mode)]
 
 
 # ------------------------------------------------ bounded history (RUN-01)
@@ -1130,3 +1150,40 @@ async def test_the_body_limit_middleware_rejects_without_calling_receive() -> No
     await SolMessageBodyLimit(inner)(scope, receive, send)
     assert sent[0]["status"] == 413
     assert b"payload_too_large" in sent[1]["body"]
+
+
+async def test_scoped_prior_tool_payload_reaches_next_turn_without_replaying_actions(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    foreign = await _create_conversation(client, alice_headers, project["id"])
+    service = ConversationService()
+    for identity, value in [
+        (convo["id"], "observed-leader-axis"),
+        (foreign["id"], "foreign-private-axis"),
+    ]:
+        await service.append_turn(
+            db,
+            conversation_id=uuid.UUID(identity),
+            project_id=uuid.UUID(project["id"]),
+            role=TurnRole.TOOL,
+            content="onshape.read → ok",
+            attrs={
+                "call": {"tool": "onshape.read", "args": {"write": "never-replay"}},
+                "result": {"ok": True, "value": {"axis": value}},
+            },
+        )
+    await db.commit()
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    response = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "What did you observe?"},
+        headers=alice_headers,
+    )
+    assert response.status_code == 200
+    text = "\n".join(turn.content for turn in runner.ctx.history)
+    assert "observed-leader-axis" in text
+    assert "foreign-private-axis" not in text
+    assert "never-replay" not in text

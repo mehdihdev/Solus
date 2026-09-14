@@ -35,7 +35,17 @@ from solus_api.connectors.onshape_ops import (
     operation_by_name,
 )
 
+FEATURE_TREE = {**FEATURE_TREE, "sourceMicroversion": "mvabc"}
+
 DID, WID, EID = "d1", "w1", "e1"
+
+
+def _spec_read_path(suffix: str) -> str:
+    base = f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/d1/w/w1/e/e1"
+    if suffix == "featurespecs":
+        respx.get(f"{base}/features").respond(200, json=FEATURE_TREE)
+        base = base.replace("/w/w1/", "/m/mvabc/")
+    return f"{base}/{suffix}"
 
 
 def _conn() -> OnshapeConnector:
@@ -51,6 +61,9 @@ async def _run(name: str, args: dict[str, Any]) -> Any:
 
 
 def _mock_workspace() -> None:
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/{DID}/w/{WID}/e/{EID}/features").respond(
+        200, json=FEATURE_TREE
+    )
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/{DID}").mock(
         return_value=httpx.Response(200, json=WORKSPACE_INFO)
     )
@@ -165,7 +178,7 @@ async def test_get_feature_tree_returns_features_and_the_write_envelope() -> Non
     assert [f["name"] for f in result["features"]] == ["Sketch 1", "Extrude 1"]
     assert result["envelope"] == {
         "serializationVersion": "1.2.7",
-        "sourceMicroversion": "mv-abc",
+        "sourceMicroversion": "mvabc",
         "libraryVersion": 2522,
     }
 
@@ -175,7 +188,7 @@ async def test_get_feature_specs_lists_addressable_feature_types() -> None:
     """This is how the write path discovers valid featureTypes and parameterIds
     instead of hardcoding a table that rots."""
     _mock_workspace()
-    respx.get(f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/{DID}/w/{WID}/e/{EID}/featurespecs").mock(
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/{DID}/m/mvabc/e/{EID}/featurespecs").mock(
         return_value=httpx.Response(200, json=FEATURE_SPECS)
     )
 
@@ -303,3 +316,194 @@ def test_operations_are_frozen_so_a_caller_cannot_rewrite_the_catalog() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         operation.name = "onshape.evil"  # type: ignore[misc]
+
+
+@respx.mock
+async def test_feature_tree_preserves_live_parameter_values() -> None:
+    parameters = [
+        {"btType": "BTMParameterQuantity-147", "parameterId": "depth", "expression": "10 mm"},
+        {"parameterId": "oppositeDirection", "value": False},
+    ]
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/d1/w/w1/e/e1/features").respond(
+        200,
+        json={
+            "features": [{"featureId": "f1", "featureType": "extrude", "parameters": parameters}]
+        },
+    )
+    result = await _run(
+        "onshape.get_feature_tree", {"document_id": DID, "workspace_id": WID, "element_id": EID}
+    )
+    assert result["features"][0]["parameters"] == parameters
+
+
+@respx.mock
+async def test_feature_specs_reads_live_parameter_collection() -> None:
+    respx.get(_spec_read_path("featurespecs")).respond(
+        200,
+        json={
+            "featureSpecs": [
+                {
+                    "featureType": "extrude",
+                    "parameters": [
+                        {"parameterId": "depth", "defaultValue": {"expression": "25 mm"}},
+                        {"parameterId": "entities"},
+                    ],
+                }
+            ]
+        },
+    )
+    result = await _run(
+        "onshape.get_feature_specs", {"document_id": DID, "workspace_id": WID, "element_id": EID}
+    )
+    assert result["feature_specs"][0]["parameter_ids"] == ["depth", "entities"]
+
+
+@pytest.mark.parametrize(
+    "operation,key,suffix",
+    [
+        ("get_feature_tree", "features", "features"),
+        ("get_feature_specs", "featureSpecs", "featurespecs"),
+    ],
+)
+@pytest.mark.parametrize(
+    "parameters",
+    [None, {}, [None], [{"expression": "5 mm"}], [{"parameterId": "x"}, {"parameterId": "x"}]],
+)
+@respx.mock
+async def test_malformed_feature_parameters_fail_closed(
+    operation: str, key: str, suffix: str, parameters: Any
+) -> None:
+    respx.get(_spec_read_path(suffix)).respond(
+        200, json={key: [{"featureType": "extrude", "parameters": parameters}]}
+    )
+    with pytest.raises(ConnectorError) as error:
+        await _run(
+            f"onshape.{operation}", {"document_id": DID, "workspace_id": WID, "element_id": EID}
+        )
+    assert error.value.code == "api_error"
+
+
+@pytest.mark.parametrize(
+    "operation,key,suffix",
+    [
+        ("get_feature_tree", "features", "features"),
+        ("get_feature_specs", "featureSpecs", "featurespecs"),
+    ],
+)
+@pytest.mark.parametrize("collection", [None, {}, [None], [{"message": None}]])
+@respx.mock
+async def test_malformed_feature_collections_fail_closed(
+    operation: str, key: str, suffix: str, collection: Any
+) -> None:
+    respx.get(_spec_read_path(suffix)).respond(
+        200, json={key: collection}
+    )
+    with pytest.raises(ConnectorError) as error:
+        await _run(
+            f"onshape.{operation}", {"document_id": DID, "workspace_id": WID, "element_id": EID}
+        )
+    assert error.value.code == "api_error"
+
+
+@respx.mock
+async def test_legacy_feature_parameter_envelopes_preserve_values() -> None:
+    parameter = {"parameterId": "depth", "expression": "10 mm"}
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/d1/w/w1/e/e1/features").respond(
+        200,
+        json={
+            "features": [{"message": {"featureId": "f1", "parameters": [{"message": parameter}]}}]
+        },
+    )
+    result = await _run(
+        "onshape.get_feature_tree", {"document_id": DID, "workspace_id": WID, "element_id": EID}
+    )
+    assert result["features"][0]["parameters"] == [parameter]
+
+
+@pytest.mark.parametrize(
+    "operation,suffix,key,filter_key,filter_value,identity",
+    [
+        ("get_feature_tree", "features", "features", "feature_id", "Feature_2", "featureId"),
+        (
+            "get_feature_specs",
+            "featurespecs",
+            "featureSpecs",
+            "feature_type",
+            "extrude",
+            "featureType",
+        ),
+    ],
+)
+@respx.mock
+async def test_exact_feature_filter_returns_complete_selected_record(
+    operation: str, suffix: str, key: str, filter_key: str, filter_value: str, identity: str
+) -> None:
+    respx.get(_spec_read_path(suffix)).respond(
+        200,
+        json={
+            key: [
+                {identity: "other", "parameters": []},
+                {
+                    identity: filter_value,
+                    "parameters": [{"parameterId": "depth", "expression": "2 mm"}],
+                },
+            ],
+            "sourceMicroversion": "micro",
+        },
+    )
+    result = await _run(
+        f"onshape.{operation}",
+        {
+            "document_id": DID,
+            "workspace_id": WID,
+            "element_id": EID,
+            filter_key: filter_value,
+        },
+    )
+    rows = result["features" if operation == "get_feature_tree" else "feature_specs"]
+    assert len(rows) == 1
+    if operation == "get_feature_tree":
+        assert rows[0]["parameters"][0]["expression"] == "2 mm"
+        assert result["envelope"] == {"sourceMicroversion": "micro"}
+    else:
+        assert rows[0]["parameter_ids"] == ["depth"]
+
+
+@pytest.mark.parametrize(
+    "operation,suffix,key,filter_key",
+    [
+        ("get_feature_tree", "features", "features", "feature_id"),
+        ("get_feature_specs", "featurespecs", "featureSpecs", "feature_type"),
+    ],
+)
+@respx.mock
+async def test_missing_exact_feature_filter_is_explicit(
+    operation: str, suffix: str, key: str, filter_key: str
+) -> None:
+    respx.get(_spec_read_path(suffix)).respond(
+        200, json={key: []}
+    )
+    with pytest.raises(ConnectorError) as error:
+        await _run(
+            f"onshape.{operation}",
+            {"document_id": DID, "workspace_id": WID, "element_id": EID, filter_key: "missing"},
+        )
+    assert error.value.code == "not_found"
+
+
+@pytest.mark.parametrize(
+    "operation,filter_key",
+    [("get_feature_tree", "feature_id"), ("get_feature_specs", "feature_type")],
+)
+@pytest.mark.parametrize("value", [None, "", "../bad", "a/b", "a?b", "a#b", 1])
+@respx.mock
+async def test_invalid_feature_filter_refused_before_vendor(
+    operation: str, filter_key: str, value: Any
+) -> None:
+    with pytest.raises(ConnectorError) as error:
+        await _run(
+            f"onshape.{operation}",
+            {"document_id": DID, "workspace_id": WID, "element_id": EID, filter_key: value},
+        )
+    assert error.value.code == "config_invalid"
+    assert not respx.calls

@@ -165,7 +165,12 @@ export function clearAllChatCaches(deps: SolChatCacheDeps): boolean {
  *  argument shapes, size caps — lives HERE where it is testable; index.ts only
  *  wires ipcMain to these with the real sender check and deps. */
 export const solChatCacheIpc = {
-  read(senderOk: boolean, projectId: unknown, conversationId: unknown, deps: SolChatCacheDeps) {
+  read(
+    senderOk: boolean,
+    projectId: unknown,
+    conversationId: unknown,
+    deps: SolChatCacheDeps
+  ): ReturnType<typeof readChatCache> {
     return senderOk && typeof projectId === 'string' && typeof conversationId === 'string'
       ? readChatCache(projectId, conversationId, deps)
       : null

@@ -762,6 +762,7 @@ class CreditBalanceView(BaseModel):
 
     user_id: UUID
     balance: int
+    unlimited: bool = False
 
 
 class CreditBalanceRead(_Timestamped):

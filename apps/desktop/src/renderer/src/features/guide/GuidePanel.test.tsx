@@ -59,6 +59,12 @@ beforeEach(() => {
 })
 
 describe('GuidePanel', () => {
+  registerGuidePresentationTests()
+
+  registerGuideFeedbackTests()
+})
+
+function registerGuidePresentationTests(): void {
   it('renders the walkthrough title and ordered steps', () => {
     mockGuide({})
     render(<GuidePanel guideId="g1" tool="kicad" version="9.0.4" />)
@@ -118,7 +124,9 @@ describe('GuidePanel', () => {
     render(<GuidePanel guideId="g1" tool="kicad" version="9.0.4" />)
     expect(screen.getByText(/couldn.t load|unavailable|try again/i)).toBeInTheDocument()
   })
+}
 
+function registerGuideFeedbackTests(): void {
   it('sends a reject to the step entry and confirms it landed (TU-08)', async () => {
     vi.mocked(guideApi.sendFeedback).mockResolvedValue({
       id: 'x',
@@ -143,4 +151,4 @@ describe('GuidePanel', () => {
     render(<GuidePanel guideId="g1" tool="kicad" version="9.0.4" />)
     expect(screen.queryByText('Helpful')).not.toBeInTheDocument()
   })
-})
+}

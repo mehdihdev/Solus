@@ -6,8 +6,8 @@
 // machine — link/unlink talk to the API with the machine identity, and the
 // card shows the scan state, the detected projects and Open-in-tool honestly
 // (offline companion disables, never hides; a refusal is shown verbatim).
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ProjectFolderCard } from './ProjectFolderCard'
 import { useProjectFolderStore } from './projectFolderStore'
@@ -19,6 +19,7 @@ import type { Source } from '../../lib/api/resources'
 import type { DetectedProject, LocalFolderView } from '../../lib/api/resources.localfolder'
 import {
   COMPANION_OFFLINE_NOTE,
+  COMPANION_RECONNECTING_NOTE,
   NOTHING_DETECTED_TEXT,
   VSCODE_MISSING_NOTE
 } from './localFolder.constants'
@@ -138,6 +139,164 @@ beforeEach(() => {
 })
 
 describe('ProjectFolderCard', () => {
+  projectFolderBindingTests()
+  projectFolderActionsTests()
+})
+
+describe('ProjectFolderCard — scan state and detected projects', () => {
+  detectedProjectActionsTests()
+  projectScanAvailabilityTests()
+})
+
+describe('ProjectFolderCard — long paths', () => {
+  it('clips the path to one line ending in an ellipsis and keeps the full path in the title', () => {
+    const long = '/Users/someone/Documents/robotics/teams/strider/rover-mk2/firmware/workspace'
+    useProjectFolderStore.setState({ folders: { p1: { path: long } } })
+    render(<ProjectFolderCard projectId="p1" />)
+    const path = screen.getByTitle(long)
+    expect(path).toHaveTextContent(long)
+    expect(path).toHaveStyle({ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' })
+  })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+it.each(['api_unreachable', 'parse_error'])(
+  'renders scan error %s truthfully through a folder reconnect',
+  async (code) => {
+    vi.useFakeTimers()
+    useWorkspaceStore.setState({ linked: true })
+    pick.mockResolvedValue('/home/u/new-folder')
+    const message =
+      code === 'api_unreachable'
+        ? 'this machine’s Solus companion is not connected'
+        : 'The schematic cannot be parsed'
+    vi.mocked(localFolderApi.getLocalFolder).mockResolvedValue(
+      view({
+        source: source({ status: 'error', last_error: { code, message } }),
+        bridge: { connected: false, tools_installed: {} }
+      })
+    )
+    render(<ProjectFolderCard projectId="p1" />)
+    fireEvent.click(screen.getByRole('button', { name: /Select folder/ }))
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(screen.getByText(COMPANION_RECONNECTING_NOTE)).toBeInTheDocument()
+    if (code === 'api_unreachable') expect(screen.queryByText(message)).not.toBeInTheDocument()
+    else expect(screen.getByText(message)).toBeInTheDocument()
+    await act(() => vi.advanceTimersByTimeAsync(30_001))
+    expect(screen.getByText(message)).toBeInTheDocument()
+  }
+)
+
+it('changes a linked folder through the native picker and waits for the registry before integration', async () => {
+  linkedCard()
+  pick.mockResolvedValue('/home/u/replacement')
+  let finish!: (value: { ok: boolean }) => void
+  link.mockImplementation(
+    () =>
+      new Promise<{ ok: boolean }>((resolve) => {
+        finish = resolve
+      })
+  )
+  render(<ProjectFolderCard projectId="p1" />)
+  await userEvent.click(screen.getByRole('button', { name: /change folder/i }))
+  expect(pick).toHaveBeenCalledTimes(1)
+  expect(useProjectFolderStore.getState().folders['p1']?.path).toBe('/home/u/arm')
+  expect(localFolderApi.linkLocalFolder).not.toHaveBeenCalled()
+  await act(async () => {
+    finish({ ok: true })
+  })
+  await waitFor(() =>
+    expect(localFolderApi.linkLocalFolder).toHaveBeenCalledWith(
+      'p1',
+      expect.objectContaining({ folder_name: 'replacement' })
+    )
+  )
+  expect(useProjectFolderStore.getState().folders['p1']?.path).toBe('/home/u/replacement')
+  expect(reveal).not.toHaveBeenCalled()
+})
+
+it('shows a registry refusal without claiming the folder was integrated', async () => {
+  useWorkspaceStore.setState({ linked: true })
+  pick.mockResolvedValue('/home/u/replacement')
+  link.mockResolvedValue({ ok: false })
+  render(<ProjectFolderCard projectId="p1" />)
+  await userEvent.click(screen.getByRole('button', { name: /select folder/i }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(/could not link/i)
+  expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
+  expect(localFolderApi.linkLocalFolder).not.toHaveBeenCalled()
+})
+
+it('ignores a native picker result after switching projects', async () => {
+  let finish!: (path: string) => void
+  pick.mockImplementation(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve
+      })
+  )
+  const { rerender } = render(<ProjectFolderCard projectId="p1" />)
+  await userEvent.click(screen.getByRole('button', { name: /select folder/i }))
+  rerender(<ProjectFolderCard projectId="p2" />)
+  await act(async () => {
+    finish('/home/u/old-project')
+  })
+  expect(link).not.toHaveBeenCalled()
+  expect(localFolderApi.linkLocalFolder).not.toHaveBeenCalled()
+})
+
+it('keeps Change folder available after registry acknowledgement when graph linking is still pending', async () => {
+  useWorkspaceStore.setState({ linked: true })
+  pick.mockResolvedValue('/home/u/arm')
+  vi.mocked(localFolderApi.linkLocalFolder).mockReturnValue(new Promise<never>(() => undefined))
+  render(<ProjectFolderCard projectId="p1" />)
+  await userEvent.click(screen.getByRole('button', { name: /select folder/i }))
+  expect(await screen.findByRole('button', { name: /change folder/i })).toBeEnabled()
+})
+
+it('restores selection controls when unlink cancels a pending Change folder picker', async () => {
+  linkedCard()
+  let finish!: (path: string) => void
+  pick.mockImplementation(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve
+      })
+  )
+  render(<ProjectFolderCard projectId="p1" />)
+  await userEvent.click(screen.getByRole('button', { name: /change folder/i }))
+  await userEvent.click(screen.getByRole('button', { name: /unlink/i }))
+  await act(async () => {
+    finish('/home/u/stale')
+  })
+  expect(screen.getByRole('button', { name: /select folder/i })).toBeEnabled()
+  expect(localFolderApi.linkLocalFolder).not.toHaveBeenCalled()
+  expect(link).not.toHaveBeenCalled()
+})
+
+it('does not restore pending selection state when returning to a project', async () => {
+  linkedCard()
+  let finish!: (path: string) => void
+  pick.mockImplementation(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve
+      })
+  )
+  const { rerender } = render(<ProjectFolderCard projectId="p1" />)
+  await userEvent.click(screen.getByRole('button', { name: /change folder/i }))
+  rerender(<ProjectFolderCard projectId="p2" />)
+  rerender(<ProjectFolderCard projectId="p1" />)
+  expect(screen.getByRole('button', { name: /change folder/i })).toBeEnabled()
+  await act(async () => {
+    finish('/home/u/stale')
+  })
+  expect(link).not.toHaveBeenCalled()
+})
+
+function projectFolderBindingTests(): void {
   it('degrades honestly when not running under the desktop app', () => {
     vi.mocked(bridge.getDesktopFolderBridge).mockReturnValue(null)
     render(<ProjectFolderCard projectId="p1" />)
@@ -177,7 +336,9 @@ describe('ProjectFolderCard', () => {
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
     expect(localFolderApi.linkLocalFolder).not.toHaveBeenCalled()
   })
+}
 
+function projectFolderActionsTests(): void {
   it('opens the linked folder in the editor through the API, on the root entity', async () => {
     linkedCard()
     render(<ProjectFolderCard projectId="p1" />)
@@ -197,7 +358,7 @@ describe('ProjectFolderCard', () => {
     reveal.mockResolvedValue({ ok: true })
     render(<ProjectFolderCard projectId="p1" />)
     await waitFor(() => expect(rootEditor()).toBeEnabled())
-    await userEvent.click(screen.getByRole('button', { name: /open folder/i }))
+    await userEvent.click(screen.getByRole('button', { name: /show in file manager/i }))
     expect(reveal).toHaveBeenCalledWith('/home/u/arm')
     await userEvent.click(screen.getByRole('button', { name: /unlink/i }))
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
@@ -243,9 +404,9 @@ describe('ProjectFolderCard', () => {
     expect(await screen.findByText(/repository not found/i)).toBeInTheDocument()
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
   })
-})
+}
 
-describe('ProjectFolderCard — scan state and detected projects', () => {
+function detectedProjectActionsTests(): void {
   it('lists every detected project (not the root) with its own Open-in buttons', async () => {
     linkedCard()
     render(<ProjectFolderCard projectId="p1" />)
@@ -313,7 +474,9 @@ describe('ProjectFolderCard — scan state and detected projects', () => {
     })
     expect(await screen.findByText('KiCad is not installed on this machine')).toBeInTheDocument()
   })
+}
 
+function projectScanAvailabilityTests(): void {
   it('disables every Open control — never hides it — while the companion is offline', async () => {
     linkedCard()
     vi.mocked(localFolderApi.getLocalFolder).mockResolvedValue(
@@ -329,7 +492,7 @@ describe('ProjectFolderCard — scan state and detected projects', () => {
     }
     expect(screen.getByText(COMPANION_OFFLINE_NOTE)).toBeInTheDocument()
     // The OS reveal does not need the companion.
-    expect(screen.getByRole('button', { name: /open folder/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /show in file manager/i })).toBeEnabled()
   })
 
   it('says VS Code is missing when the scan found none', async () => {
@@ -388,15 +551,4 @@ describe('ProjectFolderCard — scan state and detected projects', () => {
     expect(screen.queryByText(NOTHING_DETECTED_TEXT)).toBeNull()
     expect(rootEditor()).toBeDisabled()
   })
-})
-
-describe('ProjectFolderCard — long paths', () => {
-  it('clips the path to one line ending in an ellipsis and keeps the full path in the title', () => {
-    const long = '/Users/someone/Documents/robotics/teams/strider/rover-mk2/firmware/workspace'
-    useProjectFolderStore.setState({ folders: { p1: { path: long } } })
-    render(<ProjectFolderCard projectId="p1" />)
-    const path = screen.getByTitle(long)
-    expect(path).toHaveTextContent(long)
-    expect(path).toHaveStyle({ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' })
-  })
-})
+}

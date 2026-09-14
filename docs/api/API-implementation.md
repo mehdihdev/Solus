@@ -866,11 +866,24 @@ require the `member` role; reads need only a resolvable project.
 | GET    | `/sol/conversations/{id}`          | Get one owned conversation                                                              | `200`   |
 | DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                                                       | `204`   |
 | GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                                          | `200`   |
+| GET    | `/sol/conversations/{id}/confirmations` | Restore this owner's active, unexpired approval cards | `200` |
 | PATCH  | `/sol/conversations/{id}`          | Rename an owned conversation (`{title}`, non-blank, trimmed — SOLUSDEV-233)             | `200`   |
 | POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
 | POST   | `/sol/confirmations/{id}`          | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
 
 SOLX-04: `GET /sol/tools` additionally lists `solus.list_integrations`, `solus.connect_integration` (destructive — parks through the CTR-03 gate), and `solus.verify_integration` when the connector registry is wired. Connecting from chat is discovery → confirm → verify; OAuth providers are pointed at the in-app flow (credentials never pass through tool arguments).
+
+**Approval restoration (SOLUSDEV-261).** The confirmations GET requires the same
+owner-private conversation access as history, with explicit project, team, user,
+and conversation scoping. It returns an envelope containing an ordered array of
+`{confirmation_id, tool, summary, preview, expires_at}` for pending rows whose
+30-minute expiry is still in the future. Arguments are never returned. Decided
+and expired actions are not actionable cards; their existing history remains.
+Reading never extends expiry, rebuilds a preview, approves, or executes anything.
+Repeated proposals with identical tool and canonical JSON arguments reuse the
+same active row and stored preview within the same owner's conversation. A
+conversation row lock serializes concurrent park checks and inserts. This does
+not reuse decided/expired rows or treat chat text as approval.
 
 **Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, mentions?, preferences?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;

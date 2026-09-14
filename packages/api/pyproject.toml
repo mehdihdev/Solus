@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Solus core FastAPI backend (docs/api/API.md)"
 requires-python = ">=3.12"
 dependencies = [
+    "solus-contracts",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.7",
@@ -63,9 +64,6 @@ dev = [
     "cadquery-ocp-novtk>=7.9,<8",
     # The uvicorn E2E drives a real companion against a real socket (BRG-01/02).
     "solus-companion",
-    # Parity tests pin the human-owned contracts package to the in-tree draft
-    # (tests/test_contracts_package.py, SOLUSDEV-100).
-    "solus-contracts",
     "pytest-xdist>=3.6",
     # A hung test must fail with a stack trace inside the CI hour, never eat it
     # (SOLUSDEV-246: a test:python job stalled at 63% until the 1 h job timeout).

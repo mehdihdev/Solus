@@ -71,3 +71,6 @@ integrations/mcp/*/.venv/
 
 # Machine-local selection of existing Docker volumes; never shared automatically.
 /docker-compose.local.yml
+
+# Machine-local development credit opt-in; never a production entitlement.
+/.solus-dev-credits.json

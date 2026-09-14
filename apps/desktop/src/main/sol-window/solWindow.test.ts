@@ -179,158 +179,9 @@ describe('placeSolWindow', () => {
 })
 
 describe('manager', () => {
-  it('open creates one window near the cursor; a repeat focuses it; closed clears the slot', () => {
-    const h = harness({}, { x: 2500, y: 300 })
-    const m = createSolWindowManager(h.deps)
-    expect(m.isOpen()).toBe(false)
-    m.open()
-    expect(h.windows).toHaveLength(1)
-    expect(h.windows[0].bounds).toEqual(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_B))
-    m.open()
-    expect(h.windows).toHaveLength(1)
-    expect(h.windows[0].focus).toHaveBeenCalledTimes(1)
-    h.windows[0].close()
-    expect(m.isOpen()).toBe(false)
-    m.open({ near: { x: 5, y: 5 } })
-    expect(h.windows).toHaveLength(2)
-    expect(h.windows[1].bounds).toEqual(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_A))
-  })
-
-  it('saves geometry 300 ms after the last move/resize, tagged with its display', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    const w = h.windows[0]
-    w.bounds = { x: 2000, y: 100, width: 500, height: 700 }
-    w.emit('move')
-    w.emit('resize')
-    expect(h.settings.window).toBeNull()
-    // Two events, one live timer: the first was cleared by the second (debounce).
-    const live = h.timers.filter((t) => t.ms === GEOMETRY_SAVE_DEBOUNCE_MS)
-    expect(live).toHaveLength(1)
-    live[0].fn()
-    expect(h.settings.window).toEqual({ x: 2000, y: 100, width: 500, height: 700, displayId: 2 })
-  })
-
-  it('a pending save is flushed on close, and nothing fires after closed', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    const w = h.windows[0]
-    w.bounds = { x: 50, y: 60, width: 400, height: 500 }
-    w.emit('move')
-    w.close()
-    expect(h.settings.window).toEqual({ x: 50, y: 60, width: 400, height: 500, displayId: 1 })
-    expect(h.timers.every((t) => t.ms === -1)).toBe(true)
-  })
-
-  it('always-on-top is read from settings at creation and toggled live', () => {
-    const h = harness({ alwaysOnTop: true })
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    expect(h.windows[0].alwaysOnTop).toBe(true)
-    m.setAlwaysOnTop(false)
-    expect(h.windows[0].alwaysOnTop).toBe(false)
-    expect(h.settings.alwaysOnTop).toBe(false)
-    h.windows[0].close()
-    m.setAlwaysOnTop(true) // no window: settings only, no throw
-    expect(h.settings.alwaysOnTop).toBe(true)
-  })
-
-  it('pushState reaches every live window; pushRegion reaches only the SOL window', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    const region = {
-      pngBase64: 'AA==',
-      contextPngBase64: 'AA==',
-      width: 1,
-      height: 1,
-      source: null,
-      capturedAt: 1
-    }
-    expect(m.pushRegion(region)).toBe(false)
-    m.open()
-    m.pushState(STATE)
-    expect(h.others[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.state, payload: STATE }])
-    expect(h.windows[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.state, payload: STATE }])
-    m.markReady(h.windows[0].handle.webContents)
-    expect(m.pushRegion(region)).toBe(true)
-    expect(h.windows[0].sent.at(-1)).toEqual({
-      channel: SOL_WINDOW_CHANNELS.region,
-      payload: region
-    })
-    expect(h.others[0].sent).toHaveLength(1)
-  })
-
-  it('pushState reaches the SOL window even when allWindows() is empty', () => {
-    const h = harness()
-    const m = createSolWindowManager({ ...h.deps, allWindows: () => [] })
-    m.open()
-    m.pushState(STATE)
-    expect(h.windows[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.state, payload: STATE }])
-  })
-
-  it('a pending region dies with its window: closed drops it, the next window never sees it', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    const region = {
-      pngBase64: 'AA==',
-      contextPngBase64: '',
-      width: 1,
-      height: 1,
-      source: null,
-      capturedAt: 1
-    }
-    expect(m.pushRegion(region)).toBe(true)
-    h.windows[0].close()
-    m.open()
-    m.markReady(h.windows[1].handle.webContents)
-    expect(h.windows[0].sent).toEqual([])
-    expect(h.windows[1].sent).toEqual([])
-  })
-
-  it('a region pushed before the renderer asked for state is queued, then delivered once', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    const w = h.windows[0]
-    const region = {
-      pngBase64: 'AA==',
-      contextPngBase64: '',
-      width: 1,
-      height: 1,
-      source: null,
-      capturedAt: 1
-    }
-    expect(m.pushRegion(region)).toBe(true)
-    expect(w.sent).toEqual([]) // renderer not mounted yet
-    m.markReady(h.others[0].handle.webContents) // some other renderer: not ours
-    expect(w.sent).toEqual([])
-    m.markReady(w.handle.webContents)
-    expect(w.sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.region, payload: region }])
-    m.markReady(w.handle.webContents)
-    expect(w.sent).toHaveLength(1)
-    // now live: pushes go straight through
-    expect(m.pushRegion(region)).toBe(true)
-    expect(w.sent).toHaveLength(2)
-    // a new window starts unready again
-    w.close()
-    m.open()
-    m.pushRegion(region)
-    expect(h.windows[1].sent).toEqual([])
-  })
-
-  it('isSender recognises only the live SOL window webContents', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    expect(m.isSender({})).toBe(false)
-    m.open()
-    expect(m.isSender(h.windows[0].handle.webContents)).toBe(true)
-    expect(m.isSender(h.others[0].handle.webContents)).toBe(false)
-    h.windows[0].close()
-    expect(m.isSender(h.windows[0].handle.webContents)).toBe(false)
-  })
+  registerWindowLifecycleAndGeometryTests()
+  registerWindowStateBroadcastsTests()
+  registerWindowRegionReadinessTests()
 })
 
 const STATE: SolState = {
@@ -447,3 +298,162 @@ describe('window hardening (SOLX-02 Phase-4 security, kept)', () => {
     })
   })
 })
+
+function registerWindowLifecycleAndGeometryTests(): void {
+  it('open creates one window near the cursor; a repeat focuses it; closed clears the slot', () => {
+    const h = harness({}, { x: 2500, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    expect(m.isOpen()).toBe(false)
+    m.open()
+    expect(h.windows).toHaveLength(1)
+    expect(h.windows[0].bounds).toEqual(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_B))
+    m.open()
+    expect(h.windows).toHaveLength(1)
+    expect(h.windows[0].focus).toHaveBeenCalledTimes(1)
+    h.windows[0].close()
+    expect(m.isOpen()).toBe(false)
+    m.open({ near: { x: 5, y: 5 } })
+    expect(h.windows).toHaveLength(2)
+    expect(h.windows[1].bounds).toEqual(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_A))
+  })
+
+  it('saves geometry 300 ms after the last move/resize, tagged with its display', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    w.bounds = { x: 2000, y: 100, width: 500, height: 700 }
+    w.emit('move')
+    w.emit('resize')
+    expect(h.settings.window).toBeNull()
+    // Two events, one live timer: the first was cleared by the second (debounce).
+    const live = h.timers.filter((t) => t.ms === GEOMETRY_SAVE_DEBOUNCE_MS)
+    expect(live).toHaveLength(1)
+    live[0].fn()
+    expect(h.settings.window).toEqual({ x: 2000, y: 100, width: 500, height: 700, displayId: 2 })
+  })
+
+  it('a pending save is flushed on close, and nothing fires after closed', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    w.bounds = { x: 50, y: 60, width: 400, height: 500 }
+    w.emit('move')
+    w.close()
+    expect(h.settings.window).toEqual({ x: 50, y: 60, width: 400, height: 500, displayId: 1 })
+    expect(h.timers.every((t) => t.ms === -1)).toBe(true)
+  })
+
+  it('always-on-top is read from settings at creation and toggled live', () => {
+    const h = harness({ alwaysOnTop: true })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    expect(h.windows[0].alwaysOnTop).toBe(true)
+    m.setAlwaysOnTop(false)
+    expect(h.windows[0].alwaysOnTop).toBe(false)
+    expect(h.settings.alwaysOnTop).toBe(false)
+    h.windows[0].close()
+    m.setAlwaysOnTop(true) // no window: settings only, no throw
+    expect(h.settings.alwaysOnTop).toBe(true)
+  })
+}
+
+function registerWindowStateBroadcastsTests(): void {
+  it('pushState reaches every live window; pushRegion reaches only the SOL window', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    const region = {
+      pngBase64: 'AA==',
+      contextPngBase64: 'AA==',
+      width: 1,
+      height: 1,
+      source: null,
+      capturedAt: 1
+    }
+    expect(m.pushRegion(region)).toBe(false)
+    m.open()
+    m.pushState(STATE)
+    expect(h.others[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.state, payload: STATE }])
+    expect(h.windows[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.state, payload: STATE }])
+    m.markReady(h.windows[0].handle.webContents)
+    expect(m.pushRegion(region)).toBe(true)
+    expect(h.windows[0].sent.at(-1)).toEqual({
+      channel: SOL_WINDOW_CHANNELS.region,
+      payload: region
+    })
+    expect(h.others[0].sent).toHaveLength(1)
+  })
+
+  it('pushState reaches the SOL window even when allWindows() is empty', () => {
+    const h = harness()
+    const m = createSolWindowManager({ ...h.deps, allWindows: () => [] })
+    m.open()
+    m.pushState(STATE)
+    expect(h.windows[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.state, payload: STATE }])
+  })
+
+  it('a pending region dies with its window: closed drops it, the next window never sees it', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const region = {
+      pngBase64: 'AA==',
+      contextPngBase64: '',
+      width: 1,
+      height: 1,
+      source: null,
+      capturedAt: 1
+    }
+    expect(m.pushRegion(region)).toBe(true)
+    h.windows[0].close()
+    m.open()
+    m.markReady(h.windows[1].handle.webContents)
+    expect(h.windows[0].sent).toEqual([])
+    expect(h.windows[1].sent).toEqual([])
+  })
+}
+
+function registerWindowRegionReadinessTests(): void {
+  it('a region pushed before the renderer asked for state is queued, then delivered once', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    const region = {
+      pngBase64: 'AA==',
+      contextPngBase64: '',
+      width: 1,
+      height: 1,
+      source: null,
+      capturedAt: 1
+    }
+    expect(m.pushRegion(region)).toBe(true)
+    expect(w.sent).toEqual([]) // renderer not mounted yet
+    m.markReady(h.others[0].handle.webContents) // some other renderer: not ours
+    expect(w.sent).toEqual([])
+    m.markReady(w.handle.webContents)
+    expect(w.sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.region, payload: region }])
+    m.markReady(w.handle.webContents)
+    expect(w.sent).toHaveLength(1)
+    // now live: pushes go straight through
+    expect(m.pushRegion(region)).toBe(true)
+    expect(w.sent).toHaveLength(2)
+    // a new window starts unready again
+    w.close()
+    m.open()
+    m.pushRegion(region)
+    expect(h.windows[1].sent).toEqual([])
+  })
+
+  it('isSender recognises only the live SOL window webContents', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    expect(m.isSender({})).toBe(false)
+    m.open()
+    expect(m.isSender(h.windows[0].handle.webContents)).toBe(true)
+    expect(m.isSender(h.others[0].handle.webContents)).toBe(false)
+    h.windows[0].close()
+    expect(m.isSender(h.windows[0].handle.webContents)).toBe(false)
+  })
+}

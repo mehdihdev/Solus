@@ -1,0 +1,38 @@
+server: isaac
+tools:
+  - name: probe
+    requires_confirmation: false
+    reason: Read-only installed runtime identity; does not launch Isaac
+  - name: status
+    requires_confirmation: false
+    reason: Read-only status of this project-owned simulator
+  - name: start
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 195
+    reason: Starts one owned headless installed Isaac simulator
+  - name: stop
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 20
+    reason: Stops only this companion-owned simulator session
+  - name: load_model
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 165
+    reason: Replaces the owned scene with the pinned graph-bound SO-101 model and bottle
+  - name: set_joint_limits
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 25
+    reason: Changes exactly one graph-bound simulated joint limit
+  - name: set_sensor_pose
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 25
+    reason: Changes exactly one graph-bound contact sensor local pose
+  - name: run_routine
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 55
+    reason: Runs a finite grasp_bottle trajectory with explicit joint ranges and physical readback

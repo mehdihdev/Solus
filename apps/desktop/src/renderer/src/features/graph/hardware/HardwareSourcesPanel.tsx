@@ -30,15 +30,7 @@ function failure(reason: string): string {
   }
 }
 
-export function HardwareSourcesPanel({
-  projectId,
-  mode,
-  sourceRefs = EMPTY_REFS
-}: {
-  projectId: string
-  mode: SolMode
-  sourceRefs?: readonly string[]
-}): React.JSX.Element {
+function useLocalSourceList(projectId: string) {
   const { generation, authEpoch } = useHardwareGeneration(projectId)
   const [sources, setSources] = useState<Source[]>([])
   const [accountId, setAccountId] = useState<string | null>(null)
@@ -81,6 +73,35 @@ export function HardwareSourcesPanel({
     }
   }, [projectId, authEpoch, reload, generation])
 
+  return {
+    generation,
+    sources,
+    setSources,
+    accountId,
+    busy,
+    setBusy,
+    error,
+    setError,
+    status,
+    setStatus,
+    setReload
+  }
+}
+
+function useLocalSourceActions(projectId: string) {
+  const {
+    generation,
+    sources,
+    setSources,
+    accountId,
+    busy,
+    setBusy,
+    error,
+    setError,
+    status,
+    setStatus,
+    setReload
+  } = useLocalSourceList(projectId)
   const receive = (
     result: Awaited<ReturnType<Sources['pick']>>,
     kind: 'pick' | 'recheck'
@@ -120,6 +141,20 @@ export function HardwareSourcesPanel({
       if (ticket === generation.current) setBusy(false)
     }
   }
+  return { sources, accountId, busy, error, status, setReload, act }
+}
+
+export function HardwareSourcesPanel({
+  projectId,
+  mode,
+  sourceRefs = EMPTY_REFS
+}: {
+  projectId: string
+  mode: SolMode
+  sourceRefs?: readonly string[]
+}): React.JSX.Element {
+  const { sources, accountId, busy, error, status, setReload, act } =
+    useLocalSourceActions(projectId)
   const missing = [
     ...new Set(
       sourceRefs

@@ -72,6 +72,12 @@ function stubApi(overrides: Partial<OAuthConnectApi> = {}): OAuthConnectApi {
     createSource: vi.fn(async () => source()),
     updateSource: vi.fn(async () => source()),
     triggerSync: vi.fn(async () => ({ job_id: 'j1', status: 'queued' })),
+    getJob: vi.fn(async () => ({
+      id: 'j1',
+      project_id: 'p1',
+      status: 'succeeded' as const,
+      error: null
+    })),
     getSyncs: vi.fn(async () => [sync()]),
     getSource: vi.fn(async () => source({ entity_count: 214 })),
     ...overrides
@@ -113,6 +119,16 @@ function makeDeps(
 const OPTS = { redirectUri: 'http://127.0.0.1:7421/cb', displayName: 'FutureCAD' }
 
 describe('runOAuthConnect', () => {
+  registerOAuthOrchestrationTests()
+
+  registerOAuthAccountReuseTests()
+
+  registerOAuthStepFailuresTests()
+
+  registerOAuthFallbacksTests()
+})
+
+function registerOAuthOrchestrationTests(): void {
   it('drives oauth → exchange → configure → sync → done on the happy path', async () => {
     const api = stubApi()
     const { deps, states } = makeDeps(api, stubBridge({ code: 'cd' }))
@@ -168,7 +184,9 @@ describe('runOAuthConnect', () => {
     expect(labels).toContain('Linking your FutureCAD account…')
     expect(labels).not.toMatch(/github/i)
   })
+}
 
+function registerOAuthAccountReuseTests(): void {
   it('falls back with an error when the Electron bridge is absent', async () => {
     const api = stubApi()
     const { deps, states } = makeDeps(api, null)
@@ -181,10 +199,10 @@ describe('runOAuthConnect', () => {
     expect(states[states.length - 1].phase).toBe('error')
   })
 
-  it('reuses a linked account: binds the project and skips the handshake (SOLUSDEV-241)', async () => {
+  it.each([true, false])('reuses a linked account with desktop bridge=%s', async (hasBridge) => {
     const api = stubApi()
     const bridge = stubBridge({ code: 'cd' })
-    const { deps, states } = makeDeps(api, bridge)
+    const { deps, states } = makeDeps(api, hasBridge ? bridge : null)
     const chooseAccess = vi.fn(async () => ({ access: 'write' }))
 
     const result = await runOAuthConnect({ ...deps, chooseAccess }, 'p1', PROVIDER, {
@@ -228,7 +246,9 @@ describe('runOAuthConnect', () => {
     expect(result.error).toBe('Future CAD was linked to your account but not to this project.')
     expect(api.triggerSync).not.toHaveBeenCalled()
   })
+}
 
+function registerOAuthStepFailuresTests(): void {
   it('marks an error when the OAuth callback returns an error', async () => {
     const api = stubApi()
     const { deps, states } = makeDeps(api, stubBridge({ error: 'access_denied' }))
@@ -266,7 +286,13 @@ describe('runOAuthConnect', () => {
 
   it('reports the sync error when the sync fails', async () => {
     const api = stubApi({
-      getSyncs: vi.fn(async () => [sync({ status: 'failed', errors: ['rate limited'] })])
+      getJob: vi.fn(async () => ({
+        id: 'j1',
+        project_id: 'p1',
+        status: 'failed' as const,
+        error: { message: 'rate limited' }
+      })),
+      getSyncs: vi.fn(async () => [sync({ status: 'succeeded' })])
     })
     const { deps, states } = makeDeps(api, stubBridge({ code: 'cd' }))
 
@@ -277,7 +303,9 @@ describe('runOAuthConnect', () => {
     expect(api.getSource).not.toHaveBeenCalled()
     expect(states[states.length - 1]).toMatchObject({ phase: 'error', error: 'rate limited' })
   })
+}
 
+function registerOAuthFallbacksTests(): void {
   it('errors and reports when an API call throws mid-flow', async () => {
     const api = stubApi({
       exchangeOAuth: vi.fn(async () => {
@@ -292,7 +320,14 @@ describe('runOAuthConnect', () => {
   })
 
   it('times out when the sync never reaches a terminal state', async () => {
-    const api = stubApi({ getSyncs: vi.fn(async () => [sync({ status: 'running' })]) })
+    const api = stubApi({
+      getJob: vi.fn(async () => ({
+        id: 'j1',
+        project_id: 'p1',
+        status: 'running' as const,
+        error: null
+      }))
+    })
     const { deps } = makeDeps(api, stubBridge({ code: 'cd' }))
     const result = await runOAuthConnect(deps, 'p1', PROVIDER, OPTS)
     expect(result.ok).toBe(false)
@@ -314,4 +349,4 @@ describe('runOAuthConnect', () => {
       error: `${PROVIDER} connect needs the desktop app.`
     })
   })
-})
+}

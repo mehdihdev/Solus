@@ -619,3 +619,124 @@ async def test_access_cannot_be_patched_onto_a_source(
     config = resp.json()["data"]["config"]
     assert config.get("documents") == ["dA"]
     assert config.get("access") != "write"
+
+
+async def test_revoke_removes_onshape_webhook_authority(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    import uuid
+
+    from solus_api.connectors.webhook_token import WEBHOOK_TOKEN_KEY, mint_webhook_token
+    from solus_api.models import Source
+
+    connection = (await _connect_account(client, alice_headers))["connection"]
+    project = await _project(client, alice_headers)
+    created = await _bind(client, alice_headers, project, connection["id"])
+    source_id = uuid.UUID(created["id"])
+    async with app.state.sessionmaker() as session:
+        source = await session.get(Source, source_id)
+        _, digest = mint_webhook_token()
+        source.config = {
+            **source.config,
+            WEBHOOK_TOKEN_KEY: digest,
+            "_onshape_webhook": {"status": "registered", "subscriptions": {"doc": "hook"}},
+        }
+        await session.commit()
+    response = await client.delete(
+        f"/api/v1/users/me/connections/{connection['id']}", headers=alice_headers
+    )
+    assert response.status_code == 200
+    async with app.state.sessionmaker() as session:
+        source = await session.get(Source, source_id)
+        assert WEBHOOK_TOKEN_KEY not in source.config
+        assert source.config["_onshape_webhook"]["status"] == "revoked"
+
+
+async def test_onshape_verified_application_is_bound_and_client_cannot_patch_it(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    import uuid
+
+    from solus_api.models import AccountConnection, Source
+
+    key = "_onshape_oauth_application"
+    monkeypatch.setattr(_CountingAccountLevel, "_client_id", "verified-app", raising=False)
+    connected = await _connect_account(client, alice_headers)
+    connection_id = connected["connection"]["id"]
+    project_id = await _project(client, alice_headers)
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/sources",
+        json={
+            "type": "onshape",
+            "name": "cad",
+            "connection_id": connection_id,
+            "config": {key: "forged"},
+        },
+        headers=alice_headers,
+    )
+    assert created.status_code == 201
+    source = created.json()["data"]
+    digest = hashlib.sha256(b"verified-app").hexdigest()
+    patched = await client.patch(
+        f"/api/v1/projects/{project_id}/sources/{source['id']}",
+        json={"config": {key: "forged"}},
+        headers=alice_headers,
+    )
+    assert patched.status_code == 200
+    async with app.state.sessionmaker() as session:
+        account = await session.get(AccountConnection, uuid.UUID(connection_id))
+        row = await session.get(Source, uuid.UUID(source["id"]))
+        assert account is not None and account.config[key] == digest
+        assert row is not None and row.config[key] == digest
+
+
+async def test_legacy_onshape_reauthorization_retains_unbound_quota(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uuid
+
+    from solus_api.models import AccountConnection
+
+    connected = await _connect_account(client, alice_headers)
+    identity = connected["connection"]["id"]
+    monkeypatch.setattr(_CountingAccountLevel, "_client_id", "newly-configured-app", raising=False)
+    again = await _connect_account(client, alice_headers)
+    assert again["connection"]["id"] == identity
+    async with app.state.sessionmaker() as session:
+        account = await session.get(AccountConnection, uuid.UUID(identity))
+        assert account is not None
+        assert "_onshape_oauth_application" not in account.config
+
+
+async def test_known_onshape_application_binding_updates_only_after_successful_reauthorization(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    import uuid
+
+    from solus_api.models import AccountConnection
+
+    monkeypatch.setattr(_CountingAccountLevel, "_client_id", "old-app", raising=False)
+    connected = await _connect_account(client, alice_headers)
+    identity = connected["connection"]["id"]
+    for application in ("old-app", "replacement-app"):
+        monkeypatch.setattr(_CountingAccountLevel, "_client_id", application)
+        again = await _connect_account(client, alice_headers)
+        assert again["connection"]["id"] == identity
+        async with app.state.sessionmaker() as session:
+            account = await session.get(AccountConnection, uuid.UUID(identity))
+            assert account is not None
+            assert (
+                account.config["_onshape_oauth_application"]
+                == hashlib.sha256(application.encode()).hexdigest()
+            )

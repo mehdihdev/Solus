@@ -62,172 +62,10 @@ describe('streamSolMessage', () => {
     'event: token\ndata: {"text":"Hi"}\n\n' +
     'event: message\ndata: {"role":"assistant","content":"Hi.","citations":["entity:imu"]}\n\n' +
     'event: done\ndata: {"conversation_id":"c1","turn_id":"t1"}\n\n'
-
-  it('POSTs content + action_mode with the bearer token and streams parsed events', async () => {
-    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
-    const events: SolStreamEvent[] = []
-    await streamSolMessage({
-      projectId: 'p1',
-      conversationId: 'c1',
-      content: 'why is the IMU noisy?',
-      actionMode: 'do',
-      onEvent: (e) => events.push(e),
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: async () => 'jwt-123',
-      baseUrl: 'http://api.test/api/v1'
-    })
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('http://api.test/api/v1/projects/p1/sol/conversations/c1/messages')
-    expect(init.method).toBe('POST')
-    expect(init.headers).toMatchObject({
-      Authorization: 'Bearer jwt-123',
-      Accept: 'text/event-stream'
-    })
-    expect(JSON.parse(init.body as string)).toEqual({
-      content: 'why is the IMU noisy?',
-      action_mode: 'do',
-      // Always present, so the server sees one body shape (SOLUSDEV-168).
-      mentions: []
-    })
-    expect(events.map((e) => e.type)).toEqual(['token', 'message', 'done'])
-  })
-
-  it('sends think_harder only when the composer toggle is on', async () => {
-    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
-    const base = {
-      projectId: 'p1',
-      conversationId: 'c1',
-      content: 'what is I2C',
-      actionMode: 'guide' as const,
-      onEvent: () => {},
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: async () => null,
-      baseUrl: 'http://api.test/api/v1'
-    }
-    await streamSolMessage({ ...base, thinkHarder: true })
-    await streamSolMessage({ ...base, thinkHarder: false })
-    await streamSolMessage(base)
-    const bodies = fetchImpl.mock.calls.map(
-      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
-    )
-    expect(bodies[0]).toMatchObject({ think_harder: true })
-    expect(bodies[1]).not.toHaveProperty('think_harder')
-    expect(bodies[2]).not.toHaveProperty('think_harder')
-  })
-
-  it('posts the screenshot as `screenshot` (crop + context) only when one is attached', async () => {
-    // SOLUSDEV-252 S3 (docs/architecture/sol-window.md §8): at most one per turn.
-    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
-    const base = {
-      projectId: 'p1',
-      conversationId: 'c1',
-      content: 'What do you think this is?',
-      actionMode: 'guide' as const,
-      onEvent: () => {},
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: async () => null,
-      baseUrl: 'http://api.test/api/v1'
-    }
-    const screenshot = {
-      media_type: 'image/png' as const,
-      data: 'iVBORw0KGgo=',
-      width: 320,
-      height: 200,
-      source: { app: 'Onshape', title: 'Bracket v3' },
-      context: 'iVBORw0KGgoCONTEXT='
-    }
-    await streamSolMessage({ ...base, screenshot })
-    await streamSolMessage(base)
-    const bodies = fetchImpl.mock.calls.map(
-      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
-    )
-    expect(bodies[0]).toMatchObject({ screenshot })
-    expect(bodies[1]).not.toHaveProperty('screenshot')
-  })
-
-  it('sends the engineering preferences beside the text, and omits the key when null', async () => {
-    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
-    const preferences = {
-      schema_version: 1,
-      freeText: '',
-      codeStyle: '',
-      mechanical: '',
-      electrical: 'Prefer 0.1 mm clearance minimum on all boards.',
-      documentation: '',
-      unitsStandards: ''
-    }
-    const base = {
-      projectId: 'p1',
-      conversationId: 'c1',
-      content: 'what clearance?',
-      actionMode: 'guide' as const,
-      onEvent: () => undefined,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: async () => 'jwt',
-      baseUrl: 'http://api.test/api/v1'
-    }
-    await streamSolMessage({ ...base, preferences })
-    await streamSolMessage({ ...base, preferences: null })
-    const bodies = fetchImpl.mock.calls.map(
-      (call) =>
-        JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as Record<
-          string,
-          unknown
-        >
-    )
-    expect(bodies[0].preferences).toEqual(preferences)
-    expect('preferences' in bodies[1]).toBe(false)
-  })
-
-  it('sends @-mentioned entity ids beside the text, never encoded into it', async () => {
-    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
-    await streamSolMessage({
-      projectId: 'p1',
-      conversationId: 'c1',
-      content: 'will @Camera Bracket clear the belt?',
-      actionMode: 'do',
-      mentions: ['e-1', 'e-2'],
-      onEvent: () => undefined,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: async () => null,
-      baseUrl: 'http://api.test/api/v1'
-    })
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
-    expect(JSON.parse(init.body as string).mentions).toEqual(['e-1', 'e-2'])
-  })
-
-  it('omits the Authorization header when unauthenticated', async () => {
-    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
-    await streamSolMessage({
-      projectId: 'p1',
-      conversationId: 'c1',
-      content: 'hello',
-      actionMode: 'guide',
-      onEvent: () => undefined,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: async () => null,
-      baseUrl: 'http://api.test'
-    })
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
-    expect(init.headers).not.toHaveProperty('Authorization')
-  })
-
-  it('rejects on a non-2xx status instead of parsing an error page', async () => {
-    const fetchImpl = vi.fn(async () => sseResponse('', { ok: false, status: 429 }))
-    await expect(
-      streamSolMessage({
-        projectId: 'p1',
-        conversationId: 'c1',
-        content: 'hello',
-        actionMode: 'guide',
-        onEvent: () => undefined,
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-        getToken: async () => null,
-        baseUrl: 'http://api.test'
-      })
-    ).rejects.toMatchObject({ status: 429 })
-  })
+  messageRequestRoutingTests(WIRE)
+  messageRequestScreenshotTests(WIRE)
+  messageRequestContextTests(WIRE)
+  messageRequestAuthorizationTests(WIRE)
 })
 
 describe('path encoding (SOLX-02 Phase-4 security)', () => {
@@ -314,3 +152,177 @@ describe('fetchArtifactBlob', () => {
     ).rejects.toMatchObject({ status: 404, message: 'gone' })
   })
 })
+
+function messageRequestRoutingTests(WIRE: string): void {
+  it('POSTs content + action_mode with the bearer token and streams parsed events', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const events: SolStreamEvent[] = []
+    await streamSolMessage({
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'why is the IMU noisy?',
+      actionMode: 'do',
+      onEvent: (e) => events.push(e),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => 'jwt-123',
+      baseUrl: 'http://api.test/api/v1'
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('http://api.test/api/v1/projects/p1/sol/conversations/c1/messages')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer jwt-123',
+      Accept: 'text/event-stream'
+    })
+    expect(JSON.parse(init.body as string)).toEqual({
+      content: 'why is the IMU noisy?',
+      action_mode: 'do',
+      // Always present, so the server sees one body shape (SOLUSDEV-168).
+      mentions: []
+    })
+    expect(events.map((e) => e.type)).toEqual(['token', 'message', 'done'])
+  })
+
+  it('sends think_harder only when the composer toggle is on', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'what is I2C',
+      actionMode: 'guide' as const,
+      onEvent: () => {},
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    }
+    await streamSolMessage({ ...base, thinkHarder: true })
+    await streamSolMessage({ ...base, thinkHarder: false })
+    await streamSolMessage(base)
+    const bodies = fetchImpl.mock.calls.map(
+      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
+    )
+    expect(bodies[0]).toMatchObject({ think_harder: true })
+    expect(bodies[1]).not.toHaveProperty('think_harder')
+    expect(bodies[2]).not.toHaveProperty('think_harder')
+  })
+}
+
+function messageRequestScreenshotTests(WIRE: string): void {
+  it('posts the screenshot as `screenshot` (crop + context) only when one is attached', async () => {
+    // SOLUSDEV-252 S3 (docs/architecture/sol-window.md §8): at most one per turn.
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'What do you think this is?',
+      actionMode: 'guide' as const,
+      onEvent: () => {},
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    }
+    const screenshot = {
+      media_type: 'image/png' as const,
+      data: 'iVBORw0KGgo=',
+      width: 320,
+      height: 200,
+      source: { app: 'Onshape', title: 'Bracket v3' },
+      context: 'iVBORw0KGgoCONTEXT='
+    }
+    await streamSolMessage({ ...base, screenshot })
+    await streamSolMessage(base)
+    const bodies = fetchImpl.mock.calls.map(
+      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
+    )
+    expect(bodies[0]).toMatchObject({ screenshot })
+    expect(bodies[1]).not.toHaveProperty('screenshot')
+  })
+}
+
+function messageRequestContextTests(WIRE: string): void {
+  it('sends the engineering preferences beside the text, and omits the key when null', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const preferences = {
+      schema_version: 1,
+      freeText: '',
+      codeStyle: '',
+      mechanical: '',
+      electrical: 'Prefer 0.1 mm clearance minimum on all boards.',
+      documentation: '',
+      unitsStandards: ''
+    }
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'what clearance?',
+      actionMode: 'guide' as const,
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => 'jwt',
+      baseUrl: 'http://api.test/api/v1'
+    }
+    await streamSolMessage({ ...base, preferences })
+    await streamSolMessage({ ...base, preferences: null })
+    const bodies = fetchImpl.mock.calls.map(
+      (call) =>
+        JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as Record<
+          string,
+          unknown
+        >
+    )
+    expect(bodies[0].preferences).toEqual(preferences)
+    expect('preferences' in bodies[1]).toBe(false)
+  })
+
+  it('sends @-mentioned entity ids beside the text, never encoded into it', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    await streamSolMessage({
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'will @Camera Bracket clear the belt?',
+      actionMode: 'do',
+      mentions: ['e-1', 'e-2'],
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    })
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string).mentions).toEqual(['e-1', 'e-2'])
+  })
+}
+
+function messageRequestAuthorizationTests(WIRE: string): void {
+  it('omits the Authorization header when unauthenticated', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    await streamSolMessage({
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'hello',
+      actionMode: 'guide',
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test'
+    })
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(init.headers).not.toHaveProperty('Authorization')
+  })
+
+  it('rejects on a non-2xx status instead of parsing an error page', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse('', { ok: false, status: 429 }))
+    await expect(
+      streamSolMessage({
+        projectId: 'p1',
+        conversationId: 'c1',
+        content: 'hello',
+        actionMode: 'guide',
+        onEvent: () => undefined,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        getToken: async () => null,
+        baseUrl: 'http://api.test'
+      })
+    ).rejects.toMatchObject({ status: 429 })
+  })
+}

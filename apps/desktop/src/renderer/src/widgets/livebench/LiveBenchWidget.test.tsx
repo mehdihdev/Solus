@@ -55,6 +55,12 @@ afterEach(() => {
 })
 
 describe('LiveBenchWidget', () => {
+  registerTelemetryPresentationTests()
+
+  registerTelemetryRecoveryTests()
+})
+
+function registerTelemetryPresentationTests(): void {
   it('renders the empty state and fetches nothing without a focus', () => {
     render(<LiveBenchWidget focus={null} onFocusChange={vi.fn()} />)
 
@@ -117,7 +123,9 @@ describe('LiveBenchWidget', () => {
 
     await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/no telemetry yet/i))
   })
+}
 
+function registerTelemetryRecoveryTests(): void {
   it('reports the error state when the bench routes fail', async () => {
     requestMock.mockRejectedValue(new Error('api down'))
     const states: string[] = []
@@ -149,4 +157,4 @@ describe('LiveBenchWidget', () => {
 
     expect(requestMock.mock.calls.length).toBe(callsBefore)
   })
-})
+}

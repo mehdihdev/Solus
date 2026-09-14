@@ -82,36 +82,7 @@ export function PanelLinksSection(): React.JSX.Element {
       title="Onshape panel"
       sub="Link the Solus panel inside Onshape to this account. Open the panel in an Onshape document, then enter the code it shows."
     >
-      <Row label="Pairing code">
-        <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-          <input
-            aria-label="Pairing code"
-            value={code}
-            placeholder="ABCD-EFGH"
-            maxLength={16}
-            onChange={(e) => setCode(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
-              letterSpacing: '1px',
-              textTransform: 'uppercase',
-              padding: '6px 8px',
-              width: 130,
-              background: 'var(--sur2)',
-              border: '1px solid var(--bd)',
-              borderRadius: 4,
-              color: 'inherit'
-            }}
-          />
-          <Button
-            size="sm"
-            disabled={busy || code.trim().length < 4}
-            onClick={() => void onApprove()}
-          >
-            {busy ? 'Linking…' : 'Link panel'}
-          </Button>
-        </span>
-      </Row>
+      <PairingCode code={code} busy={busy} setCode={setCode} onApprove={onApprove} />
 
       {links.map((link) => (
         <Row
@@ -133,5 +104,50 @@ export function PanelLinksSection(): React.JSX.Element {
 
       <InlineError message={error} />
     </Section>
+  )
+}
+
+function PairingCode({
+  code,
+  busy,
+  setCode,
+  onApprove
+}: {
+  code: string
+  busy: boolean
+  setCode: (value: string) => void
+  onApprove: () => Promise<void>
+}): React.JSX.Element {
+  return (
+    <Row label="Pairing code">
+      <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+        <input
+          aria-label="Pairing code"
+          value={code}
+          placeholder="ABCD-EFGH"
+          maxLength={16}
+          onChange={(e) => setCode(e.target.value)}
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12,
+            letterSpacing: '1px',
+            textTransform: 'uppercase',
+            padding: '6px 8px',
+            width: 130,
+            background: 'var(--sur2)',
+            border: '1px solid var(--bd)',
+            borderRadius: 4,
+            color: 'inherit'
+          }}
+        />
+        <Button
+          size="sm"
+          disabled={busy || code.trim().length < 4}
+          onClick={() => void onApprove()}
+        >
+          {busy ? 'Linking…' : 'Link panel'}
+        </Button>
+      </span>
+    </Row>
   )
 }

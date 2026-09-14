@@ -27,7 +27,27 @@ describe('onboardingStore', () => {
   beforeEach(() => {
     useOnboardingStore.getState().reset()
   })
+  registerConnectionStateTests()
 
+  registerBuildStateTests()
+})
+
+describe('resetBuild', () => {
+  it('clears the build log, done flag and entity count without touching other state', () => {
+    const store = useOnboardingStore.getState()
+    store.setDescription('keep me')
+    store.setBuildLog([{ name: 'a', detail: 'b', state: 'ok' }])
+    store.finishBuild(7)
+    useOnboardingStore.getState().resetBuild()
+    const s = useOnboardingStore.getState()
+    expect(s.buildLog).toEqual([])
+    expect(s.buildDone).toBe(false)
+    expect(s.buildEntityCount).toBeNull()
+    expect(s.description).toBe('keep me')
+  })
+})
+
+function registerConnectionStateTests(): void {
   it('starts on the About step with nothing connected or built', () => {
     const s = useOnboardingStore.getState()
     expect(s.step).toBe(0)
@@ -86,7 +106,9 @@ describe('onboardingStore', () => {
     expect(conns.github).toEqual({ phase: 'error', error: 'GitHub sign-in was cancelled.' })
     expect(connectedCount(conns)).toBe(1)
   })
+}
 
+function registerBuildStateTests(): void {
   it('setBuildLog replaces the real sync lines wholesale', () => {
     const store = useOnboardingStore.getState()
     const first: BuildLine[] = [{ name: 'strider-fw', detail: 'checking sync…', state: 'pending' }]
@@ -125,19 +147,4 @@ describe('onboardingStore', () => {
     expect(s.buildDone).toBe(false)
     expect(s.buildEntityCount).toBeNull()
   })
-})
-
-describe('resetBuild', () => {
-  it('clears the build log, done flag and entity count without touching other state', () => {
-    const store = useOnboardingStore.getState()
-    store.setDescription('keep me')
-    store.setBuildLog([{ name: 'a', detail: 'b', state: 'ok' }])
-    store.finishBuild(7)
-    useOnboardingStore.getState().resetBuild()
-    const s = useOnboardingStore.getState()
-    expect(s.buildLog).toEqual([])
-    expect(s.buildDone).toBe(false)
-    expect(s.buildEntityCount).toBeNull()
-    expect(s.description).toBe('keep me')
-  })
-})
+}

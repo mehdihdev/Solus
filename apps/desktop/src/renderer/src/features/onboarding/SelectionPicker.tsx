@@ -4,7 +4,7 @@
 //
 // Nothing here knows what an item IS: `mode` comes from the connector's declared
 // selection, and the item's own `name`/`subtitle` are the only copy shown.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import type { SelectableItem } from '../../lib/api/resources'
 
@@ -29,6 +29,9 @@ export interface SelectionPickerProps {
   onSelect?: (items: SelectableItem[] | null) => void
   /** Items already tracked, so an edit starts from the current selection. */
   initial?: readonly string[]
+  onRefresh?: () => Promise<SelectableItem[]>
+  refreshLabel?: string
+  disabled?: boolean
 }
 
 /** Single-select: one item, chosen from a dropdown. */
@@ -60,6 +63,7 @@ function SinglePicker({ items, onSelect }: SelectionPickerProps): React.JSX.Elem
  *  valid answer — the source stays connected and simply tracks nothing. */
 function MultiPicker({ items, onSelect, initial = [] }: SelectionPickerProps): React.JSX.Element {
   const [chosen, setChosen] = useState<readonly string[]>(initial)
+  const selected = items.filter((item) => chosen.includes(item.id))
   const toggle = (id: string): void =>
     setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
@@ -88,17 +92,73 @@ function MultiPicker({ items, onSelect, initial = [] }: SelectionPickerProps): R
           </label>
         ))}
       </div>
-      <Button
-        kind="primary"
-        size="sm"
-        onClick={() => onSelect?.(items.filter((i) => chosen.includes(i.id)))}
-      >
-        Track {chosen.length > 0 ? chosen.length : 'none'}
+      <Button kind="primary" size="sm" onClick={() => onSelect?.(selected)}>
+        Track {selected.length > 0 ? selected.length : 'none'}
       </Button>
     </div>
   )
 }
 
+function useRefreshedItems(props: SelectionPickerProps) {
+  const [items, setItems] = useState(props.items)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const generation = useRef(0)
+  const pending = useRef(false)
+  useEffect(() => {
+    setItems(props.items)
+    setBusy(false)
+    setError(null)
+    pending.current = false
+    generation.current += 1
+    return () => {
+      generation.current += 1
+    }
+  }, [props.items])
+  const refresh = async (): Promise<void> => {
+    if (!props.onRefresh || pending.current || props.disabled) return
+    const current = generation.current
+    pending.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      const found = await props.onRefresh()
+      if (current === generation.current) setItems(found)
+    } catch {
+      if (current === generation.current)
+        setError('Could not refresh the list. Your selection is unchanged.')
+    } finally {
+      if (current === generation.current) {
+        pending.current = false
+        setBusy(false)
+      }
+    }
+  }
+  return { items, busy, error, refresh }
+}
+
 export function SelectionPicker(props: SelectionPickerProps): React.JSX.Element {
-  return props.mode === 'multi' ? <MultiPicker {...props} /> : <SinglePicker {...props} />
+  const listing = useRefreshedItems(props)
+  const pickerProps = { ...props, items: listing.items }
+  return (
+    <>
+      <fieldset
+        disabled={listing.busy || props.disabled}
+        style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+      >
+        {props.mode === 'multi' ? (
+          <MultiPicker {...pickerProps} />
+        ) : (
+          <SinglePicker {...pickerProps} />
+        )}
+        {props.onRefresh && (
+          <Button kind="ghost" size="sm" onClick={() => void listing.refresh()}>
+            {listing.busy ? 'Refreshing…' : (props.refreshLabel ?? 'Refresh list')}
+          </Button>
+        )}
+      </fieldset>
+      {listing.error && <div role="alert">{listing.error}</div>}
+      {!listing.busy && listing.items.length === 0 && <div role="status">No items found.</div>}
+    </>
+  )
 }

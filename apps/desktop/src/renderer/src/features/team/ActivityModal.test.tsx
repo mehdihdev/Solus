@@ -29,6 +29,20 @@ function item(id: string): ActivityApi {
 }
 
 describe('ActivityModal', () => {
+  activityFeedRowsTests()
+  activityFeedCompletenessTests()
+})
+
+describe('ViewAllActivityButton', () => {
+  it('shows the total and fires onClick', async () => {
+    const onClick = vi.fn()
+    render(<ViewAllActivityButton total={12} onClick={onClick} />)
+    await userEvent.click(screen.getByRole('button', { name: /View all activity \(12\)/ }))
+    expect(onClick).toHaveBeenCalled()
+  })
+})
+
+function activityFeedRowsTests(): void {
   it('renders every loaded row, the server total, and actor attribution', () => {
     render(
       <ActivityModal
@@ -86,7 +100,9 @@ describe('ActivityModal', () => {
     expect(container.querySelector('img')).toBeNull()
     expect(screen.getByText(/<img src=x onerror="alert\(1\)">/)).toBeInTheDocument()
   })
+}
 
+function activityFeedCompletenessTests(): void {
   it('says honestly when it shows fewer rows than the total and cannot page', () => {
     render(<ActivityModal activity={[item('a1'), item('a2')]} total={20} onClose={vi.fn()} />)
     expect(screen.getByText(/most recent 2 of 20/)).toBeInTheDocument()
@@ -113,13 +129,4 @@ describe('ActivityModal', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalled()
   })
-})
-
-describe('ViewAllActivityButton', () => {
-  it('shows the total and fires onClick', async () => {
-    const onClick = vi.fn()
-    render(<ViewAllActivityButton total={12} onClick={onClick} />)
-    await userEvent.click(screen.getByRole('button', { name: /View all activity \(12\)/ }))
-    expect(onClick).toHaveBeenCalled()
-  })
-})
+}

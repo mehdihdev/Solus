@@ -21,10 +21,10 @@ from typing import Any, Final, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.connectors.quota import QuotaState
-from solus_api.connectors.registry import ConnectorContext, _onshape_meter
+from solus_api.connectors.registry import ConnectorContext, _onshape_meter, onshape_quota_scope
 from solus_api.core.config import Settings
 from solus_api.models import AccountConnection, ConnectionStatus, SourceType, User
-from solus_api.services.connections import account_ref_for
+from solus_api.services.connections import account_ref_for, onshape_application_for
 from solus_api.services.events import emit_event
 
 logger = logging.getLogger(__name__)
@@ -66,13 +66,19 @@ async def account_quota(
     if redis is None or connection.provider is not SourceType.ONSHAPE:
         return None
     meter = _onshape_meter(
-        settings, redis, ConnectorContext(account_ref=account_ref_for(connection))
+        settings,
+        redis,
+        ConnectorContext(
+            account_ref=account_ref_for(connection),
+            onshape_application=onshape_application_for(connection),
+        ),
     )
     return await meter.state()
 
 
 def _seen_key(connection: AccountConnection) -> str:
-    return f"solus:intq:{connection.provider.value}:acct:{account_ref_for(connection)}:seen"
+    scope = onshape_quota_scope(account_ref_for(connection), onshape_application_for(connection))
+    return f"solus:intq:{connection.provider.value}:acct:{scope}:seen"
 
 
 async def record_quota_transition(

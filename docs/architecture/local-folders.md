@@ -114,3 +114,14 @@ Derived clone matching excludes internal revision snapshot sources, prefers a
 unique exact-branch match, otherwise accepts one unique repository match. Ambiguous
 matches produce no guessed edge. The local folder root remains named after the
 folder; its packages are nested for presentation while requires semantics remain.
+
+### Static Arduino observations (SOLUSDEV-261)
+
+Local scans attach bounded observations to existing CODE sketch entities: source
+file, literal pin calls and source lines, recognized bus startup, and library
+includes. This is lexical evidence, not a C++ interpreter or inferred electrical
+wiring. Conditional/ambiguous expressions remain incomplete. Maximums are128
+sketch files,128 pin observations per file and512 overall. Reads walk every root
+and file ancestor with no-follow descriptors on POSIX; unsupported descriptor
+platforms report incomplete observations. A projection-version cursor causes old
+local sources to reproject once even when their file digest is unchanged.

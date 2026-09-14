@@ -39,7 +39,11 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.agent.errors_filing import file_tool_error
+from solus_api.agent.errors_filing import (
+    UNCERTAIN_COMMAND_OUTCOME,
+    command_failure,
+    file_tool_error,
+)
 from solus_api.agent.tools.exec import run_tool
 from solus_api.agent.tools.knowledge import record_write_outcome
 from solus_api.agent.tools.registry import ToolRegistry
@@ -50,8 +54,9 @@ from solus_api.agent.tools.shapes import (
     ToolErrorCode,
     ToolResult,
 )
+from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import redact_text
-from solus_api.models import ConfirmationStatus, ToolConfirmation, User, utcnow
+from solus_api.models import ConfirmationStatus, Conversation, ToolConfirmation, User, utcnow
 
 logger = logging.getLogger("solus.agent.confirmations")
 
@@ -144,7 +149,26 @@ def _single_line(value: object, cap: int) -> str:
     return _RUNS.sub(" ", "".join(ch for ch in spaced if ch.isprintable()))[:cap].strip()
 
 
-async def _build_preview(tool: Any, args: dict[str, Any]) -> list[dict[str, Any]]:
+class QuotaPreviewUnavailable(ToolException):
+    """Only connector-owned quota classification crosses the preview refusal boundary."""
+
+    def __init__(self, *, exhausted: bool) -> None:
+        self.safe_message = (
+            "Onshape API quota is exhausted. Nothing was executed."
+            if exhausted
+            else "Onshape API quota has reached its conservation threshold. "
+            "SOL actions are paused to reserve the remaining allowance. Nothing was executed."
+        )
+        super().__init__(self.safe_message, code=ToolErrorCode.UNAVAILABLE, retryable=False)
+
+
+async def _build_preview(
+    tool: Any,
+    args: dict[str, Any],
+    *,
+    force_complete: bool = False,
+    quota_failures: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """The diff a user is asked to approve, from the tool itself.
 
     Duck-typed exactly like `list_selectable`: a tool that can describe its own
@@ -153,22 +177,30 @@ async def _build_preview(tool: Any, args: dict[str, Any]) -> list[dict[str, Any]
     construction — a CAD edit, a firmware flash and a robot command all render
     the same rows.
 
-    A preview is a READ against a live system, so it can fail. It degrades to no
-    rows rather than blocking the park: losing the diff weakens the prompt, but
-    refusing to park would make the action unreachable entirely.
+    A preview is a read against a live system and can fail. Legacy tools retain
+    argument rows as a fallback. Tools requiring a complete preview return no
+    rows on failure so the caller refuses to park or execute the action.
     """
+    required = force_complete or getattr(tool, "requires_complete_preview", False) is True
+    fallback = [] if required else _argument_rows(args)
     builder = getattr(tool, "preview", None)
     if builder is None:
-        return _argument_rows(args)
+        return fallback
     try:
         # Bounded (SEC-M3): a preview is a live network read and one call site
         # runs under a row lock — a hanging tool must not pin the connection.
         async with asyncio.timeout(_PREVIEW_TIMEOUT_SECONDS):
             rows = await builder(dict(args))
+    except QuotaPreviewUnavailable as error:
+        if quota_failures is not None:
+            quota_failures.append(error.safe_message)
+        return []
     except Exception:
         name = getattr(getattr(tool, "descriptor", None), "name", "?")
-        logger.warning("preview failed for %s; falling back to arguments", name)
-        return _argument_rows(args)
+        logger.warning("preview failed for %s (complete preview required=%s)", name, required)
+        return fallback
+    if required and not _complete_preview(rows):
+        return []
     cleaned: list[dict[str, Any]] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or "label" not in row:
@@ -181,13 +213,40 @@ async def _build_preview(tool: Any, args: dict[str, Any]) -> list[dict[str, Any]
                 "label": redact_text(_single_line(row.get("label", ""), _LABEL_CAP)),
                 "before": None
                 if row.get("before") is None
-                else redact_text(_single_line(row["before"], _VALUE_CAP)),
+                else redact_text(
+                    row["before"] if required else _single_line(row["before"], _VALUE_CAP)
+                ),
                 "after": None
                 if row.get("after") is None
-                else redact_text(_single_line(row["after"], _VALUE_CAP)),
+                else redact_text(
+                    row["after"] if required else _single_line(row["after"], _VALUE_CAP)
+                ),
             }
         )
-    return cleaned[:_MAX_PREVIEW_ROWS] if cleaned else _argument_rows(args)
+    return cleaned[:_MAX_PREVIEW_ROWS] if cleaned else fallback
+
+
+def _complete_preview(rows: Any) -> bool:
+    if not isinstance(rows, list) or not 1 <= len(rows) <= _MAX_PREVIEW_ROWS:
+        return False
+    return all(
+        isinstance(row, dict)
+        and set(row) == {"label", "before", "after"}
+        and isinstance(row["label"], str)
+        and bool(row["label"].strip())
+        and len(row["label"]) <= _LABEL_CAP
+        and all(character.isprintable() for character in row["label"])
+        and all(
+            row[key] is None
+            or (
+                isinstance(row[key], str)
+                and len(row[key]) <= _VALUE_CAP
+                and all(character.isprintable() or character in "\n\t" for character in row[key])
+            )
+            for key in ("before", "after")
+        )
+        for row in rows
+    )
 
 
 def _argument_rows(args: dict[str, Any]) -> list[dict[str, Any]]:
@@ -220,6 +279,13 @@ def _refusal(call_id: str, message: str, code: ToolErrorCode) -> ToolResult:
     return ToolResult.failure(call_id, ToolError(code=code, message=message, retryable=False))
 
 
+def validate_tool_arguments(descriptor: ToolDescriptor, args: dict[str, Any]) -> str | None:
+    """Validate before either preview/automatic execution or confirmation storage."""
+    validator = Draft202012Validator(descriptor.params)
+    errors = sorted(validator.iter_errors(dict(args)), key=lambda error: str(error.path))
+    return "; ".join(error.message[:120] for error in errors[:3]) if errors else None
+
+
 async def request_confirmation(
     session: AsyncSession,
     registry: ToolRegistry,
@@ -243,10 +309,8 @@ async def request_confirmation(
     # rendered on the consent card, and streamed — a token-shaped extra key
     # ("token": "ghp_…") would land in Postgres and on the wire even though
     # execution later rejects it. Invalid args are refused, never parked.
-    validator = Draft202012Validator(descriptor.params)
-    errors = sorted(validator.iter_errors(dict(call.args)), key=lambda e: str(e.path))
-    if errors:
-        detail = "; ".join(e.message[:120] for e in errors[:3])
+    detail = validate_tool_arguments(descriptor, call.args)
+    if detail:
         return ParkedCall(
             confirmation_id=None,
             tool=call.tool,
@@ -260,9 +324,85 @@ async def request_confirmation(
             ),
         )
 
+    if conversation_id is not None:
+        # Serialize cross-turn check/insert under the same owner-private chat.
+        # The caller commits immediately after parking, releasing this lock.
+        owned = await session.scalar(
+            select(Conversation)
+            .where(
+                Conversation.id == conversation_id,
+                Conversation.project_id == project_id,
+                Conversation.team_id == team_id,
+                Conversation.created_by == user_id,
+                Conversation.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if owned is None:
+            return ParkedCall(
+                None,
+                call.tool,
+                {},
+                "",
+                [],
+                _refusal(call.call_id, "Conversation not found", ToolErrorCode.NOT_FOUND),
+            )
+        candidates = await session.scalars(
+            select(ToolConfirmation)
+            .where(
+                ToolConfirmation.conversation_id == conversation_id,
+                ToolConfirmation.project_id == project_id,
+                ToolConfirmation.team_id == team_id,
+                ToolConfirmation.user_id == user_id,
+                ToolConfirmation.tool == call.tool,
+                ToolConfirmation.status == ConfirmationStatus.PENDING,
+                ToolConfirmation.expires_at > utcnow(),
+            )
+            .order_by(ToolConfirmation.created_at, ToolConfirmation.id)
+        )
+        key = json.dumps(call.args, sort_keys=True, separators=(",", ":"))
+        for existing in candidates:
+            if json.dumps(existing.args, sort_keys=True, separators=(",", ":")) == key:
+                return ParkedCall(
+                    existing.id,
+                    existing.tool,
+                    dict(existing.args),
+                    existing.summary,
+                    existing.preview,
+                    _refusal(
+                        call.call_id,
+                        f"{call.tool} is already waiting for the person's approval. "
+                        "The original approval card has been restored. Do not propose it again.",
+                        ToolErrorCode.UNAUTHORIZED,
+                    ),
+                )
+
     summary = _summarize(descriptor, call.args)
     tool = next((t for t in registry.tools() if t.descriptor.name == call.tool), None)
-    preview = await _build_preview(tool, call.args) if tool is not None else []
+    quota_failures: list[str] = []
+    preview = (
+        await _build_preview(tool, call.args, quota_failures=quota_failures)
+        if tool is not None
+        else []
+    )
+    if quota_failures or (
+        getattr(tool, "requires_complete_preview", False) is True and not preview
+    ):
+        return ParkedCall(
+            confirmation_id=None,
+            tool=call.tool,
+            args={},
+            summary="",
+            preview=[],
+            result=_refusal(
+                call.call_id,
+                quota_failures[0]
+                if quota_failures
+                else "The complete change preview is unavailable. Nothing was parked or applied; "
+                "read the current design and try again.",
+                ToolErrorCode.UNAVAILABLE,
+            ),
+        )
     row = ToolConfirmation(
         project_id=project_id,
         team_id=team_id,
@@ -367,7 +507,18 @@ async def decide_confirmation(
         )
 
     tool = next((t for t in registry.tools() if t.descriptor.name == row.tool), None)
-    if tool is not None and _diverged(list(row.preview), await _build_preview(tool, row.args)):
+    quota_failures: list[str] = []
+    current_preview = (
+        await _build_preview(tool, row.args, quota_failures=quota_failures)
+        if tool is not None
+        else []
+    )
+    missing_preview = (
+        getattr(tool, "requires_complete_preview", False) is True and not current_preview
+    )
+    if tool is not None and (
+        quota_failures or missing_preview or _diverged(list(row.preview), current_preview)
+    ):
         # THE R1 GUARANTEE, enforced once at the gate rather than in each tool.
         #
         # A preview is resolved against a live system, and the world can move
@@ -381,9 +532,11 @@ async def decide_confirmation(
         logger.info("refused stale confirmation %s for %s", row.id, row.tool)
         return _refusal(
             call_id,
-            "What this action would do has changed since it was shown to you. "
+            quota_failures[0]
+            if quota_failures
+            else "What this action would do has changed since it was shown to you. "
             "Nothing was applied — ask again to see the current change.",
-            ToolErrorCode.UNAUTHORIZED,
+            ToolErrorCode.UNAVAILABLE if quota_failures else ToolErrorCode.UNAUTHORIZED,
         )
 
     # Mark decided BEFORE dispatch, and make it DURABLE: holding the transition
@@ -401,7 +554,20 @@ async def decide_confirmation(
     async def _approved(call: ToolCall) -> ToolResult:
         return await registry.invoke(call)  # the sanctioned post-approval site
 
-    result = await run_tool(_approved, stored)
+    from solus_api.agent.command_output import current_output, output_store
+
+    progress = (
+        output_store.start((project_id, user_id, confirmation_id))
+        if row.tool in {"code.run", "code.test"}
+        else None
+    )
+    token = current_output.set(progress)
+    try:
+        result = await run_tool(_approved, stored)
+    finally:
+        current_output.reset(token)
+        if progress is not None:
+            progress.finish()
     # Plain values, captured BEFORE the best-effort hooks: a hook may roll the
     # session back, which expires the row — touching it afterwards would lazy-load
     # outside the async context.
@@ -454,21 +620,44 @@ def command_outcome_text(value: dict[str, Any]) -> str | None:
     """A short clause naming what a confirmed COMMAND did, for the tool turn
     the next model reads (SOLUSDEV-250). `ToolResult.ok` is the transport; the
     command's own exit lives in the value, and without it the model can only
-    say "applied ok" about a test run that failed. None for non-commands — a
-    result is a command's only when it carries an `exit_code` key (every
-    `code.*` answer does, `null` for a refusal); a `reason` alone is not one
-    (`local.open_in_tool` answers `reason: null` on success)."""
+    say "applied ok" about a test run that failed. Command evidence includes
+    exit codes, timeouts, uncertainty, or failed ordered results. A null exit
+    without evidence of execution retains the legacy refusal meaning. A reason
+    alone is not command evidence (`local.open_in_tool` may return one)."""
+    if value.get("uncertain") is True:
+        return "; " + UNCERTAIN_COMMAND_OUTCOME
+    if value.get("timed_out") is True:
+        return _timeout_outcome(value)
     if "exit_code" not in value:
-        return None
+        failure = command_failure(value)
+        if failure is None:
+            return None
+        return "; the command " + output_tail({"stderr_tail": failure}, _OUTCOME_TAIL_CAP)
     exit_code = value["exit_code"]
+    reason = output_tail({"stderr_tail": str(value.get("reason") or "unknown reason")}, _REASON_CAP)
+    if value.get("ok") is False and (
+        (value.get("started") is True and exit_code is None)
+        or (type(exit_code) is int and exit_code == 0)
+    ):
+        tail = output_tail(value, _OUTCOME_TAIL_CAP)
+        return f"; the command failed: {reason}" + (f" — output tail: {tail}" if tail else "")
     if exit_code is None:
-        return f"; the server refused to run it: {str(value.get('reason'))[:_REASON_CAP]}"
+        return f"; the server refused to run it: {reason}"
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
         return None
     if exit_code == 0:
+        if value.get("ok") is True and value.get("started") is False:
+            return "; verified existing result; no command was started"
         return "; the command exited 0"
     tail = output_tail(value, _OUTCOME_TAIL_CAP)
     return f"; the command exited {exit_code}" + (f" — output tail: {tail}" if tail else "")
+
+
+def _timeout_outcome(value: dict[str, Any]) -> str:
+    if value.get("started") is False:
+        return "; the command did not start before its deadline"
+    tail = output_tail(value, _OUTCOME_TAIL_CAP)
+    return "; the command timed out" + (f" — output tail: {tail}" if tail else "")
 
 
 async def _feed_back_outcome(

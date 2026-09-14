@@ -94,9 +94,11 @@ function SimulatorToolRow({
 }
 
 export function SimulationPanel({
-  currentProject
+  currentProject,
+  excludeKinds = []
 }: {
   currentProject: WorkspaceProject | null
+  excludeKinds?: readonly string[]
 }): React.JSX.Element {
   const projectId = currentProject?.id ?? null
   const { data, refresh } = useLocalConnections(projectId)
@@ -140,7 +142,7 @@ export function SimulationPanel({
   const runnerReason = data.sources.runner.available
     ? null
     : (data.sources.runner.reason ?? 'livebench is not available on the server')
-  const simulators = data.sources.simulators
+  const simulators = data.sources.simulators.filter((sim) => !excludeKinds.includes(sim.kind))
   return (
     <>
       {simulators.map((sim, i) => (

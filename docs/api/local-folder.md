@@ -199,3 +199,23 @@ matches are not guessed. Branch, HEAD and normalized remote changes participate 
 the scan digest. The companion change sensor observes bounded source and Git
 metadata changes so branch-only changes can trigger a fresh scan. Saved local files
 are the working-copy content; editor buffers are not claimed readable.
+
+## Static Arduino observations — SOLUSDEV-261 completion
+
+The optional `arduino` scan list contains at most 128 records, one per observed
+`.ino` file: `{parts, pins, buses, libraries, incomplete}`. Pin records carry
+`{operation, pin, line}`; pin is a literal digital number or `A<n>`, or null when
+an expression cannot be resolved. Recognized calls are pinMode, digitalRead,
+digitalWrite, analogRead and analogWrite. Only literal assignments to immutable
+`const` variables or object-like defines can resolve aliases; ambiguous/conditional
+source is reported incomplete. Buses report explicit Wire/SPI/Serial begin usage;
+library includes are declarations, not proof of installation. Comments and string
+contents are never treated as calls. No code executes during extraction.
+
+Reads are confined, bounded to 64 KiB per file and 128 pin observations; skipped,
+malformed, oversized or unsupported source is incomplete, never a fabricated empty
+complete result. Cloud validation rechecks paths, closed call/bus vocabularies,
+lengths and counts. Records attach to the corresponding `arduino_sketch` graph
+entity as source-file observations. They do not establish physical board bindings
+or electrical connections. A projection marker invalidates old unchanged local
+cursors once so existing sketches receive these observations.

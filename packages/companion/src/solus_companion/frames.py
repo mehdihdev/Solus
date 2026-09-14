@@ -205,3 +205,18 @@ def artifact_chunk_frame(
             "error": error,
         },
     )
+
+
+def tool_output_frame(
+    call_id: str, sequence: int, stream: str, text: str, *, truncated: bool = False
+) -> str:
+    """Bounded optional observation, never a tool result or authorization."""
+    data: dict[str, Any] = {
+        "call_id": call_id,
+        "sequence": sequence,
+        "stream": stream,
+        "text": text,
+    }
+    if truncated:
+        data["truncated"] = True
+    return _encode("tool_output", data)

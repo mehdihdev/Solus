@@ -37,7 +37,7 @@ from test_connections import (  # noqa: F401 — the autouse fixture must be in 
 from test_connector_quota import FakeRedis
 
 ALLOWANCE = 1800  # settings.onshape_annual_call_allowance
-LEDGER = f"solus:intq:onshape:acct:42:{datetime.now(UTC).year}"  # FakeGitHub external_id "42"
+LEDGER = f"solus:intq:onshape:acct:42:{datetime.now(UTC).year}"
 LATCH = "solus:intq:onshape:acct:42:402"
 
 

@@ -54,6 +54,16 @@ const suggestion: HardwareSuggestion = {
 }
 
 describe('hardware API client', () => {
+  registerHardwareConfigurationTests()
+
+  registerSuggestionsAndDetectionTests()
+
+  registerDeviceConfirmationAndAssignmentTests()
+
+  registerHardwareLibraryTests()
+})
+
+function registerHardwareConfigurationTests(): void {
   it('keeps absent v2 configs nullable and sends the exact expected version', async () => {
     const api = client()
     const absent = { entry_id: null, entity_id: 'r1', version: 0, config: null }
@@ -110,7 +120,9 @@ describe('hardware API client', () => {
       { method: 'POST', body: { state: 'ordered' } }
     )
   })
+}
 
+function registerSuggestionsAndDetectionTests(): void {
   it('lists suggestions by status, defaulting to pending', async () => {
     const api = client()
     vi.mocked(api.request).mockResolvedValue([suggestion])
@@ -169,7 +181,9 @@ describe('hardware API client', () => {
     expect(await listDetectedDevices('p1', api)).toEqual([])
     expect(api.request).toHaveBeenLastCalledWith('/projects/p1/hardware/detected')
   })
+}
 
+function registerDeviceConfirmationAndAssignmentTests(): void {
   it('proposes with the device ref URL-encoded and no body unless given', async () => {
     const api = client()
     vi.mocked(api.request).mockResolvedValue({ device_ref: 'usb_serial:5B42', rows: [] })
@@ -231,7 +245,9 @@ describe('hardware API client', () => {
       body: input
     })
   })
+}
 
+function registerHardwareLibraryTests(): void {
   it('searches the library with the query and previews one definition by kind', async () => {
     const api = client()
     vi.mocked(api.request).mockResolvedValue([])
@@ -264,4 +280,4 @@ describe('hardware API client', () => {
       { method: 'POST', body: input }
     )
   })
-})
+}

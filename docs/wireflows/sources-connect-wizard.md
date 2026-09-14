@@ -75,6 +75,19 @@ always shown verbatim — never fabricated.
 
 ## Flows
 
+### Explicit selection refresh (SOLUSDEV-261)
+
+The existing document/repository selection area includes **Refresh documents**
+(or the connector's equivalent plural noun) in both the connect wizard and the
+connected-source selection editor. Initial listing remains cached. Refresh uses
+the existing source-scoped selectable route with `refresh=true`, preserving
+authorization, account metering and cooldown. It neither reconnects nor saves a
+selection nor starts a sync. The checked selection survives a successful refresh.
+While loading, prevent duplicate refresh and disable Track; on failure retain the
+prior list and checked items and show an inline error. Ignore results after the
+picker closes or changes source. Empty successful results display the existing
+empty state. New documents become selectable without repeating OAuth.
+
 1. **Next-step click** (a Home row's button / an onboarding tile) → wizard opens at
    step 0. Tiles are pure launchers (`ConnectTile`): identity, logo, live
    status footer. Clicking an errored tile reopens the wizard on the error.
@@ -195,3 +208,22 @@ engine stage emissions in `oauthConnect.ts` / `edaConnect.ts` /
 `accessChoiceStep.ts` / `selectionConfigureStep.ts` / `fieldsConfigureStep.ts` ·
 `onboardingStore.ts` (`stage`, `clearConnection`) · wizard CSS in
 `assets/main.css` (`cw-*`).
+
+## Link a local project file on an existing source — SOLUSDEV-261
+
+Home's existing source row offers **Link project file** (or **Edit project link**)
+when the connector advertises `project_path` in `config_fields`. This is a generic
+capability-driven action beside Sync now; it does not add a wizard step or a native
+file-picker bypass.
+
+The modal names the source and shows its current workspace-relative project file.
+Guide mode explains that the path is relative to the local folder linked to this
+project; Expert mode gives the shorter instruction. KiCad uses a `.kicad_pro`
+file. Reject absolute paths, traversal, control characters, empty segments and
+paths over 512 characters before saving. Native confinement remains authoritative.
+Save sends only `config.project_path` through the existing source PATCH, prevents
+duplicate submission, and refreshes source metadata. Cancel writes nothing. A
+failed save stays editable with an error; success says **Project link saved**.
+Saving does not claim the file was exported or its graph synchronized. Actual
+companion change signals drive live acquisition and graph refresh; manual Sync
+may use the committed export when dispatched to a worker without the live bridge.

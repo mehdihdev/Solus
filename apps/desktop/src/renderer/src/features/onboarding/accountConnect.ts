@@ -30,6 +30,7 @@ export interface AccountConnectDeps {
   onProgress: (state: ConnectionState) => void
   /** The connect-time grant choice, BEFORE authorization (it decides the scopes). */
   chooseAccess?: AccessChoiceStep
+  addOn?: (connectionId: string) => Promise<string | null>
 }
 
 export interface AccountConnectOptions {
@@ -96,7 +97,8 @@ export async function runAccountConnect(
       state: start.state,
       code: callback.code
     })
-    const result = accountConnectedResult(label, connection.account_login)
+    const note = await completeAddOn(deps, connection.id)
+    const result = withNote(accountConnectedResult(label, connection.account_login), note)
     deps.onProgress({ phase: 'done', result })
     return { ok: true, connectionId: connection.id, login: connection.account_login, result }
   } catch (error) {
@@ -104,4 +106,19 @@ export async function runAccountConnect(
     deps.onProgress({ phase: 'error', error: message })
     return { ok: false, error: message }
   }
+}
+
+async function completeAddOn(
+  deps: AccountConnectDeps,
+  connectionId: string
+): Promise<string | null> {
+  try {
+    return deps.addOn ? await deps.addOn(connectionId) : null
+  } catch {
+    return 'Add-on setup incomplete; continue setup in Home.'
+  }
+}
+
+function withNote(result: string, note: string | null): string {
+  return note ? `${result} · ${note}` : result
 }

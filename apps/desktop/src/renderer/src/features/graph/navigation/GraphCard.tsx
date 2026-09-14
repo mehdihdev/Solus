@@ -163,16 +163,7 @@ export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.J
         title={entity.name}
         onClick={unlessDragged(onSelect)}
         onDoubleClick={unlessDragged(onEnter)}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowRight') {
-            event.preventDefault()
-            onEnter()
-          }
-          if (event.key === 'ArrowLeft' || event.key === 'Escape') {
-            event.preventDefault()
-            onBack()
-          }
-        }}
+        onKeyDown={(event) => navigateCardKey(event, onEnter, onBack)}
       >
         <strong>{entity.name}</strong>
         <span>{entity.type.replaceAll('_', ' ')}</span>
@@ -257,4 +248,19 @@ function NodeDrag({
       ⠿
     </button>
   )
+}
+
+function navigateCardKey(
+  event: React.KeyboardEvent,
+  onEnter: () => void,
+  onBack: () => void
+): void {
+  if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    onEnter()
+  }
+  if (event.key === 'ArrowLeft' || event.key === 'Escape') {
+    event.preventDefault()
+    onBack()
+  }
 }

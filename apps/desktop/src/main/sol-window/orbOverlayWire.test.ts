@@ -146,121 +146,9 @@ describe('outbound pushes', () => {
 })
 
 describe('inbound subscriptions', () => {
-  it('delivers a valid renderer message, parsed', () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const wire = attachOrbOverlayWire(w.win, i.ipc)
-    const seen: OrbToOverlay[] = []
-    wire.onOrbToOverlay((m) => seen.push(m))
-    i.emit(ORB_OVERLAY_CHANNELS.toOverlay, 7, ADVANCE)
-    expect(seen).toEqual([ADVANCE])
-    expect(seen[0]).not.toBe(ADVANCE)
-  })
-
-  it('rejects a malformed message at the boundary: handler never runs, rejection observable', () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const onMalformed = vi.fn()
-    const wire = attachOrbOverlayWire(w.win, i.ipc, onMalformed)
-    const handler = vi.fn()
-    wire.onOrbToOverlay(handler)
-    wire.onOverlayToOrb(handler)
-    i.emit(ORB_OVERLAY_CHANNELS.toOverlay, 7, MALFORMED)
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, UNKNOWN_TYPE)
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, 'not even an object')
-    expect(handler).not.toHaveBeenCalled()
-    expect(onMalformed).toHaveBeenCalledTimes(3)
-    expect(onMalformed).toHaveBeenCalledWith(ORB_OVERLAY_CHANNELS.toOverlay, expect.any(TypeError))
-  })
-
-  it('screens a hostile megabyte `type` field before it can bloat an error message', () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const onMalformed = vi.fn()
-    const wire = attachOrbOverlayWire(w.win, i.ipc, onMalformed)
-    const handler = vi.fn()
-    wire.onOverlayToOrb(handler)
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, { type: 'A'.repeat(1_000_000), handoffId: 'h-1' })
-    expect(handler).not.toHaveBeenCalled()
-    expect(onMalformed).toHaveBeenCalledTimes(1)
-    const error = onMalformed.mock.calls[0][1] as Error
-    expect(error.message.length).toBeLessThan(256)
-  })
-
-  it('the default logger strips control characters and throttles a malformed flood', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      const w = fakeWindow(7)
-      const i = fakeIpc()
-      const wire = attachOrbOverlayWire(w.win, i.ipc)
-      wire.onOverlayToOrb(vi.fn())
-      i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, {
-        type: 'x\nFORGED ENTRY — user confirmed flash',
-        handoffId: 'h-1'
-      })
-      expect(spy).toHaveBeenCalledTimes(1)
-      expect(spy.mock.calls[0].join(' ')).not.toMatch(/[\n\r]/)
-      for (let k = 0; k < 10; k += 1) {
-        i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, { type: 'nope', handoffId: 'h-1' })
-      }
-      // 11 malformed messages, at most MALFORMED_LOG_CAP log lines.
-      expect(spy.mock.calls.length).toBeLessThanOrEqual(5)
-    } finally {
-      spy.mockRestore()
-    }
-  })
-
-  it('a __proto__-smuggling payload is delivered clean and pollutes nothing', () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const wire = attachOrbOverlayWire(w.win, i.ipc)
-    const seen: OverlayToOrb[] = []
-    wire.onOverlayToOrb((m) => seen.push(m))
-    const raw: unknown = JSON.parse(
-      '{"__proto__":{"polluted":true},"type":"ready","handoffId":"h-1"}'
-    )
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, raw)
-    expect(seen).toEqual([READY])
-    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
-  })
-
-  it("ignores messages from another window's webContents", () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const wire = attachOrbOverlayWire(w.win, i.ipc)
-    const handler = vi.fn()
-    wire.onOverlayToOrb(handler)
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 99, FAILED)
-    expect(handler).not.toHaveBeenCalled()
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, FAILED)
-    expect(handler).toHaveBeenCalledTimes(1)
-  })
-
-  it('inbound filtering never touches webContents after attach (renderer-crash safety)', () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const wire = attachOrbOverlayWire(w.win, i.ipc)
-    const handler = vi.fn()
-    wire.onOverlayToOrb(handler)
-    w.revokeWebContents()
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, READY)
-    expect(handler).toHaveBeenCalledTimes(1)
-  })
-
-  it('unsubscribe removes the underlying ipc listener', () => {
-    const w = fakeWindow(7)
-    const i = fakeIpc()
-    const wire = attachOrbOverlayWire(w.win, i.ipc)
-    const handler = vi.fn()
-    const unsubscribe = wire.onOverlayToOrb(handler)
-    expect(i.count(ORB_OVERLAY_CHANNELS.toOrb)).toBe(1)
-    unsubscribe()
-    expect(i.count(ORB_OVERLAY_CHANNELS.toOrb)).toBe(0)
-    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, READY)
-    expect(handler).not.toHaveBeenCalled()
-    // A second call is a no-op, not a double-remove.
-    unsubscribe()
-  })
+  registerInboundValidationTests()
+  registerInboundIsolationAndLoggingTests()
+  registerInboundUnsubscriptionTests()
 })
 
 describe('teardown', () => {
@@ -336,3 +224,125 @@ it('the structural slices accept the real electron shapes', () => {
   const attach: (win: BrowserWindow, ipc: IpcMain) => OrbOverlayWire = attachOrbOverlayWire
   expect(attach).toBe(attachOrbOverlayWire)
 })
+
+function registerInboundValidationTests(): void {
+  it('delivers a valid renderer message, parsed', () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const wire = attachOrbOverlayWire(w.win, i.ipc)
+    const seen: OrbToOverlay[] = []
+    wire.onOrbToOverlay((m) => seen.push(m))
+    i.emit(ORB_OVERLAY_CHANNELS.toOverlay, 7, ADVANCE)
+    expect(seen).toEqual([ADVANCE])
+    expect(seen[0]).not.toBe(ADVANCE)
+  })
+
+  it('rejects a malformed message at the boundary: handler never runs, rejection observable', () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const onMalformed = vi.fn()
+    const wire = attachOrbOverlayWire(w.win, i.ipc, onMalformed)
+    const handler = vi.fn()
+    wire.onOrbToOverlay(handler)
+    wire.onOverlayToOrb(handler)
+    i.emit(ORB_OVERLAY_CHANNELS.toOverlay, 7, MALFORMED)
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, UNKNOWN_TYPE)
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, 'not even an object')
+    expect(handler).not.toHaveBeenCalled()
+    expect(onMalformed).toHaveBeenCalledTimes(3)
+    expect(onMalformed).toHaveBeenCalledWith(ORB_OVERLAY_CHANNELS.toOverlay, expect.any(TypeError))
+  })
+
+  it('screens a hostile megabyte `type` field before it can bloat an error message', () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const onMalformed = vi.fn()
+    const wire = attachOrbOverlayWire(w.win, i.ipc, onMalformed)
+    const handler = vi.fn()
+    wire.onOverlayToOrb(handler)
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, { type: 'A'.repeat(1_000_000), handoffId: 'h-1' })
+    expect(handler).not.toHaveBeenCalled()
+    expect(onMalformed).toHaveBeenCalledTimes(1)
+    const error = onMalformed.mock.calls[0][1] as Error
+    expect(error.message.length).toBeLessThan(256)
+  })
+}
+
+function registerInboundIsolationAndLoggingTests(): void {
+  it('the default logger strips control characters and throttles a malformed flood', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const w = fakeWindow(7)
+      const i = fakeIpc()
+      const wire = attachOrbOverlayWire(w.win, i.ipc)
+      wire.onOverlayToOrb(vi.fn())
+      i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, {
+        type: 'x\nFORGED ENTRY — user confirmed flash',
+        handoffId: 'h-1'
+      })
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(spy.mock.calls[0].join(' ')).not.toMatch(/[\n\r]/)
+      for (let k = 0; k < 10; k += 1) {
+        i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, { type: 'nope', handoffId: 'h-1' })
+      }
+      // 11 malformed messages, at most MALFORMED_LOG_CAP log lines.
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(5)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('a __proto__-smuggling payload is delivered clean and pollutes nothing', () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const wire = attachOrbOverlayWire(w.win, i.ipc)
+    const seen: OverlayToOrb[] = []
+    wire.onOverlayToOrb((m) => seen.push(m))
+    const raw: unknown = JSON.parse(
+      '{"__proto__":{"polluted":true},"type":"ready","handoffId":"h-1"}'
+    )
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, raw)
+    expect(seen).toEqual([READY])
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
+  })
+
+  it("ignores messages from another window's webContents", () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const wire = attachOrbOverlayWire(w.win, i.ipc)
+    const handler = vi.fn()
+    wire.onOverlayToOrb(handler)
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 99, FAILED)
+    expect(handler).not.toHaveBeenCalled()
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, FAILED)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('inbound filtering never touches webContents after attach (renderer-crash safety)', () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const wire = attachOrbOverlayWire(w.win, i.ipc)
+    const handler = vi.fn()
+    wire.onOverlayToOrb(handler)
+    w.revokeWebContents()
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, READY)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+}
+
+function registerInboundUnsubscriptionTests(): void {
+  it('unsubscribe removes the underlying ipc listener', () => {
+    const w = fakeWindow(7)
+    const i = fakeIpc()
+    const wire = attachOrbOverlayWire(w.win, i.ipc)
+    const handler = vi.fn()
+    const unsubscribe = wire.onOverlayToOrb(handler)
+    expect(i.count(ORB_OVERLAY_CHANNELS.toOrb)).toBe(1)
+    unsubscribe()
+    expect(i.count(ORB_OVERLAY_CHANNELS.toOrb)).toBe(0)
+    i.emit(ORB_OVERLAY_CHANNELS.toOrb, 7, READY)
+    expect(handler).not.toHaveBeenCalled()
+    // A second call is a no-op, not a double-remove.
+    unsubscribe()
+  })
+}

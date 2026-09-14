@@ -20,7 +20,7 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.connectors.registry import ConnectorContext, UnknownConnectorError
+from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry, UnknownConnectorError
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
@@ -50,10 +50,12 @@ from solus_api.services.connections import (
     list_documents,
     list_live_connections,
     named_legacy_sources,
+    onshape_application_for,
     owned_connection,
     revoke_connection,
     sweep_after_commit,
 )
+from solus_api.services.document_tree import document_tree
 from solus_api.services.events import emit_event
 
 router = APIRouter(prefix="/api/v1/users/me/connections")
@@ -65,6 +67,7 @@ async def _serialize_with_health(
     settings: Settings,
     user: User,
     connections: list[AccountConnection],
+    registry: ConnectorRegistry,
 ) -> list[dict[str, Any]]:
     """SOLUSDEV-244 (H4): each grant with its derived health and, for a metered
     provider, the meter's estimated position. A transition into the degraded
@@ -85,7 +88,14 @@ async def _serialize_with_health(
             quota=quota,
             source_error_codes=[p["error_code"] for p in used_in if p.get("error_code")],
         )
-        rows.append(serialize_connection(connection, used_in, health=health, quota=quota))
+        row = serialize_connection(connection, used_in, health=health, quota=quota)
+        try:
+            connector = registry.create(connection.provider.value)
+        except UnknownConnectorError:
+            row["document_tree"] = False
+        else:
+            row["document_tree"] = bool(getattr(connector, "supports_document_tree", False))
+        rows.append(row)
     if recorded:
         await session.commit()
     return rows
@@ -93,10 +103,16 @@ async def _serialize_with_health(
 
 @router.get("")
 async def list_connections(
-    request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
+    request: Request,
+    user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
+    registry: RegistryDep,
 ) -> dict[str, Any]:
     connections = await list_live_connections(session, user)
-    return envelope(await _serialize_with_health(request, session, settings, user, connections))
+    return envelope(
+        await _serialize_with_health(request, session, settings, user, connections, registry)
+    )
 
 
 @router.get("/legacy")
@@ -210,9 +226,10 @@ async def get_connection(
     user: CurrentUser,
     session: SessionDep,
     settings: SettingsDep,
+    registry: RegistryDep,
 ) -> dict[str, Any]:
     connection = await owned_connection(session, user, connection_id)
-    [row] = await _serialize_with_health(request, session, settings, user, [connection])
+    [row] = await _serialize_with_health(request, session, settings, user, [connection], registry)
     return envelope(row)
 
 
@@ -272,7 +289,12 @@ async def documents(
     account_ref = account_ref_for(connection)
     try:
         connector = registry.create_scoped(
-            provider, ConnectorContext(acting_user_id=user.id, account_ref=account_ref)
+            provider,
+            ConnectorContext(
+                acting_user_id=user.id,
+                account_ref=account_ref,
+                onshape_application=onshape_application_for(connection),
+            ),
         )
     except UnknownConnectorError as exc:
         raise APIError(400, "connector_unavailable", f"No connector for '{provider}'") from exc
@@ -286,6 +308,68 @@ async def documents(
         refresh=refresh,
         cache_only=cache_only,
     )
+    return envelope(
+        fetched.value, meta={"cached": fetched.cached, "fetched_at": fetched.fetched_at}
+    )
+
+
+@router.get("/{connection_id}/document-tree")
+async def browse_document_tree(
+    connection_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    registry: RegistryDep,
+    secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
+    _verified: RequireVerified,
+    node: Annotated[
+        str,
+        Query(
+            pattern=r"^(root|shared|folder:[0-9a-f]{24}|owner:resource(user|company)owner:[0-9a-f]{24})$"
+        ),
+    ] = "root",
+    offset: Annotated[int, Query(ge=0, le=100000)] = 0,
+    refresh: Annotated[bool, Query()] = False,
+    cache_only: Annotated[bool, Query()] = False,
+) -> dict[str, Any]:
+    connection = await owned_connection(session, user, connection_id)
+    if (cache_only and refresh) or (node == "root" and offset != 0):
+        raise APIError(422, "validation_error", "Invalid document-tree query combination")
+    if connection.status is not ConnectionStatus.CONNECTED or not connection.secret_ref:
+        raise APIError(409, "not_connected", "This account is not connected")
+    provider = connection.provider.value
+    account_ref = account_ref_for(connection)
+    try:
+        connector = registry.create_scoped(
+            provider,
+            ConnectorContext(
+                acting_user_id=user.id,
+                account_ref=account_ref,
+                onshape_application=onshape_application_for(connection),
+            ),
+        )
+    except UnknownConnectorError as exc:
+        raise APIError(400, "connector_unavailable", "This connector is unavailable") from exc
+    fetched = await document_tree(
+        cache,
+        connector=connector,
+        secret_store=secret_store,
+        secret_ref=connection.secret_ref,
+        provider=provider,
+        account_ref=account_ref,
+        node=node,
+        offset=offset,
+        refresh=refresh,
+        cache_only=cache_only,
+    )
+    if refresh and not fetched.cached:
+        emit_event(
+            session,
+            user=user,
+            event_type="integration.listing_refreshed",
+            payload={"provider": provider, "connection_id": str(connection_id)},
+        )
+        await session.commit()
     return envelope(
         fetched.value, meta={"cached": fetched.cached, "fetched_at": fetched.fetched_at}
     )

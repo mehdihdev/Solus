@@ -95,6 +95,12 @@ beforeEach(() => {
 })
 
 describe('openCheckoutWindow', () => {
+  registerCheckoutSecurityTests()
+  registerCheckoutCompletionTests()
+  registerCheckoutPopupsTests()
+})
+
+function registerCheckoutSecurityTests(): void {
   it('refuses non-Stripe URLs without opening a window', async () => {
     await expect(openCheckoutWindow('https://evil.example.com/pay')).resolves.toEqual({
       status: 'blocked'
@@ -152,7 +158,9 @@ describe('openCheckoutWindow', () => {
     win.close()
     await pending
   })
+}
 
+function registerCheckoutCompletionTests(): void {
   it('closes itself and resolves success on the marker redirect', async () => {
     const pending = openCheckoutWindow(CHECKOUT_URL)
     const win = lastWindow()
@@ -205,7 +213,9 @@ describe('openCheckoutWindow', () => {
     lastWindow().close()
     await next
   })
+}
 
+function registerCheckoutPopupsTests(): void {
   describe('popup links (setWindowOpenHandler)', () => {
     it('opens parsed https Stripe links in the system browser and denies the popup', async () => {
       const pending = openCheckoutWindow(CHECKOUT_URL)
@@ -245,4 +255,4 @@ describe('openCheckoutWindow', () => {
       await pending
     })
   })
-})
+}

@@ -44,7 +44,17 @@ export interface HostedAddOnRowProps {
   readonly onChanged: () => void
 }
 
-export function HostedAddOnRow({
+export function HostedAddOnRow(props: HostedAddOnRowProps): React.JSX.Element {
+  if (props.source.connection_id)
+    return (
+      <p style={{ fontSize: 11, color: 'var(--mut)' }}>
+        {props.hosted.display_name} is managed by the linked account owner in Home.
+      </p>
+    )
+  return <LegacyHostedAddOnRow {...props} />
+}
+
+function LegacyHostedAddOnRow({
   source,
   projectId,
   hosted,
@@ -57,6 +67,88 @@ export function HostedAddOnRow({
   const state = hostedState(source, hosted.server)
   const detail = hostedDetail(source, hosted.server)
 
+  const { enable, recheck } = hostedActions({
+    source,
+    projectId,
+    hosted,
+    onChanged,
+    setBusy,
+    setError
+  })
+
+  const openStore = (): void => openSubscriptionStore(hosted, setError)
+
+  return (
+    <div style={{ paddingLeft: 24, paddingBottom: 8 }} data-hosted-state={state}>
+      {state === 'ready' && (
+        <Mono style={{ fontSize: 10.5, color: 'var(--ok)' }}>
+          {hosted.display_name.toUpperCase()} ON
+        </Mono>
+      )}
+
+      {state === 'subscription_required' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* The vendor's OWN words. A refusal we did not author is more
+              actionable than our paraphrase, and we genuinely cannot tell a
+              missing subscription from an admin-gated Labs account. */}
+          <Mono style={{ fontSize: 10.5, color: 'var(--mut)' }}>
+            {detail ??
+              `${hosted.display_name} is not available on this ${providerName} account yet.`}{' '}
+            It needs a {providerName} subscription to the app, and on a company account an
+            administrator may have to permit it first.
+          </Mono>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {hosted.subscribe_url ? (
+              <button type="button" onClick={openStore}>
+                Open {providerName} App Store
+              </button>
+            ) : null}
+            <button type="button" onClick={() => void recheck()} disabled={busy !== null}>
+              {busy === 'checking' ? 'Checking…' : 'I’ve subscribed — check again'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {state === 'not_connected' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {hosted.notice ? (
+            <Mono style={{ fontSize: 10.5, color: 'var(--mut)', whiteSpace: 'pre-wrap' }}>
+              {noticeLead(solMode)} {hosted.notice}
+            </Mono>
+          ) : null}
+          <div>
+            <button type="button" onClick={() => void enable()} disabled={busy !== null}>
+              {busy === 'enabling' ? 'Waiting for your browser…' : `Enable ${hosted.display_name}`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error !== null && (
+        <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 4 }}>{error}</div>
+      )}
+    </div>
+  )
+}
+
+interface HostedActionContext {
+  source: Source
+  projectId: string
+  hosted: IntegrationHosted
+  onChanged: () => void
+  setBusy: (value: 'enabling' | 'checking' | null) => void
+  setError: (message: string | null) => void
+}
+
+function hostedActions({
+  source,
+  projectId,
+  hosted,
+  onChanged,
+  setBusy,
+  setError
+}: HostedActionContext): { enable: () => Promise<void>; recheck: () => Promise<void> } {
   // The SECOND browser trip. It reuses the connector loopback wholesale: the
   // backend registers byte-for-byte the same redirect the connector flow uses,
   // and the nonce is the backend's own OAuth state — same channel, same port,
@@ -111,68 +203,20 @@ export function HostedAddOnRow({
     }
   }
 
-  const openStore = (): void => {
-    const url = hosted.subscribe_url
-    if (!url) return
-    setError(null)
-    void getDesktopHostedBridge()
-      ?.openStore(url)
-      .then((r) => {
-        if (!r.ok) setError("Couldn't open the App Store page.")
-      })
-      .catch(() => setError("Couldn't open the App Store page."))
-  }
+  return { enable, recheck }
+}
 
-  return (
-    <div style={{ paddingLeft: 24, paddingBottom: 8 }} data-hosted-state={state}>
-      {state === 'ready' && (
-        <Mono style={{ fontSize: 10.5, color: 'var(--ok)' }}>
-          {hosted.display_name.toUpperCase()} ON
-        </Mono>
-      )}
-
-      {state === 'subscription_required' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {/* The vendor's OWN words. A refusal we did not author is more
-              actionable than our paraphrase, and we genuinely cannot tell a
-              missing subscription from an admin-gated Labs account. */}
-          <Mono style={{ fontSize: 10.5, color: 'var(--mut)' }}>
-            {detail ??
-              `${hosted.display_name} is not available on this ${providerName} account yet.`}{' '}
-            It needs a {providerName} subscription to the app, and on a company account an
-            administrator may have to permit it first.
-          </Mono>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {hosted.subscribe_url ? (
-              <button type="button" onClick={openStore}>
-                Open {providerName} App Store
-              </button>
-            ) : null}
-            <button type="button" onClick={() => void recheck()} disabled={busy !== null}>
-              {busy === 'checking' ? 'Checking…' : 'I’ve subscribed — check again'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {state === 'not_connected' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {hosted.notice ? (
-            <Mono style={{ fontSize: 10.5, color: 'var(--mut)', whiteSpace: 'pre-wrap' }}>
-              {noticeLead(solMode)} {hosted.notice}
-            </Mono>
-          ) : null}
-          <div>
-            <button type="button" onClick={() => void enable()} disabled={busy !== null}>
-              {busy === 'enabling' ? 'Waiting for your browser…' : `Enable ${hosted.display_name}`}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {error !== null && (
-        <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 4 }}>{error}</div>
-      )}
-    </div>
-  )
+function openSubscriptionStore(
+  hosted: IntegrationHosted,
+  setError: (message: string | null) => void
+): void {
+  const url = hosted.subscribe_url
+  if (!url) return
+  setError(null)
+  void getDesktopHostedBridge()
+    ?.openStore(url)
+    .then((r) => {
+      if (!r.ok) setError("Couldn't open the App Store page.")
+    })
+    .catch(() => setError("Couldn't open the App Store page."))
 }

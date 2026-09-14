@@ -86,101 +86,8 @@ afterEach(() => {
 })
 
 describe('useExtensions — reading', () => {
-  it('joins the server catalog with the install rows into views', async () => {
-    const { result } = await ready()
-    const byId = new Map(result.current.views.map((v) => [v.catalog.slug, v]))
-    expect(byId.get('scene')).toMatchObject({
-      availability: 'installed',
-      state: {
-        enabled: true,
-        pinnedVersion: '1.2.0',
-        grantedScopes: ['graph.read', 'sources.read']
-      }
-    })
-    expect(byId.get('scene')?.manifest?.extension.id).toBe('scene')
-    expect(byId.get('bom')).toMatchObject({ availability: 'needs_source', manifest: null })
-    expect(byId.get('bom')?.missing).toEqual([['eda']])
-    expect(result.current.updatesAvailable).toBe(0)
-  })
-
-  it('walks every catalog page, then appends installs the catalog no longer lists', async () => {
-    vi.mocked(ext.listExtensions)
-      .mockImplementationOnce(() => page([catalogItem({ slug: 'a', name: 'A' })], 'c2'))
-      .mockImplementationOnce(() => page([catalogItem({ slug: 'b', name: 'B' })]))
-    const { result } = await ready()
-    expect(result.current.views.map((v) => v.catalog.slug)).toEqual(['a', 'b', 'scene'])
-    expect(result.current.views[2].catalog.inCatalog).toBe(false)
-    expect(vi.mocked(ext.listExtensions).mock.calls[1][0]).toMatchObject({ cursor: 'c2' })
-  })
-
-  it('unblocks an extension once a satisfying source is connected', async () => {
-    mockSources('ready', ['kicad'])
-    const { result } = await ready()
-    expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe(
-      'available'
-    )
-  })
-
-  it('counts installs with an update available', async () => {
-    vi.mocked(ext.listProjectExtensions).mockImplementation(() =>
-      page([{ ...sceneRow, update_available: { version: '1.3.0', widens_permissions: false } }])
-    )
-    const { result } = await ready()
-    expect(result.current.updatesAvailable).toBe(1)
-  })
-
-  it('is offline without a fetchable session: nothing is called, nothing is shown', () => {
-    useWorkspaceStore.setState({ linked: false })
-    const { result } = renderHook(() => useExtensions('p1'))
-    expect(result.current.status).toBe('offline')
-    expect(result.current.views).toEqual([])
-    expect(ext.listExtensions).not.toHaveBeenCalled()
-  })
-
-  it('reports offline when the Store API is unreachable, with requirements unmet', async () => {
-    vi.mocked(ext.listExtensions).mockRejectedValue(new TypeError('fetch failed'))
-    const { result } = renderHook(() => useExtensions('p1'))
-    await waitFor(() => expect(result.current.status).toBe('offline'))
-    expect(result.current.views).toEqual([])
-  })
-
-  it('passes the sources status through so the screen can explain an offline gap', async () => {
-    mockSources('offline', [])
-    const { result } = await ready()
-    expect(result.current.sourcesStatus).toBe('offline')
-  })
-
-  it("never judges requirements against another project's sources", async () => {
-    mockSources('ready', ['kicad'])
-    useWorkspaceStore.setState({ project: { id: 'p2', name: 'P2' } })
-    const { result } = await ready()
-    expect(result.current.sourcesStatus).toBe('offline')
-    expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe(
-      'needs_source'
-    )
-  })
-
-  it('re-reads the install rows on the poll interval', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    await ready()
-    expect(ext.listProjectExtensions).toHaveBeenCalledTimes(1)
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(EXTENSIONS_POLL_MS)
-    })
-    expect(ext.listProjectExtensions).toHaveBeenCalledTimes(2)
-    expect(ext.listExtensions).toHaveBeenCalledTimes(1)
-  })
-
-  it('loadDetail fills the manifest of an uninstalled extension', async () => {
-    vi.mocked(ext.getExtension).mockResolvedValue(detail())
-    const { result } = await ready()
-    await act(() => result.current.actions.loadDetail('bom'))
-    const bom = result.current.views.find((v) => v.catalog.slug === 'bom')
-    expect(bom?.manifest?.permissions.scopes).toEqual(['graph.read', 'sources.read'])
-    expect(bom?.catalog.assetUrls.privacyPolicy).toBe(
-      '/extensions/bom/versions/1.2.0/assets/PRIVACY.md'
-    )
-  })
+  registerExtensionCatalogReadsTests()
+  registerExtensionSourcesAndPollingTests()
 })
 
 describe('useExtensions — install', () => {
@@ -189,38 +96,8 @@ describe('useExtensions — install', () => {
     network: ['https://api.octopart.com']
   }
 
-  it('PUTs the install, then fetches the bundle, then hands it to the desktop — in that order', async () => {
-    const order: string[] = []
-    const bridge = fakeBridge()
-    vi.mocked(bridgeModule.getDesktopExtensionsBridge).mockReturnValue(bridge)
-    vi.mocked(ext.installExtension).mockImplementation(async () => {
-      order.push('put')
-      return installRow()
-    })
-    vi.mocked(ext.fetchExtensionBundle).mockImplementation(async () => {
-      order.push('bundle')
-      return { bytes: new ArrayBuffer(4), contentHash: 'a'.repeat(64) }
-    })
-    vi.mocked(bridge.install).mockImplementation(async () => {
-      order.push('desktop')
-      return { ok: true }
-    })
-    const { result } = await ready()
-    const outcome = await act(() => result.current.actions.install('bom', grants))
-    expect(outcome).toEqual({ ok: true, bundle: 'cached' })
-    expect(order).toEqual(['put', 'bundle', 'desktop'])
-    expect(ext.installExtension).toHaveBeenCalledWith('p1', 'bom', { version: '1.2.0', grants })
-    expect(ext.fetchExtensionBundle).toHaveBeenCalledWith('bom', '1.2.0')
-    expect(bridge.install).toHaveBeenCalledWith({
-      id: 'bom',
-      version: '1.2.0',
-      contentHash: 'a'.repeat(64),
-      bytes: expect.any(ArrayBuffer)
-    })
-    expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe(
-      'installed'
-    )
-  })
+  it('PUTs the install, then fetches the bundle, then hands it to the desktop — in that order', () =>
+    verifyInstallOrder(grants))
 
   it('records the server install without a desktop bridge and says the bundle is deferred', async () => {
     vi.mocked(ext.installExtension).mockResolvedValue(installRow())
@@ -275,31 +152,7 @@ describe('useExtensions — install', () => {
     expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe('blocked')
   })
 
-  it('maps the other route-plan error codes to user-facing text', async () => {
-    vi.mocked(ext.installExtension)
-      .mockRejectedValueOnce(new ApiError(422, 'validation_error', 'bad'))
-      .mockRejectedValueOnce(new ApiError(403, 'scope_denied', 'no'))
-      .mockRejectedValueOnce(new TypeError('fetch failed'))
-    const { result } = await ready()
-    const a = await act(() => result.current.actions.install('bom', grants))
-    const b = await act(() => result.current.actions.install('bom', grants))
-    const c = await act(() => result.current.actions.install('bom', grants))
-    expect(a).toMatchObject({
-      ok: false,
-      code: 'validation_error',
-      message: expect.stringMatching(/rejected/i)
-    })
-    expect(b).toMatchObject({
-      ok: false,
-      code: 'scope_denied',
-      message: expect.stringMatching(/permission/i)
-    })
-    expect(c).toMatchObject({
-      ok: false,
-      code: 'unreachable',
-      message: expect.stringMatching(/reach/i)
-    })
-  })
+  it('maps the other route-plan error codes to user-facing text', () => verifyInstallErrors(grants))
 })
 
 describe('useExtensions — update, uninstall, patch', () => {
@@ -308,42 +161,8 @@ describe('useExtensions — update, uninstall, patch', () => {
     update_available: { version: '1.3.0', widens_permissions: true }
   }
 
-  it('PUTs the latest version with the current grants; a 409 surfaces the additions', async () => {
-    vi.mocked(ext.listProjectExtensions).mockImplementation(() => page([updatable]))
-    vi.mocked(ext.installExtension).mockRejectedValueOnce(
-      new ApiError(409, 'grants_required', 'more', [{ scopes: ['telemetry.read'], network: [] }])
-    )
-    const { result } = await ready()
-    const first = await act(() => result.current.actions.update('scene'))
-    expect(ext.installExtension).toHaveBeenCalledWith('p1', 'scene', {
-      version: '1.3.0',
-      grants: { scopes: ['graph.read', 'sources.read'], network: ['https://api.octopart.com'] }
-    })
-    expect(first).toEqual({
-      ok: false,
-      code: 'grants_required',
-      message: expect.any(String),
-      grantsRequired: { scopes: ['telemetry.read'], network: [] }
-    })
-
-    vi.mocked(ext.installExtension).mockResolvedValueOnce({
-      ...sceneRow,
-      version: { ...sceneRow.version, version: '1.3.0' }
-    })
-    const widened = {
-      scopes: ['graph.read', 'sources.read', 'telemetry.read'] as const,
-      network: ['https://api.octopart.com']
-    }
-    const second = await act(() => result.current.actions.update('scene', widened))
-    expect(second).toMatchObject({ ok: true })
-    expect(ext.installExtension).toHaveBeenLastCalledWith('p1', 'scene', {
-      version: '1.3.0',
-      grants: widened
-    })
-    expect(result.current.views.find((v) => v.catalog.slug === 'scene')?.state.pinnedVersion).toBe(
-      '1.3.0'
-    )
-  })
+  it('PUTs the latest version with the current grants; a 409 surfaces the additions', () =>
+    verifyUpdateGrants(updatable))
 
   it('refuses to update when the server reports nothing newer', async () => {
     const { result } = await ready()
@@ -401,3 +220,201 @@ describe('useExtensions — update, uninstall, patch', () => {
     })
   })
 })
+
+function registerExtensionCatalogReadsTests(): void {
+  it('joins the server catalog with the install rows into views', async () => {
+    const { result } = await ready()
+    const byId = new Map(result.current.views.map((v) => [v.catalog.slug, v]))
+    expect(byId.get('scene')).toMatchObject({
+      availability: 'installed',
+      state: {
+        enabled: true,
+        pinnedVersion: '1.2.0',
+        grantedScopes: ['graph.read', 'sources.read']
+      }
+    })
+    expect(byId.get('scene')?.manifest?.extension.id).toBe('scene')
+    expect(byId.get('bom')).toMatchObject({ availability: 'needs_source', manifest: null })
+    expect(byId.get('bom')?.missing).toEqual([['eda']])
+    expect(result.current.updatesAvailable).toBe(0)
+  })
+
+  it('walks every catalog page, then appends installs the catalog no longer lists', async () => {
+    vi.mocked(ext.listExtensions)
+      .mockImplementationOnce(() => page([catalogItem({ slug: 'a', name: 'A' })], 'c2'))
+      .mockImplementationOnce(() => page([catalogItem({ slug: 'b', name: 'B' })]))
+    const { result } = await ready()
+    expect(result.current.views.map((v) => v.catalog.slug)).toEqual(['a', 'b', 'scene'])
+    expect(result.current.views[2].catalog.inCatalog).toBe(false)
+    expect(vi.mocked(ext.listExtensions).mock.calls[1][0]).toMatchObject({ cursor: 'c2' })
+  })
+
+  it('unblocks an extension once a satisfying source is connected', async () => {
+    mockSources('ready', ['kicad'])
+    const { result } = await ready()
+    expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe(
+      'available'
+    )
+  })
+
+  it('counts installs with an update available', async () => {
+    vi.mocked(ext.listProjectExtensions).mockImplementation(() =>
+      page([{ ...sceneRow, update_available: { version: '1.3.0', widens_permissions: false } }])
+    )
+    const { result } = await ready()
+    expect(result.current.updatesAvailable).toBe(1)
+  })
+
+  it('is offline without a fetchable session: nothing is called, nothing is shown', () => {
+    useWorkspaceStore.setState({ linked: false })
+    const { result } = renderHook(() => useExtensions('p1'))
+    expect(result.current.status).toBe('offline')
+    expect(result.current.views).toEqual([])
+    expect(ext.listExtensions).not.toHaveBeenCalled()
+  })
+
+  it('reports offline when the Store API is unreachable, with requirements unmet', async () => {
+    vi.mocked(ext.listExtensions).mockRejectedValue(new TypeError('fetch failed'))
+    const { result } = renderHook(() => useExtensions('p1'))
+    await waitFor(() => expect(result.current.status).toBe('offline'))
+    expect(result.current.views).toEqual([])
+  })
+}
+
+function registerExtensionSourcesAndPollingTests(): void {
+  it('passes the sources status through so the screen can explain an offline gap', async () => {
+    mockSources('offline', [])
+    const { result } = await ready()
+    expect(result.current.sourcesStatus).toBe('offline')
+  })
+
+  it("never judges requirements against another project's sources", async () => {
+    mockSources('ready', ['kicad'])
+    useWorkspaceStore.setState({ project: { id: 'p2', name: 'P2' } })
+    const { result } = await ready()
+    expect(result.current.sourcesStatus).toBe('offline')
+    expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe(
+      'needs_source'
+    )
+  })
+
+  it('re-reads the install rows on the poll interval', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    await ready()
+    expect(ext.listProjectExtensions).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(EXTENSIONS_POLL_MS)
+    })
+    expect(ext.listProjectExtensions).toHaveBeenCalledTimes(2)
+    expect(ext.listExtensions).toHaveBeenCalledTimes(1)
+  })
+
+  it('loadDetail fills the manifest of an uninstalled extension', async () => {
+    vi.mocked(ext.getExtension).mockResolvedValue(detail())
+    const { result } = await ready()
+    await act(() => result.current.actions.loadDetail('bom'))
+    const bom = result.current.views.find((v) => v.catalog.slug === 'bom')
+    expect(bom?.manifest?.permissions.scopes).toEqual(['graph.read', 'sources.read'])
+    expect(bom?.catalog.assetUrls.privacyPolicy).toBe(
+      '/extensions/bom/versions/1.2.0/assets/PRIVACY.md'
+    )
+  })
+}
+
+async function verifyInstallOrder(
+  grants: Parameters<ExtensionsData['actions']['install']>[1]
+): Promise<void> {
+  const order: string[] = []
+  const bridge = fakeBridge()
+  vi.mocked(bridgeModule.getDesktopExtensionsBridge).mockReturnValue(bridge)
+  vi.mocked(ext.installExtension).mockImplementation(async () => {
+    order.push('put')
+    return installRow()
+  })
+  vi.mocked(ext.fetchExtensionBundle).mockImplementation(async () => {
+    order.push('bundle')
+    return { bytes: new ArrayBuffer(4), contentHash: 'a'.repeat(64) }
+  })
+  vi.mocked(bridge.install).mockImplementation(async () => {
+    order.push('desktop')
+    return { ok: true }
+  })
+  const { result } = await ready()
+  const outcome = await act(() => result.current.actions.install('bom', grants))
+  expect(outcome).toEqual({ ok: true, bundle: 'cached' })
+  expect(order).toEqual(['put', 'bundle', 'desktop'])
+  expect(ext.installExtension).toHaveBeenCalledWith('p1', 'bom', { version: '1.2.0', grants })
+  expect(ext.fetchExtensionBundle).toHaveBeenCalledWith('bom', '1.2.0')
+  expect(bridge.install).toHaveBeenCalledWith({
+    id: 'bom',
+    version: '1.2.0',
+    contentHash: 'a'.repeat(64),
+    bytes: expect.any(ArrayBuffer)
+  })
+  expect(result.current.views.find((v) => v.catalog.slug === 'bom')?.availability).toBe('installed')
+}
+
+async function verifyUpdateGrants(updatable: typeof sceneRow): Promise<void> {
+  vi.mocked(ext.listProjectExtensions).mockImplementation(() => page([updatable]))
+  vi.mocked(ext.installExtension).mockRejectedValueOnce(
+    new ApiError(409, 'grants_required', 'more', [{ scopes: ['telemetry.read'], network: [] }])
+  )
+  const { result } = await ready()
+  const first = await act(() => result.current.actions.update('scene'))
+  expect(ext.installExtension).toHaveBeenCalledWith('p1', 'scene', {
+    version: '1.3.0',
+    grants: { scopes: ['graph.read', 'sources.read'], network: ['https://api.octopart.com'] }
+  })
+  expect(first).toEqual({
+    ok: false,
+    code: 'grants_required',
+    message: expect.any(String),
+    grantsRequired: { scopes: ['telemetry.read'], network: [] }
+  })
+
+  vi.mocked(ext.installExtension).mockResolvedValueOnce({
+    ...sceneRow,
+    version: { ...sceneRow.version, version: '1.3.0' }
+  })
+  const widened = {
+    scopes: ['graph.read', 'sources.read', 'telemetry.read'] as const,
+    network: ['https://api.octopart.com']
+  }
+  const second = await act(() => result.current.actions.update('scene', widened))
+  expect(second).toMatchObject({ ok: true })
+  expect(ext.installExtension).toHaveBeenLastCalledWith('p1', 'scene', {
+    version: '1.3.0',
+    grants: widened
+  })
+  expect(result.current.views.find((v) => v.catalog.slug === 'scene')?.state.pinnedVersion).toBe(
+    '1.3.0'
+  )
+}
+
+async function verifyInstallErrors(
+  grants: Parameters<ExtensionsData['actions']['install']>[1]
+): Promise<void> {
+  vi.mocked(ext.installExtension)
+    .mockRejectedValueOnce(new ApiError(422, 'validation_error', 'bad'))
+    .mockRejectedValueOnce(new ApiError(403, 'scope_denied', 'no'))
+    .mockRejectedValueOnce(new TypeError('fetch failed'))
+  const { result } = await ready()
+  const a = await act(() => result.current.actions.install('bom', grants))
+  const b = await act(() => result.current.actions.install('bom', grants))
+  const c = await act(() => result.current.actions.install('bom', grants))
+  expect(a).toMatchObject({
+    ok: false,
+    code: 'validation_error',
+    message: expect.stringMatching(/rejected/i)
+  })
+  expect(b).toMatchObject({
+    ok: false,
+    code: 'scope_denied',
+    message: expect.stringMatching(/permission/i)
+  })
+  expect(c).toMatchObject({
+    ok: false,
+    code: 'unreachable',
+    message: expect.stringMatching(/reach/i)
+  })
+}

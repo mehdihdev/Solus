@@ -98,81 +98,14 @@ export function ClassifyIndicator({
   return (
     <div style={{ position: 'relative' }}>
       {open && (
-        <div
-          data-testid="classify-popover"
-          style={{
-            position: 'absolute',
-            bottom: 24,
-            right: 0,
-            width: 320,
-            background: 'var(--sur)',
-            border: '1px solid var(--bd)',
-            borderRadius: 4,
-            padding: 10,
-            boxShadow: '0 8px 24px rgba(0,0,0,.25)',
-            zIndex: 20
-          }}
-        >
-          <div style={{ ...MUTED, marginBottom: 4 }}>Tier — this message only</div>
-          {preview.options.complexities.map((option) => (
-            <OptionRow
-              key={option.value}
-              option={option}
-              selected={option.value === preview.complexity}
-              onPick={() => {
-                onOverride({ complexity: option.value })
-                setOpen(false)
-              }}
-            />
-          ))}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '6px 8px 2px',
-              fontSize: 12
-            }}
-          >
-            <span>Think harder</span>
-            <Switch
-              checked={override.thinkHarder}
-              onChange={(thinkHarder) => onOverride({ thinkHarder })}
-              ariaLabel="Think harder"
-            />
-          </div>
-          <div style={{ ...MUTED, margin: '8px 0 4px' }}>Type</div>
-          {preview.options.types.map((option) => (
-            <OptionRow
-              key={option.value}
-              option={option}
-              selected={option.value === preview.type}
-              onPick={() => {
-                onOverride({ type: option.value })
-                setOpen(false)
-              }}
-            />
-          ))}
-          {overridden && (
-            <button
-              type="button"
-              onClick={() => {
-                onReset()
-                setOpen(false)
-              }}
-              style={{
-                ...MUTED,
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '6px 8px 2px',
-                textDecoration: 'underline'
-              }}
-            >
-              reset to estimate
-            </button>
-          )}
-        </div>
+        <ClassifyPopover
+          preview={preview}
+          override={override}
+          onOverride={onOverride}
+          onReset={onReset}
+          overridden={overridden}
+          onClose={() => setOpen(false)}
+        />
       )}
       <div
         data-testid="classify-indicator"
@@ -200,5 +133,106 @@ export function ClassifyIndicator({
         {!preview.viable && preview.reason ? ` — ${preview.reason}` : ''}
       </div>
     </div>
+  )
+}
+
+function ClassifyPopover({
+  preview,
+  override,
+  onOverride,
+  onReset,
+  overridden,
+  onClose
+}: Omit<ClassifyIndicatorProps, 'preview'> & {
+  preview: ClassifyPreview
+  overridden: boolean
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      data-testid="classify-popover"
+      style={{
+        position: 'absolute',
+        bottom: 24,
+        right: 0,
+        width: 320,
+        background: 'var(--sur)',
+        border: '1px solid var(--bd)',
+        borderRadius: 4,
+        padding: 10,
+        boxShadow: '0 8px 24px rgba(0,0,0,.25)',
+        zIndex: 20
+      }}
+    >
+      <div style={{ ...MUTED, marginBottom: 4 }}>Tier — this message only</div>
+      {preview.options.complexities.map((option) => (
+        <OptionRow
+          key={option.value}
+          option={option}
+          selected={option.value === preview.complexity}
+          onPick={() => {
+            onOverride({ complexity: option.value })
+            onClose()
+          }}
+        />
+      ))}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '6px 8px 2px',
+          fontSize: 12
+        }}
+      >
+        <span>Think harder</span>
+        <Switch
+          checked={override.thinkHarder}
+          onChange={(thinkHarder) => onOverride({ thinkHarder })}
+          ariaLabel="Think harder"
+        />
+      </div>
+      <div style={{ ...MUTED, margin: '8px 0 4px' }}>Type</div>
+      {preview.options.types.map((option) => (
+        <OptionRow
+          key={option.value}
+          option={option}
+          selected={option.value === preview.type}
+          onPick={() => {
+            onOverride({ type: option.value })
+            onClose()
+          }}
+        />
+      ))}
+      {overridden && <ResetRoutingButton onReset={onReset} onClose={onClose} />}
+    </div>
+  )
+}
+
+function ResetRoutingButton({
+  onReset,
+  onClose
+}: {
+  onReset: () => void
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onReset()
+        onClose()
+      }}
+      style={{
+        ...MUTED,
+        background: 'transparent',
+        border: 'none',
+        cursor: 'pointer',
+        padding: '6px 8px 2px',
+        textDecoration: 'underline'
+      }}
+    >
+      reset to estimate
+    </button>
   )
 }

@@ -42,6 +42,7 @@ async def _call(workspace: Path, tool: str, args: dict[str, Any]) -> dict[str, A
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool, args)
+            assert not result.isError, result
             value = result.structuredContent
             assert isinstance(value, dict), result
             return value
@@ -65,13 +66,34 @@ async def test_kicad_read_operate_write_read_back(tmp_path: Path) -> None:
     assert analysis.get("success", True) is not False
     assert analysis.get("component_count", netlist["component_count"]) >= 1
 
-    # WRITE — the confirmation-gated tool (the gate is cloud-side; here we are the approver).
-    written = await _call(
-        tmp_path,
-        "set_symbol_property",
-        {"schematic_path": sch, "reference": "R1", "property": "Value", "value": "4k7"},
-    )
+    # Native half of the cloud confirmation protocol: observe, preview, revalidate.
+    original_bytes = (project / "solus_sample.kicad_sch").read_bytes()
+    geometry = await _call(tmp_path, "get_schematic_geometry", {"schematic_path": sch})
+    args = {
+        "schematic_path": sch,
+        "reference": "R1",
+        "property": "Value",
+        "value": "4k7",
+        "expected_fingerprint": geometry["fingerprint"],
+    }
+    preview_args = {**args, "dry_run": True}
+    preview = await _call(tmp_path, "set_symbol_property", preview_args)
+    assert preview["dry_run"] is True
+    assert preview["verified"] is False
+    assert preview["old_value"] == before
+    assert preview["new_value"] == "4k7"
+    assert preview["preview"]
+    assert preview["before_fingerprint"] == geometry["fingerprint"]
+    assert preview["after_fingerprint"] != preview["before_fingerprint"]
+    assert (project / "solus_sample.kicad_sch").read_bytes() == original_bytes
+    assert await _call(tmp_path, "set_symbol_property", preview_args) == preview
+    assert (project / "solus_sample.kicad_sch").read_bytes() == original_bytes
+
+    # Separate MCP processes retain no ticket; the unchanged fingerprint binds execution.
+    written = await _call(tmp_path, "set_symbol_property", {**args, "dry_run": False})
     assert written.get("changed") is True, written
+    assert written["verified"] is True
+    assert written["after_fingerprint"] == preview["after_fingerprint"]
 
     # READ BACK — the tool's own read confirms the value landed.
     after = await _call(tmp_path, "extract_project_netlist", {"project_path": pro})

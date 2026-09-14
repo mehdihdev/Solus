@@ -28,7 +28,7 @@ import { useOnboardingStore } from '../onboarding/onboardingStore'
 import { plural } from '../onboarding/selectionConfigureStep'
 import { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
-import { toolStatusText } from '../project/localconnections/presentation'
+import { toolStatusText, platformUnavailableReason } from '../project/localconnections/presentation'
 import { useProjectSources } from '../project/useProjectSources'
 import { AccountRow, LegacyRow, SourceItem } from './AccountRows'
 import { CodeEnvironmentRow } from './CodeEnvironmentRow'
@@ -42,6 +42,7 @@ import {
   type AccountDomain
 } from './accountDomains'
 import { SimulationPanel } from './SimulationPanel'
+import { SimulationModelSetup } from './SimulationModelSetup'
 import type { MainScreen } from './shellStore'
 import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
 import { useBridgeStatus } from './useBridgeStatus'
@@ -103,7 +104,7 @@ export function ToolRowHead({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry.name}</div>
         <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{status}</div>
-        {disabled && (
+        {disabled && disabledHint !== status && (
           <div style={{ fontSize: 10.5, color: 'var(--mut)' }} data-testid="needs-project">
             {disabledHint}
           </div>
@@ -183,7 +184,9 @@ function ToolRow({
   const unclaimed = accounts.legacy.filter((l) => l.provider === entry.id)
   const held = sources.sources.filter((s) => s.type === entry.id)
   const step = nextStep(entry, linkedAccountFor(accounts.connections, entry.id) !== null)
-  const disabledHint = step.needsProject && !currentProject ? NEEDS_PROJECT_HINT : null
+  const unavailable = entry.localTool ? platformUnavailableReason(entry.localTool) : null
+  const disabledHint =
+    unavailable ?? (step.needsProject && !currentProject ? NEEDS_PROJECT_HINT : null)
   return (
     <div>
       <ToolRowHead
@@ -399,7 +402,13 @@ function DomainPanel({
   providers: readonly CatalogEntry[]
   onNavigate?: (screen: MainScreen) => void
 } & Omit<ToolRowProps, 'entry'>): React.JSX.Element {
-  if (domain === 'simulation') return <SimulationPanel currentProject={currentProject} />
+  if (domain === 'simulation')
+    return (
+      <>
+        {currentProject && <SimulationModelSetup projectId={currentProject.id} />}
+        <SimulationPanel currentProject={currentProject} excludeKinds={['isaac']} />
+      </>
+    )
   const hasLocal =
     domain === 'software' && sources.sources.some((s) => s.type === LOCAL_SOURCE_TYPE)
   if (providers.length === 0 && !hasLocal) {
@@ -492,6 +501,7 @@ export function ConnectedAccountsCard({
           onBegin={() => void wizard.begin()}
           onPickFiles={(files) => void wizard.pickFiles(files)}
           onSelect={wizard.select}
+          onRefreshSelection={wizard.refreshSelection}
           onSubmitConfig={wizard.submitConfig}
           onChooseAccess={wizard.chooseAccess}
           onClose={wizard.close}

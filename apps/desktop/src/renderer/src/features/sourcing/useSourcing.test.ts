@@ -27,6 +27,11 @@ beforeEach(() => {
 })
 
 describe('useSourcing', () => {
+  sourcingRequestLifecycleTests()
+  sourcingRequestOutcomesTests()
+})
+
+function sourcingRequestLifecycleTests(): void {
   it('loads the rules and derives torque from an assembly', async () => {
     vi.mocked(api.deriveTorque).mockResolvedValue(torque())
     const { result } = renderHook(() => useSourcing('p1', { pollMs: 5 }))
@@ -64,7 +69,9 @@ describe('useSourcing', () => {
     expect(result.current.request?.candidates).toHaveLength(2)
     expect(result.current.request?.excluded).toHaveLength(1)
   })
+}
 
+function sourcingRequestOutcomesTests(): void {
   it('surfaces a failed request with its typed error, and a refusal as a message', async () => {
     vi.mocked(api.createSourcingRequest).mockResolvedValue({
       request: request({ status: 'queued', candidates: [] }),
@@ -138,4 +145,4 @@ describe('useSourcing', () => {
     expect(await act(() => result.current.actions.saveRules(rules()))).toBe(false)
     expect(result.current.error).toBe('No.')
   })
-})
+}

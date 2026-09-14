@@ -1,0 +1,189 @@
+.confirmation-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--bd);
+  border-left: 3px solid var(--acc);
+  border-radius: 10px;
+  background: var(--sur);
+  color: var(--tx);
+  display: grid;
+  gap: 10px;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
+.confirmation-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.confirmation-card__header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.confirmation-card__status,
+.confirmation-card__summary,
+.confirmation-card__details {
+  color: var(--mut);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.confirmation-card__summary {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.confirmation-card__changes {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.confirmation-card__label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+
+.confirmation-card__comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 1px;
+  margin: 0;
+  padding: 1px;
+  border-radius: 7px;
+  background: var(--bd);
+  overflow: hidden;
+}
+
+.confirmation-card__comparison > div {
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--sur2);
+}
+
+.confirmation-card__comparison dt {
+  color: var(--mut);
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+
+.confirmation-card dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.confirmation-card__value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
+.confirmation-card__after .confirmation-card__value {
+  color: var(--acc);
+}
+
+.confirmation-card__empty {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--mut);
+}
+
+.confirmation-card__details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.confirmation-card__details dl {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.confirmation-card__details dd {
+  color: var(--tx);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.confirmation-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.confirmation-card__actions button {
+  min-height: 36px;
+  padding: 7px 18px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  background: var(--sur2);
+  color: var(--tx);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.confirmation-card__actions .confirmation-card__approve {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: var(--acc-ink);
+  font-weight: 600;
+}
+
+.confirmation-card__actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.confirmation-card button:focus-visible,
+.confirmation-card summary:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 3px;
+}
+
+.confirmation-card__preview {
+  min-width: 0;
+  color: var(--mut);
+  font-size: 12px;
+}
+
+.confirmation-card__preview summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.confirmation-card__scroll {
+  max-height: min(45vh, 22rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin-top: 10px;
+  padding: 2px;
+}
+
+.confirmation-card__scroll:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.confirmation-card__output pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  text-transform: none;
+}

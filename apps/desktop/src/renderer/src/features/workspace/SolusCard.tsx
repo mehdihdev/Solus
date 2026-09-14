@@ -140,26 +140,13 @@ function SectionRow({
   const panelId = `solus-card-panel-${section}`
   return (
     <div>
-      <button
-        type="button"
-        className="solus-card-row"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={onToggle}
-      >
-        <span className="solus-card-chevron">
-          <Icons.arrowR size={11} />
-        </span>
-        <span style={{ flex: 1 }}>{SECTION_LABELS[section]}</span>
-        {section === 'errors' && (
-          <Mono size={8} color="var(--mut)">
-            AUTO + YOU
-          </Mono>
-        )}
-        <Mono size={9} color="var(--mut)">
-          {sectionCountLabel(entries.length)}
-        </Mono>
-      </button>
+      <SectionToggle
+        section={section}
+        open={open}
+        onToggle={onToggle}
+        panelId={panelId}
+        count={entries.length}
+      />
       <div className="solus-card-panel" data-open={open} id={panelId}>
         <div>
           {open && (
@@ -287,5 +274,39 @@ function EntryRow({
         </button>
       </div>
     </div>
+  )
+}
+
+function SectionToggle({
+  section,
+  open,
+  onToggle,
+  panelId,
+  count
+}: Pick<SectionRowProps, 'section' | 'open' | 'onToggle'> & {
+  panelId: string
+  count: number
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="solus-card-row"
+      aria-expanded={open}
+      aria-controls={panelId}
+      onClick={onToggle}
+    >
+      <span className="solus-card-chevron">
+        <Icons.arrowR size={11} />
+      </span>
+      <span style={{ flex: 1 }}>{SECTION_LABELS[section]}</span>
+      {section === 'errors' && (
+        <Mono size={8} color="var(--mut)">
+          AUTO + YOU
+        </Mono>
+      )}
+      <Mono size={9} color="var(--mut)">
+        {sectionCountLabel(count)}
+      </Mono>
+    </button>
   )
 }

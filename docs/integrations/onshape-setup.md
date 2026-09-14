@@ -1,5 +1,15 @@
 # Onshape integration setup (SOLUSDEV-96 / CAD-01)
 
+> Current behavior (SOLUSDEV-261): this guide retains the original connector setup
+> history. Native authoring and the hosted FeatureScript add-on now complement
+> STEP graph ingestion. The default import bound is 256 exportable elements;
+> verified public webhook subscriptions replace routine polling. See
+> [the quota audit](../qa/ONSHAPE_QUOTA_AUDIT_SOLUSDEV-261.md) and
+> [current code map](../CODEMAPS/onshape.md) for transport, freshness and acceptance
+> limits. `SOLUS_PUBLIC_API_BASE_URL` also configures webhook callback registration;
+> localhost does not provide live webhook delivery.
+
+
 Onshape is Solus's mechanical-CAD source. It is a **thin API** integration per
 `docs/contracts/metadata-extraction.md` §2: Solus uses the Onshape REST API only to
 authenticate, detect change, and fetch a STEP export — then routes that export into the **shared

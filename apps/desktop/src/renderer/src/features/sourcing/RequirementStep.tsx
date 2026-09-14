@@ -89,18 +89,7 @@ export function RequirementStep({
   torque,
   busy,
   onDerive
-}: {
-  projectId: string
-  form: SpecForm
-  onForm: (form: SpecForm) => void
-  mode: RequirementMode
-  onMode: (mode: RequirementMode) => void
-  cad: CadState
-  onCad: (cad: CadState) => void
-  torque: TorqueApi | null
-  busy: boolean
-  onDerive: () => void
-}): React.JSX.Element {
+}: RequirementStepProps): React.JSX.Element {
   const assemblies = useAssemblies(projectId, mode === 'From CAD')
   const set = (key: keyof SpecForm) => (value: string) => onForm({ ...form, [key]: value })
   const text = (label: string, key: keyof SpecForm, placeholder: string): React.JSX.Element => (
@@ -136,28 +125,7 @@ export function RequirementStep({
         </div>
       ) : (
         <div style={{ marginTop: 10 }}>
-          <label style={{ display: 'block' }}>
-            <Mono size={9}>Assembly</Mono>
-            <select
-              aria-label="Assembly"
-              value={cad.assemblyId}
-              onChange={(e) => onCad({ assemblyId: e.target.value, masses: {} })}
-              style={INPUT}
-            >
-              <option value="">
-                {assemblies === null
-                  ? 'Loading assemblies…'
-                  : assemblies.length === 0
-                    ? 'No CAD assembly in this project yet'
-                    : 'Pick an assembly'}
-              </option>
-              {(assemblies ?? []).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <AssemblyPicker assemblies={assemblies} cad={cad} onCad={onCad} />
           <div style={{ marginTop: 10, display: 'flex', gap: 10, alignItems: 'center' }}>
             <Button kind="soft" size="sm" disabled={!cad.assemblyId || busy} onClick={onDerive}>
               {busy ? 'Deriving…' : 'Derive torque from geometry'}
@@ -182,4 +150,52 @@ export function RequirementStep({
       )}
     </div>
   )
+}
+
+function AssemblyPicker({
+  assemblies,
+  cad,
+  onCad
+}: {
+  assemblies: ReturnType<typeof useAssemblies>
+  cad: CadState
+  onCad: (cad: CadState) => void
+}): React.JSX.Element {
+  return (
+    <label style={{ display: 'block' }}>
+      <Mono size={9}>Assembly</Mono>
+      <select
+        aria-label="Assembly"
+        value={cad.assemblyId}
+        onChange={(e) => onCad({ assemblyId: e.target.value, masses: {} })}
+        style={INPUT}
+      >
+        <option value="">
+          {assemblies === null
+            ? 'Loading assemblies…'
+            : assemblies.length === 0
+              ? 'No CAD assembly in this project yet'
+              : 'Pick an assembly'}
+        </option>
+        {(assemblies ?? []).map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+interface RequirementStepProps {
+  projectId: string
+  form: SpecForm
+  onForm: (form: SpecForm) => void
+  mode: RequirementMode
+  onMode: (mode: RequirementMode) => void
+  cad: CadState
+  onCad: (cad: CadState) => void
+  torque: TorqueApi | null
+  busy: boolean
+  onDerive: () => void
 }

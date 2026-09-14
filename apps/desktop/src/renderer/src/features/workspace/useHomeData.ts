@@ -179,21 +179,17 @@ export function useHomeData(): HomeData {
     [load]
   )
 
-  // Through the team choke point (HOME H5): a project of the previous team is
-  // closed and every project-scoped store cleared before the team moves.
-  const setActiveTeam = (teamId: string): void => switchWorkspaceTeam(teamId, 'home')
+  const actions = createHomeActions(team, load, runAction)
 
-  // Archiving or deleting the OPEN project closes it: the shell must not stay
-  // scoped to a project that is hidden or gone (its retained entity list goes
-  // with a deletion). Through the choke point, so everything else clears too.
-  const closeIfOpen = (projectId: string, forget: boolean): void => {
-    if (forget) forgetWorkspaceGraph(projectId)
-    if (useWorkspaceStore.getState().project?.id === projectId) {
-      switchWorkspaceProject(null, 'home')
-    }
-  }
+  return { status, me, teams: me?.teams ?? [], team, projects, activityByProject, actions }
+}
 
-  const actions: HomeActions = {
+function createHomeActions(
+  team: TeamSummary | null,
+  load: () => Promise<void>,
+  runAction: (action: () => Promise<unknown>) => Promise<boolean>
+): HomeActions {
+  return {
     switchTeam: setActiveTeam,
     createProject: async (name) => {
       if (!team) return null
@@ -246,6 +242,18 @@ export function useHomeData(): HomeData {
       }),
     refresh: load
   }
+}
 
-  return { status, me, teams: me?.teams ?? [], team, projects, activityByProject, actions }
+// Through the team choke point (HOME H5): a project of the previous team is
+// closed and every project-scoped store cleared before the team moves.
+const setActiveTeam = (teamId: string): void => switchWorkspaceTeam(teamId, 'home')
+
+// Archiving or deleting the OPEN project closes it: the shell must not stay
+// scoped to a project that is hidden or gone (its retained entity list goes
+// with a deletion). Through the choke point, so everything else clears too.
+const closeIfOpen = (projectId: string, forget: boolean): void => {
+  if (forget) forgetWorkspaceGraph(projectId)
+  if (useWorkspaceStore.getState().project?.id === projectId) {
+    switchWorkspaceProject(null, 'home')
+  }
 }

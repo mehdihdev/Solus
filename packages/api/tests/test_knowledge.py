@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from solus_api.agent.prompt import tool_specs
 from solus_api.agent.tools.knowledge import (
     TOOL_CONTROLS,
@@ -69,6 +70,40 @@ def test_every_mapped_tool_names_a_closed_family() -> None:
         assert isinstance(family, ToolFamily)
         assert control_id.startswith(family.value + ".")
         assert tool_name.split(".")[0] in (family.value, "onshape", "kicad")
+
+
+@pytest.mark.parametrize(
+    ("tool", "control", "shortcut"),
+    [
+        ("add_symbol", "interactive_drawing.place_symbol", "A"),
+        ("add_wire", "interactive_drawing_line_wire_bus.draw_wires", "W"),
+        ("add_net_label", "interactive_drawing.place_label", "L"),
+        ("mark_no_connect", "interactive_drawing.place_no_connect", "Q"),
+    ],
+)
+async def test_schematic_tools_receive_published_control_and_shortcut(
+    db: AsyncSession, tool: str, control: str, shortcut: str
+) -> None:
+    control_id = "kicad.eeschema." + control
+    await ingest(
+        db,
+        entry={
+            **_entry(control_id, ToolFamily.KICAD, label="Place", description="Place an item."),
+            "version_range": ">=10.0 <11.0",
+            "invocation": {"menu_path": None, "shortcut": shortcut},
+        },
+        ctx=IngestContext(
+            acquired_via=AcquisitionMethod.DOCS,
+            doc_url="https://docs.kicad.org/10.0/en/eeschema/eeschema.html",
+        ),
+    )
+    await db.commit()
+    notes = await load_knowledge_notes(db, versions={ToolFamily.KICAD: "10.0.6"})
+    note = notes["kicad." + tool]
+    assert note.control_id == control_id
+    assert f"Default shortcut: {shortcut}." in note.text
+    assert len(note.text) <= 400
+    assert await load_knowledge_notes(db, versions={ToolFamily.KICAD: "9.0"}) == {}
 
 
 async def test_notes_come_only_from_published_vendor_docs_entries(db: AsyncSession) -> None:

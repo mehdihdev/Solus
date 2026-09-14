@@ -4,6 +4,7 @@
 // unreachable — the pill renders honestly, never a fabricated state.
 import { useCallback, useEffect, useState } from 'react'
 import { getBridgeStatus, type BridgeStatus } from '../../lib/api/resources'
+import { isPlatformUnavailableDetail } from '../project/localconnections/presentation'
 import { useInterval } from '../../lib/useInterval'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
@@ -16,7 +17,13 @@ export type BridgePillState = 'offline' | 'ready' | 'busy' | 'attention'
 export function pillState(status: BridgeStatus | null): BridgePillState {
   if (!status?.connected) return 'offline'
   if (status.servers.some((s) => s.state === 'busy')) return 'busy'
-  if (status.servers.some((s) => s.state === 'error' || s.state === 'not_launched')) {
+  if (
+    status.servers.some(
+      (s) =>
+        s.state === 'error' ||
+        (s.state === 'not_launched' && !isPlatformUnavailableDetail(s.detail))
+    )
+  ) {
     return 'attention'
   }
   return 'ready'

@@ -1,4 +1,5 @@
 import type { Connection, SelectableItem } from '../../lib/api/resources'
+import { ServiceDocumentTree } from './ServiceDocumentTree'
 import { ProviderMark } from '../workspace/ConnectedAccountsCard'
 import { isServiceAdded, type useServiceAttachments } from './useServiceAttachments'
 import { supportsWorkspaceService } from './serviceAttachments'
@@ -78,6 +79,16 @@ function ServiceDocuments({
   added,
   select
 }: DocumentProps): React.JSX.Element {
+  if (account.document_tree)
+    return (
+      <ServiceDocumentTree
+        catalog={catalog.tree}
+        connectionId={account.id}
+        busy={busy}
+        added={added}
+        select={select}
+      />
+    )
   const loaded = listing?.status === 'ready'
   return (
     <div className="workspace-service-documents">

@@ -73,7 +73,7 @@ UPSTREAM_REGISTERED_TOOLS = frozenset(
 # package, the MCP SDKs from the fork's own lockfile, and itself. NEVER
 # `solus_api` or anything else from packages/ — the fork runs on customer
 # machines with no cloud codebase present.
-ALLOWED_IMPORT_ROOTS = frozenset({"kicad_mcp", "mcp", "fastmcp", "solus"})
+ALLOWED_IMPORT_ROOTS = frozenset({"kicad_mcp", "mcp", "fastmcp", "pydantic", "solus"})
 
 
 # --- roster shape -------------------------------------------------------------
@@ -82,7 +82,14 @@ ALLOWED_IMPORT_ROOTS = frozenset({"kicad_mcp", "mcp", "fastmcp", "solus"})
 def test_roster_is_exposed_upstream_plus_solus_authored() -> None:
     assert READ_ROSTER == EXPOSED_UPSTREAM_TOOLS | SOLUS_AUTHORED_TOOLS
     assert not (EXPOSED_UPSTREAM_TOOLS & SOLUS_AUTHORED_TOOLS)
-    assert WRITE_ROSTER == {"set_symbol_property"}
+    assert WRITE_ROSTER == {
+        "set_symbol_property",
+        "create_schematic",
+        "add_symbol",
+        "add_wire",
+        "add_net_label",
+        "mark_no_connect",
+    }
     assert not (WRITE_ROSTER & READ_ROSTER)
 
 
@@ -90,7 +97,12 @@ def test_exposed_upstream_names_exist_in_the_vendored_tree() -> None:
     """Guards the roster against silent upstream renames on re-vendor: every
     exposed upstream name must be a tool upstream actually registers."""
     assert EXPOSED_UPSTREAM_TOOLS <= UPSTREAM_REGISTERED_TOOLS
-    assert SOLUS_AUTHORED_TOOLS == {"export_netlist"}
+    assert SOLUS_AUTHORED_TOOLS == {
+        "export_netlist",
+        "get_symbol_definition",
+        "get_schematic_geometry",
+        "check_erc",
+    }
     assert "export_netlist" not in UPSTREAM_REGISTERED_TOOLS
 
 
@@ -393,6 +405,8 @@ async def test_project_path_tools_still_run_when_the_project_is_inside_the_works
     workspace.mkdir()
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(workspace))
     project = write_minimal_project(workspace / "proj")
+    # This test verifies outer path admission, not installed CLI availability.
+    monkeypatch.setattr("solus.netlist_reads.read_topology", lambda path: {"success": True})
     fake = FakeMCP()
     register_allowlisted_tools(fake)
 
@@ -447,6 +461,8 @@ async def test_schematic_path_tools_still_run_when_the_schematic_is_inside_the_w
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(workspace))
     project = write_minimal_project(workspace / "proj")
     schematic = project.with_suffix(".kicad_sch")
+    # This test verifies outer path admission, not installed CLI availability.
+    monkeypatch.setattr("solus.netlist_reads.read_topology", lambda path: {"success": True})
     fake = FakeMCP()
     register_allowlisted_tools(fake)
 
@@ -469,15 +485,15 @@ async def test_set_symbol_property_is_also_confined_at_the_generic_layer(
     fake = FakeMCP()
     register_allowlisted_tools(fake)
 
-    result = await _call(
-        fake.tools["set_symbol_property"],
-        schematic_path=str(outside),
-        reference="U1",
-        property="MPN",
-        value="X",
-    )
-
-    assert result["reason"] == REASON_PATH_ESCAPES_WORKSPACE
+    with pytest.raises(ValueError, match=REASON_PATH_ESCAPES_WORKSPACE):
+        await _call(
+            fake.tools["set_symbol_property"],
+            schematic_path=str(outside),
+            reference="U1",
+            property="MPN",
+            value="X",
+        )
+    assert outside.read_text() == "(kicad_sch)"
 
 
 # --- the fork itself stays pristine --------------------------------------------

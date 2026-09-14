@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import create_project, create_team
@@ -29,7 +30,7 @@ from solus_api.agent.confirmations import (
     request_confirmation,
 )
 from solus_api.agent.tools.registry import ToolRegistry
-from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolErrorCode
+from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import InProcessTool, ToolException
 from solus_api.models import (
     ConfirmationStatus,
@@ -95,6 +96,43 @@ def _registry(record: list[dict[str, Any]]) -> ToolRegistry:
 
 
 # --------------------------------------------------------------- parking
+
+
+async def test_route_schedules_only_successful_approval_with_stored_arguments(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from solus_api.routers import sol
+
+    project_id, confirmation_id = await _seeded_confirmation(
+        client, alice_headers, maker, tool="onshape.update_feature"
+    )
+    async with maker() as db:
+        row = await db.get(ToolConfirmation, confirmation_id)
+        assert row is not None
+        row.args = {"document_id": "doc1"}
+        team_id = row.team_id
+        await db.commit()
+    applied = ToolResult(call_id="write1", ok=True, value={"applied": True})
+    monkeypatch.setattr(sol, "decide_confirmation", AsyncMock(return_value=applied))
+    scheduler = AsyncMock(
+        return_value={"status": "failed", "message": "CAD applied; sync unavailable"}
+    )
+    monkeypatch.setattr(sol, "schedule_onshape_write_sync", scheduler, raising=False)
+    url = f"/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}"
+    response = await client.post(url, headers=alice_headers, json={"decision": "approve"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["ok"] is True
+    assert response.json()["data"]["value"]["graph_sync"]["status"] == "failed"
+    assert scheduler.await_args is not None
+    assert scheduler.await_args.kwargs["args"] == {"document_id": "doc1"}
+    assert scheduler.await_args.kwargs["project_id"] == uuid.UUID(project_id)
+    assert scheduler.await_args.kwargs["team_id"] == team_id
+    scheduler.reset_mock()
+    await client.post(url, headers=alice_headers, json={"decision": "reject"})
+    scheduler.assert_not_awaited()
 
 
 async def test_a_gated_call_parks_instead_of_running(
@@ -674,6 +712,66 @@ async def test_a_failing_preview_degrades_rather_than_blocking_the_park(
     assert row.status is ConfirmationStatus.PENDING
 
 
+@pytest.mark.parametrize("preview_result", [None, [], [{"bad": "row"}]])
+async def test_required_preview_failure_never_parks_or_executes(
+    maker: async_sessionmaker[AsyncSession], preview_result: Any
+) -> None:
+    class RequiredPreview(InProcessTool):
+        requires_complete_preview = True
+
+        async def preview(self, args: dict[str, Any]) -> Any:
+            if preview_result is None:
+                raise RuntimeError("preview unavailable")
+            return preview_result
+
+    executed = []
+
+    async def run(args: dict[str, Any]) -> dict[str, Any]:
+        executed.append(args)
+        return {}
+
+    registry = ToolRegistry()
+    registry.register(RequiredPreview(DANGEROUS, run))
+    project_id, team_id, user_id = await _scope(maker)
+    async with maker() as db:
+        parked = await request_confirmation(
+            db,
+            registry,
+            ToolCall(tool=DANGEROUS.name, args={"name": "width"}),
+            project_id=project_id,
+            team_id=team_id,
+            user_id=user_id,
+        )
+        assert parked is not None
+        assert parked.confirmation_id is None
+        assert not parked.result.ok
+        # Also refuse a pre-existing argument-only card under the new policy.
+        legacy = ToolConfirmation(
+            project_id=project_id,
+            team_id=team_id,
+            user_id=user_id,
+            tool=DANGEROUS.name,
+            args={"name": "width"},
+            summary="legacy",
+            preview=[
+                {"label": "name", "before": None, "after": "width"},
+            ],
+            expires_at=utcnow() + CONFIRMATION_TTL,
+        )
+        db.add(legacy)
+        await db.commit()
+        result = await decide_confirmation(
+            db,
+            registry,
+            legacy.id,
+            approve=True,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        assert not result.ok
+        assert executed == []
+
+
 async def test_preview_rows_are_bounded_and_shape_checked(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -1213,6 +1311,25 @@ def test_the_decision_summary_distinguishes_the_three_outcomes() -> None:
     assert "not applied" in summary and "ask again" in summary
 
 
+def test_uncertain_command_is_not_success_or_refusal_and_is_filed() -> None:
+    from solus_api.agent.confirmations import command_outcome_text
+    from solus_api.agent.errors_filing import run_failure
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    value = {"ok": False, "changed": None, "exit_code": None, "uncertain": True}
+    result = ToolResult.success("uncertain", value)
+    for text in (
+        command_outcome_text(value),
+        _decision_summary("approve", result),
+        run_failure(result),
+    ):
+        assert text is not None
+        assert "uncertain" in text and "may have changed" in text
+        assert "Do not retry automatically" in text
+        assert "applied ok" not in text and "refused to run" not in text
+
+
 def test_the_decision_summary_carries_a_confirmed_commands_exit_outcome() -> None:
     """SOLUSDEV-250: a `code.run`/`code.test` result is `ok` at the transport
     level even when the command exited 1 — the next turn's model must read the
@@ -1233,7 +1350,7 @@ def test_the_decision_summary_carries_a_confirmed_commands_exit_outcome() -> Non
         },
     )
     summary = _decision_summary("approve", failed)
-    assert summary.startswith("approved by you and applied ok")
+    assert summary.startswith("approved by you;")
     assert "exited 1" in summary and "test_reward_is_positive" in summary
     assert len(summary) < 700  # the tail is capped; the whole stderr never rides the history
     assert (
@@ -1537,3 +1654,154 @@ async def test_a_rejected_action_files_nothing(
         await session.commit()
 
     assert await _error_entries(maker, project_id) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ({"ok": False, "exit_code": 0, "reason": "compilation_unverified"}, "failed"),
+        ({"ok": False, "exit_code": None, "started": True, "reason": "resource_limit"}, "failed"),
+        ({"ok": False, "exit_code": None, "timed_out": True}, "timed out"),
+        ({"ok": False, "exit_code": None, "reason": "legacy_refusal"}, "refused to run"),
+        ({"ok": False, "exit_code": 1}, "exited 1"),
+        ({"ok": False, "exit_code": 1, "started": True}, "exited 1"),
+    ],
+)
+def test_confirmed_failure_is_never_described_as_applied_ok(
+    value: dict[str, Any], expected: str
+) -> None:
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    summary = _decision_summary("approve", ToolResult.success("command", value))
+    assert expected in summary
+    assert "applied ok" not in summary
+    if value.get("started") or value.get("timed_out"):
+        assert "refused to run" not in summary
+
+
+def test_failed_command_reason_is_redacted_before_persisted_summary() -> None:
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    summary = _decision_summary(
+        "approve",
+        ToolResult.success(
+            "command", {"ok": False, "exit_code": 0, "reason": "password=sample-sensitive-value"}
+        ),
+    )
+    assert "sample-sensitive-value" not in summary
+    assert "failed" in summary
+
+
+def test_confirmed_ordered_command_failure_is_not_applied_ok() -> None:
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    value = {
+        "results": [{"exit_code": 0}, {"ok": False, "exit_code": 0, "reason": "readback_failed"}]
+    }
+    summary = _decision_summary("approve", ToolResult.success("steps", value))
+    assert "step 2" in summary and "readback_failed" in summary
+    assert "applied ok" not in summary
+
+
+def test_verified_cached_command_result_does_not_claim_a_process_ran() -> None:
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    value = {"ok": True, "changed": False, "started": False, "exit_code": 0}
+    summary = _decision_summary("approve", ToolResult.success("cached", value))
+    assert "verified existing result" in summary
+    assert "no command was started" in summary
+    assert "exited" not in summary
+
+
+def test_prelaunch_timeout_does_not_claim_the_command_ran() -> None:
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    value = {"ok": False, "started": False, "exit_code": None, "timed_out": True}
+    summary = _decision_summary("approve", ToolResult.success("deadline", value))
+    assert "did not start" in summary and "deadline" in summary
+    assert "command timed out" not in summary
+
+
+async def test_output_route_is_owner_private_and_does_not_execute(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    project, confirmation = await _seeded_confirmation(client, alice_headers, maker)
+    path = f"/api/v1/projects/{project}/sol/confirmations/{confirmation}/output"
+    response = await client.get(path, headers=alice_headers)
+    assert response.status_code == 200
+    assert response.json()["data"]["chunks"] == []
+    assert (await client.get(path, headers=bob_headers)).status_code == 404
+    assert (await client.get(path)).status_code == 401
+    assert (await client.get(path + "?cursor=-1", headers=alice_headers)).status_code == 422
+
+
+async def test_populated_progress_is_hidden_from_same_project_teammate(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.agent.command_output import output_store
+    from solus_api.models import Membership, Role
+
+    project, confirmation = await _seeded_confirmation(
+        client, alice_headers, maker, tool="code.run"
+    )
+    bob = (await client.get("/api/v1/users/me", headers=bob_headers)).json()["data"]["id"]
+    async with maker() as db:
+        row = await db.get(ToolConfirmation, confirmation)
+        assert row is not None
+        db.add(Membership(team_id=row.team_id, user_id=uuid.UUID(bob), role=Role.MEMBER))
+        output_store.start((row.project_id, row.user_id, confirmation)).append(
+            "stdout", "private output\n"
+        )
+        await db.commit()
+    path = f"/api/v1/projects/{project}/sol/confirmations/{confirmation}/output"
+    assert (await client.get(path, headers=alice_headers)).json()["data"]["chunks"][0][
+        "text"
+    ] == "private output\n"
+    assert (await client.get(path, headers=bob_headers)).status_code == 404
+
+
+async def test_approved_command_binds_progress_and_finalizes_it(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.agent.command_output import current_output, output_store
+
+    project, confirmation = await _seeded_confirmation(
+        client, alice_headers, maker, tool="code.run"
+    )
+
+    async def command(args: dict[str, Any]) -> dict[str, Any]:
+        sink = current_output.get()
+        assert sink is not None
+        sink.append("stdout", "first\nlast")
+        return {"exit_code": 0}
+
+    registry = ToolRegistry()
+    registry.register(InProcessTool(DANGEROUS.model_copy(update={"name": "code.run"}), command))
+    async with maker() as db:
+        row = await db.get(ToolConfirmation, confirmation)
+        assert row is not None
+        owner = row.user_id
+        from solus_api.agent.confirmations import _build_preview
+
+        row.preview = await _build_preview(registry.tools()[0], row.args)
+        await db.commit()
+        result = await decide_confirmation(
+            db, registry, confirmation, approve=True, project_id=uuid.UUID(project), user_id=owner
+        )
+        assert result.ok
+    output = output_store.read((uuid.UUID(project), owner, confirmation), 0)
+    assert output["complete"] and "".join(c["text"] for c in output["chunks"]) == "first\nlast"
+    assert current_output.get() is None

@@ -101,6 +101,7 @@ export interface ConnectionProject {
  *  API.md §2.1). Bound on Home; projects attach through their sources. Never
  *  carries a secret or a secret ref. */
 export interface Connection {
+  document_tree?: boolean
   id: string
   provider: string
   status: ConnectionStatus
@@ -258,7 +259,7 @@ export interface IntegrationHosted {
  *  wizard cancels on close and Home resets the onboarding store
  *  on mount, so a renderer-resident flag would be wrong for every teammate and
  *  lost on every navigation. */
-export type HostedState = 'ready' | 'subscription_required' | 'not_connected'
+export type HostedState = 'ready' | 'subscription_required' | 'not_connected' | 'not_enabled'
 
 /** The integration catalog entry (auth + config requirements). */
 export interface Integration {
@@ -424,6 +425,7 @@ export function updateCustomInstruction(
 /** GET /users/me/usage (SOLUSDEV-233): the ADR-018 always-visible meter,
  *  credit-denominated. `allowance` null = no plan-derived denominator. */
 export interface UsageApi {
+  unlimited?: boolean
   used: number
   allowance: number | null
   balance: number
@@ -486,6 +488,7 @@ export interface CheckoutSession {
 
 /** Current credit balance (GET /users/me/credits). */
 export interface CreditBalance {
+  unlimited?: boolean
   user_id: string
   balance: number
 }
@@ -1538,6 +1541,7 @@ export function getBenchDeviceRecent(
 /** A vendor-run local tool reachable through the companion bridge (no project
  *  scope). Copy fields are shown verbatim — honest guidance, never invented. */
 export interface LocalTool {
+  supported_platforms?: ('linux' | 'darwin' | 'win32')[] | null
   type: string
   display_name: string
   hosting: string

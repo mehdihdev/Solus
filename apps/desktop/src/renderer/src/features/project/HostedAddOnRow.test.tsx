@@ -40,7 +40,10 @@ function source(config: Record<string, unknown>): Source {
   }
 }
 
-const props = (config: Record<string, unknown>, onChanged = vi.fn()): Parameters<typeof HostedAddOnRow>[0] => ({
+const props = (
+  config: Record<string, unknown>,
+  onChanged = vi.fn()
+): Parameters<typeof HostedAddOnRow>[0] => ({
   source: source(config),
   projectId: 'p1',
   hosted: HOSTED,
@@ -51,6 +54,13 @@ const props = (config: Record<string, unknown>, onChanged = vi.fn()): Parameters
 beforeEach(() => vi.clearAllMocks())
 
 describe('state comes from the server, never from this component', () => {
+  it('does not offer a second enable action for an account-owned grant', () => {
+    const input = props({})
+    input.source.connection_id = 'c1'
+    render(<HostedAddOnRow {...input} />)
+    expect(screen.queryByRole('button', { name: 'Enable FeatureScript' })).not.toBeInTheDocument()
+    expect(screen.getByText(/linked account/)).toBeInTheDocument()
+  })
   it('an absent config reads as not connected, never as optimistically ready', () => {
     render(<HostedAddOnRow {...props({})} />)
     expect(screen.getByRole('button', { name: 'Enable FeatureScript' })).toBeInTheDocument()

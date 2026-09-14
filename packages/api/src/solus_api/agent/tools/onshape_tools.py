@@ -37,18 +37,21 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.connectors.contracts import ConnectorError, Credentials
 from solus_api.connectors.onshape import ONSHAPE_ID_RE, tracked_document_ids
+from solus_api.connectors.onshape_confirmation import ConfirmedOnshapeTool, PreviewBinding
 from solus_api.connectors.onshape_ops import OnshapeOperation, every_operation
-from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
-from solus_api.connectors.runtime import call_with_refresh, resolve_credentials
+from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry, UnknownConnectorError
+from solus_api.connectors.runtime import call_with_refresh, refresh_secret_ref, resolve_credentials
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
-from solus_api.models import AccountConnection, Source, SourceStatus, SourceType
+from solus_api.models import AccountConnection, ConnectionStatus, Source, SourceStatus, SourceType
+from solus_api.services.connections import onshape_application_for
 
 if TYPE_CHECKING:
     from solus_api.connectors.onshape import OnshapeConnector
@@ -63,6 +66,7 @@ type _Step[T] = Callable[["OnshapeConnector", httpx.AsyncClient, dict[str, Any]]
 #: unlisted is a TOOL_ERROR, so a new connector code can never leak as a crash.
 _ERROR_CODES: dict[str, ToolErrorCode] = {
     "config_invalid": ToolErrorCode.INVALID_ARGS,
+    "stale_state": ToolErrorCode.UNAUTHORIZED,
     "invalid_credentials": ToolErrorCode.UNAUTHORIZED,
     "oauth_refresh_failed": ToolErrorCode.UNAUTHORIZED,
     "oauth_not_configured": ToolErrorCode.UNAUTHORIZED,
@@ -71,6 +75,21 @@ _ERROR_CODES: dict[str, ToolErrorCode] = {
 
 #: Codes worth retrying: a transport blip, not a bad request.
 _RETRYABLE = frozenset({"api_unreachable", "api_error"})
+
+
+# A graph refresh is activity, not revocation of the existing source grant.
+_USABLE_SOURCE_STATES = (SourceStatus.CONNECTED, SourceStatus.SYNCING)
+
+
+def _usable_source() -> ColumnElement[bool]:
+    # A raced graph snapshot does not revoke live account authority.
+    return or_(
+        Source.status.in_(_USABLE_SOURCE_STATES),
+        and_(
+            Source.status == SourceStatus.ERROR,
+            Source.last_error["code"].as_string() == "revision_changed",
+        ),
+    )
 
 
 async def _connected_source(
@@ -86,18 +105,22 @@ async def _connected_source(
             select(Source).where(
                 Source.project_id == project_id,
                 Source.type == SourceType.ONSHAPE,
-                Source.status == SourceStatus.CONNECTED,
+                _usable_source(),
             )
         )
         return source
 
 
-def _tool_error(exc: ConnectorError) -> ToolException:
+def _tool_error(exc: ConnectorError, *, preview_only: bool = False) -> ToolException:
     """Map a connector failure to the model-facing envelope.
 
     The message is the connector's own — which never echoes upstream text or
     credential material (its `request` helper drops both deliberately).
     """
+    if preview_only and exc.code in {"quota_degraded", "quota_exhausted"}:
+        from solus_api.agent.confirmations import QuotaPreviewUnavailable
+
+        return QuotaPreviewUnavailable(exhausted=exc.code == "quota_exhausted")
     return ToolException(
         exc.message,
         code=_ERROR_CODES.get(exc.code, ToolErrorCode.TOOL_ERROR),
@@ -148,6 +171,26 @@ async def _prepare(
             code=ToolErrorCode.NOT_FOUND,
             retryable=False,
         )
+    onshape_application = onshape_application_for(source)
+    account_ref = source.account_external_id or f"source:{source.id}"
+    if source.connection_id is not None:
+        async with session_factory() as session:
+            account = await session.get(AccountConnection, source.connection_id)
+        if (
+            account is None
+            or account.status is not ConnectionStatus.CONNECTED
+            or account.provider is not SourceType.ONSHAPE
+            or not account.secret_ref
+        ):
+            raise ToolException(
+                "The connected Onshape account is unavailable",
+                code=ToolErrorCode.UNAUTHORIZED,
+                retryable=False,
+            )
+        # Detached per-call source snapshot; never persisted to source config.
+        source.secret_ref = account.secret_ref
+        onshape_application = onshape_application_for(account)
+        account_ref = account.account_external_id or f"connection:{account.id}"
     if is_write and not await _may_write(session_factory, source):
         raise ToolException(
             "This Onshape source is connected read-only. Reconnect it and choose "
@@ -156,7 +199,17 @@ async def _prepare(
             retryable=False,
         )
     try:
-        connector = connectors.create("onshape")
+        connector = connectors.create_scoped(
+            "onshape",
+            ConnectorContext(
+                project_id=project_id,
+                team_id=source.team_id,
+                acting_user_id=source.created_by,
+                account_ref=account_ref,
+                onshape_application=onshape_application,
+                purpose="scheduled",
+            ),
+        )
     except UnknownConnectorError as exc:  # pragma: no cover - registry always has it
         raise ToolException(
             "The Onshape connector is not available.",
@@ -222,6 +275,131 @@ def _refuse_untracked_document(source: Source, args: dict[str, Any]) -> list[str
     return tracked
 
 
+class _AccountRefreshStore(SecretStore):
+    """Fence refreshed credentials and their retry against account revocation.
+
+    The vendor refresh runs without a database lock. Before its first secret
+    write, reacquire the account and source's live authority; keep that account
+    lock through both token writes and the retried operation. Revoke uses the
+    same lock, so it either wins first (no writes/retry) or deletes the resulting
+    family after this operation completes.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        store: SecretStore,
+        source: Source,
+        args: dict[str, Any],
+        *,
+        is_write: bool,
+    ) -> None:
+        self._session = session
+        self._store = store
+        self._source = source
+        self._args = args
+        self._is_write = is_write
+        self._admitted = False
+
+    async def _admit(self) -> None:
+        account = await self._session.scalar(
+            select(AccountConnection)
+            .where(
+                AccountConnection.id == self._source.connection_id,
+                AccountConnection.provider == SourceType.ONSHAPE,
+                AccountConnection.status == ConnectionStatus.CONNECTED,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        current = await self._session.scalar(
+            select(Source)
+            .where(
+                Source.id == self._source.id,
+                Source.project_id == self._source.project_id,
+                Source.connection_id == self._source.connection_id,
+                Source.type == SourceType.ONSHAPE,
+                _usable_source(),
+            )
+            .execution_options(populate_existing=True)
+        )
+        if (
+            account is None
+            or current is None
+            or not account.secret_ref
+            or account.secret_ref != self._source.secret_ref
+            or (self._is_write and (account.config or {}).get("access") != _WRITE_ACCESS)
+        ):
+            raise ToolException(
+                "The Onshape grant changed during sign-in; reconnect the account",
+                code=ToolErrorCode.UNAUTHORIZED,
+                retryable=False,
+            )
+        tracked = _refuse_untracked_document(current, self._args)
+        if "source_document_id" in self._args:
+            _refuse_untracked_document(current, {"document_id": self._args["source_document_id"]})
+        self._args["_documents"] = tracked
+        self._admitted = True
+
+    async def put(self, ref: str, value: str) -> None:
+        if not self._admitted:
+            await self._admit()
+        expected = self._source.secret_ref or ""
+        if ref not in {expected, refresh_secret_ref(expected)}:
+            raise ToolException(
+                "Invalid Onshape credential scope", code=ToolErrorCode.UNAUTHORIZED, retryable=False
+            )
+        await self._store.put(ref, value)
+
+    async def get(self, ref: str) -> str:
+        return await self._store.get(ref)
+
+    async def delete(self, ref: str) -> None:
+        await self._store.delete(ref)
+
+
+async def _run_with_refresh[T](
+    session_factory: async_sessionmaker[AsyncSession],
+    source: Source,
+    connector: OnshapeConnector,
+    credentials: Credentials,
+    secret_store: SecretStore,
+    args: dict[str, Any],
+    run: Callable[[Credentials], Awaitable[T]],
+    *,
+    is_write: bool,
+) -> T:
+    async def invoke(store: SecretStore) -> T:
+        return await call_with_refresh(
+            connector=connector,
+            credentials=credentials,
+            secret_store=store,
+            secret_ref=source.secret_ref or "",
+            run=run,
+        )
+
+    if source.connection_id is not None:
+        async with session_factory() as session:
+            result = await invoke(
+                _AccountRefreshStore(session, secret_store, source, args, is_write=is_write)
+            )
+            await session.commit()
+            return result
+    return await invoke(secret_store)
+
+
+async def _invoke_bound(
+    binding: PreviewBinding,
+    args: dict[str, Any],
+    invoke: Callable[[], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    try:
+        with binding.execution(args):
+            return await invoke()
+    except ConnectorError as exc:
+        raise _tool_error(exc) from exc
+
+
 def _build_tool(
     operation: OnshapeOperation,
     session_factory: async_sessionmaker[AsyncSession],
@@ -230,12 +408,29 @@ def _build_tool(
     connectors: ConnectorRegistry,
 ) -> Tool:
     is_write = "write" in operation.tags
+    binding = PreviewBinding(
+        enabled=operation.name
+        in {
+            "onshape.set_variable",
+            "onshape.insert_part",
+            "onshape.update_feature",
+            "onshape.extrude_cut",
+            "onshape.create_circle_sketch",
+            "onshape.create_face_mate_connector",
+            "onshape.create_circle_mate_connector",
+            "onshape.create_fastened_mate",
+            "onshape.restore_fastened_pose",
+            "onshape.create_revolute_mate",
+        }
+    )
 
-    async def _call[T](args: dict[str, Any], step: _Step[T]) -> T:
+    async def _call[T](args: dict[str, Any], step: _Step[T], *, preview_only: bool = False) -> T:
         connector, credentials, source = await _prepare(
             session_factory, project_id, secret_store, connectors, is_write=is_write
         )
         tracked = _refuse_untracked_document(source, args)
+        if "source_document_id" in args:
+            _refuse_untracked_document(source, {"document_id": args["source_document_id"]})
         # The model's MENU, bound by Solus code exactly like `project_id` — never
         # an argument it could supply. Every operation schema forbids extra
         # properties, so a model that tried to send `_documents` is rejected at
@@ -247,24 +442,30 @@ def _build_tool(
                 return await step(connector, client, args)
 
         try:
-            return await call_with_refresh(
-                connector=connector,
-                credentials=credentials,
-                secret_store=secret_store,
-                secret_ref=source.secret_ref or "",
-                run=run,
+            return await _run_with_refresh(
+                session_factory,
+                source,
+                connector,
+                credentials,
+                secret_store,
+                args,
+                run,
+                is_write=is_write,
             )
         except ConnectorError as exc:
             logger.info("onshape tool %s failed: %s", operation.name, exc.code)
-            raise _tool_error(exc) from exc
+            raise _tool_error(exc, preview_only=preview_only) from exc
 
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
-        return await _call(args, operation.run)
+        return await _invoke_bound(binding, args, lambda: _call(args, operation.run))
 
     async def preview(args: dict[str, Any]) -> list[dict[str, Any]]:
         assert operation.preview is not None
-        rows = await _call(args, operation.preview)
-        return [*await _document_row(args), *rows]
+        binding.clear()
+        rows = await _call(args, operation.preview, preview_only=True)
+        complete = [*await _document_row(args), *rows]
+        binding.remember(args, rows)
+        return complete
 
     async def _document_row(args: dict[str, Any]) -> list[dict[str, Any]]:
         """WHICH document this change lands in, by NAME, as the card's first row.
@@ -313,7 +514,8 @@ def _build_tool(
             }
         ]
 
-    return InProcessTool(
+    tool_class = ConfirmedOnshapeTool if binding.enabled else InProcessTool
+    return tool_class(
         ToolDescriptor(
             name=operation.name,
             description=operation.description,

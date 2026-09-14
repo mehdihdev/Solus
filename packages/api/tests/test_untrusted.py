@@ -100,3 +100,8 @@ def test_a_secret_next_to_punctuation_is_redacted() -> None:
 
 def test_redaction_keeps_the_shape_of_the_text() -> None:
     assert redact_text("line one\nline two") == "line one\nline two"
+
+
+def test_authorization_scheme_does_not_leave_credential_visible() -> None:
+    assert 'short-token' not in redact_text('Authorization: Bearer short-token')
+    assert 'short-token' not in redact_text('authorization=Basic short-token')

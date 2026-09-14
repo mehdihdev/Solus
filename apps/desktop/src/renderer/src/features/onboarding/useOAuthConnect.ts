@@ -7,7 +7,8 @@
 // the connector DECLARES — a `selection` (pick repos/documents) or plain
 // `config_fields` (type them in) — never by a provider id. So a new OAuth
 // connector needs no change here.
-import { useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { useAuthStore } from '../../store/authStore'
 import {
   startOAuth,
   exchangeOAuth,
@@ -16,6 +17,7 @@ import {
   updateSource,
   triggerSync,
   getSyncs,
+  getJob,
   getSource,
   startHostedOAuth,
   exchangeHostedOAuth,
@@ -28,6 +30,12 @@ import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { accessChoiceStep } from './accessChoiceStep'
 import { runAccountConnect, type AccountConnectResult } from './accountConnect'
 import { addOnStep } from './addOnStep'
+import { accountAddOnStep } from './accountAddOnStep'
+import {
+  getAccountHosted,
+  startAccountHosted,
+  exchangeAccountHosted
+} from '../../lib/api/resources.hosted'
 import { fieldsConfigureStep } from './fieldsConfigureStep'
 import { selectionConfigureStep } from './selectionConfigureStep'
 import {
@@ -46,6 +54,7 @@ const oauthApi: OAuthConnectApi = {
   updateSource,
   triggerSync,
   getSyncs,
+  getJob,
   getSource
 }
 
@@ -136,7 +145,7 @@ function awaitChoice<T>(
   })
 }
 
-export function useOAuthConnect(): UseOAuthConnect {
+function useOAuthInputs() {
   const setConnection = useOnboardingStore((s) => s.setConnection)
   // Resolvers for the in-flow steps; the orchestration awaits the user's input.
   const selectChoice = useRef<Resolver<SelectableItem[]>>(null)
@@ -144,7 +153,49 @@ export function useOAuthConnect(): UseOAuthConnect {
   const accessChoice = useRef<Resolver<string>>(null)
   const currentAttempt = useRef<Attempt | null>(null)
 
-  const start = async (
+  const cancel = useCallback((): void => {
+    if (currentAttempt.current) currentAttempt.current.cancelled = true
+    selectChoice.current?.(null)
+    configSubmit.current?.(null)
+    accessChoice.current?.(null)
+    // Settle a flow parked on the browser handshake NOW — otherwise the
+    // loopback stays armed and a later browser completion would mint and
+    // store a token for an attempt the user abandoned. A rejected invoke is
+    // swallowed: nothing depends on the result, and the flow's own timeout
+    // remains the backstop.
+    void getDesktopOAuthBridge()
+      ?.cancelOAuth?.()
+      ?.catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = useAuthStore.subscribe((state, previous) => {
+      if (state.accessToken !== previous.accessToken) cancel()
+    })
+    return () => {
+      unsubscribe()
+      cancel()
+    }
+  }, [cancel])
+
+  return { setConnection, selectChoice, configSubmit, accessChoice, currentAttempt, cancel }
+}
+
+export function useOAuthConnect(): UseOAuthConnect {
+  const inputs = useOAuthInputs()
+  return {
+    start: projectConnect(inputs),
+    startAccount: accountConnect(inputs),
+    select: (items) => inputs.selectChoice.current?.(items),
+    submitConfig: (values) => inputs.configSubmit.current?.(values),
+    chooseAccess: (mode) => inputs.accessChoice.current?.(mode),
+    cancel: inputs.cancel
+  }
+}
+
+function projectConnect(inputs: ReturnType<typeof useOAuthInputs>): UseOAuthConnect['start'] {
+  const { setConnection, selectChoice, configSubmit, accessChoice, currentAttempt } = inputs
+  return async (
     projectId: string,
     provider: string,
     options: OAuthConnectStartOptions = {}
@@ -158,7 +209,7 @@ export function useOAuthConnect(): UseOAuthConnect {
     // A cancelled attempt goes quiet: its progress must not resurrect tile
     // state the wizard already forgot.
     const onProgress = (state: ConnectionState): void => {
-      if (!attempt.cancelled) setConnection(provider, state)
+      if (!attempt.cancelled && currentAttempt.current === attempt) setConnection(provider, state)
     }
 
     const configure: ConfigureStep = options.selection
@@ -199,8 +250,13 @@ export function useOAuthConnect(): UseOAuthConnect {
       }
     )
   }
+}
 
-  const startAccount = async (
+function accountConnect(
+  inputs: ReturnType<typeof useOAuthInputs>
+): UseOAuthConnect['startAccount'] {
+  const { setConnection, accessChoice, currentAttempt } = inputs
+  return async (
     provider: string,
     options: OAuthConnectStartOptions = {}
   ): Promise<AccountConnectResult> => {
@@ -209,7 +265,7 @@ export function useOAuthConnect(): UseOAuthConnect {
     const bridge = getDesktopOAuthBridge()
     const redirectUri = bridge ? await bridge.getConnectorRedirectUrl() : ''
     const onProgress = (state: ConnectionState): void => {
-      if (!attempt.cancelled) setConnection(provider, state)
+      if (!attempt.cancelled && currentAttempt.current === attempt) setConnection(provider, state)
     }
     const chooseAccess = accessChoiceStep({
       accessModes: options.accessModes,
@@ -217,33 +273,21 @@ export function useOAuthConnect(): UseOAuthConnect {
       onChoose: () => awaitChoice(accessChoice, attempt, currentAttempt)
     })
     return runAccountConnect(
-      { api: { startOAuth, exchangeOAuth }, bridge, onProgress, chooseAccess },
+      {
+        api: { startOAuth, exchangeOAuth },
+        bridge,
+        onProgress,
+        chooseAccess,
+        addOn: accountAddOnStep({
+          hosted: options.hosted ?? null,
+          bridge,
+          onProgress,
+          api: { getAccountHosted, startAccountHosted, exchangeAccountHosted },
+          isCancelled: () => attempt.cancelled || currentAttempt.current !== attempt
+        })
+      },
       provider,
       { redirectUri, displayName: options.displayName }
     )
-  }
-
-  const cancel = (): void => {
-    if (currentAttempt.current) currentAttempt.current.cancelled = true
-    selectChoice.current?.(null)
-    configSubmit.current?.(null)
-    accessChoice.current?.(null)
-    // Settle a flow parked on the browser handshake NOW — otherwise the
-    // loopback stays armed and a later browser completion would mint and
-    // store a token for an attempt the user abandoned. A rejected invoke is
-    // swallowed: nothing depends on the result, and the flow's own timeout
-    // remains the backstop.
-    void getDesktopOAuthBridge()
-      ?.cancelOAuth?.()
-      ?.catch(() => undefined)
-  }
-
-  return {
-    start,
-    startAccount,
-    select: (items) => selectChoice.current?.(items),
-    submitConfig: (values) => configSubmit.current?.(values),
-    chooseAccess: (mode) => accessChoice.current?.(mode),
-    cancel
   }
 }

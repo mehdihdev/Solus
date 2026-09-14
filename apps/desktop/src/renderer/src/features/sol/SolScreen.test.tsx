@@ -15,6 +15,7 @@ import { fakeSolBridge, installSolBridge, uninstallSolBridge } from './solWindow
 import { disconnectSolBridge, useSolWindowStore } from './solWindowStore'
 
 vi.mock('./solApi', () => ({
+  listSolConfirmations: vi.fn().mockResolvedValue([]),
   createSolConversation: vi.fn(),
   listSolTurns: vi.fn().mockResolvedValue([]),
   listSolConversations: vi.fn().mockResolvedValue([]),

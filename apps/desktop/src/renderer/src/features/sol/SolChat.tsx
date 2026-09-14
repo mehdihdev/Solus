@@ -195,6 +195,7 @@ const MessageRow = memo(function MessageRow({
       {confirmations.map((confirmation) => (
         <ConfirmationCard
           key={confirmation.confirmationId}
+          projectId={projectId}
           pending={confirmation}
           onDecide={(decision) => onDecide(confirmation.confirmationId, decision)}
         />
@@ -444,16 +445,7 @@ function Composer({
   regionAttached,
   onDismissRegion,
   onSend
-}: {
-  streaming: boolean
-  page: boolean
-  projectId: string | null
-  mode: SolActionMode
-  onModeChange: (mode: SolActionMode) => void
-  regionAttached: boolean
-  onDismissRegion: () => void
-  onSend: ComposerSend
-}): React.JSX.Element {
+}: ComposerProps): React.JSX.Element {
   const [input, setInput] = useState('')
   const classify = useClassifyPreview(input)
   const empty = input.trim() === ''
@@ -505,23 +497,7 @@ function Composer({
           onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
           ariaLabel="Think harder"
         />
-        <button
-          type="submit"
-          disabled={streaming || empty}
-          style={{
-            background: 'var(--acc)',
-            color: 'var(--acc-ink)',
-            border: 'none',
-            borderRadius: 4,
-            padding: '7px 14px',
-            fontSize: 12,
-            fontWeight: 600,
-            cursor: streaming ? 'wait' : 'pointer',
-            opacity: streaming || empty ? 0.6 : 1
-          }}
-        >
-          Send
-        </button>
+        <SendButton streaming={streaming} empty={empty} />
       </div>
       <ClassifyIndicator
         preview={classify.preview}
@@ -603,4 +579,43 @@ export function SolChat({
       />
     </div>
   )
+}
+
+function SendButton({
+  streaming,
+  empty
+}: {
+  streaming: boolean
+  empty: boolean
+}): React.JSX.Element {
+  return (
+    <button
+      type="submit"
+      disabled={streaming || empty}
+      style={{
+        background: 'var(--acc)',
+        color: 'var(--acc-ink)',
+        border: 'none',
+        borderRadius: 4,
+        padding: '7px 14px',
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: streaming ? 'wait' : 'pointer',
+        opacity: streaming || empty ? 0.6 : 1
+      }}
+    >
+      Send
+    </button>
+  )
+}
+
+interface ComposerProps {
+  streaming: boolean
+  page: boolean
+  projectId: string | null
+  mode: SolActionMode
+  onModeChange: (mode: SolActionMode) => void
+  regionAttached: boolean
+  onDismissRegion: () => void
+  onSend: ComposerSend
 }

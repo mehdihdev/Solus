@@ -21,16 +21,18 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 # an EMPTY wheel — the app then fails at boot with ModuleNotFoundError.
 COPY pyproject.toml uv.lock ./
 COPY packages/api/pyproject.toml ./packages/api/
+COPY packages/contracts/python/pyproject.toml ./packages/contracts/python/
 RUN uv sync --frozen --no-dev --no-install-workspace --package solus-api
 
 # Code second — changes here don't bust the deps layer. alembic.ini +
 # migrations/ ship in the image because the entrypoint owns schema migration
 # (SOLUS_AUTO_CREATE_TABLES stays false everywhere shared — core/config.py).
 COPY packages/api/src ./packages/api/src
+COPY packages/contracts/python/solus_contracts ./packages/contracts/python/solus_contracts
 COPY packages/api/alembic.ini ./packages/api/alembic.ini
 COPY packages/api/migrations ./packages/api/migrations
 
-# Now install the workspace package itself from the real sources.
+# Now install the API and its runtime contracts package from the real sources.
 RUN uv sync --frozen --no-dev --package solus-api
 
 # The bridge allowlists (~250K). Without these the image has no
@@ -83,6 +85,9 @@ exec uv run --no-sync --package solus-api uvicorn --factory solus_api.main:creat
     --host 0.0.0.0 --port 8000
 EOF
 RUN chmod +x /app/entrypoint.sh
+
+# The API and TypeScript share these runtime customer-design detection rules.
+COPY packages/shared-types/fixtures/tool-knowledge/customer-shapes.json ./packages/shared-types/fixtures/tool-knowledge/customer-shapes.json
 
 # Least privilege: nothing in the boot sequence needs root (uvicorn binds 8000,
 # migrations only talk to the DB). uv needs a writable cache dir as non-root.

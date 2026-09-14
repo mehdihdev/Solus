@@ -13,6 +13,12 @@ import {
 afterEach(cleanup)
 
 describe('RecognitionPanel', () => {
+  registerRecognitionDecisionsTests()
+
+  registerRecognitionEditingTests()
+})
+
+function registerRecognitionDecisionsTests(): void {
   it.each([
     ['tier 1', TIER1_BUS_FIRMWARE_REPO],
     ['tier 2', TIER2_FIRMWARE_ONLY],
@@ -75,7 +81,9 @@ describe('RecognitionPanel', () => {
     expect(within(row).getByText('unknown')).toBeInTheDocument()
     expect(within(row).queryByRole('button', { name: /^accept$/i })).toBeNull()
   })
+}
 
+function registerRecognitionEditingTests(): void {
   it('tier 3 flow: the user NAMES an unknown channel (edit decision)', () => {
     const onDecision = vi.fn()
     render(<RecognitionPanel proposals={TIER3_BARE_SERIAL} onDecision={onDecision} />)
@@ -140,4 +148,4 @@ describe('RecognitionPanel', () => {
     expect(screen.getAllByRole('combobox')).toHaveLength(TIER1_BUS_FIRMWARE_REPO.length)
     expect(screen.getAllByRole('columnheader')).toHaveLength(5)
   })
-})
+}

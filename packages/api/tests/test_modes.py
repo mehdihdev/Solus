@@ -66,6 +66,8 @@ async def test_guide_never_dispatches_a_mutation() -> None:
     assert result.error is not None
     assert result.error.code is ToolErrorCode.UNAUTHORIZED
     assert "guide" in result.error.message.lower()
+    assert "Build mode" in result.error.message
+    assert "Do mode" not in result.error.message
     assert result.error.retryable is False
 
 

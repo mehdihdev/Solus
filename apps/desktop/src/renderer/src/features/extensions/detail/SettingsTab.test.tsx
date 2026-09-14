@@ -6,6 +6,11 @@ import { SettingsTab } from './SettingsTab'
 import { fakeActions, manifest, viewOf } from '../testing/fixtures'
 
 describe('SettingsTab', () => {
+  registerExtensionSettingsEditsTests()
+  registerExtensionSettingsAvailabilityTests()
+})
+
+function registerExtensionSettingsEditsTests(): void {
   it('toggles enablement for this project', async () => {
     const a = fakeActions()
     render(<SettingsTab view={viewOf({ install: {} })} actions={a} />)
@@ -58,7 +63,9 @@ describe('SettingsTab', () => {
       expect.objectContaining({ currency: 'EUR', max_rows: 50 })
     )
   })
+}
 
+function registerExtensionSettingsAvailabilityTests(): void {
   it('shows the refusal when the server rejects a value', async () => {
     const a = fakeActions({
       setSettings: vi.fn(async () => ({
@@ -93,4 +100,4 @@ describe('SettingsTab', () => {
     )
     expect(screen.getByText(/no settings of its own/)).toBeInTheDocument()
   })
-})
+}

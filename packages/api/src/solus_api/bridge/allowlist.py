@@ -39,9 +39,34 @@ _ANY_OBJECT_RETURNS: dict[str, Any] = {"type": "object"}
 #: answers it with the resolved plan instead of running it
 #: (packages/companion/src/solus_companion/machine/server.py). Solus-owned, like
 #: `requires_confirmation`.
-_DRY_RUN_TOOLS: Final = frozenset(
+_COMPLETE_PREVIEW_TOOLS: Final = frozenset(
+    {
+        "kicad.create_schematic",
+        "kicad.add_symbol",
+        "kicad.add_wire",
+        "kicad.add_net_label",
+        "kicad.mark_no_connect",
+        "kicad.set_symbol_property",
+        "code.git_commit",
+        "code.git_push",
+        "code.arduino_prepare",
+        "code.arduino_compile",
+        "isaac.start",
+        "isaac.stop",
+        "isaac.load_model",
+        "isaac.set_joint_limits",
+        "isaac.set_sensor_pose",
+        "isaac.run_routine",
+    }
+)
+_DRY_RUN_TOOLS: Final = _COMPLETE_PREVIEW_TOOLS | frozenset(
     {"machine.run_command", "machine.install_package", "machine.create_environment"}
 )
+
+
+def requires_complete_preview(composed_name: str) -> bool:
+    """Solus-owned policy: argument-only approval cannot authorize these writes."""
+    return composed_name in _COMPLETE_PREVIEW_TOOLS
 
 
 def supports_dry_run(composed_name: str) -> bool:

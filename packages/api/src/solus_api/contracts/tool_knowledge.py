@@ -60,6 +60,8 @@ class ToolFamily(enum.StrEnum):
     KICAD = "kicad"
     ALTIUM = "altium"
     SPICE = "spice"
+    CODE = "code"
+    ISAAC = "isaac"
 
 
 class UiSurface(enum.StrEnum):
@@ -72,6 +74,7 @@ class UiSurface(enum.StrEnum):
     DIALOG = "dialog"
     KEYBOARD = "keyboard"
     STATUS_BAR = "status_bar"
+    TERMINAL = "terminal"
 
 
 class ControlEffect(enum.StrEnum):
@@ -93,6 +96,7 @@ class ControlEffect(enum.StrEnum):
     EXPORT = "export"
     UNDO = "undo"
     SETTINGS = "settings"
+    EXECUTE = "execute"
 
 
 class Provenance(enum.StrEnum):

@@ -10,15 +10,7 @@ import { configDraft, hardwareSourceRefs, prepareHardwareConfig } from './hardwa
 import { HardwareSourcesPanel } from './HardwareSourcesPanel'
 import { useHardwareGeneration } from './useHardwareGeneration'
 
-export function HardwareConfigPanel({
-  projectId,
-  entityId,
-  online
-}: {
-  projectId: string
-  entityId: string
-  online: boolean
-}): React.JSX.Element {
+function useHardwareConfigDraft(projectId: string, entityId: string, online: boolean) {
   const mode = useSettingsStore((state) => state.solMode)
   const { generation, authEpoch } = useHardwareGeneration(`${projectId}:${entityId}`)
   const [saved, setSaved] = useState<EntityHardwareConfigOut | null>(null)
@@ -64,6 +56,39 @@ export function HardwareConfigPanel({
     }
   }, [projectId, entityId, online, authEpoch, reload, generation])
 
+  return {
+    mode,
+    generation,
+    saved,
+    setSaved,
+    draft,
+    setDraft,
+    busy,
+    setBusy,
+    error,
+    setError,
+    status,
+    setStatus,
+    setReload
+  }
+}
+
+function useHardwareConfigEditor(projectId: string, entityId: string, online: boolean) {
+  const {
+    mode,
+    generation,
+    saved,
+    setSaved,
+    draft,
+    setDraft,
+    busy,
+    setBusy,
+    error,
+    setError,
+    status,
+    setStatus,
+    setReload
+  } = useHardwareConfigDraft(projectId, entityId, online)
   const disabled = busy || !online
   const save = async (): Promise<void> => {
     if (saved === null || disabled) return
@@ -95,6 +120,20 @@ export function HardwareConfigPanel({
       if (ticket === generation.current) setBusy(false)
     }
   }
+  return { mode, saved, draft, setDraft, error, status, setReload, disabled, save }
+}
+
+export function HardwareConfigPanel({
+  projectId,
+  entityId,
+  online
+}: {
+  projectId: string
+  entityId: string
+  online: boolean
+}): React.JSX.Element {
+  const { mode, saved, draft, setDraft, error, status, setReload, disabled, save } =
+    useHardwareConfigEditor(projectId, entityId, online)
   return (
     <section
       aria-label="Entity hardware configuration"

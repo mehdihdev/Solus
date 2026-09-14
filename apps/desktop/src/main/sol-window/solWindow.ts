@@ -192,27 +192,9 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     current = win
     ready = false
     pending = null
-    let timer: unknown = null
-    const save = (): void => {
-      timer = null
-      if (win.isDestroyed()) return
-      const b = win.getBounds()
-      const d = deps.screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
-      deps.settings.setWindowGeometry({ ...b, displayId: d.id })
-    }
-    const scheduleSave = (): void => {
-      if (timer !== null) scheduler.clearTimeout(timer)
-      timer = scheduler.setTimeout(save, GEOMETRY_SAVE_DEBOUNCE_MS)
-    }
-    win.on('move', scheduleSave)
-    win.on('resize', scheduleSave)
-    win.on('close', () => {
-      if (timer === null) return
-      scheduler.clearTimeout(timer)
-      save()
-    })
+    const cancelSave = trackWindowGeometry(win, deps, scheduler)
     win.on('closed', () => {
-      if (timer !== null) scheduler.clearTimeout(timer)
+      cancelSave()
       if (current === win) current = null
       pending = null // ephemeral by construction: a region never outlives its window
       ready = false
@@ -353,4 +335,33 @@ export function createSolBrowserWindow(
     void win.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/sol-window' })
   }
   return win
+}
+
+function trackWindowGeometry(
+  win: SolWindowHandle,
+  deps: SolWindowManagerDeps,
+  scheduler: NonNullable<SolWindowManagerDeps['scheduler']>
+): () => void {
+  let timer: unknown = null
+  const save = (): void => {
+    timer = null
+    if (win.isDestroyed()) return
+    const b = win.getBounds()
+    const d = deps.screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+    deps.settings.setWindowGeometry({ ...b, displayId: d.id })
+  }
+  const scheduleSave = (): void => {
+    if (timer !== null) scheduler.clearTimeout(timer)
+    timer = scheduler.setTimeout(save, GEOMETRY_SAVE_DEBOUNCE_MS)
+  }
+  win.on('move', scheduleSave)
+  win.on('resize', scheduleSave)
+  win.on('close', () => {
+    if (timer === null) return
+    scheduler.clearTimeout(timer)
+    save()
+  })
+  return () => {
+    if (timer !== null) scheduler.clearTimeout(timer)
+  }
 }

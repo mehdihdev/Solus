@@ -57,14 +57,19 @@ def test_read_file_text_binary_and_cap(tmp_path: Path) -> None:
 
 
 def test_write_file_atomic_create_dirs_and_cap(tmp_path: Path) -> None:
-    out = actions.write_file(tmp_path, "sub/dir/f.txt", "hi", create_dirs=True)
-    assert out == {"path": "sub/dir/f.txt", "bytes_written": 2}
+    plan = actions.plan_write_file(tmp_path, "sub/dir/f.txt", "hi", create_dirs=True)
+    out = actions.write_file(
+        tmp_path, "sub/dir/f.txt", "hi", create_dirs=True, expected_fingerprint=plan["fingerprint"]
+    )
+    assert out["path"] == "sub/dir/f.txt"
+    assert out["bytes_written"] == 2
+    assert out["verified"] is True
     assert (tmp_path / "sub/dir/f.txt").read_text() == "hi"
     assert [p.name for p in (tmp_path / "sub/dir").iterdir()] == ["f.txt"]  # no temp left
     with pytest.raises(MachineActionError, match="does not exist"):
-        actions.write_file(tmp_path, "nope/f.txt", "hi", create_dirs=False)
+        actions.plan_write_file(tmp_path, "nope/f.txt", "hi", create_dirs=False)
     with pytest.raises(MachineActionError, match="200 KB"):
-        actions.write_file(tmp_path, "f.txt", "x" * (WRITE_CAP_BYTES + 1), create_dirs=False)
+        actions.plan_write_file(tmp_path, "f.txt", "x" * (WRITE_CAP_BYTES + 1), create_dirs=False)
 
 
 def _allowlist_names() -> set[str]:

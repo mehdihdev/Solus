@@ -28,6 +28,11 @@ function fakeUiohook(opts: { startThrows?: boolean } = {}): {
 }
 
 describe('loadKeyHook (docs/architecture/sol-window.md §5)', () => {
+  registerKeyHookEventsAndFailuresTests()
+  registerKeyHookPlatformSupportTests()
+})
+
+function registerKeyHookEventsAndFailuresTests(): void {
   it('maps uiohook key events to ctrlDown / ctrlUp / otherKeyDown, deduping autorepeat', () => {
     const fake = fakeUiohook()
     const { hook, state } = loadKeyHook(X11_X64, { require: () => fake.mod })
@@ -83,7 +88,9 @@ describe('loadKeyHook (docs/architecture/sol-window.md §5)', () => {
   it('a module with the wrong shape → null', () => {
     expect(loadKeyHook(X11_X64, { require: () => ({}) }).hook).toBeNull()
   })
+}
 
+function registerKeyHookPlatformSupportTests(): void {
   it('Linux arm64 → null from the static table without loading', () => {
     const req = vi.fn()
     const { hook, state } = loadKeyHook(
@@ -121,4 +128,4 @@ describe('loadKeyHook (docs/architecture/sol-window.md §5)', () => {
     // no probe wired → cannot verify → degrade, never assume
     expect(loadKeyHook(mac, { require: () => fake.mod }).hook).toBeNull()
   })
-})
+}

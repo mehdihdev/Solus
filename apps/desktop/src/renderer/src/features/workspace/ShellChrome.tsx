@@ -184,40 +184,7 @@ export function NotificationsPopover({
           </div>
         )}
         {items.map((n) => (
-          <div
-            key={n.id}
-            onClick={() => onRead(n.id)}
-            className="interactive"
-            style={{
-              display: 'flex',
-              gap: 10,
-              padding: '12px 14px',
-              borderBottom: '1px solid var(--bd)',
-              cursor: 'pointer',
-              opacity: n.read_at ? 0.55 : 1
-            }}
-          >
-            {!n.read_at && (
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 99,
-                  background: 'var(--acc)',
-                  marginTop: 5
-                }}
-              />
-            )}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{n.title}</div>
-              {n.body && (
-                <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2 }}>{n.body}</div>
-              )}
-              <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 3 }}>
-                {relativeTime(n.created_at)}
-              </div>
-            </div>
-          </div>
+          <NotificationRow key={n.id} n={n} onRead={onRead} />
         ))}
       </Card>
     </div>
@@ -273,6 +240,48 @@ export function ToastView({
           <Icons.x size={12} />
         </span>
       </Card>
+    </div>
+  )
+}
+
+function NotificationRow({
+  n,
+  onRead
+}: {
+  n: NotificationApi
+  onRead: (id: string) => void
+}): React.JSX.Element {
+  return (
+    <div
+      onClick={() => onRead(n.id)}
+      className="interactive"
+      style={{
+        display: 'flex',
+        gap: 10,
+        padding: '12px 14px',
+        borderBottom: '1px solid var(--bd)',
+        cursor: 'pointer',
+        opacity: n.read_at ? 0.55 : 1
+      }}
+    >
+      {!n.read_at && (
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 99,
+            background: 'var(--acc)',
+            marginTop: 5
+          }}
+        />
+      )}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>{n.title}</div>
+        {n.body && <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2 }}>{n.body}</div>}
+        <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 3 }}>
+          {relativeTime(n.created_at)}
+        </div>
+      </div>
     </div>
   )
 }

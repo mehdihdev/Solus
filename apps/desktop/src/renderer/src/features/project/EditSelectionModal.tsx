@@ -41,7 +41,8 @@ function Body({
   items,
   selection,
   current,
-  onSelect
+  onSelect,
+  onRefresh
 }: {
   status: Status
   error: string | null
@@ -49,6 +50,7 @@ function Body({
   selection: IntegrationSelection
   current: readonly string[]
   onSelect: (items: SelectableItem[] | null) => void
+  onRefresh: () => Promise<SelectableItem[]>
 }): React.JSX.Element {
   const listed = status === 'ready' || status === 'saving'
   return (
@@ -58,12 +60,15 @@ function Body({
       {listed && items.length === 0 && (
         <div style={NOTE}>No {plural(selection.label)} found for this account.</div>
       )}
-      {listed && items.length > 0 && (
+      {listed && (
         <SelectionPicker
           items={items}
           mode={selection.mode}
           initial={current}
           onSelect={onSelect}
+          onRefresh={onRefresh}
+          refreshLabel={`Refresh ${plural(selection.label)}`}
+          disabled={status === 'saving'}
         />
       )}
     </>
@@ -84,6 +89,8 @@ export function EditSelectionModal({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    setStatus('loading')
+    setError(null)
     let cancelled = false
     listSelectable(projectId, sourceId)
       .then((found) => {
@@ -122,21 +129,17 @@ export function EditSelectionModal({
 
   return (
     <ModalShell onClose={onClose}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>
-        Choose {plural(selection.label)} for {sourceName}
-      </div>
-      <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
-        Only the {plural(selection.label)} you track are indexed into the graph. Removing one keeps
-        the entities it already contributed until the next sync reconciles them.
-      </div>
+      <SelectionHeading selection={selection} sourceName={sourceName} />
 
       <Body
+        key={`${projectId}:${sourceId}`}
         status={status}
         error={error}
         items={items}
         selection={selection}
         current={current}
         onSelect={(chosen) => void save(chosen)}
+        onRefresh={() => listSelectable(projectId, sourceId, undefined, { refresh: true })}
       />
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
@@ -145,5 +148,22 @@ export function EditSelectionModal({
         </Button>
       </div>
     </ModalShell>
+  )
+}
+
+function SelectionHeading({
+  selection,
+  sourceName
+}: Pick<EditSelectionModalProps, 'selection' | 'sourceName'>): React.JSX.Element {
+  return (
+    <>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>
+        Choose {plural(selection.label)} for {sourceName}
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 8, lineHeight: 1.55 }}>
+        Only the {plural(selection.label)} you track are indexed into the graph. Removing one keeps
+        the entities it already contributed until the next sync reconciles them.
+      </div>
+    </>
   )
 }

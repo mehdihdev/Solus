@@ -28,6 +28,7 @@ export interface BillingData {
   subscription: Subscription | null
   /** Credit balance, or null before it has loaded. */
   credits: number | null
+  unlimited: boolean
   packs: CreditPack[]
   /** True while a checkout/portal action is in flight (disables the controls). */
   busy: boolean
@@ -102,6 +103,7 @@ function messageFor(error: unknown): string {
 async function fetchSnapshot(): Promise<{
   subscription: Subscription | null
   credits: number | null
+  unlimited: boolean
   packs: CreditPack[]
 }> {
   let subscription: Subscription | null = null
@@ -110,9 +112,12 @@ async function fetchSnapshot(): Promise<{
   } catch {
     subscription = null
   }
+  let unlimited = false
   let credits: number | null = null
   try {
-    credits = (await getCredits()).balance
+    const balance = await getCredits()
+    credits = balance.balance
+    unlimited = balance.unlimited === true
   } catch {
     credits = null
   }
@@ -122,7 +127,7 @@ async function fetchSnapshot(): Promise<{
   } catch {
     packs = []
   }
-  return { subscription, credits, packs }
+  return { subscription, credits, unlimited, packs }
 }
 
 export function useBillingData(): BillingData {
@@ -130,22 +135,84 @@ export function useBillingData(): BillingData {
   const [status, setStatus] = useState<BillingStatus>(fetchEnabled ? 'loading' : 'offline')
   const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [credits, setCredits] = useState<number | null>(null)
+  const [unlimited, setUnlimited] = useState(false)
   const [packs, setPacks] = useState<CreditPack[]>([])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     if (!fetchEnabled) {
+      setUnlimited(false)
       setStatus('offline')
       return
     }
     const snap = await fetchSnapshot()
+    setUnlimited(snap.unlimited)
     setSubscription(snap.subscription)
     if (snap.credits !== null) setCredits(snap.credits)
     setPacks(snap.packs)
     setStatus('ready')
   }, [fetchEnabled])
 
+  const finishCheckout = useCheckoutCompletion(load, setNotice)
+
+  const runAction = useCallback(
+    async (getUrl: () => Promise<string>): Promise<void> => {
+      setBusy(true)
+      setNotice(null)
+      try {
+        const url = await getUrl()
+        const openCheckout = billingBridge()?.openCheckout
+        if (openCheckout) {
+          // Self-contained: a sandboxed in-app window; busy until it closes.
+          finishCheckout((await openCheckout(url)).status)
+        } else {
+          await openExternal(url)
+        }
+      } catch (error) {
+        setNotice(messageFor(error))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [finishCheckout]
+  )
+
+  const startCheckout = useCallback(
+    (plan: PlanType, interval: CheckoutInterval): Promise<void> =>
+      runAction(async () => (await createSubscriptionCheckout(plan, interval)).url),
+    [runAction]
+  )
+  const buyPack = useCallback(
+    (priceId: string): Promise<void> =>
+      runAction(async () => (await createPackCheckout(priceId)).url),
+    [runAction]
+  )
+  const openPortal = useCallback(
+    (): Promise<void> => runAction(async () => (await createBillingPortal()).url),
+    [runAction]
+  )
+
+  return {
+    status,
+    subscription,
+    credits,
+    unlimited,
+    packs,
+    busy,
+    notice,
+    clearNotice: () => setNotice(null),
+    startCheckout,
+    buyPack,
+    openPortal,
+    refresh: load
+  }
+}
+
+function useCheckoutCompletion(
+  load: () => Promise<void>,
+  setNotice: (notice: string | null) => void
+): (status: CheckoutStatus) => void {
   useEffect(() => {
     void load()
   }, [load])
@@ -198,57 +265,8 @@ export function useBillingData(): BillingData {
         refreshTimersRef.current.push(id)
       }
     },
-    [refetchEverything]
+    [refetchEverything, setNotice]
   )
 
-  const runAction = useCallback(
-    async (getUrl: () => Promise<string>): Promise<void> => {
-      setBusy(true)
-      setNotice(null)
-      try {
-        const url = await getUrl()
-        const openCheckout = billingBridge()?.openCheckout
-        if (openCheckout) {
-          // Self-contained: a sandboxed in-app window; busy until it closes.
-          finishCheckout((await openCheckout(url)).status)
-        } else {
-          await openExternal(url)
-        }
-      } catch (error) {
-        setNotice(messageFor(error))
-      } finally {
-        setBusy(false)
-      }
-    },
-    [finishCheckout]
-  )
-
-  const startCheckout = useCallback(
-    (plan: PlanType, interval: CheckoutInterval): Promise<void> =>
-      runAction(async () => (await createSubscriptionCheckout(plan, interval)).url),
-    [runAction]
-  )
-  const buyPack = useCallback(
-    (priceId: string): Promise<void> =>
-      runAction(async () => (await createPackCheckout(priceId)).url),
-    [runAction]
-  )
-  const openPortal = useCallback(
-    (): Promise<void> => runAction(async () => (await createBillingPortal()).url),
-    [runAction]
-  )
-
-  return {
-    status,
-    subscription,
-    credits,
-    packs,
-    busy,
-    notice,
-    clearNotice: () => setNotice(null),
-    startCheckout,
-    buyPack,
-    openPortal,
-    refresh: load
-  }
+  return finishCheckout
 }

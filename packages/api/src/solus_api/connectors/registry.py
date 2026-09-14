@@ -55,6 +55,9 @@ class ConnectorContext:
     #: read-only scope can yield "", and every such source sharing ONE ledger key
     #: would let one team latch another team's 402.
     account_ref: str | None = None
+    #: Hash bound by successful OAuth exchange, never inferred from current settings.
+    #: Missing legacy bindings retain their original accounting scope.
+    onshape_application: str | None = None
     #: Who is spending. Only "user" survives the degraded band; scheduled sweeps
     #: and agent turns can wait.
     purpose: Purpose = "user"
@@ -146,21 +149,34 @@ AcquirerFactory = Callable[[ConnectorContext, str], ExportAcquirer]
 LocalAcquirerFactory = Callable[[ConnectorContext], FolderAcquirer]
 
 
+def onshape_quota_scope(account_ref: str, application: str | None) -> str:
+    """Only a verified grant binding selects a new application ledger."""
+    if application is None:
+        return account_ref
+    return f"oauth-app:{application}:account:{account_ref}"
+
+
 def _onshape_meter(
     settings: Settings, redis: object | None, ctx: ConnectorContext
 ) -> quota.CallMeter:
     """One meter per scoped construction, bound to the account being charged.
 
+    Application identity excludes the secret: rotation and reauthorization retain
+    the same ledger. Old application records remain untouched.
+
     The year comes from the wall clock and the key embeds it, so the ledger rolls
     over on 1 January. Onshape's licence year is the subscription anniversary,
     which we do not know — documented in ADR-019's amendment rather than guessed.
     """
+    account_scope = onshape_quota_scope(
+        ctx.account_ref or f"source-scope:{ctx.project_id}", ctx.onshape_application
+    )
     return quota.CallMeter(
         redis,
         provider="onshape",
         # Never empty: a blank account id would put every such source on ONE
         # ledger key, letting one team exhaust and latch another team's quota.
-        account_ref=ctx.account_ref or f"source-scope:{ctx.project_id}",
+        account_ref=account_scope,
         year=datetime.now(UTC).year,
         allowance=settings.onshape_annual_call_allowance,
         degrade_ratio=settings.integration_degrade_ratio,

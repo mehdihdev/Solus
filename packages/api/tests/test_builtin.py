@@ -365,3 +365,13 @@ async def test_a_failing_subsystem_becomes_ok_false_never_an_exception(
         assert result.ok is False
         assert result.error is not None and result.error.message
         assert "subsystem down" not in str(result.value)  # no leak through value
+
+
+async def test_rail_analysis_is_registered_read_only_and_project_bound(
+    maker: async_sessionmaker[AsyncSession], systems: DbSolSystems
+) -> None:
+    registry, _ = _registry_and_dispatch(maker, uuid.uuid4(), systems)
+    descriptor = next(d for d in registry.list() if d.name == "analyze_rail_current")
+    assert descriptor.requires_confirmation is False
+    assert set(descriptor.params["properties"]) == {"rail_entity_id"}
+    assert descriptor.params["additionalProperties"] is False

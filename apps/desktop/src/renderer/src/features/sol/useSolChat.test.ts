@@ -11,6 +11,7 @@ import { resetSolChatSessions } from './solChatStore'
 import { useSolChat } from './useSolChat'
 
 vi.mock('./solApi', () => ({
+  listSolConfirmations: vi.fn().mockResolvedValue([]),
   createSolConversation: vi.fn(),
   listSolTurns: vi.fn(),
   streamSolMessage: vi.fn()
@@ -72,105 +73,8 @@ describe('history', () => {
 })
 
 describe('send', () => {
-  it('creates the conversation on first send and records it per project', async () => {
-    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
-    streamWith([{ type: 'done', conversationId: 'c9', turnId: 't1' }])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('hello', 'guide')
-    })
-    expect(createSolConversation).toHaveBeenCalledWith('p1', 'hello')
-    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c9' })
-    expect(streamSolMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: 'c9', content: 'hello', actionMode: 'guide' })
-    )
-  })
-
-  it('passes the chosen action mode through to the stream', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([])
-    streamWith([])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('flash it', 'do')
-    })
-    expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
-  })
-
-  it('folds tokens into the pending assistant item, finalizes on message, flags streaming', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([])
-    const seenStreaming: boolean[] = []
-    streamSolMessage.mockImplementation(async ({ onEvent }) => {
-      seenStreaming.push(useSolSessionStore.getState().streaming)
-      onEvent({ type: 'token', text: 'The ' })
-      onEvent({ type: 'token', text: 'IMU.' })
-      onEvent({ type: 'tool_call', callId: 'k1', tool: 'get_entity' })
-      onEvent({ type: 'tool_result', callId: 'k1', ok: true, errorCode: null })
-      onEvent({
-        type: 'message',
-        role: 'assistant',
-        content: 'The IMU.',
-        citations: ['entity:imu']
-      })
-      onEvent({ type: 'done', conversationId: 'c1', turnId: 't1' })
-    })
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('why?', 'guide')
-    })
-    expect(seenStreaming).toEqual([true]) // pulse on while the turn streams
-    expect(useSolSessionStore.getState().streaming).toBe(false) // and off after
-    const [user, assistant] = result.current.items
-    expect(user).toMatchObject({ role: 'user', content: 'why?' })
-    expect(assistant).toMatchObject({
-      role: 'assistant',
-      content: 'The IMU.',
-      citations: ['entity:imu'],
-      pending: false,
-      error: null
-    })
-    expect(assistant.trace).toEqual([
-      { callId: 'k1', tool: 'get_entity', ok: true, errorCode: null }
-    ])
-  })
-
-  it('surfaces the author-safe error frame on the assistant item', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([])
-    streamWith([{ type: 'error', code: 'timeout', message: 'The SOL turn timed out.' }])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('hi', 'guide')
-    })
-    expect(result.current.items[1]).toMatchObject({
-      pending: false,
-      error: 'The SOL turn timed out.'
-    })
-  })
-
-  it('marks the turn failed when the transport rejects, and always clears the pulse', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([])
-    streamSolMessage.mockRejectedValue(new Error('ECONNREFUSED'))
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('hi', 'guide')
-    })
-    expect(result.current.items[1].error).toBe('SOL is unreachable right now.')
-    expect(result.current.items[1].error).not.toContain('ECONNREFUSED')
-    expect(useSolSessionStore.getState().streaming).toBe(false)
-  })
-
-  it('ignores empty input and sends without a project', async () => {
-    const { result } = renderHook(() => useSolChat(null))
-    await act(async () => {
-      await result.current.send('   ', 'guide')
-      await result.current.send('hello', 'guide')
-    })
-    expect(streamSolMessage).not.toHaveBeenCalled()
-    expect(createSolConversation).not.toHaveBeenCalled()
-  })
+  chatSendLifecycleTests()
+  chatSendFailuresTests()
 })
 
 describe('stream lifecycle (SOLX-02 → SOLUSDEV-233: sessions outlive the page)', () => {
@@ -230,99 +134,8 @@ describe('stream lifecycle (SOLX-02 → SOLUSDEV-233: sessions outlive the page)
 })
 
 describe('SOL page additions (SOLUSDEV-233)', () => {
-  it('exposes the turn context manifest from the context_used frame', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([])
-    streamWith([
-      {
-        type: 'context_used',
-        sections: [{ kind: 'graph', citation: '[graph:motor]', tokens: 12 }],
-        truncated: false,
-        dropped: 1
-      },
-      { type: 'done', conversationId: 'c1', turnId: 't1' }
-    ])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('hi', 'guide')
-    })
-    expect(result.current.contextUsed).toEqual({
-      sections: [{ kind: 'graph', citation: '[graph:motor]', tokens: 12 }],
-      truncated: false,
-      dropped: 1
-    })
-  })
-
-  it('branches a 402 into the credits message and flag, and 429 into backoff', async () => {
-    const { ApiError } = await import('../../lib/api/envelope.types')
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([])
-    streamSolMessage.mockRejectedValue(new ApiError(402, 'insufficient_credits', 'no'))
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('hi', 'guide')
-    })
-    expect(result.current.creditsExhausted).toBe(true)
-    expect(result.current.items.at(-1)?.error).toMatch(/out of SOL credits/i)
-
-    streamSolMessage.mockRejectedValue(new ApiError(429, 'frequency_cap', 'slow down'))
-    await act(async () => {
-      await result.current.send('again', 'guide')
-    })
-    expect(result.current.items.at(-1)?.error).toMatch(/too many SOL turns/i)
-  })
-
-  it('seeds the conversation title from the first message', async () => {
-    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
-    streamWith([{ type: 'done', conversationId: 'c9', turnId: 't1' }])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('Why is joint 2 stalling?', 'guide')
-    })
-    expect(createSolConversation).toHaveBeenCalledWith('p1', 'Why is joint 2 stalling?')
-  })
-
-  it('creating a conversation mid-send never reloads away the live turn', async () => {
-    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
-    streamWith([
-      { type: 'message', role: 'assistant', content: 'Answer.', citations: [] },
-      { type: 'done', conversationId: 'c9', turnId: 't1' }
-    ])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await act(async () => {
-      await result.current.send('hello', 'guide')
-    })
-    // The store now points at c9, but the just-created id must not trigger a
-    // history reload that wipes the streamed items.
-    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c9' })
-    expect(listSolTurns).not.toHaveBeenCalled()
-    expect(result.current.items.map((m) => m.content)).toEqual(['hello', 'Answer.'])
-  })
-
-  it('selectConversation reloads history for the chosen chat', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-
-    listSolTurns.mockResolvedValue([turn('t9', 'user', 'other chat')])
-    act(() => result.current.selectConversation('c2'))
-    await waitFor(() => expect(result.current.items.map((m) => m.content)).toEqual(['other chat']))
-    expect(listSolTurns).toHaveBeenLastCalledWith('p1', 'c2')
-    expect(result.current.activeConversationId).toBe('c2')
-  })
-
-  it('startNewChat clears the active conversation and the transcript', async () => {
-    useSolSessionStore.getState().setConversation('p1', 'c1')
-    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
-    const { result } = renderHook(() => useSolChat('p1'))
-    await waitFor(() => expect(result.current.items).toHaveLength(1))
-
-    act(() => result.current.startNewChat())
-    await waitFor(() => expect(result.current.items).toEqual([]))
-    expect(result.current.activeConversationId).toBeNull()
-    expect(useSolSessionStore.getState().conversationByProject).toEqual({})
-  })
+  chatTurnMetadataTests()
+  chatConversationNavigationTests()
 })
 
 describe('cancelled turns never clobber newer sends (SOLUSDEV-233 review H1)', () => {
@@ -478,3 +291,205 @@ describe('stable callbacks (SOLUSDEV-252 S2-A)', () => {
     expect(result.current).toBe(first)
   })
 })
+
+function chatSendLifecycleTests(): void {
+  it('creates the conversation on first send and records it per project', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
+    streamWith([{ type: 'done', conversationId: 'c9', turnId: 't1' }])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hello', 'guide')
+    })
+    expect(createSolConversation).toHaveBeenCalledWith('p1', 'hello')
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c9' })
+    expect(streamSolMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'c9', content: 'hello', actionMode: 'guide' })
+    )
+  })
+
+  it('passes the chosen action mode through to the stream', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamWith([])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('flash it', 'do')
+    })
+    expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
+  })
+
+  it('folds tokens into the pending assistant item, finalizes on message, flags streaming', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    const seenStreaming: boolean[] = []
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      seenStreaming.push(useSolSessionStore.getState().streaming)
+      onEvent({ type: 'token', text: 'The ' })
+      onEvent({ type: 'token', text: 'IMU.' })
+      onEvent({ type: 'tool_call', callId: 'k1', tool: 'get_entity' })
+      onEvent({ type: 'tool_result', callId: 'k1', ok: true, errorCode: null })
+      onEvent({
+        type: 'message',
+        role: 'assistant',
+        content: 'The IMU.',
+        citations: ['entity:imu']
+      })
+      onEvent({ type: 'done', conversationId: 'c1', turnId: 't1' })
+    })
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('why?', 'guide')
+    })
+    expect(seenStreaming).toEqual([true]) // pulse on while the turn streams
+    expect(useSolSessionStore.getState().streaming).toBe(false) // and off after
+    const [user, assistant] = result.current.items
+    expect(user).toMatchObject({ role: 'user', content: 'why?' })
+    expect(assistant).toMatchObject({
+      role: 'assistant',
+      content: 'The IMU.',
+      citations: ['entity:imu'],
+      pending: false,
+      error: null
+    })
+    expect(assistant.trace).toEqual([
+      { callId: 'k1', tool: 'get_entity', ok: true, errorCode: null }
+    ])
+  })
+}
+
+function chatSendFailuresTests(): void {
+  it('surfaces the author-safe error frame on the assistant item', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamWith([{ type: 'error', code: 'timeout', message: 'The SOL turn timed out.' }])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.items[1]).toMatchObject({
+      pending: false,
+      error: 'The SOL turn timed out.'
+    })
+  })
+
+  it('marks the turn failed when the transport rejects, and always clears the pulse', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamSolMessage.mockRejectedValue(new Error('ECONNREFUSED'))
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.items[1].error).toBe('SOL is unreachable right now.')
+    expect(result.current.items[1].error).not.toContain('ECONNREFUSED')
+    expect(useSolSessionStore.getState().streaming).toBe(false)
+  })
+
+  it('ignores empty input and sends without a project', async () => {
+    const { result } = renderHook(() => useSolChat(null))
+    await act(async () => {
+      await result.current.send('   ', 'guide')
+      await result.current.send('hello', 'guide')
+    })
+    expect(streamSolMessage).not.toHaveBeenCalled()
+    expect(createSolConversation).not.toHaveBeenCalled()
+  })
+}
+
+function chatTurnMetadataTests(): void {
+  it('exposes the turn context manifest from the context_used frame', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamWith([
+      {
+        type: 'context_used',
+        sections: [{ kind: 'graph', citation: '[graph:motor]', tokens: 12 }],
+        truncated: false,
+        dropped: 1
+      },
+      { type: 'done', conversationId: 'c1', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.contextUsed).toEqual({
+      sections: [{ kind: 'graph', citation: '[graph:motor]', tokens: 12 }],
+      truncated: false,
+      dropped: 1
+    })
+  })
+
+  it('branches a 402 into the credits message and flag, and 429 into backoff', async () => {
+    const { ApiError } = await import('../../lib/api/envelope.types')
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([])
+    streamSolMessage.mockRejectedValue(new ApiError(402, 'insufficient_credits', 'no'))
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hi', 'guide')
+    })
+    expect(result.current.creditsExhausted).toBe(true)
+    expect(result.current.items.at(-1)?.error).toMatch(/out of SOL credits/i)
+
+    streamSolMessage.mockRejectedValue(new ApiError(429, 'frequency_cap', 'slow down'))
+    await act(async () => {
+      await result.current.send('again', 'guide')
+    })
+    expect(result.current.items.at(-1)?.error).toMatch(/too many SOL turns/i)
+  })
+
+  it('seeds the conversation title from the first message', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
+    streamWith([{ type: 'done', conversationId: 'c9', turnId: 't1' }])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('Why is joint 2 stalling?', 'guide')
+    })
+    expect(createSolConversation).toHaveBeenCalledWith('p1', 'Why is joint 2 stalling?')
+  })
+}
+
+function chatConversationNavigationTests(): void {
+  it('creating a conversation mid-send never reloads away the live turn', async () => {
+    createSolConversation.mockResolvedValue({ id: 'c9' } as solApi.SolConversation)
+    streamWith([
+      { type: 'message', role: 'assistant', content: 'Answer.', citations: [] },
+      { type: 'done', conversationId: 'c9', turnId: 't1' }
+    ])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await act(async () => {
+      await result.current.send('hello', 'guide')
+    })
+    // The store now points at c9, but the just-created id must not trigger a
+    // history reload that wipes the streamed items.
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({ p1: 'c9' })
+    expect(listSolTurns).not.toHaveBeenCalled()
+    expect(result.current.items.map((m) => m.content)).toEqual(['hello', 'Answer.'])
+  })
+
+  it('selectConversation reloads history for the chosen chat', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    listSolTurns.mockResolvedValue([turn('t9', 'user', 'other chat')])
+    act(() => result.current.selectConversation('c2'))
+    await waitFor(() => expect(result.current.items.map((m) => m.content)).toEqual(['other chat']))
+    expect(listSolTurns).toHaveBeenLastCalledWith('p1', 'c2')
+    expect(result.current.activeConversationId).toBe('c2')
+  })
+
+  it('startNewChat clears the active conversation and the transcript', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    listSolTurns.mockResolvedValue([turn('t1', 'user', 'old')])
+    const { result } = renderHook(() => useSolChat('p1'))
+    await waitFor(() => expect(result.current.items).toHaveLength(1))
+
+    act(() => result.current.startNewChat())
+    await waitFor(() => expect(result.current.items).toEqual([]))
+    expect(result.current.activeConversationId).toBeNull()
+    expect(useSolSessionStore.getState().conversationByProject).toEqual({})
+  })
+}

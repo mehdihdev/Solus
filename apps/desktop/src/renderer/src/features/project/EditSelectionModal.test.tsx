@@ -107,3 +107,20 @@ describe('EditSelectionModal', () => {
     expect(onSaved).not.toHaveBeenCalled()
   })
 })
+
+it('explicitly refreshes the scoped source without saving or syncing', async () => {
+  const fresh = { id: 'saved', name: 'FeatureScript MCP Workspace' }
+  vi.mocked(resources.listSelectable)
+    .mockResolvedValueOnce(DOCS)
+    .mockResolvedValueOnce([...DOCS, fresh])
+  renderModal(['docB'])
+  await screen.findByLabelText('Arm')
+  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+  expect(await screen.findByLabelText(fresh.name)).toBeInTheDocument()
+  expect(resources.listSelectable).toHaveBeenLastCalledWith('p1', 's1', undefined, {
+    refresh: true
+  })
+  expect(screen.getByLabelText('Arm')).toBeChecked()
+  expect(resources.updateSource).not.toHaveBeenCalled()
+  expect(resources.triggerSync).not.toHaveBeenCalled()
+})

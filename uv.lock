@@ -2039,6 +2039,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "redis" },
     { name = "sentry-sdk" },
+    { name = "solus-contracts" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "stripe" },
     { name = "uuid6" },
@@ -2063,7 +2064,6 @@ dev = [
     { name = "respx" },
     { name = "ruff" },
     { name = "solus-companion" },
-    { name = "solus-contracts" },
     { name = "types-jsonschema" },
     { name = "types-pyyaml" },
 ]
@@ -2094,6 +2094,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "redis", specifier = ">=5.0" },
     { name = "sentry-sdk", specifier = ">=2.0" },
+    { name = "solus-contracts", editable = "packages/contracts/python" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "stripe", specifier = ">=11.0" },
     { name = "uuid6", specifier = ">=2024.1.12" },
@@ -2114,7 +2115,6 @@ dev = [
     { name = "respx", specifier = ">=0.21" },
     { name = "ruff", specifier = ">=0.8" },
     { name = "solus-companion", editable = "packages/companion" },
-    { name = "solus-contracts", editable = "packages/contracts/python" },
     { name = "types-jsonschema", specifier = ">=4.20" },
     { name = "types-pyyaml", specifier = ">=6.0" },
 ]

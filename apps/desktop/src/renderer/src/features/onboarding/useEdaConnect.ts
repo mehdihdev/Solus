@@ -2,7 +2,7 @@
 // binds the typed API singleton + onboarding store to the pure orchestration in
 // edaConnect.ts, mirroring useOAuthConnect.
 import { useRef } from 'react'
-import { createSource, getSource, getSyncs, triggerSync } from '../../lib/api/resources'
+import { createSource, getSource, getJob, getSyncs, triggerSync } from '../../lib/api/resources'
 import {
   runEdaConnect,
   type EdaConnectApi,
@@ -12,7 +12,7 @@ import {
 import { useOnboardingStore } from './onboardingStore'
 
 /** The typed API surface the orchestration runs against (app singleton). */
-const edaApi: EdaConnectApi = { createSource, triggerSync, getSyncs, getSource }
+const edaApi: EdaConnectApi = { createSource, triggerSync, getSyncs, getSource, getJob }
 
 export interface UseEdaConnect {
   /** Begin the real connect for a provider with the picked, routed files.

@@ -89,3 +89,40 @@ def test_doc_domains_are_https_hosts_without_scheme(tool: ToolFamily) -> None:
     for entry in VENDOR_DOC_DOMAINS[tool]:
         assert not entry.startswith("http"), "domain entries are host[/path], scheme-less"
         assert " " not in entry
+
+
+@pytest.mark.parametrize(
+    ("tool", "url"),
+    [
+        (ToolFamily.CODE, "https://git-scm.com/docs/git-commit/2.43.0"),
+        (
+            ToolFamily.CODE,
+            "https://docs.arduino.cc/arduino-cli/commands-reference/arduino-cli_compile/",
+        ),
+        (
+            ToolFamily.ISAAC,
+            "https://docs.isaacsim.omniverse.nvidia.com/6.0.0/core_api_tutorials/tutorial_core_hello_world.html",
+        ),
+    ],
+)
+def test_execution_docs_accept_only_reviewed_origin_and_path(tool: ToolFamily, url: str) -> None:
+    assert is_vendor_doc_url(tool, url)
+    assert not is_vendor_doc_url(tool, url.replace("https://", "http://"))
+    assert not is_vendor_doc_url(
+        tool,
+        url.replace(".com/", ".com.attacker.example/").replace(".cc/", ".cc.attacker.example/"),
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://git-scm.com/customer-upload",
+        "https://git-scm.com/docs-upload/forged",
+        "https://docs.arduino.cc/arduino-cli-customer/design",
+        "https://docs.arduino.cc/hardware/customer",
+        "https://github.com/customer/repository",
+    ],
+)
+def test_code_docs_refuse_other_sources(url: str) -> None:
+    assert not is_vendor_doc_url(ToolFamily.CODE, url)

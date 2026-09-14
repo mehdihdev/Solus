@@ -47,12 +47,72 @@ afterEach(() => {
 })
 
 describe('useBillingData', () => {
+  billingSnapshotTests()
+  billingActionsTests()
+})
+
+// --- in-app checkout window (SOLUSDEV-114) -----------------------------------
+
+const openCheckout = vi.fn()
+
+function installCheckoutBridge(): void {
+  ;(window as unknown as { solus?: unknown }).solus = {
+    billing: { openExternal, openCheckout }
+  }
+}
+
+describe('useBillingData with the in-app checkout bridge', () => {
+  beforeEach(() => {
+    openCheckout.mockReset()
+    installCheckoutBridge()
+    vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
+    vi.mocked(resources.createBillingPortal).mockResolvedValue({ url: 'https://portal/x' })
+  })
+  checkoutBridgeSuccessTests()
+  checkoutWebhookRefreshTests()
+  checkoutBridgeOutcomesTests()
+})
+
+function billingSnapshotTests(): void {
   it('loads subscription, credits, and packs when authenticated', async () => {
     const { result } = renderHook(() => useBillingData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.subscription?.plan).toBe('basic')
     expect(result.current.credits).toBe(1000)
     expect(result.current.packs).toEqual([{ price_id: 'price_p10', credits: 1000 }])
+  })
+
+  it('preserves the real balance and clears the development flag on refresh', async () => {
+    vi.mocked(resources.getCredits).mockResolvedValue({
+      user_id: 'u1',
+      balance: 17,
+      unlimited: true
+    })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.credits).toBe(17)
+    expect(result.current.unlimited).toBe(true)
+    vi.mocked(resources.getCredits).mockResolvedValue({
+      user_id: 'u1',
+      balance: 12,
+      unlimited: false
+    })
+    await act(() => result.current.refresh())
+    expect(result.current.credits).toBe(12)
+    expect(result.current.unlimited).toBe(false)
+  })
+
+  it('does not retain an unlimited claim when its refresh fails', async () => {
+    vi.mocked(resources.getCredits).mockResolvedValue({
+      user_id: 'u1',
+      balance: 17,
+      unlimited: true
+    })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.getCredits).mockRejectedValue(new Error('offline'))
+    await act(() => result.current.refresh())
+    expect(result.current.unlimited).toBe(false)
   })
 
   it('is offline when neither authenticated nor linked', async () => {
@@ -68,7 +128,9 @@ describe('useBillingData', () => {
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.subscription).toBeNull()
   })
+}
 
+function billingActionsTests(): void {
   it('startCheckout opens the Stripe URL for the chosen plan + interval', async () => {
     vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
     const { result } = renderHook(() => useBillingData())
@@ -113,26 +175,9 @@ describe('useBillingData', () => {
     expect(openExternal).not.toHaveBeenCalled()
     expect(result.current.notice).toMatch(/configured/i)
   })
-})
-
-// --- in-app checkout window (SOLUSDEV-114) -----------------------------------
-
-const openCheckout = vi.fn()
-
-function installCheckoutBridge(): void {
-  ;(window as unknown as { solus?: unknown }).solus = {
-    billing: { openExternal, openCheckout }
-  }
 }
 
-describe('useBillingData with the in-app checkout bridge', () => {
-  beforeEach(() => {
-    openCheckout.mockReset()
-    installCheckoutBridge()
-    vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
-    vi.mocked(resources.createBillingPortal).mockResolvedValue({ url: 'https://portal/x' })
-  })
-
+function checkoutBridgeSuccessTests(): void {
   it('prefers the in-app window over the system browser', async () => {
     openCheckout.mockResolvedValue({ status: 'success' })
     const { result } = renderHook(() => useBillingData())
@@ -161,7 +206,9 @@ describe('useBillingData with the in-app checkout bridge', () => {
     expect(bellRefresh).toHaveBeenCalled()
     window.removeEventListener('solus:notifications-refresh', bellRefresh)
   })
+}
 
+function checkoutWebhookRefreshTests(): void {
   it('schedules follow-up refetches to absorb webhook lag', async () => {
     openCheckout.mockResolvedValue({ status: 'success' })
     const { result } = renderHook(() => useBillingData())
@@ -182,7 +229,9 @@ describe('useBillingData with the in-app checkout bridge', () => {
       vi.useRealTimers()
     }
   })
+}
 
+function checkoutBridgeOutcomesTests(): void {
   it('on cancel or a dismissed window: canceled notice, nothing charged-looking', async () => {
     for (const status of ['cancel', 'closed'] as const) {
       openCheckout.mockResolvedValue({ status })
@@ -229,4 +278,4 @@ describe('useBillingData with the in-app checkout bridge', () => {
     })
     expect(result.current.notice).toMatch(/went wrong/i)
   })
-})
+}

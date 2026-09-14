@@ -40,6 +40,16 @@ CLOSE_OVERSIZE = 4413
 CLOSE_RATE_EXCEEDED = 4429
 
 
+class ToolOutputData(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    call_id: str = Field(min_length=1, max_length=128)
+    sequence: int = Field(ge=1, le=256)
+    stream: Literal["stdout", "stderr"]
+    text: str = Field(max_length=2048)
+    truncated: bool = False
+
+
 class HelloTool(BaseModel):
     """One tool a companion advertises. UNTRUSTED — deliberately has no
     `requires_confirmation` field: that flag comes only from the Solus-owned
@@ -163,6 +173,7 @@ INBOUND_TYPES = frozenset(
         "status",
         "error",
         "tool_result",
+        "tool_output",
         "credential_submit",
         "artifact_chunk",
         # SOLUSDEV-167: an unsolicited "something under my workspace moved".
@@ -187,6 +198,7 @@ class InboundFrame:
         | StatusData
         | CredentialSubmitData
         | ArtifactChunkData
+        | ToolOutputData
         | None
     )
 
@@ -231,6 +243,7 @@ def _parse_envelope(raw: str | bytes) -> tuple[str, dict[str, Any]] | FrameViola
 _PAYLOAD_MODELS: dict[str, Any] = {
     "hello": HelloData,
     "tool_result": ToolResult,
+    "tool_output": ToolOutputData,
     "error": ErrorData,
     "status": StatusData,
     "credential_submit": CredentialSubmitData,

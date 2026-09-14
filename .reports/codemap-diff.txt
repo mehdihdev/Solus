@@ -1,0 +1,7 @@
+SOLUSDEV-261 2026-09-13
+Added docs/CODEMAPS/onshape.md; existing maps preserved.
+New internal modules: onshape_webhooks.py, onshape_read_cache.py.
+No new dependency or HTTP route; existing webhook route now has bounded event parsing.
+Updated authority docs: change-signal-spine.md, API.md, onshape-development.md.
+Historical Onshape setup remains relevant for grant setup; quota audit supersedes
+historical polling/limit assumptions. No repository-wide staleness audit claimed.

@@ -38,8 +38,9 @@ from typing import Any
 
 from fastapi import APIRouter
 from pydantic import Field
+from sqlalchemy import select
 
-from solus_api.agent.tools.hosted_tools import INVENTORY_KEY, STATE_KEY
+from solus_api.agent.tools.hosted_tools import INVENTORY_KEY, STATE_KEY, _hosted_source_available
 from solus_api.agent.tools.mcp_tool import MCPServerSpec, discover_mcp_tools
 from solus_api.agent.tools.remote_mcp import HOSTED_SERVERS, RemoteAuthError, RemoteMCPSpec
 from solus_api.agent.tools.tool import ToolException
@@ -54,8 +55,9 @@ from solus_api.deps import (
     SessionDep,
     require_role,
 )
-from solus_api.models import OAuthState, Role, Source, ensure_utc, utcnow
+from solus_api.models import AccountConnection, OAuthState, Role, Source, utcnow
 from solus_api.schemas import StrictModel
+from solus_api.services import hosted_accounts
 from solus_api.services.events import emit_event
 
 logger = logging.getLogger("solus.routers.hosted")
@@ -107,13 +109,13 @@ def _matching_source(source: Source, spec: RemoteMCPSpec) -> None:
         raise APIError(400, "source_not_connected", "Connect this source before enabling add-ons")
 
 
-def _state_of(source: Source, server: str) -> dict[str, Any]:
+def _state_of(source: Source | AccountConnection, server: str) -> dict[str, Any]:
     states = source.config.get(STATE_KEY) if isinstance(source.config, dict) else None
     entry = states.get(server) if isinstance(states, dict) else None
     return dict(entry) if isinstance(entry, dict) else {"state": STATE_NOT_ENABLED}
 
 
-def _write_state(source: Source, server: str, entry: dict[str, Any]) -> None:
+def _write_state(source: Source | AccountConnection, server: str, entry: dict[str, Any]) -> None:
     """Config is a JSON column — REASSIGN it, never mutate in place, or
     SQLAlchemy will not mark it dirty and the write is silently lost."""
     config = dict(source.config or {})
@@ -123,7 +125,9 @@ def _write_state(source: Source, server: str, entry: dict[str, Any]) -> None:
     source.config = config
 
 
-def _write_inventory(source: Source, server: str, entry: dict[str, Any] | None) -> None:
+def _write_inventory(
+    source: Source | AccountConnection, server: str, entry: dict[str, Any] | None
+) -> None:
     config = dict(source.config or {})
     stored = dict(config.get(INVENTORY_KEY) or {})
     if entry is None:
@@ -134,7 +138,7 @@ def _write_inventory(source: Source, server: str, entry: dict[str, Any] | None) 
     source.config = config
 
 
-def _payload(source: Source, spec: RemoteMCPSpec) -> dict[str, Any]:
+def _payload(source: Source | AccountConnection, spec: RemoteMCPSpec) -> dict[str, Any]:
     entry = _state_of(source, spec.name)
     return {
         "server": spec.name,
@@ -153,7 +157,7 @@ def _payload(source: Source, spec: RemoteMCPSpec) -> dict[str, Any]:
 
 
 async def _probe(
-    spec: RemoteMCPSpec, source: Source, secret_store: Any
+    spec: RemoteMCPSpec, source: Source | AccountConnection, secret_store: Any
 ) -> tuple[str, list[dict[str, Any]], str | None]:
     """`(state, inventory_rows, detail)` — is this account actually usable?
 
@@ -227,7 +231,7 @@ async def _probe(
 
 
 async def _record_probe(
-    session: SessionDep, source: Source, spec: RemoteMCPSpec, secret_store: Any
+    session: SessionDep, source: Source | AccountConnection, spec: RemoteMCPSpec, secret_store: Any
 ) -> dict[str, Any]:
     state, rows, detail = await _probe(spec, source, secret_store)
     _write_state(
@@ -266,7 +270,8 @@ async def hosted_status(
     require_role(ctx, Role.VIEWER)
     spec = _spec(server)
     source = await _scoped_source(session, ctx, source_id)
-    return envelope(_payload(source, spec))
+    account = await hosted_accounts.source_account(session, source, spec)
+    return envelope(_payload(account or source, spec))
 
 
 @router.post("/{server}/probe")
@@ -289,6 +294,9 @@ async def hosted_probe(
     spec = _spec(server)
     source = await _scoped_source(session, ctx, source_id)
     _matching_source(source, spec)
+    account = await hosted_accounts.source_account(session, source, spec, owner_id=ctx.user.id)
+    if account is not None:
+        return envelope(await hosted_accounts.probe(session, ctx.user, account, spec, secret_store))
     return envelope(await _record_probe(session, source, spec, secret_store))
 
 
@@ -311,6 +319,9 @@ async def hosted_oauth_start(
     spec = _spec(server)
     source = await _scoped_source(session, ctx, source_id)
     _matching_source(source, spec)
+    account = await hosted_accounts.source_account(session, source, spec, owner_id=ctx.user.id)
+    if account is not None:
+        return envelope(await hosted_accounts.start(session, ctx.user, account, spec, secret_store))
 
     redirect_uri = hosted_oauth.registered_redirect_uri(spec)
     try:
@@ -370,26 +381,17 @@ async def hosted_oauth_exchange(
     source = await _scoped_source(session, ctx, source_id)
     _matching_source(source, spec)
 
-    record = await session.get(OAuthState, body.state)
-    # Every mismatch answers the same way: a wrong user, a wrong source, a wrong
-    # server and an absent row are indistinguishable from outside.
-    if (
-        record is None
-        or record.provider != f"{_STATE_PREFIX}{spec.name}"
-        or record.user_id != ctx.user.id
-        or record.source_id != source.id
-    ):
-        raise APIError(404, "invalid_state", "Unknown or expired sign-in")
-    if ensure_utc(record.expires_at) < utcnow() or not record.code_verifier:
-        await session.delete(record)
-        await session.commit()
-        raise APIError(400, "expired_state", "This sign-in expired; start it again")
-
-    verifier, redirect_uri = record.code_verifier, record.redirect_uri
-    # Single use: consumed before the exchange, so a replay cannot reach the
-    # token endpoint even if the exchange itself fails.
-    await session.delete(record)
-    await session.flush()
+    account = await hosted_accounts.source_account(session, source, spec, owner_id=ctx.user.id)
+    if account is not None:
+        return envelope(
+            await hosted_accounts.exchange(
+                session, ctx.user, account, spec, secret_store, state=body.state, code=body.code
+            )
+        )
+    original_ref = source.secret_ref
+    verifier, redirect_uri = await hosted_accounts.consume_state(
+        session, state=body.state, user_id=ctx.user.id, server=spec.name, source_id=source.id
+    )
 
     try:
         client = await hosted_oauth.ensure_client(secret_store, spec, redirect_uri=redirect_uri)
@@ -400,6 +402,23 @@ async def hosted_oauth_exchange(
         await session.commit()
         raise APIError(400, exc.code, exc.message) from exc
 
+    current = await session.scalar(
+        select(Source)
+        .where(
+            Source.id == source_id,
+            Source.project_id == ctx.project.id,
+            _hosted_source_available(),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        current is None
+        or current.connection_id is not None
+        or current.secret_ref != original_ref
+    ):
+        raise APIError(404, "not_found", "Connected source not found")
+    source = current
     await secret_store.put(
         hosted_oauth.token_secret_ref(source.secret_ref or "", spec.name), token.to_json()
     )

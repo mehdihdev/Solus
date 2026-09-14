@@ -66,31 +66,23 @@ export function RulesEditor({
     else setError("Couldn't save the rules.")
   }
 
-  const field = (
-    label: string,
-    value: string,
-    set: (v: string) => void,
-    hint: string
-  ): React.JSX.Element => (
-    <label style={{ display: 'block', marginTop: 10 }}>
-      <Mono size={9}>{label}</Mono>
-      <input aria-label={label} value={value} onChange={(e) => set(e.target.value)} style={INPUT} />
-      <div style={{ fontSize: 10.5, color: 'var(--mut)', marginTop: 2 }}>{hint}</div>
-    </label>
-  )
-
   return (
     <div data-testid="sourcing-rules-editor" style={{ marginTop: 8 }}>
-      {field(
+      {ruleField(
         'Excluded suppliers',
         excluded,
         setExcluded,
         'name: reason; name: reason — the reason is what an excluded candidate shows.'
       )}
-      {field('Required certifications', certs, setCerts, 'Comma-separated, e.g. RoHS, CE.')}
-      {field('Max voltage (V)', voltage, setVoltage, 'Candidates above it are excluded.')}
-      {field('Allowed protocols', protocols, setProtocols, 'Comma-separated; empty allows any.')}
-      {field('Preferred suppliers', preferred, setPreferred, 'Ranked first, never excluded.')}
+      {ruleField('Required certifications', certs, setCerts, 'Comma-separated, e.g. RoHS, CE.')}
+      {ruleField('Max voltage (V)', voltage, setVoltage, 'Candidates above it are excluded.')}
+      {ruleField(
+        'Allowed protocols',
+        protocols,
+        setProtocols,
+        'Comma-separated; empty allows any.'
+      )}
+      {ruleField('Preferred suppliers', preferred, setPreferred, 'Ranked first, never excluded.')}
       {error && (
         <div role="alert" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8 }}>
           {error}
@@ -105,5 +97,20 @@ export function RulesEditor({
         </Button>
       </div>
     </div>
+  )
+}
+
+function ruleField(
+  label: string,
+  value: string,
+  set: (v: string) => void,
+  hint: string
+): React.JSX.Element {
+  return (
+    <label style={{ display: 'block', marginTop: 10 }}>
+      <Mono size={9}>{label}</Mono>
+      <input aria-label={label} value={value} onChange={(e) => set(e.target.value)} style={INPUT} />
+      <div style={{ fontSize: 10.5, color: 'var(--mut)', marginTop: 2 }}>{hint}</div>
+    </label>
   )
 }

@@ -28,11 +28,25 @@ source and its tool set dynamic, so the only honest fixture is a live capture
 
 ## Tool knowledge in the loop
 
+SOLUSDEV-261 sync clarification: a STEP translation refusal does not prove that
+the entire document is unusable. The connector may omit geometry for a tab only
+after a successful, schema-valid API read positively establishes an empty Part
+Studio part list or an empty Assembly instance list. Unknown, malformed, or
+nonempty responses preserve the export failure and leave the prior graph intact.
+Empty tabs contribute no mechanical geometry; the selected document root remains.
+
 The global tool-knowledge table now reaches the model and hears back from it — see the
 `docs/api/toolkb.md` amendment. The mapping from a write tool to the vendor control it acts on
 is data (`TOOL_CONTROLS`); the note rides the tool description as a fenced block; the outcome of
 each confirmed write is a vote. This is how "tool-specific, not generic" is mechanised without a
 per-tool prompt: the vendor's own documentation, admitted through the guard, is what SOL reads.
+
+SOLUSDEV-261 also maps schematic symbol, wire, label and no-connect tools to the
+official KiCad action controls. Published default shortcuts travel inside the same
+bounded data note. The installed KiCad10 action definitions are imported through
+the existing guarded importer; unclassifiable actions are skipped. Onshape's
+existing `>=1.0 <2.0` note identity is a repository compatibility convention, not
+evidence of a vendor SaaS release. Current SOL note loading is version-unfiltered.
 
 ## What was verified live, per tool (this Mac, 2026-09-07)
 

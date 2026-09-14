@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import type { BridgeServer, BridgeStatus } from '../../lib/api/resources'
+import { isPlatformUnavailableDetail } from '../project/localconnections/presentation'
 import { LicenseCaptureModal } from './LicenseCaptureModal'
 import { useBridgeStatus, pillState, type BridgePillState } from './useBridgeStatus'
 
@@ -129,7 +130,9 @@ function BridgePopover({
               {s.detail && (
                 <span style={{ color: 'var(--mut)', flex: 1, minWidth: 0 }}>{s.detail}</span>
               )}
-              <LicenseAffordance state={s.license_state} onAdd={() => onAddLicense(s.name)} />
+              {!(s.state === 'not_launched' && isPlatformUnavailableDetail(s.detail)) && (
+                <LicenseAffordance state={s.license_state} onAdd={() => onAddLicense(s.name)} />
+              )}
             </div>
           ))}
       </Card>

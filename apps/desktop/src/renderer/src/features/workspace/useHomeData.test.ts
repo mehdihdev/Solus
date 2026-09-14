@@ -93,232 +93,14 @@ beforeEach(() => {
 })
 
 describe('useHomeData — the active team', () => {
-  it('loads the active team’s projects (archived included) and its feed split by project', async () => {
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(result.current.team?.team_id).toBe('t1')
-    expect(result.current.teams.map((t) => t.team_id)).toEqual(['t-me', 't1'])
-    expect(result.current.projects.map((p) => p.name)).toEqual(['Rover MK2'])
-    expect(vi.mocked(resources.listProjects)).toHaveBeenCalledWith('t1', { includeArchived: true })
-    expect(vi.mocked(resources.listActivityPage)).toHaveBeenCalledWith('t1', { limit: 50 })
-    expect(vi.mocked(resources.listProjects)).not.toHaveBeenCalledWith('t-me', expect.anything())
-    expect(Object.keys(result.current.activityByProject)).toEqual(['p1'])
-    expect(result.current.activityByProject.p1.map((a) => a.id)).toEqual(['a1'])
-  })
-
-  it('falls back to the personal team when the stored id is not one of my teams', async () => {
-    useWorkspaceStore.setState({ teamId: 't-ghost' })
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(result.current.team?.team_id).toBe('t-me')
-    expect(vi.mocked(resources.listProjects)).toHaveBeenCalledWith('t-me', {
-      includeArchived: true
-    })
-  })
-
-  it('is ready with no team and no projects when I am on no team at all', async () => {
-    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, teams: [] })
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(result.current.team).toBe(null)
-    expect(result.current.projects).toEqual([])
-    expect(resources.listProjects).not.toHaveBeenCalled()
-  })
-
-  it('switchTeam reloads for the other team and drops the previous team’s data', async () => {
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    vi.mocked(resources.listProjects).mockResolvedValue([])
-    vi.mocked(resources.listActivityPage).mockResolvedValue({ data: [], meta: { total: 0 } })
-    act(() => result.current.actions.switchTeam('t-me'))
-    await waitFor(() => expect(result.current.team?.team_id).toBe('t-me'))
-    expect(useWorkspaceStore.getState().teamId).toBe('t-me')
-    expect(result.current.projects).toEqual([])
-    expect(result.current.activityByProject).toEqual({})
-  })
-
-  it('ignores a slow answer for a team the user has since left', async () => {
-    let releaseFirst: (rows: resources.Project[]) => void = () => undefined
-    vi.mocked(resources.listProjects).mockImplementation((teamId) =>
-      teamId === 't1'
-        ? new Promise<resources.Project[]>((resolve) => (releaseFirst = resolve))
-        : Promise.resolve([])
-    )
-    const { result } = renderHook(() => useHomeData())
-    act(() => useWorkspaceStore.getState().setTeamId('t-me'))
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    await act(async () => {
-      releaseFirst([PROJECT])
-      await Promise.resolve()
-    })
-    expect(result.current.team?.team_id).toBe('t-me')
-    expect(result.current.projects).toEqual([])
-  })
-
-  it('stays ready with empty per-project activity when the feed fetch fails', async () => {
-    vi.mocked(resources.listActivityPage).mockRejectedValue(new Error('down'))
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(result.current.activityByProject).toEqual({})
-  })
-
-  it('is offline when the workspace is not linked', async () => {
-    useWorkspaceStore.setState({ linked: false })
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('offline'))
-    expect(resources.getMe).not.toHaveBeenCalled()
-  })
-
-  it('is offline when the profile cannot be fetched', async () => {
-    vi.mocked(resources.getMe).mockRejectedValue(new Error('down'))
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('offline'))
-  })
+  homeActiveTeamLoadingTests()
+  homeActiveTeamFailuresTests()
 })
 
 describe('useHomeData — actions', () => {
-  it('createProject posts to the active team then refreshes', async () => {
-    vi.mocked(resources.createProject).mockResolvedValue(PROJECT)
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    let created: resources.Project | null = null
-    await act(async () => {
-      created = await result.current.actions.createProject('Rover MK2')
-    })
-    expect(created).toEqual(PROJECT)
-    expect(resources.createProject).toHaveBeenCalledWith('t1', { name: 'Rover MK2' })
-    expect(vi.mocked(resources.listProjects).mock.calls.length).toBeGreaterThan(1)
-  })
-
-  it('createProject returns null without an active team or on failure', async () => {
-    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, teams: [] })
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(await result.current.actions.createProject('X')).toBe(null)
-    expect(resources.createProject).not.toHaveBeenCalled()
-  })
-
-  it('createTeam makes the new team active', async () => {
-    vi.mocked(resources.createTeam).mockResolvedValue({ id: 't-new' } as resources.TeamDetail)
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    await act(async () => {
-      expect(await result.current.actions.createTeam('Rocket Lab')).toEqual({
-        ok: true,
-        teamId: 't-new'
-      })
-    })
-    expect(useWorkspaceStore.getState().teamId).toBe('t-new')
-  })
-
-  it('createTeam names a plain failure and the plan limit (HOME H5)', async () => {
-    vi.mocked(resources.createTeam).mockRejectedValue(new Error('nope'))
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(await result.current.actions.createTeam('X')).toEqual({ ok: false, reason: 'failed' })
-
-    vi.mocked(resources.createTeam).mockRejectedValue(
-      new ApiError(409, 'plan_limit_reached', "You're at your collaborative-team limit.", [
-        { limit: 'max_teams', current: 2, max: 2, upgrade: '/settings/billing' }
-      ])
-    )
-    expect(await result.current.actions.createTeam('Y')).toEqual({
-      ok: false,
-      reason: 'plan_limit',
-      limit: {
-        limit: 'max_teams',
-        current: 2,
-        max: 2,
-        message: "You're at your collaborative-team limit."
-      }
-    })
-    expect(useWorkspaceStore.getState().teamId).toBe('t1')
-  })
-
-  it('joinTeam accepts the token and makes the joined team active', async () => {
-    vi.mocked(resources.acceptInvite).mockResolvedValue({ team_id: 't7', role: 'member' })
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    await act(async () => {
-      expect(await result.current.actions.joinTeam('tok')).toEqual({
-        ok: true,
-        teamId: 't7',
-        role: 'member'
-      })
-    })
-    expect(useWorkspaceStore.getState().teamId).toBe('t7')
-  })
-
-  it('joinTeam names why a token was refused instead of "try again" (HOME H5)', async () => {
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    const cases: Array<[unknown, string]> = [
-      [new Error('bad'), 'failed'],
-      [new ApiError(404, 'not_found', 'x'), 'invalid_token'],
-      [new ApiError(410, 'invite_expired', 'x'), 'expired'],
-      [new ApiError(403, 'forbidden', 'x'), 'wrong_email'],
-      [new ApiError(409, 'already_member', 'x'), 'already_member'],
-      [new ApiError(409, 'invite_revoked', 'x'), 'invalid_token']
-    ]
-    for (const [error, reason] of cases) {
-      vi.mocked(resources.acceptInvite).mockRejectedValue(error)
-      expect(await result.current.actions.joinTeam('t')).toMatchObject({ ok: false, reason })
-    }
-    vi.mocked(resources.acceptInvite).mockRejectedValue(
-      new ApiError(409, 'plan_limit_reached', 'Leave a team or upgrade your plan.', [
-        { limit: 'max_teams', current: 2, max: 2 }
-      ])
-    )
-    expect(await result.current.actions.joinTeam('t')).toMatchObject({
-      ok: false,
-      reason: 'plan_limit',
-      limit: { current: 2, max: 2 }
-    })
-    expect(useWorkspaceStore.getState().teamId).toBe('t1')
-  })
-
-  it('a deleted active team reads as gone, not as an outage (HOME H5)', async () => {
-    vi.mocked(resources.listProjects).mockRejectedValue(new ApiError(404, 'not_found', 'gone'))
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('gone'))
-  })
-
-  it('switching teams closes a project of the previous team (HOME H5)', async () => {
-    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover', teamId: 't1' } })
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    vi.mocked(resources.listProjects).mockResolvedValue([])
-    act(() => result.current.actions.switchTeam('t-me'))
-    expect(useWorkspaceStore.getState().project).toBeNull()
-    expect(useWorkspaceStore.getState().teamId).toBe('t-me')
-  })
-
-  it('renames, archives, unarchives, and deletes a project, refreshing after each', async () => {
-    vi.mocked(resources.updateProject).mockResolvedValue({} as resources.ProjectDetail)
-    vi.mocked(resources.archiveProject).mockResolvedValue(PROJECT)
-    vi.mocked(resources.unarchiveProject).mockResolvedValue(PROJECT)
-    vi.mocked(resources.deleteProject).mockResolvedValue(undefined)
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    await act(async () => {
-      expect(await result.current.actions.renameProject('p1', 'Rover MK3')).toBe(true)
-      expect(await result.current.actions.archiveProject('p1')).toBe(true)
-      expect(await result.current.actions.unarchiveProject('p1')).toBe(true)
-      expect(await result.current.actions.deleteProject('p1')).toBe(true)
-    })
-    expect(resources.updateProject).toHaveBeenCalledWith('p1', { name: 'Rover MK3' })
-    expect(resources.archiveProject).toHaveBeenCalledWith('p1')
-    expect(resources.unarchiveProject).toHaveBeenCalledWith('p1')
-    expect(resources.deleteProject).toHaveBeenCalledWith('p1')
-    expect(vi.mocked(resources.listProjects).mock.calls.length).toBe(5)
-  })
-
-  it('project actions return false on failure', async () => {
-    vi.mocked(resources.archiveProject).mockRejectedValue(new Error('403'))
-    const { result } = renderHook(() => useHomeData())
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    expect(await result.current.actions.archiveProject('p1')).toBe(false)
-  })
+  homeProjectAndTeamCreationTests()
+  homeTeamJoinAndSwitchTests()
+  homeProjectMutationsTests()
 })
 
 describe('useHomeData — the open project is closed when hidden or gone (SOLUSDEV-242)', () => {
@@ -382,3 +164,238 @@ describe('useHomeData — the open project is closed when hidden or gone (SOLUSD
     expect(result.current.team?.team_id).toBe('t-me')
   })
 })
+
+function homeActiveTeamLoadingTests(): void {
+  it('loads the active team’s projects (archived included) and its feed split by project', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.team?.team_id).toBe('t1')
+    expect(result.current.teams.map((t) => t.team_id)).toEqual(['t-me', 't1'])
+    expect(result.current.projects.map((p) => p.name)).toEqual(['Rover MK2'])
+    expect(vi.mocked(resources.listProjects)).toHaveBeenCalledWith('t1', { includeArchived: true })
+    expect(vi.mocked(resources.listActivityPage)).toHaveBeenCalledWith('t1', { limit: 50 })
+    expect(vi.mocked(resources.listProjects)).not.toHaveBeenCalledWith('t-me', expect.anything())
+    expect(Object.keys(result.current.activityByProject)).toEqual(['p1'])
+    expect(result.current.activityByProject.p1.map((a) => a.id)).toEqual(['a1'])
+  })
+
+  it('falls back to the personal team when the stored id is not one of my teams', async () => {
+    useWorkspaceStore.setState({ teamId: 't-ghost' })
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.team?.team_id).toBe('t-me')
+    expect(vi.mocked(resources.listProjects)).toHaveBeenCalledWith('t-me', {
+      includeArchived: true
+    })
+  })
+
+  it('is ready with no team and no projects when I am on no team at all', async () => {
+    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, teams: [] })
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.team).toBe(null)
+    expect(result.current.projects).toEqual([])
+    expect(resources.listProjects).not.toHaveBeenCalled()
+  })
+
+  it('switchTeam reloads for the other team and drops the previous team’s data', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.listProjects).mockResolvedValue([])
+    vi.mocked(resources.listActivityPage).mockResolvedValue({ data: [], meta: { total: 0 } })
+    act(() => result.current.actions.switchTeam('t-me'))
+    await waitFor(() => expect(result.current.team?.team_id).toBe('t-me'))
+    expect(useWorkspaceStore.getState().teamId).toBe('t-me')
+    expect(result.current.projects).toEqual([])
+    expect(result.current.activityByProject).toEqual({})
+  })
+}
+
+function homeActiveTeamFailuresTests(): void {
+  it('ignores a slow answer for a team the user has since left', async () => {
+    let releaseFirst: (rows: resources.Project[]) => void = () => undefined
+    vi.mocked(resources.listProjects).mockImplementation((teamId) =>
+      teamId === 't1'
+        ? new Promise<resources.Project[]>((resolve) => (releaseFirst = resolve))
+        : Promise.resolve([])
+    )
+    const { result } = renderHook(() => useHomeData())
+    act(() => useWorkspaceStore.getState().setTeamId('t-me'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      releaseFirst([PROJECT])
+      await Promise.resolve()
+    })
+    expect(result.current.team?.team_id).toBe('t-me')
+    expect(result.current.projects).toEqual([])
+  })
+
+  it('stays ready with empty per-project activity when the feed fetch fails', async () => {
+    vi.mocked(resources.listActivityPage).mockRejectedValue(new Error('down'))
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.activityByProject).toEqual({})
+  })
+
+  it('is offline when the workspace is not linked', async () => {
+    useWorkspaceStore.setState({ linked: false })
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('offline'))
+    expect(resources.getMe).not.toHaveBeenCalled()
+  })
+
+  it('is offline when the profile cannot be fetched', async () => {
+    vi.mocked(resources.getMe).mockRejectedValue(new Error('down'))
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('offline'))
+  })
+}
+
+function homeProjectAndTeamCreationTests(): void {
+  it('createProject posts to the active team then refreshes', async () => {
+    vi.mocked(resources.createProject).mockResolvedValue(PROJECT)
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    let created: resources.Project | null = null
+    await act(async () => {
+      created = await result.current.actions.createProject('Rover MK2')
+    })
+    expect(created).toEqual(PROJECT)
+    expect(resources.createProject).toHaveBeenCalledWith('t1', { name: 'Rover MK2' })
+    expect(vi.mocked(resources.listProjects).mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it('createProject returns null without an active team or on failure', async () => {
+    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, teams: [] })
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(await result.current.actions.createProject('X')).toBe(null)
+    expect(resources.createProject).not.toHaveBeenCalled()
+  })
+
+  it('createTeam makes the new team active', async () => {
+    vi.mocked(resources.createTeam).mockResolvedValue({ id: 't-new' } as resources.TeamDetail)
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.createTeam('Rocket Lab')).toEqual({
+        ok: true,
+        teamId: 't-new'
+      })
+    })
+    expect(useWorkspaceStore.getState().teamId).toBe('t-new')
+  })
+
+  it('createTeam names a plain failure and the plan limit (HOME H5)', async () => {
+    vi.mocked(resources.createTeam).mockRejectedValue(new Error('nope'))
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(await result.current.actions.createTeam('X')).toEqual({ ok: false, reason: 'failed' })
+
+    vi.mocked(resources.createTeam).mockRejectedValue(
+      new ApiError(409, 'plan_limit_reached', "You're at your collaborative-team limit.", [
+        { limit: 'max_teams', current: 2, max: 2, upgrade: '/settings/billing' }
+      ])
+    )
+    expect(await result.current.actions.createTeam('Y')).toEqual({
+      ok: false,
+      reason: 'plan_limit',
+      limit: {
+        limit: 'max_teams',
+        current: 2,
+        max: 2,
+        message: "You're at your collaborative-team limit."
+      }
+    })
+    expect(useWorkspaceStore.getState().teamId).toBe('t1')
+  })
+}
+
+function homeTeamJoinAndSwitchTests(): void {
+  it('joinTeam accepts the token and makes the joined team active', async () => {
+    vi.mocked(resources.acceptInvite).mockResolvedValue({ team_id: 't7', role: 'member' })
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.joinTeam('tok')).toEqual({
+        ok: true,
+        teamId: 't7',
+        role: 'member'
+      })
+    })
+    expect(useWorkspaceStore.getState().teamId).toBe('t7')
+  })
+
+  it('joinTeam names why a token was refused instead of "try again" (HOME H5)', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const cases: Array<[unknown, string]> = [
+      [new Error('bad'), 'failed'],
+      [new ApiError(404, 'not_found', 'x'), 'invalid_token'],
+      [new ApiError(410, 'invite_expired', 'x'), 'expired'],
+      [new ApiError(403, 'forbidden', 'x'), 'wrong_email'],
+      [new ApiError(409, 'already_member', 'x'), 'already_member'],
+      [new ApiError(409, 'invite_revoked', 'x'), 'invalid_token']
+    ]
+    for (const [error, reason] of cases) {
+      vi.mocked(resources.acceptInvite).mockRejectedValue(error)
+      expect(await result.current.actions.joinTeam('t')).toMatchObject({ ok: false, reason })
+    }
+    vi.mocked(resources.acceptInvite).mockRejectedValue(
+      new ApiError(409, 'plan_limit_reached', 'Leave a team or upgrade your plan.', [
+        { limit: 'max_teams', current: 2, max: 2 }
+      ])
+    )
+    expect(await result.current.actions.joinTeam('t')).toMatchObject({
+      ok: false,
+      reason: 'plan_limit',
+      limit: { current: 2, max: 2 }
+    })
+    expect(useWorkspaceStore.getState().teamId).toBe('t1')
+  })
+
+  it('a deleted active team reads as gone, not as an outage (HOME H5)', async () => {
+    vi.mocked(resources.listProjects).mockRejectedValue(new ApiError(404, 'not_found', 'gone'))
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('gone'))
+  })
+
+  it('switching teams closes a project of the previous team (HOME H5)', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover', teamId: 't1' } })
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.listProjects).mockResolvedValue([])
+    act(() => result.current.actions.switchTeam('t-me'))
+    expect(useWorkspaceStore.getState().project).toBeNull()
+    expect(useWorkspaceStore.getState().teamId).toBe('t-me')
+  })
+}
+
+function homeProjectMutationsTests(): void {
+  it('renames, archives, unarchives, and deletes a project, refreshing after each', async () => {
+    vi.mocked(resources.updateProject).mockResolvedValue({} as resources.ProjectDetail)
+    vi.mocked(resources.archiveProject).mockResolvedValue(PROJECT)
+    vi.mocked(resources.unarchiveProject).mockResolvedValue(PROJECT)
+    vi.mocked(resources.deleteProject).mockResolvedValue(undefined)
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      expect(await result.current.actions.renameProject('p1', 'Rover MK3')).toBe(true)
+      expect(await result.current.actions.archiveProject('p1')).toBe(true)
+      expect(await result.current.actions.unarchiveProject('p1')).toBe(true)
+      expect(await result.current.actions.deleteProject('p1')).toBe(true)
+    })
+    expect(resources.updateProject).toHaveBeenCalledWith('p1', { name: 'Rover MK3' })
+    expect(resources.archiveProject).toHaveBeenCalledWith('p1')
+    expect(resources.unarchiveProject).toHaveBeenCalledWith('p1')
+    expect(resources.deleteProject).toHaveBeenCalledWith('p1')
+    expect(vi.mocked(resources.listProjects).mock.calls.length).toBe(5)
+  })
+
+  it('project actions return false on failure', async () => {
+    vi.mocked(resources.archiveProject).mockRejectedValue(new Error('403'))
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(await result.current.actions.archiveProject('p1')).toBe(false)
+  })
+}

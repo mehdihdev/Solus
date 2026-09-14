@@ -121,7 +121,6 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
   let initSent = false
   let disposed = false
   let dropped = 0
-  const inFlightIds = new Set<string>()
 
   const post = (message: BridgeOutbound): void => {
     if (!disposed) frame.postMessage(message)
@@ -136,16 +135,7 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
 
   function init(): void {
     initSent = true
-    const payload: BridgeInitPayload = {
-      extensionId: policy.extensionId,
-      version: policy.version,
-      projectHandle,
-      settings: { ...settings },
-      theme: deps.theme(),
-      focus: deps.focus.get(),
-      mode: policy.mode
-    }
-    sendEvent('init', payload)
+    sendEvent('init', initPayload(policy, settings, deps, projectHandle))
   }
 
   const telemetry = createTelemetryRegistry(
@@ -164,45 +154,11 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
     telemetry
   }
 
-  function refuse(request: BridgeRequest, code: BridgeErrorCode, message?: string): void {
-    post(fail(request.id, code, message))
-    if (REFUSAL_CODES.has(code)) {
-      deps.emitRefusal({
-        extensionId: policy.extensionId,
-        version: policy.version,
-        method: request.method,
-        code
-      })
-    }
-  }
-
-  async function execute<M extends BridgeMethod>(request: BridgeRequest, method: M): Promise<void> {
-    const params = validateParams(method, request.params)
-    if (params === null) return refuse(request, 'invalid_params')
-    const ctx: HandlerContext = { policy, settings, deps, session, openExternalLimiter }
-    inFlightIds.add(request.id)
-    try {
-      const result = await (HANDLERS[method] as Handler<M>)(params, ctx)
-      post(ok(request.id, result))
-    } catch (error) {
-      const mapped = toBridgeError(error)
-      refuse(request, mapped.code, mapped.message)
-    } finally {
-      inFlightIds.delete(request.id)
-    }
-  }
-
-  async function dispatch(request: BridgeRequest): Promise<void> {
-    if (limiter.tryAcquire() === 'rate_limited') return refuse(request, 'rate_limited')
-    try {
-      const denied = authorize(policy, request.method)
-      if (denied !== null) return refuse(request, denied)
-      if (inFlightIds.has(request.id)) return refuse(request, 'invalid_params')
-      await execute(request, request.method as BridgeMethod)
-    } finally {
-      limiter.release()
-    }
-  }
+  const dispatch = createRequestDispatcher(
+    () => ({ policy, settings, deps, session, openExternalLimiter }),
+    limiter,
+    post
+  )
 
   return {
     async handleMessage(event) {
@@ -231,5 +187,72 @@ export function createBridgeHost(options: BridgeHostOptions): BridgeHost {
       disposed = true
       telemetry.dispose()
     }
+  }
+}
+
+/** Rate-limit and authorize before validating or executing a frame request. */
+function createRequestDispatcher(
+  context: () => HandlerContext,
+  limiter: RateLimiter,
+  post: (message: BridgeOutbound) => void
+): (request: BridgeRequest) => Promise<void> {
+  const inFlightIds = new Set<string>()
+  function refuse(request: BridgeRequest, code: BridgeErrorCode, message?: string): void {
+    post(fail(request.id, code, message))
+    const { policy, deps } = context()
+    if (REFUSAL_CODES.has(code)) {
+      deps.emitRefusal({
+        extensionId: policy.extensionId,
+        version: policy.version,
+        method: request.method,
+        code
+      })
+    }
+  }
+
+  async function execute<M extends BridgeMethod>(request: BridgeRequest, method: M): Promise<void> {
+    const params = validateParams(method, request.params)
+    if (params === null) return refuse(request, 'invalid_params')
+    const ctx = context()
+    inFlightIds.add(request.id)
+    try {
+      const result = await (HANDLERS[method] as Handler<M>)(params, ctx)
+      post(ok(request.id, result))
+    } catch (error) {
+      const mapped = toBridgeError(error)
+      refuse(request, mapped.code, mapped.message)
+    } finally {
+      inFlightIds.delete(request.id)
+    }
+  }
+
+  async function dispatch(request: BridgeRequest): Promise<void> {
+    if (limiter.tryAcquire() === 'rate_limited') return refuse(request, 'rate_limited')
+    try {
+      const denied = authorize(context().policy, request.method)
+      if (denied !== null) return refuse(request, denied)
+      if (inFlightIds.has(request.id)) return refuse(request, 'invalid_params')
+      await execute(request, request.method as BridgeMethod)
+    } finally {
+      limiter.release()
+    }
+  }
+  return dispatch
+}
+
+function initPayload(
+  policy: BridgePolicy,
+  settings: SettingsValues,
+  deps: BridgeDeps,
+  projectHandle: string
+): BridgeInitPayload {
+  return {
+    extensionId: policy.extensionId,
+    version: policy.version,
+    projectHandle,
+    settings: { ...settings },
+    theme: deps.theme(),
+    focus: deps.focus.get(),
+    mode: policy.mode
   }
 }

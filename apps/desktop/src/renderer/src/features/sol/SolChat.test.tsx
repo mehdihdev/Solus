@@ -13,6 +13,7 @@ import { regionToScreenshot, useSolWindowStore } from './solWindowStore'
 import { SOL_REGION } from './solWindow.fixtures'
 
 vi.mock('./solApi', () => ({
+  listSolConfirmations: vi.fn().mockResolvedValue([]),
   createSolConversation: vi.fn(),
   listSolTurns: vi.fn(),
   streamSolMessage: vi.fn()
@@ -245,73 +246,8 @@ describe('SolChat auto-scroll', () => {
       }
     }
   }
-
-  it('follows the stream to the bottom as tokens grow a message in place', async () => {
-    // The regression this pins: token events mutate one item's CONTENT without
-    // changing the item COUNT, so a count-keyed effect never scrolls mid-stream
-    // and the reply runs off-screen.
-    const { pins, restore } = stubScrollGeometry()
-    try {
-      let emit:
-        | ((e: Parameters<Parameters<typeof streamSolMessage>[0]['onEvent']>[0]) => void)
-        | null = null
-      streamSolMessage.mockImplementation(async ({ onEvent }) => {
-        emit = onEvent
-      })
-      render(<SolChat projectId="p1" />)
-      sendMessage('why?')
-      await waitFor(() => expect(emit).not.toBeNull())
-      const pinsAfterSend = pins.length
-      expect(pinsAfterSend).toBeGreaterThan(0) // the send itself pinned to bottom
-      await act(async () => {
-        emit?.({ type: 'token', text: 'a long streamed line ' })
-        await nextFrame()
-      })
-      await act(async () => {
-        emit?.({ type: 'token', text: 'and another one' })
-        await nextFrame()
-      })
-      // Each token growth re-pinned the list (count never changed).
-      expect(pins.length).toBeGreaterThan(pinsAfterSend)
-      expect(pins.every((v) => v === 1000)).toBe(true)
-    } finally {
-      restore()
-    }
-  })
-
-  it('stops following when the user scrolls up to read, and resumes on a new row', async () => {
-    const { pins, restore } = stubScrollGeometry()
-    try {
-      let emit:
-        | ((e: Parameters<Parameters<typeof streamSolMessage>[0]['onEvent']>[0]) => void)
-        | null = null
-      streamSolMessage.mockImplementation(async ({ onEvent }) => {
-        emit = onEvent
-      })
-      render(<SolChat projectId="p1" />)
-      sendMessage('why?')
-      await waitFor(() => expect(emit).not.toBeNull())
-      // scrollTop reads 0 from the stub, so the list believes the user is
-      // 1000-0-200 = 800px above the bottom — far beyond the follow slack.
-      const list = screen.getByText('thinking…').parentElement?.parentElement as HTMLElement
-      fireEvent.scroll(list)
-      const pinned = pins.length
-      await act(async () => {
-        emit?.({ type: 'token', text: 'more text' })
-        await nextFrame()
-      })
-      expect(pins.length).toBe(pinned) // reading position respected — no yank
-      await act(async () => {
-        emit?.({ type: 'message', role: 'assistant', content: 'done', citations: [] })
-        emit?.({ type: 'done', conversationId: 'c1', turnId: 't1' })
-      })
-      sendMessage('follow up')
-      // A new row re-engages follow.
-      await waitFor(() => expect(pins.length).toBeGreaterThan(pinned))
-    } finally {
-      restore()
-    }
-  })
+  scrollFollowTests(stubScrollGeometry)
+  scrollReadingPositionTests(stubScrollGeometry)
 })
 
 describe('SolChat settled rows (S2 rendering)', () => {
@@ -374,193 +310,9 @@ describe('SolChat settled rows (S2 rendering)', () => {
 })
 
 describe('SolChat composer', () => {
-  it('posts action_mode from the mode badge and clears the input after send', async () => {
-    // SOLUSDEV-252 S3: the Guide/Do segmented control is now the shared mode
-    // badge (Guide | Build), the same one the SOL window header shows.
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-    const badge = screen.getByRole('button', { name: 'SOL action mode' })
-    expect(badge).toHaveTextContent('Build')
-    sendMessage('flash the board')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ actionMode: 'do', content: 'flash the board' })
-      )
-    )
-    expect(screen.getByPlaceholderText('Ask about a signal, a change, a part…')).toHaveValue('')
-    fireEvent.click(badge)
-    expect(badge).toHaveTextContent('Guide')
-    sendMessage('what does this pin do')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ actionMode: 'guide' })
-      )
-    )
-    // The toggle sticks for the surface rather than resetting per send.
-    expect(badge).toHaveTextContent('Guide')
-  })
-
-  it('sends think_harder from the composer toggle and resets it after send', async () => {
-    // S1-W3: one tier up for THIS message only — off by default, off again after.
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-    const toggle = screen.getByRole('switch', { name: 'Think harder' })
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-    sendMessage('what is I2C')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ thinkHarder: false }))
-    )
-    fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-checked', 'true')
-    sendMessage('why does the bus lock up under load')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          thinkHarder: true,
-          content: 'why does the bus lock up under load'
-        })
-      )
-    )
-    expect(screen.getByRole('switch', { name: 'Think harder' })).toHaveAttribute(
-      'aria-checked',
-      'false'
-    )
-  })
-
-  it('defaults to Do, so a mutating ask parks for approval instead of being refused', async () => {
-    // Guide refuses exactly the tools whose descriptor sets
-    // `requires_confirmation` (agent/modes.py) — precisely the set the CTR-03
-    // gate already parks. So defaulting to Guide added no safety: it replaced an
-    // approval card the user could act on with "switch to Do mode to operate the
-    // tool". The gate is unchanged and still parks every mutation; only the
-    // client default moves. `MessageCreate.action_mode` stays GUIDE for every
-    // non-UI caller.
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-
-    expect(screen.getByRole('button', { name: 'SOL action mode' })).toHaveTextContent('Build')
-
-    sendMessage('rename the mounting sketch')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
-    )
-  })
-
-  it('sends the ids of @-mentioned entities alongside the text', async () => {
-    // SOLUSDEV-168. The point of the `@` is that the user can name ONE node at
-    // any depth, from any integration, instead of hoping similarity search
-    // guesses which "bracket" they meant. The id travels beside the prose, so
-    // the composer's trim() and any later edit cannot invalidate an offset.
-    streamSolMessage.mockResolvedValue(undefined)
-    listEntities.mockResolvedValue([
-      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
-    ])
-    vi.useFakeTimers()
-    try {
-      render(<SolChat projectId="p1" />)
-      const box = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
-
-      fireEvent.change(box, { target: { value: 'will @cam' } })
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
-      })
-      expect(listEntities).toHaveBeenCalledWith('p1', { q: 'cam', limit: 8 })
-
-      fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
-      expect(box).toHaveValue('will @Camera Bracket ')
-
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
-    } finally {
-      vi.useRealTimers()
-    }
-
-    expect(streamSolMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ content: 'will @Camera Bracket', mentions: ['e-1'] })
-    )
-  })
-
-  it('drops a mention the user deleted before sending', async () => {
-    // The id list is not the source of truth — the surviving `@Name` in the text
-    // is. Otherwise deleting a mention would still ground SOL on it.
-    streamSolMessage.mockResolvedValue(undefined)
-    listEntities.mockResolvedValue([
-      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
-    ])
-    vi.useFakeTimers()
-    try {
-      render(<SolChat projectId="p1" />)
-      const box = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
-      fireEvent.change(box, { target: { value: 'will @cam' } })
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
-      })
-      fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
-
-      // The user changes their mind and rewrites the question.
-      fireEvent.change(box, { target: { value: 'never mind, why is the IMU noisy' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
-    } finally {
-      vi.useRealTimers()
-    }
-
-    expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ mentions: [] }))
-  })
-
-  it('does not open the picker for an email address', async () => {
-    listEntities.mockResolvedValue([])
-    vi.useFakeTimers()
-    try {
-      render(<SolChat projectId="p1" />)
-      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
-        target: { value: 'ask maya@example.com' }
-      })
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
-      })
-    } finally {
-      vi.useRealTimers()
-    }
-
-    expect(listEntities).not.toHaveBeenCalled()
-    expect(screen.queryByRole('listbox', { name: 'Graph entities' })).not.toBeInTheDocument()
-  })
-
-  it('still lets the user drop back to Guide for an explain-only turn', async () => {
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-    fireEvent.click(screen.getByRole('button', { name: 'SOL action mode' }))
-
-    sendMessage('what would changing this break')
-
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ actionMode: 'guide' })
-      )
-    )
-  })
-
-  it('wires the classify preview onto the input (debounced, never per keystroke)', async () => {
-    vi.useFakeTimers()
-    try {
-      render(<SolChat projectId="p1" />)
-      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
-        target: { value: 'why is the IMU noisy' }
-      })
-      expect(classifyQuery).not.toHaveBeenCalled()
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
-      })
-      expect(classifyQuery).toHaveBeenCalledWith({ query: 'why is the IMU noisy' })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
+  composerActionModesTests()
+  composerMentionSelectionTests()
+  composerRoutingTests()
 })
 
 // SOLUSDEV-252 S3, wireflow §C: the circled region is "the subject of the next
@@ -720,3 +472,272 @@ it('distinguishes duplicate code filenames by stored path and sends the chosen i
     vi.useRealTimers()
   }
 })
+
+function scrollFollowTests(
+  stubScrollGeometry: () => { pins: number[]; restore: () => void }
+): void {
+  it('follows the stream to the bottom as tokens grow a message in place', async () => {
+    // The regression this pins: token events mutate one item's CONTENT without
+    // changing the item COUNT, so a count-keyed effect never scrolls mid-stream
+    // and the reply runs off-screen.
+    const { pins, restore } = stubScrollGeometry()
+    try {
+      let emit:
+        | ((e: Parameters<Parameters<typeof streamSolMessage>[0]['onEvent']>[0]) => void)
+        | null = null
+      streamSolMessage.mockImplementation(async ({ onEvent }) => {
+        emit = onEvent
+      })
+      render(<SolChat projectId="p1" />)
+      sendMessage('why?')
+      await waitFor(() => expect(emit).not.toBeNull())
+      const pinsAfterSend = pins.length
+      expect(pinsAfterSend).toBeGreaterThan(0) // the send itself pinned to bottom
+      await act(async () => {
+        emit?.({ type: 'token', text: 'a long streamed line ' })
+        await nextFrame()
+      })
+      await act(async () => {
+        emit?.({ type: 'token', text: 'and another one' })
+        await nextFrame()
+      })
+      // Each token growth re-pinned the list (count never changed).
+      expect(pins.length).toBeGreaterThan(pinsAfterSend)
+      expect(pins.every((v) => v === 1000)).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+}
+
+function scrollReadingPositionTests(
+  stubScrollGeometry: () => { pins: number[]; restore: () => void }
+): void {
+  it('stops following when the user scrolls up to read, and resumes on a new row', async () => {
+    const { pins, restore } = stubScrollGeometry()
+    try {
+      let emit:
+        | ((e: Parameters<Parameters<typeof streamSolMessage>[0]['onEvent']>[0]) => void)
+        | null = null
+      streamSolMessage.mockImplementation(async ({ onEvent }) => {
+        emit = onEvent
+      })
+      render(<SolChat projectId="p1" />)
+      sendMessage('why?')
+      await waitFor(() => expect(emit).not.toBeNull())
+      // scrollTop reads 0 from the stub, so the list believes the user is
+      // 1000-0-200 = 800px above the bottom — far beyond the follow slack.
+      const list = screen.getByText('thinking…').parentElement?.parentElement as HTMLElement
+      fireEvent.scroll(list)
+      const pinned = pins.length
+      await act(async () => {
+        emit?.({ type: 'token', text: 'more text' })
+        await nextFrame()
+      })
+      expect(pins.length).toBe(pinned) // reading position respected — no yank
+      await act(async () => {
+        emit?.({ type: 'message', role: 'assistant', content: 'done', citations: [] })
+        emit?.({ type: 'done', conversationId: 'c1', turnId: 't1' })
+      })
+      sendMessage('follow up')
+      // A new row re-engages follow.
+      await waitFor(() => expect(pins.length).toBeGreaterThan(pinned))
+    } finally {
+      restore()
+    }
+  })
+}
+
+function composerActionModesTests(): void {
+  it('posts action_mode from the mode badge and clears the input after send', async () => {
+    // SOLUSDEV-252 S3: the Guide/Do segmented control is now the shared mode
+    // badge (Guide | Build), the same one the SOL window header shows.
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<SolChat projectId="p1" />)
+    const badge = screen.getByRole('button', { name: 'SOL action mode' })
+    expect(badge).toHaveTextContent('Build')
+    sendMessage('flash the board')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ actionMode: 'do', content: 'flash the board' })
+      )
+    )
+    expect(screen.getByPlaceholderText('Ask about a signal, a change, a part…')).toHaveValue('')
+    fireEvent.click(badge)
+    expect(badge).toHaveTextContent('Guide')
+    sendMessage('what does this pin do')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ actionMode: 'guide' })
+      )
+    )
+    // The toggle sticks for the surface rather than resetting per send.
+    expect(badge).toHaveTextContent('Guide')
+  })
+
+  it('sends think_harder from the composer toggle and resets it after send', async () => {
+    // S1-W3: one tier up for THIS message only — off by default, off again after.
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<SolChat projectId="p1" />)
+    const toggle = screen.getByRole('switch', { name: 'Think harder' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    sendMessage('what is I2C')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ thinkHarder: false }))
+    )
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    sendMessage('why does the bus lock up under load')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          thinkHarder: true,
+          content: 'why does the bus lock up under load'
+        })
+      )
+    )
+    expect(screen.getByRole('switch', { name: 'Think harder' })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
+  })
+
+  it('defaults to Do, so a mutating ask parks for approval instead of being refused', async () => {
+    // Guide refuses exactly the tools whose descriptor sets
+    // `requires_confirmation` (agent/modes.py) — precisely the set the CTR-03
+    // gate already parks. So defaulting to Guide added no safety: it replaced an
+    // approval card the user could act on with "switch to Do mode to operate the
+    // tool". The gate is unchanged and still parks every mutation; only the
+    // client default moves. `MessageCreate.action_mode` stays GUIDE for every
+    // non-UI caller.
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<SolChat projectId="p1" />)
+
+    expect(screen.getByRole('button', { name: 'SOL action mode' })).toHaveTextContent('Build')
+
+    sendMessage('rename the mounting sketch')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
+    )
+  })
+}
+
+function composerMentionSelectionTests(): void {
+  it('sends the ids of @-mentioned entities alongside the text', async () => {
+    // SOLUSDEV-168. The point of the `@` is that the user can name ONE node at
+    // any depth, from any integration, instead of hoping similarity search
+    // guesses which "bracket" they meant. The id travels beside the prose, so
+    // the composer's trim() and any later edit cannot invalidate an offset.
+    streamSolMessage.mockResolvedValue(undefined)
+    listEntities.mockResolvedValue([
+      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
+    ])
+    vi.useFakeTimers()
+    try {
+      render(<SolChat projectId="p1" />)
+      const box = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
+
+      fireEvent.change(box, { target: { value: 'will @cam' } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(listEntities).toHaveBeenCalledWith('p1', { q: 'cam', limit: 8 })
+
+      fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
+      expect(box).toHaveValue('will @Camera Bracket ')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(streamSolMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'will @Camera Bracket', mentions: ['e-1'] })
+    )
+  })
+
+  it('drops a mention the user deleted before sending', async () => {
+    // The id list is not the source of truth — the surviving `@Name` in the text
+    // is. Otherwise deleting a mention would still ground SOL on it.
+    streamSolMessage.mockResolvedValue(undefined)
+    listEntities.mockResolvedValue([
+      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
+    ])
+    vi.useFakeTimers()
+    try {
+      render(<SolChat projectId="p1" />)
+      const box = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
+      fireEvent.change(box, { target: { value: 'will @cam' } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
+
+      // The user changes their mind and rewrites the question.
+      fireEvent.change(box, { target: { value: 'never mind, why is the IMU noisy' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ mentions: [] }))
+  })
+}
+
+function composerRoutingTests(): void {
+  it('does not open the picker for an email address', async () => {
+    listEntities.mockResolvedValue([])
+    vi.useFakeTimers()
+    try {
+      render(<SolChat projectId="p1" />)
+      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
+        target: { value: 'ask maya@example.com' }
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(listEntities).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox', { name: 'Graph entities' })).not.toBeInTheDocument()
+  })
+
+  it('still lets the user drop back to Guide for an explain-only turn', async () => {
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<SolChat projectId="p1" />)
+    fireEvent.click(screen.getByRole('button', { name: 'SOL action mode' }))
+
+    sendMessage('what would changing this break')
+
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ actionMode: 'guide' })
+      )
+    )
+  })
+
+  it('wires the classify preview onto the input (debounced, never per keystroke)', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<SolChat projectId="p1" />)
+      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
+        target: { value: 'why is the IMU noisy' }
+      })
+      expect(classifyQuery).not.toHaveBeenCalled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(classifyQuery).toHaveBeenCalledWith({ query: 'why is the IMU noisy' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+}

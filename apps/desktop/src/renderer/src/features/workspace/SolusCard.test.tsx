@@ -52,7 +52,11 @@ describe('SolusCard', () => {
     vi.clearAllMocks()
     state.current = ready()
   })
+  solusNoteEditingTests()
+  solusNoteSafetyAndImportTests()
+})
 
+function solusNoteEditingTests(): void {
   it('asks for a project when none is open, and is honest when offline', () => {
     const { unmount } = render(<SolusCard projectId={null} projectName={null} />)
     expect(screen.getByText(/Open or switch to a project/)).toBeInTheDocument()
@@ -122,7 +126,9 @@ describe('SolusCard', () => {
       'new text'
     )
   })
+}
 
+function solusNoteSafetyAndImportTests(): void {
   it('deletes only on the second, confirming click', async () => {
     const file = entry({
       id: 'f1',
@@ -201,4 +207,4 @@ describe('SolusCard', () => {
     })
     expect(actions.importFile).toHaveBeenCalledWith('docs', picked)
   })
-})
+}

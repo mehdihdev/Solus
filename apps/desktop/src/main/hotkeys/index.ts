@@ -107,23 +107,14 @@ export function startHotkeys(deps: HotkeyDeps): HotkeysHandle {
   const { hook, state: hookState } = load(capabilities)
   const machine = createCtrlStateMachine()
 
-  // circle mode (fallback path, and Ctrl+Shift+C with the hook too)
-  let circle: CircleMode | null = null
-
-  const emitRegion = (path: Point[]): boolean => {
-    const a = analyse(path)
-    if (!isCircle(a)) return false
-    const display = deps.displayFor(a.centroid)
-    deps.onRegion(regionFor(a, display), display)
-    return true
-  }
+  const emitRegion = (path: Point[]): boolean => emitCircleRegion(deps, path)
 
   const sampler = createCursorSampler({
     getCursor: () => deps.getCursor(),
     now: () => deps.now(),
     scheduler: deps.scheduler,
     onSample: (t, at) =>
-      circle ? onCircleSample(t, at) : act(machine.feed({ type: 'cursor', t, at }))
+      circleMode.active() ? circleMode.sample(t, at) : act(machine.feed({ type: 'cursor', t, at }))
   })
 
   const act = (outputs: CtrlOutput[]): void => {
@@ -133,6 +124,70 @@ export function startHotkeys(deps: HotkeyDeps): HotkeysHandle {
     }
   }
 
+  const circleMode = createCircleMode(deps, machine, sampler, emitRegion, () => publish())
+  const enterCircleMode = circleMode.enter
+
+  const shortcuts = registerGlobalHotkeys(deps.globalShortcut, {
+    available: capabilities.globalShortcuts.status !== 'unavailable',
+    hookAvailable: hook !== null,
+    platform: capabilities.platform,
+    onToggleMode: () => deps.onToggleMode(),
+    onSummon: () => deps.onSummon(),
+    onCircleMode: enterCircleMode
+  })
+
+  hook?.onCtrlDown(() => {
+    act(machine.feed({ type: 'ctrlDown', t: deps.now(), at: deps.getCursor() }))
+    sampler.arm() // ponytail: 60 Hz from ctrlDown (travel decides tap vs gesture), off at ctrlUp
+  })
+  hook?.onCtrlUp(() => {
+    act(machine.feed({ type: 'ctrlUp', t: deps.now() }))
+    if (!circleMode.active()) sampler.disarm()
+  })
+  hook?.onOtherKeyDown(() => {
+    act(machine.feed({ type: 'otherKeyDown', t: deps.now() }))
+    if (!circleMode.active()) sampler.disarm()
+  })
+
+  const status = (): HotkeyStatus => {
+    const base = {
+      hook: hookState,
+      shortcuts: shortcuts.shortcuts,
+      mode: hook ? ('hook' as const) : ('fallback' as const),
+      circleModeActive: circleMode.active()
+    }
+    const extra = [
+      ...(capabilities.globalShortcuts.status !== 'available'
+        ? [capabilities.globalShortcuts.message]
+        : []),
+      ...shortcuts.messages
+    ]
+    return { ...base, summary: summaryFor(base, extra, capabilities.platform) }
+  }
+  const publish = (): void => deps.onStatus(status())
+  publish()
+
+  return {
+    status,
+    enterCircleMode,
+    stop() {
+      circleMode.clear()
+      sampler.disarm()
+      shortcuts.stop()
+      hook?.stop()
+    }
+  }
+}
+
+/** Own the bounded fallback stroke independently of native key events. */
+function createCircleMode(
+  deps: HotkeyDeps,
+  machine: ReturnType<typeof createCtrlStateMachine>,
+  sampler: ReturnType<typeof createCursorSampler>,
+  emitRegion: (path: Point[]) => boolean,
+  publish: () => void
+): { active(): boolean; enter(): void; sample(t: number, at: Point): void; clear(): void } {
+  let circle: CircleMode | null = null
   const exitCircleMode = (): void => {
     circle = null
     if (machine.phase() === 'idle') sampler.disarm()
@@ -169,54 +224,20 @@ export function startHotkeys(deps: HotkeyDeps): HotkeysHandle {
     publish()
   }
 
-  const shortcuts = registerGlobalHotkeys(deps.globalShortcut, {
-    available: capabilities.globalShortcuts.status !== 'unavailable',
-    hookAvailable: hook !== null,
-    platform: capabilities.platform,
-    onToggleMode: () => deps.onToggleMode(),
-    onSummon: () => deps.onSummon(),
-    onCircleMode: enterCircleMode
-  })
-
-  hook?.onCtrlDown(() => {
-    act(machine.feed({ type: 'ctrlDown', t: deps.now(), at: deps.getCursor() }))
-    sampler.arm() // ponytail: 60 Hz from ctrlDown (travel decides tap vs gesture), off at ctrlUp
-  })
-  hook?.onCtrlUp(() => {
-    act(machine.feed({ type: 'ctrlUp', t: deps.now() }))
-    if (!circle) sampler.disarm()
-  })
-  hook?.onOtherKeyDown(() => {
-    act(machine.feed({ type: 'otherKeyDown', t: deps.now() }))
-    if (!circle) sampler.disarm()
-  })
-
-  const status = (): HotkeyStatus => {
-    const base = {
-      hook: hookState,
-      shortcuts: shortcuts.shortcuts,
-      mode: hook ? ('hook' as const) : ('fallback' as const),
-      circleModeActive: circle !== null
-    }
-    const extra = [
-      ...(capabilities.globalShortcuts.status !== 'available'
-        ? [capabilities.globalShortcuts.message]
-        : []),
-      ...shortcuts.messages
-    ]
-    return { ...base, summary: summaryFor(base, extra, capabilities.platform) }
-  }
-  const publish = (): void => deps.onStatus(status())
-  publish()
-
   return {
-    status,
-    enterCircleMode,
-    stop() {
+    active: () => circle !== null,
+    enter: enterCircleMode,
+    sample: onCircleSample,
+    clear: () => {
       circle = null
-      sampler.disarm()
-      shortcuts.stop()
-      hook?.stop()
     }
   }
+}
+
+function emitCircleRegion(deps: HotkeyDeps, path: Point[]): boolean {
+  const a = analyse(path)
+  if (!isCircle(a)) return false
+  const display = deps.displayFor(a.centroid)
+  deps.onRegion(regionFor(a, display), display)
+  return true
 }

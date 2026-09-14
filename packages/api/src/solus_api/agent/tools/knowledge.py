@@ -40,7 +40,22 @@ logger = logging.getLogger("solus.agent.knowledge")
 #: vendor's own names (the seed catalogs under `toolkb/catalog/`); adding a row
 #: here is a data change, never a new mechanism.
 TOOL_CONTROLS: Final[dict[str, tuple[ToolFamily, str]]] = {
+    "isaac.start": (ToolFamily.ISAAC, "isaac.standalone.application"),
+    "code.git_commit": (ToolFamily.CODE, "code.git.commit"),
+    "code.git_push": (ToolFamily.CODE, "code.git.push"),
+    "code.arduino_prepare": (ToolFamily.CODE, "code.arduino.core_install"),
+    "code.arduino_compile": (ToolFamily.CODE, "code.arduino.compile"),
     "kicad.set_symbol_property": (ToolFamily.KICAD, "kicad.eeschema.edit_symbol_properties"),
+    "kicad.add_symbol": (ToolFamily.KICAD, "kicad.eeschema.interactive_drawing.place_symbol"),
+    "kicad.add_wire": (
+        ToolFamily.KICAD,
+        "kicad.eeschema.interactive_drawing_line_wire_bus.draw_wires",
+    ),
+    "kicad.add_net_label": (ToolFamily.KICAD, "kicad.eeschema.interactive_drawing.place_label"),
+    "kicad.mark_no_connect": (
+        ToolFamily.KICAD,
+        "kicad.eeschema.interactive_drawing.place_no_connect",
+    ),
     "onshape.set_variable": (ToolFamily.ONSHAPE, "onshape.partstudio.variable_table"),
     "onshape.add_feature": (ToolFamily.ONSHAPE, "onshape.partstudio.feature_list"),
     "onshape.update_feature": (ToolFamily.ONSHAPE, "onshape.partstudio.feature_list"),
@@ -100,7 +115,10 @@ async def load_knowledge_notes(
         entry = next((e for e in entries if _trusted(e)), None)
         if entry is None:
             continue
-        text = f"{entry.label}: {entry.description}"[:NOTE_CAP]
+        text = f"{entry.label}: {entry.description}"
+        if entry.shortcut:
+            text += f" Default shortcut: {entry.shortcut}."
+        text = text[:NOTE_CAP]
         notes[tool_name] = KnowledgeNote(control_id=control_id, text=text)
     return notes
 
@@ -125,11 +143,28 @@ def with_knowledge_notes(
     return tuple(out)
 
 
+def _code_verdict(result: ToolResult) -> Verdict | None:
+    """Repository/build failures do not contradict vendor documentation."""
+    value = result.value or {}
+    if not result.ok or value.get("ok") is not True:
+        return None
+    if any(value.get(flag) for flag in ("uncertain", "timed_out", "dry_run")):
+        return None
+    if "exit_code" in value:
+        exit_code = value["exit_code"]
+        if type(exit_code) is not int or exit_code != 0:
+            return None
+    return Verdict.CONFIRM
+
+
 def write_verdict(tool_name: str, result: ToolResult) -> Verdict | None:
     """What a confirmed write's result says about the CONTROL: CONFIRM when it
     landed, REJECT when the tool itself refused the change, None (abstain) when
     the failure was transport, entitlement or throttling — those say nothing
     about the vendor's documentation (security review H1)."""
+    mapped = TOOL_CONTROLS.get(tool_name)
+    if mapped is not None and mapped[0] is ToolFamily.CODE:
+        return _code_verdict(result)
     if result.ok:
         value = result.value if isinstance(result.value, dict) else {}
         if tool_name.startswith("kicad."):

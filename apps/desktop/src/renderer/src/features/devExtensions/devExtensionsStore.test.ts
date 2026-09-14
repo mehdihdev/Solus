@@ -287,6 +287,19 @@ describe('selectDevRegistration', () => {
 })
 
 describe('devExtensionsStore.acknowledge (SEC-H3)', () => {
+  registerDevAcknowledgementPersistenceTests()
+  registerDevPermissionReconsentTests()
+  registerDevAcknowledgementHydrationTests()
+})
+
+describe('useDevExtensionsStore', () => {
+  it('starts empty and is not persisted', () => {
+    expect(useDevExtensionsStore.getState().entries).toEqual({})
+    expect(localStorage.length).toBe(0)
+  })
+})
+
+function registerDevAcknowledgementPersistenceTests(): void {
   it('flips the entry, and the selector then yields the registration', async () => {
     const bridge = bridgeAnswering({ [BOM_PATH]: fakeManifest() })
     const store = storeWith(bridge)
@@ -331,7 +344,9 @@ describe('devExtensionsStore.acknowledge (SEC-H3)', () => {
 
     expect(store.getState().entries.bom.acknowledged).toBe(true)
   })
+}
 
+function registerDevPermissionReconsentTests(): void {
   it('a same-folder reload that widens declared permissions asks again (re-review MEDIUM)', async () => {
     const widened = fakeManifest({
       permissions: { scopes: ['graph.read', 'telemetry.read'], network: [] },
@@ -391,7 +406,9 @@ describe('devExtensionsStore.acknowledge (SEC-H3)', () => {
     await store.getState().reload('bom')
     expect(store.getState().entries.bom.acknowledged).toBe(true)
   })
+}
 
+function registerDevAcknowledgementHydrationTests(): void {
   it('hydrate never restores an acknowledgement: a restart asks again', async () => {
     const bridge = bridgeAnswering(
       { [BOM_PATH]: fakeManifest() },
@@ -405,11 +422,4 @@ describe('devExtensionsStore.acknowledge (SEC-H3)', () => {
 
     expect(store.getState().entries.bom.acknowledged).toBe(false)
   })
-})
-
-describe('useDevExtensionsStore', () => {
-  it('starts empty and is not persisted', () => {
-    expect(useDevExtensionsStore.getState().entries).toEqual({})
-    expect(localStorage.length).toBe(0)
-  })
-})
+}

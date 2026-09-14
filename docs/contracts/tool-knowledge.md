@@ -188,6 +188,13 @@ assert the enum vocabularies match member for member.
 Additive within the existing shape — a new `ToolFamily`, a new `ControlEffect`, a new closed
 enum — goes through a LANE 0 ticket like any other.
 
+SOLUSDEV-261 amendment, explicitly approved in chat on 2026-09-12: add `code` and
+`isaac` to `ToolFamily`, `terminal` to `UiSurface`, and `execute` to `ControlEffect`.
+These classify vendor documentation for code tools and external simulation. They
+add no command payload, source path, customer identifier or execution authority;
+the existing closed fields, prose validation and ingestion guard still apply.
+Python/TypeScript vocabularies and persisted CHECK constraints must change together.
+
 **Anything that widens what the type can hold is a security change, not a contract change.**
 A new free-text field, an index signature, an untyped map, an id of anything customer-owned,
 or a relaxation of the rejection patterns goes to a human before it is written (CLAUDE.md §7:

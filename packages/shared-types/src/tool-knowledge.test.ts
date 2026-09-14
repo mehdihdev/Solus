@@ -115,7 +115,6 @@ describe("parseToolKnowledge", () => {
   ])("rejects a %s field outright", (field, value) => {
     expect(() => parseToolKnowledge({ ...FIXTURE, [field]: value })).toThrow();
   });
-
 });
 
 describe("parseToolKnowledge — the traps", () => {
@@ -183,9 +182,15 @@ describe("parseToolKnowledge — the traps", () => {
 describe("customer content the review actually got through", () => {
   test.each([
     ["a net description", "Net MOTOR_PWM_1 connects U3 pin 14 to Q2 gate"],
-    ["an assembly hierarchy", "Chassis/DriveArm/Gripper_v3/FingerLeft revision 7"],
+    [
+      "an assembly hierarchy",
+      "Chassis/DriveArm/Gripper_v3/FingerLeft revision 7",
+    ],
     ["a base64 blob", "U29sdXNQcm9wcmlldGFyeVNjaGVtYXRpY0R1bXBWMQ".repeat(6)],
-    ["units not in the old allowlist", "Motor rated 250W at 3000RPM, 12psi clamp, 40Hz loop"],
+    [
+      "units not in the old allowlist",
+      "Motor rated 250W at 3000RPM, 12psi clamp, 40Hz loop",
+    ],
     ["a homoglyph path", "／home／mehdi／robot／chassis․f3d"],
     ["a drive-less windows path", "Users\\mehdi\\Documents\\robot\\chassis"],
     ["mAh", "Battery pack 2200mAh"],
@@ -206,7 +211,9 @@ describe("the two languages cannot drift again", () => {
   test("the pattern list is loaded from one shared file, not duplicated", async () => {
     // The TS list was missing AWG while Python had it — a security filter kept in
     // two hand-maintained copies. The Python mirror reads this same file.
-    const shapes = await import("../fixtures/tool-knowledge/customer-shapes.json");
+    const shapes = await import(
+      "../fixtures/tool-knowledge/customer-shapes.json"
+    );
     expect(shapes.default.patterns.length).toBeGreaterThan(8);
     expect(JSON.stringify(shapes.default.patterns)).toContain("AWG");
   });
@@ -217,7 +224,9 @@ describe("bounded inputs", () => {
     // 83 chars of "1  1  1…!" took 2.4 SECONDS against the old ambiguous regex.
     const evil = "1" + "  1".repeat(30) + "!";
     const started = Date.now();
-    expect(() => parseToolKnowledge({ ...FIXTURE, version_range: evil })).toThrow();
+    expect(() =>
+      parseToolKnowledge({ ...FIXTURE, version_range: evil }),
+    ).toThrow();
     expect(Date.now() - started).toBeLessThan(50);
   });
 
@@ -225,7 +234,10 @@ describe("bounded inputs", () => {
     // 5000 segments × 400 chars parsed clean in TS and would 422 at the API.
     const long = Array.from({ length: 9 }, (_, i) => `Menu${i}`);
     expect(() =>
-      parseToolKnowledge({ ...FIXTURE, invocation: { menu_path: long, shortcut: null } }),
+      parseToolKnowledge({
+        ...FIXTURE,
+        invocation: { menu_path: long, shortcut: null },
+      }),
     ).toThrow(/segments/);
   });
 
@@ -246,7 +258,27 @@ describe("bounded inputs", () => {
 
   test("a locator cannot be infinite", () => {
     expect(() =>
-      parseToolKnowledge({ ...FIXTURE, locator: { x: 0, y: 0, w: Infinity, h: 1 } }),
+      parseToolKnowledge({
+        ...FIXTURE,
+        locator: { x: 0, y: 0, w: Infinity, h: 1 },
+      }),
     ).toThrow(/finite/);
   });
 });
+
+test.each(["code", "isaac"])(
+  "execution knowledge for %s retains the closed boundary",
+  (tool) => {
+    const record = { ...FIXTURE, tool, surface: "terminal", effect: "execute" };
+    expect(parseToolKnowledge(record).tool).toBe(tool);
+    expect(() =>
+      parseToolKnowledge({ ...record, command: "arbitrary input" }),
+    ).toThrow();
+    expect(() =>
+      parseToolKnowledge({
+        ...record,
+        description: "/home/customer/private.ino",
+      }),
+    ).toThrow();
+  },
+);

@@ -51,7 +51,7 @@ def test_provider_metadata() -> None:
     assert connector.auth_kind is AuthKind.NONE
     assert connector.supports_token_connect is False
     # The netlist export and the board file are the two design inputs (§5.2/§5.2a).
-    assert connector.config_fields == ("export", "board")
+    assert connector.config_fields == ("export", "board", "project_path")
 
 
 async def test_sync_maps_components_nets_and_connectivity() -> None:

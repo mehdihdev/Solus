@@ -22,6 +22,7 @@ import {
 import * as accountsHook from './useAccountConnections'
 import * as sourcesHook from '../project/useProjectSources'
 import type { Source } from '../../lib/api/resources'
+import * as desktopBridge from '../../lib/desktopBridge'
 import * as catalogHook from '../onboarding/useIntegrationCatalog'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import type { Connection, LegacyConnection } from '../../lib/api/resources'
@@ -256,12 +257,151 @@ describe('ConnectedAccountsCard', () => {
 })
 
 describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', () => {
+  accountGrantScopeTests()
+  accountGrantMoveConfirmationTests()
+  projectToolConnectionsTests()
+  accountToolGuidanceTests()
+})
+
+describe('copy helpers', () => {
+  it('usageText counts beyond two projects', () => {
+    expect(usageText({ ...LINKED, projects: [] })).toBe('Not used by any project yet')
+    expect(usageText(LINKED)).toBe('Used in Rover and Arm')
+    expect(
+      usageText({ ...LINKED, projects: [...LINKED.projects, { project_id: 'p3', name: 'Leg' }] })
+    ).toBe('Used in 3 projects')
+  })
+
+  it('scopeText and reauthText say only what is known', () => {
+    expect(scopeText(LINKED)).toBe('Read only')
+    expect(scopeText({ ...LINKED, access: 'write' })).toBe('Read and edit')
+    expect(scopeText({ ...LINKED, access: null })).toBe('Access level not recorded')
+    expect(reauthText(LINKED)).toBeNull()
+    expect(legacyText(LEGACY)).toMatch(/Connected in Rover before/)
+    expect(legacyText({ ...LEGACY, projects: [] })).toMatch(/Connected in a project/)
+    expect(
+      legacyText({ ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] })
+    ).toMatch(/Rover and Arm.*those projects keep syncing/)
+    expect(legacyText({ ...LEGACY, claimable_connection_id: 'c1' })).toMatch(
+      /linked account matches/
+    )
+    expect(moveDetail('Onshape', LEGACY, LINKED)).toMatch(
+      /Rover will use your linked Onshape account \(read only access\)/
+    )
+    expect(moveDetail('Onshape', LEGACY, { ...LINKED, access: 'write' })).toMatch(
+      /\(read and edit access\)/
+    )
+    expect(
+      moveDetail(
+        'Onshape',
+        { ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] },
+        LINKED
+      )
+    ).toMatch(/Rover and Arm will use.*Each project's own Onshape token/)
+    expect(reauthText({ ...LINKED, status: 'error', needs_reauth: 'token_error' })).toMatch(
+      /last sign-in failed/
+    )
+  })
+
+  it('revokeDetail is honest about what is lost', () => {
+    expect(revokeDetail('Onshape', { ...LINKED, projects: [] })).toContain('No project uses it')
+    expect(revokeDetail('Onshape', LINKED)).toContain('disconnects Onshape in Rover, Arm')
+  })
+})
+
+describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () => {
+  accountQuotaDisplayTests()
+  accountHealthRecoveryTests()
+})
+
+describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
+  const GITHUB: CatalogEntry = {
+    id: 'github',
+    name: 'GitHub',
+    kind: 'Code',
+    mark: 'GH',
+    mode: 'oauth',
+    configFields: ['repo', 'branch'],
+    selection: null,
+    accessModes: null,
+    hosted: null
+  }
+  const FUSION: CatalogEntry = {
+    id: 'fusion',
+    name: 'Fusion',
+    kind: 'Local tool — companion bridge',
+    mark: 'Fu',
+    mode: 'local-bridge',
+    configFields: [],
+    selection: null,
+    accessModes: null,
+    hosted: null
+  }
+  accountDomainNavigationTests(GITHUB, FUSION)
+  accountDomainClassificationTests()
+})
+
+it('disables Fusion on Linux even with the companion offline', () => {
+  vi.spyOn(desktopBridge, 'getDesktopPlatform').mockReturnValue('linux')
+  vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([
+    {
+      id: 'fusion',
+      name: 'Fusion',
+      kind: 'Local tool',
+      mark: 'Fu',
+      mode: 'local-bridge',
+      configFields: [],
+      selection: null,
+      accessModes: null,
+      hosted: null,
+      localTool: {
+        type: 'fusion',
+        display_name: 'Fusion',
+        hosting: 'vendor-run',
+        url_host: '127.0.0.1:27182',
+        connect_notice: 'Enable Fusion MCP',
+        requires: 'companion',
+        supported_platforms: ['darwin', 'win32']
+      }
+    }
+  ])
+  mockAccounts()
+  render(<ConnectedAccountsCard />)
+  expect(screen.getByRole('button', { name: 'Connect for Fusion' })).toBeDisabled()
+  expect(screen.getByText('Fusion is not available on Linux')).toBeInTheDocument()
+  expect(screen.queryByText('Companion offline')).not.toBeInTheDocument()
+})
+
+it.each(['degraded', 'exhausted'] as const)(
+  'offers account reauthorization at quota status %s without revoking the grant',
+  async (status) => {
+    const accounts = mockAccounts({
+      connections: [
+        {
+          ...LINKED,
+          health: 'degraded',
+          quota: { status, used: 1800, allowance: 1800, estimated: true }
+        }
+      ]
+    })
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Re-authorize Onshape' }))
+    const dialog = screen.getByRole('dialog', { name: 'Connect Onshape' })
+    const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((node) => node.textContent)
+    expect(steps).toEqual(['Sign in'])
+    expect(accounts.revoke).not.toHaveBeenCalled()
+    expect(accounts.refresh).not.toHaveBeenCalled()
+    expect(screen.getByTestId('quota-note')).toBeInTheDocument()
+  }
+)
+
+function accountGrantScopeTests(): void {
   it('states the scope of every linked account plainly', () => {
     mockAccounts({ connections: [LINKED, { ...LINKED, id: 'c2', access: 'write' }] })
     render(<ConnectedAccountsCard />)
     expect(screen.getByText(/Used in Rover and Arm · Read only/)).toBeInTheDocument()
     expect(screen.getByText(/Used in Rover and Arm · Read and edit/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /re-authorize/i })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /re-authorize/i })).toHaveLength(2)
   })
 
   it('lists a legacy project-scoped grant as "sign in once to move it", unmoved and honest', async () => {
@@ -288,7 +428,9 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByRole('button', { name: 'Revoke Onshape' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Sign in to move Onshape' })).toBeInTheDocument()
   })
+}
 
+function accountGrantMoveConfirmationTests(): void {
   it('offers the move as a confirmed action naming the project and the grant once the account is proved', async () => {
     const accounts = mockAccounts({
       connections: [LINKED],
@@ -350,7 +492,9 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     await userEvent.click(screen.getByRole('button', { name: 'Move' }))
     expect(screen.getByText(/Couldn't move this Onshape connection/)).toBeInTheDocument()
   })
+}
 
+function projectToolConnectionsTests(): void {
   it('a committed-export tool offers Choose file as its next step, into the current project', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard currentProject={ROVER} />)
@@ -364,7 +508,9 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     const dialog = screen.getByRole('dialog', { name: 'Connect KiCad' })
     const steps = Array.from(dialog.querySelectorAll('[data-step]')).map((n) => n.textContent)
     expect(steps).toEqual(['Choose export', 'Build graph'])
-    expect(within(dialog).getByRole('button', { name: /choose netlist \/ board file/i })).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: /choose netlist \/ board file/i })
+    ).toBeInTheDocument()
   })
 
   it('without a current project a project-bound step stays visible but disabled, and says why', async () => {
@@ -410,7 +556,9 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
     expect(sources.actions.disconnect).toHaveBeenCalledWith('s1')
   })
+}
 
+function accountToolGuidanceTests(): void {
   it('a linked OAuth account moves the next step on to picking, on the current project, without a second sign-in', async () => {
     mockAccounts({ connections: [LINKED] })
     render(<ConnectedAccountsCard currentProject={ROVER} />)
@@ -474,55 +622,9 @@ describe('ConnectedAccountsCard — scope and re-consent (SOLUSDEV-242 / H2)', (
     expect(screen.getByRole('note')).toHaveTextContent('token revoked. Re-authorize to reconnect.')
     expect(screen.getByRole('button', { name: 'Re-authorize Onshape' })).toBeInTheDocument()
   })
-})
+}
 
-describe('copy helpers', () => {
-  it('usageText counts beyond two projects', () => {
-    expect(usageText({ ...LINKED, projects: [] })).toBe('Not used by any project yet')
-    expect(usageText(LINKED)).toBe('Used in Rover and Arm')
-    expect(
-      usageText({ ...LINKED, projects: [...LINKED.projects, { project_id: 'p3', name: 'Leg' }] })
-    ).toBe('Used in 3 projects')
-  })
-
-  it('scopeText and reauthText say only what is known', () => {
-    expect(scopeText(LINKED)).toBe('Read only')
-    expect(scopeText({ ...LINKED, access: 'write' })).toBe('Read and edit')
-    expect(scopeText({ ...LINKED, access: null })).toBe('Access level not recorded')
-    expect(reauthText(LINKED)).toBeNull()
-    expect(legacyText(LEGACY)).toMatch(/Connected in Rover before/)
-    expect(legacyText({ ...LEGACY, projects: [] })).toMatch(/Connected in a project/)
-    expect(
-      legacyText({ ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] })
-    ).toMatch(/Rover and Arm.*those projects keep syncing/)
-    expect(legacyText({ ...LEGACY, claimable_connection_id: 'c1' })).toMatch(
-      /linked account matches/
-    )
-    expect(moveDetail('Onshape', LEGACY, LINKED)).toMatch(
-      /Rover will use your linked Onshape account \(read only access\)/
-    )
-    expect(moveDetail('Onshape', LEGACY, { ...LINKED, access: 'write' })).toMatch(
-      /\(read and edit access\)/
-    )
-    expect(
-      moveDetail(
-        'Onshape',
-        { ...LEGACY, projects: [...LEGACY.projects, { project_id: 'p2', name: 'Arm' }] },
-        LINKED
-      )
-    ).toMatch(/Rover and Arm will use.*Each project's own Onshape token/)
-    expect(reauthText({ ...LINKED, status: 'error', needs_reauth: 'token_error' })).toMatch(
-      /last sign-in failed/
-    )
-  })
-
-  it('revokeDetail is honest about what is lost', () => {
-    expect(revokeDetail('Onshape', { ...LINKED, projects: [] })).toContain('No project uses it')
-    expect(revokeDetail('Onshape', LINKED)).toContain('disconnects Onshape in Rover, Arm')
-  })
-})
-
-describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () => {
+function accountQuotaDisplayTests(): void {
   it('a healthy metered account states its estimated position, quietly', () => {
     mockAccounts({
       connections: [
@@ -535,7 +637,7 @@ describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () =>
       screen.getByText('At least 120 of 1,800 Onshape calls this year (estimate)')
     ).toBeInTheDocument()
     expect(screen.queryByTestId('quota-note')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Re-authorize Onshape' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Re-authorize Onshape' })).toBeInTheDocument()
   })
 
   it('an unmetered account says nothing about quota', () => {
@@ -565,7 +667,7 @@ describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () =>
     expect(note).toHaveTextContent('your own Sync now still reaches Onshape')
     expect(note).toHaveTextContent('cache-only reads and starts no new syncs')
     expect(screen.getByTestId('quota-bar')).toHaveStyle({ width: '80%' })
-    expect(screen.queryByRole('button', { name: 'Re-authorize Onshape' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Re-authorize Onshape' })).toBeInTheDocument()
   })
 
   it('at the wall it explains cache-only mode rather than showing an error', () => {
@@ -583,12 +685,14 @@ describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () =>
     expect(note).toHaveTextContent('cache-only mode')
     expect(note).toHaveTextContent('documents already synced stay readable')
     expect(note).toHaveTextContent('not an error')
-    // No error framing anywhere: no sign-in prompt, no failure wording.
-    expect(screen.queryByText(/sign-in failed|rejected|re-authorize/i)).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Re-authorize Onshape' })).toBeNull()
+    // Recovery remains available without presenting quota exhaustion as an auth error.
+    expect(screen.queryByText(/sign-in failed|rejected/i)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Re-authorize Onshape' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Revoke Onshape' })).toBeInTheDocument()
   })
+}
 
+function accountHealthRecoveryTests(): void {
   it('an expired token offers reconnect in place even when the grant row is still connected', async () => {
     const accounts = mockAccounts({ connections: [{ ...LINKED, health: 'token_expired' }] })
     render(<ConnectedAccountsCard />)
@@ -609,32 +713,9 @@ describe('ConnectedAccountsCard — health and quota (SOLUSDEV-244 / H4)', () =>
     expect(quotaText(degraded, 'Onshape')).toMatch(/\(estimate\)$/)
     expect(quotaText(degraded, 'Onshape')).not.toMatch(/remaining|left/)
   })
-})
+}
 
-describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
-  const GITHUB: CatalogEntry = {
-    id: 'github',
-    name: 'GitHub',
-    kind: 'Code',
-    mark: 'GH',
-    mode: 'oauth',
-    configFields: ['repo', 'branch'],
-    selection: null,
-    accessModes: null,
-    hosted: null
-  }
-  const FUSION: CatalogEntry = {
-    id: 'fusion',
-    name: 'Fusion',
-    kind: 'Local tool — companion bridge',
-    mark: 'Fu',
-    mode: 'local-bridge',
-    configFields: [],
-    selection: null,
-    accessModes: null,
-    hosted: null
-  }
-
+function accountDomainNavigationTests(GITHUB: CatalogEntry, FUSION: CatalogEntry): void {
   it('shows the four domains in order, Mechanical selected first', () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
@@ -665,7 +746,9 @@ describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
     expect(screen.getAllByRole('tab')).toHaveLength(4) // the tabs remain
     expect(screen.queryByRole('button', { name: /connect|attach|revoke/i })).toBeNull()
   })
+}
 
+function accountDomainClassificationTests(): void {
   it('an empty domain says so instead of showing an empty box', async () => {
     vi.mocked(catalogHook.useIntegrationCatalog).mockReturnValue([ONSHAPE])
     mockAccounts()
@@ -705,4 +788,4 @@ describe('ConnectedAccountsCard — domain tabs (SOLUSDEV-244)', () => {
     expect(accountDomain({ id: 'brand-new-tool' })).toBe('software')
     expect(emptyDomainText('electrical')).toMatch(/No electrical tools/)
   })
-})
+}

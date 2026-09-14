@@ -51,6 +51,12 @@ function stubApi(overrides: Partial<EdaConnectApi> = {}): EdaConnectApi {
   return {
     createSource: vi.fn(async () => source()),
     triggerSync: vi.fn(async () => ({ job_id: 'j1', status: 'queued' })),
+    getJob: vi.fn(async () => ({
+      id: 'j1',
+      project_id: 'p1',
+      status: 'succeeded' as const,
+      error: null
+    })),
     getSyncs: vi.fn(async () => [sync()]),
     getSource: vi.fn(async () => source({ entity_count: 6 })),
     ...overrides
@@ -65,6 +71,16 @@ function collect(): { states: ConnectionState[]; onProgress: (s: ConnectionState
 const noSleep = async (): Promise<void> => {}
 
 describe('runEdaConnect', () => {
+  registerExportSourceCreationTests()
+
+  registerCombinedExportSyncTests()
+
+  registerExportBoundsTests()
+
+  registerExportSyncFailuresTests()
+})
+
+function registerExportSourceCreationTests(): void {
   it('creates the source with the netlist as config.export, syncs, and reports done', async () => {
     const api = stubApi()
     const { states, onProgress } = collect()
@@ -114,7 +130,9 @@ describe('runEdaConnect', () => {
       'done'
     ])
   })
+}
 
+function registerCombinedExportSyncTests(): void {
   it('sends netlist and board together, one key each, named after the netlist', async () => {
     const api = stubApi()
     const { states, onProgress } = collect()
@@ -157,7 +175,13 @@ describe('runEdaConnect', () => {
   it('surfaces the backend sync error message verbatim when the sync fails', async () => {
     const message = 'kicad: export_format_unsupported — the file is a schematic.'
     const api = stubApi({
-      getSyncs: vi.fn(async () => [sync({ status: 'failed', errors: [{ item: 'sync', message }] })])
+      getJob: vi.fn(async () => ({
+        id: 'j1',
+        project_id: 'p1',
+        status: 'failed' as const,
+        error: { message }
+      })),
+      getSyncs: vi.fn(async () => [sync({ status: 'succeeded' })])
     })
     const { states, onProgress } = collect()
 
@@ -169,7 +193,9 @@ describe('runEdaConnect', () => {
     expect(result.error).toContain('export_format_unsupported')
     expect(states[states.length - 1]).toEqual({ phase: 'error', error: message, sourceId: 's1' })
   })
+}
 
+function registerExportBoundsTests(): void {
   it('refuses a pick with neither netlist nor board without calling the API', async () => {
     const api = stubApi()
     const { states, onProgress } = collect()
@@ -233,9 +259,18 @@ describe('runEdaConnect', () => {
     expect(result.error).toMatch(/too large/i)
     expect(api.createSource).not.toHaveBeenCalled()
   })
+}
 
+function registerExportSyncFailuresTests(): void {
   it('reports a timeout when the sync never reaches a terminal state', async () => {
-    const api = stubApi({ getSyncs: vi.fn(async () => [sync({ status: 'running' })]) })
+    const api = stubApi({
+      getJob: vi.fn(async () => ({
+        id: 'j1',
+        project_id: 'p1',
+        status: 'running' as const,
+        error: null
+      }))
+    })
     const { onProgress } = collect()
 
     const result = await runEdaConnect({ api, onProgress, sleep: noSleep }, 'p1', 'kicad', {
@@ -262,4 +297,4 @@ describe('runEdaConnect', () => {
     expect(result.error).toContain("No connector for 'kicad'")
     expect(states[states.length - 1].phase).toBe('error')
   })
-})
+}

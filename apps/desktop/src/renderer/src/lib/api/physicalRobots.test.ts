@@ -23,6 +23,12 @@ const robot: Entity = {
 const client = (): ApiClient => ({ request: vi.fn(), requestPage: vi.fn() })
 
 describe('physical robot API', () => {
+  registerRobotMutationTests()
+
+  registerRetainedPartPaginationTests()
+})
+
+function registerRobotMutationTests(): void {
   it('creates independent default-name instances without an ensure or provider request', async () => {
     const api = client()
     vi.mocked(api.request)
@@ -88,7 +94,9 @@ describe('physical robot API', () => {
     })
     expect(api.request).toHaveBeenCalledTimes(1)
   })
+}
 
+function registerRetainedPartPaginationTests(): void {
   it('reads bounded persistent orphan pages and escapes the cursor', async () => {
     const api = client()
     const page = { data: [{ id: 'part' }], meta: { has_next: false } }
@@ -102,4 +110,4 @@ describe('physical robot API', () => {
       '/projects/p1/entities?orphaned_from_robot=true&limit=24&cursor=next%2F%2B%3F'
     )
   })
-})
+}

@@ -266,11 +266,14 @@ def test_only_the_gated_dispatcher_reaches_registry_invoke() -> None:
         "agent/confirmations.py",
         "agent/tools/registry.py",
     }
+    # These owned wrappers invoke only their privately scoped native capabilities;
+    # they are not allowed to invoke the public registry or expose raw fallbacks.
+    adapters = {"agent/tools/isaac_tools.py", "agent/tools/machine_writes.py"}
 
     offenders = [
         f"{path.relative_to(root)}:{match}"
         for path in (root / "agent").rglob("*.py")
-        if str(path.relative_to(root)) not in allowed
+        if str(path.relative_to(root)) not in allowed | adapters
         for match in re.findall(r"^.*\.invoke\(.*$", path.read_text(encoding="utf-8"), re.M)
     ]
     # And the original repo-wide registry.invoke sweep stays, unshrunk.
@@ -504,6 +507,66 @@ def _machine_spec(tool: str, *, gated: bool = False) -> Any:
 
 def _names(registry: Any) -> set[str]:
     return {descriptor.name for descriptor in registry.list()}
+
+
+@pytest.mark.parametrize("name", ["load_model", "unknown_internal_operation"])
+async def test_isaac_internal_inventory_never_becomes_a_raw_tool(
+    engine: AsyncEngine, name: str
+) -> None:
+    from solus_api.bridge.allowlist import BridgeToolSpec
+
+    template = _machine_spec(name, gated=True)
+    spec = BridgeToolSpec(
+        server="isaac",
+        remote_name=name,
+        descriptor=template.descriptor.model_copy(update={"name": f"isaac.{name}"}),
+    )
+    bridge, scope = _bridge_with(spec)
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        scope[2],
+        bridge=bridge,
+        user_id=scope[0],
+        team_id=scope[1],
+    )
+    assert f"isaac.{name}" not in _names(registry)
+
+
+async def test_isaac_registry_exposes_only_owned_graph_schema(engine: AsyncEngine) -> None:
+    from solus_api.bridge.allowlist import BridgeToolSpec, requires_complete_preview
+
+    specs = []
+    for name in ("status", "load_model"):
+        template = _machine_spec(name, gated=True)
+        specs.append(
+            BridgeToolSpec(
+                server="isaac",
+                remote_name=name,
+                descriptor=template.descriptor.model_copy(update={"name": f"isaac.{name}"}),
+            )
+        )
+    bridge, scope = _bridge_with(*specs)
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        scope[2],
+        bridge=bridge,
+        user_id=scope[0],
+        team_id=scope[1],
+    )
+    descriptors = {d.name: d for d in registry.list()}
+    load = descriptors["isaac.load_model"]
+    assert load.requires_confirmation
+    assert set(load.params["properties"]) == {"session_id", "model_entity_id", "dry_run"}
+    assert not descriptors["isaac.status"].requires_confirmation
+    for name in (
+        "start",
+        "stop",
+        "load_model",
+        "set_joint_limits",
+        "set_sensor_pose",
+        "run_routine",
+    ):
+        assert requires_complete_preview(f"isaac.{name}")
 
 
 async def test_link_environment_appears_only_with_the_machine_read_on_the_bridge(

@@ -103,3 +103,10 @@ describe('useBridgeStatus', () => {
     }
   })
 })
+
+it('keeps OS-incompatible servers neutral without hiding real launch failures', () => {
+  const unavailable = { ...server('not_launched'), detail: 'Fusion is not available on Linux' }
+  expect(pillState(connected([unavailable]))).toBe('ready')
+  expect(pillState(connected([unavailable, server('error')]))).toBe('attention')
+  expect(pillState(connected([{ ...unavailable, detail: 'failed to start' }]))).toBe('attention')
+})

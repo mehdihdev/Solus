@@ -14,6 +14,11 @@ const VALID_ICON =
   )
 
 describe('reduceSvg', () => {
+  registerSvgNormalizationTests()
+  registerSvgSecurityTests()
+})
+
+function registerSvgNormalizationTests(): void {
   it('reduces a valid icon: colours → currentColor, none survives, title kept, declaration dropped', () => {
     const out = reduceSvg(VALID_ICON)
     expect(out).not.toBeNull()
@@ -63,7 +68,9 @@ describe('reduceSvg', () => {
     ).toBeNull()
     expect(reduceSvg('<?xml version="1.0"?>' + svg('<path d="M0 0"/>'))).not.toBeNull()
   })
+}
 
+function registerSvgSecurityTests(): void {
   it.each([
     ['script', '<script>alert(1)</script>'],
     ['foreignObject', '<foreignObject><div>x</div></foreignObject>'],
@@ -122,4 +129,4 @@ describe('reduceSvg', () => {
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0"/></svg>'
     )
   })
-})
+}

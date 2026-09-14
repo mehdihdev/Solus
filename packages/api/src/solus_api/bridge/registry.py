@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from solus_api.agent.command_output import OutputSink
 from solus_api.agent.tools.shapes import ToolResult
 from solus_api.bridge.allowlist import BridgeToolSpec
 from solus_api.bridge.frames import ArtifactChunkData, StatusData
@@ -49,6 +50,10 @@ class BridgeSession:
     #: scope field — never inferred from a frame.
     may_write: bool = False
     inflight: dict[str, asyncio.Future[ToolResult]] = field(default_factory=dict)
+    # Exact safe requested paths, scoped to one machine.write_file invocation.
+    write_paths: dict[str, str] = field(default_factory=dict)
+    output_sinks: dict[str, OutputSink] = field(default_factory=dict)
+    output_limits: dict[str, tuple[int, int]] = field(default_factory=dict)
     # BRG-03: the last status snapshot (advisory, UI-facing; dies with the session).
     last_status: StatusData | None = None
     status_updated_at: datetime | None = None

@@ -24,6 +24,12 @@ beforeEach(() => {
 })
 
 describe('useBom', () => {
+  registerBomLoadingAndWritesTests()
+
+  registerBomRefusalsAndExportTests()
+})
+
+function registerBomLoadingAndWritesTests(): void {
   it('loads the view and exposes it', async () => {
     vi.mocked(bomApi.getBomView).mockResolvedValue(bomView())
     const { result } = renderHook(() => useBom('p1'))
@@ -82,7 +88,9 @@ describe('useBom', () => {
     })
     expect(bomApi.getBomView).toHaveBeenCalledTimes(4)
   })
+}
 
+function registerBomRefusalsAndExportTests(): void {
   it('reports a refused write with the server message, never throws', async () => {
     vi.mocked(bomApi.getBomView).mockResolvedValue(bomView())
     vi.mocked(bomApi.patchBomRow).mockRejectedValue(
@@ -108,4 +116,4 @@ describe('useBom', () => {
     })
     expect(save).toHaveBeenCalledWith('bom-rover.csv', 'key,kind\r\n')
   })
-})
+}

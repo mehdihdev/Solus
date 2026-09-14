@@ -121,3 +121,10 @@ def test_a_new_hosted_server_is_data_only() -> None:
     assert other.consent_summary("wreck_thing") == "Wreck — `wreck_thing`"
     # A read-only tool with no consent text still gets a Solus-authored sentence.
     assert other.consent_summary("read_thing") == "Run `vendor_x` — `read_thing`"
+
+
+def test_connect_notice_does_not_claim_a_customer_annual_api_allocation():
+    from solus_api.agent.tools.remote_mcp import FS_MCP
+
+    assert "consumes your account's API allocation" not in FS_MCP.connect_notice
+    assert "service limits" in FS_MCP.connect_notice

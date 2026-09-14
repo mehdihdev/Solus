@@ -87,6 +87,11 @@ beforeEach(() => {
 })
 
 describe('switchWorkspaceProject', () => {
+  projectSwitchIsolationTests()
+  projectSwitchStateAndEventsTests()
+})
+
+function projectSwitchIsolationTests(): void {
   it('swaps the project and its team, and clears everything scoped to the previous one', () => {
     seedProjectA()
     switchWorkspaceProject(B, 'home')
@@ -130,7 +135,9 @@ describe('switchWorkspaceProject', () => {
     switchWorkspaceProject(B, 'home')
     expect(useSolWindowStore.getState().region).toBeNull()
   })
+}
 
+function projectSwitchStateAndEventsTests(): void {
   it('switching to no project clears the same state', () => {
     seedProjectA()
     switchWorkspaceProject(null, 'validation')
@@ -181,4 +188,4 @@ describe('switchWorkspaceProject', () => {
     switchWorkspaceProject(B, 'home')
     expect(vi.mocked(ext.postDataEvents)).not.toHaveBeenCalled()
   })
-})
+}

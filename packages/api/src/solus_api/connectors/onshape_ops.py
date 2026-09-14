@@ -33,6 +33,7 @@ write is recoverable; a corrupted model is not.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -47,6 +48,9 @@ from solus_api.connectors.onshape import (
     OnshapeConnector,
     element_base_path,
 )
+from solus_api.connectors.onshape_assembly_read import AssemblyFeaturePage
+from solus_api.connectors.onshape_confirmation import require_matching_preview
+from solus_api.connectors.onshape_geometry import GeometryPage
 
 #: Feature names travel to a UI; a model-supplied one is bounded.
 _NAME_CAP: Final = 120
@@ -269,9 +273,65 @@ async def _element_read(
     return await connector.get_json(client, path, what=what, params=params)
 
 
+def _read_messages(items: Any) -> list[dict[str, Any]]:
+    """Validate read collections before flattening legacy message envelopes."""
+    if not isinstance(items, list) or any(
+        not isinstance(item, dict) or ("message" in item and not isinstance(item["message"], dict))
+        for item in items
+    ):
+        raise ConnectorError("api_error", "Onshape returned a malformed feature collection")
+    return _messages(items)
+
+
+def _live_parameters(message: dict[str, Any]) -> list[dict[str, Any]]:
+    parameters = _read_messages(message.get("parameters", []))
+    seen: set[str] = set()
+    for parameter in parameters:
+        identity = parameter.get("parameterId")
+        if not isinstance(identity, str) or not identity or identity in seen:
+            raise ConnectorError("api_error", "Onshape returned malformed parameter identities")
+        seen.add(identity)
+    return parameters
+
+
+def _spec_parameter_ids(message: dict[str, Any]) -> list[str]:
+    if "parameters" in message:
+        return sorted(parameter["parameterId"] for parameter in _live_parameters(message))
+    legacy = message.get("parameterIdToSpec", {})
+    if not isinstance(legacy, dict) or any(
+        not isinstance(key, str) or not key or not isinstance(value, dict)
+        for key, value in legacy.items()
+    ):
+        raise ConnectorError("api_error", "Onshape returned malformed parameter specifications")
+    return sorted(legacy)
+
+
+def _feature_filter(args: dict[str, Any], key: str) -> str | None:
+    if key not in args:
+        return None
+    value = args[key]
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+        raise ConnectorError("config_invalid", f"{key} must be a safe feature identifier")
+    return value
+
+
+def _filtered_features(
+    rows: list[dict[str, Any]], key: str, identity: str | None
+) -> list[dict[str, Any]]:
+    if identity is None:
+        return rows
+    matches = [row for row in rows if row.get(key) == identity]
+    if not matches:
+        raise ConnectorError("not_found", "The requested feature or feature type was not found")
+    if len(matches) != 1:
+        raise ConnectorError("api_error", "Onshape returned duplicate feature identities")
+    return matches
+
+
 async def _get_feature_tree(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> dict[str, Any]:
+    identity = _feature_filter(args, "feature_id")
     body = await _element_read(
         connector, client, args, kind="partstudios", suffix="/features", what="feature tree"
     )
@@ -280,8 +340,9 @@ async def _get_feature_tree(
             "name": message.get("name", ""),
             "feature_id": message.get("featureId", ""),
             "feature_type": message.get("featureType", ""),
+            "parameters": _live_parameters(message),
         }
-        for message in _messages(body.get("features") if isinstance(body, dict) else None)
+        for message in _read_messages(body.get("features") if isinstance(body, dict) else None)
     ]
     # The envelope trio travels back out: a later write echoes it so a stale
     # geometry reference fails loudly instead of silently reattaching.
@@ -290,29 +351,40 @@ async def _get_feature_tree(
         for key in ("serializationVersion", "sourceMicroversion", "libraryVersion")
         if isinstance(body, dict) and body.get(key) is not None
     }
-    return {"features": features, "envelope": envelope}
+    return {"features": _filtered_features(features, "feature_id", identity), "envelope": envelope}
 
 
 async def _get_feature_specs(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> dict[str, Any]:
-    body = await _element_read(
-        connector, client, args, kind="partstudios", suffix="/featurespecs", what="feature specs"
+    identity = _feature_filter(args, "feature_type")
+    document_id = validated_id(args, "document_id")
+    element_id = validated_id(args, "element_id")
+    workspace_id = await workspace_for(connector, client, args)
+    base = element_base_path("partstudios", document_id, workspace_id, element_id)
+    tree = await connector.get_json(client, f"{base}/features", what="feature tree")
+    body = await connector.immutable_feature_specs(
+        client,
+        document_id=document_id,
+        element_id=element_id,
+        microversion_id=tree.get("sourceMicroversion", "") if isinstance(tree, dict) else "",
+        collection="partstudios",
     )
     specs = [
         {
             "featureType": message.get("featureType", ""),
             "name": message.get("featureTypeName", ""),
-            "parameter_ids": sorted((message.get("parameterIdToSpec") or {}).keys()),
+            "parameter_ids": _spec_parameter_ids(message),
         }
-        for message in _messages(body.get("featureSpecs") if isinstance(body, dict) else None)
+        for message in _read_messages(body.get("featureSpecs") if isinstance(body, dict) else None)
     ]
-    return {"feature_specs": specs}
+    return {"feature_specs": _filtered_features(specs, "featureType", identity)}
 
 
 async def _get_body_details(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> dict[str, Any]:
+    page = GeometryPage.from_args(args)
     body = await _element_read(
         connector,
         client,
@@ -324,6 +396,8 @@ async def _get_body_details(
         # is on the left" becomes unanswerable.
         params={"includeGeometricData": "true"},
     )
+    if page is not None:
+        return page.select(body)
     return {"bodies": body.get("bodies", []) if isinstance(body, dict) else []}
 
 
@@ -344,6 +418,9 @@ async def _get_mass_properties(
 async def _get_assembly_definition(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> dict[str, Any]:
+    page = AssemblyFeaturePage.from_args(args)
+    if page is not None:
+        args = {**args, "workspace_id": await workspace_for(connector, client, args)}
     body = await _element_read(
         connector,
         client,
@@ -355,6 +432,16 @@ async def _get_assembly_definition(
         # mates is silently useless.
         params={"includeMateFeatures": "true", "includeMateConnectors": "true"},
     )
+    if page is not None:
+        tree = await _element_read(
+            connector,
+            client,
+            args,
+            kind="assemblies",
+            suffix="/features",
+            what="assembly feature health",
+        )
+        return page.select(body, tree, workspace_id=args["workspace_id"])
     root = body.get("rootAssembly", {}) if isinstance(body, dict) else {}
     return {
         "instances": root.get("instances", []),
@@ -369,11 +456,7 @@ async def _get_variables(
     body = await _element_read(
         connector, client, args, kind="variables", suffix="/variables", what="variables"
     )
-    variables: list[dict[str, Any]] = []
-    for table in body if isinstance(body, list) else []:
-        if isinstance(table, dict):
-            variables.extend(v for v in table.get("variables", []) if isinstance(v, dict))
-    return {"variables": variables}
+    return {"variables": _validated_variables(body)}
 
 
 _ELEMENT_REQUIRED = ("document_id", "element_id")
@@ -399,9 +482,14 @@ READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
         name="onshape.get_feature_tree",
         description=(
             "The ordered feature tree of a part studio, plus the write envelope a "
-            "later edit must echo back."
+            "later edit must echo back. Pass feature_id to retrieve complete parameters "
+            "for one feature before editing, avoiding truncated collections."
         ),
-        params=schema(element=True, required=_ELEMENT_REQUIRED),
+        params=schema(
+            element=True,
+            required=_ELEMENT_REQUIRED,
+            extra={"feature_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}},
+        ),
         returns={"type": "object"},
         run=_get_feature_tree,
         tags=("read",),
@@ -410,9 +498,14 @@ READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
         name="onshape.get_feature_specs",
         description=(
             "Every feature type this part studio can accept and its valid parameter "
-            "ids — including custom features. Consult before constructing an edit."
+            "ids — including custom features. Pass feature_type to retrieve one complete "
+            "spec before editing, avoiding truncated collections."
         ),
-        params=schema(element=True, required=_ELEMENT_REQUIRED),
+        params=schema(
+            element=True,
+            required=_ELEMENT_REQUIRED,
+            extra={"feature_type": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}},
+        ),
         returns={"type": "object"},
         run=_get_feature_specs,
         tags=("read", "discovery"),
@@ -421,9 +514,18 @@ READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
         name="onshape.get_body_details",
         description=(
             "Bodies with their face, edge and vertex ids and analytic geometry. "
-            "These ids are what a geometry-referencing edit points at."
+            "These ids are what a geometry-referencing edit points at. When a body/part id "
+            "is known, request body_id and collection with limit=1 for complete geometry. "
+            "Continue with next_offset and expected_fingerprint from the first page. "
+            "Once total and fingerprint are known, independent offsets can be requested "
+            "in parallel to avoid exhausting model rounds on a sequential traversal. "
+            "A page fingerprint is not a vendor microversion or write authorization."
         ),
-        params=schema(element=True, required=_ELEMENT_REQUIRED),
+        params=schema(
+            element=True,
+            required=_ELEMENT_REQUIRED,
+            extra=GeometryPage.model_json_schema()["properties"],
+        ),
         returns={"type": "object"},
         run=_get_body_details,
         tags=("read", "geometry"),
@@ -438,8 +540,16 @@ READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
     ),
     OnshapeOperation(
         name="onshape.get_assembly_definition",
-        description="An assembly's instances, occurrences and mate features.",
-        params=schema(element=True, required=_ELEMENT_REQUIRED),
+        description=(
+            "An assembly's instances, occurrences and mate features. Use view=features "
+            "for complete bounded feature IDs, current health and measured connector world "
+            "frames; continue with next_offset and expected_snapshot."
+        ),
+        params=schema(
+            element=True,
+            required=_ELEMENT_REQUIRED,
+            extra=AssemblyFeaturePage.model_json_schema()["properties"],
+        ),
         returns={"type": "object"},
         run=_get_assembly_definition,
         tags=("read",),
@@ -494,16 +604,77 @@ def _variables_path(document_id: str, workspace_id: str, element_id: str) -> str
     return f"/api/v6/variables/d/{document_id}/w/{workspace_id}/e/{element_id}/variables"
 
 
+def _validated_variables(body: Any) -> list[dict[str, Any]]:
+    """Validate the whole vendor collection before reading or replacing any entry."""
+    if not isinstance(body, list):
+        raise ConnectorError("api_error", "Onshape returned an invalid variable table")
+    existing: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for table in body:
+        if not isinstance(table, dict) or not isinstance(table.get("variables"), list):
+            raise ConnectorError("api_error", "Onshape returned an invalid variable table")
+        for variable in table["variables"]:
+            if not isinstance(variable, dict):
+                raise ConnectorError("api_error", "Onshape returned an invalid variable definition")
+            name = variable.get("name")
+            if (
+                not isinstance(name, str)
+                or not _VAR_NAME_RE.fullmatch(name)
+                or name in names
+                or not isinstance(variable.get("type"), str)
+                or not variable["type"].strip()
+                or not isinstance(variable.get("expression"), str)
+                or ("description" in variable and not isinstance(variable["description"], str))
+            ):
+                raise ConnectorError(
+                    "api_error", "Onshape returned an invalid or duplicate variable"
+                )
+            names.add(name)
+            existing.append(variable)
+    return existing
+
+
 async def _variable_table(
     connector: OnshapeConnector, client: httpx.AsyncClient, path: str
 ) -> list[dict[str, Any]]:
-    """Every variable currently in the studio, flattened out of its table."""
-    body = await connector.get_json(client, path, what="variables")
-    existing: list[dict[str, Any]] = []
-    for table in body if isinstance(body, list) else []:
-        if isinstance(table, dict):
-            existing.extend(v for v in table.get("variables", []) if isinstance(v, dict))
-    return existing
+    return _validated_variables(await connector.get_json(client, path, what="variables"))
+
+
+def _variable_definition(variable: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: variable[key]
+        for key in ("name", "type", "expression", "description")
+        if key in variable
+    }
+
+
+def _variable_rows(
+    existing: list[dict[str, Any]], payload: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    before = {variable["name"]: _variable_definition(variable) for variable in existing}
+    rows = [
+        {
+            "label": entry["name"],
+            "before": json.dumps(before[entry["name"]], sort_keys=True, ensure_ascii=False)
+            if entry["name"] in before
+            else None,
+            "after": json.dumps(entry, sort_keys=True, ensure_ascii=False),
+        }
+        for entry in payload
+    ]
+    if len(rows) > 40 or any(
+        isinstance(value, str) and len(value) > 400 for row in rows for value in row.values()
+    ):
+        raise ConnectorError("config_invalid", "The complete variable table exceeds preview limits")
+    return rows
+
+
+def _variable_unverified() -> ConnectorError:
+    return ConnectorError(
+        "mutation_unverified",
+        "The variable update may have been applied, but its complete table could not be verified. "
+        "Inspect the Onshape Variable Studio before retrying.",
+    )
 
 
 def _variable_name(args: dict[str, Any]) -> str:
@@ -529,13 +700,7 @@ def _merged_variables(
     payload: list[dict[str, Any]] = []
     found = False
     for variable in existing:
-        entry = {
-            "name": variable.get("name", ""),
-            "type": variable.get("type", _DEFAULT_VAR_TYPE),
-            "expression": variable.get("expression", ""),
-        }
-        if variable.get("description"):
-            entry["description"] = str(variable["description"])
+        entry = _variable_definition(variable)
         if entry["name"] == name:
             found = True
             entry["expression"] = expression
@@ -568,7 +733,22 @@ async def _set_variable(
 
     existing = await _variable_table(connector, client, path)
     payload, created = _merged_variables(existing, name, expression, args.get("type"))
-    await connector.post_json(client, path, payload, what="variable update")
+    require_matching_preview(_variable_rows(existing, payload))
+    try:
+        response = await connector.request(
+            client, "POST", path, what="variable update", json_body=payload
+        )
+        # Only this replacement endpoint has an observed empty 204 response.
+        # Acceptance still depends on the complete fresh table below.
+        if response.status_code != 204 or response.content:
+            connector._json(response, "variable update")
+        observed = await _variable_table(connector, client, path)
+    except (ConnectorError, httpx.HTTPError) as exc:
+        raise _variable_unverified() from exc
+    expected = {entry["name"]: entry for entry in payload}
+    actual = {entry["name"]: _variable_definition(entry) for entry in observed}
+    if actual != expected:
+        raise _variable_unverified()
     return {"name": name, "expression": expression, "created": created}
 
 
@@ -583,9 +763,8 @@ async def _preview_set_variable(
     existing = await _variable_table(
         connector, client, _variables_path(document_id, workspace_id, element_id)
     )
-    current = next((v for v in existing if v.get("name") == name), None)
-    before = current.get("expression") if current else None
-    return [{"label": name, "before": before, "after": expression}]
+    payload, _ = _merged_variables(existing, name, expression, args.get("type"))
+    return _variable_rows(existing, payload)
 
 
 def _feature_spec(specs: Any, feature_type: str) -> dict[str, Any]:
@@ -643,13 +822,30 @@ def _parameter(spec: dict[str, Any], parameter_id: str, value: Any) -> dict[str,
     return {**template, "parameterId": parameter_id, field_name: value}
 
 
+def _parameter_specs_by_id(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Index the complete observed spec without guessing between representations."""
+    if "parameters" in spec:
+        if "parameterIdToSpec" in spec:
+            raise ConnectorError("api_error", "Onshape returned ambiguous parameter specifications")
+        return {parameter["parameterId"]: parameter for parameter in _live_parameters(spec)}
+    legacy = spec.get("parameterIdToSpec", {})
+    if not isinstance(legacy, dict) or any(
+        not isinstance(identity, str)
+        or not identity
+        or not isinstance(parameter, dict)
+        or ("parameterId" in parameter and parameter["parameterId"] != identity)
+        for identity, parameter in legacy.items()
+    ):
+        raise ConnectorError("api_error", "Onshape returned malformed parameter specifications")
+    return legacy
+
+
 def _feature_parameters(spec: dict[str, Any], supplied: Any) -> list[dict[str, Any]]:
+    known = _parameter_specs_by_id(spec)
     if supplied is None:
         return []
     if not isinstance(supplied, dict):
         raise ConnectorError("config_invalid", "parameters must be an object")
-    by_id = spec.get("parameterIdToSpec")
-    known = by_id if isinstance(by_id, dict) else {}
     parameters: list[dict[str, Any]] = []
     for parameter_id, value in supplied.items():
         parameter_spec = known.get(parameter_id)
@@ -681,14 +877,20 @@ async def _add_feature(
     workspace_id = await workspace_for(connector, client, args)
     base = element_base_path("partstudios", document_id, workspace_id, element_id)
 
-    specs = await connector.get_json(client, f"{base}/featurespecs", what="feature specs")
+    tree = await connector.get_json(client, f"{base}/features", what="feature tree")
+    specs = await connector.immutable_feature_specs(
+        client,
+        document_id=document_id,
+        element_id=element_id,
+        microversion_id=tree.get("sourceMicroversion", "") if isinstance(tree, dict) else "",
+        collection="partstudios",
+    )
     spec = _feature_spec(specs, feature_type)
     parameters = _feature_parameters(spec, args.get("parameters"))
 
     # The envelope trio is echoed from the CURRENT tree, with skew rejected: a
     # write built against a stale microversion must fail loudly rather than
     # silently reattach to different geometry.
-    tree = await connector.get_json(client, f"{base}/features", what="feature tree")
     envelope = {
         key: tree.get(key)
         for key in ("serializationVersion", "sourceMicroversion", "libraryVersion")
@@ -704,13 +906,34 @@ async def _add_feature(
             "parameters": parameters,
         },
     }
-    created = await connector.post_json(client, f"{base}/features", body, what="feature creation")
-    feature = created.get("feature") if isinstance(created, dict) else None
-    return {
-        "feature_id": (feature or {}).get("featureId", "") if isinstance(feature, dict) else "",
-        "name": name,
-        "feature_type": feature_type,
-    }
+    from solus_api.connectors.onshape_cut import _healthy
+    from solus_api.connectors.onshape_refs import _feature
+
+    try:
+        created = await connector.post_json(
+            client, f"{base}/features", body, what="feature creation"
+        )
+        feature = created.get("feature") if isinstance(created, dict) else None
+        identity = feature.get("featureId") if isinstance(feature, dict) else None
+        if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identity):
+            raise ValueError("Missing created feature identity")
+        observed = await connector.get_json(
+            client, f"{base}/features", what="created feature readback"
+        )
+        actual = _feature(observed, identity)
+        if (
+            actual.get("name") != name
+            or actual.get("featureType") != feature_type
+            or not _healthy(observed, actual)
+        ):
+            raise ValueError("Created feature could not be verified")
+    except Exception:
+        raise ConnectorError(
+            "mutation_unverified",
+            "Feature creation may have applied, but its identity and healthy state could not "
+            "be verified. Inspect the Part Studio before retrying.",
+        ) from None
+    return {"feature_id": identity, "name": name, "feature_type": feature_type, "verified": True}
 
 
 async def _preview_add_feature(
@@ -730,7 +953,14 @@ async def _preview_add_feature(
     name = _feature_name(args)
     workspace_id = await workspace_for(connector, client, args)
     base = element_base_path("partstudios", document_id, workspace_id, element_id)
-    specs = await connector.get_json(client, f"{base}/featurespecs", what="feature specs")
+    tree = await connector.get_json(client, f"{base}/features", what="feature tree")
+    specs = await connector.immutable_feature_specs(
+        client,
+        document_id=document_id,
+        element_id=element_id,
+        microversion_id=tree.get("sourceMicroversion", "") if isinstance(tree, dict) else "",
+        collection="partstudios",
+    )
     spec = _feature_spec(specs, feature_type)
     supplied = args.get("parameters")
     _feature_parameters(spec, supplied)
@@ -817,9 +1047,24 @@ def every_operation() -> tuple[OnshapeOperation, ...]:
     Imported lazily so the dependency stays one-way: `onshape_refs` builds on
     this module's primitives, never the reverse.
     """
+    from solus_api.connectors.onshape_assembly_geometry import INSPECTION_OPERATIONS
+    from solus_api.connectors.onshape_authoring import AUTHORING_OPERATIONS
+    from solus_api.connectors.onshape_cut import CUT_OPERATIONS
+    from solus_api.connectors.onshape_mate_repair import REPAIR_OPERATION
+    from solus_api.connectors.onshape_mates import MATE_OPERATIONS
     from solus_api.connectors.onshape_refs import REFERENCE_OPERATIONS
+    from solus_api.connectors.onshape_sketch import SKETCH_OPERATIONS
 
-    return ALL_OPERATIONS + REFERENCE_OPERATIONS
+    return (
+        ALL_OPERATIONS
+        + INSPECTION_OPERATIONS
+        + REFERENCE_OPERATIONS
+        + AUTHORING_OPERATIONS
+        + CUT_OPERATIONS
+        + SKETCH_OPERATIONS
+        + MATE_OPERATIONS
+        + (REPAIR_OPERATION,)
+    )
 
 
 def operation_by_name(name: str) -> OnshapeOperation | None:

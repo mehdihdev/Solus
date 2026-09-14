@@ -1,0 +1,13 @@
+#!/bin/sh
+# Solus-owned fixed launcher. Dependencies are materialized only at install time.
+set -eu
+PATH=/usr/bin:/bin
+export PATH
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+PYTHON="${SOLUS_MCP_PYTHON:-}"
+if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then exit 78; fi
+WORKSPACE="${SOLUS_MCP_WORKSPACE:-}"
+if [ -z "$WORKSPACE" ]; then exit 78; fi
+cd -- "$WORKSPACE"
+exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 SOLUS_MCP_WORKSPACE="$WORKSPACE" "$PYTHON" "$FORK_DIR/solus/server.py"

@@ -135,6 +135,79 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
     }
   }, [projectId])
 
+  const { derive, submit } = useRequestActions({
+    projectId,
+    pollMs,
+    alive,
+    setBusy,
+    setError,
+    setTorque,
+    setSelected,
+    setRequest,
+    setPhase
+  })
+
+  const select = useCallback(
+    async (candidateId: string, extra: Omit<SelectInput, 'candidate_id'> = {}): Promise<void> => {
+      if (!request) return
+      setBusy(true)
+      setError(null)
+      try {
+        const outcome = await selectSourcingCandidate(projectId, request.id, {
+          candidate_id: candidateId,
+          ...extra
+        })
+        setRequest(outcome.request)
+        setSelected(outcome.entity)
+        setPhase('selected')
+      } catch (err) {
+        setError(messageOf(err))
+      } finally {
+        if (alive.current) setBusy(false)
+      }
+    },
+    [projectId, request]
+  )
+
+  const saveRules = useSaveSourcingRules(projectId, setError, setRules)
+
+  const reset = useCallback((): void => {
+    setPhase('requirement')
+    setRequest(null)
+    setSelected(null)
+    setError(null)
+  }, [])
+
+  const actions = useMemo<SourcingActions>(
+    () => ({ derive, submit, select, saveRules, reset }),
+    [derive, submit, select, saveRules, reset]
+  )
+  return { phase, rules, torque, request, selected, error, busy, actions }
+}
+
+interface RequestActionsContext {
+  projectId: string
+  pollMs: number
+  alive: React.RefObject<boolean>
+  setBusy: (busy: boolean) => void
+  setError: (error: string | null) => void
+  setTorque: (torque: TorqueApi) => void
+  setSelected: (selected: Entity | null) => void
+  setRequest: (request: SourcingRequestApi) => void
+  setPhase: (phase: SourcingPhase) => void
+}
+
+function useRequestActions({
+  projectId,
+  pollMs,
+  alive,
+  setBusy,
+  setError,
+  setTorque,
+  setSelected,
+  setRequest,
+  setPhase
+}: RequestActionsContext): Pick<SourcingActions, 'derive' | 'submit'> {
   const derive = useCallback(
     async (input: TorqueInput): Promise<void> => {
       setBusy(true)
@@ -147,7 +220,7 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
         if (alive.current) setBusy(false)
       }
     },
-    [projectId]
+    [projectId, alive, setBusy, setError, setTorque]
   )
 
   const submit = useCallback(
@@ -182,32 +255,18 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
         if (alive.current) setBusy(false)
       }
     },
-    [pollMs, projectId]
+    [pollMs, projectId, alive, setBusy, setError, setSelected, setRequest, setTorque, setPhase]
   )
 
-  const select = useCallback(
-    async (candidateId: string, extra: Omit<SelectInput, 'candidate_id'> = {}): Promise<void> => {
-      if (!request) return
-      setBusy(true)
-      setError(null)
-      try {
-        const outcome = await selectSourcingCandidate(projectId, request.id, {
-          candidate_id: candidateId,
-          ...extra
-        })
-        setRequest(outcome.request)
-        setSelected(outcome.entity)
-        setPhase('selected')
-      } catch (err) {
-        setError(messageOf(err))
-      } finally {
-        if (alive.current) setBusy(false)
-      }
-    },
-    [projectId, request]
-  )
+  return { derive, submit }
+}
 
-  const saveRules = useCallback(
+function useSaveSourcingRules(
+  projectId: string,
+  setError: (error: string | null) => void,
+  setRules: (rules: SourcingRulesApi) => void
+): SourcingActions['saveRules'] {
+  return useCallback(
     async (next: SourcingRulesApi): Promise<boolean> => {
       setError(null)
       try {
@@ -218,19 +277,6 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
         return false
       }
     },
-    [projectId]
+    [projectId, setError, setRules]
   )
-
-  const reset = useCallback((): void => {
-    setPhase('requirement')
-    setRequest(null)
-    setSelected(null)
-    setError(null)
-  }, [])
-
-  const actions = useMemo<SourcingActions>(
-    () => ({ derive, submit, select, saveRules, reset }),
-    [derive, submit, select, saveRules, reset]
-  )
-  return { phase, rules, torque, request, selected, error, busy, actions }
 }

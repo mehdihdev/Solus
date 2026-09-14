@@ -4,7 +4,15 @@
 // Consolidates what TeamScreen / useTeamData carried; keyed on the team id with
 // a stale-response guard so a slow answer for a team the user has since left
 // never lands on the new one (nothing carried across — SOLUSDEV-242).
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+  type RefObject
+} from 'react'
 import { ApiError, type ApiMeta } from '../../lib/api/envelope.types'
 import { classifyFetchError } from '../../lib/api/errors'
 import {
@@ -149,54 +157,24 @@ export function useHomeTeam(
   const teamIdRef = useRef(teamId)
   teamIdRef.current = teamId
 
-  const load = useCallback(async (): Promise<void> => {
-    const seq = ++loadSeq.current
-    if (!teamId) {
-      setStatus('idle')
-      setDetail(null)
-      setMembers([])
-      setInvites([])
-      setActivity([])
-      setMeta({})
-      return
-    }
-    setStatus('loading')
-    setDetail(null)
-    setMembers([])
-    setInvites([])
-    setActivity([])
-    try {
-      const snap = await fetchTeam(teamId)
-      if (seq !== loadSeq.current) return
-      setDetail(snap.detail)
-      setMembers(snap.members)
-      setInvites(snap.invites)
-      setActivity(snap.activity)
-      setMeta(snap.meta)
-      setStatus('ready')
-    } catch (error: unknown) {
-      if (seq !== loadSeq.current) return
-      setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
-    }
-  }, [teamId])
+  const load = useCallback(
+    () =>
+      loadHomeTeam(teamId, loadSeq, {
+        setStatus,
+        setDetail,
+        setMembers,
+        setInvites,
+        setActivity,
+        setMeta
+      }),
+    [teamId]
+  )
 
   useEffect(() => {
     void load()
   }, [load])
 
-  // The plan is per USER (ADR-024), so the limit is fetched once, not per team;
-  // an unknown subscription leaves the position unknown rather than guessed.
-  useEffect(() => {
-    let stale = false
-    getSubscription()
-      .then((sub) => {
-        if (!stale) setLimits(sub.limits)
-      })
-      .catch(() => undefined)
-    return () => {
-      stale = true
-    }
-  }, [me?.id])
+  useSubscriptionLimits(me?.id, setLimits)
 
   const refreshMembers = useCallback(async () => {
     if (!teamId) return
@@ -209,31 +187,59 @@ export function useHomeTeam(
     if (teamIdRef.current === teamId) setInvites(rows)
   }, [teamId])
 
-  const run = async (
-    action: () => Promise<unknown>,
-    after: () => Promise<void>
-  ): Promise<boolean> => {
-    try {
-      await action()
-      await after().catch(() => undefined)
-      return true
-    } catch {
-      return false
-    }
-  }
-  const runMember = async (
-    action: () => Promise<unknown>,
-    after: () => Promise<void>
-  ): Promise<MemberOutcome> => {
-    try {
-      await action()
-      await after().catch(() => undefined)
-      return { ok: true }
-    } catch (error: unknown) {
-      return memberRefusal(error)
-    }
-  }
+  const actions = createHomeTeamActions({
+    teamId,
+    me,
+    refreshHome,
+    load,
+    refreshMembers,
+    refreshInvites,
+    meta,
+    teamIdRef,
+    setActivity,
+    setMeta
+  })
 
+  return {
+    status,
+    detail,
+    members,
+    invites,
+    activity,
+    activityTotal: meta.total ?? activity.length,
+    activityHasMore: meta.has_next ?? false,
+    myRole: detail?.role ?? null,
+    teamLimit: me ? teamLimitPosition(me.teams, limits) : null,
+    actions
+  }
+}
+
+interface HomeTeamActionContext {
+  teamId: string | null
+  me: Me | null
+  refreshHome: () => Promise<void>
+  load: () => Promise<void>
+  refreshMembers: () => Promise<void>
+  refreshInvites: () => Promise<void>
+  meta: ApiMeta
+  teamIdRef: RefObject<string | null>
+  setActivity: Dispatch<SetStateAction<ActivityApi[]>>
+  setMeta: Dispatch<SetStateAction<ApiMeta>>
+}
+
+function createHomeTeamActions(context: HomeTeamActionContext): HomeTeamActions {
+  const {
+    teamId,
+    me,
+    refreshHome,
+    load,
+    refreshMembers,
+    refreshInvites,
+    meta,
+    teamIdRef,
+    setActivity,
+    setMeta
+  } = context
   /** Where Home lands after I leave or delete the active team. */
   const fallBackToPersonal = async (): Promise<void> => {
     const home = me ? personalTeam(me) : undefined
@@ -241,37 +247,20 @@ export function useHomeTeam(
     await refreshHome().catch(() => undefined)
   }
 
-  const actions: HomeTeamActions = {
-    invite: async (email, role = 'member') => {
-      if (!teamId) return { ok: false, reason: 'failed' }
-      if (!EMAIL_PATTERN.test(email)) return { ok: false, reason: 'invalid_email' }
-      try {
-        const invite = await createInvite(teamId, { email, role })
-        const moved = invite.team_id !== teamId ? invite.team_id : null
-        if (moved) {
-          // The personal team stays solo (ADR-025): the invite lives on the
-          // collaborative team the server just created — go there.
-          switchWorkspaceTeam(moved, 'home')
-          await refreshHome().catch(() => undefined)
-        } else {
-          await refreshInvites().catch(() => undefined)
-        }
-        return { ok: true, token: invite.token ?? null, movedToTeamId: moved }
-      } catch (error: unknown) {
-        return inviteRefusal(error)
-      }
-    },
+  return {
+    invite: (email, role = 'member') =>
+      inviteHomeTeam(teamId, email, role, refreshHome, refreshInvites),
     revoke: (inviteId) =>
       teamId
-        ? runMember(() => revokeInvite(teamId, inviteId), refreshInvites)
+        ? runMemberAction(() => revokeInvite(teamId, inviteId), refreshInvites)
         : Promise.resolve({ ok: false, reason: 'failed' }),
     changeRole: (userId, role) =>
       teamId
-        ? runMember(() => changeMemberRole(teamId, userId, role), refreshMembers)
+        ? runMemberAction(() => changeMemberRole(teamId, userId, role), refreshMembers)
         : Promise.resolve({ ok: false, reason: 'failed' }),
     remove: (userId) =>
       teamId
-        ? runMember(() => removeMember(teamId, userId), refreshMembers)
+        ? runMemberAction(() => removeMember(teamId, userId), refreshMembers)
         : Promise.resolve({ ok: false, reason: 'failed' }),
     leave: async () => {
       if (!teamId || !me) return { ok: false, reason: 'failed' }
@@ -286,7 +275,7 @@ export function useHomeTeam(
     },
     rename: (name) =>
       teamId
-        ? run(
+        ? runTeamAction(
             () => updateTeam(teamId, { name }),
             async () => {
               await load()
@@ -295,7 +284,9 @@ export function useHomeTeam(
           )
         : Promise.resolve(false),
     deleteTeam: () =>
-      teamId ? run(() => deleteTeamApi(teamId), fallBackToPersonal) : Promise.resolve(false),
+      teamId
+        ? runTeamAction(() => deleteTeamApi(teamId), fallBackToPersonal)
+        : Promise.resolve(false),
     loadMoreActivity: async () => {
       if (!teamId || !meta.has_next || !meta.next_cursor) return
       try {
@@ -309,17 +300,119 @@ export function useHomeTeam(
     },
     refresh: load
   }
+}
 
-  return {
-    status,
-    detail,
-    members,
-    invites,
-    activity,
-    activityTotal: meta.total ?? activity.length,
-    activityHasMore: meta.has_next ?? false,
-    myRole: detail?.role ?? null,
-    teamLimit: me ? teamLimitPosition(me.teams, limits) : null,
-    actions
+async function inviteHomeTeam(
+  teamId: string | null,
+  email: string,
+  role: Exclude<TeamRole, 'owner'>,
+  refreshHome: () => Promise<void>,
+  refreshInvites: () => Promise<void>
+): Promise<InviteOutcome> {
+  if (!teamId) return { ok: false, reason: 'failed' }
+  if (!EMAIL_PATTERN.test(email)) return { ok: false, reason: 'invalid_email' }
+  try {
+    const invite = await createInvite(teamId, { email, role })
+    const moved = invite.team_id !== teamId ? invite.team_id : null
+    if (moved) {
+      // The personal team stays solo (ADR-025): the invite lives on the
+      // collaborative team the server just created — go there.
+      switchWorkspaceTeam(moved, 'home')
+      await refreshHome().catch(() => undefined)
+    } else {
+      await refreshInvites().catch(() => undefined)
+    }
+    return { ok: true, token: invite.token ?? null, movedToTeamId: moved }
+  } catch (error: unknown) {
+    return inviteRefusal(error)
   }
+}
+
+async function runTeamAction(
+  action: () => Promise<unknown>,
+  after: () => Promise<void>
+): Promise<boolean> {
+  try {
+    await action()
+    await after().catch(() => undefined)
+    return true
+  } catch {
+    return false
+  }
+}
+async function runMemberAction(
+  action: () => Promise<unknown>,
+  after: () => Promise<void>
+): Promise<MemberOutcome> {
+  try {
+    await action()
+    await after().catch(() => undefined)
+    return { ok: true }
+  } catch (error: unknown) {
+    return memberRefusal(error)
+  }
+}
+
+interface HomeTeamStateWriters {
+  setStatus: Dispatch<SetStateAction<HomeTeamStatus>>
+  setDetail: Dispatch<SetStateAction<TeamDetail | null>>
+  setMembers: Dispatch<SetStateAction<TeamMemberApi[]>>
+  setInvites: Dispatch<SetStateAction<InviteApi[]>>
+  setActivity: Dispatch<SetStateAction<ActivityApi[]>>
+  setMeta: Dispatch<SetStateAction<ApiMeta>>
+}
+
+async function loadHomeTeam(
+  teamId: string | null,
+  loadSeq: RefObject<number>,
+  writers: HomeTeamStateWriters
+): Promise<void> {
+  const { setStatus, setDetail, setMembers, setInvites, setActivity, setMeta } = writers
+  const seq = ++loadSeq.current
+  if (!teamId) {
+    setStatus('idle')
+    setDetail(null)
+    setMembers([])
+    setInvites([])
+    setActivity([])
+    setMeta({})
+    return
+  }
+  setStatus('loading')
+  setDetail(null)
+  setMembers([])
+  setInvites([])
+  setActivity([])
+  try {
+    const snap = await fetchTeam(teamId)
+    if (seq !== loadSeq.current) return
+    setDetail(snap.detail)
+    setMembers(snap.members)
+    setInvites(snap.invites)
+    setActivity(snap.activity)
+    setMeta(snap.meta)
+    setStatus('ready')
+  } catch (error: unknown) {
+    if (seq !== loadSeq.current) return
+    setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
+  }
+}
+
+function useSubscriptionLimits(
+  userId: string | undefined,
+  setLimits: Dispatch<SetStateAction<Record<string, number | null> | null>>
+): void {
+  // The plan is per USER (ADR-024), so the limit is fetched once, not per team;
+  // an unknown subscription leaves the position unknown rather than guessed.
+  useEffect(() => {
+    let stale = false
+    getSubscription()
+      .then((sub) => {
+        if (!stale) setLimits(sub.limits)
+      })
+      .catch(() => undefined)
+    return () => {
+      stale = true
+    }
+  }, [userId, setLimits])
 }

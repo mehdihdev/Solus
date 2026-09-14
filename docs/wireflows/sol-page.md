@@ -36,7 +36,7 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   the backend's persisted format (`tool → outcome`), citations region,
   confirmation cards (unchanged CTR-03 flow). Messages enter with a short
   fade-rise.
-- Composer: input + Guide/Do action-mode toggle + Send (unchanged), routing
+- Composer: input + Guide/Build action-mode toggle + Send (unchanged), routing
   line underneath — ALWAYS present (SOLUSDEV-233): with a classification it
   reads `tier · type · model` (click to override); with none (empty input /
   endpoint hiccup) it shows the honest idle line "auto routing · sizes each
@@ -53,14 +53,30 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   in "From the graph" with no extra UI. A failed search shows no list and never
   blocks Send. Code results show their stored path to distinguish duplicate filenames.
   Changing projects immediately invalidates old results and selected mentions.
-  The action-mode toggle **defaults to Do** (SOLUSDEV-168) and sticks for the
+  The action-mode toggle **defaults to Build** (wire value `do`, SOLUSDEV-168) and sticks for the
   panel instance. Guide refuses exactly the tools the CTR-03 gate already parks,
-  so a Guide default only replaced an approval card with a "switch to Do mode"
+  so a Guide default only replaced an approval card with a "switch to Build mode"
   refusal; every mutation still parks for explicit approval. The API default
   (`MessageCreate.action_mode`) stays `guide` for non-UI callers.
 - Turn rejections are named, not generic: 402 → "You're out of SOL credits —
   top up to keep going." (and the top-up card lights); 429 → "Too many SOL
   turns right now — give it a few seconds."
+
+SOLUSDEV-261 approval-card polish preserves the CTR-03 flow: a clear review heading,
+always-visible action summary, responsive labeled Before/After values with exact
+case and whitespace, and expandable tool/approval identifiers. Missing and empty
+values are distinct. Approve/Reject, busy states, retry and terminal refusal behavior
+are unchanged. User-facing action-mode wording is Guide/Build; internal wire values
+remain `guide`/`do` for compatibility.
+
+SOLUSDEV-261 restoration: reopening a chat reads its persisted active approval
+cards alongside history and shows their original identifiers and full previews
+in an "Awaiting your approval" transcript entry. This is current server state;
+historical waiting prose is not approval status. Expired or decided actions are
+not restored as actionable cards. The local cache never supplies approvals.
+After a successful decision, the entry reports that decision and no longer says
+it is waiting when its final card is removed. Identical pending proposals in
+later turns reuse the original card; typing acceptance does not approve it.
 
 ## Right — CONTEXT IN USE
 
@@ -115,3 +131,22 @@ JS timers in orb-adjacent files).
 - Usage fetch fails / offline: "Usage unavailable offline."; no fabricated
   numbers anywhere on the page.
 - Signed out (dev bypass): panels degrade to their offline states.
+
+## Compact intervention cards and autonomous Build — SOLUSDEV-261
+
+Build runs routine edits through the centrally validated execution policy. Guide
+remains read-only. Only actions requiring intervention show a compact card: keep
+summary, status and Approve/Reject visible; show the number of proposed changes.
+Put the complete verbatim preview into an expandable, scroll-bounded region
+(collapsed for lengthy previews; short previews may stay open). Never discard
+rows, multiline values or identity/fingerprint details. Ambiguous intent gets a
+short question before acting. The renderer does not grant or classify permissions.
+
+### Command output in compact confirmations
+
+While an approved local code run/test executes, keep the card compact with its
+existing execution indicator and show a bounded, keyboard-scrollable plain-text
+output region. Poll the owner-scoped output endpoint only during execution;
+append incremental stdout/stderr, label truncation, and retain final completion
+or failure state. Never interpret terminal text as HTML or instructions. No modal
+or second approval screen is introduced.

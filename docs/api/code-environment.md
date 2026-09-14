@@ -1,5 +1,9 @@
 # Code environment — the "VSCode item", properly named (SOLUSDEV-250 / INTEGRATIONS I3)
 
+Repository operations added by SOLUSDEV-261 are specified in
+[`code-git-development.md`](code-git-development.md); they use this same Code server
+and central confirmation path.
+
 Route plan + wire shapes. Tier-1 (ADR-032). Companion docs: `docs/api/local-folder.md` (the
 `local` source and server this extends), `docs/api/solus.md` (the `.solus` sections — `code` is
 "Code environment", `errors` is "Error logging"), `docs/contracts/action-gate.md` (every command
@@ -133,3 +137,31 @@ environment; absent, invalid, escaping or untrusted target yields no venv facts.
 Successful confirmed create/install re-probes that exact path before updating its
 CODE record with provenance `sol`. It does not scan arbitrary machine paths or
 add another environment executor. Missing/partial observations remain unavailable.
+
+## Incremental command output — SOLUSDEV-261 completion
+
+Existing code.run/code.test keep their exact command approval and final outcome.
+During an authorized call, the owned code server reports bounded stdout/stderr
+chunks using MCP progress messages. The companion forwards them through the
+existing authenticated channel's extension mechanism as `tool_output` frames:
+`{call_id, sequence, stream: "stdout"|"stderr", text}`. Text is at most 2,048
+characters, sequence strictly increases, and at most 256 chunks/256 KiB are
+accepted for one in-flight call. Output never authorizes a tool or resolves its
+result; exactly one final tool_result remains required. Unknown/finished call IDs,
+wrong sessions and replayed chunks are ignored. Existing ingress redaction applies.
+Commands are never automatically replayed after a transport failure.
+
+A project/owner-scoped GET `/api/v1/projects/{project_id}/sol/confirmations/{id}/output`
+returns bounded incremental output for a confirmation being executed, with an
+integer cursor, truncation marker and completion status. The compact confirmation
+card polls while its existing approve request is pending, showing escaped plain
+text before process completion. Output is ephemeral, bounded and expires; final
+stdout/stderr tails and normal failure filing remain the durable outcome. No
+credentials, arbitrary file reader, shell command or new approval bypass is added.
+
+The optional `truncated` boolean (default false) on a progress frame reports sender
+suppression explicitly. The receiver also marks its own byte ceiling. Both ends
+buffer complete lines before redaction, suppress oversized lines rather than
+splitting secrets, and flush bounded final lines on completion. Companion progress
+is paced below five frames/second across calls; final and control frames do not
+wait behind that progress lock.

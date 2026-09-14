@@ -28,13 +28,19 @@ narrow it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import re
+from dataclasses import dataclass
 from typing import Any, Final
 
 import httpx
 
 from solus_api.connectors.contracts import ConnectorError
 from solus_api.connectors.onshape import OnshapeConnector
+from solus_api.connectors.onshape_confirmation import require_matching_preview, stable_spec
+from solus_api.connectors.onshape_cut import _healthy
 from solus_api.connectors.onshape_ops import (
     OnshapeOperation,
     element_base_path,
@@ -53,6 +59,9 @@ _ENTITY_KINDS: Final[dict[str, tuple[str, str, str]]] = {
 
 #: How many candidates a refusal will name before it stops listing them.
 _MAX_LISTED: Final = 8
+
+# Feature IDs include underscores, unlike document/workspace IDs.
+_FEATURE_ID_RE: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class _Candidate:
@@ -197,10 +206,23 @@ async def _resolve_reference(
 
 
 def _feature(tree: Any, feature_id: str) -> dict[str, Any]:
-    for item in (tree.get("features") or []) if isinstance(tree, dict) else []:
-        message = item.get("message") if isinstance(item, dict) else None
-        if isinstance(message, dict) and message.get("featureId") == feature_id:
-            return message
+    items = tree.get("features") if isinstance(tree, dict) else None
+    if not isinstance(items, list):
+        raise ConnectorError("api_error", "Onshape returned a malformed feature collection")
+    features: dict[str, dict[str, Any]] = {}
+    for item in items:
+        message = item.get("message", item) if isinstance(item, dict) else None
+        identity = message.get("featureId") if isinstance(message, dict) else None
+        if (
+            not isinstance(identity, str)
+            or not _FEATURE_ID_RE.fullmatch(identity)
+            or identity in features
+        ):
+            raise ConnectorError("api_error", "Onshape returned malformed feature identities")
+        assert isinstance(message, dict)
+        features[identity] = message
+    if feature_id in features:
+        return features[feature_id]
     raise ConnectorError(
         "not_found",
         f"no feature '{feature_id}' in this part studio — "
@@ -245,11 +267,34 @@ def _repointed(parameter: dict[str, Any], entity_id: str, parameter_id: str) -> 
     return {**parameter, "queries": [{**example, field: [entity_id]}]}
 
 
+def _editable_value_field(parameter: dict[str, Any]) -> str | None:
+    # Live quantity values include derived fields beside their authored
+    # expression. Recognize only this observed type and bounded field set.
+    if parameter.get("btType") == "BTMParameterQuantity-147":
+        allowed = {
+            "btType",
+            "parameterId",
+            "parameterName",
+            "nodeId",
+            "libraryRelationType",
+            "expression",
+            "value",
+            "units",
+            "isInteger",
+            "importMicroversion",
+            "valueString",
+        }
+        if set(parameter) <= allowed and isinstance(parameter.get("expression"), str):
+            return "expression"
+        return None
+    return parameter_value_field(parameter)
+
+
 def _rewritten_value(parameter: dict[str, Any], value: Any, parameter_id: str) -> dict[str, Any]:
     """A non-geometry parameter with its value replaced, shape untouched."""
     if not isinstance(value, str | int | float | bool):
         raise ConnectorError("config_invalid", f"'{parameter_id}' must be a single value")
-    field = parameter_value_field(parameter)
+    field = _editable_value_field(parameter)
     if field is None:
         raise ConnectorError(
             "config_invalid", f"'{parameter_id}' has an ambiguous payload shape; refusing to guess"
@@ -262,7 +307,7 @@ def _current(parameter: dict[str, Any]) -> str | None:
     if _is_query(parameter):
         queries = parameter.get("queries")
         return "a selection" if isinstance(queries, list) and queries else None
-    field = parameter_value_field(parameter)
+    field = _editable_value_field(parameter)
     return None if field is None else str(parameter.get(field))
 
 
@@ -279,8 +324,15 @@ async def _edited_parameters(
         supplied = {}
     if not isinstance(supplied, dict):
         raise ConnectorError("config_invalid", "parameters must be an object")
-    existing = [p for p in feature.get("parameters") or [] if isinstance(p, dict)]
-    by_id = {str(p.get("parameterId", "")): p for p in existing}
+    existing = feature.get("parameters", [])
+    if not isinstance(existing, list):
+        raise ConnectorError("api_error", "Onshape returned a malformed parameter collection")
+    by_id: dict[str, dict[str, Any]] = {}
+    for parameter in existing:
+        identity = parameter.get("parameterId") if isinstance(parameter, dict) else None
+        if not isinstance(identity, str) or not identity or identity in by_id:
+            raise ConnectorError("api_error", "Onshape returned malformed parameter identities")
+        by_id[identity] = parameter
     for parameter_id in supplied:
         if parameter_id not in by_id:
             raise ConnectorError(
@@ -302,7 +354,7 @@ async def _edited_parameters(
         else:
             changed[parameter_id] = _rewritten_value(parameter, value, parameter_id)
             rows.append((parameter_id, before, str(value)))
-    return [changed.get(str(p.get("parameterId", "")), p) for p in existing], rows
+    return [changed.get(identity, parameter) for identity, parameter in by_id.items()], rows
 
 
 def _value_selector(value: Any, parameter_id: str) -> dict[str, Any]:
@@ -327,40 +379,143 @@ async def _load(
     document_id = validated_id(args, "document_id")
     element_id = validated_id(args, "element_id")
     feature_id = args.get("feature_id")
-    if not isinstance(feature_id, str) or not feature_id:
-        raise ConnectorError("config_invalid", "feature_id must be a string")
+    if not isinstance(feature_id, str) or not _FEATURE_ID_RE.fullmatch(feature_id):
+        raise ConnectorError("config_invalid", "feature_id must be a safe Onshape feature ID")
     workspace_id = await workspace_for(connector, client, args)
     base = element_base_path("partstudios", document_id, workspace_id, element_id)
     tree = await connector.get_json(client, f"{base}/features", what="feature tree")
     return base, tree if isinstance(tree, dict) else {}, _feature(tree, feature_id)
 
 
+def _unverified_update() -> ConnectorError:
+    return ConnectorError(
+        "mutation_unverified", "The feature may have changed; inspect it before retrying."
+    )
+
+
+def _authored_parameters(parameters: Any) -> Any:
+    if not isinstance(parameters, list):
+        raise _unverified_update()
+    result = {}
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            raise _unverified_update()
+        identity = parameter.get("parameterId")
+        if not isinstance(identity, str) or not identity or identity in result:
+            raise _unverified_update()
+        clean = stable_spec(parameter)
+        if parameter.get("btType") == "BTMParameterQuantity-147":
+            for field in ("value", "units", "isInteger", "valueString"):
+                clean.pop(field, None)
+        result[identity] = clean
+    return result
+
+
+@dataclass(frozen=True)
+class _FeatureEdit:
+    base: str
+    tree: dict[str, Any]
+    feature: dict[str, Any]
+    parameters: list[dict[str, Any]]
+    changes: list[tuple[str, str | None, str]]
+    rows: list[dict[str, Any]]
+
+    @classmethod
+    async def plan(
+        cls, connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
+    ) -> _FeatureEdit:
+        base, tree, feature = await _load(connector, client, args)
+        parameters, changes = await _edited_parameters(
+            connector, client, base, feature, args.get("parameters")
+        )
+        microversion = tree.get("sourceMicroversion")
+        if not changes or not isinstance(microversion, str) or not microversion:
+            raise ConnectorError(
+                "config_invalid", "A nonempty edit and source microversion are required"
+            )
+        try:
+            state = json.dumps(
+                {
+                    "base": base,
+                    "tree": stable_spec(
+                        {k: v for k, v in tree.items() if k != "serializationVersion"}
+                    ),
+                    "parameters": stable_spec(parameters),
+                },
+                sort_keys=True,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            raise ConnectorError("api_error", "The feature state is malformed") from None
+        digest = hashlib.sha256(state.encode()).hexdigest()
+        name = feature.get("name", feature["featureId"])
+        rows = [
+            {"label": "Feature", "before": None, "after": f"{base} / {feature['featureId']}"},
+            {"label": "Source microversion", "before": None, "after": microversion},
+            {
+                "label": "Feature state fingerprint",
+                "before": None,
+                "after": ":".join(digest[i : i + 16] for i in range(0, 64, 16)),
+            },
+            *[
+                {"label": f"{name} · {pid}", "before": before, "after": after}
+                for pid, before, after in changes
+            ],
+        ]
+        if len(rows) > 40 or any(
+            isinstance(v, str) and len(v) > 400 for r in rows for v in r.values()
+        ):
+            raise ConnectorError(
+                "config_invalid", "The complete feature preview exceeds its limits"
+            )
+        return cls(base, tree, feature, parameters, changes, rows)
+
+    def verify(self, tree: Any) -> None:
+        actual = _feature(tree, self.feature["featureId"])
+        if (
+            not _healthy(tree, actual)
+            or actual.get("name") != self.feature.get("name")
+            or actual.get("featureType") != self.feature.get("featureType")
+            or _authored_parameters(actual.get("parameters"))
+            != _authored_parameters(self.parameters)
+        ):
+            raise _unverified_update()
+
+
 async def _update_feature(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> dict[str, Any]:
-    base, tree, feature = await _load(connector, client, args)
-    parameters, rows = await _edited_parameters(
-        connector, client, base, feature, args.get("parameters")
-    )
+    plan = await _FeatureEdit.plan(connector, client, args)
     envelope = {
-        key: tree.get(key)
+        key: plan.tree[key]
         for key in ("serializationVersion", "sourceMicroversion", "libraryVersion")
-        if tree.get(key) is not None
+        if key in plan.tree
     }
     body = {
         **envelope,
         "rejectMicroversionSkew": True,
-        "feature": {**feature, "parameters": parameters},
+        "feature": {**plan.feature, "parameters": plan.parameters},
     }
-    feature_id = feature["featureId"]
-    await connector.post_json(
-        client, f"{base}/features/featureid/{feature_id}", body, what="feature update"
-    )
+    require_matching_preview(plan.rows)
+    try:
+        await connector.post_json(
+            client,
+            f"{plan.base}/features/featureid/{plan.feature['featureId']}",
+            body,
+            what="feature update",
+        )
+        plan.verify(
+            await connector.get_json(client, f"{plan.base}/features", what="feature readback")
+        )
+    except ConnectorError as exc:
+        raise _unverified_update() from exc
     return {
-        "feature_id": feature_id,
-        "name": feature.get("name", ""),
+        "feature_id": plan.feature["featureId"],
+        "name": plan.feature.get("name", ""),
+        "verified": True,
         "changed": [
-            {"parameter": pid, "before": before, "after": after} for pid, before, after in rows
+            {"parameter": pid, "before": before, "after": after}
+            for pid, before, after in plan.changes
         ],
     }
 
@@ -368,15 +523,7 @@ async def _update_feature(
 async def _preview_update_feature(
     connector: OnshapeConnector, client: httpx.AsyncClient, args: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    base, _tree, feature = await _load(connector, client, args)
-    _parameters, rows = await _edited_parameters(
-        connector, client, base, feature, args.get("parameters")
-    )
-    name = feature.get("name", feature.get("featureId", ""))
-    return [
-        {"label": f"{name} · {parameter_id}", "before": before, "after": after}
-        for parameter_id, before, after in rows
-    ]
+    return (await _FeatureEdit.plan(connector, client, args)).rows
 
 
 _SELECTOR_SCHEMA: Final[dict[str, Any]] = {

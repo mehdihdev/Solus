@@ -131,9 +131,8 @@ async def test_an_oversized_body_is_refused_before_it_is_buffered(
     assert resp.status_code == 413
 
 
-async def test_a_garbage_body_is_still_accepted(client: AsyncClient, maker: Any) -> None:
-    """The body is a doorbell, never data — so it does not even have to be JSON.
-    If this ever starts 400ing, something has begun parsing it."""
+async def test_a_garbage_body_is_rejected(client: AsyncClient, maker: Any) -> None:
+    """The approved bounded Onshape envelope refuses malformed JSON."""
     source_id, token = await _seed(maker)
 
     resp = await client.post(
@@ -142,7 +141,7 @@ async def test_a_garbage_body_is_still_accepted(client: AsyncClient, maker: Any)
         headers={"Content-Type": "application/octet-stream"},
     )
 
-    assert resp.status_code == 204
+    assert resp.status_code == 400
 
 
 async def test_a_disconnected_source_is_not_probed(client: AsyncClient, maker: Any) -> None:
@@ -180,7 +179,7 @@ async def test_a_delivery_storm_stops_scheduling_work(
     codes = [(await client.post(url, json={})).status_code for _ in range(40)]
 
     assert set(codes) == {204}, "a rejected delivery must still answer 204"
-    assert len(scheduled) == WEBHOOK_DELIVERIES_PER_DAY, (
+    assert len(scheduled) == 1, (
         f"{len(scheduled)} deliveries scheduled work; budget is {WEBHOOK_DELIVERIES_PER_DAY}"
     )
 
@@ -257,3 +256,28 @@ async def test_a_lying_small_content_length_is_still_capped_while_streaming(
     )
 
     assert resp.status_code == 413
+
+
+async def test_onshape_hints_remain_durable_while_syncing(client, maker):
+    from solus_api.services.onshape_webhooks import STATE_KEY
+
+    source_id, token = await _seed(maker, status=SourceStatus.SYNCING)
+    url = f"/api/v1/webhooks/onshape/{source_id}/{token}"
+    for _ in range(2):
+        assert (await client.post(url, json={"messageId": "same-event"})).status_code == 204
+    async with maker() as session:
+        source = await session.get(Source, source_id)
+        assert source.config[STATE_KEY]["generation"] == 1
+
+
+async def test_onshape_foreign_document_does_not_dirty_source(client, maker):
+    from solus_api.services.onshape_webhooks import STATE_KEY
+
+    source_id, token = await _seed(maker)
+    response = await client.post(
+        f"/api/v1/webhooks/onshape/{source_id}/{token}", json={"documentId": "foreign"}
+    )
+    assert response.status_code == 204
+    async with maker() as session:
+        source = await session.get(Source, source_id)
+        assert STATE_KEY not in source.config

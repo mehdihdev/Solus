@@ -131,7 +131,9 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
     }
   }, [fetchEnabled, creditsExhausted])
 
-  const lowOnCredits = creditsExhausted || (usage !== null && usage.balance <= LOW_BALANCE_CREDITS)
+  const unlimited = usage?.unlimited === true
+  const lowOnCredits =
+    !unlimited && (creditsExhausted || (usage !== null && usage.balance <= LOW_BALANCE_CREDITS))
 
   return (
     <div style={{ marginTop: 22 }}>
@@ -142,27 +144,41 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
             {status === 'loading' ? 'Loading usage…' : 'Usage unavailable offline.'}
           </div>
         ) : (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 12, fontWeight: 600 }}>This cycle</span>
-              <Mono size={10} style={{ textTransform: 'none' }}>
-                {formatCredits(usage.used)}
-                {usage.allowance !== null ? ` / ${formatCredits(usage.allowance)}` : ' credits'}
-              </Mono>
-            </div>
-            {usage.allowance !== null && usage.allowance > 0 && (
-              <MeterBar fraction={usage.used / usage.allowance} />
-            )}
-            <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 8 }}>
-              Balance: {formatCredits(usage.balance)} credits
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 4 }}>
-              Reasoner · {SOL_REASONER_NAME}
-            </div>
-          </>
+          <UsageSummary usage={usage} unlimited={unlimited} />
         )}
       </Card>
       {lowOnCredits && <TopUpCard exhausted={creditsExhausted} />}
     </div>
+  )
+}
+
+function UsageSummary({
+  usage,
+  unlimited
+}: {
+  usage: UsageApi
+  unlimited: boolean
+}): React.JSX.Element {
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>This cycle</span>
+        <Mono size={10} style={{ textTransform: 'none' }}>
+          {formatCredits(usage.used)}
+          {!unlimited && usage.allowance !== null
+            ? ` / ${formatCredits(usage.allowance)}`
+            : ' credits'}
+        </Mono>
+      </div>
+      {!unlimited && usage.allowance !== null && usage.allowance > 0 && (
+        <MeterBar fraction={usage.used / usage.allowance} />
+      )}
+      <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 8 }}>
+        {unlimited ? 'Unlimited (development)' : `Balance: ${formatCredits(usage.balance)} credits`}
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 4 }}>
+        Reasoner · {SOL_REASONER_NAME}
+      </div>
+    </>
   )
 }

@@ -10,7 +10,7 @@
 // THIS machine — linking tells the API the machine id + folder name (never
 // the path), the companion scans it, and the card shows the scan state, what
 // was recognised, and Open-in-tool for each project, via useLocalFolder.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
@@ -35,36 +35,28 @@ export interface ProjectFolderCardProps {
   suggestedRepoUrl?: string
 }
 
-export function ProjectFolderCard({
+export function ProjectFolderCard(props: ProjectFolderCardProps): React.JSX.Element {
+  return <ProjectFolderCardContent key={props.projectId} {...props} />
+}
+
+function ProjectFolderCardContent({
   projectId,
   suggestedRepoUrl
 }: ProjectFolderCardProps): React.JSX.Element {
-  const bridge = getDesktopFolderBridge()
-  const link = useProjectFolderStore((s) => s.folders[projectId])
-  const setFolder = useProjectFolderStore((s) => s.setFolder)
-  const clearFolder = useProjectFolderStore((s) => s.clearFolder)
-  const [cloning, setCloning] = useState(false)
-  const folder = useLocalFolder(projectId, link !== undefined)
-
-  const selectFolder = async (): Promise<void> => {
-    const path = await bridge?.pick()
-    if (!path) return
-    setFolder(projectId, { path })
-    await folder.link(path)
-  }
-
-  const runClone = async (repoUrl: string): Promise<{ ok: boolean; error?: string }> => {
-    if (!bridge) return { ok: false, error: 'The desktop app is required to clone.' }
-    const parentDir = await bridge.pick()
-    if (!parentDir) return { ok: false }
-    const result = await bridge.clone({ repoUrl, parentDir })
-    if (result.path) {
-      setFolder(projectId, { path: result.path, repoUrl })
-      void folder.link(result.path)
-      return { ok: true }
-    }
-    return { ok: false, error: result.error ?? 'Clone failed.' }
-  }
+  const {
+    bridge,
+    link,
+    clearFolder,
+    cloning,
+    setCloning,
+    selectionVersion,
+    setSelection,
+    selecting,
+    selectionError,
+    folder,
+    selectFolder,
+    runClone
+  } = useProjectFolderSelection(projectId)
 
   return (
     <Card pad={0}>
@@ -76,10 +68,14 @@ export function ProjectFolderCard({
         <LinkedFolder
           link={link}
           folder={folder}
+          selecting={selecting}
+          onChangeFolder={() => void selectFolder()}
           onOpenFolder={() => void bridge.reveal(link.path)}
           onUnlink={() => {
             // The machine-local link goes first (instant, never blocked on the
             // API); the graph source is then disconnected best-effort.
+            selectionVersion.current += 1
+            setSelection(null)
             clearFolder(projectId)
             void folder.unlink()
           }}
@@ -87,22 +83,33 @@ export function ProjectFolderCard({
       ) : (
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-            Link a working copy on this computer so Solus can line the graph up with your files.
+            Choose a project folder, then confirm “Select this folder” in the picker to link and
+            scan it.
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button kind="ghost" size="sm" onClick={() => void selectFolder()}>
+            <Button kind="ghost" size="sm" disabled={selecting} onClick={() => void selectFolder()}>
               <Icons.box size={13} /> Select folder
             </Button>
-            <Button kind="ghost" size="sm" onClick={() => setCloning(true)}>
+            <Button
+              kind="ghost"
+              size="sm"
+              disabled={selecting}
+              onClick={() => setCloning(projectId)}
+            >
               <Icons.github size={13} /> Clone a repo
             </Button>
           </div>
         </div>
       )}
-      {cloning && (
+      {selectionError && (
+        <div role="alert" style={{ padding: '12px 16px', color: 'var(--err)', fontSize: 12 }}>
+          {selectionError}
+        </div>
+      )}
+      {cloning === projectId && (
         <CloneModal
           initialUrl={suggestedRepoUrl ?? ''}
-          onClose={() => setCloning(false)}
+          onClose={() => setCloning(null)}
           onClone={runClone}
         />
       )}
@@ -113,11 +120,15 @@ export function ProjectFolderCard({
 function LinkedFolder({
   link,
   folder,
+  selecting,
+  onChangeFolder,
   onOpenFolder,
   onUnlink
 }: {
   link: { path: string; repoUrl?: string }
   folder: LocalFolderController
+  selecting: boolean
+  onChangeFolder: () => void
   onOpenFolder: () => void
   onUnlink: () => void
 }): React.JSX.Element {
@@ -136,28 +147,7 @@ function LinkedFolder({
         overflow: 'hidden'
       }}
     >
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0 }}>
-        <span style={{ color: 'var(--acc)', flexShrink: 0, display: 'inline-flex' }}>
-          <Icons.box size={16} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {/* A long path ends in "…" rather than wrapping; the title carries the whole of it. */}
-          <div title={link.path} style={ONE_LINE}>
-            <Mono size={11} style={{ textTransform: 'none' }}>
-              {link.path}
-            </Mono>
-          </div>
-          {link.repoUrl && (
-            <div
-              title={link.repoUrl}
-              style={{ ...ONE_LINE, fontSize: 10.5, color: 'var(--mut)', marginTop: 3 }}
-            >
-              cloned from {link.repoUrl}
-            </div>
-          )}
-          <ScanStateLine source={view?.source ?? null} />
-        </div>
-      </div>
+      <LinkedFolderHeader link={link} view={view} status={status} />
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Button
           kind="ghost"
@@ -169,8 +159,11 @@ function LinkedFolder({
         >
           {OPEN_LABEL.vscode}
         </Button>
+        <Button kind="ghost" size="sm" disabled={selecting} onClick={onChangeFolder}>
+          Change folder
+        </Button>
         <Button kind="ghost" size="sm" onClick={onOpenFolder}>
-          Open Folder
+          Show in file manager
         </Button>
         <Button kind="ghost" size="sm" onClick={onUnlink}>
           Unlink
@@ -189,6 +182,45 @@ function LinkedFolder({
         disabledReason={rowsReason}
         onOpen={folder.open}
       />
+    </div>
+  )
+}
+
+function LinkedFolderHeader({
+  link,
+  view,
+  status
+}: {
+  link: { path: string; repoUrl?: string }
+  view: LocalFolderController['view']
+  status: LocalFolderController['status']
+}): React.JSX.Element {
+  const awaitingCompanion =
+    status === 'loading' &&
+    view?.source?.status === 'error' &&
+    view.source.last_error?.code === 'api_unreachable'
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0 }}>
+      <span style={{ color: 'var(--acc)', flexShrink: 0, display: 'inline-flex' }}>
+        <Icons.box size={16} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* A long path ends in "…" rather than wrapping; the title carries the whole of it. */}
+        <div title={link.path} style={ONE_LINE}>
+          <Mono size={11} style={{ textTransform: 'none' }}>
+            {link.path}
+          </Mono>
+        </div>
+        {link.repoUrl && (
+          <div
+            title={link.repoUrl}
+            style={{ ...ONE_LINE, fontSize: 10.5, color: 'var(--mut)', marginTop: 3 }}
+          >
+            cloned from {link.repoUrl}
+          </div>
+        )}
+        {!awaitingCompanion && <ScanStateLine source={view?.source ?? null} />}
+      </div>
     </div>
   )
 }
@@ -263,4 +295,104 @@ function CloneModal({
       </div>
     </ModalShell>
   )
+}
+
+function useProjectFolderSelection(projectId: string) {
+  const bridge = getDesktopFolderBridge()
+  const link = useProjectFolderStore((s) => s.folders[projectId])
+  const setFolder = useProjectFolderStore((s) => s.setFolder)
+  const clearFolder = useProjectFolderStore((s) => s.clearFolder)
+  const [cloning, setCloning] = useState<string | null>(null)
+  const [selection, setSelection] = useState<{
+    projectId: string
+    busy: boolean
+    error: string | null
+  } | null>(null)
+  const selectionVersion = useRef(0)
+  useEffect(
+    () => () => {
+      selectionVersion.current += 1
+    },
+    [projectId]
+  )
+  const selecting = selection?.projectId === projectId && selection.busy
+  const selectionError = selection?.projectId === projectId ? selection.error : null
+  const folder = useLocalFolder(projectId, link !== undefined)
+
+  const selectFolder = async (): Promise<void> => {
+    const version = ++selectionVersion.current
+    const current = (): boolean => version === selectionVersion.current
+    setSelection({ projectId, busy: true, error: null })
+    try {
+      const path = await bridge?.pick()
+      if (!path || !current()) return
+      if (!(await setFolder(projectId, { path }))) {
+        if (current())
+          setSelection({
+            projectId,
+            busy: false,
+            error: 'Could not link this folder on this machine. Try selecting it again.'
+          })
+        return
+      }
+      if (current()) void folder.link(path)
+    } catch {
+      if (current())
+        setSelection({
+          projectId,
+          busy: false,
+          error: 'Could not open the folder picker. Try again.'
+        })
+    } finally {
+      if (current()) setSelection((previous) => (previous ? { ...previous, busy: false } : null))
+    }
+  }
+
+  const runClone = cloneProjectFolder(bridge, selectionVersion, projectId, setFolder, folder)
+  return {
+    bridge,
+    link,
+    clearFolder,
+    cloning,
+    setCloning,
+    selectionVersion,
+    setSelection,
+    selecting,
+    selectionError,
+    folder,
+    selectFolder,
+    runClone
+  }
+}
+
+function cloneProjectFolder(
+  bridge: ReturnType<typeof getDesktopFolderBridge>,
+  selectionVersion: { current: number },
+  projectId: string,
+  setFolder: ReturnType<typeof useProjectFolderStore.getState>['setFolder'],
+  folder: LocalFolderController
+) {
+  const runClone = async (repoUrl: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!bridge) return { ok: false, error: 'The desktop app is required to clone.' }
+    const version = ++selectionVersion.current
+    const current = (): boolean => version === selectionVersion.current
+    const parentDir = await bridge.pick()
+    if (!parentDir || !current()) return { ok: false }
+    const result = await bridge.clone({ repoUrl, parentDir })
+    if (!current()) return { ok: false }
+    if (result.path) {
+      if (!(await setFolder(projectId, { path: result.path, repoUrl }))) {
+        return {
+          ok: false,
+          error: 'The repository was cloned, but its folder could not be linked on this machine.'
+        }
+      }
+      if (!current()) return { ok: false }
+      void folder.link(result.path)
+      return { ok: true }
+    }
+    return { ok: false, error: result.error ?? 'Clone failed.' }
+  }
+
+  return runClone
 }

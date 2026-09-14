@@ -15,6 +15,8 @@ pinned-binary posture (CLAUDE.md §7). Here the CLI comes only from the
 import functools
 import os
 import shutil
+import subprocess
+from pathlib import Path
 
 # Stable degradation reasons (asserted verbatim by tests and shown to users).
 KICAD_CLI_UNAVAILABLE_REASON = (
@@ -38,4 +40,26 @@ def detect_kicad_cli() -> str | None:
     pinned = os.environ.get("KICAD_CLI_PATH", "")
     if pinned and os.path.isfile(pinned) and os.access(pinned, os.X_OK):
         return pinned
-    return shutil.which("kicad-cli")
+    native = shutil.which("kicad-cli")
+    if native is not None:
+        return native
+    return _flatpak_cli()
+
+
+def _flatpak_cli() -> str | None:
+    discovered = shutil.which("flatpak")
+    if discovered is None or os.path.realpath(discovered) != "/usr/bin/flatpak":
+        return None
+    try:
+        result = subprocess.run(
+            ["/usr/bin/flatpak", "info", "--show-ref", "org.kicad.KiCad"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout.startswith(b"app/org.kicad.KiCad/"):
+        return None
+    adapter = Path(__file__).resolve().parents[1] / "bin/kicad-cli-flatpak"
+    return str(adapter) if adapter.is_file() and os.access(adapter, os.X_OK) else None

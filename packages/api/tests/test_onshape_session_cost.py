@@ -153,9 +153,9 @@ async def test_session_cost_before_and_after(onshape: Any, maker: Any, capsys: A
         print(f"\n  before by route: {before_routes}")
         print(f"  after  by route: {after_routes}")
         print(
-            f"\n  Onshape's quota is ANNUAL: 2500/user/year on Free/Standard."
-            f"\n  This session is {before / 2500 * 100:.1f}% of a YEAR before,"
-            f" {after / 2500 * 100:.1f}% after."
+            "\n  This fixture measures configured non-exempt REST call accounting."
+            "\n  These savings do not imply an annual cap for public App Store OAuth"
+            "\n  or for the separately observed hosted MCP allocation."
         )
         print(
             "\n  NOTE: the before column UNDERSTATES the real saving. It already"

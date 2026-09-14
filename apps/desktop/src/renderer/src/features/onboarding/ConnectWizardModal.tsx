@@ -47,6 +47,7 @@ export interface ConnectWizardModalProps {
   onPickFiles: (files: File[]) => void
   /** Resolve the picker step (null cancels). */
   onSelect: (items: SelectableItem[] | null) => void
+  onRefreshSelection?: () => Promise<SelectableItem[]>
   /** Resolve the details-form step. */
   onSubmitConfig: (values: Record<string, string>) => void
   /** Resolve the grant-choice step (null cancels). */
@@ -387,10 +388,11 @@ function BusyAction({
   state,
   onSelect,
   onSubmitConfig,
-  onChooseAccess
+  onChooseAccess,
+  onRefreshSelection
 }: Pick<
   ConnectWizardModalProps,
-  'state' | 'onSelect' | 'onSubmitConfig' | 'onChooseAccess'
+  'state' | 'onSelect' | 'onSubmitConfig' | 'onChooseAccess' | 'onRefreshSelection'
 >): React.JSX.Element {
   if (state?.phase !== 'busy') return <Spinner />
   if (state.accessModes) {
@@ -398,7 +400,13 @@ function BusyAction({
   }
   if (state.selectable && state.selectable.length > 0) {
     return (
-      <SelectionPicker items={state.selectable} mode={state.selectionMode} onSelect={onSelect} />
+      <SelectionPicker
+        key={state.sourceId}
+        items={state.selectable}
+        mode={state.selectionMode}
+        onSelect={onSelect}
+        onRefresh={onRefreshSelection}
+      />
     )
   }
   if (state.configFields && state.configFields.length > 0) {

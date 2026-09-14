@@ -46,6 +46,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
   return {
     ...actual,
+    listSelectable: vi.fn(async () => []),
     disconnectSource: vi.fn(async () => ({ id: 's1', retained_entities: false }))
   }
 })
@@ -141,6 +142,98 @@ function parkOAuth(firstProgress?: import('./onboardingStore').ConnectionState):
 }
 
 describe('useConnectWizard', () => {
+  registerWizardReadinessTests()
+
+  registerWizardDispatchTests()
+
+  registerExportValidationTests()
+
+  registerExportReadFailuresTests()
+
+  registerExportSizeGuardsTests()
+
+  registerWizardCancellationTests()
+
+  registerWizardSettlementTests()
+})
+
+it('reopens a failed browser connect as a fresh linked-account project picker', async () => {
+  vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
+  const { result, rerender } = renderHook(
+    ({ linked }: { linked: resources.Connection[] }) =>
+      useConnectWizard({ projectId: 'p1', linkedConnections: linked }),
+    { initialProps: { linked: [] as resources.Connection[] } }
+  )
+  act(() => result.current.open(GITHUB))
+  await act(() => result.current.begin())
+  expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
+  act(() => result.current.close())
+  rerender({ linked: [LINKED_GITHUB] })
+  act(() => result.current.open(GITHUB))
+  expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+  await act(() => result.current.begin())
+  expect(mockedOAuth).toHaveBeenCalledWith(
+    expect.anything(),
+    'p1',
+    'github',
+    expect.objectContaining({ linkedConnection: { id: 'c1', login: 'octocat' } })
+  )
+  expect(mockedAccount).not.toHaveBeenCalled()
+})
+
+it('keeps a completed linked-account result when reopening', () => {
+  useOnboardingStore.getState().setConnection('github', { phase: 'done', result: 'Synced' })
+  const { result } = renderHook(() =>
+    useConnectWizard({
+      projectId: 'p1',
+      linkedConnections: [LINKED_GITHUB]
+    })
+  )
+  act(() => result.current.open(GITHUB))
+  expect(useOnboardingStore.getState().connections.github).toEqual({
+    phase: 'done',
+    result: 'Synced'
+  })
+})
+
+it('uses the new project scope when account linking and opening are batched', () => {
+  useOnboardingStore.getState().failConnect('github', 'GitHub connect needs the desktop app.')
+  const { result, rerender } = renderHook(
+    ({ scope }: { scope: 'account' | 'project' }) =>
+      useConnectWizard({
+        projectId: 'p1',
+        scope,
+        linkedConnections: [LINKED_GITHUB]
+      }),
+    { initialProps: { scope: 'account' as 'account' | 'project' } }
+  )
+  act(() => {
+    result.current.open(GITHUB)
+    rerender({ scope: 'project' })
+  })
+  expect(result.current.linkedAccount?.id).toBe('c1')
+  expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+})
+
+it('refreshes only the active configure source through the existing explicit API', async () => {
+  const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+  act(() => result.current.open(GITHUB))
+  act(() =>
+    useOnboardingStore.getState().setConnection('github', {
+      phase: 'busy',
+      stage: 'configure',
+      label: 'Choose',
+      sourceId: 's1',
+      selectable: [{ id: 'one', name: 'One' }]
+    })
+  )
+  await act(async () => {
+    await result.current.refreshSelection()
+  })
+  expect(resources.listSelectable).toHaveBeenCalledWith('p1', 's1', undefined, { refresh: true })
+})
+
+function registerWizardReadinessTests(): void {
   it('open exposes the active entry; close forgets it', () => {
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
     act(() => result.current.open(GITHUB))
@@ -169,8 +262,9 @@ describe('useConnectWizard', () => {
     expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
   })
 
-  it('reuses a CONNECTED linked account for the entry (SOLUSDEV-241)', async () => {
-    withBridge()
+  it.each([true, false])('reuses a CONNECTED linked account with bridge=%s', async (hasBridge) => {
+    if (hasBridge) withBridge()
+    else vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
     const { result } = renderHook(() =>
       useConnectWizard({ projectId: 'p1', linkedConnections: [LINKED_GITHUB] })
     )
@@ -193,7 +287,9 @@ describe('useConnectWizard', () => {
     await act(async () => result.current.begin())
     expect(mockedOAuth.mock.calls[0][3]).not.toHaveProperty('linkedConnection')
   })
+}
 
+function registerWizardDispatchTests(): void {
   it('account scope binds the account with no project at all', async () => {
     withBridge()
     mockedAccount.mockResolvedValue({ ok: true, connectionId: 'c1', result: 'Connected as x' })
@@ -257,7 +353,9 @@ describe('useConnectWizard', () => {
       board: { fileName: 'misnamed.net', content: BOARD_TEXT }
     })
   })
+}
 
+function registerExportValidationTests(): void {
   it('a schematic pick fails fast with guidance and never starts a flow', async () => {
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
     act(() => result.current.open(KICAD))
@@ -315,7 +413,9 @@ describe('useConnectWizard', () => {
       error: TOO_MANY_FILES_ERROR
     })
   })
+}
 
+function registerExportReadFailuresTests(): void {
   it('kicad refuses a third file BEFORE reading any — a folder pick never lands in memory (S5)', async () => {
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
     act(() => result.current.open(KICAD))
@@ -380,7 +480,9 @@ describe('useConnectWizard', () => {
       error: FILE_READ_ERROR
     })
   })
+}
 
+function registerExportSizeGuardsTests(): void {
   it('a failed read on an attempt the user already cancelled stays quiet (T1)', async () => {
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
     act(() => result.current.open(KICAD))
@@ -439,7 +541,9 @@ describe('useConnectWizard', () => {
     expect(mockedEda).not.toHaveBeenCalled()
     expect(useOnboardingStore.getState().connections.kicad?.phase).toBe('error')
   })
+}
 
+function registerWizardCancellationTests(): void {
   it('close DURING the file read cancels: no source is created for the abandoned pick', async () => {
     const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
     act(() => result.current.open(KICAD))
@@ -501,7 +605,9 @@ describe('useConnectWizard', () => {
     await act(async () => undefined)
     expect(useOnboardingStore.getState().connections.github).toBeUndefined()
   })
+}
 
+function registerWizardSettlementTests(): void {
   it('a cancelled flow that still completed keeps its source — work is not thrown away', async () => {
     withBridge()
     const onConnected = vi.fn()
@@ -565,4 +671,4 @@ describe('useConnectWizard', () => {
     })
     expect(cancelOAuth).not.toHaveBeenCalled()
   })
-})
+}

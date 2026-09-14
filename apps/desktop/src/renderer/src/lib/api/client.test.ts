@@ -308,7 +308,15 @@ describe('coalescing and cooldown are scoped to the signed-in token (SOLUSDEV-23
       status: 429,
       headers
     })
+  requestAccountIsolationTests(ok, rateLimited)
+  requestRateLimitScopeTests(rateLimited)
+  requestMutationInvalidationTests(ok)
+})
 
+function requestAccountIsolationTests(
+  ok: (payload: unknown) => Response,
+  rateLimited: (headers: Record<string, string>) => Response
+): void {
   it("never hands one account another account's in-flight response", async () => {
     let token = 'jwt-A'
     let release: (r: Response) => void = () => {}
@@ -351,7 +359,11 @@ describe('coalescing and cooldown are scoped to the signed-in token (SOLUSDEV-23
     await expect(client.request('/a')).rejects.toMatchObject({ status: 429 })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
+}
 
+function requestRateLimitScopeTests(
+  rateLimited: (headers: Record<string, string>) => Response
+): void {
   it('clamps an absurd Retry-After so reads can never be frozen for the process lifetime', async () => {
     let nowMs = 0
     const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(() =>
@@ -405,7 +417,9 @@ describe('coalescing and cooldown are scoped to the signed-in token (SOLUSDEV-23
     await expect(client.request('/projects/p/sources')).rejects.toMatchObject({ status: 429 })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
+}
 
+function requestMutationInvalidationTests(ok: (payload: unknown) => Response): void {
   it('a completed mutation drops in-flight reads so the next refetch is fresh', async () => {
     const responses: Array<(r: Response) => void> = []
     const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
@@ -428,4 +442,4 @@ describe('coalescing and cooldown are scoped to the signed-in token (SOLUSDEV-23
     await expect(stale).resolves.toBe('before')
     await expect(fresh).resolves.toBe('after')
   })
-})
+}

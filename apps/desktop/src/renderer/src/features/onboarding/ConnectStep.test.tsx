@@ -71,95 +71,9 @@ describe('ConnectStep — workspace bootstrap', () => {
 
 describe('ConnectStep — OAuth routing', () => {
   beforeEach(reset)
+  registerConnectorBridgeTests()
 
-  it('drives the REAL connector when linked + bridge present', async () => {
-    const bridge = {
-      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
-      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
-      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
-      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
-    }
-    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(bridge)
-    mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
-
-    await act(async () => {
-      render(<ConnectStep onBuild={vi.fn()} />)
-    })
-    // The mount effect linked the workspace.
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
-
-    // The tile opens the wizard; its Connect action starts the real flow.
-    await userEvent.click(screen.getByText('GitHub'))
-    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
-
-    await vi.waitFor(() => expect(mockedRun).toHaveBeenCalledTimes(1))
-    const [, projectId, provider, options] = mockedRun.mock.calls[0]
-    expect(projectId).toBe('p1')
-    expect(provider).toBe('github')
-    expect(options).toEqual({ redirectUri: 'http://127.0.0.1:9/cb', displayName: 'GitHub' })
-  })
-
-  it('reports an honest error when there is no bridge (dev/web) — never a fake connect', async () => {
-    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
-    mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
-
-    await act(async () => {
-      render(<ConnectStep onBuild={vi.fn()} />)
-    })
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
-    await userEvent.click(screen.getByText('GitHub'))
-    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
-
-    expect(mockedRun).not.toHaveBeenCalled()
-    const github = useOnboardingStore.getState().connections.github
-    expect(github?.phase).toBe('error')
-    expect(github).toMatchObject({ error: expect.stringMatching(/desktop app/i) })
-  })
-
-  it('reports an honest error when the workspace never linked', async () => {
-    const bridge = {
-      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
-      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
-      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
-      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
-    }
-    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(bridge)
-    mockedEnsure.mockResolvedValue({ linked: false })
-
-    await act(async () => {
-      render(<ConnectStep onBuild={vi.fn()} />)
-    })
-    await userEvent.click(screen.getByText('GitHub'))
-    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
-
-    expect(mockedRun).not.toHaveBeenCalled()
-    const github = useOnboardingStore.getState().connections.github
-    expect(github?.phase).toBe('error')
-    expect(github).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
-  })
-
-  it('renders a picker in the wizard when a busy state carries selectable items', async () => {
-    const selectable: SelectableItem[] = [
-      { id: 'a/one', name: 'a/one' },
-      { id: 'a/two', name: 'a/two' }
-    ]
-    useOnboardingStore.getState().setConnection('github', {
-      phase: 'busy',
-      stage: 'configure',
-      label: 'Choose repositories to track…',
-      sourceId: 's1',
-      selectable,
-      selectionMode: 'single'
-    })
-    await act(async () => {
-      render(<ConnectStep onBuild={vi.fn()} />)
-    })
-    // The picker lives in the wizard now — opening the tile surfaces it.
-    await userEvent.click(screen.getByText('GitHub'))
-    const picker = await screen.findByLabelText('Choose an item to track')
-    expect(picker).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
-  })
+  registerConnectorReadinessTests()
 })
 
 describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
@@ -291,3 +205,96 @@ describe('ConnectStep — skip path (FND-08)', () => {
     expect(screen.getByRole('button', { name: /Build workspace/ })).toBeEnabled()
   })
 })
+
+function registerConnectorBridgeTests(): void {
+  it('drives the REAL connector when linked + bridge present', async () => {
+    const bridge = {
+      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
+      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
+      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
+      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
+    }
+    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(bridge)
+    mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
+
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    // The mount effect linked the workspace.
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
+
+    // The tile opens the wizard; its Connect action starts the real flow.
+    await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+
+    await vi.waitFor(() => expect(mockedRun).toHaveBeenCalledTimes(1))
+    const [, projectId, provider, options] = mockedRun.mock.calls[0]
+    expect(projectId).toBe('p1')
+    expect(provider).toBe('github')
+    expect(options).toEqual({ redirectUri: 'http://127.0.0.1:9/cb', displayName: 'GitHub' })
+  })
+
+  it('reports an honest error when there is no bridge (dev/web) — never a fake connect', async () => {
+    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
+    mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
+
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
+    await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+
+    expect(mockedRun).not.toHaveBeenCalled()
+    const github = useOnboardingStore.getState().connections.github
+    expect(github?.phase).toBe('error')
+    expect(github).toMatchObject({ error: expect.stringMatching(/desktop app/i) })
+  })
+}
+
+function registerConnectorReadinessTests(): void {
+  it('reports an honest error when the workspace never linked', async () => {
+    const bridge = {
+      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
+      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
+      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
+      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
+    }
+    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(bridge)
+    mockedEnsure.mockResolvedValue({ linked: false })
+
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+
+    expect(mockedRun).not.toHaveBeenCalled()
+    const github = useOnboardingStore.getState().connections.github
+    expect(github?.phase).toBe('error')
+    expect(github).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
+  })
+
+  it('renders a picker in the wizard when a busy state carries selectable items', async () => {
+    const selectable: SelectableItem[] = [
+      { id: 'a/one', name: 'a/one' },
+      { id: 'a/two', name: 'a/two' }
+    ]
+    useOnboardingStore.getState().setConnection('github', {
+      phase: 'busy',
+      stage: 'configure',
+      label: 'Choose repositories to track…',
+      sourceId: 's1',
+      selectable,
+      selectionMode: 'single'
+    })
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    // The picker lives in the wizard now — opening the tile surfaces it.
+    await userEvent.click(screen.getByText('GitHub'))
+    const picker = await screen.findByLabelText('Choose an item to track')
+    expect(picker).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
+  })
+}

@@ -6,6 +6,43 @@ import { splitSettled, stableTail } from './markdownSplit'
 import { buildBenchMarkdown, splitIntoTokens } from './streamBench'
 
 describe('splitSettled', () => {
+  markdownParagraphsTests()
+  markdownFencesTests()
+  markdownStructuredBlocksTests()
+})
+
+describe('stableTail', () => {
+  it('passes prose and complete blocks through unchanged', () => {
+    expect(stableTail('')).toBe('')
+    expect(stableTail('just prose')).toBe('just prose')
+    expect(stableTail('```c\nint a;\n```')).toBe('```c\nint a;\n```')
+    expect(stableTail('- a\n- b')).toBe('- a\n- b')
+  })
+
+  it('holds back a table row while the table has no header separator yet', () => {
+    expect(stableTail('| Signal | Addr')).toBe('')
+    expect(stableTail('| Signal | Addr |\n')).toBe('')
+    expect(stableTail('text\n| Signal | Addr |')).toBe('text')
+    // The separator line itself is held until complete (a short one is not a table).
+    expect(stableTail('| Signal | Addr |\n|---|-')).toBe('| Signal | Addr |')
+  })
+
+  it('lets partial rows through once the separator is in place', () => {
+    const t = '| Signal | Addr |\n|---|---|\n| imu | 0x'
+    expect(stableTail(t)).toBe(t)
+  })
+
+  it('holds back an unfinished fence opener so it never renders as stray backticks', () => {
+    expect(stableTail('text\n``')).toBe('text')
+    expect(stableTail('text\n`')).toBe('text')
+    expect(stableTail('text\n~~')).toBe('text')
+    expect(stableTail('``')).toBe('')
+    // A complete opener with an info string is a real (unclosed) fence: keep it.
+    expect(stableTail('text\n```python')).toBe('text\n```python')
+  })
+})
+
+function markdownParagraphsTests(): void {
   it('empty input → nothing settled, nothing in the tail', () => {
     expect(splitSettled('')).toEqual({ settled: '', tail: '' })
   })
@@ -25,7 +62,9 @@ describe('splitSettled', () => {
   it('a trailing blank line settles everything', () => {
     expect(splitSettled('para\n\n')).toEqual({ settled: 'para\n\n', tail: '' })
   })
+}
 
+function markdownFencesTests(): void {
   it('does not split inside an open fenced code block (blank lines are code)', () => {
     const content = 'intro\n\n```c\nint a;\n\nint b;\n'
     expect(splitSettled(content)).toEqual({
@@ -53,7 +92,9 @@ describe('splitSettled', () => {
       tail: 'out'
     })
   })
+}
 
+function markdownStructuredBlocksTests(): void {
   it('keeps a whole table in the tail until a blank line follows it', () => {
     const rows = '| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |'
     expect(splitSettled(`intro\n\n${rows}`)).toEqual({ settled: 'intro\n\n', tail: rows })
@@ -87,35 +128,4 @@ describe('splitSettled', () => {
       expect(settled + tail).toBe(acc)
     }
   })
-})
-
-describe('stableTail', () => {
-  it('passes prose and complete blocks through unchanged', () => {
-    expect(stableTail('')).toBe('')
-    expect(stableTail('just prose')).toBe('just prose')
-    expect(stableTail('```c\nint a;\n```')).toBe('```c\nint a;\n```')
-    expect(stableTail('- a\n- b')).toBe('- a\n- b')
-  })
-
-  it('holds back a table row while the table has no header separator yet', () => {
-    expect(stableTail('| Signal | Addr')).toBe('')
-    expect(stableTail('| Signal | Addr |\n')).toBe('')
-    expect(stableTail('text\n| Signal | Addr |')).toBe('text')
-    // The separator line itself is held until complete (a short one is not a table).
-    expect(stableTail('| Signal | Addr |\n|---|-')).toBe('| Signal | Addr |')
-  })
-
-  it('lets partial rows through once the separator is in place', () => {
-    const t = '| Signal | Addr |\n|---|---|\n| imu | 0x'
-    expect(stableTail(t)).toBe(t)
-  })
-
-  it('holds back an unfinished fence opener so it never renders as stray backticks', () => {
-    expect(stableTail('text\n``')).toBe('text')
-    expect(stableTail('text\n`')).toBe('text')
-    expect(stableTail('text\n~~')).toBe('text')
-    expect(stableTail('``')).toBe('')
-    // A complete opener with an info string is a real (unclosed) fence: keep it.
-    expect(stableTail('text\n```python')).toBe('text\n```python')
-  })
-})
+}

@@ -9,6 +9,7 @@ argument that could reach another team's Onshape.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import httpx
@@ -121,7 +122,19 @@ async def test_read_tools_are_not_confirmation_gated(
 
     # A3 added writes; nothing that only READS may ever ask for a confirmation,
     # or the gate stops meaning anything.
-    assert gated == {"onshape.set_variable", "onshape.add_feature", "onshape.update_feature"}
+    assert gated == {
+        "onshape.set_variable",
+        "onshape.add_feature",
+        "onshape.update_feature",
+        "onshape.insert_part",
+        "onshape.extrude_cut",
+        "onshape.create_circle_sketch",
+        "onshape.create_face_mate_connector",
+        "onshape.create_circle_mate_connector",
+        "onshape.create_fastened_mate",
+        "onshape.restore_fastened_pose",
+        "onshape.create_revolute_mate",
+    }
 
 
 # --------------------------------------------------------------- invocation
@@ -500,10 +513,11 @@ async def test_write_tools_expose_a_preview_for_the_confirmation_card(
 
     # SOLUSDEV-168: WHICH document, by name, first — approving an edit to a
     # 24-hex id is approving an edit to a document you cannot identify.
-    assert rows == [
-        {"label": "document", "before": None, "after": "Rover chassis"},
-        {"label": "width", "before": "120 mm", "after": "150 mm"},
-    ]
+    assert rows[0] == {"label": "document", "before": None, "after": "Rover chassis"}
+    assert [row["label"] for row in rows[1:]] == ["width", "count"]
+    assert json.loads(rows[1]["before"])["expression"] == "120 mm"
+    assert json.loads(rows[1]["after"])["expression"] == "150 mm"
+    assert rows[2]["before"] == rows[2]["after"]
 
 
 async def test_read_tools_have_no_preview(maker: async_sessionmaker[AsyncSession]) -> None:
@@ -660,4 +674,352 @@ async def test_a_failed_document_lookup_degrades_to_the_id_not_a_lost_card(
         )
 
     assert rows[0] == {"label": "document", "before": None, "after": "d1"}
-    assert len(rows) == 2, "the operation's own diff must survive a naming failure"
+    assert len(rows) == 3, "the full replacement diff must survive a naming failure"
+
+
+@respx.mock
+async def test_insert_refuses_untracked_donor_before_vendor_io(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    project_id, ref = await _seed_access(maker, "write")
+    store = InMemorySecretStore()
+    await store.put(ref, "token")
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(
+            tool="onshape.insert_part",
+            args={
+                "document_id": "d1",
+                "workspace_id": "w1",
+                "element_id": "e1",
+                "source_document_id": "untracked",
+                "source_element_id": "studio",
+                "source_microversion_id": "micro",
+                "part_id": "part1",
+            },
+        )
+    )
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.UNAUTHORIZED
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.parametrize("account_bound", [False, True])
+async def test_tool_connector_uses_scoped_provider_account_budget(
+    maker: async_sessionmaker[AsyncSession],
+    account_bound: bool,
+) -> None:
+    from solus_api.agent.tools.onshape_tools import _prepare
+    from solus_api.connectors.registry import ConnectorContext
+    from solus_api.models import AccountConnection, ConnectionStatus, User
+
+    project_id, ref = await _seed(maker)
+    store = InMemorySecretStore()
+    async with maker() as db:
+        source = await db.scalar(select(Source).where(Source.project_id == project_id))
+        assert source is not None
+        expected_ref = f"source:{source.id}"
+        if account_bound:
+            user = User(supabase_user_id="scope-owner", email="scope-owner@example.test")
+            db.add(user)
+            await db.flush()
+            account = AccountConnection(
+                user_id=user.id,
+                provider=SourceType.ONSHAPE,
+                status=ConnectionStatus.CONNECTED,
+                secret_ref="connection/scoped/onshape",
+                account_external_id="provider-account",
+                config={"access": "read"},
+            )
+            db.add(account)
+            await db.flush()
+            source.connection_id = account.id
+            source.created_by = user.id
+            source.config = {**source.config, "access": "write"}
+            ref = account.secret_ref or ""
+            expected_ref = "provider-account"
+        source_id, team_id, actor_id = source.id, source.team_id, source.created_by
+        await db.commit()
+    await store.put(ref, "token")
+    seen: list[ConnectorContext] = []
+    connectors = _connectors()
+
+    def scoped(ctx: ConnectorContext) -> OnshapeConnector:
+        seen.append(ctx)
+        return OnshapeConnector(client_id="c", client_secret="s")
+
+    connectors.register_scoped("onshape", scoped)
+    await _prepare(maker, project_id, store, connectors, is_write=False)
+    assert len(seen) == 1
+    assert seen[0] == ConnectorContext(
+        project_id=project_id,
+        team_id=team_id,
+        acting_user_id=actor_id,
+        account_ref=expected_ref,
+        purpose="scheduled",
+    )
+    if account_bound:
+        from solus_api.agent.tools.tool import ToolException
+
+        with pytest.raises(ToolException):
+            await _prepare(maker, project_id, store, connectors, is_write=True)
+        async with maker() as db:
+            current = await db.get(Source, source_id)
+            assert current is not None
+            connection = await db.get(AccountConnection, current.connection_id)
+            assert connection is not None
+            connection.status = ConnectionStatus.REVOKED
+            await db.commit()
+        with pytest.raises(ToolException):
+            await _prepare(maker, project_id, store, connectors, is_write=False)
+
+
+@respx.mock
+async def test_insert_preview_refuses_donor_deselected_before_approval(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.agent.tools.tool import ToolException
+
+    project_id, ref = await _seed_access(maker, "write")
+    store = InMemorySecretStore()
+    await store.put(ref, "token")
+    tools = {
+        tool.descriptor.name: tool
+        for tool in build_onshape_tools(
+            maker, project_id, secret_store=store, connectors=_connectors()
+        )
+    }
+    insert = tools["onshape.insert_part"]
+    assert insert.descriptor.requires_confirmation is True
+    with pytest.raises(ToolException) as error:
+        await insert.preview(
+            {
+                "document_id": "d1",
+                "workspace_id": "w1",
+                "element_id": "e1",
+                "source_document_id": "deselected",
+                "source_element_id": "studio",
+                "source_microversion_id": "micro",
+                "part_id": "part1",
+            }
+        )
+    assert error.value.code is ToolErrorCode.NOT_FOUND
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.parametrize("change", ["revoked", "read_only", "unchanged"])
+@pytest.mark.parametrize("revision_error", [False, True])
+@respx.mock
+async def test_revoke_during_refresh_does_not_restore_tokens_or_retry_insert(
+    maker: async_sessionmaker[AsyncSession],
+    change: str,
+    revision_error: bool,
+) -> None:
+    from solus_api.connectors.secrets import SecretNotFoundError
+    from solus_api.models import AccountConnection, ConnectionStatus, User
+    from solus_api.services.connections import revoke_connection
+
+    project_id, _ = await _seed(maker)
+    ref = f"connection/{uuid.uuid4()}/onshape"
+    store = InMemorySecretStore()
+    await store.put(ref, "expired")
+    await store.put(refresh_secret_ref(ref), "old-refresh")
+    async with maker() as db:
+        owner = User(supabase_user_id="refresh-owner", email="refresh-owner@example.test")
+        db.add(owner)
+        await db.flush()
+        account = AccountConnection(
+            user_id=owner.id,
+            provider=SourceType.ONSHAPE,
+            status=ConnectionStatus.CONNECTED,
+            secret_ref=ref,
+            config={"access": "write"},
+        )
+        db.add(account)
+        await db.flush()
+        source = await db.scalar(select(Source).where(Source.project_id == project_id))
+        assert source is not None
+        source.connection_id = account.id
+        source.secret_ref = ref
+        source.config = {"documents": ["d1", "donor"]}
+        if revision_error:
+            source.status = SourceStatus.ERROR
+            source.last_error = {"code": "revision_changed"}
+        account_id = account.id
+        await db.commit()
+
+    async def refresh(request: httpx.Request) -> httpx.Response:
+        async with maker() as db:
+            account = await db.get(AccountConnection, account_id)
+            assert account is not None
+            if change == "revoked":
+                await revoke_connection(db, store, account)
+            elif change == "read_only":
+                account.config = {"access": "read"}
+            await db.commit()
+        return httpx.Response(
+            200, json={"access_token": "new-token", "refresh_token": "new-refresh"}
+        )
+
+    respx.post("https://oauth.onshape.com/oauth/token").mock(side_effect=refresh)
+    # First donor read fails auth; if the write is retried after revocation this
+    # route would let it continue all the way to insertion.
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/donor/m/micro/e/studio").mock(
+        side_effect=[
+            httpx.Response(200, json=[{"partId": "part1"}]),
+            httpx.Response(401),
+            httpx.Response(200, json=[{"partId": "part1"}]),
+        ]
+    )
+    assembly = {"rootAssembly": {"instances": [], "documentMicroversion": "before"}}
+    after = {
+        "rootAssembly": {
+            "documentMicroversion": "after",
+            "instances": [
+                {
+                    "id": "inserted",
+                    "documentId": "donor",
+                    "elementId": "studio",
+                    "partId": "part1",
+                    "documentMicroversion": "micro",
+                    "type": "Part",
+                }
+            ],
+        }
+    }
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/assemblies/d/d1/w/w1/e/e1").mock(
+        side_effect=[
+            httpx.Response(200, json=assembly),
+            httpx.Response(200, json=assembly),
+            httpx.Response(200, json=after),
+        ]
+    )
+    post = respx.post(f"{ONSHAPE_API_BASE}/api/v6/assemblies/d/d1/w/w1/e/e1/instances").respond(
+        200, json={}
+    )
+    registry = _registry(maker, project_id, store)
+    call = ToolCall(
+        tool="onshape.insert_part",
+        args={
+            "document_id": "d1",
+            "workspace_id": "w1",
+            "element_id": "e1",
+            "source_document_id": "donor",
+            "source_element_id": "studio",
+            "source_microversion_id": "micro",
+            "part_id": "part1",
+        },
+    )
+    tool = next(t for t in registry.tools() if t.descriptor.name == call.tool)
+    await tool.preview(call.args)
+    result = await registry.invoke(call)
+    if change == "unchanged":
+        assert result.ok is True
+        assert post.call_count == 1
+        assert await store.get(ref) == "new-token"
+        assert await store.get(refresh_secret_ref(ref)) == "new-refresh"
+    else:
+        assert result.error is not None
+        assert result.error.code is ToolErrorCode.UNAUTHORIZED
+        assert post.call_count == 0
+        if change == "revoked":
+            with pytest.raises(SecretNotFoundError):
+                await store.get(ref)
+            with pytest.raises(SecretNotFoundError):
+                await store.get(refresh_secret_ref(ref))
+        else:
+            assert await store.get(ref) == "expired"
+            assert await store.get(refresh_secret_ref(ref)) == "old-refresh"
+
+
+async def test_variable_replacement_requires_complete_preview(maker):
+    project_id, _ = await _seed_access(maker, "write")
+    tools = build_onshape_tools(
+        maker, project_id, secret_store=InMemorySecretStore(), connectors=_connectors()
+    )
+    variable = next(tool for tool in tools if tool.descriptor.name == "onshape.set_variable")
+    assert getattr(variable, "requires_complete_preview", False) is True
+
+
+@respx.mock
+@pytest.mark.parametrize("status", list(SourceStatus))
+@pytest.mark.parametrize(
+    "error_code", [None, "revision_changed", "oauth_invalid_grant", "quota_exhausted"]
+)
+async def test_graph_sync_preserves_live_onshape_read_authority(maker, status, error_code):
+    project_id, ref = await _seed(maker, status=status)
+    async with maker() as db:
+        source = await db.scalar(select(Source).where(Source.project_id == project_id))
+        source.last_error = {"code": error_code} if error_code else None
+        await db.commit()
+    store = InMemorySecretStore()
+    await store.put(ref, "fixture-token")
+    read = respx.get(f"{ONSHAPE_API_BASE}/api/v6/variables/d/d1/w/w1/e/e1/variables").respond(
+        200, json=VARIABLES
+    )
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(
+            tool="onshape.get_variables",
+            args={"document_id": "d1", "workspace_id": "w1", "element_id": "e1"},
+        )
+    )
+    usable = status in {SourceStatus.CONNECTED, SourceStatus.SYNCING} or (
+        status is SourceStatus.ERROR and error_code == "revision_changed"
+    )
+    assert result.ok is usable
+    assert read.call_count == int(usable)
+
+
+@pytest.mark.parametrize("status", list(SourceStatus))
+@pytest.mark.parametrize(
+    "error_code", [None, "revision_changed", "oauth_invalid_grant", "quota_exhausted"]
+)
+async def test_refresh_admission_keeps_syncing_source_but_rejects_unusable_states(
+    maker, status, error_code
+):
+    from solus_api.agent.tools.onshape_tools import _AccountRefreshStore
+    from solus_api.agent.tools.tool import ToolException
+    from solus_api.models import AccountConnection, ConnectionStatus, User
+
+    project_id, ref = await _seed(maker, status=status)
+    async with maker() as db:
+        user = User(supabase_user_id="sync-reader", email="sync-reader@example.test")
+        db.add(user)
+        await db.flush()
+        account = AccountConnection(
+            user_id=user.id,
+            provider=SourceType.ONSHAPE,
+            status=ConnectionStatus.CONNECTED,
+            secret_ref=ref,
+            config={"access": "write"},
+        )
+        db.add(account)
+        await db.flush()
+        source = await db.scalar(select(Source).where(Source.project_id == project_id))
+        source.connection_id = account.id
+        source.last_error = {"code": error_code} if error_code else None
+        await db.commit()
+        guard = _AccountRefreshStore(
+            db, InMemorySecretStore(), source, {"document_id": "d1"}, is_write=True
+        )
+        if status in {SourceStatus.CONNECTED, SourceStatus.SYNCING} or (
+            status is SourceStatus.ERROR and error_code == "revision_changed"
+        ):
+            await guard._admit()
+        else:
+            with pytest.raises(ToolException):
+                await guard._admit()
+
+
+async def test_compact_assembly_inspection_refuses_untracked_root_before_http(maker):
+    project_id, ref = await _seed(maker, documents=["allowed"])
+    store = InMemorySecretStore()
+    await store.put(ref, "access")
+    result = await _registry(maker, project_id, store).invoke(
+        ToolCall(
+            tool="onshape.inspect_assembly_geometry",
+            args={"document_id": "untracked", "workspace_id": "ws", "element_id": "assembly"},
+        )
+    )
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.code == ToolErrorCode.NOT_FOUND

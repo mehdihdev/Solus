@@ -269,6 +269,7 @@ async def test_local_tools_lists_vendor_run_loopback_servers(
     # here by catalog entry alone — zero frontend edits.
     fusion = by_type["fusion"]
     assert fusion["display_name"] == "Fusion"
+    assert fusion["supported_platforms"] == ["darwin", "win32"]
     assert fusion["hosting"] == "vendor-run"
     assert fusion["url_host"] == "127.0.0.1:27182"
     assert fusion["requires"] == "companion"

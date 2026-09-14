@@ -1,7 +1,7 @@
 // The shared picker. Its whole job is to be item-agnostic: `mode` decides the
 // shape, and the items supply their own copy. No provider id appears here.
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SelectionPicker } from './SelectionPicker'
 import type { SelectableItem } from '../../lib/api/resources'
@@ -58,4 +58,83 @@ describe('SelectionPicker — multi', () => {
     render(<SelectionPicker items={DOCS} mode="multi" />)
     expect(screen.getByText('Maya')).toBeInTheDocument()
   })
+})
+
+it('refreshes explicitly, retains checked items, and does not select before Track', async () => {
+  const fresh = { id: 'saved', name: 'FeatureScript MCP Workspace' }
+  const onRefresh = vi.fn(async () => [...DOCS, fresh])
+  const onSelect = vi.fn()
+  render(<SelectionPicker items={DOCS} mode="multi" onRefresh={onRefresh} onSelect={onSelect} />)
+  await userEvent.click(screen.getByLabelText('Arm'))
+  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+  expect(await screen.findByLabelText(fresh.name)).toBeInTheDocument()
+  expect(screen.getByLabelText('Arm')).toBeChecked()
+  expect(onRefresh).toHaveBeenCalledTimes(1)
+  expect(onSelect).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByLabelText(fresh.name))
+  await userEvent.click(screen.getByRole('button', { name: /track 2/i }))
+  expect(onSelect).toHaveBeenCalledWith([DOCS[1], fresh])
+})
+
+it('keeps the old listing and selection when refresh fails', async () => {
+  render(
+    <SelectionPicker
+      items={DOCS}
+      mode="multi"
+      initial={['docB']}
+      onRefresh={vi.fn(async () => {
+        throw new Error('quota')
+      })}
+    />
+  )
+  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(/refresh/i)
+  expect(screen.getByLabelText('Arm')).toBeChecked()
+})
+
+it('prevents concurrent refresh and Track while the request is pending', async () => {
+  let finish!: (items: SelectableItem[]) => void
+  const onRefresh = vi.fn(
+    () =>
+      new Promise<SelectableItem[]>((resolve) => {
+        finish = resolve
+      })
+  )
+  const onSelect = vi.fn()
+  render(
+    <SelectionPicker
+      items={DOCS}
+      mode="multi"
+      initial={['docB']}
+      onRefresh={onRefresh}
+      onSelect={onSelect}
+    />
+  )
+  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+  expect(screen.getByRole('button', { name: /track 1/i })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: /refreshing/i }))
+  expect(onRefresh).toHaveBeenCalledTimes(1)
+  expect(onSelect).not.toHaveBeenCalled()
+  await act(async () => finish([]))
+  expect(screen.getByRole('status')).toHaveTextContent('No items found')
+  expect(screen.getByRole('button', { name: /track none/i })).toBeEnabled()
+})
+
+it('ignores a late refresh after the picker closes or changes source', async () => {
+  let finish!: (items: SelectableItem[]) => void
+  const onRefresh = () =>
+    new Promise<SelectableItem[]>((resolve) => {
+      finish = resolve
+    })
+  const { rerender, unmount } = render(
+    <SelectionPicker key="source-a" items={DOCS} mode="multi" onRefresh={onRefresh} />
+  )
+  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+  rerender(
+    <SelectionPicker key="source-b" items={[{ id: 'b', name: 'Other source' }]} mode="multi" />
+  )
+  await act(async () => finish([{ id: 'late', name: 'Late old document' }]))
+  expect(screen.queryByLabelText('Late old document')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Other source')).toBeInTheDocument()
+  unmount()
 })

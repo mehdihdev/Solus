@@ -68,6 +68,16 @@ beforeEach(() => {
 })
 
 describe('SourcingModal — requirement', () => {
+  sourcingDescriptionTests()
+  sourcingCadAndRulesTests()
+})
+
+describe('SourcingModal — candidates and selection', () => {
+  sourcingCandidateComparisonTests()
+  sourcingSelectionOutcomesTests()
+})
+
+function sourcingDescriptionTests(): void {
   it('describes a requirement and submits it for the BOM door', async () => {
     const a = actions()
     render(
@@ -99,7 +109,9 @@ describe('SourcingModal — requirement', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/Describe the requirement/)
     expect(a.submit).not.toHaveBeenCalled()
   })
+}
 
+function sourcingCadAndRulesTests(): void {
   it('derives torque from a real assembly for the Workspace door, names unknown masses, and submits with them', async () => {
     const a = actions()
     const { rerender } = render(
@@ -160,9 +172,9 @@ describe('SourcingModal — requirement', () => {
       preferred_suppliers: []
     })
   })
-})
+}
 
-describe('SourcingModal — candidates and selection', () => {
+function sourcingCandidateComparisonTests(): void {
   it('shows searching honestly', () => {
     render(
       <SourcingModal
@@ -219,7 +231,9 @@ describe('SourcingModal — candidates and selection', () => {
       quantity: 2
     })
   })
+}
 
+function sourcingSelectionOutcomesTests(): void {
   it('shows the planned part with its vendor CAD link and hands it to the door', async () => {
     const onSelected = vi.fn()
     const onClose = vi.fn()
@@ -268,4 +282,4 @@ describe('SourcingModal — candidates and selection', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
     expect(a.reset).toHaveBeenCalled()
   })
-})
+}

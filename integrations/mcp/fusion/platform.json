@@ -1,0 +1,7 @@
+{
+  "display_name": "Fusion",
+  "supported_platforms": [
+    "darwin",
+    "win32"
+  ]
+}

@@ -16,14 +16,15 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.confirmations import (
     ParkedCall,
+    _feed_back_outcome,
     command_outcome_text,
     decide_confirmation,
     request_confirmation,
@@ -33,11 +34,13 @@ from solus_api.agent.conversation import (
     serialize_conversation,
     serialize_turn,
 )
+from solus_api.agent.execution_policy import BuildExecutionPolicy
+from solus_api.agent.history_evidence import enrich_history
 from solus_api.agent.modes import ActionMode, build_mode_dispatch
+from solus_api.agent.onshape_turn_sync import OnshapeTurnSync, create_turn_sync
 from solus_api.agent.preferences import EngineeringPreferences
 from solus_api.agent.reason import MAX_ANCHORS
 from solus_api.agent.runtime import (
-    MAX_TOOL_CALLS,
     AgentRunContext,
     TurnView,
     build_dispatch,
@@ -54,6 +57,7 @@ from solus_api.agent.tools import ToolRegistry
 from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import redact_value
+from solus_api.agent.turn_limits import turn_limits
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
@@ -71,9 +75,11 @@ from solus_api.deps import (
 )
 from solus_api.extensions.attribution import ExtensionAttribution
 from solus_api.models import (
+    ConfirmationStatus,
     Conversation,
     ConversationTurn,
     Role,
+    Source,
     ToolConfirmation,
     TurnRole,
     User,
@@ -90,6 +96,7 @@ from solus_api.orchestration.gates import (
 from solus_api.orchestration.providers import ProviderTransientError
 from solus_api.schemas import ConfirmationDecision, StrictModel
 from solus_api.services.events import emit_event
+from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
 
 logger = logging.getLogger("solus.sol")
 
@@ -147,7 +154,6 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 # runner), not inside the runner: an upper bound on tool calls per turn and a wall-clock
 # budget on the whole turn. The scaffold never trips these; they protect the transport
 # once the model-backed runner (SOL-01/02) swaps in with no endpoint change.
-SOL_TURN_TIMEOUT_SECONDS = 120.0
 #: Flat pre-flight estimate for one SOL turn.
 #: ponytail: a turn is a variable number of model rounds, so this is a floor, not
 #: a forecast. The real per-call enforcement is `assert_can_spend` inside the
@@ -344,6 +350,37 @@ async def list_turns(
     return envelope([serialize_turn(t) for t in visible], meta=meta)
 
 
+@router.get("/conversations/{conversation_id}/confirmations")
+async def list_conversation_confirmations(
+    conversation_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep
+) -> dict[str, Any]:
+    await _owned_or_404(ctx, session, conversation_id)
+    rows = await session.scalars(
+        select(ToolConfirmation)
+        .where(
+            ToolConfirmation.conversation_id == conversation_id,
+            ToolConfirmation.project_id == ctx.project.id,
+            ToolConfirmation.team_id == ctx.team.id,
+            ToolConfirmation.user_id == ctx.user.id,
+            ToolConfirmation.status == ConfirmationStatus.PENDING,
+            ToolConfirmation.expires_at > utcnow(),
+        )
+        .order_by(ToolConfirmation.created_at, ToolConfirmation.id)
+    )
+    return envelope(
+        [
+            {
+                "confirmation_id": str(row.id),
+                "tool": row.tool,
+                "summary": row.summary,
+                "preview": row.preview,
+                "expires_at": row.expires_at.isoformat(),
+            }
+            for row in rows
+        ]
+    )
+
+
 @router.patch("/conversations/{conversation_id}")
 async def rename_conversation(
     conversation_id: uuid.UUID, body: ConversationRename, ctx: ProjectCtx, session: SessionDep
@@ -425,7 +462,17 @@ def _decision_summary(decision: str, result: ToolResult) -> str:
     """
     if result.ok:
         outcome = command_outcome_text(result.value) if isinstance(result.value, dict) else None
-        return "approved by you and applied ok" + (outcome or "")
+        if outcome is not None:
+            return "approved by you" + outcome
+        sync = result.value.get("graph_sync") if isinstance(result.value, dict) else None
+        sync_note = ""
+        if isinstance(sync, dict):
+            sync_note = (
+                "; graph sync queued"
+                if sync.get("status") == "queued"
+                else "; graph sync unavailable — retry source sync, not the CAD change"
+            )
+        return "approved by you and applied ok" + (outcome or "") + sync_note
     if decision != "approve":
         return "rejected by you; nothing was applied"
     code = result.error.code.value if result.error is not None else "error"
@@ -510,6 +557,72 @@ async def _persist_turn(
         return assistant.id
 
 
+async def _close_runner(stream: AsyncIterator[AgentEvent]) -> None:
+    close = getattr(stream, "aclose", None)
+    if close is not None:
+        try:
+            await _bounded_await(close(), 5.0)
+        except (TimeoutError, RuntimeError):
+            logger.warning("SOL runner cleanup did not complete within its bound")
+
+
+async def _cleanup_turn(
+    stream: AsyncIterator[AgentEvent], turn_sync: OnshapeTurnSync | None
+) -> None:
+    async def cleanup() -> None:
+        await _close_runner(stream)
+        if turn_sync is not None:
+            await turn_sync.flush()
+
+    try:
+        await _bounded_await(cleanup(), 5.0)
+    except TimeoutError:
+        logger.warning("Turn cleanup grace expired; durable holds will recover")
+
+
+def _consume_task(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _bounded_await(awaitable: Any, seconds: float) -> Any:
+    task = asyncio.ensure_future(awaitable)
+    task.add_done_callback(_consume_task)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, seconds))
+        if not done:
+            raise TimeoutError
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+async def _bounded_events(
+    stream: AsyncIterator[AgentEvent], seconds: float
+) -> AsyncIterator[AgentEvent]:
+    deadline = asyncio.get_running_loop().time() + seconds
+    while True:
+        try:
+            event = await _bounded_await(
+                anext(stream), deadline - asyncio.get_running_loop().time()
+            )
+        except StopAsyncIteration:
+            return
+        yield event
+
+
+def _abort_code(error: BaseException) -> str:
+    return "timeout" if isinstance(error, TimeoutError) else "cancelled"
+
+
+def _abort_event(code: str, error: BaseException | None) -> AgentEvent:
+    if code == "cancelled":
+        assert error is not None
+        raise error
+    return AgentEvent.error(code, _ABORT_MESSAGES[code])
+
+
 async def _run_and_persist(
     *,
     runner: AgentRunnerDep,
@@ -522,6 +635,7 @@ async def _run_and_persist(
     sol_mode: str,
     action_mode: str,
     parked: list[ParkedCall],
+    turn_sync: OnshapeTurnSync | None = None,
 ) -> AsyncIterator[str]:
     """Stream the runner's events and, once the turn completes, persist the tool and
     assistant turns in a FRESH session (the request session is gone by the time the
@@ -533,16 +647,19 @@ async def _run_and_persist(
     final_text = ""
     tool_calls = 0
     aborted: str | None = None
+    abort_error: BaseException | None = None
+    limits = turn_limits(ctx.action_mode)
+    stream = runner.run(ctx)
     try:
         try:
-            async with asyncio.timeout(SOL_TURN_TIMEOUT_SECONDS):
-                async for event in runner.run(ctx):
+            async with asyncio.timeout(limits.timeout_seconds):
+                async for event in _bounded_events(stream, limits.timeout_seconds):
                     if event.type is AgentEventType.TOOL_CALL:
                         tool_calls += 1
                         # Loop guard enforced HERE, independent of the runner: a runaway
                         # (real, model-driven) runner is cut off by the plumbing, not by
                         # its own restraint.
-                        if tool_calls > MAX_TOOL_CALLS:
+                        if tool_calls > limits.tool_calls:
                             aborted = "loop_limit"
                             break
                         pending[event.data["call_id"]] = event.data
@@ -565,8 +682,11 @@ async def _run_and_persist(
                                 preview=request.preview,
                             )
                         )
-        except TimeoutError:
-            aborted = "timeout"
+        except (TimeoutError, asyncio.CancelledError, GeneratorExit) as error:
+            aborted = _abort_code(error)
+            abort_error = error
+        finally:
+            await _cleanup_turn(stream, turn_sync)
 
         # Persist whatever completed — for a clean turn OR a bounded abort (a truncated
         # transcript is still worth keeping). A hard failure below falls to the outer except.
@@ -584,7 +704,7 @@ async def _run_and_persist(
             parked_tools=frozenset(p.tool for p in parked if p.confirmation_id is not None),
         )
         if aborted is not None:
-            yield format_sse(AgentEvent.error(aborted, _ABORT_MESSAGES[aborted]))
+            yield format_sse(_abort_event(aborted, abort_error))
         yield format_sse(
             AgentEvent.done(conversation_id=str(conversation_id), turn_id=str(done_turn_id))
         )
@@ -618,9 +738,77 @@ async def _validate_mentions(
             )
 
 
+async def _record_build_outcome(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: SettingsDep,
+    ctx: ProjectCtx,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    call: ToolCall,
+    result: ToolResult,
+    turn_sync: OnshapeTurnSync | None = None,
+) -> ToolResult:
+    """Record Build provenance and retain the normal post-write graph sync path."""
+    if turn_sync is not None:
+        result = turn_sync.outcome(call, result)
+    if result.ok and turn_sync is None:
+        from solus_api.routers.sources import enqueue_sync
+
+        async def enqueue_after_write(sync_session: AsyncSession, source: Source) -> uuid.UUID:
+            return await enqueue_sync(
+                sync_session,
+                ctx,
+                source,
+                request,
+                background_tasks,
+                settings.model_copy(update={"sync_inline": False}),
+                Response(),
+            )
+
+        graph_sync = await schedule_onshape_write_sync(
+            sessionmaker,
+            project_id=ctx.project.id,
+            team_id=ctx.team.id,
+            tool_name=call.tool,
+            args=call.args,
+            store=getattr(request.app.state, "integration_store", None),
+            enqueue=enqueue_after_write,
+        )
+        if graph_sync is not None and result.value is not None:
+            result = result.model_copy(update={"value": {**result.value, "graph_sync": graph_sync}})
+    try:
+        async with sessionmaker() as recording:
+            await _feed_back_outcome(
+                recording,
+                call.tool,
+                result,
+                user_id=ctx.user.id,
+                team_id=ctx.team.id,
+                project_id=ctx.project.id,
+            )
+            emit_event(
+                recording,
+                user=ctx.user,
+                event_type="sol.build_action_executed",
+                team_id=ctx.team.id,
+                project_id=ctx.project.id,
+                payload={
+                    "tool": call.tool,
+                    "call_id": call.call_id,
+                    "authorization_origin": "build_policy",
+                    "ok": result.ok,
+                },
+            )
+            await recording.commit()
+    except Exception:
+        logger.warning("Build outcome recording failed for %s", call.tool)
+    return result
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     conversation_id: uuid.UUID,
     body: MessageCreate,
     ctx: ProjectCtx,
@@ -676,7 +864,10 @@ async def post_message(
     prior = await SERVICE.history(
         session, conversation_id=conversation_id, project_id=ctx.project.id
     )
-    history = tuple(TurnView(role=t.role.value, content=t.content) for t in prior)
+    history = tuple(
+        TurnView(role=role, content=content)
+        for role, content in enrich_history([(t.role.value, t.content, t.attrs) for t in prior])
+    )
     # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
     # on `attrs`; the Solus-authored framing exists only in model input. S3: a
     # screenshot leaves dims + app only — never pixels (sol-window.md §8.3).
@@ -764,13 +955,32 @@ async def post_message(
     # SOLUSDEV-251: vendor-documented tool knowledge rides each mapped write
     # tool's description as a fenced note (global table, never project data).
     descriptors = with_knowledge_notes(tuple(registry.list()), await load_knowledge_notes(session))
+    routine_policy = BuildExecutionPolicy(registry, body.action_mode)
+    turn_sync = create_turn_sync(request, settings, ctx, sessionmaker)
+
+    async def routine_outcome(call: ToolCall, result: ToolResult) -> ToolResult:
+        return await _record_build_outcome(
+            request, background_tasks, settings, ctx, sessionmaker, call, result, turn_sync
+        )
+
     run_ctx = AgentRunContext(
         prompt=content,
         # Descriptors + a gated, MODE-WRAPPED dispatcher, never the registry
         # itself: a runner holds nothing it could invoke ungated (CLAUDE.md §7)
         # and, in guide mode, nothing that could mutate (SOLX-01).
         tools=descriptors,
-        dispatch=build_mode_dispatch(body.action_mode, descriptors, build_dispatch(registry, park)),
+        dispatch=build_mode_dispatch(
+            body.action_mode,
+            descriptors,
+            build_dispatch(
+                registry,
+                park,
+                routine_policy=routine_policy,
+                routine_outcome=routine_outcome,
+                routine_start=turn_sync.start,
+            ),
+        ),
+        executed_build_calls=routine_policy.executed_calls,
         systems=systems,
         project_id=ctx.project.id,
         sol_mode=ctx.user.sol_mode,
@@ -813,6 +1023,7 @@ async def post_message(
         runner=runner,
         ctx=run_ctx,
         parked=parked_calls,
+        turn_sync=turn_sync,
         sessionmaker=sessionmaker,
         conversation_id=conversation_id,
         project_id=ctx.project.id,
@@ -830,14 +1041,37 @@ async def post_message(
     )
 
 
+@router.get("/confirmations/{confirmation_id}/output")
+async def confirmation_output(
+    confirmation_id: uuid.UUID,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    cursor: Annotated[int, Query(ge=0, le=256)] = 0,
+) -> dict[str, Any]:
+    from solus_api.agent.command_output import output_store
+
+    owned = await session.scalar(
+        select(ToolConfirmation.id).where(
+            ToolConfirmation.id == confirmation_id,
+            ToolConfirmation.project_id == ctx.project.id,
+            ToolConfirmation.user_id == ctx.user.id,
+        )
+    )
+    if owned is None:
+        raise APIError(404, "not_found", "No such action.")
+    return {"data": output_store.read((ctx.project.id, ctx.user.id, confirmation_id), cursor)}
+
+
 @router.post("/confirmations/{confirmation_id}")
 async def decide_tool_confirmation(
     request: Request,
+    background_tasks: BackgroundTasks,
     confirmation_id: uuid.UUID,
     body: ConfirmationDecision,
     ctx: ProjectCtx,
     session: SessionDep,
     registry: SolRegistryDep,
+    settings: SettingsDep,
     _verified: RequireVerified,
 ) -> dict[str, Any]:
     """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
@@ -875,7 +1109,9 @@ async def decide_tool_confirmation(
     # event stream — the same no-existence-oracle rule, applied to the audit path.
     decided = (
         await session.execute(
-            select(ToolConfirmation.tool, ToolConfirmation.conversation_id).where(
+            select(
+                ToolConfirmation.tool, ToolConfirmation.conversation_id, ToolConfirmation.args
+            ).where(
                 ToolConfirmation.id == confirmation_id,
                 ToolConfirmation.project_id == ctx.project.id,
                 ToolConfirmation.user_id == ctx.user.id,
@@ -883,6 +1119,32 @@ async def decide_tool_confirmation(
         )
     ).first()
     tool_name = decided.tool if decided is not None else None
+
+    if body.decision == "approve" and result.ok and decided is not None:
+        from solus_api.routers.sources import enqueue_sync
+
+        async def enqueue_after_write(sync_session: AsyncSession, source: Source) -> uuid.UUID:
+            return await enqueue_sync(
+                sync_session,
+                ctx,
+                source,
+                request,
+                background_tasks,
+                settings.model_copy(update={"sync_inline": False}),
+                Response(),
+            )
+
+        graph_sync = await schedule_onshape_write_sync(
+            request.app.state.sessionmaker,
+            project_id=ctx.project.id,
+            team_id=ctx.team.id,
+            tool_name=decided.tool,
+            args=decided.args,
+            store=getattr(request.app.state, "integration_store", None),
+            enqueue=enqueue_after_write,
+        )
+        if graph_sync is not None and isinstance(result.value, dict):
+            result = result.model_copy(update={"value": {**result.value, "graph_sync": graph_sync}})
 
     # THE OTHER HALF OF THE HISTORY FIX. The turn that proposed this recorded it
     # as "parked, awaiting your approval" and then ended. Without a second turn

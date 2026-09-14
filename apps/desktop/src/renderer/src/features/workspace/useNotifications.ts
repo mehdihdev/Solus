@@ -24,6 +24,23 @@ export interface NotificationsData {
   refresh: () => Promise<void>
 }
 
+function useNotificationRefresh(load: () => Promise<void>): void {
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // The billing flow dispatches this after a checkout completes so the bell
+  // shows the webhook's payment notification without a remount (SOLUSDEV-114).
+  // Loose coupling by design: the event name is duplicated from
+  // billing/useBillingData.NOTIFICATIONS_REFRESH_EVENT to avoid a cross-feature
+  // import cycle.
+  useEffect(() => {
+    const onRefresh = (): void => void load()
+    window.addEventListener('solus:notifications-refresh', onRefresh)
+    return () => window.removeEventListener('solus:notifications-refresh', onRefresh)
+  }, [load])
+}
+
 export function useNotifications(): NotificationsData {
   // An authenticated session always fetches; the persisted `linked` onboarding
   // flag only unlocks fetches for non-authenticated (dev-bypass) sessions. A
@@ -62,20 +79,7 @@ export function useNotifications(): NotificationsData {
     }
   }
 
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  // The billing flow dispatches this after a checkout completes so the bell
-  // shows the webhook's payment notification without a remount (SOLUSDEV-114).
-  // Loose coupling by design: the event name is duplicated from
-  // billing/useBillingData.NOTIFICATIONS_REFRESH_EVENT to avoid a cross-feature
-  // import cycle.
-  useEffect(() => {
-    const onRefresh = (): void => void load()
-    window.addEventListener('solus:notifications-refresh', onRefresh)
-    return () => window.removeEventListener('solus:notifications-refresh', onRefresh)
-  }, [load])
+  useNotificationRefresh(load)
 
   const markRead = async (id: string): Promise<void> => {
     const stamp = new Date().toISOString()

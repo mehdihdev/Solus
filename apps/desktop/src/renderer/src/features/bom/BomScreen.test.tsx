@@ -78,6 +78,14 @@ function renderScreen(props: Partial<Parameters<typeof BomScreen>[0]> = {}): voi
 }
 
 describe('BomScreen', () => {
+  registerBomRowsAndEditingTests()
+
+  registerBomActionsAndStatesTests()
+
+  registerBomSourcingTests()
+})
+
+function registerBomRowsAndEditingTests(): void {
   it('lists one row per physical part with its sources, kind, quantity and state', () => {
     mockBom({})
     renderScreen()
@@ -142,7 +150,9 @@ describe('BomScreen', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Add to BOM' }))
     expect(await within(dialog).findByText(/Only project members/)).toBeInTheDocument()
   })
+}
 
+function registerBomActionsAndStatesTests(): void {
   it('removes an item row after a confirm, and never offers removal on a design row', async () => {
     const a = mockBom({})
     renderScreen()
@@ -206,7 +216,9 @@ describe('BomScreen', () => {
     expect(screen.getByText(/bounded subset/)).toBeInTheDocument()
     expect(screen.getByText(designRow().name)).toBeInTheDocument()
   })
+}
 
+function registerBomSourcingTests(): void {
   it('opens the sourcing panel from Find compatible parts and refreshes when a part is planned', async () => {
     const a = mockBom({})
     renderScreen()
@@ -217,4 +229,4 @@ describe('BomScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: 'close' }))
     expect(screen.queryByRole('dialog', { name: 'sourcing:bom' })).toBeNull()
   })
-})
+}

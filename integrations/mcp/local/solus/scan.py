@@ -26,6 +26,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import IO, Any, TypedDict
 
+from .arduino import MAX_FILES as MAX_SKETCHES
+from .arduino import collect_sketches
 from .deps import collect_dependencies
 from .detect import tools_installed
 from .gitremote import GitInfo, git_info
@@ -139,6 +141,7 @@ def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str
     dependencies, truncated_dependencies = collect_dependencies(
         root, [entry["parts"] for entry in files]
     )
+    sketches = [entry["parts"] for entry in files if entry["tool"] == "arduino"]
     return {
         "schema_version": SCHEMA_VERSION,
         "root_name": root.name,
@@ -149,6 +152,8 @@ def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str
         "tools_installed": dict(tools) if tools is not None else dict(tools_installed()),
         "dependencies": dependencies,
         "truncated_dependencies": truncated_dependencies,
+        "arduino": collect_sketches(root, sketches),
+        "truncated_arduino": len(sketches) > MAX_SKETCHES,
     }
 
 

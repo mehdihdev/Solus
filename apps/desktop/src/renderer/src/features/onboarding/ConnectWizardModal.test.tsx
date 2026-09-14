@@ -93,205 +93,13 @@ beforeEach(() => {
 })
 
 describe('ConnectWizardModal', () => {
-  it('renders the rail derived from the connector shape, first step current', () => {
-    renderWizard(OAUTH_PICK)
-    const rail = screen.getByLabelText('Connect steps')
-    const steps = Array.from(rail.querySelectorAll('[data-step]')).map((el) => el.textContent)
-    expect(steps).toEqual(['Sign in', 'Pick repositories', 'Build graph'])
-    expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe('Sign in')
-  })
+  registerWizardPresentationTests()
 
-  it('draws the Solus logo, not a letter, at the Solus end of the link (SOLUSDEV-253)', () => {
-    renderWizard(OAUTH_PICK)
-    const solusEnd = document.querySelector('[aria-label="Solus"]')
-    expect(solusEnd?.querySelector('svg[role="img"]')).not.toBeNull()
-    expect(solusEnd?.textContent).toBe('')
-  })
+  registerWizardInputsTests()
 
-  it('starts idle with a Connect action that begins the flow', () => {
-    const handlers = renderWizard(OAUTH_PICK)
-    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
-    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
-  })
+  registerWizardRecoveryTests()
 
-  it('shows the live engine label and marks the busy step current', () => {
-    renderWizard(OAUTH_PICK, {
-      phase: 'busy',
-      stage: 'configure',
-      label: 'Discovering repositories…'
-    })
-    expect(screen.getByText('Discovering repositories…')).toBeTruthy()
-    const rail = screen.getByLabelText('Connect steps')
-    expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe('Pick repositories')
-  })
-
-  it('renders the selection picker when the flow offers items', () => {
-    const handlers = renderWizard(OAUTH_PICK, {
-      phase: 'busy',
-      stage: 'configure',
-      selectable: [{ id: 'a/one', name: 'a/one' }],
-      selectionMode: 'single'
-    })
-    fireEvent.change(screen.getByLabelText('Choose an item to track'), {
-      target: { value: 'a/one' }
-    })
-    expect(handlers.onSelect).toHaveBeenCalledWith([{ id: 'a/one', name: 'a/one' }])
-  })
-
-  it('renders the details form, masking secret-looking fields', () => {
-    const handlers = renderWizard(OAUTH_FIELDS, {
-      phase: 'busy',
-      stage: 'configure',
-      configFields: ['document_id', 'license_key']
-    })
-    const docField = screen.getByLabelText('Document id')
-    const licenseField = screen.getByLabelText('License key')
-    expect((docField as HTMLInputElement).type).toBe('text')
-    expect((licenseField as HTMLInputElement).type).toBe('password')
-    fireEvent.change(docField, { target: { value: 'd1' } })
-    fireEvent.change(licenseField, { target: { value: 'k1' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    expect(handlers.onSubmitConfig).toHaveBeenCalledWith({ document_id: 'd1', license_key: 'k1' })
-  })
-
-  it('will not submit a partially filled details form', () => {
-    const handlers = renderWizard(OAUTH_FIELDS, {
-      phase: 'busy',
-      stage: 'configure',
-      configFields: ['document_id', 'license_key']
-    })
-    fireEvent.change(screen.getByLabelText('Document id'), { target: { value: 'd1' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    expect(handlers.onSubmitConfig).not.toHaveBeenCalled()
-  })
-
-  it('lets a multi-select picker submit an empty selection (connected but idle)', () => {
-    const handlers = renderWizard(OAUTH_PICK, {
-      phase: 'busy',
-      stage: 'configure',
-      selectable: [{ id: 'docA', name: 'Rover chassis' }],
-      selectionMode: 'multi'
-    })
-    fireEvent.click(screen.getByRole('button', { name: /track none/i }))
-    expect(handlers.onSelect).toHaveBeenCalledWith([])
-  })
-
-  it('starts the grant choice on the connector’s own default, not the widest', () => {
-    renderWizard(OAUTH_ACCESS, {
-      phase: 'busy',
-      stage: 'access',
-      accessModes: OAUTH_ACCESS.accessModes!
-    })
-    expect((screen.getByLabelText('Read-only') as HTMLInputElement).checked).toBe(true)
-  })
-
-  it('renders the grant choice with descriptions and confirms the chosen mode', () => {
-    const handlers = renderWizard(OAUTH_ACCESS, {
-      phase: 'busy',
-      stage: 'access',
-      accessModes: OAUTH_ACCESS.accessModes!
-    })
-    expect(screen.getByText('Read and change models')).toBeTruthy()
-    fireEvent.click(screen.getByLabelText('Read and edit'))
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-    expect(handlers.onChooseAccess).toHaveBeenCalledWith('write')
-  })
-
-  it('lets a committed-export connector pick its files and hands over the FILES unread', () => {
-    const handlers = renderWizard(EXPORT_FILE)
-    const input = screen.getByLabelText('Choose a netlist export or board file') as HTMLInputElement
-    const netlist = new File(['<netlist/>'], 'power-board.xml', { type: 'text/xml' })
-    const board = new File(['(kicad_pcb)'], 'power-board.kicad_pcb')
-    const text = vi.spyOn(netlist, 'text')
-    fireEvent.change(input, { target: { files: [netlist, board] } })
-    expect(handlers.onPickFiles).toHaveBeenCalledWith([netlist, board])
-    // The wizard never reads the files — the glue validates size FIRST.
-    expect(text).not.toHaveBeenCalled()
-  })
-
-  it('offers kicad a multi-file input accepting netlists and boards, with the schematic hint', () => {
-    renderWizard(EXPORT_FILE)
-    const input = screen.getByLabelText('Choose a netlist export or board file') as HTMLInputElement
-    expect(input.multiple).toBe(true)
-    expect(input.accept.split(',')).toEqual(['.xml', '.net', '.kicad_pcb'])
-    expect(screen.getByRole('button', { name: /choose netlist \/ board file/i })).toBeTruthy()
-    expect(screen.getByText(KICAD_HINT)).toBeTruthy()
-  })
-
-  it('keeps the single netlist pick for other export connectors, without the kicad hint', () => {
-    const handlers = renderWizard(SINGLE_EXPORT_FILE)
-    const input = screen.getByLabelText('Choose a committed netlist export') as HTMLInputElement
-    expect(input.multiple).toBe(false)
-    expect(input.accept).toBe('.xml,.net')
-    expect(screen.queryByText(KICAD_HINT)).toBeNull()
-    const file = new File(['<netlist/>'], 'design.xml')
-    fireEvent.change(input, { target: { files: [file] } })
-    expect(handlers.onPickFiles).toHaveBeenCalledWith([file])
-    expect(screen.getByRole('button', { name: /choose export file/i })).toBeTruthy()
-  })
-
-  it('ignores an empty file dialog (cancelled pick)', () => {
-    const handlers = renderWizard(EXPORT_FILE)
-    const input = screen.getByLabelText('Choose a netlist export or board file')
-    fireEvent.change(input, { target: { files: [] } })
-    expect(handlers.onPickFiles).not.toHaveBeenCalled()
-  })
-
-  it('retries a committed-export connector with the file picker, never the OAuth path', () => {
-    const handlers = renderWizard(EXPORT_FILE, { phase: 'error', error: 'Sync failed.' })
-    expect(screen.getByText('Sync failed.')).toBeTruthy()
-    const again = screen.getByRole('button', { name: /choose netlist \/ board file/i })
-    expect(again).toBeTruthy()
-    fireEvent.click(again)
-    expect(handlers.onBegin).not.toHaveBeenCalled()
-  })
-
-  it('shows the honest error and retries through onBegin', () => {
-    const handlers = renderWizard(OAUTH_PICK, {
-      phase: 'error',
-      error: 'GitHub sign-in was cancelled.'
-    })
-    expect(screen.getByText('GitHub sign-in was cancelled.')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
-  })
-
-  it('celebrates done with the real result and closes', () => {
-    const handlers = renderWizard(OAUTH_PICK, {
-      phase: 'done',
-      result: 'Connected — 214 entities indexed'
-    })
-    expect(screen.getByText('Connected — 214 entities indexed')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
-    expect(handlers.onClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('closes from the X control', () => {
-    const handlers = renderWizard(OAUTH_PICK)
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-    expect(handlers.onClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('respects SOL mode: Guide teaches, Expert is terse (ADR-016)', () => {
-    const { unmount } = render(
-      <ConnectWizardModal
-        entry={OAUTH_PICK}
-        onBegin={vi.fn()}
-        onPickFiles={vi.fn()}
-        onSelect={vi.fn()}
-        onSubmitConfig={vi.fn()}
-        onChooseAccess={vi.fn()}
-        onClose={vi.fn()}
-      />
-    )
-    const guideCopy = screen.getByTestId('cw-instruction').textContent ?? ''
-    unmount()
-    useSettingsStore.getState().setSolMode('Expert')
-    renderWizard(OAUTH_PICK)
-    const expertCopy = screen.getByTestId('cw-instruction').textContent ?? ''
-    expect(guideCopy).not.toBe(expertCopy)
-    expect(guideCopy.length).toBeGreaterThan(expertCopy.length)
-  })
+  registerWizardModesTests()
 })
 
 // Connector-ingested content (repo/document names, registry copy) is untrusted
@@ -387,3 +195,211 @@ describe('isSecretField', () => {
     }
   })
 })
+
+function registerWizardPresentationTests(): void {
+  it('renders the rail derived from the connector shape, first step current', () => {
+    renderWizard(OAUTH_PICK)
+    const rail = screen.getByLabelText('Connect steps')
+    const steps = Array.from(rail.querySelectorAll('[data-step]')).map((el) => el.textContent)
+    expect(steps).toEqual(['Sign in', 'Pick repositories', 'Build graph'])
+    expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe('Sign in')
+  })
+
+  it('draws the Solus logo, not a letter, at the Solus end of the link (SOLUSDEV-253)', () => {
+    renderWizard(OAUTH_PICK)
+    const solusEnd = document.querySelector('[aria-label="Solus"]')
+    expect(solusEnd?.querySelector('svg[role="img"]')).not.toBeNull()
+    expect(solusEnd?.textContent).toBe('')
+  })
+
+  it('starts idle with a Connect action that begins the flow', () => {
+    const handlers = renderWizard(OAUTH_PICK)
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the live engine label and marks the busy step current', () => {
+    renderWizard(OAUTH_PICK, {
+      phase: 'busy',
+      stage: 'configure',
+      label: 'Discovering repositories…'
+    })
+    expect(screen.getByText('Discovering repositories…')).toBeTruthy()
+    const rail = screen.getByLabelText('Connect steps')
+    expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe('Pick repositories')
+  })
+
+  it('renders the selection picker when the flow offers items', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'busy',
+      stage: 'configure',
+      selectable: [{ id: 'a/one', name: 'a/one' }],
+      selectionMode: 'single'
+    })
+    fireEvent.change(screen.getByLabelText('Choose an item to track'), {
+      target: { value: 'a/one' }
+    })
+    expect(handlers.onSelect).toHaveBeenCalledWith([{ id: 'a/one', name: 'a/one' }])
+  })
+
+  it('renders the details form, masking secret-looking fields', () => {
+    const handlers = renderWizard(OAUTH_FIELDS, {
+      phase: 'busy',
+      stage: 'configure',
+      configFields: ['document_id', 'license_key']
+    })
+    const docField = screen.getByLabelText('Document id')
+    const licenseField = screen.getByLabelText('License key')
+    expect((docField as HTMLInputElement).type).toBe('text')
+    expect((licenseField as HTMLInputElement).type).toBe('password')
+    fireEvent.change(docField, { target: { value: 'd1' } })
+    fireEvent.change(licenseField, { target: { value: 'k1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(handlers.onSubmitConfig).toHaveBeenCalledWith({ document_id: 'd1', license_key: 'k1' })
+  })
+}
+
+function registerWizardInputsTests(): void {
+  it('will not submit a partially filled details form', () => {
+    const handlers = renderWizard(OAUTH_FIELDS, {
+      phase: 'busy',
+      stage: 'configure',
+      configFields: ['document_id', 'license_key']
+    })
+    fireEvent.change(screen.getByLabelText('Document id'), { target: { value: 'd1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(handlers.onSubmitConfig).not.toHaveBeenCalled()
+  })
+
+  it('lets a multi-select picker submit an empty selection (connected but idle)', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'busy',
+      stage: 'configure',
+      selectable: [{ id: 'docA', name: 'Rover chassis' }],
+      selectionMode: 'multi'
+    })
+    fireEvent.click(screen.getByRole('button', { name: /track none/i }))
+    expect(handlers.onSelect).toHaveBeenCalledWith([])
+  })
+
+  it('starts the grant choice on the connector’s own default, not the widest', () => {
+    renderWizard(OAUTH_ACCESS, {
+      phase: 'busy',
+      stage: 'access',
+      accessModes: OAUTH_ACCESS.accessModes!
+    })
+    expect((screen.getByLabelText('Read-only') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('renders the grant choice with descriptions and confirms the chosen mode', () => {
+    const handlers = renderWizard(OAUTH_ACCESS, {
+      phase: 'busy',
+      stage: 'access',
+      accessModes: OAUTH_ACCESS.accessModes!
+    })
+    expect(screen.getByText('Read and change models')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('Read and edit'))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(handlers.onChooseAccess).toHaveBeenCalledWith('write')
+  })
+
+  it('lets a committed-export connector pick its files and hands over the FILES unread', () => {
+    const handlers = renderWizard(EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a netlist export or board file') as HTMLInputElement
+    const netlist = new File(['<netlist/>'], 'power-board.xml', { type: 'text/xml' })
+    const board = new File(['(kicad_pcb)'], 'power-board.kicad_pcb')
+    const text = vi.spyOn(netlist, 'text')
+    fireEvent.change(input, { target: { files: [netlist, board] } })
+    expect(handlers.onPickFiles).toHaveBeenCalledWith([netlist, board])
+    // The wizard never reads the files — the glue validates size FIRST.
+    expect(text).not.toHaveBeenCalled()
+  })
+
+  it('offers kicad a multi-file input accepting netlists and boards, with the schematic hint', () => {
+    renderWizard(EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a netlist export or board file') as HTMLInputElement
+    expect(input.multiple).toBe(true)
+    expect(input.accept.split(',')).toEqual(['.xml', '.net', '.kicad_pcb'])
+    expect(screen.getByRole('button', { name: /choose netlist \/ board file/i })).toBeTruthy()
+    expect(screen.getByText(KICAD_HINT)).toBeTruthy()
+  })
+}
+
+function registerWizardRecoveryTests(): void {
+  it('keeps the single netlist pick for other export connectors, without the kicad hint', () => {
+    const handlers = renderWizard(SINGLE_EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a committed netlist export') as HTMLInputElement
+    expect(input.multiple).toBe(false)
+    expect(input.accept).toBe('.xml,.net')
+    expect(screen.queryByText(KICAD_HINT)).toBeNull()
+    const file = new File(['<netlist/>'], 'design.xml')
+    fireEvent.change(input, { target: { files: [file] } })
+    expect(handlers.onPickFiles).toHaveBeenCalledWith([file])
+    expect(screen.getByRole('button', { name: /choose export file/i })).toBeTruthy()
+  })
+
+  it('ignores an empty file dialog (cancelled pick)', () => {
+    const handlers = renderWizard(EXPORT_FILE)
+    const input = screen.getByLabelText('Choose a netlist export or board file')
+    fireEvent.change(input, { target: { files: [] } })
+    expect(handlers.onPickFiles).not.toHaveBeenCalled()
+  })
+
+  it('retries a committed-export connector with the file picker, never the OAuth path', () => {
+    const handlers = renderWizard(EXPORT_FILE, { phase: 'error', error: 'Sync failed.' })
+    expect(screen.getByText('Sync failed.')).toBeTruthy()
+    const again = screen.getByRole('button', { name: /choose netlist \/ board file/i })
+    expect(again).toBeTruthy()
+    fireEvent.click(again)
+    expect(handlers.onBegin).not.toHaveBeenCalled()
+  })
+
+  it('shows the honest error and retries through onBegin', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'error',
+      error: 'GitHub sign-in was cancelled.'
+    })
+    expect(screen.getByText('GitHub sign-in was cancelled.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('celebrates done with the real result and closes', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'done',
+      result: 'Connected — 214 entities indexed'
+    })
+    expect(screen.getByText('Connected — 214 entities indexed')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(handlers.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes from the X control', () => {
+    const handlers = renderWizard(OAUTH_PICK)
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(handlers.onClose).toHaveBeenCalledTimes(1)
+  })
+}
+
+function registerWizardModesTests(): void {
+  it('respects SOL mode: Guide teaches, Expert is terse (ADR-016)', () => {
+    const { unmount } = render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        onBegin={vi.fn()}
+        onPickFiles={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    const guideCopy = screen.getByTestId('cw-instruction').textContent ?? ''
+    unmount()
+    useSettingsStore.getState().setSolMode('Expert')
+    renderWizard(OAUTH_PICK)
+    const expertCopy = screen.getByTestId('cw-instruction').textContent ?? ''
+    expect(guideCopy).not.toBe(expertCopy)
+    expect(guideCopy.length).toBeGreaterThan(expertCopy.length)
+  })
+}

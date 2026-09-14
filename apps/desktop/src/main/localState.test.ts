@@ -119,185 +119,10 @@ describe('readRegistry', () => {
 })
 
 describe('linkProjectFolder', () => {
-  test('writes the entry with lastOpenedAt from the clock, atomically via temp+replace', () => {
-    const deps = fakeDeps()
-    const ok = linkProjectFolder('p1', { path: '/ws/rover', repoUrl: 'https://g/x.git' }, deps)
-    expect(ok).toBe(true)
-    const written = JSON.parse(deps.files.get(FILE) as string)
-    expect(written).toEqual({
-      schema_version: 1,
-      projects: {
-        p1: {
-          path: '/ws/rover',
-          repoUrl: 'https://g/x.git',
-          lastOpenedAt: '2026-08-30T12:00:00.000Z'
-        }
-      }
-    })
-    // The temp file is gone (replaced), and nothing else leaked.
-    expect([...deps.files.keys()]).toEqual([FILE])
-  })
-
-  test('preserves other projects on upsert', () => {
-    const deps = fakeDeps()
-    linkProjectFolder('p1', { path: '/ws/rover' }, deps)
-    linkProjectFolder('p2', { path: '/ws/arm' }, deps)
-    const written = JSON.parse(deps.files.get(FILE) as string)
-    expect(Object.keys(written.projects).sort()).toEqual(['p1', 'p2'])
-  })
-
-  test('rejects an unsafe project id (path segment discipline)', () => {
-    const deps = fakeDeps()
-    expect(linkProjectFolder('../evil', { path: '/ws' }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
-  })
-
-  test('rejects an empty or relative path', () => {
-    const deps = fakeDeps()
-    expect(linkProjectFolder('p1', { path: '' }, deps)).toBe(false)
-    expect(linkProjectFolder('p1', { path: 'relative/dir' }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
-  })
-
-  // Control characters are rejected on EVERY platform: NUL makes spawn throw,
-  // a newline corrupts the env line (SOLUSDEV-166 review C1/M4).
-  test.each([
-    ['a NUL byte', '/ws/\x00evil'],
-    ['a newline', '/ws/a\nb'],
-    ['a tab', '/ws/a\tb']
-  ])('rejects a path with %s on any platform', (_why, path) => {
-    for (const platform of ['linux', 'win32'] as const) {
-      const deps = fakeDeps({ platform })
-      expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
-      expect(deps.files.size).toBe(0)
-    }
-  })
-
-  // The cmd.exe metacharacter class is fatal ONLY on Windows (the launch.cmd
-  // sink). On POSIX these are legal directory names the dialog can produce.
-  test.each([
-    ['an ampersand', '/ws/a & calc'],
-    ['a caret', '/ws/a^b'],
-    ['a pipe', '/ws/a|b'],
-    ['a redirect', '/ws/a>b'],
-    ['a percent', '/ws/%USERPROFILE%'],
-    ['a glob star', '/ws/proj*']
-  ])('rejects %s on Windows but accepts it on POSIX', (_why, path) => {
-    const win = fakeDeps({ platform: 'win32' })
-    expect(linkProjectFolder('p1', { path }, win)).toBe(false)
-    expect(win.files.size).toBe(0)
-
-    const posix = fakeDeps({ platform: 'linux' })
-    expect(linkProjectFolder('p1', { path }, posix)).toBe(true)
-  })
-
-  test('rejects a path that is not an existing directory', () => {
-    const deps = fakeDeps({ isDirectory: () => false })
-    expect(linkProjectFolder('p1', { path: '/ws/gone' }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
-  })
-
-  test('rejects a path that does not resolve (realpath null)', () => {
-    const deps = fakeDeps({ realpath: () => null })
-    expect(linkProjectFolder('p1', { path: '/ws/vanished' }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
-  })
-
-  // review C1-a: the forbidden set is compared AFTER canonicalization, so
-  // dot-segments, doubled separators, and symlinks cannot dodge it.
-  test.each([
-    ['the filesystem root', '/'],
-    ['a doubled-separator root', '//'],
-    ['a dot-segment resolving to root', '/tmp/..'],
-    ['the user home', '/home/tester'],
-    ['the home via a dot-segment', '/home/tester/x/..'],
-    ['the home with a trailing slash', '/home/tester/'],
-    ['~/.solus itself', HOME],
-    ['a path under ~/.solus', `${HOME}/projects/p1`],
-    ['a symlink resolving to home', '/ws/link-to-home']
-  ])('refuses %s as a workspace (too much fork reach)', (_why, path) => {
-    // realpath resolves dot-segments and the symlink fixture to their targets.
-    const deps = fakeDeps({
-      realpath: (p) => {
-        if (p === '/ws/link-to-home') return '/home/tester'
-        if (p === '/tmp/..' || p === '//') return '/'
-        if (p === '/home/tester/x/..') return '/home/tester'
-        return p.replace(/\/+$/, '') || '/'
-      }
-    })
-    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
-  })
-
-  test.each([
-    ['the parent of home', '/home'],
-    ['a grandparent of home', '/'],
-    ['a dot-segment ancestor of home', '/home/tester/..']
-  ])('refuses %s — an ancestor of home contains ~/.solus (review C1-a)', (_why, path) => {
-    const deps = fakeDeps({
-      realpath: (p) => (p === '/home/tester/..' ? '/home' : p.replace(/\/+$/, '') || '/')
-    })
-    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
-    expect(deps.files.size).toBe(0)
-  })
-
-  test('still accepts a normal project directory UNDER home', () => {
-    const deps = fakeDeps()
-    expect(linkProjectFolder('p1', { path: '/home/tester/robots/rover' }, deps)).toBe(true)
-  })
-
-  test('rejects a case-variant of home on a case-insensitive platform', () => {
-    const deps = fakeDeps({ platform: 'darwin', realpath: (p) => p })
-    expect(linkProjectFolder('p1', { path: '/HOME/TESTER' }, deps)).toBe(false)
-  })
-
-  test('rejects a Windows drive root', () => {
-    const deps = fakeDeps({
-      platform: 'win32',
-      homedir: () => 'C:\\Users\\tester',
-      realpath: (p) => p
-    })
-    expect(linkProjectFolder('p1', { path: 'C:\\' }, deps)).toBe(false)
-  })
-
-  test('stores the CANONICAL path, not the raw input', () => {
-    const deps = fakeDeps({ realpath: (p) => (p === '/ws/link' ? '/ws/real' : p) })
-    linkProjectFolder('p1', { path: '/ws/link' }, deps)
-    expect(JSON.parse(deps.files.get(FILE) as string).projects.p1.path).toBe('/ws/real')
-  })
-
-  // SOLUSDEV-166 security review H2: the registry is fork-readable, so a clone
-  // URL's embedded credentials must never be persisted.
-  test('strips userinfo from repoUrl before persisting', () => {
-    const deps = fakeDeps()
-    linkProjectFolder(
-      'p1',
-      { path: '/ws/rover', repoUrl: 'https://oauth2:glpat-SECRET@gitlab.com/team/rover.git' },
-      deps
-    )
-    const written = JSON.parse(deps.files.get(FILE) as string)
-    expect(written.projects.p1.repoUrl).toBe('https://gitlab.com/team/rover.git')
-  })
-
-  test('keeps a credential-free scp-style repoUrl unchanged', () => {
-    const deps = fakeDeps()
-    linkProjectFolder('p1', { path: '/ws/rover', repoUrl: 'git@gitlab.com:team/rover.git' }, deps)
-    const written = JSON.parse(deps.files.get(FILE) as string)
-    expect(written.projects.p1.repoUrl).toBe('git@gitlab.com:team/rover.git')
-  })
-
-  test('refuses to clobber a registry written by a NEWER schema version', () => {
-    const deps = fakeDeps()
-    deps.files.set(FILE, JSON.stringify({ schema_version: 99, projects: {} }))
-    expect(linkProjectFolder('p1', { path: '/ws' }, deps)).toBe(false)
-    expect(JSON.parse(deps.files.get(FILE) as string).schema_version).toBe(99)
-  })
-
-  test('creates ~/.solus with 0700 and tightens an existing dir', () => {
-    const deps = fakeDeps()
-    linkProjectFolder('p1', { path: '/ws' }, deps)
-    expect(deps.modes.get(HOME)).toBe(0o700)
-  })
+  registerFolderRegistryWritesTests()
+  registerFolderPathValidationTests()
+  registerSensitiveFolderRejectionTests()
+  registerRegistryVersionAndPermissionsTests()
 })
 
 describe('unlinkProjectFolder', () => {
@@ -452,3 +277,191 @@ describe('real filesystem deps', () => {
     }
   })
 })
+
+function registerFolderRegistryWritesTests(): void {
+  test('writes the entry with lastOpenedAt from the clock, atomically via temp+replace', () => {
+    const deps = fakeDeps()
+    const ok = linkProjectFolder('p1', { path: '/ws/rover', repoUrl: 'https://g/x.git' }, deps)
+    expect(ok).toBe(true)
+    const written = JSON.parse(deps.files.get(FILE) as string)
+    expect(written).toEqual({
+      schema_version: 1,
+      projects: {
+        p1: {
+          path: '/ws/rover',
+          repoUrl: 'https://g/x.git',
+          lastOpenedAt: '2026-08-30T12:00:00.000Z'
+        }
+      }
+    })
+    // The temp file is gone (replaced), and nothing else leaked.
+    expect([...deps.files.keys()]).toEqual([FILE])
+  })
+
+  test('preserves other projects on upsert', () => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws/rover' }, deps)
+    linkProjectFolder('p2', { path: '/ws/arm' }, deps)
+    const written = JSON.parse(deps.files.get(FILE) as string)
+    expect(Object.keys(written.projects).sort()).toEqual(['p1', 'p2'])
+  })
+
+  test('rejects an unsafe project id (path segment discipline)', () => {
+    const deps = fakeDeps()
+    expect(linkProjectFolder('../evil', { path: '/ws' }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  test('rejects an empty or relative path', () => {
+    const deps = fakeDeps()
+    expect(linkProjectFolder('p1', { path: '' }, deps)).toBe(false)
+    expect(linkProjectFolder('p1', { path: 'relative/dir' }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  // Control characters are rejected on EVERY platform: NUL makes spawn throw,
+  // a newline corrupts the env line (SOLUSDEV-166 review C1/M4).
+  test.each([
+    ['a NUL byte', '/ws/\x00evil'],
+    ['a newline', '/ws/a\nb'],
+    ['a tab', '/ws/a\tb']
+  ])('rejects a path with %s on any platform', (_why, path) => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const deps = fakeDeps({ platform })
+      expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+      expect(deps.files.size).toBe(0)
+    }
+  })
+}
+
+function registerFolderPathValidationTests(): void {
+  // The cmd.exe metacharacter class is fatal ONLY on Windows (the launch.cmd
+  // sink). On POSIX these are legal directory names the dialog can produce.
+  test.each([
+    ['an ampersand', '/ws/a & calc'],
+    ['a caret', '/ws/a^b'],
+    ['a pipe', '/ws/a|b'],
+    ['a redirect', '/ws/a>b'],
+    ['a percent', '/ws/%USERPROFILE%'],
+    ['a glob star', '/ws/proj*']
+  ])('rejects %s on Windows but accepts it on POSIX', (_why, path) => {
+    const win = fakeDeps({ platform: 'win32' })
+    expect(linkProjectFolder('p1', { path }, win)).toBe(false)
+    expect(win.files.size).toBe(0)
+
+    const posix = fakeDeps({ platform: 'linux' })
+    expect(linkProjectFolder('p1', { path }, posix)).toBe(true)
+  })
+
+  test('rejects a path that is not an existing directory', () => {
+    const deps = fakeDeps({ isDirectory: () => false })
+    expect(linkProjectFolder('p1', { path: '/ws/gone' }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  test('rejects a path that does not resolve (realpath null)', () => {
+    const deps = fakeDeps({ realpath: () => null })
+    expect(linkProjectFolder('p1', { path: '/ws/vanished' }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  // review C1-a: the forbidden set is compared AFTER canonicalization, so
+  // dot-segments, doubled separators, and symlinks cannot dodge it.
+  test.each([
+    ['the filesystem root', '/'],
+    ['a doubled-separator root', '//'],
+    ['a dot-segment resolving to root', '/tmp/..'],
+    ['the user home', '/home/tester'],
+    ['the home via a dot-segment', '/home/tester/x/..'],
+    ['the home with a trailing slash', '/home/tester/'],
+    ['~/.solus itself', HOME],
+    ['a path under ~/.solus', `${HOME}/projects/p1`],
+    ['a symlink resolving to home', '/ws/link-to-home']
+  ])('refuses %s as a workspace (too much fork reach)', (_why, path) => {
+    // realpath resolves dot-segments and the symlink fixture to their targets.
+    const deps = fakeDeps({
+      realpath: (p) => {
+        if (p === '/ws/link-to-home') return '/home/tester'
+        if (p === '/tmp/..' || p === '//') return '/'
+        if (p === '/home/tester/x/..') return '/home/tester'
+        return p.replace(/\/+$/, '') || '/'
+      }
+    })
+    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+}
+
+function registerSensitiveFolderRejectionTests(): void {
+  test.each([
+    ['the parent of home', '/home'],
+    ['a grandparent of home', '/'],
+    ['a dot-segment ancestor of home', '/home/tester/..']
+  ])('refuses %s — an ancestor of home contains ~/.solus (review C1-a)', (_why, path) => {
+    const deps = fakeDeps({
+      realpath: (p) => (p === '/home/tester/..' ? '/home' : p.replace(/\/+$/, '') || '/')
+    })
+    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+    expect(deps.files.size).toBe(0)
+  })
+
+  test('still accepts a normal project directory UNDER home', () => {
+    const deps = fakeDeps()
+    expect(linkProjectFolder('p1', { path: '/home/tester/robots/rover' }, deps)).toBe(true)
+  })
+
+  test('rejects a case-variant of home on a case-insensitive platform', () => {
+    const deps = fakeDeps({ platform: 'darwin', realpath: (p) => p })
+    expect(linkProjectFolder('p1', { path: '/HOME/TESTER' }, deps)).toBe(false)
+  })
+
+  test('rejects a Windows drive root', () => {
+    const deps = fakeDeps({
+      platform: 'win32',
+      homedir: () => 'C:\\Users\\tester',
+      realpath: (p) => p
+    })
+    expect(linkProjectFolder('p1', { path: 'C:\\' }, deps)).toBe(false)
+  })
+
+  test('stores the CANONICAL path, not the raw input', () => {
+    const deps = fakeDeps({ realpath: (p) => (p === '/ws/link' ? '/ws/real' : p) })
+    linkProjectFolder('p1', { path: '/ws/link' }, deps)
+    expect(JSON.parse(deps.files.get(FILE) as string).projects.p1.path).toBe('/ws/real')
+  })
+
+  // SOLUSDEV-166 security review H2: the registry is fork-readable, so a clone
+  // URL's embedded credentials must never be persisted.
+  test('strips userinfo from repoUrl before persisting', () => {
+    const deps = fakeDeps()
+    linkProjectFolder(
+      'p1',
+      { path: '/ws/rover', repoUrl: 'https://oauth2:glpat-SECRET@gitlab.com/team/rover.git' },
+      deps
+    )
+    const written = JSON.parse(deps.files.get(FILE) as string)
+    expect(written.projects.p1.repoUrl).toBe('https://gitlab.com/team/rover.git')
+  })
+
+  test('keeps a credential-free scp-style repoUrl unchanged', () => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws/rover', repoUrl: 'git@gitlab.com:team/rover.git' }, deps)
+    const written = JSON.parse(deps.files.get(FILE) as string)
+    expect(written.projects.p1.repoUrl).toBe('git@gitlab.com:team/rover.git')
+  })
+}
+
+function registerRegistryVersionAndPermissionsTests(): void {
+  test('refuses to clobber a registry written by a NEWER schema version', () => {
+    const deps = fakeDeps()
+    deps.files.set(FILE, JSON.stringify({ schema_version: 99, projects: {} }))
+    expect(linkProjectFolder('p1', { path: '/ws' }, deps)).toBe(false)
+    expect(JSON.parse(deps.files.get(FILE) as string).schema_version).toBe(99)
+  })
+
+  test('creates ~/.solus with 0700 and tightens an existing dir', () => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws' }, deps)
+    expect(deps.modes.get(HOME)).toBe(0o700)
+  })
+}

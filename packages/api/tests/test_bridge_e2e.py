@@ -9,7 +9,9 @@ structured, timeouts are cloud-owned, and companion death fails fast.
 
 import asyncio
 import json
+import sys
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ from solus_api.bridge.service import fetch_artifact
 from solus_api.core.config import Settings
 from solus_api.main import create_app
 from solus_companion.channel import ChannelState, run_channel
-from solus_companion.config import CompanionConfig, discover_servers
+from solus_companion.config import INTERPRETER_ENV, CompanionConfig, discover_servers
 from solus_companion.supervisor import Supervisor
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -110,6 +112,12 @@ async def test_full_companion_cloud_round_trip(e2e_server: Any) -> None:
 
     launches = discover_servers(MCP_ROOT)
     assert [launch.name for launch in launches] == ["mock"]
+    # The committed private-env fixture is a shell shim, not an installed MCP
+    # runtime. Use this test process's interpreter, as the supervisor tests do,
+    # so launching pytest by absolute path does not select /usr/bin/python3.
+    launches = tuple(
+        replace(launch, env={**launch.env, INTERPRETER_ENV: sys.executable}) for launch in launches
+    )
     supervisor = Supervisor(launches)
     await supervisor.start_all()
     config = CompanionConfig(

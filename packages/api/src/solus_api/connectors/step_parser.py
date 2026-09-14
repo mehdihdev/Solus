@@ -31,6 +31,7 @@ If a tool later exposes stable instance UUIDs, key on those instead.
 
 from __future__ import annotations
 
+import math
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -195,6 +196,10 @@ def _transfer_document(path: Path, occt: tuple[Any, ...]) -> tuple[Any, Any]:
     reader.SetNameMode(True)
     try:
         status = reader.ReadFile(str(path))
+        if status == return_status.IFSelect_RetDone:
+            reader.ChangeReader().SetSystemLengthUnit(
+                1.0
+            )  # OCCT millimetres, independent of file units.
         transferred = status == return_status.IFSelect_RetDone and reader.Transfer(doc)
     except Exception as exc:  # OCCT raises bare Standard_Failure subclasses
         raise ConnectorError("step_unreadable", "the STEP export could not be read") from exc
@@ -203,6 +208,51 @@ def _transfer_document(path: Path, occt: tuple[Any, ...]) -> tuple[Any, Any]:
             "step_unreadable", "the content is not a STEP file OpenCASCADE can transfer"
         )
     return doc, doc_tool_cls.ShapeTool_s(doc.Main())
+
+
+def _shape_geometry(shape: Any) -> dict[str, Any]:
+    """Measured part-local geometry, in explicit transfer units; no inferred mass."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    try:
+        if shape.IsNull():
+            raise ValueError("null shape")
+        box = Bnd_Box()
+        BRepBndLib.AddOptimal_s(shape, box, False, False)
+        bounds = list(box.Get())
+        surface = GProp_GProps()
+        BRepGProp.SurfaceProperties_s(shape, surface)
+        area = surface.Mass()
+        volume = None
+        if TopExp_Explorer(shape, TopAbs_SOLID).More() and BRepCheck_Analyzer(shape).IsValid():
+            solid = GProp_GProps()
+            BRepGProp.VolumeProperties_s(shape, solid, True)
+            volume = solid.Mass()
+        values = [*bounds, area, *([] if volume is None else [volume])]
+        if (
+            not all(math.isfinite(v) for v in values)
+            or area < 0
+            or (volume is not None and volume < 0)
+            or any(bounds[i] > bounds[i + 3] for i in range(3))
+        ):
+            raise ValueError("invalid geometry measurement")
+        return {
+            "frame": "part_local",
+            "length_unit": "mm",
+            "bbox_min": [round(v, 9) for v in bounds[:3]],
+            "bbox_max": [round(v, 9) for v in bounds[3:]],
+            "dimensions": [round(bounds[i + 3] - bounds[i], 9) for i in range(3)],
+            "surface_area_mm2": round(area, 9),
+            "volume_mm3": None if volume is None else round(volume, 9),
+        }
+    except Exception as exc:
+        raise ConnectorError("step_unreadable", "The STEP geometry could not be measured") from exc
 
 
 def parse_step(text: str) -> CadModel:
@@ -267,6 +317,7 @@ def parse_step(text: str) -> CadModel:
                     is_assembly=bool(shape_tool.IsAssembly_s(label)),
                     parent_key=parent_key,
                     placement=placement,
+                    properties={"geometry": _shape_geometry(shape_tool.GetShape_s(label))},
                 )
             )
             if depth >= MAX_ASSEMBLY_DEPTH:

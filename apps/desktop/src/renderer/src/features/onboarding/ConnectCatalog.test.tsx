@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ConnectCatalog } from './ConnectCatalog'
 import { useOnboardingStore } from './onboardingStore'
+import * as desktopBridge from '../../lib/desktopBridge'
 import * as catalogHook from './useIntegrationCatalog'
 import type { CatalogEntry } from './integrationCatalog'
 
@@ -76,5 +77,16 @@ describe('ConnectCatalog — local-bridge tiles (SOLUSDEV-72)', () => {
     expect(screen.getByText('Launch Fusion and enable the MCP server')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Got it' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+  })
+  it('disables unsupported tools on Linux without opening guidance', () => {
+    vi.spyOn(desktopBridge, 'getDesktopPlatform').mockReturnValue('linux')
+    vi.spyOn(catalogHook, 'useIntegrationCatalog').mockReturnValue([
+      { ...FUSION, localTool: { ...FUSION.localTool!, supported_platforms: ['win32', 'darwin'] } }
+    ])
+    render(<ConnectCatalog projectId="p1" />)
+    expect(screen.getByText('Fusion is not available on Linux')).toBeTruthy()
+    fireEvent.click(screen.getByText('Fusion'))
+    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull()
+    expect(screen.queryByText('Connect')).toBeNull()
   })
 })

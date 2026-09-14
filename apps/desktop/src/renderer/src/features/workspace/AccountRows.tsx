@@ -14,6 +14,7 @@ import { plural } from '../onboarding/selectionConfigureStep'
 import { DisconnectSourceModal } from '../project/DisconnectSourceModal'
 import { EditSelectionModal } from '../project/EditSelectionModal'
 import { HostedAddOnRow } from '../project/HostedAddOnRow'
+import { LocalProjectBinding } from '../project/LocalProjectBinding'
 import { sourceErrorText, sourceStatusColor, trackedIds } from '../project/sourcePresentation'
 import {
   legacyText,
@@ -28,6 +29,7 @@ import {
   usageText
 } from './connectedAccounts'
 import { ModalShell } from './modals'
+import { AccountHostedRow } from './AccountHostedRow'
 
 /** Indented under the tool row's mark, separated from it by a hairline. */
 const SUB_ROW_STYLE: React.CSSProperties = {
@@ -222,14 +224,16 @@ export function AccountRow({
           Revoke
         </Button>
       </div>
-      {reauth && (
+      {(reauth || entry.mode === 'oauth') && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <div
-            role="note"
-            style={{ flex: 1, fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}
-          >
-            {reauth}
-          </div>
+          {reauth && (
+            <div
+              role="note"
+              style={{ flex: 1, fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.45 }}
+            >
+              {reauth}
+            </div>
+          )}
           <Button
             kind="soft"
             size="sm"
@@ -256,6 +260,9 @@ export function AccountRow({
           onClose={() => setConfirming(false)}
           onConfirm={onRevoke}
         />
+      )}
+      {entry.hosted && connection.status === 'connected' && (
+        <AccountHostedRow key={connection.id} connectionId={connection.id} hosted={entry.hosted} />
       )}
     </div>
   )
@@ -389,43 +396,22 @@ export function SourceItem({
   onChanged: () => void
 }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
-  const count = source.entity_count
-  const synced = source.last_synced_at
-    ? `synced ${relativeTime(source.last_synced_at)}`
-    : 'never synced'
-  const errorText = sourceErrorText(source.last_error)
   return (
     <div style={SUB_ROW_STYLE}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 160 }}>
-          <div style={{ fontSize: 12, fontWeight: 500, ...LOGIN_STYLE }} title={source.name}>
-            {source.name}
-          </div>
-          <div style={{ fontSize: 10.5, color: 'var(--mut)', display: 'flex', gap: 6 }}>
-            <span
-              aria-hidden
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: 99,
-                background: sourceStatusColor(source.status),
-                alignSelf: 'center',
-                flexShrink: 0
-              }}
-            />
-            <span>
-              {source.status} · {synced}
-              {typeof count === 'number' && ` · ${count} entities`}
-            </span>
-          </div>
-          {errorText && (
-            <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>{errorText}</div>
-          )}
-        </div>
+        <SourceSummary source={source} />
         <Button kind="ghost" size="sm" aria-label={`Sync ${source.name} now`} onClick={onSync}>
           <Icons.play size={11} /> Sync now
         </Button>
         <SelectionAction source={source} entry={entry} projectId={projectId} onSaved={onChanged} />
+        {entry.configFields.includes('project_path') && (
+          <LocalProjectBinding
+            key={`${projectId}:${source.id}`}
+            projectId={projectId}
+            source={source}
+            onSaved={onChanged}
+          />
+        )}
         <Button
           kind="ghost"
           size="sm"
@@ -451,6 +437,41 @@ export function SourceItem({
           onClose={() => setConfirming(false)}
           onConfirm={onDisconnect}
         />
+      )}
+    </div>
+  )
+}
+
+function SourceSummary({ source }: { source: Source }): React.JSX.Element {
+  const count = source.entity_count
+  const synced = source.last_synced_at
+    ? `synced ${relativeTime(source.last_synced_at)}`
+    : 'never synced'
+  const errorText = sourceErrorText(source.last_error)
+  return (
+    <div style={{ flex: 1, minWidth: 160 }}>
+      <div style={{ fontSize: 12, fontWeight: 500, ...LOGIN_STYLE }} title={source.name}>
+        {source.name}
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--mut)', display: 'flex', gap: 6 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 99,
+            background: sourceStatusColor(source.status),
+            alignSelf: 'center',
+            flexShrink: 0
+          }}
+        />
+        <span>
+          {source.status} · {synced}
+          {typeof count === 'number' && ` · ${count} entities`}
+        </span>
+      </div>
+      {errorText && (
+        <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 2 }}>{errorText}</div>
       )}
     </div>
   )

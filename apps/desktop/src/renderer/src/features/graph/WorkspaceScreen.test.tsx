@@ -144,199 +144,13 @@ describe('WorkspaceScreen — unlinked (dev bypass)', () => {
 })
 
 describe('WorkspaceScreen — linked', () => {
-  it('clears selected categories after deleting their robot from the overview', async () => {
-    useAuthStore.setState({
-      status: 'authenticated',
-      user: { email: 'robot-qa@example.invalid' },
-      accessToken: 'robot-qa'
-    })
-    linkProject()
-    const robot: resources.Entity = {
-      ...entity('robot', 'Leader'),
-      type: 'physical_robot',
-      domain: 'project',
-      project_id: 'p1',
-      origin: 'manual',
-      source_id: null,
-      version: 1
-    }
-    const category: resources.Entity = {
-      ...robot,
-      id: 'sensors',
-      type: 'robot_category',
-      name: 'Sensors',
-      properties: { robot_id: 'robot', category: 'sensors' }
-    }
-    const solus = { ...entity('solus-1', '.solus'), type: 'solus_config', domain: 'project' }
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(3, 1))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([solus, robot, category])
-    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
-      { id: 'owned', type: 'contains', from_entity_id: robot.id, to_entity_id: category.id }
-    ])
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [robot, category],
-      edges: [],
-      truncated: false
-    })
-    vi.mocked(robotApi.deletePhysicalRobot).mockResolvedValue({
-      deleted_entity_id: robot.id,
-      retained_part_ids: []
-    })
-    render(<WorkspaceScreen />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Zoom into Leader' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Select Sensors' }))
-    await waitFor(() => expect(useFocusStore.getState().status).toBe('ready'))
-    await userEvent.click(screen.getByRole('button', { name: 'Help' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Project overview' }))
-    expect(useFocusStore.getState().focusedEntityId).toBe('sensors')
-    const categoryReads = vi
-      .mocked(resources.getGraphNeighborhood)
-      .mock.calls.filter((args) => args[1] === 'sensors').length
-    // The robot's actions live in its sidebar: select it, then the two-step delete.
-    await userEvent.click(await screen.findByRole('button', { name: 'Select Leader' }))
-    const sidebar = within(await screen.findByRole('complementary', { name: 'Sidebar' }))
-    await userEvent.click(await sidebar.findByRole('button', { name: 'Delete robot…' }))
-    expect(
-      sidebar.getByText(/Delete Leader\? Its parts and other links are retained/)
-    ).toBeInTheDocument()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([solus])
-    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([])
-    await userEvent.click(sidebar.getByRole('button', { name: 'Delete robot' }))
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBeNull())
-    expect(
-      vi.mocked(resources.getGraphNeighborhood).mock.calls.filter((args) => args[1] === 'sensors')
-    ).toHaveLength(categoryReads)
-    expect(useFocusStore.getState().status).toBe('idle')
-  })
+  registerRobotDeletionTests()
 
-  it('describes something new under the robot through Add › Hardware and reveals it', async () => {
-    useAuthStore.setState({
-      status: 'authenticated',
-      user: { email: 'robot-qa@example.invalid' },
-      accessToken: 'robot-qa'
-    })
-    linkProject()
-    // Existing authenticated accounts need not retain the old onboarding flag.
-    useWorkspaceStore.setState({ linked: false })
-    const leader: resources.Entity = {
-      ...entity('leader', 'Leader'),
-      type: 'physical_robot',
-      domain: 'project',
-      origin: 'manual',
-      source_id: null,
-      project_id: 'p1',
-      version: 1
-    }
-    const camera = { ...entity('cam', 'Wrist camera'), origin: 'manual', project_id: 'p1' }
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([leader])
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [leader, camera],
-      edges: [],
-      truncated: false
-    })
-    vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
-      entity: camera,
-      config_entry_id: 'entry-1'
-    })
-    render(<WorkspaceScreen />)
-    await screen.findByRole('button', { name: 'Select Leader' })
-    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-    await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
-    const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
-    await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Wrist camera')
-    expect(describe.getByRole('combobox', { name: 'Category' })).toHaveValue('sensors')
-    expect(describe.getByRole('combobox', { name: 'Part of' })).toHaveValue('leader')
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([leader, camera])
-    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
-      { id: 'r1', type: 'contains', from_entity_id: 'leader', to_entity_id: 'cam' }
-    ])
-    await userEvent.click(describe.getByRole('button', { name: 'Add' }))
-    await waitFor(() =>
-      expect(hardwareApi.createHardwarePart).toHaveBeenCalledExactlyOnceWith('p1', 'leader', {
-        name: 'Wrist camera',
-        category: 'sensors',
-        specs: {},
-        lifecycle: 'planned'
-      })
-    )
-    expect(robotApi.createPhysicalRobot).not.toHaveBeenCalled()
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('cam'))
-    expect(await screen.findByRole('button', { name: 'Select Wrist camera' })).toBeInTheDocument()
-  })
+  registerRobotChildCreationTests()
 
-  it('makes the described thing the robot when the project has none', async () => {
-    linkProject()
-    const rover: resources.Entity = {
-      ...entity('rover', 'Rover MK2'),
-      type: 'physical_robot',
-      domain: 'project',
-      origin: 'manual',
-      source_id: null,
-      project_id: 'p1',
-      version: 1
-    }
-    const bracket = entity('bracket', 'Bracket')
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([bracket])
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [rover],
-      edges: [],
-      truncated: false
-    })
-    vi.mocked(robotApi.createPhysicalRobot).mockResolvedValue(rover)
-    render(<WorkspaceScreen />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Add' }))
-    await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
-    const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
-    await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Rover MK2')
-    expect(describe.queryByRole('combobox', { name: 'Part of' })).not.toBeInTheDocument()
-    expect(describe.getByText('No robot yet — this becomes the robot.')).toBeInTheDocument()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([bracket, rover])
-    await userEvent.click(describe.getByRole('button', { name: 'Add' }))
-    await waitFor(() =>
-      expect(robotApi.createPhysicalRobot).toHaveBeenCalledExactlyOnceWith(
-        'p1',
-        undefined,
-        'Rover MK2'
-      )
-    )
-    expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
-    expect(await screen.findByRole('button', { name: 'Select Rover MK2' })).toBeInTheDocument()
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('rover'))
-  })
+  registerRootRobotCreationTests()
 
-  it('navigates a containment level and selects a leaf with its shared focus path', async () => {
-    linkProject()
-    const root = entity('root', 'Assembly')
-    const leaf = entity('leaf', 'Motor')
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1, [{ id: 's1' }]))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([root, leaf])
-    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
-      { id: 'r1', type: 'contains', from_entity_id: 'root', to_entity_id: 'leaf' }
-    ])
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [root, leaf],
-      edges: [],
-      truncated: false
-    })
-    render(<WorkspaceScreen />)
-    await userEvent.dblClick(await screen.findByRole('button', { name: 'Select Assembly' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Select Motor' }))
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('leaf'))
-    expect(useFocusStore.getState().path).toEqual([
-      {
-        entity: { projectId: 'p1', entityId: 'root' },
-        domain: 'mechanical',
-        label: 'Assembly',
-        relation: 'contains'
-      }
-    ])
-    expect(resources.getGraphNeighborhood).toHaveBeenLastCalledWith('p1', 'leaf', { depth: 1 })
-  })
+  registerContainmentFocusTests()
 })
 
 describe('WorkspaceScreen — deliberate empty states', () => {
@@ -482,55 +296,7 @@ describe('WorkspaceScreen — live hardware events', () => {
 })
 
 describe('WorkspaceScreen — the canvas-edge device rail', () => {
-  const device = (ref: string): hardwareApi.DetectedDeviceOut => ({
-    transport: 'usb_serial',
-    device_ref: ref,
-    identity: null,
-    level: 'transport',
-    board: null,
-    board_class: 'usb_bridge',
-    mcu_known: false,
-    confidence: 0.4,
-    evidence: [],
-    ambiguous: false,
-    last_seen_path: null
-  })
-  const leader: resources.Entity = {
-    ...entity('leader', 'Leader'),
-    type: 'physical_robot',
-    domain: 'project',
-    origin: 'manual',
-    source_id: null,
-    project_id: 'p1',
-    version: 1
-  }
-  const boundPart: resources.Entity = {
-    ...entity('m1', 'M1'),
-    domain: 'runtime',
-    source_key: 'usb_serial:BOUND/1'
-  }
-  const rail = (): HTMLElement => {
-    const overlay = document.querySelector('.graph-overlay')
-    if (!(overlay instanceof HTMLElement)) throw new Error('no rail')
-    return overlay
-  }
-  function signIn(): void {
-    useAuthStore.setState({
-      status: 'authenticated',
-      user: { email: 'robot-qa@example.invalid' },
-      accessToken: 'robot-qa'
-    })
-    linkProject()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0, [{ id: 's1' }]))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([leader, boundPart])
-    vi.mocked(hardwareApi.listDetectedDevices).mockResolvedValue([
-      device('usb_serial:BOUND'),
-      device('usb_serial:FREE')
-    ])
-    vi.mocked(streamProjectEvents).mockImplementation(async function* () {
-      yield 'ready' as ProjectEvent
-    })
-  }
+  const { signIn, leader, boundPart, rail } = deviceRailFixture()
 
   it('shows a card for an unbound device and none for a device a part already binds', async () => {
     signIn()
@@ -755,3 +521,259 @@ describe('WorkspaceScreen — transient state boundaries', () => {
     }
   )
 })
+
+function registerRobotDeletionTests(): void {
+  it('clears selected categories after deleting their robot from the overview', async () => {
+    useAuthStore.setState({
+      status: 'authenticated',
+      user: { email: 'robot-qa@example.invalid' },
+      accessToken: 'robot-qa'
+    })
+    linkProject()
+    const robot: resources.Entity = {
+      ...entity('robot', 'Leader'),
+      type: 'physical_robot',
+      domain: 'project',
+      project_id: 'p1',
+      origin: 'manual',
+      source_id: null,
+      version: 1
+    }
+    const category: resources.Entity = {
+      ...robot,
+      id: 'sensors',
+      type: 'robot_category',
+      name: 'Sensors',
+      properties: { robot_id: 'robot', category: 'sensors' }
+    }
+    const solus = { ...entity('solus-1', '.solus'), type: 'solus_config', domain: 'project' }
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(3, 1))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([solus, robot, category])
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
+      { id: 'owned', type: 'contains', from_entity_id: robot.id, to_entity_id: category.id }
+    ])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [robot, category],
+      edges: [],
+      truncated: false
+    })
+    vi.mocked(robotApi.deletePhysicalRobot).mockResolvedValue({
+      deleted_entity_id: robot.id,
+      retained_part_ids: []
+    })
+    render(<WorkspaceScreen />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Zoom into Leader' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Select Sensors' }))
+    await waitFor(() => expect(useFocusStore.getState().status).toBe('ready'))
+    await userEvent.click(screen.getByRole('button', { name: 'Help' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Project overview' }))
+    expect(useFocusStore.getState().focusedEntityId).toBe('sensors')
+    const categoryReads = vi
+      .mocked(resources.getGraphNeighborhood)
+      .mock.calls.filter((args) => args[1] === 'sensors').length
+    // The robot's actions live in its sidebar: select it, then the two-step delete.
+    await userEvent.click(await screen.findByRole('button', { name: 'Select Leader' }))
+    const sidebar = within(await screen.findByRole('complementary', { name: 'Sidebar' }))
+    await userEvent.click(await sidebar.findByRole('button', { name: 'Delete robot…' }))
+    expect(
+      sidebar.getByText(/Delete Leader\? Its parts and other links are retained/)
+    ).toBeInTheDocument()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([solus])
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([])
+    await userEvent.click(sidebar.getByRole('button', { name: 'Delete robot' }))
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBeNull())
+    expect(
+      vi.mocked(resources.getGraphNeighborhood).mock.calls.filter((args) => args[1] === 'sensors')
+    ).toHaveLength(categoryReads)
+    expect(useFocusStore.getState().status).toBe('idle')
+  })
+}
+
+function registerRobotChildCreationTests(): void {
+  it('describes something new under the robot through Add › Hardware and reveals it', async () => {
+    useAuthStore.setState({
+      status: 'authenticated',
+      user: { email: 'robot-qa@example.invalid' },
+      accessToken: 'robot-qa'
+    })
+    linkProject()
+    // Existing authenticated accounts need not retain the old onboarding flag.
+    useWorkspaceStore.setState({ linked: false })
+    const leader: resources.Entity = {
+      ...entity('leader', 'Leader'),
+      type: 'physical_robot',
+      domain: 'project',
+      origin: 'manual',
+      source_id: null,
+      project_id: 'p1',
+      version: 1
+    }
+    const camera = { ...entity('cam', 'Wrist camera'), origin: 'manual', project_id: 'p1' }
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([leader])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [leader, camera],
+      edges: [],
+      truncated: false
+    })
+    vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
+      entity: camera,
+      config_entry_id: 'entry-1'
+    })
+    render(<WorkspaceScreen />)
+    await screen.findByRole('button', { name: 'Select Leader' })
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
+    const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
+    await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Wrist camera')
+    expect(describe.getByRole('combobox', { name: 'Category' })).toHaveValue('sensors')
+    expect(describe.getByRole('combobox', { name: 'Part of' })).toHaveValue('leader')
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([leader, camera])
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
+      { id: 'r1', type: 'contains', from_entity_id: 'leader', to_entity_id: 'cam' }
+    ])
+    await userEvent.click(describe.getByRole('button', { name: 'Add' }))
+    await waitFor(() =>
+      expect(hardwareApi.createHardwarePart).toHaveBeenCalledExactlyOnceWith('p1', 'leader', {
+        name: 'Wrist camera',
+        category: 'sensors',
+        specs: {},
+        lifecycle: 'planned'
+      })
+    )
+    expect(robotApi.createPhysicalRobot).not.toHaveBeenCalled()
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('cam'))
+    expect(await screen.findByRole('button', { name: 'Select Wrist camera' })).toBeInTheDocument()
+  })
+}
+
+function registerRootRobotCreationTests(): void {
+  it('makes the described thing the robot when the project has none', async () => {
+    linkProject()
+    const rover: resources.Entity = {
+      ...entity('rover', 'Rover MK2'),
+      type: 'physical_robot',
+      domain: 'project',
+      origin: 'manual',
+      source_id: null,
+      project_id: 'p1',
+      version: 1
+    }
+    const bracket = entity('bracket', 'Bracket')
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([bracket])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [rover],
+      edges: [],
+      truncated: false
+    })
+    vi.mocked(robotApi.createPhysicalRobot).mockResolvedValue(rover)
+    render(<WorkspaceScreen />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Add' }))
+    await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
+    const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
+    await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Rover MK2')
+    expect(describe.queryByRole('combobox', { name: 'Part of' })).not.toBeInTheDocument()
+    expect(describe.getByText('No robot yet — this becomes the robot.')).toBeInTheDocument()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([bracket, rover])
+    await userEvent.click(describe.getByRole('button', { name: 'Add' }))
+    await waitFor(() =>
+      expect(robotApi.createPhysicalRobot).toHaveBeenCalledExactlyOnceWith(
+        'p1',
+        undefined,
+        'Rover MK2'
+      )
+    )
+    expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: 'Select Rover MK2' })).toBeInTheDocument()
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('rover'))
+  })
+}
+
+function registerContainmentFocusTests(): void {
+  it('navigates a containment level and selects a leaf with its shared focus path', async () => {
+    linkProject()
+    const root = entity('root', 'Assembly')
+    const leaf = entity('leaf', 'Motor')
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([root, leaf])
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
+      { id: 'r1', type: 'contains', from_entity_id: 'root', to_entity_id: 'leaf' }
+    ])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [root, leaf],
+      edges: [],
+      truncated: false
+    })
+    render(<WorkspaceScreen />)
+    await userEvent.dblClick(await screen.findByRole('button', { name: 'Select Assembly' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Select Motor' }))
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('leaf'))
+    expect(useFocusStore.getState().path).toEqual([
+      {
+        entity: { projectId: 'p1', entityId: 'root' },
+        domain: 'mechanical',
+        label: 'Assembly',
+        relation: 'contains'
+      }
+    ])
+    expect(resources.getGraphNeighborhood).toHaveBeenLastCalledWith('p1', 'leaf', { depth: 1 })
+  })
+}
+
+function deviceRailFixture() {
+  const device = (ref: string): hardwareApi.DetectedDeviceOut => ({
+    transport: 'usb_serial',
+    device_ref: ref,
+    identity: null,
+    level: 'transport',
+    board: null,
+    board_class: 'usb_bridge',
+    mcu_known: false,
+    confidence: 0.4,
+    evidence: [],
+    ambiguous: false,
+    last_seen_path: null
+  })
+  const leader: resources.Entity = {
+    ...entity('leader', 'Leader'),
+    type: 'physical_robot',
+    domain: 'project',
+    origin: 'manual',
+    source_id: null,
+    project_id: 'p1',
+    version: 1
+  }
+  const boundPart: resources.Entity = {
+    ...entity('m1', 'M1'),
+    domain: 'runtime',
+    source_key: 'usb_serial:BOUND/1'
+  }
+  const rail = (): HTMLElement => {
+    const overlay = document.querySelector('.graph-overlay')
+    if (!(overlay instanceof HTMLElement)) throw new Error('no rail')
+    return overlay
+  }
+  function signIn(): void {
+    useAuthStore.setState({
+      status: 'authenticated',
+      user: { email: 'robot-qa@example.invalid' },
+      accessToken: 'robot-qa'
+    })
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([leader, boundPart])
+    vi.mocked(hardwareApi.listDetectedDevices).mockResolvedValue([
+      device('usb_serial:BOUND'),
+      device('usb_serial:FREE')
+    ])
+    vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+      yield 'ready' as ProjectEvent
+    })
+  }
+
+  return { signIn, leader, boundPart, rail }
+}

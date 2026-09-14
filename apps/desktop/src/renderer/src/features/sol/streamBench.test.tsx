@@ -57,6 +57,7 @@ vi.mock('react/jsx-runtime', async (importOriginal) => {
 })
 
 vi.mock('./solApi', () => ({
+  listSolConfirmations: vi.fn().mockResolvedValue([]),
   createSolConversation: vi.fn(),
   listSolTurns: vi.fn(),
   streamSolMessage: vi.fn()
@@ -229,13 +230,13 @@ describe('SOL streaming render benchmark (jsdom: render work, not paint)', () =>
     }
     const row = (m: RunMetrics): string =>
       `${String(m.ms).padStart(7)} ms | ${String(m.commits).padStart(7)} | ${String(m.rows).padStart(7)} | ${String(m.storeNotifies).padStart(7)} | ${String(m.parses).padStart(7)}`
-    console.info(
+    process.stdout.write(
       [
         `SOL stream bench — ${BENCH_TOKEN_COUNT} tokens, ${MARKDOWN.length} chars, median of ${RUNS} runs (jsdom: render work, not paint)`,
         'mode  |  tokens ms | commits | MsgRow  | notify  | mdparse',
         `sync  | ${row(results.sync)}`,
         `paced | ${row(results.paced)}`
-      ].join('\n')
+      ].join('\n') + '\n'
     )
     // Loose ceilings that hold before AND after the optimisation lanes.
     for (const m of Object.values(results)) {

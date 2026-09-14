@@ -129,7 +129,11 @@ describe('PreferencesSection — desktop SOL rows (SOLUSDEV-252)', () => {
   afterEach(() => {
     delete solWindow.solus
   })
+  desktopSolPreferencesTests()
+  desktopSolStateUpdatesTests()
+})
 
+function desktopSolPreferencesTests(): void {
   it('outside Electron, says the rows live in the desktop app and renders no controls', () => {
     render(<PreferencesSection data={data()} />)
     expect(screen.getByText(/Available in the desktop app/)).toBeInTheDocument()
@@ -180,7 +184,9 @@ describe('PreferencesSection — desktop SOL rows (SOLUSDEV-252)', () => {
     await userEvent.click(screen.getByRole('switch', { name: 'Hold-Ctrl gestures' }))
     expect(bridge.setHotkeys).toHaveBeenCalledWith(false)
   })
+}
 
+function desktopSolStateUpdatesTests(): void {
   it('shows the platform note and the settings URL as text when capture is not available', async () => {
     solWindow.solus = {
       sol: fakeSolBridge(
@@ -233,4 +239,4 @@ describe('PreferencesSection — desktop SOL rows (SOLUSDEV-252)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/SOL settings didn't load/)
     expect(screen.queryByLabelText('Action mode')).toBeNull()
   })
-})
+}
