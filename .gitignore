@@ -74,3 +74,10 @@ integrations/mcp/*/.venv/
 
 # Machine-local development credit opt-in; never a production entitlement.
 /.solus-dev-credits.json
+
+# /design-sync (staged converter, build output, machine state)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
