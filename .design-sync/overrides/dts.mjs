@@ -321,7 +321,11 @@ export function loadDts(typesRoot) {
   for (; walk !== dirname(walk); walk = dirname(walk)) {
     const pj = join(walk, 'package.json');
     if (existsSync(pj)) {
-      try { if (JSON.parse(readFileSync(pj, 'utf8')).name) break; } catch {}
+      try {
+        if (JSON.parse(readFileSync(pj, 'utf8')).name) break;
+      } catch {
+        // Unreadable or malformed package.json — treat as a stub and keep walking.
+      }
     }
   }
   // projectFor normalizes pkgDir to forward-slashes (ts-morph's

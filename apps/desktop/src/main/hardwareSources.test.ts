@@ -1,6 +1,14 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, readFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  symlinkSync,
+  rmSync,
+  readFileSync,
+  realpathSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +40,10 @@ function setup(): {
     newId: () => string
   }
 } {
-  const home = mkdtempSync(join(tmpdir(), 'solus-hardware-sources-'))
+  // readHardwareSource refuses any path whose realpath differs from the path
+  // given (symlinked-parent guard). macOS's tmpdir is /var → /private/var, so
+  // the fixture home must be canonical or every pick fails with relink_required.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'solus-hardware-sources-')))
   roots.push(home)
   const file = join(home, 'calibration.json')
   writeFileSync(file, '{"joint":1}')
