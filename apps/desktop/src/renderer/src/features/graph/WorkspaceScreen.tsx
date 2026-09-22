@@ -14,7 +14,7 @@ import { useOfflineReason, type OfflineReason } from '../workspace/workspaceOnli
 import { NodeSidebar } from './sidebar/NodeSidebar'
 import { accountDocuments, isAccountAnchor, withAccountAnchors } from './accountAnchors'
 import { AccountNodeContent } from './AccountNodeContent'
-import { placementNearRail } from './hardware/deviceCard'
+import { placementNearRail } from './hardware/deviceCardRules'
 import { PendingDeviceCards } from './hardware/PendingDeviceCards'
 import { editableRobot } from './robots/robotSession'
 import { useSolusNodes } from './useSolusNodes'
