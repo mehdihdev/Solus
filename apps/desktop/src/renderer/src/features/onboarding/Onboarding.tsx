@@ -23,7 +23,7 @@ import { switchWorkspaceProject } from '../workspace/projectSwitch'
 /** Upper bound on waiting for the terminal 'done' write before navigating. */
 const DONE_PERSIST_TIMEOUT_MS = 2000
 
-export function Onboarding(): React.JSX.Element {
+function useOnboardingFlow() {
   const navigate = useNavigate()
   const store = useOnboardingStore()
   const solMode = useSettingsStore((s) => s.solMode)
@@ -88,20 +88,30 @@ export function Onboarding(): React.JSX.Element {
     void persistOnboardingStep('connect')
   }
 
-  const handleComplete = async (): Promise<void> => {
-    // The terminal transition is the one write where server durability matters
-    // (it's what stops other machines re-showing onboarding), so await it — but
-    // bounded, so a hung network can never hold the user away from their
-    // workspace. On failure the user still completes locally; another device
-    // would resume from the last saved step (explicit tradeoff, FND-08).
-    await Promise.race([
-      persistOnboardingStep('done'),
-      new Promise((resolve) => setTimeout(resolve, DONE_PERSIST_TIMEOUT_MS))
-    ])
-    completeOnboarding()
-    navigate('/')
+  const handleComplete = completeOnboardingFlow(completeOnboarding, navigate)
+  return {
+    store,
+    solMode,
+    setSolMode,
+    userEmail,
+    hydrated,
+    beginBuild,
+    handleContinue,
+    handleComplete
   }
+}
 
+export function Onboarding(): React.JSX.Element {
+  const {
+    store,
+    solMode,
+    setSolMode,
+    userEmail,
+    hydrated,
+    beginBuild,
+    handleContinue,
+    handleComplete
+  } = useOnboardingFlow()
   if (!hydrated) {
     return (
       <div
@@ -170,4 +180,23 @@ function OnboardingHeader({
       <Mono size={9.5}>{(userEmail ?? 'you@solus.dev').toUpperCase()}</Mono>
     </div>
   )
+}
+
+function completeOnboardingFlow(
+  completeOnboarding: () => void,
+  navigate: ReturnType<typeof useNavigate>
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    // The terminal transition is the one write where server durability matters
+    // (it's what stops other machines re-showing onboarding), so await it — but
+    // bounded, so a hung network can never hold the user away from their
+    // workspace. On failure the user still completes locally; another device
+    // would resume from the last saved step (explicit tradeoff, FND-08).
+    await Promise.race([
+      persistOnboardingStep('done'),
+      new Promise((resolve) => setTimeout(resolve, DONE_PERSIST_TIMEOUT_MS))
+    ])
+    completeOnboarding()
+    navigate('/')
+  }
 }

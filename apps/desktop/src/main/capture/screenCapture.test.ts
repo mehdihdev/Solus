@@ -77,6 +77,12 @@ describe('capability', () => {
 })
 
 describe('captureRegion', () => {
+  registerCaptureGeometryTests()
+  registerCaptureAvailabilityTests()
+  registerCaptureFailuresTests()
+})
+
+function registerCaptureGeometryTests(): void {
   it('crops the matching display source at scaleFactor 2 and downscales the context', async () => {
     const result = await createScreenCapture(deps()).captureRegion({
       x: 2020,
@@ -135,7 +141,9 @@ describe('captureRegion', () => {
     })
     expect(result).toMatchObject({ reason: 'empty-region' })
   })
+}
 
+function registerCaptureAvailabilityTests(): void {
   it('setting off → CaptureUnavailable(disabled) before any source or permission work (§7)', async () => {
     const getSources = vi.fn()
     const getMediaAccessStatus = vi.fn(() => 'granted')
@@ -175,7 +183,9 @@ describe('captureRegion', () => {
     })
     expect(result).toMatchObject({ reason: 'unavailable' })
   })
+}
 
+function registerCaptureFailuresTests(): void {
   it('getSources throwing or returning nothing → CaptureUnavailable(error), warned, never thrown', async () => {
     const warn = vi.fn()
     const boom = createScreenCapture(
@@ -209,4 +219,4 @@ describe('captureRegion', () => {
     if ('reason' in result) throw new Error(result.message)
     expect(result.window).toBeNull()
   })
-})
+}

@@ -540,3 +540,99 @@ async def test_the_loader_ignores_a_disconnected_source(
     source.status = SourceStatus.DISCONNECTED
     await db.commit()
     assert await load_hosted_inventory(db, uuid.UUID(project_id)) == {}
+
+
+@pytest.mark.parametrize(
+    "status,code,revoked,allowed",
+    [
+        (SourceStatus.CONNECTED, None, False, True),
+        (SourceStatus.ERROR, "quota_exhausted", False, True),
+        (SourceStatus.ERROR, "invalid_credentials", False, False),
+        (SourceStatus.ERROR, "api_error", False, False),
+        (SourceStatus.ERROR, None, False, False),
+        (SourceStatus.DISCONNECTED, "quota_exhausted", False, False),
+        (SourceStatus.SYNCING, "quota_exhausted", False, False),
+        (SourceStatus.ERROR, "quota_exhausted", True, False),
+    ],
+)
+async def test_hosted_grant_is_independent_only_of_rest_quota_error(
+    client, alice_headers, db, engine, status, code, revoked, allowed
+):
+    from solus_api.agent.tools.hosted_tools import (
+        INVENTORY_KEY,
+        SourceHostedAuth,
+        connected_source,
+        load_hosted_inventory,
+    )
+    from solus_api.agent.tools.remote_mcp import RemoteAuthError
+    from solus_api.connectors.secrets import InMemorySecretStore
+    from solus_api.models import AccountConnection, ConnectionStatus
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    project_id = await _project(client, alice_headers)
+    source = await _onshape_source(db, project_id)
+    owner = (await me(client, alice_headers))["id"]
+    account = AccountConnection(
+        user_id=uuid.UUID(owner),
+        provider=SourceType.ONSHAPE,
+        status=ConnectionStatus.REVOKED if revoked else ConnectionStatus.CONNECTED,
+        secret_ref="connection/hosted-test/onshape",
+        account_external_id="hosted-test",
+        config={INVENTORY_KEY: {SERVER: {"tools": []}}},
+    )
+    db.add(account)
+    await db.flush()
+    source.connection_id = account.id
+    source.status = status
+    source.last_error = {"code": code} if code else None
+    await db.commit()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    auth = SourceHostedAuth(
+        session_factory=maker,
+        project_id=uuid.UUID(project_id),
+        spec=FS_MCP,
+        secret_store=InMemorySecretStore(),
+        source_id=str(source.id),
+        connection_id=str(account.id),
+    )
+    assert bool(await load_hosted_inventory(db, uuid.UUID(project_id))) is allowed
+    async with maker() as session:
+        if allowed:
+            ref, actual = await auth._secret_ref(session)
+            assert actual.id == account.id and ref.startswith(account.secret_ref)
+        else:
+            with pytest.raises(RemoteAuthError):
+                await auth._secret_ref(session)
+    if not revoked:
+        assert (await connected_source(maker, uuid.UUID(project_id), FS_MCP) is not None) is allowed
+    assert await load_hosted_inventory(db, uuid.uuid4()) == {}
+    assert source.status is status and source.last_error == ({"code": code} if code else None)
+
+
+@pytest.mark.parametrize(
+    "code,expected", [("quota_exhausted", 200), ("invalid_credentials", 404), ("api_error", 404)]
+)
+async def test_legacy_exchange_commit_retains_only_quota_error_eligibility(
+    client, alice_headers, db, monkeypatch, code, expected
+):
+    _install_fake_server(monkeypatch, ["get_featurescript"])
+    project_id = await _project(client, alice_headers)
+    source = await _onshape_source(db, project_id)
+    source_id = source.id
+    base = _base(project_id, str(source_id))
+    start = await client.post(f"{base}/oauth/start", headers=alice_headers)
+    assert start.status_code == 201
+    source.status = SourceStatus.ERROR
+    source.last_error = {"code": code}
+    await db.commit()
+    done = await client.post(
+        f"{base}/oauth/exchange",
+        json={"state": start.json()["data"]["state"], "code": "auth-code"},
+        headers=alice_headers,
+    )
+    assert done.status_code == expected
+    if expected == 200:
+        assert done.json()["data"]["state"] == "ready"
+    db.expire_all()
+    current = await db.get(Source, source_id)
+    assert current.status is SourceStatus.ERROR and current.last_error == {"code": code}

@@ -114,14 +114,7 @@ export function CandidateCompare({
   categories,
   busy,
   onSelect
-}: {
-  candidates: readonly CandidateApi[]
-  excluded: readonly ExcludedCandidateApi[]
-  currency: string
-  categories: readonly CategoryOption[]
-  busy: boolean
-  onSelect: (candidateId: string, categoryId: string | undefined, quantity: number) => void
-}): React.JSX.Element {
+}: CandidateCompareProps): React.JSX.Element {
   const rows = compareColumns(candidates, currency)
   return (
     <div>
@@ -136,30 +129,7 @@ export function CandidateCompare({
             aria-label="Candidate comparison"
             style={{ borderCollapse: 'collapse', minWidth: 640 }}
           >
-            <thead>
-              <tr>
-                <th style={CELL} />
-                {candidates.map((c) => (
-                  <th key={c.id} scope="col" style={{ ...CELL, textAlign: 'left', minWidth: 220 }}>
-                    <div style={{ fontWeight: 600 }}>{c.name}</div>
-                    {c.manufacturer && (
-                      <div style={{ fontSize: 11.5, color: 'var(--mut)' }}>{c.manufacturer}</div>
-                    )}
-                    <div style={{ marginTop: 4 }}>
-                      <GroundingBadge candidate={c} />
-                    </div>
-                    <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 400 }}>
-                      {tradeOffLine(c)}
-                    </div>
-                    {c.flags.map((flag) => (
-                      <div key={flag} style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>
-                        {flag}
-                      </div>
-                    ))}
-                  </th>
-                ))}
-              </tr>
-            </thead>
+            <CandidateHeaders candidates={candidates} />
             <tbody>
               {rows.map((row) => (
                 <tr key={row.label}>
@@ -176,28 +146,7 @@ export function CandidateCompare({
                   ))}
                 </tr>
               ))}
-              <tr>
-                <th
-                  scope="row"
-                  style={{ ...CELL, textAlign: 'left', color: 'var(--mut)', fontWeight: 500 }}
-                >
-                  Vendor CAD
-                </th>
-                {candidates.map((c) => {
-                  const cad = safeHttps(c.vendor_cad_url)
-                  return (
-                    <td key={`cad-${c.id}`} style={CELL}>
-                      {cad ? (
-                        <a href={cad} target="_blank" rel="noopener noreferrer">
-                          {linkHost(cad)} ↗
-                        </a>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                  )
-                })}
-              </tr>
+              <VendorCadRow candidates={candidates} />
               <tr>
                 <th scope="row" style={{ ...CELL, borderBottom: 'none' }} />
                 {candidates.map((c) => (
@@ -232,4 +181,68 @@ export function CandidateCompare({
       )}
     </div>
   )
+}
+
+function CandidateHeaders({
+  candidates
+}: {
+  candidates: readonly CandidateApi[]
+}): React.JSX.Element {
+  return (
+    <thead>
+      <tr>
+        <th style={CELL} />
+        {candidates.map((c) => (
+          <th key={c.id} scope="col" style={{ ...CELL, textAlign: 'left', minWidth: 220 }}>
+            <div style={{ fontWeight: 600 }}>{c.name}</div>
+            {c.manufacturer && (
+              <div style={{ fontSize: 11.5, color: 'var(--mut)' }}>{c.manufacturer}</div>
+            )}
+            <div style={{ marginTop: 4 }}>
+              <GroundingBadge candidate={c} />
+            </div>
+            <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 400 }}>{tradeOffLine(c)}</div>
+            {c.flags.map((flag) => (
+              <div key={flag} style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>
+                {flag}
+              </div>
+            ))}
+          </th>
+        ))}
+      </tr>
+    </thead>
+  )
+}
+
+function VendorCadRow({ candidates }: { candidates: readonly CandidateApi[] }): React.JSX.Element {
+  return (
+    <tr>
+      <th scope="row" style={{ ...CELL, textAlign: 'left', color: 'var(--mut)', fontWeight: 500 }}>
+        Vendor CAD
+      </th>
+      {candidates.map((c) => {
+        const cad = safeHttps(c.vendor_cad_url)
+        return (
+          <td key={`cad-${c.id}`} style={CELL}>
+            {cad ? (
+              <a href={cad} target="_blank" rel="noopener noreferrer">
+                {linkHost(cad)} ↗
+              </a>
+            ) : (
+              '—'
+            )}
+          </td>
+        )
+      })}
+    </tr>
+  )
+}
+
+interface CandidateCompareProps {
+  candidates: readonly CandidateApi[]
+  excluded: readonly ExcludedCandidateApi[]
+  currency: string
+  categories: readonly CategoryOption[]
+  busy: boolean
+  onSelect: (candidateId: string, categoryId: string | undefined, quantity: number) => void
 }

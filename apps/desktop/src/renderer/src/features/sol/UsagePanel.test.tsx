@@ -26,6 +26,7 @@ const USAGE: resources.UsageApi = {
 function billing(overrides: Partial<billingData.BillingData> = {}): billingData.BillingData {
   return {
     status: 'ready',
+    unlimited: false,
     subscription: null,
     credits: 9059,
     packs: [
@@ -65,6 +66,16 @@ describe('UsagePanel', () => {
     expect(screen.getByRole('progressbar', { name: 'Credits used this cycle' })).toBeVisible()
     expect(screen.getByText(/Balance: 9,059 credits/)).toBeInTheDocument()
     // Healthy balance: no top-up nag.
+    expect(screen.queryByText(/Running low on credits/)).not.toBeInTheDocument()
+  })
+
+  it('shows actual usage without a cap or top-up warning for development allowance', async () => {
+    getUsage.mockResolvedValue({ ...USAGE, balance: 0, unlimited: true })
+    render(<UsagePanel creditsExhausted />)
+    await screen.findByText('Unlimited (development)')
+    expect(screen.getByText('941 credits')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.queryByText('Out of credits')).not.toBeInTheDocument()
     expect(screen.queryByText(/Running low on credits/)).not.toBeInTheDocument()
   })
 

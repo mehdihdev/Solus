@@ -41,6 +41,7 @@ from solus_api.bridge.frames import (
     HelloData,
     InboundFrame,
     StatusData,
+    ToolOutputData,
     UnknownFrame,
     credential_ack_frame,
     error_frame,
@@ -54,6 +55,7 @@ from solus_api.bridge.service import (
     fail_artifact_fetches,
     fail_inflight,
     ingest_artifact_chunk,
+    ingest_output,
     ingest_result,
     supersede,
 )
@@ -531,6 +533,10 @@ async def _handle_parsed(
     if frame.type == "tool_result":
         assert isinstance(frame.payload, ToolResult)
         ingest_result(session, frame.payload)
+        return None, False
+    if frame.type == "tool_output":
+        assert isinstance(frame.payload, ToolOutputData)
+        ingest_output(session, frame.payload)
         return None, False
     if frame.type == "hello":
         logger.warning("bridge session %s sent hello twice", session.session_id)

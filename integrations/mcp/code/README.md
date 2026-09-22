@@ -8,7 +8,8 @@ creates the venv, installs packages, runs scripts and tests in the USER's enviro
 command an argument list assembled by Solus code, confirmation-gated with the exact argv on the
 approval card, workspace-confined, and bounded.
 
-Authoritative tool contract: `docs/api/code-environment.md` §4 (names, arguments, answers,
+Authoritative tool contracts: `docs/api/code-environment.md` §4 and
+`docs/api/code-git-development.md` and `docs/api/code-arduino-development.md` (names, arguments, answers,
 caps, the never-raises rule). The scan-side half of the feature (dependency parsing) lives in
 the `local` fork (`../local`, §3 of the same doc).
 
@@ -17,7 +18,7 @@ the `local` fork (`../local`, §3 of the same doc).
 | Path                    | Contents                                                                                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bin/launch`            | The ONLY entrypoint. Fixed argv, `env -i` scrub to the allowlist declared in `solus/env_allowlist.py` (local's set + `VIRTUAL_ENV`), `PATH=/usr/bin:/bin`, fork-private `.venv/bin/python3`, zero network I/O. |
-| `allowlist.yaml`        | `server: code` + six tools. `probe_environment`/`plan` read; `create_environment`/`install`/`run`/`test` are `requires_confirmation: true`. Single source of truth for discovery, the cloud ingress gate, and `solus/roster.py`. |
+| `allowlist.yaml`        | `server: code` + fourteen tools: six reads and eight confirmation-required actions. Single source of truth for discovery, the cloud ingress gate, and `solus/roster.py`. |
 | `solus/`                | The server: `server.py` (FastMCP entry), `workspace.py` (fail-closed root + confinement, verbatim from `local`), `plan.py` (pure argv assembly + validation), `execute.py` (bounded, scrubbed execution), `probe.py`, `roster.py`, `env_allowlist.py`, `env.allow`. |
 | `requirements.lock.txt` | Hash-pinned `mcp` closure — byte-identical below the header to `../local/requirements.lock.txt`. `scripts/install-mcp-forks.sh` materializes `.venv/` from it; `.venv/` is gitignored.    |
 | `PROVENANCE.md`         | Identity, license (MIT, Solus), no-upstream statement, exposed tools, blank sign-offs.                                                                                                       |
@@ -49,9 +50,28 @@ the `local` fork (`../local`, §3 of the same doc).
 - `test {target?: "tests", environment?, timeout_seconds?}` — `<env>/bin/python -m pytest -q --
   <target>`; the target must exist inside the workspace.
 
-Every acting tool answers `{ok, argv, cwd, exit_code, stdout_tail, stderr_tail, duration_ms,
+The four environment actions answer `{ok, argv, cwd, exit_code, stdout_tail, stderr_tail, duration_ms,
 timed_out, reason}` (+ `path` for `create_environment`); `ok` = exit 0; a refusal is
 `{ok: false, exit_code: null, reason, …}` and never reaches the executor.
+
+### Repository tools (SOLUSDEV-261)
+
+`git_status`, `git_log` and `git_diff` observe the linked ordinary repository.
+`git_commit` commits only the already staged index; `git_push` sends one exact
+commit to one explicitly previewed branch. Both require a complete state-bound
+dry-run approval. The commit preview includes the full branch ref and staged patch,
+including significant whitespace. Changed branch/index/HEAD or destination refuse.
+Git refusals use MCP errors. Post-write verification failures carry `uncertain:true`
+and require inspection, never automatic retry. No generic shell or staging tool.
+
+Git's executable and SSH client are pinned to trusted system roots, configuration
+and subprocess behavior are restricted, and output/time are bounded. Ignore
+dependency directories when validating the worktree; validate actual tracked paths
+and Git metadata. Unsupported attributes, tracked symlinks, external Git directories
+and conflicts are explicit limitations. Production push currently supports existing
+native SSH identities for GitHub/GitLab only; it never adds host keys or credentials.
+Final results are not an incremental terminal stream. See the API supplement for
+exact schemas, constraints and local-versus-live evidence.
 
 ## How a command runs (`solus/execute.py`)
 
@@ -79,3 +99,13 @@ timed_out, reason}` (+ `path` for `create_environment`); `ok` = exit 0; a refusa
 
 There is nothing to re-vendor. Any change to `bin/launch`, the env allowlist, `allowlist.yaml`,
 `SEARCH_ROOTS`, or `requirements.lock.txt` voids the sign-offs in `PROVENANCE.md`.
+
+## Arduino compilation
+
+`arduino_probe` verifies the pinned CLI and frozen dependencies without launching
+the CLI. `arduino_prepare` and `arduino_compile` require complete approval previews.
+Preparation installs the pinned dependency closure into the owned application runtime;
+compilation snapshots a linked Uno sketch and runs offline in Bubblewrap, exposing
+only the verified toolchain and isolated job. Successful builds publish verified
+immutable artifacts. Neither tool identifies, opens or flashes attached hardware.
+The API plan documents limits, cancellation, failures and setup requirements.

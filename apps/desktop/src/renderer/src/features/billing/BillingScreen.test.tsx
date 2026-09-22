@@ -50,12 +50,42 @@ afterEach(() => {
 })
 
 describe('BillingScreen', () => {
+  billingSummaryTests()
+  billingCheckoutTests()
+  billingPlanDetailsTests()
+  billingCancellationAndPacksTests()
+})
+
+function billingSummaryTests(): void {
   it('shows the current plan, status, and credits', async () => {
     render(<BillingScreen />)
     await waitFor(() => expect(screen.getByText('Billing')).toBeInTheDocument())
     expect(screen.getByText('Basic')).toBeInTheDocument()
     expect(screen.getByText('TRIAL')).toBeInTheDocument()
     expect(screen.getByText('1,000')).toBeInTheDocument() // credit balance
+  })
+
+  it.each([true, false])(
+    'shows the development allowance only when flagged (%s)',
+    async (unlimited) => {
+      vi.mocked(resources.getCredits).mockResolvedValue({ user_id: 'u1', balance: 17, unlimited })
+      render(<BillingScreen />)
+      await screen.findByText(unlimited ? 'Unlimited (development)' : '17')
+      expect(
+        screen.queryByText(unlimited ? '17' : 'Unlimited (development)')
+      ).not.toBeInTheDocument()
+    }
+  )
+
+  it('shows the development allowance without a subscription', async () => {
+    vi.mocked(resources.getSubscription).mockRejectedValue(new Error('404'))
+    vi.mocked(resources.getCredits).mockResolvedValue({
+      user_id: 'u1',
+      balance: 0,
+      unlimited: true
+    })
+    render(<BillingScreen />)
+    await screen.findByText('Unlimited (development)')
   })
 
   it('shows an honest offline notice when signed out', async () => {
@@ -65,7 +95,9 @@ describe('BillingScreen', () => {
       expect(screen.getByText(/Sign in to Solus to manage billing/)).toBeInTheDocument()
     )
   })
+}
 
+function billingCheckoutTests(): void {
   it('opens Stripe Checkout for the chosen plan (monthly by default)', async () => {
     render(<BillingScreen />)
     await waitFor(() => expect(screen.getByText('Basic')).toBeInTheDocument())
@@ -115,7 +147,9 @@ describe('BillingScreen', () => {
     await waitFor(() => expect(resources.createBillingPortal).toHaveBeenCalled())
     expect(resources.createSubscriptionCheckout).not.toHaveBeenCalled()
   })
+}
 
+function billingPlanDetailsTests(): void {
   it('marks the active plan as current (not subscribable)', async () => {
     render(<BillingScreen />)
     await waitFor(() => expect(screen.getByText('Basic')).toBeInTheDocument())
@@ -155,7 +189,9 @@ describe('BillingScreen', () => {
     expect(screen.getByText(/organization('|’)s wallet/i)).toBeInTheDocument()
     expect(screen.getByText('CONTACT SALES')).toBeInTheDocument()
   })
+}
 
+function billingCancellationAndPacksTests(): void {
   it('shows a persistent end-date bar while a cancellation is pending', async () => {
     vi.mocked(resources.getSubscription).mockResolvedValue({
       ...SUB,
@@ -197,4 +233,4 @@ describe('BillingScreen', () => {
     expect(screen.getByText('$10')).toBeInTheDocument()
     expect(screen.getByText('$50')).toBeInTheDocument()
   })
-})
+}

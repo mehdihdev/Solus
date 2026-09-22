@@ -107,21 +107,7 @@ function SwitcherDropdown({
         role="menu"
         className="popover-in"
         onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: '100%',
-          marginTop: 6,
-          zIndex: 61,
-          minWidth: 240,
-          maxHeight: 380,
-          overflowY: 'auto',
-          background: 'var(--sur)',
-          border: '1px solid var(--bd)',
-          borderRadius: 5,
-          boxShadow: '0 14px 44px rgba(0,0,0,0.5)',
-          padding: '4px 0'
-        }}
+        style={SWITCHER_POPOVER_STYLE}
       >
         <MenuRow onClick={onHome}>
           <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
@@ -216,4 +202,20 @@ export function MenuRow({
       {children}
     </button>
   )
+}
+
+const SWITCHER_POPOVER_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  top: '100%',
+  marginTop: 6,
+  zIndex: 61,
+  minWidth: 240,
+  maxHeight: 380,
+  overflowY: 'auto',
+  background: 'var(--sur)',
+  border: '1px solid var(--bd)',
+  borderRadius: 5,
+  boxShadow: '0 14px 44px rgba(0,0,0,0.5)',
+  padding: '4px 0'
 }

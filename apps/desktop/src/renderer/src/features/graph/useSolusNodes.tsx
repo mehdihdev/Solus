@@ -32,7 +32,7 @@ interface SolusNodes {
 }
 
 /** Attach W1 actions to persisted graph identities; never synthesize graph nodes. */
-export function useSolusNodes(projectId: string | null, onGraphChanged: () => void): SolusNodes {
+function useSolusNodeActions(projectId: string | null, onGraphChanged: () => void) {
   const state = useSolusConfig(projectId)
   const mode = useSettingsStore((s) => s.solMode)
   const streaming = useSolChatStore((s) => selectSession(s, projectId).streaming)
@@ -76,6 +76,47 @@ export function useSolusNodes(projectId: string | null, onGraphChanged: () => vo
     },
     [composer]
   )
+  return {
+    state,
+    mode,
+    streaming,
+    actions,
+    menu,
+    setMenu,
+    composer,
+    setComposer,
+    armedDeleteId,
+    setArmedDeleteId,
+    input,
+    onImport,
+    online,
+    sections,
+    onContextMenu,
+    armDelete,
+    onSubmit
+  }
+}
+
+export function useSolusNodes(projectId: string | null, onGraphChanged: () => void): SolusNodes {
+  const {
+    state,
+    mode,
+    streaming,
+    actions,
+    menu,
+    setMenu,
+    composer,
+    setComposer,
+    armedDeleteId,
+    setArmedDeleteId,
+    input,
+    onImport,
+    online,
+    sections,
+    onContextMenu,
+    armDelete,
+    onSubmit
+  } = useSolusNodeActions(projectId, onGraphChanged)
   const overlays = (
     <>
       {input}
@@ -108,7 +149,7 @@ export function useSolusNodes(projectId: string | null, onGraphChanged: () => vo
         />
       )
     },
-    [projectId, sections, online, composer, onSubmit]
+    [projectId, sections, online, composer, onSubmit, setComposer]
   )
   const renderSidebar = (entity: Entity): ReactNode => (
     <SolusSidebar

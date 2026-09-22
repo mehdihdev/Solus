@@ -10,6 +10,7 @@ import { resolveApiBaseUrl } from '../../lib/cspConnect'
 import { ApiError } from '../../lib/api/envelope.types'
 import { unwrapEnvelope } from '../../lib/api/client'
 import { createSolStreamParser, type SolStreamEvent } from './solStream'
+import { toPendingConfirmation, type PendingConfirmation } from '../../lib/api/solStream'
 
 /** How SOL may act on one message: explain and point, or operate tools (SOLX-01). */
 export type SolActionMode = 'guide' | 'do'
@@ -103,6 +104,21 @@ export function listSolTurns(
   return client.request<SolTurn[]>(
     `/projects/${encodeURIComponent(projectId)}/sol/conversations/${encodeURIComponent(conversationId)}/turns`
   )
+}
+
+/** Server-owned active cards; cached text is never approval authority. */
+export async function listSolConfirmations(
+  projectId: string,
+  conversationId: string,
+  client: ApiClient = api
+): Promise<PendingConfirmation[]> {
+  const rows = await client.request<Record<string, unknown>[]>(
+    `/projects/${encodeURIComponent(projectId)}/sol/conversations/${encodeURIComponent(conversationId)}/confirmations`
+  )
+  return rows.flatMap((data) => {
+    const card = toPendingConfirmation({ type: 'tool_confirmation', data })
+    return card ? [card] : []
+  })
 }
 
 // Same resolution as lib/api/client.ts, through the shared helper so the two can

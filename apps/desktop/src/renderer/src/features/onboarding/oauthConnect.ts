@@ -13,10 +13,10 @@ import type { OAuthBridge } from '../auth/githubOAuth'
 import type { AccessChoiceStep } from './accessChoiceStep'
 import type { AddOnStep } from './addOnStep'
 import type { ConnectionState, ConnectStage } from './onboardingStore'
-import { pollSync, syncErrorMessage } from './sourceSync'
+import { pollAcceptedSync, indexedSyncDetail, type SyncJobApi } from './sourceSync'
 
 /** The slice of the typed API surface this orchestration depends on. */
-export interface OAuthConnectApi {
+export interface OAuthConnectApi extends SyncJobApi {
   startOAuth: (
     projectId: string,
     provider: string,
@@ -119,12 +119,6 @@ export async function runOAuthConnect(
 ): Promise<OAuthConnectResult> {
   const label = options.displayName ?? provider
 
-  if (!deps.bridge) {
-    const error = noBridgeError(label)
-    deps.onProgress({ phase: 'error', error })
-    return { ok: false, error }
-  }
-
   try {
     const linked = await link(deps, deps.bridge, projectId, provider, options, label)
     if ('error' in linked) {
@@ -165,7 +159,7 @@ type Linked = { source: Source } | { error: string; sourceId?: string }
  */
 async function link(
   deps: OAuthConnectDeps,
-  bridge: OAuthBridge,
+  bridge: OAuthBridge | null,
   projectId: string,
   provider: string,
   options: OAuthConnectOptions,
@@ -180,6 +174,7 @@ async function link(
     })
     return { source }
   }
+  if (!bridge) return { error: noBridgeError(label) }
   const authorized = await authorize(deps, bridge, projectId, provider, options, label)
   if ('error' in authorized) return authorized
 
@@ -246,26 +241,27 @@ async function indexSource(
 ): Promise<OAuthConnectResult> {
   deps.onProgress(busy('index', `Indexing ${outcome.label ?? displayName}…`, sourceId))
   await deps.api.updateSource(projectId, sourceId, { config: outcome.config })
-  await deps.api.triggerSync(projectId, sourceId)
+  const accepted = await deps.api.triggerSync(projectId, sourceId)
 
-  const sync = await pollSync(deps.api, projectId, sourceId, deps.sleep)
-  if (!sync) {
+  const job = await pollAcceptedSync(deps.api, projectId, accepted.job_id, deps.sleep)
+  if (!job) {
     const error = 'Sync timed out.'
     deps.onProgress({ phase: 'error', error, sourceId })
     return { ok: false, error, sourceId }
   }
-  if (sync.status === 'failed') {
-    const error = syncErrorMessage(sync)
+  if (job.status !== 'succeeded') {
+    const error =
+      job.error?.message ?? (job.status === 'cancelled' ? 'Sync cancelled.' : 'Sync failed.')
     deps.onProgress({ phase: 'error', error, sourceId })
     return { ok: false, error, sourceId }
   }
 
   const source = await deps.api.getSource(projectId, sourceId)
-  const count = source.entity_count ?? sync.entities_created
+  const detail = await indexedSyncDetail(deps.api, projectId, sourceId, source.entity_count)
   // The add-on note rides the REAL result string rather than replacing it: a
   // connect that indexed nothing has not become a success because an extra
   // turned on, and the entity count is what the person came for.
-  const result = `Connected — ${count} entities indexed${addOnNote ? ` · ${addOnNote}` : ''}`
+  const result = `Connected — ${detail}${addOnNote ? ` · ${addOnNote}` : ''}`
   deps.onProgress({ phase: 'done', sourceId, result })
   return { ok: true, sourceId, result }
 }

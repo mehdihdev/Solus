@@ -55,7 +55,7 @@ OAUTH_HOST = "oauth.onshape.com"
 _ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("sessioninfo", re.compile(r"^/api/users/sessioninfo$")),
     ("microversion", re.compile(r"^/api/v6/documents/d/[^/]+/w/[^/]+/currentmicroversion$")),
-    ("elements", re.compile(r"^/api/v6/documents/d/[^/]+/w/[^/]+/elements$")),
+    ("elements", re.compile(r"^/api/v6/documents/d/[^/]+/m/[^/]+/elements$")),
     ("externaldata", re.compile(r"^/api/v6/documents/d/[^/]+/externaldata/[^/]+$")),
     (
         # Both element families translate through the same shape; only the
@@ -64,7 +64,7 @@ _ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"^/api/v6/(?:assemblies|partstudios)/d/[^/]+/w/[^/]+/e/[^/]+/translations$"),
     ),
     ("translations_poll", re.compile(r"^/api/v8/translations/[^/]+$")),
-    ("parts", re.compile(r"^/api/v6/parts/d/[^/]+/w/[^/]+/e/[^/]+$")),
+    ("parts", re.compile(r"^/api/v6/parts/d/[^/]+/m/[^/]+/e/[^/]+$")),
     ("document_list", re.compile(r"^/api/v6/documents$")),
     ("document", re.compile(r"^/api/v6/documents/[^/]+$")),
     ("oauth_token", re.compile(r"^/oauth/token$")),

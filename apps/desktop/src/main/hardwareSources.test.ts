@@ -61,212 +61,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 describe('HardwareSources authenticated picker', () => {
-  it('returns only portable scope/ref/digest/filename from the selected bytes', async () => {
-    const { sources, file, store, deps } = setup()
-    const result = await sources.pick(true, {})
-    expect(result).toEqual({
-      ok: true,
-      value: {
-        projectId: PROJECT,
-        accountId: ACCOUNT,
-        source: {
-          sourceRef: REF,
-          contentSha256: digest('{"joint":1}'),
-          displayName: 'calibration.json'
-        }
-      }
-    })
-    expect(JSON.stringify(result)).not.toContain(file)
-    expect(deps.authorize).toHaveBeenCalledWith('test-session', PROJECT, expect.any(AbortSignal))
-    const saved = store.read(PROJECT)
-    if (saved.status !== 'ready') throw new Error('missing saved state')
-    expect(saved.state.accounts[ACCOUNT].sources[REF].path).toBe(file)
-  })
-
-  it('refuses hostile senders before auth, dialog or filesystem access', async () => {
-    const { sources, deps } = setup()
-    expect(await sources.pick(false, {})).toEqual({ ok: false, reason: 'unauthorized' })
-    expect(await sources.list(false)).toEqual({ ok: false, reason: 'unauthorized' })
-    expect(deps.authorize).not.toHaveBeenCalled()
-    expect(deps.pickFile).not.toHaveBeenCalled()
-  })
-
-  it('never treats a renderer-named path or account as authority', async () => {
-    const { sources, deps } = setup()
-    expect(await sources.pick(true, { path: '/private/file.json' })).toEqual({
-      ok: false,
-      reason: 'invalid'
-    })
-    expect(await sources.pick(true, { accountId: OTHER })).toEqual({ ok: false, reason: 'invalid' })
-    expect(deps.pickFile).not.toHaveBeenCalled()
-  })
-
-  it('requires real authenticated project membership', async () => {
-    const { sources, deps } = setup()
-    deps.authorize.mockResolvedValue(null)
-    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'unauthorized' })
-    expect(deps.pickFile).not.toHaveBeenCalled()
-    sources.setToken(null)
-    expect(await sources.list(true)).toEqual({ ok: false, reason: 'unauthorized' })
-  })
-
-  it('lists only the server-verified account and refuses another account source ref', async () => {
-    const { sources, deps, store } = setup()
-    store.updateAccount(PROJECT, OTHER, () => ({
-      sources: { [REF]: { path: '/elsewhere/config.json', contentSha256: 'a'.repeat(64) } },
-      bindings: {}
-    }))
-    expect(await sources.list(true)).toEqual({
-      ok: true,
-      value: { projectId: PROJECT, accountId: ACCOUNT, sources: [] }
-    })
-    expect(await sources.recheck(true, { sourceRef: REF })).toEqual({
-      ok: false,
-      reason: 'not_found'
-    })
-    expect(deps.pickFile).not.toHaveBeenCalled()
-  })
-
-  it('never leaks a foreign-platform path through a display filename', async () => {
-    const { sources, store } = setup()
-    store.updateAccount(PROJECT, ACCOUNT, () => ({
-      sources: {
-        [REF]: { path: 'C:\\private\\calibration.json', contentSha256: 'a'.repeat(64) }
-      },
-      bindings: {}
-    }))
-    const result = await sources.list(true)
-    expect(result.ok && result.value.sources[0].displayName).toBe('calibration.json')
-    expect(JSON.stringify(result)).not.toContain('private')
-  })
-
-  it('does not create state when the dialog is cancelled', async () => {
-    const { sources, deps, store } = setup()
-    deps.pickFile.mockResolvedValue(null)
-    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'cancelled' })
-    expect(store.read(PROJECT)).toEqual({
-      status: 'ready',
-      state: { schema_version: 1, accounts: {} }
-    })
-  })
-
-  it('rejects a pending dialog after project A to B to A transitions', async () => {
-    const { sources, deps, file, store } = setup()
-    const pick = deferred<string | null>()
-    deps.pickFile.mockReturnValue(pick.promise)
-    const pending = sources.pick(true, {})
-    await vi.waitFor(() => expect(deps.pickFile).toHaveBeenCalled())
-    sources.setProject(OTHER)
-    sources.setProject(PROJECT)
-    pick.resolve(file)
-    expect(await pending).toEqual({ ok: false, reason: 'stale_scope' })
-    expect(store.read(PROJECT)).toEqual({
-      status: 'ready',
-      state: { schema_version: 1, accounts: {} }
-    })
-  })
-
-  it('invalidates pending authorization on signout even after signing in again', async () => {
-    const { sources, deps } = setup()
-    const auth = deferred<string | null>()
-    deps.authorize.mockReturnValue(auth.promise)
-    const pending = sources.list(true)
-    sources.setToken(null)
-    sources.setToken('test-session')
-    auth.resolve(ACCOUNT)
-    expect(await pending).toEqual({ ok: false, reason: 'stale_scope' })
-  })
-
-  it('allows only one native picker at a time', async () => {
-    const { sources, deps } = setup()
-    const pick = deferred<string | null>()
-    deps.pickFile.mockReturnValue(pick.promise)
-    const pending = sources.pick(true, {})
-    await vi.waitFor(() => expect(deps.pickFile).toHaveBeenCalled())
-    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'busy' })
-    pick.resolve(null)
-    await pending
-  })
-
-  it('requires concrete digest-change confirmation before replacing an existing ref', async () => {
-    const { sources, deps, file, home } = setup()
-    await sources.pick(true, {})
-    const statePath = join(home, '.solus', 'projects', PROJECT, 'hardware.json')
-    const before = readFileSync(statePath, 'utf8')
-    writeFileSync(file, '{"joint":2}')
-    expect(await sources.recheck(true, { sourceRef: REF })).toEqual({
-      ok: false,
-      reason: 'source_changed'
-    })
-    deps.confirmDigestChange.mockResolvedValue(false)
-    expect(await sources.pick(true, { sourceRef: REF })).toEqual({ ok: false, reason: 'cancelled' })
-    expect(readFileSync(statePath, 'utf8')).toBe(before)
-    deps.confirmDigestChange.mockResolvedValue(true)
-    const result = await sources.pick(true, { sourceRef: REF })
-    expect(result.ok).toBe(true)
-    expect(deps.confirmDigestChange).toHaveBeenLastCalledWith({
-      displayName: 'calibration.json',
-      previousDigest: digest('{"joint":1}'),
-      contentSha256: digest('{"joint":2}')
-    })
-    expect(readFileSync(statePath, 'utf8')).toContain(digest('{"joint":2}'))
-  })
-
-  it('explicitly relinks an unknown migrated reference using the native picker', async () => {
-    const { sources, deps, store, file } = setup()
-    const result = await sources.pick(true, { sourceRef: REF })
-    expect(result.ok && result.value.source.sourceRef).toBe(REF)
-    expect(deps.pickFile).toHaveBeenCalledOnce()
-    const state = store.read(PROJECT)
-    expect(state.status === 'ready' && state.state.accounts[ACCOUNT].sources[REF].path).toBe(file)
-  })
-
-  it('reviews changed known bytes when relinking an unknown reference to the same file', async () => {
-    const { sources, deps, file } = setup()
-    await sources.pick(true, {})
-    writeFileSync(file, '{"joint":2}')
-    deps.confirmDigestChange.mockResolvedValue(false)
-    expect(await sources.pick(true, { sourceRef: OTHER })).toEqual({
-      ok: false,
-      reason: 'cancelled'
-    })
-    expect(deps.confirmDigestChange).toHaveBeenCalledOnce()
-  })
-
-  it('reuses a selected canonical file reference and reviews changed bytes', async () => {
-    const { sources, deps, file, store } = setup()
-    await sources.pick(true, {})
-    deps.newId = () => OTHER
-    const same = await sources.pick(true, {})
-    expect(same.ok && same.value.source.sourceRef).toBe(REF)
-    writeFileSync(file, '{"joint":3}')
-    deps.confirmDigestChange.mockResolvedValue(false)
-    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'cancelled' })
-    const state = store.read(PROJECT)
-    expect(state.status === 'ready' && Object.keys(state.state.accounts[ACCOUNT].sources)).toEqual([
-      REF
-    ])
-  })
-
-  it('checks membership again after a dialog before persistence', async () => {
-    const { sources, deps, store } = setup()
-    deps.authorize.mockResolvedValueOnce(ACCOUNT).mockResolvedValueOnce(null)
-    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'unauthorized' })
-    expect(store.read(PROJECT)).toEqual({
-      status: 'ready',
-      state: { schema_version: 1, accounts: {} }
-    })
-  })
-
-  it('reports corrupt state without showing a picker or overwriting it', async () => {
-    const { sources, deps, home } = setup()
-    const dir = join(home, '.solus', 'projects', PROJECT)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'hardware.json'), 'bad')
-    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'invalid' })
-    expect(deps.pickFile).not.toHaveBeenCalled()
-    expect(readFileSync(join(dir, 'hardware.json'), 'utf8')).toBe('bad')
-  })
+  registerPickerAuthorizationTests()
+  registerPickerScopeAndCancellationTests()
+  registerPickerConcurrencyAndRelinkingTests()
+  registerPickerDigestAndPersistenceTests()
 })
 
 describe('readHardwareSource', () => {
@@ -368,3 +166,218 @@ describe('authorizeHardwareScope', () => {
     ).toBe(null)
   })
 })
+
+function registerPickerAuthorizationTests(): void {
+  it('returns only portable scope/ref/digest/filename from the selected bytes', async () => {
+    const { sources, file, store, deps } = setup()
+    const result = await sources.pick(true, {})
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        projectId: PROJECT,
+        accountId: ACCOUNT,
+        source: {
+          sourceRef: REF,
+          contentSha256: digest('{"joint":1}'),
+          displayName: 'calibration.json'
+        }
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain(file)
+    expect(deps.authorize).toHaveBeenCalledWith('test-session', PROJECT, expect.any(AbortSignal))
+    const saved = store.read(PROJECT)
+    if (saved.status !== 'ready') throw new Error('missing saved state')
+    expect(saved.state.accounts[ACCOUNT].sources[REF].path).toBe(file)
+  })
+
+  it('refuses hostile senders before auth, dialog or filesystem access', async () => {
+    const { sources, deps } = setup()
+    expect(await sources.pick(false, {})).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(await sources.list(false)).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(deps.authorize).not.toHaveBeenCalled()
+    expect(deps.pickFile).not.toHaveBeenCalled()
+  })
+
+  it('never treats a renderer-named path or account as authority', async () => {
+    const { sources, deps } = setup()
+    expect(await sources.pick(true, { path: '/private/file.json' })).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
+    expect(await sources.pick(true, { accountId: OTHER })).toEqual({ ok: false, reason: 'invalid' })
+    expect(deps.pickFile).not.toHaveBeenCalled()
+  })
+
+  it('requires real authenticated project membership', async () => {
+    const { sources, deps } = setup()
+    deps.authorize.mockResolvedValue(null)
+    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(deps.pickFile).not.toHaveBeenCalled()
+    sources.setToken(null)
+    expect(await sources.list(true)).toEqual({ ok: false, reason: 'unauthorized' })
+  })
+}
+
+function registerPickerScopeAndCancellationTests(): void {
+  it('lists only the server-verified account and refuses another account source ref', async () => {
+    const { sources, deps, store } = setup()
+    store.updateAccount(PROJECT, OTHER, () => ({
+      sources: { [REF]: { path: '/elsewhere/config.json', contentSha256: 'a'.repeat(64) } },
+      bindings: {}
+    }))
+    expect(await sources.list(true)).toEqual({
+      ok: true,
+      value: { projectId: PROJECT, accountId: ACCOUNT, sources: [] }
+    })
+    expect(await sources.recheck(true, { sourceRef: REF })).toEqual({
+      ok: false,
+      reason: 'not_found'
+    })
+    expect(deps.pickFile).not.toHaveBeenCalled()
+  })
+
+  it('never leaks a foreign-platform path through a display filename', async () => {
+    const { sources, store } = setup()
+    store.updateAccount(PROJECT, ACCOUNT, () => ({
+      sources: {
+        [REF]: { path: 'C:\\private\\calibration.json', contentSha256: 'a'.repeat(64) }
+      },
+      bindings: {}
+    }))
+    const result = await sources.list(true)
+    expect(result.ok && result.value.sources[0].displayName).toBe('calibration.json')
+    expect(JSON.stringify(result)).not.toContain('private')
+  })
+
+  it('does not create state when the dialog is cancelled', async () => {
+    const { sources, deps, store } = setup()
+    deps.pickFile.mockResolvedValue(null)
+    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'cancelled' })
+    expect(store.read(PROJECT)).toEqual({
+      status: 'ready',
+      state: { schema_version: 1, accounts: {} }
+    })
+  })
+
+  it('rejects a pending dialog after project A to B to A transitions', async () => {
+    const { sources, deps, file, store } = setup()
+    const pick = deferred<string | null>()
+    deps.pickFile.mockReturnValue(pick.promise)
+    const pending = sources.pick(true, {})
+    await vi.waitFor(() => expect(deps.pickFile).toHaveBeenCalled())
+    sources.setProject(OTHER)
+    sources.setProject(PROJECT)
+    pick.resolve(file)
+    expect(await pending).toEqual({ ok: false, reason: 'stale_scope' })
+    expect(store.read(PROJECT)).toEqual({
+      status: 'ready',
+      state: { schema_version: 1, accounts: {} }
+    })
+  })
+}
+
+function registerPickerConcurrencyAndRelinkingTests(): void {
+  it('invalidates pending authorization on signout even after signing in again', async () => {
+    const { sources, deps } = setup()
+    const auth = deferred<string | null>()
+    deps.authorize.mockReturnValue(auth.promise)
+    const pending = sources.list(true)
+    sources.setToken(null)
+    sources.setToken('test-session')
+    auth.resolve(ACCOUNT)
+    expect(await pending).toEqual({ ok: false, reason: 'stale_scope' })
+  })
+
+  it('allows only one native picker at a time', async () => {
+    const { sources, deps } = setup()
+    const pick = deferred<string | null>()
+    deps.pickFile.mockReturnValue(pick.promise)
+    const pending = sources.pick(true, {})
+    await vi.waitFor(() => expect(deps.pickFile).toHaveBeenCalled())
+    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'busy' })
+    pick.resolve(null)
+    await pending
+  })
+
+  it('requires concrete digest-change confirmation before replacing an existing ref', async () => {
+    const { sources, deps, file, home } = setup()
+    await sources.pick(true, {})
+    const statePath = join(home, '.solus', 'projects', PROJECT, 'hardware.json')
+    const before = readFileSync(statePath, 'utf8')
+    writeFileSync(file, '{"joint":2}')
+    expect(await sources.recheck(true, { sourceRef: REF })).toEqual({
+      ok: false,
+      reason: 'source_changed'
+    })
+    deps.confirmDigestChange.mockResolvedValue(false)
+    expect(await sources.pick(true, { sourceRef: REF })).toEqual({ ok: false, reason: 'cancelled' })
+    expect(readFileSync(statePath, 'utf8')).toBe(before)
+    deps.confirmDigestChange.mockResolvedValue(true)
+    const result = await sources.pick(true, { sourceRef: REF })
+    expect(result.ok).toBe(true)
+    expect(deps.confirmDigestChange).toHaveBeenLastCalledWith({
+      displayName: 'calibration.json',
+      previousDigest: digest('{"joint":1}'),
+      contentSha256: digest('{"joint":2}')
+    })
+    expect(readFileSync(statePath, 'utf8')).toContain(digest('{"joint":2}'))
+  })
+
+  it('explicitly relinks an unknown migrated reference using the native picker', async () => {
+    const { sources, deps, store, file } = setup()
+    const result = await sources.pick(true, { sourceRef: REF })
+    expect(result.ok && result.value.source.sourceRef).toBe(REF)
+    expect(deps.pickFile).toHaveBeenCalledOnce()
+    const state = store.read(PROJECT)
+    expect(state.status === 'ready' && state.state.accounts[ACCOUNT].sources[REF].path).toBe(file)
+  })
+}
+
+function registerPickerDigestAndPersistenceTests(): void {
+  it('reviews changed known bytes when relinking an unknown reference to the same file', async () => {
+    const { sources, deps, file } = setup()
+    await sources.pick(true, {})
+    writeFileSync(file, '{"joint":2}')
+    deps.confirmDigestChange.mockResolvedValue(false)
+    expect(await sources.pick(true, { sourceRef: OTHER })).toEqual({
+      ok: false,
+      reason: 'cancelled'
+    })
+    expect(deps.confirmDigestChange).toHaveBeenCalledOnce()
+  })
+
+  it('reuses a selected canonical file reference and reviews changed bytes', async () => {
+    const { sources, deps, file, store } = setup()
+    await sources.pick(true, {})
+    deps.newId = () => OTHER
+    const same = await sources.pick(true, {})
+    expect(same.ok && same.value.source.sourceRef).toBe(REF)
+    writeFileSync(file, '{"joint":3}')
+    deps.confirmDigestChange.mockResolvedValue(false)
+    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'cancelled' })
+    const state = store.read(PROJECT)
+    expect(state.status === 'ready' && Object.keys(state.state.accounts[ACCOUNT].sources)).toEqual([
+      REF
+    ])
+  })
+
+  it('checks membership again after a dialog before persistence', async () => {
+    const { sources, deps, store } = setup()
+    deps.authorize.mockResolvedValueOnce(ACCOUNT).mockResolvedValueOnce(null)
+    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'unauthorized' })
+    expect(store.read(PROJECT)).toEqual({
+      status: 'ready',
+      state: { schema_version: 1, accounts: {} }
+    })
+  })
+
+  it('reports corrupt state without showing a picker or overwriting it', async () => {
+    const { sources, deps, home } = setup()
+    const dir = join(home, '.solus', 'projects', PROJECT)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'hardware.json'), 'bad')
+    expect(await sources.pick(true, {})).toEqual({ ok: false, reason: 'invalid' })
+    expect(deps.pickFile).not.toHaveBeenCalled()
+    expect(readFileSync(join(dir, 'hardware.json'), 'utf8')).toBe('bad')
+  })
+}

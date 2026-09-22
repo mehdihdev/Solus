@@ -9,6 +9,50 @@ function frame(event: string, data: unknown): string {
 }
 
 describe('solStream framing', () => {
+  streamMessageFramesTests()
+  streamArtifactFramesTests()
+  streamErrorValidationTests()
+  streamFramingBoundariesTests()
+})
+
+describe('context_used frame (SOLUSDEV-233)', () => {
+  it('parses the turn context manifest', () => {
+    const parser = createSolStreamParser()
+    const events = parser.push(
+      frame('context_used', {
+        sections: [
+          { kind: 'graph', citation: '[graph:motor_driver]', tokens: 120 },
+          { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 300 },
+          { kind: 'telemetry', citation: null, tokens: 40 }
+        ],
+        truncated: false,
+        dropped: 2
+      })
+    )
+    expect(events).toEqual([
+      {
+        type: 'context_used',
+        sections: [
+          { kind: 'graph', citation: '[graph:motor_driver]', tokens: 120 },
+          { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 300 },
+          { kind: 'telemetry', citation: null, tokens: 40 }
+        ],
+        truncated: false,
+        dropped: 2
+      }
+    ])
+  })
+
+  it('drops a manifest whose sections are malformed', () => {
+    const parser = createSolStreamParser()
+    const events = parser.push(
+      frame('context_used', { sections: [{ kind: 7 }], truncated: false, dropped: 0 })
+    )
+    expect(events).toEqual([])
+  })
+})
+
+function streamMessageFramesTests(): void {
   it('parses token, tool frames, message with citations, and done', () => {
     const parser = createSolStreamParser()
     const events: SolStreamEvent[] = []
@@ -50,7 +94,9 @@ describe('solStream framing', () => {
     expect(event).toEqual({ type: 'tool_call', callId: 'c9', tool: 'flash' })
     expect(JSON.stringify(event)).not.toContain('hunter2')
   })
+}
 
+function streamArtifactFramesTests(): void {
   it('parses an artifact frame into a validated reference (SOLUSDEV-252 S5)', () => {
     const parser = createSolStreamParser()
     const events = parser.push(
@@ -83,7 +129,9 @@ describe('solStream framing', () => {
     expect(parser.push(frame('artifact', { title: 'x', media_type: 'image/png' }))).toEqual([])
     expect(parser.push(frame('artifact', { artifact_id: 'a1', uri: '/u' }))).toEqual([])
   })
+}
 
+function streamErrorValidationTests(): void {
   it('surfaces the error code of a failed tool result', () => {
     const parser = createSolStreamParser()
     const events = parser.push(
@@ -127,7 +175,9 @@ describe('solStream framing', () => {
     ]
     expect(events).toEqual([{ type: 'message', role: 'assistant', content: 'x', citations: [] }])
   })
+}
 
+function streamFramingBoundariesTests(): void {
   it('tolerates CRLF line endings and SSE comment/id fields', () => {
     const parser = createSolStreamParser()
     const events = parser.push(
@@ -175,41 +225,4 @@ describe('solStream framing', () => {
       { type: 'token', text: 'ok' }
     ])
   })
-})
-
-describe('context_used frame (SOLUSDEV-233)', () => {
-  it('parses the turn context manifest', () => {
-    const parser = createSolStreamParser()
-    const events = parser.push(
-      frame('context_used', {
-        sections: [
-          { kind: 'graph', citation: '[graph:motor_driver]', tokens: 120 },
-          { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 300 },
-          { kind: 'telemetry', citation: null, tokens: 40 }
-        ],
-        truncated: false,
-        dropped: 2
-      })
-    )
-    expect(events).toEqual([
-      {
-        type: 'context_used',
-        sections: [
-          { kind: 'graph', citation: '[graph:motor_driver]', tokens: 120 },
-          { kind: 'document', citation: '[datasheet:so101.urdf]', tokens: 300 },
-          { kind: 'telemetry', citation: null, tokens: 40 }
-        ],
-        truncated: false,
-        dropped: 2
-      }
-    ])
-  })
-
-  it('drops a manifest whose sections are malformed', () => {
-    const parser = createSolStreamParser()
-    const events = parser.push(
-      frame('context_used', { sections: [{ kind: 7 }], truncated: false, dropped: 0 })
-    )
-    expect(events).toEqual([])
-  })
-})
+}

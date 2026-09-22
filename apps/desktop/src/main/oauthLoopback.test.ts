@@ -97,142 +97,9 @@ beforeEach(async () => {
 })
 
 describe('awaitGithubCallback', () => {
-  it(
-    'opens the https authorize URL and resolves with the code on a matching callback',
-    async () => {
-      const redirect = oauth.getRedirectUrl()
-      expect(redirect).toContain('127.0.0.1:53682/auth/callback?solus_cb=')
-      const state = new URL(redirect).searchParams.get('solus_cb')
-
-      const pending = oauth.awaitGithubCallback(AUTHORIZE, PORT)
-      const status = await hitCallback(`${base()}?solus_cb=${state}&code=auth-code-1`)
-
-      expect(status).toBe(200)
-      expect(await pending).toEqual({ code: 'auth-code-1' })
-      expect(openExternal).toHaveBeenCalledWith(AUTHORIZE)
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
-
-  it(
-    'ignores a forged callback with the wrong state, then accepts the real one',
-    async () => {
-      const redirect = oauth.getRedirectUrl()
-      const state = new URL(redirect).searchParams.get('solus_cb')
-      const pending = oauth.awaitGithubCallback(AUTHORIZE, PORT)
-
-      const forged = await hitCallback(`${base()}?solus_cb=wrong&code=evil`)
-      expect(forged).toBe(404)
-
-      await hitCallback(`${base()}?solus_cb=${state}&code=real-code`)
-      expect(await pending).toEqual({ code: 'real-code' })
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
-
-  it('refuses a non-https authorize URL and never opens the browser', async () => {
-    oauth.getRedirectUrl()
-    const result = await oauth.awaitGithubCallback('file:///etc/passwd', PORT)
-    expect(result).toEqual({ error: 'Invalid sign-in URL.' })
-    expect(openExternal).not.toHaveBeenCalled()
-  })
-
-  it(
-    'supersedes an in-flight sign-in instead of refusing the new one',
-    async () => {
-      // Nothing tells us the user closed the browser tab, so an abandoned flow
-      // used to hold the port for five minutes and answer "A sign-in is already
-      // in progress." to every retry. Refusing is only right if the earlier flow
-      // might still complete; a person clicking sign-in again is saying it will
-      // not. The old flow settles as cancelled — never left dangling.
-      oauth.getRedirectUrl()
-      const abandoned = oauth.awaitGithubCallback(AUTHORIZE, PORT)
-      await hitCallback(`${base()}?solus_cb=ping`).catch(() => undefined)
-
-      const redirect = oauth.getRedirectUrl()
-      const state = new URL(redirect).searchParams.get('solus_cb')
-      const second = oauth.awaitGithubCallback(AUTHORIZE, PORT)
-
-      expect(await abandoned).toEqual({ error: 'Sign-in was cancelled.' })
-
-      // And the port really did change hands: the new flow is listening.
-      await hitCallback(`${base()}?solus_cb=${state}&code=done`)
-      expect(await second).toEqual({ code: 'done' })
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
-
-  // Connector OAuth: the redirect URI must stay constant for strict providers
-  // (Onshape), so the nonce is the provider's echoed `state`, not solus_cb.
-  it(
-    'captures a connector callback matched on the provider state',
-    async () => {
-      expect(oauth.getConnectorRedirectUrl()).toBe('http://localhost:53682/auth/callback')
-
-      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'backend-state-abc', PORT)
-      const forged = await hitCallback(`${base()}?state=wrong&code=evil`)
-      expect(forged).toBe(404)
-
-      const status = await hitCallback(`${base()}?state=backend-state-abc&code=real-code`)
-      expect(status).toBe(200)
-      expect(await pending).toEqual({ code: 'real-code' })
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
-
-  // The reason both loopback stacks are bound: the connector redirect says
-  // `localhost`, which resolves to ::1 first on many systems. A callback arriving
-  // over IPv6 must land, or the sign-in hangs until it times out.
-  it.skipIf(!IPV6_AVAILABLE)(
-    'accepts a connector callback over IPv6 loopback',
-    async () => {
-      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'v6-state', PORT)
-
-      const status = await hitCallback(
-        `http://[::1]:${PORT}/auth/callback?state=v6-state&code=v6-code`
-      )
-
-      expect(status).toBe(200)
-      expect(await pending).toEqual({ code: 'v6-code' })
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
-
-  it(
-    'accepts the same connector callback over IPv4 loopback',
-    async () => {
-      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'v4-state', PORT)
-
-      const status = await hitCallback(`${base()}?state=v4-state&code=v4-code`)
-
-      expect(status).toBe(200)
-      expect(await pending).toEqual({ code: 'v4-code' })
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
-
-  it(
-    'never logs the auth code',
-    async () => {
-      const spies = [
-        vi.spyOn(console, 'log').mockImplementation(() => {}),
-        vi.spyOn(console, 'error').mockImplementation(() => {}),
-        vi.spyOn(console, 'warn').mockImplementation(() => {})
-      ]
-      const redirect = oauth.getRedirectUrl()
-      const state = new URL(redirect).searchParams.get('solus_cb')
-      const pending = oauth.awaitGithubCallback(AUTHORIZE, PORT)
-      await hitCallback(`${base()}?solus_cb=${state}&code=secret-code-xyz`)
-      await pending
-      for (const spy of spies) {
-        for (const call of spy.mock.calls) {
-          expect(JSON.stringify(call)).not.toContain('secret-code-xyz')
-        }
-        spy.mockRestore()
-      }
-    },
-    SOCKET_TEST_TIMEOUT_MS
-  )
+  registerOAuthSuccessAndUrlValidationTests()
+  registerOAuthSupersessionAndTimeoutTests()
+  registerOAuthDualStackAndStateTests()
 })
 
 // The cancel seam (SOLUSDEV-165): closing the connect wizard mid-handshake must
@@ -309,3 +176,146 @@ describe('test isolation', () => {
     SOCKET_TEST_TIMEOUT_MS
   )
 })
+
+function registerOAuthSuccessAndUrlValidationTests(): void {
+  it(
+    'opens the https authorize URL and resolves with the code on a matching callback',
+    async () => {
+      const redirect = oauth.getRedirectUrl()
+      expect(redirect).toContain('127.0.0.1:53682/auth/callback?solus_cb=')
+      const state = new URL(redirect).searchParams.get('solus_cb')
+
+      const pending = oauth.awaitGithubCallback(AUTHORIZE, PORT)
+      const status = await hitCallback(`${base()}?solus_cb=${state}&code=auth-code-1`)
+
+      expect(status).toBe(200)
+      expect(await pending).toEqual({ code: 'auth-code-1' })
+      expect(openExternal).toHaveBeenCalledWith(AUTHORIZE)
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  it(
+    'ignores a forged callback with the wrong state, then accepts the real one',
+    async () => {
+      const redirect = oauth.getRedirectUrl()
+      const state = new URL(redirect).searchParams.get('solus_cb')
+      const pending = oauth.awaitGithubCallback(AUTHORIZE, PORT)
+
+      const forged = await hitCallback(`${base()}?solus_cb=wrong&code=evil`)
+      expect(forged).toBe(404)
+
+      await hitCallback(`${base()}?solus_cb=${state}&code=real-code`)
+      expect(await pending).toEqual({ code: 'real-code' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  it('refuses a non-https authorize URL and never opens the browser', async () => {
+    oauth.getRedirectUrl()
+    const result = await oauth.awaitGithubCallback('file:///etc/passwd', PORT)
+    expect(result).toEqual({ error: 'Invalid sign-in URL.' })
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+}
+
+function registerOAuthSupersessionAndTimeoutTests(): void {
+  it(
+    'supersedes an in-flight sign-in instead of refusing the new one',
+    async () => {
+      // Nothing tells us the user closed the browser tab, so an abandoned flow
+      // used to hold the port for five minutes and answer "A sign-in is already
+      // in progress." to every retry. Refusing is only right if the earlier flow
+      // might still complete; a person clicking sign-in again is saying it will
+      // not. The old flow settles as cancelled — never left dangling.
+      oauth.getRedirectUrl()
+      const abandoned = oauth.awaitGithubCallback(AUTHORIZE, PORT)
+      await hitCallback(`${base()}?solus_cb=ping`).catch(() => undefined)
+
+      const redirect = oauth.getRedirectUrl()
+      const state = new URL(redirect).searchParams.get('solus_cb')
+      const second = oauth.awaitGithubCallback(AUTHORIZE, PORT)
+
+      expect(await abandoned).toEqual({ error: 'Sign-in was cancelled.' })
+
+      // And the port really did change hands: the new flow is listening.
+      await hitCallback(`${base()}?solus_cb=${state}&code=done`)
+      expect(await second).toEqual({ code: 'done' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  // Connector OAuth: the redirect URI must stay constant for strict providers
+  // (Onshape), so the nonce is the provider's echoed `state`, not solus_cb.
+  it(
+    'captures a connector callback matched on the provider state',
+    async () => {
+      expect(oauth.getConnectorRedirectUrl()).toBe('http://localhost:53682/auth/callback')
+
+      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'backend-state-abc', PORT)
+      const forged = await hitCallback(`${base()}?state=wrong&code=evil`)
+      expect(forged).toBe(404)
+
+      const status = await hitCallback(`${base()}?state=backend-state-abc&code=real-code`)
+      expect(status).toBe(200)
+      expect(await pending).toEqual({ code: 'real-code' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  // The reason both loopback stacks are bound: the connector redirect says
+  // `localhost`, which resolves to ::1 first on many systems. A callback arriving
+  // over IPv6 must land, or the sign-in hangs until it times out.
+  it.skipIf(!IPV6_AVAILABLE)(
+    'accepts a connector callback over IPv6 loopback',
+    async () => {
+      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'v6-state', PORT)
+
+      const status = await hitCallback(
+        `http://[::1]:${PORT}/auth/callback?state=v6-state&code=v6-code`
+      )
+
+      expect(status).toBe(200)
+      expect(await pending).toEqual({ code: 'v6-code' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+}
+
+function registerOAuthDualStackAndStateTests(): void {
+  it(
+    'accepts the same connector callback over IPv4 loopback',
+    async () => {
+      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'v4-state', PORT)
+
+      const status = await hitCallback(`${base()}?state=v4-state&code=v4-code`)
+
+      expect(status).toBe(200)
+      expect(await pending).toEqual({ code: 'v4-code' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  it(
+    'never logs the auth code',
+    async () => {
+      const spies = [
+        vi.spyOn(console, 'log').mockImplementation(() => {}),
+        vi.spyOn(console, 'error').mockImplementation(() => {}),
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+      ]
+      const redirect = oauth.getRedirectUrl()
+      const state = new URL(redirect).searchParams.get('solus_cb')
+      const pending = oauth.awaitGithubCallback(AUTHORIZE, PORT)
+      await hitCallback(`${base()}?solus_cb=${state}&code=secret-code-xyz`)
+      await pending
+      for (const spy of spies) {
+        for (const call of spy.mock.calls) {
+          expect(JSON.stringify(call)).not.toContain('secret-code-xyz')
+        }
+        spy.mockRestore()
+      }
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+}

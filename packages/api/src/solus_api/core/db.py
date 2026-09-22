@@ -11,13 +11,22 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from solus_api.billing.development import SESSION_SETTINGS_KEY
+from solus_api.core.config import Settings
+
 
 def build_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url, pool_pre_ping=True)
 
 
-def build_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(engine, expire_on_commit=False)
+def build_sessionmaker(
+    engine: AsyncEngine, *, settings: Settings | None = None
+) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        info={SESSION_SETTINGS_KEY: settings} if settings is not None else {},
+    )
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:

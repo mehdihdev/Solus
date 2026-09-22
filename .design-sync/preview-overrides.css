@@ -1,0 +1,20 @@
+/*
+ * Appended to the compiled Tailwind output by .design-sync/build-css.sh.
+ * Hand-written and committed; do not edit .design-sync/solus-base.css directly
+ * (it is regenerated).
+ *
+ * Solus is a dark-first design system: assets/main.css sets
+ *   body { background: var(--bg); color: var(--tx) }
+ * The design-sync preview card template injects an inline
+ *   <style>body{margin:0;padding:24px;background:#fff}</style>
+ * AFTER the stylesheet link, so its background wins while the DS's light
+ * --tx text colour still applies — light grey text on white, unreadable.
+ * Raising specificity to `html body` restores the system's own intent without
+ * touching the card template. This ships to real designs too, which is correct:
+ * a design built from Solus components belongs on the Solus canvas.
+ */
+html body {
+  background: var(--bg);
+  color: var(--tx);
+  font-family: var(--font-ui);
+}

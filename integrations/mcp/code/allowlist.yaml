@@ -40,3 +40,36 @@ tools:
     files_errors: true
     timeout_seconds: 630
     reason: executes pytest over a workspace target with the workspace venv interpreter — arbitrary code on the customer machine
+  - name: git_status
+    requires_confirmation: false
+    reason: read-only status and state fingerprints of the linked repository
+  - name: git_log
+    requires_confirmation: false
+    reason: read-only bounded commit history of the linked repository
+  - name: git_diff
+    requires_confirmation: false
+    reason: read-only bounded staged or unstaged diff in the linked repository
+  - name: git_commit
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 90
+    reason: commits the already staged index only after a complete diff and repository-state preview
+  - name: git_push
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 120
+    reason: pushes one exact commit to one explicitly previewed remote branch without force or credential changes
+  - name: arduino_probe
+    requires_confirmation: false
+    timeout_seconds: 15
+    reason: read-only verification of the pinned local Arduino compiler and frozen Uno toolchain
+  - name: arduino_prepare
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 630
+    reason: installs only the frozen verified Arduino dependencies into the owned application runtime after a complete preview
+  - name: arduino_compile
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 150
+    reason: compiles a verified workspace snapshot offline in an isolated job and publishes immutable artifacts after a complete preview

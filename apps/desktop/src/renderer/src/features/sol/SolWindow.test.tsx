@@ -18,6 +18,7 @@ import {
 } from './solWindow.fixtures'
 
 vi.mock('./solApi', () => ({
+  listSolConfirmations: vi.fn().mockResolvedValue([]),
   createSolConversation: vi.fn(),
   listSolTurns: vi.fn().mockResolvedValue([]),
   streamSolMessage: vi.fn()

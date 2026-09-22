@@ -21,9 +21,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from threading import Event
 from typing import IO, Any
 
 from .plan import Plan
+from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, LineOutput
 from .workspace import resolve_inside
 
 logger = logging.getLogger("solus.code.execute")
@@ -114,29 +116,71 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
         proc.kill()
 
 
+def _drain_output(
+    observer: LineOutput, stream: str, reader: IO[bytes], deadline: float, cancelled: Event | None
+) -> None:
+    """Never follow a descendant's still-growing spool indefinitely after parent exit."""
+    for _ in range(32):  # at most 256 KiB scanned per stream after exit
+        if observer.callback is None or observer.discard[stream]:
+            return
+        if time.monotonic() >= deadline or (cancelled is not None and cancelled.is_set()):
+            break
+        data = reader.read(8192)
+        if not data:
+            return
+        observer.feed(stream, data)
+    observer.suppress(stream)
+
+
 def default_runner(
     argv: list[str], cwd: Path, env: dict[str, str], timeout_seconds: int
 ) -> Outcome:
     """argv list, no shell, own session, closed stdin, spooled output."""
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(  # noqa: S603 - argv assembled by plan.py from validated input
-            argv,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=out,
-            stderr=err,
-            start_new_session=True,
-            close_fds=True,
-        )
-        timed_out = False
-        try:
-            proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_group(proc)
-            proc.wait()
-        return Outcome(None if timed_out else proc.returncode, _tail(out), _tail(err), timed_out)
+    # Private spools and independent read descriptors are established before launch.
+    # Reading never seeks the child's shared write offset.
+    with tempfile.TemporaryDirectory(prefix="solus-command-") as directory:
+        with (
+            open(Path(directory) / "stdout", "w+b") as out,
+            open(Path(directory) / "stderr", "w+b") as err,
+            open(Path(directory) / "stdout", "rb") as out_reader,
+            open(Path(directory) / "stderr", "rb") as err_reader,
+        ):
+            cancelled = CANCEL_EVENT.get()
+            if cancelled is not None and cancelled.is_set():
+                return Outcome(None, b"", b"", True)
+            proc = subprocess.Popen(  # noqa: S603 - validated argv, no shell
+                argv,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=err,
+                start_new_session=True,
+                close_fds=True,
+            )
+            observer = LineOutput(OUTPUT_CALLBACK.get())
+            deadline = time.monotonic() + timeout_seconds
+            timed_out = False
+            try:
+                while proc.poll() is None:
+                    observer.feed("stdout", out_reader.read(8192))
+                    observer.feed("stderr", err_reader.read(8192))
+                    if time.monotonic() >= deadline or (cancelled and cancelled.is_set()):
+                        timed_out = True
+                        _kill_group(proc)
+                        break
+                    time.sleep(0.025)
+                proc.wait()
+                for stream, reader in (("stdout", out_reader), ("stderr", err_reader)):
+                    _drain_output(observer, stream, reader, deadline, cancelled)
+                observer.finish()
+            finally:
+                if proc.poll() is None:
+                    _kill_group(proc)
+                    proc.wait()
+            return Outcome(
+                None if timed_out else proc.returncode, _tail(out), _tail(err), timed_out
+            )
 
 
 def resolve_executable(root: Path, argv0: str, which: Which = pinned_which) -> str | None:

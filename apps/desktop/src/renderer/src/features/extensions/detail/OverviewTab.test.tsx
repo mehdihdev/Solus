@@ -5,6 +5,11 @@ import { OverviewTab } from './OverviewTab'
 import { manifest, viewOf } from '../testing/fixtures'
 
 describe('OverviewTab', () => {
+  registerOverviewMetadataTests()
+  registerOverviewRequirementsAndLinksTests()
+})
+
+function registerOverviewMetadataTests(): void {
   it('names what a first-party bundle runs inside Solus (STORE ST3)', () => {
     const firstParty = manifest({
       schema_version: 2,
@@ -51,7 +56,9 @@ describe('OverviewTab', () => {
     rerender(<OverviewTab view={viewOf()} />)
     expect(screen.getByText('NOT INSTALLED')).toBeInTheDocument()
   })
+}
 
+function registerOverviewRequirementsAndLinksTests(): void {
   it('shows requirements with their met/unmet state', () => {
     const cadOrEda = manifest({
       extension: { ...manifest().extension, requires: [['cad', 'eda']] }
@@ -108,4 +115,4 @@ describe('OverviewTab', () => {
     expect(screen.queryByText('Permissions')).not.toBeInTheDocument()
     expect(screen.getByText(/Loading/)).toBeInTheDocument()
   })
-})
+}

@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy import select
 
+from solus_api.billing.development import session_development_unlimited
 from solus_api.models import Subscription, SubscriptionStatus, User
 from solus_api.orchestration.cost import account_spend, has_sufficient_credits
 from solus_api.services.events import emit_event
@@ -169,6 +170,8 @@ async def assert_can_spend(
     v1) is already at/over `limits.trial_credit_cap`. Any other status — or no
     subscription at all — → block unless the cached balance covers at least one
     credit (has_sufficient_credits; no cost estimation per Q9)."""
+    if session_development_unlimited(session, user_id):
+        return
     sub = await session.scalar(
         select(Subscription).where(
             Subscription.user_id == user_id, Subscription.deleted_at.is_(None)

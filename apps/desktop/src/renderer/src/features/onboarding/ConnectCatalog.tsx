@@ -11,6 +11,7 @@ import { useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import type { Connection, LocalTool } from '../../lib/api/resources'
 import { LocalBridgeConnectModal } from '../project/localconnections/LocalBridgeConnectModal'
+import { platformUnavailableReason } from '../project/localconnections/presentation'
 import { ConnectTile } from './ConnectTile'
 import { ConnectWizardModal } from './ConnectWizardModal'
 import type { CatalogEntry } from './integrationCatalog'
@@ -44,7 +45,8 @@ export function ConnectCatalog({
 
   const open = (integ: CatalogEntry): void => {
     if (integ.mode === 'local-bridge') {
-      if (integ.localTool) setBridgeTool(integ.localTool)
+      if (integ.localTool && !platformUnavailableReason(integ.localTool))
+        setBridgeTool(integ.localTool)
       return
     }
     wizard.open(integ)
@@ -58,6 +60,7 @@ export function ConnectCatalog({
             key={integ.id}
             integration={integ}
             state={connections[integ.id]}
+            unavailableReason={integ.localTool ? platformUnavailableReason(integ.localTool) : null}
             onOpen={() => open(integ)}
           />
         ))}
@@ -82,6 +85,7 @@ export function ConnectCatalog({
           onBegin={() => void wizard.begin()}
           onPickFiles={(files) => void wizard.pickFiles(files)}
           onSelect={wizard.select}
+          onRefreshSelection={wizard.refreshSelection}
           onSubmitConfig={wizard.submitConfig}
           onChooseAccess={wizard.chooseAccess}
           onClose={wizard.close}

@@ -125,19 +125,45 @@ def _looks_entropic(value: str) -> bool:
     return _entropic_token(value)
 
 
-def redact_value(value: Any) -> Any:
-    """Recursively redact secret-shaped content from an untrusted result before
-    it is persisted or enters model context. Returns a new structure."""
+def safe_relative_display_path(value: object) -> str | None:
+    """A conservative display exception, not filesystem access authorization."""
+    if not isinstance(value, str) or not 1 <= len(value) <= 400:
+        return None
+    parts = value.split("/")
+    if not 2 <= len(parts) <= 32:
+        return None
+    if any(
+        part in {"", ".", ".."}
+        or part.strip() != part
+        or re.fullmatch(r"[A-Za-z0-9_. -]+", part) is None
+        or _SECRET_KEY.search(part)
+        or _looks_entropic(part)
+        for part in parts
+    ):
+        return None
+    return value
+
+
+def redact_value(value: Any, *, allowed_paths: frozenset[str] = frozenset()) -> Any:
+    """Redact untrusted values; exact validated call-bound display paths may survive.
+
+    Sensitive key names always win. Callers without explicit context retain the
+    original detector, including its treatment of arbitrary slash-bearing blobs.
+    """
     if isinstance(value, dict):
         return {
             key: (
-                REDACTED if isinstance(key, str) and _SECRET_KEY.search(key) else redact_value(item)
+                REDACTED
+                if isinstance(key, str) and _SECRET_KEY.search(key)
+                else redact_value(item, allowed_paths=allowed_paths)
             )
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [redact_value(item) for item in value]
+        return [redact_value(item, allowed_paths=allowed_paths) for item in value]
     if isinstance(value, str) and _looks_entropic(value):
+        if value in allowed_paths and safe_relative_display_path(value) is not None:
+            return value
         return REDACTED
     return value
 
@@ -147,6 +173,7 @@ _SECRET_ASSIGNMENT = re.compile(
     r"[A-Za-z0-9_-]*\s*[=:]\s*)(\S+)",
     re.IGNORECASE,
 )
+_AUTHORIZATION = re.compile(r"(authorization\s*[=:]\s*)(?:Bearer|Basic)\s+\S+", re.IGNORECASE)
 
 
 #: The charset as a SET, for `_trim`. Quotes, brackets and sentence punctuation
@@ -183,7 +210,8 @@ def redact_text(text: str) -> str:
     space-separated line) and judged with their surrounding punctuation trimmed;
     a token that reads as a secret is replaced whole, punctuation included.
     """
-    masked = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, text)
+    masked = _AUTHORIZATION.sub(lambda m: m.group(1) + REDACTED, text)
+    masked = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, masked)
     parts = _WHITESPACE_SPLIT.split(masked)
     return "".join(
         REDACTED if part and not part.isspace() and _looks_entropic(_trim(part)) else part

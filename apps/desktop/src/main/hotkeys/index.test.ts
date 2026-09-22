@@ -105,6 +105,12 @@ function drawCircle(h: Harness, cx: number, cy: number, r: number, ms = 600): vo
 }
 
 describe('startHotkeys (docs/architecture/sol-window.md §2-§5, wireflow §A-§B)', () => {
+  registerNativeGestureTests()
+  registerFallbackCircleTests()
+  registerHotkeyStatusAndTeardownTests()
+})
+
+function registerNativeGestureTests(): void {
   it('hook mode: a double-tap summons', () => {
     const h = harness({ hook: true })
     const handle = startHotkeys(h.deps)
@@ -160,7 +166,9 @@ describe('startHotkeys (docs/architecture/sol-window.md §2-§5, wireflow §A-§
     h.hook!.up()
     expect(h.onRegion).not.toHaveBeenCalled()
   })
+}
 
+function registerFallbackCircleTests(): void {
   it('fallback: Ctrl+Shift+C, then a circle, reaches onRegion after the cursor pauses', () => {
     const h = harness({ hook: false })
     const handle = startHotkeys(h.deps)
@@ -218,7 +226,9 @@ describe('startHotkeys (docs/architecture/sol-window.md §2-§5, wireflow §A-§
     expect(getCursor.mock.calls.length).toBe(polls)
     expect(h.onRegion).not.toHaveBeenCalled()
   })
+}
 
+function registerHotkeyStatusAndTeardownTests(): void {
   it('status summaries: fallback names the chord; circle mode names the gesture; onStatus fires on change', () => {
     const h = harness({ hook: false })
     const handle = startHotkeys(h.deps)
@@ -266,4 +276,4 @@ describe('startHotkeys (docs/architecture/sol-window.md §2-§5, wireflow §A-§
     h.fire(ACCELERATORS.toggleMode)
     expect(h.onToggleMode).not.toHaveBeenCalled()
   })
-})
+}

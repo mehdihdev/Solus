@@ -19,6 +19,7 @@ import { addSolusEntry, decideSolConfirmation, type SolusSection } from '../../l
 import {
   createSolConversation,
   listSolTurns,
+  listSolConfirmations,
   streamSolMessage,
   type SolActionMode,
   type SolScreenshot,
@@ -121,6 +122,8 @@ export const MAX_CONCURRENT_TURNS = 3
 const TITLE_SEED_CHARS = 60
 
 let itemSeq = 0
+let identityGeneration = 0
+const decidedApprovals = new Set<string>()
 const nextItemId = (): string => `local-${++itemSeq}`
 
 function patchSession(projectId: string, fn: (session: SolSession) => SolSession): void {
@@ -157,6 +160,8 @@ function cancelLiveTurn(projectId: string): void {
 
 /** Sign-out teardown (SEC-M4 idiom): abort every stream, drop every session. */
 export function resetSolChatSessions(): void {
+  identityGeneration += 1
+  decidedApprovals.clear()
   for (const controller of controllers.values()) controller.abort()
   for (const batcher of batchers.values()) batcher.dispose()
   controllers.clear()
@@ -320,7 +325,10 @@ export async function syncSession(projectId: string): Promise<void> {
     )
   }
   try {
-    const turns = await listSolTurns(projectId, active)
+    const [turns, approvals] = await Promise.all([
+      listSolTurns(projectId, active),
+      listSolConfirmations(projectId, active)
+    ])
     // Still the active conversation? A switch mid-fetch discards this load.
     if (selectConversationId(useSolSessionStore.getState(), projectId) !== active) return
     const loaded = [...turns].reverse().map(turnToItem)
@@ -328,7 +336,34 @@ export async function syncSession(projectId: string): Promise<void> {
       ...s,
       // Merge, don't replace: a send may have appended local items while
       // history was in flight — loading must never wipe a live turn.
-      items: [...loaded, ...s.items.filter((m) => m.id.startsWith('local-'))],
+      items: (() => {
+        const local = s.items.filter((m) => m.id.startsWith('local-'))
+        const liveIds = new Set(local.flatMap((m) => m.confirmations.map((c) => c.confirmationId)))
+        const restored = approvals.filter(
+          (c) =>
+            !liveIds.has(c.confirmationId) &&
+            !decidedApprovals.has(`${projectId}:${c.confirmationId}`)
+        )
+        return [
+          ...loaded,
+          ...(restored.length
+            ? [
+                {
+                  id: `approvals-${active}`,
+                  role: 'assistant' as const,
+                  content: 'Awaiting your approval',
+                  citations: [],
+                  trace: [],
+                  pending: false,
+                  error: null,
+                  confirmations: restored,
+                  artifacts: []
+                }
+              ]
+            : []),
+          ...local
+        ]
+      })(),
       status: 'ready'
     }))
     writeCachedChat(projectId, active, loaded)
@@ -387,18 +422,7 @@ export async function sendMessage(
   const turnToken = {}
   turnTokens.set(projectId, turnToken)
   const assistantId = nextItemId()
-  const patch: Patch = (fn) =>
-    patchSession(projectId, (s) => {
-      // The live assistant item is always the LAST item while its turn streams
-      // (nothing appends behind it); patch by index and fall back to the scan.
-      const last = s.items.length - 1
-      if (s.items[last]?.id !== assistantId) {
-        return { ...s, items: s.items.map((m) => (m.id === assistantId ? fn(m) : m)) }
-      }
-      const items = s.items.slice()
-      items[last] = fn(s.items[last])
-      return { ...s, items }
-    })
+  const patch = assistantPatch(projectId, assistantId)
   const batcher = createTokenBatcher(
     (text) => appendContent(patch, text),
     undefined,
@@ -436,31 +460,7 @@ export async function sendMessage(
       ...(screenshot ? { screenshot } : {}),
       signal: controller.signal,
       onEvent: (event) => {
-        if (event.type === 'token') {
-          batcher.push(event.text)
-          return
-        }
-        // Every other frame lands AFTER the prose it follows.
-        batcher.flushNow()
-        if (event.type === 'context_used') {
-          patchSession(projectId, (s) => ({
-            ...s,
-            contextUsed: {
-              sections: event.sections,
-              truncated: event.truncated,
-              dropped: event.dropped
-            }
-          }))
-          return
-        }
-        // Mid-stream credit exhaustion arrives as an error FRAME, not a 402.
-        if (event.type === 'error') {
-          failed = true
-          if (event.code === 'insufficient_credits') {
-            patchSession(projectId, (s) => ({ ...s, creditsExhausted: true }))
-          }
-        }
-        applyEvent(patch, event)
+        if (handleTurnEvent(projectId, patch, batcher, event)) failed = true
       }
     })
   } catch (error: unknown) {
@@ -541,13 +541,23 @@ export async function decideConfirmation(
   decision: 'approve' | 'reject'
 ): Promise<void> {
   // Clear ONLY on success — ConfirmationCard owns the failure state (CTR-03).
+  const generation = identityGeneration
   await decideSolConfirmation(projectId, confirmationId, decision)
+  if (generation !== identityGeneration) return
+  decidedApprovals.add(`${projectId}:${confirmationId}`)
   patchSession(projectId, (s) => ({
     ...s,
     items: s.items.map((m) =>
       m.confirmations.some((c) => c.confirmationId === confirmationId)
         ? {
             ...m,
+            content: m.id.startsWith('approvals-')
+              ? m.confirmations.length === 1
+                ? decision === 'approve'
+                  ? 'Approval recorded.'
+                  : 'Action rejected.'
+                : m.content
+              : `${m.content}\n\nApproval update: ${m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'} ${decision === 'approve' ? 'approval recorded' : 'was rejected'}.`,
             confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId)
           }
         : m
@@ -600,3 +610,59 @@ useAuthStore.subscribe((state, prev) => {
     purgeAllCachedChats()
   }
 })
+
+function assistantPatch(projectId: string, assistantId: string): Patch {
+  return (fn) =>
+    patchSession(projectId, (s) => {
+      // The live assistant item is always the LAST item while its turn streams
+      // (nothing appends behind it); patch by index and fall back to the scan.
+      const last = s.items.length - 1
+      if (s.items[last]?.id !== assistantId) {
+        return { ...s, items: s.items.map((m) => (m.id === assistantId ? fn(m) : m)) }
+      }
+      const items = s.items.slice()
+      items[last] = fn(s.items[last])
+      return { ...s, items }
+    })
+}
+
+function handleTurnEvent(
+  projectId: string,
+  patch: Patch,
+  batcher: ReturnType<typeof createTokenBatcher>,
+  event: SolStreamEvent
+): boolean {
+  if (
+    event.type === 'tool_confirmation' &&
+    (decidedApprovals.has(`${projectId}:${event.pending.confirmationId}`) ||
+      selectSession(useSolChatStore.getState(), projectId).items.some((m) =>
+        m.confirmations.some((c) => c.confirmationId === event.pending.confirmationId)
+      ))
+  )
+    return false
+  if (event.type === 'token') {
+    batcher.push(event.text)
+    return false
+  }
+  // Every other frame lands AFTER the prose it follows.
+  batcher.flushNow()
+  if (event.type === 'context_used') {
+    patchSession(projectId, (s) => ({
+      ...s,
+      contextUsed: {
+        sections: event.sections,
+        truncated: event.truncated,
+        dropped: event.dropped
+      }
+    }))
+    return false
+  }
+  // Mid-stream credit exhaustion arrives as an error FRAME, not a 402.
+  if (event.type === 'error') {
+    if (event.code === 'insufficient_credits') {
+      patchSession(projectId, (s) => ({ ...s, creditsExhausted: true }))
+    }
+  }
+  applyEvent(patch, event)
+  return event.type === 'error'
+}

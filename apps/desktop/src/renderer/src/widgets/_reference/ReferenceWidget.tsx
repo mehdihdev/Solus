@@ -29,38 +29,7 @@ export function ReferenceWidget({
   onFocusChange,
   onStateChange
 }: WidgetProps): React.JSX.Element {
-  const [state, setState] = useState<WidgetRenderState>(focus === null ? 'empty' : 'loading')
-  const [description, setDescription] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (focus === null) {
-      setState('empty')
-      setDescription(null)
-      return
-    }
-    // A focus change can land while the previous read is in flight; without the
-    // guard the slower one wins and the widget shows the wrong entity.
-    let live = true
-    setState('loading')
-    describeEntity(focus)
-      .then((text) => {
-        if (!live) return
-        setDescription(text)
-        setState('ready')
-      })
-      .catch(() => {
-        if (!live) return
-        setDescription(null)
-        setState('error')
-      })
-    return () => {
-      live = false
-    }
-  }, [focus])
-
-  // Reported in its own effect so the canvas sees every transition exactly once,
-  // including the ones that happen inside the async read above.
-  useEffect(() => onStateChange?.(state), [state, onStateChange])
+  const { state, description } = useEntityDescription(focus, onStateChange)
 
   if (state === 'empty') {
     return (
@@ -112,4 +81,44 @@ export function ReferenceWidget({
       </button>
     </div>
   )
+}
+
+function useEntityDescription(
+  focus: WidgetProps['focus'],
+  onStateChange: WidgetProps['onStateChange']
+) {
+  const [state, setState] = useState<WidgetRenderState>(focus === null ? 'empty' : 'loading')
+  const [description, setDescription] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (focus === null) {
+      setState('empty')
+      setDescription(null)
+      return
+    }
+    // A focus change can land while the previous read is in flight; without the
+    // guard the slower one wins and the widget shows the wrong entity.
+    let live = true
+    setState('loading')
+    describeEntity(focus)
+      .then((text) => {
+        if (!live) return
+        setDescription(text)
+        setState('ready')
+      })
+      .catch(() => {
+        if (!live) return
+        setDescription(null)
+        setState('error')
+      })
+    return () => {
+      live = false
+    }
+  }, [focus])
+
+  // Reported in its own effect so the canvas sees every transition exactly once,
+  // including the ones that happen inside the async read above.
+  useEffect(() => onStateChange?.(state), [state, onStateChange])
+
+  return { state, description }
 }

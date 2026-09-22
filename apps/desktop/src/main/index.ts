@@ -317,21 +317,7 @@ function startSol(): void {
       lastRegionRefused
     }
   }
-  const windows = createSolWindowManager({
-    createWindow: (bounds, alwaysOnTop) =>
-      createSolBrowserWindow(
-        bounds,
-        alwaysOnTop,
-        ipcMain,
-        process.platform === 'linux' ? icon : undefined
-      ),
-    screen,
-    settings,
-    // The main window only (the manager adds the SOL window itself). Never the
-    // checkout window (remote Stripe content) nor extension windows (third-party
-    // bundles) — sol:state is for the app's own renderers (security M2).
-    allWindows: () => (mainWindow ? [mainWindow] : [])
-  })
+  const windows = createAppSolWindows(settings)
   solWindows = windows
   const publish = (): void => {
     const snapshot = state()
@@ -349,28 +335,7 @@ function startSol(): void {
   })
   registerSolIpcHandlers(ipcMain, { windows, settings, state }, isSolSender)
 
-  // Tray: the mark at tray size, and the same mark with the sees-screen dot.
-  const trayOff = nativeImage
-    .createFromPath(icon)
-    .resize({ width: TRAY_ICON_PX, height: TRAY_ICON_PX })
-  const size = trayOff.getSize()
-  const trayOn = nativeImage.createFromBitmap(
-    paintDot(trayOff.toBitmap(), size.width, size.height),
-    size
-  )
-  solTray = createTray({
-    basics,
-    env: process.env,
-    icons: { off: trayOff, on: trayOn },
-    createTray: (image) => new Tray(image as NativeImage),
-    buildMenu: (template) => Menu.buildFromTemplate(template),
-    onOpen: () => windows.open(),
-    onSetMode: (mode) => settings.setMode(mode),
-    onSetScreenIntelligence: (on) => settings.setScreenIntelligence(on),
-    onSetHotkeys: (on) => settings.setHotkeys(on),
-    onQuit: () => app.quit(),
-    warn: (message) => console.warn(message)
-  })
+  startSolTray(basics, settings, windows)
 
   // A closed loop: capture (setting on) → open + region; setting off → the
   // capture answers `disabled` and the window opens with the one-line refusal
@@ -399,41 +364,12 @@ function startSol(): void {
   // Boot and every flip of the hotkeys setting go through here: stop what runs,
   // then start again — with no hook at all while the setting is off.
   function runHotkeys(): void {
-    hotkeys?.stop()
-    hotkeys = null
-    try {
-      hotkeys = startHotkeys({
-        capabilities: staticCapabilities(basics),
-        globalShortcut,
-        getCursor: () => screen.getCursorScreenPoint(),
-        displayFor: (point) => screen.getDisplayNearestPoint(point),
-        now: Date.now,
-        scheduler: { setInterval, clearInterval },
-        ...(settings.get().hotkeys ? {} : { loadHook: () => HOTKEYS_OFF }),
-        ...(process.platform === 'darwin'
-          ? {
-              isTrustedAccessibilityClient: () =>
-                systemPreferences.isTrustedAccessibilityClient(false)
-            }
-          : {}),
-        onSummon: () => windows.open(),
-        onToggleMode: () => void settings.toggleMode(),
-        onRegion: (region) => void onRegion(region),
-        onStatus: (status) => {
-          hotkeyStatus = status
-          publish()
-        },
-        // SOLUS_DEBUG_GESTURE=1: cursor samples + evaluations (coordinates only).
-        ...(process.env['SOLUS_DEBUG_GESTURE']
-          ? { debug: (line: string) => console.warn(`[gesture] ${line}`) }
-          : {})
-      })
-    } catch (error) {
-      console.warn(
-        `[sol] hotkeys unavailable: ${error instanceof Error ? error.message : 'unknown'}`
-      )
-    }
+    restartSolHotkeys(basics, settings, windows, onRegion, (status) => {
+      hotkeyStatus = status
+      publish()
+    })
   }
+
   runHotkeys()
   publish()
 }
@@ -533,33 +469,7 @@ if (!app.requestSingleInstanceLock()) {
       if (!isCheckoutWindow(window)) optimizer.watchWindowShortcuts(window)
     })
 
-    // Local project folder (SOLUSDEV-164): pick an existing directory, clone a
-    // repo into a chosen parent, or reveal a linked folder in the OS file manager.
-    // The clone input is untrusted renderer data — cloneRepo validates it.
-    ipcMain.handle('folder:pick', async () => {
-      const result = await dialog.showOpenDialog({
-        properties: ['openDirectory', 'createDirectory']
-      })
-      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
-    })
-    ipcMain.handle('folder:reveal', async (_event, path: string) => {
-      const error = await shell.openPath(path)
-      return { ok: error === '' }
-    })
-    // Open the linked folder in VSCode via its vscode://file URL scheme. The
-    // path is untrusted renderer data — vscodeFolderUrl validates and encodes
-    // it; openExternal rejects when no vscode:// handler is installed.
-    ipcMain.handle('folder:open-vscode', async (_event, path: unknown) => {
-      const url = typeof path === 'string' ? vscodeFolderUrl(path) : null
-      if (!url) return { ok: false }
-      try {
-        await shell.openExternal(url)
-        return { ok: true }
-      } catch {
-        return { ok: false }
-      }
-    })
-    ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
+    registerProjectFolderHandlers()
 
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
@@ -568,90 +478,16 @@ if (!app.requestSingleInstanceLock()) {
 
     registerExtensionHandlers()
 
-    // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
-    // portal URL (returned by our API) in the system browser. Only the app's
-    // own renderer may invoke either billing channel.
-    ipcMain.handle('billing:open-external', (event, url: string) =>
-      isMainRendererSender(event) ? openBillingUrl(url) : { ok: false }
-    )
-    // Hosted MCP add-ons (SOLUSDEV-168): send the user to the vendor's App
-    // Store to subscribe. Sender-gated like every other privileged channel.
-    ipcMain.handle('hosted:open-store', (event, url: string) =>
-      isMainRendererSender(event) ? openAppStoreUrl(url) : { ok: false }
-    )
-    // Billing (SOLUSDEV-114): self-contained checkout — same Stripe URL, but in
-    // a sandboxed in-app window that closes itself on the return redirect.
-    ipcMain.handle('billing:open-checkout', (event, url: string) =>
-      isMainRendererSender(event)
-        ? openCheckoutWindow(url, mainWindow ?? undefined)
-        : { status: 'blocked' }
-    )
+    registerBillingHandlers()
 
     // The SOL window, tray and hotkeys (SOLUSDEV-252 S3); the window is the
     // CTR-06 host — the orb↔overlay wire is attached to it at creation.
     startSol()
 
-    // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
-    // Supabase authorize URL, then hands it back for the system-browser round-trip.
-    ipcMain.handle('oauth:github:redirect-url', () => getRedirectUrl())
-    ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
-      awaitGithubCallback(authorizeUrl)
-    )
+    registerOAuthHandlers()
 
-    // Connector OAuth (GitHub/GitLab/Onshape/…): a CONSTANT redirect URL, since
-    // strict providers match the registered URI exactly. The nonce is the
-    // backend's own OAuth state, echoed back by the provider.
-    ipcMain.handle('oauth:connector:redirect-url', () => getConnectorRedirectUrl())
-    // Sender-gated like the other credential-bearing channels: this one RESOLVES
-    // WITH THE AUTHORIZATION CODE, so any other webContents that gained IPC reach
-    // could open a provider consent screen and read the code out of the result.
-    // The state check inside is a CSRF defence, not a caller check.
-    ipcMain.handle('oauth:connector:await', (event, authorizeUrl: string, expectedState: string) =>
-      isMainRendererSender(event)
-        ? awaitOAuthCallback(authorizeUrl, expectedState)
-        : Promise.reject(new Error('unauthorized sender'))
-    )
-    // Cancel seam (SOLUSDEV-165): closing the connect wizard mid-handshake
-    // settles the parked flow now instead of leaving the loopback armed for
-    // five minutes. Sender-gated like the await it cancels.
-    ipcMain.handle('oauth:connector:cancel', (event) =>
-      isMainRendererSender(event)
-        ? cancelActiveOAuth()
-        : Promise.reject(new Error('unauthorized sender'))
-    )
+    registerCompanionHandlers()
 
-    // Local bridge companion (BRG-04): spawn/supervise, and relay the renderer's
-    // Supabase access token over stdin. Renderer input is untrusted — accept
-    // only a string token or null (signout); never log it. Only the app's own
-    // renderer may relay a token (credential-bearing, like bridge:license — L2).
-    // A null token is sign-out: the extension windows go with the session.
-    ipcMain.handle('bridge:token', (event, token: unknown) => {
-      if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
-        sendAccessToken(token)
-        hardwareSources?.setToken(token)
-        if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
-      }
-    })
-    // The project the companion serves. The bridge route is project-scoped, so
-    // without this the companion has no URL to dial and stays idle. Renderer
-    // input is untrusted: a string or null only, and companionWsUrl refuses any
-    // id that is not a single safe path segment.
-    ipcMain.handle('bridge:project', (event, projectId: unknown) => {
-      if (isMainRendererSender(event) && (typeof projectId === 'string' || projectId === null)) {
-        setCompanionProject(projectId)
-        hardwareSources?.setProject(projectId)
-      }
-    })
-    // BYO-license capture (SOLUSDEV-102 / MCP-05): relay license credentials
-    // to the companion's stdin. Renderer input is untrusted — writeCredential
-    // validates shape; values are never logged, never persisted, and flow
-    // renderer → preload → main → child stdin only. Only the app's own
-    // renderer may invoke this channel (credential-bearing, like billing).
-    ipcMain.handle('bridge:license', (event, server: unknown, secrets: unknown) =>
-      isMainRendererSender(event)
-        ? writeCredential(server, secrets)
-        : { ok: false, error: 'unauthorized sender' }
-    )
     startCompanion()
 
     createWindow()
@@ -689,3 +525,207 @@ app.on('window-all-closed', () => {
 
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and require them here.
+
+function startSolTray(
+  basics: ReturnType<typeof detectPlatformBasics>,
+  settings: ReturnType<typeof createSolSettings>,
+  windows: SolWindowManager
+): void {
+  // Tray: the mark at tray size, and the same mark with the sees-screen dot.
+  const trayOff = nativeImage
+    .createFromPath(icon)
+    .resize({ width: TRAY_ICON_PX, height: TRAY_ICON_PX })
+  const size = trayOff.getSize()
+  const trayOn = nativeImage.createFromBitmap(
+    paintDot(trayOff.toBitmap(), size.width, size.height),
+    size
+  )
+  solTray = createTray({
+    basics,
+    env: process.env,
+    icons: { off: trayOff, on: trayOn },
+    createTray: (image) => new Tray(image as NativeImage),
+    buildMenu: (template) => Menu.buildFromTemplate(template),
+    onOpen: () => windows.open(),
+    onSetMode: (mode) => settings.setMode(mode),
+    onSetScreenIntelligence: (on) => settings.setScreenIntelligence(on),
+    onSetHotkeys: (on) => settings.setHotkeys(on),
+    onQuit: () => app.quit(),
+    warn: (message) => console.warn(message)
+  })
+}
+
+function restartSolHotkeys(
+  basics: ReturnType<typeof detectPlatformBasics>,
+  settings: ReturnType<typeof createSolSettings>,
+  windows: SolWindowManager,
+  onRegion: (region: Rect) => Promise<void>,
+  onStatus: (status: HotkeyStatus) => void
+): void {
+  hotkeys?.stop()
+  hotkeys = null
+  try {
+    hotkeys = startHotkeys({
+      capabilities: staticCapabilities(basics),
+      globalShortcut,
+      getCursor: () => screen.getCursorScreenPoint(),
+      displayFor: (point) => screen.getDisplayNearestPoint(point),
+      now: Date.now,
+      scheduler: { setInterval, clearInterval },
+      ...(settings.get().hotkeys ? {} : { loadHook: () => HOTKEYS_OFF }),
+      ...(process.platform === 'darwin'
+        ? {
+            isTrustedAccessibilityClient: () =>
+              systemPreferences.isTrustedAccessibilityClient(false)
+          }
+        : {}),
+      onSummon: () => windows.open(),
+      onToggleMode: () => void settings.toggleMode(),
+      onRegion: (region) => void onRegion(region),
+      onStatus,
+      // SOLUS_DEBUG_GESTURE=1: cursor samples + evaluations (coordinates only).
+      ...(process.env['SOLUS_DEBUG_GESTURE']
+        ? { debug: (line: string) => console.warn(`[gesture] ${line}`) }
+        : {})
+    })
+  } catch (error) {
+    console.warn(`[sol] hotkeys unavailable: ${error instanceof Error ? error.message : 'unknown'}`)
+  }
+}
+
+function registerProjectFolderHandlers(): void {
+  // Local project folder (SOLUSDEV-164): pick an existing directory, clone a
+  // repo into a chosen parent, or reveal a linked folder in the OS file manager.
+  // The clone input is untrusted renderer data — cloneRepo validates it.
+  ipcMain.handle('folder:pick', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select a project folder',
+      buttonLabel: 'Select this folder',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+  })
+  ipcMain.handle('folder:reveal', async (_event, path: string) => {
+    const error = await shell.openPath(path)
+    return { ok: error === '' }
+  })
+  // Open the linked folder in VSCode via its vscode://file URL scheme. The
+  // path is untrusted renderer data — vscodeFolderUrl validates and encodes
+  // it; openExternal rejects when no vscode:// handler is installed.
+  ipcMain.handle('folder:open-vscode', async (_event, path: unknown) => {
+    const url = typeof path === 'string' ? vscodeFolderUrl(path) : null
+    if (!url) return { ok: false }
+    try {
+      await shell.openExternal(url)
+      return { ok: true }
+    } catch {
+      return { ok: false }
+    }
+  })
+  ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
+}
+
+function registerBillingHandlers(): void {
+  // Billing (SOLUSDEV-83 follow-up): open a Stripe-hosted Checkout / billing
+  // portal URL (returned by our API) in the system browser. Only the app's
+  // own renderer may invoke either billing channel.
+  ipcMain.handle('billing:open-external', (event, url: string) =>
+    isMainRendererSender(event) ? openBillingUrl(url) : { ok: false }
+  )
+  // Hosted MCP add-ons (SOLUSDEV-168): send the user to the vendor's App
+  // Store to subscribe. Sender-gated like every other privileged channel.
+  ipcMain.handle('hosted:open-store', (event, url: string) =>
+    isMainRendererSender(event) ? openAppStoreUrl(url) : { ok: false }
+  )
+  // Billing (SOLUSDEV-114): self-contained checkout — same Stripe URL, but in
+  // a sandboxed in-app window that closes itself on the return redirect.
+  ipcMain.handle('billing:open-checkout', (event, url: string) =>
+    isMainRendererSender(event)
+      ? openCheckoutWindow(url, mainWindow ?? undefined)
+      : { status: 'blocked' }
+  )
+}
+
+function registerOAuthHandlers(): void {
+  // GitHub OAuth (loopback): the renderer asks for the redirect URL, builds the
+  // Supabase authorize URL, then hands it back for the system-browser round-trip.
+  ipcMain.handle('oauth:github:redirect-url', () => getRedirectUrl())
+  ipcMain.handle('oauth:github:await', (_event, authorizeUrl: string) =>
+    awaitGithubCallback(authorizeUrl)
+  )
+
+  // Connector OAuth (GitHub/GitLab/Onshape/…): a CONSTANT redirect URL, since
+  // strict providers match the registered URI exactly. The nonce is the
+  // backend's own OAuth state, echoed back by the provider.
+  ipcMain.handle('oauth:connector:redirect-url', () => getConnectorRedirectUrl())
+  // Sender-gated like the other credential-bearing channels: this one RESOLVES
+  // WITH THE AUTHORIZATION CODE, so any other webContents that gained IPC reach
+  // could open a provider consent screen and read the code out of the result.
+  // The state check inside is a CSRF defence, not a caller check.
+  ipcMain.handle('oauth:connector:await', (event, authorizeUrl: string, expectedState: string) =>
+    isMainRendererSender(event)
+      ? awaitOAuthCallback(authorizeUrl, expectedState)
+      : Promise.reject(new Error('unauthorized sender'))
+  )
+  // Cancel seam (SOLUSDEV-165): closing the connect wizard mid-handshake
+  // settles the parked flow now instead of leaving the loopback armed for
+  // five minutes. Sender-gated like the await it cancels.
+  ipcMain.handle('oauth:connector:cancel', (event) =>
+    isMainRendererSender(event)
+      ? cancelActiveOAuth()
+      : Promise.reject(new Error('unauthorized sender'))
+  )
+}
+
+function registerCompanionHandlers(): void {
+  // Local bridge companion (BRG-04): spawn/supervise, and relay the renderer's
+  // Supabase access token over stdin. Renderer input is untrusted — accept
+  // only a string token or null (signout); never log it. Only the app's own
+  // renderer may relay a token (credential-bearing, like bridge:license — L2).
+  // A null token is sign-out: the extension windows go with the session.
+  ipcMain.handle('bridge:token', (event, token: unknown) => {
+    if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
+      sendAccessToken(token)
+      hardwareSources?.setToken(token)
+      if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
+    }
+  })
+  // The project the companion serves. The bridge route is project-scoped, so
+  // without this the companion has no URL to dial and stays idle. Renderer
+  // input is untrusted: a string or null only, and companionWsUrl refuses any
+  // id that is not a single safe path segment.
+  ipcMain.handle('bridge:project', (event, projectId: unknown) => {
+    if (isMainRendererSender(event) && (typeof projectId === 'string' || projectId === null)) {
+      setCompanionProject(projectId)
+      hardwareSources?.setProject(projectId)
+    }
+  })
+  // BYO-license capture (SOLUSDEV-102 / MCP-05): relay license credentials
+  // to the companion's stdin. Renderer input is untrusted — writeCredential
+  // validates shape; values are never logged, never persisted, and flow
+  // renderer → preload → main → child stdin only. Only the app's own
+  // renderer may invoke this channel (credential-bearing, like billing).
+  ipcMain.handle('bridge:license', (event, server: unknown, secrets: unknown) =>
+    isMainRendererSender(event)
+      ? writeCredential(server, secrets)
+      : { ok: false, error: 'unauthorized sender' }
+  )
+}
+
+function createAppSolWindows(settings: ReturnType<typeof createSolSettings>): SolWindowManager {
+  return createSolWindowManager({
+    createWindow: (bounds, alwaysOnTop) =>
+      createSolBrowserWindow(
+        bounds,
+        alwaysOnTop,
+        ipcMain,
+        process.platform === 'linux' ? icon : undefined
+      ),
+    screen,
+    settings,
+    // The main window only (the manager adds the SOL window itself). Never the
+    // checkout window (remote Stripe content) nor extension windows (third-party
+    // bundles) — sol:state is for the app's own renderers (security M2).
+    allWindows: () => (mainWindow ? [mainWindow] : [])
+  })
+}

@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits, usage
+from solus_api.billing.development import is_development_unlimited
 from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.runtime import refresh_secret_ref
@@ -362,11 +363,19 @@ async def update_subscription(
 
 
 @router.get("/credits")
-async def get_credits(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+async def get_credits(
+    user: CurrentUser, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
     """Current credit balance (ADR-024). Always answerable — 0 before any ledger row
     exists. The desktop Billing screen reads this to reflect credit-pack purchases."""
     balance = await credits.get_balance(session, user.id)
-    return envelope(CreditBalanceView(user_id=user.id, balance=balance).model_dump(mode="json"))
+    return envelope(
+        CreditBalanceView(
+            user_id=user.id,
+            balance=balance,
+            unlimited=is_development_unlimited(user.id, settings),
+        ).model_dump(mode="json")
+    )
 
 
 @router.get("/usage")
@@ -394,6 +403,7 @@ async def get_usage(
     balance = await credits.get_balance(session, user.id)
     return envelope(
         {
+            "unlimited": is_development_unlimited(user.id, settings),
             "used": used,
             "allowance": allowance,
             "balance": balance,

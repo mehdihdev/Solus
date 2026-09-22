@@ -207,3 +207,52 @@
    remains is execution of the user's OWN base interpreter, which the contract (§4) requires.
 3. The lockfile is a copy of the `local` fork's derived (not compiled) lock — the same
    regeneration caveat applies.
+
+## 2026-09-12 — SOLUSDEV-261 Git extension (agent verification)
+
+This supplements the prior review; it does not supply either human shipping sign-off.
+
+- [x] Five fixed tools, two gated writes; no raw shell/argv/repository URL inputs.
+- [x] Complete patch/branch/index/destination previews; strict argument schemas.
+- [x] Same-OID branch switches and changed index/remote tips refuse stale actions.
+- [x] Fixed Git/SSH runtime, scoped transports, hooks/helpers/configuration restricted.
+- [x] Bounded subprocess output/deadlines, owned-operation locks and readback checks.
+- [x] Uncertain writes persist as possibly applied and require inspection, no auto retry.
+- [x] Ignored dependencies are not traversed; tracked paths and metadata remain checked.
+- [x] 41 Git tests,83 confirmation/bridge tests,246 Code/registration tests passed.
+- [x] Fresh code review and independent security review passed after findings were fixed.
+- [ ] Both human reviewers ratify the changed source tree before shipping.
+
+Read-only ForgeTS observation succeeded; no live commit or push was attempted.
+Existing conflicts, unsupported Git layout/configuration and absent trusted SSH
+credentials remain refusals. Final output is bounded; no incremental log-stream
+claim is made by this slice.
+
+## 2026-09-12 — SOLUSDEV-261 Arduino extension (agent verification)
+
+Scope: pinned Uno toolchain preparation/compilation, strict MCP registration,
+complete confirmation previews, and truthful command outcomes. Human shipping
+signatures remain outstanding; these results are not human ratification.
+
+- [x] CLI and nine vendor archives pinned by digest and size; installed content,
+  internal links, configuration and generated metadata verified exactly.
+- [x] Compiler bytes sealed; Bubblewrap data/descriptor mounts bind execution to
+  verified bytes and held directories. No host home, network or real devices mounted.
+- [x] Empty/partial/unknown runtime state refuses; no automatic repair or retries.
+- [x] Approval previews bind all logical argv/mount identities and source state;
+  only internal OS descriptor numbers are substituted after validation.
+- [x] Strict transport inputs expose only the frozen Uno FQBN and refuse extra fields.
+- [x] Bounded source snapshots, output/deadline limits, cancellation and cleanup;
+  regression tests preserve replaced directories and confine partial-copy cleanup.
+- [x] Full hard-capped compiler JSON validated internally; only bounded tails returned.
+  Artifact display remains complete through central prompt containment/redaction.
+- [x] Failed/uncertain/no-op commands receive truthful history and error filing.
+- [x] Independent code/Python and security reviews passed, all findings resolved.
+- [x] 315 Code tests passed with 88.21% line coverage; 222 bridge/confirmation/prompt
+  tests passed. Source lint and typing passed.
+- [x] Actual engine prepared a disposable `.venv/a2qe` toolchain, compiled generated
+  Blink offline, verified ELF/HEX artifacts, then reused the verified build without
+  starting another compiler. No device was opened or flashed.
+
+The disposable proof is not a production SOL approval or physical-board proof.
+Production preparation/compilation still require their concrete human cards.

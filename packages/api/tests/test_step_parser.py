@@ -233,3 +233,62 @@ def test_adversarial_product_names_land_as_inert_data(bracket_text: str) -> None
 
     assert any("IGNORE PREVIOUS INSTRUCTIONS" in n for n in names)
     assert all("/" not in e.source_key.split("/")[-1] for e in entities)
+
+
+@requires_occt
+def test_actual_geometry_distinguishes_a_cut_with_unchanged_outer_bounds(tmp_path):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+
+    box = BRepPrimAPI_MakeBox(2, 3, 4).Shape()
+    cutter = BRepPrimAPI_MakeBox(gp_Pnt(0.5, 0.5, 0), 1, 1, 4).Shape()
+    cut = BRepAlgoAPI_Cut(box, cutter).Shape()
+    summaries = []
+    for index, shape in enumerate((box, cut)):
+        writer = STEPControl_Writer()
+        writer.Transfer(shape, STEPControl_AsIs)
+        path = tmp_path / f"box-{index}.step"
+        writer.Write(str(path))
+        node = parse_step(path.read_text()).nodes[0]
+        summaries.append(node.properties["geometry"])
+    first, second = summaries
+    assert first["frame"] == "part_local"
+    assert first["length_unit"] == "mm"
+    assert first["bbox_min"] == pytest.approx([0, 0, 0])
+    assert first["bbox_max"] == pytest.approx([2, 3, 4])
+    assert second["dimensions"] == pytest.approx(first["dimensions"])
+    assert first["volume_mm3"] == pytest.approx(24)
+    assert second["volume_mm3"] == pytest.approx(20)
+    assert first["surface_area_mm2"] == pytest.approx(52)
+
+
+@requires_occt
+def test_open_face_does_not_invent_a_solid_volume():
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Pln
+    from solus_api.connectors.step_parser import _shape_geometry
+
+    geometry = _shape_geometry(BRepBuilderAPI_MakeFace(gp_Pln(), 0, 2, 0, 3).Shape())
+    assert geometry["volume_mm3"] is None
+    assert geometry["surface_area_mm2"] == pytest.approx(6)
+
+
+@requires_occt
+def test_geometry_units_are_normalized_from_metre_step_input(bracket_text):
+    assert "SI_UNIT(.MILLI.,.METRE.)" in bracket_text
+    metres = bracket_text.replace("SI_UNIT(.MILLI.,.METRE.)", "SI_UNIT($,.METRE.)")
+    original = parse_step(bracket_text).nodes[1].properties["geometry"]
+    scaled = parse_step(metres).nodes[1].properties["geometry"]
+    assert scaled["dimensions"] == pytest.approx([v * 1000 for v in original["dimensions"]])
+    assert scaled["volume_mm3"] == pytest.approx(original["volume_mm3"] * 1e9)
+
+
+@requires_occt
+def test_null_geometry_is_a_typed_parser_failure():
+    from OCP.TopoDS import TopoDS_Shape
+    from solus_api.connectors.step_parser import _shape_geometry
+
+    with pytest.raises(ConnectorError, match="geometry could not be measured"):
+        _shape_geometry(TopoDS_Shape())

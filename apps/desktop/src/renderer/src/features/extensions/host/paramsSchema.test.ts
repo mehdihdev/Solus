@@ -4,6 +4,14 @@ import { BRIDGE_LIMITS } from './bridgeProtocol'
 import { validateParams } from './paramsSchema'
 
 describe('validateParams', () => {
+  registerEmptyAndUnknownParamsTests()
+  registerGraphAndTelemetryParamsTests()
+  registerFindingAndSolParamsTests()
+  registerStorageAndFocusParamsTests()
+  registerExternalAndNetworkParamsTests()
+})
+
+function registerEmptyAndUnknownParamsTests(): void {
   describe('empty-param methods', () => {
     it.each(['ui.ready', 'settings.get', 'graph.getFocus', 'sources.list', 'focus.get'] as const)(
       '%s accepts {} and rejects any key',
@@ -31,7 +39,9 @@ describe('validateParams', () => {
     expect(out).toEqual({ entityId: 'e1' })
     expect(out).not.toBe(input)
   })
+}
 
+function registerGraphAndTelemetryParamsTests(): void {
   describe('graph', () => {
     it('getNeighborhood defaults depth 1 / limit 200 and caps both', () => {
       expect(validateParams('graph.getNeighborhood', { entityId: 'e' })).toEqual({
@@ -83,7 +93,9 @@ describe('validateParams', () => {
       expect(validateParams('telemetry.unsubscribe', {})).toBeNull()
     })
   })
+}
 
+function registerFindingAndSolParamsTests(): void {
   describe('findings.create', () => {
     const ok = { title: 'T', body: 'B', severity: 'warning' }
 
@@ -119,7 +131,9 @@ describe('validateParams', () => {
       expect(validateParams('sol.ask', { prompt: 'p', entityIds: Array(17).fill('e') })).toBeNull()
     })
   })
+}
 
+function registerStorageAndFocusParamsTests(): void {
   describe('storage', () => {
     it('key follows the route plan rule ^[A-Za-z0-9_.-]{1,64}$', () => {
       expect(validateParams('storage.get', { key: 'cache.v1' })).toEqual({ key: 'cache.v1' })
@@ -174,7 +188,9 @@ describe('validateParams', () => {
       ).toBeNull()
     })
   })
+}
 
+function registerExternalAndNetworkParamsTests(): void {
   describe('ui.openExternal', () => {
     it('accepts only https URLs', () => {
       expect(validateParams('ui.openExternal', { url: 'https://example.com/x' })).toEqual({
@@ -229,4 +245,4 @@ describe('validateParams', () => {
       ).toEqual({ url: 'https://a.b', method: 'GET', headers: { 'X-Api-Key': 'k' } })
     })
   })
-})
+}

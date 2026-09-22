@@ -16,6 +16,30 @@
 # register it yet (tests/test_overlay_tool_trimming.py pins that).
 server: kicad
 tools:
+  - name: get_symbol_definition
+    requires_confirmation: false
+    reason: reads actual installed library pins and a bounded definition fingerprint
+  - name: get_schematic_geometry
+    requires_confirmation: false
+    reason: reads saved schematic geometry and the current file fingerprint
+  - name: check_erc
+    requires_confirmation: false
+    reason: runs a confined electrical rules check and writes a generated report, never the design
+  - name: create_schematic
+    requires_confirmation: true
+    reason: creates the new schematic sheet shown in the before and after preview
+  - name: add_symbol
+    requires_confirmation: true
+    reason: places the selected real library symbol in the reviewed schematic
+  - name: add_wire
+    requires_confirmation: true
+    reason: wires the reviewed schematic pins or endpoints along the displayed route
+  - name: add_net_label
+    requires_confirmation: true
+    reason: adds the reviewed net label at the selected schematic pin or endpoint
+  - name: mark_no_connect
+    requires_confirmation: true
+    reason: marks the reviewed unused schematic pin as intentionally not connected
   - name: list_projects
     requires_confirmation: false
     reason: read-only enumeration of .kicad_pro files in the configured search paths

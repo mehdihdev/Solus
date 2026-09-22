@@ -370,7 +370,7 @@ function useDeviceRail(
   )
 }
 
-function ProjectWorkspace(): React.JSX.Element {
+function useWorkspaceSnapshot() {
   const [graphRevision, setGraphRevision] = useState(0)
   const [validation, setValidation] = useState(0)
   const summary = useWorkspaceGraph(graphRevision, validation)
@@ -427,6 +427,45 @@ function ProjectWorkspace(): React.JSX.Element {
     const focus = useFocusStore.getState()
     if (removedId && focus.focusedEntityId === removedId) focus.clearProject()
   }, [])
+  return {
+    summary,
+    projectId,
+    onDevices,
+    validateGraph,
+    focusedId,
+    optimistic,
+    base,
+    merged,
+    selectedAnchor,
+    layout,
+    onMove,
+    copy,
+    select,
+    addRequest,
+    onOpenAdd,
+    onGraphChanged
+  }
+}
+
+function useProjectWorkspace() {
+  const {
+    summary,
+    projectId,
+    onDevices,
+    validateGraph,
+    focusedId,
+    optimistic,
+    base,
+    merged,
+    selectedAnchor,
+    layout,
+    onMove,
+    copy,
+    select,
+    addRequest,
+    onOpenAdd,
+    onGraphChanged
+  } = useWorkspaceSnapshot()
   const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph, onDevices)
   // The reveal follows the authoritative snapshot: an entity is navigated to and
   // selected once, at its real level (an optimistic part has no parent yet).
@@ -451,34 +490,59 @@ function ProjectWorkspace(): React.JSX.Element {
     onReveal,
     optimistic.add
   )
-  const robotContent = robots.renderContent
-  const solusContent = nodes.renderContent
-  // Stable per snapshot: the memoised cards re-render only when what they show changed.
-  const renderContent = useCallback(
-    (entity: Entity): React.ReactNode =>
-      entity.type === 'integration_account' ? (
-        <AccountNodeContent
-          entity={entity}
-          count={accountDocuments(entity.id, merged.entities, merged.relations).length}
-        />
-      ) : entity.type === 'physical_robot' || entity.type === 'robot_category' ? (
-        robotContent(entity)
-      ) : (
-        solusContent(entity)
-      ),
-    [merged, robotContent, solusContent]
+  const { renderContent, toolbar } = useWorkspaceContent(
+    merged,
+    robots,
+    nodes,
+    projectId,
+    onServiceSelected,
+    addRequest
   )
-  const toolbar = useMemo(
-    () => (
-      <WorkspaceAdd
-        projectId={projectId}
-        onSelected={onServiceSelected}
-        hardware={robots.hardware}
-        openRequest={addRequest}
-      />
-    ),
-    [projectId, onServiceSelected, robots.hardware, addRequest]
-  )
+  return {
+    nodes,
+    summary,
+    merged,
+    projectId,
+    selectedAnchor,
+    focusedId,
+    reveal,
+    rail,
+    layout,
+    copy,
+    select,
+    onMove,
+    renderContent,
+    toolbar,
+    liveError,
+    base,
+    robots,
+    onReveal,
+    onOpenAdd
+  }
+}
+
+function ProjectWorkspace(): React.JSX.Element {
+  const {
+    nodes,
+    summary,
+    merged,
+    projectId,
+    selectedAnchor,
+    focusedId,
+    reveal,
+    rail,
+    layout,
+    copy,
+    select,
+    onMove,
+    renderContent,
+    toolbar,
+    liveError,
+    base,
+    robots,
+    onReveal,
+    onOpenAdd
+  } = useProjectWorkspace()
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
       {nodes.overlays}
@@ -530,4 +594,43 @@ function useGraphFocusReconciliation(
     previous.current = summary.entities
     if (changed) void reconcileWorkspaceFocus(projectId, summary.entities, summary.relations)
   }, [projectId, summary.status, summary.entities, summary.relations])
+}
+
+function useWorkspaceContent(
+  merged: ReturnType<typeof withAccountAnchors>,
+  robots: ReturnType<typeof usePhysicalRobots>,
+  nodes: ReturnType<typeof useSolusNodes>,
+  projectId: string | null,
+  onServiceSelected: ReturnType<typeof useWorkspaceReveal>['onServiceSelected'],
+  addRequest: AddRequest | undefined
+) {
+  const robotContent = robots.renderContent
+  const solusContent = nodes.renderContent
+  // Stable per snapshot: the memoised cards re-render only when what they show changed.
+  const renderContent = useCallback(
+    (entity: Entity): React.ReactNode =>
+      entity.type === 'integration_account' ? (
+        <AccountNodeContent
+          entity={entity}
+          count={accountDocuments(entity.id, merged.entities, merged.relations).length}
+        />
+      ) : entity.type === 'physical_robot' || entity.type === 'robot_category' ? (
+        robotContent(entity)
+      ) : (
+        solusContent(entity)
+      ),
+    [merged, robotContent, solusContent]
+  )
+  const toolbar = useMemo(
+    () => (
+      <WorkspaceAdd
+        projectId={projectId}
+        onSelected={onServiceSelected}
+        hardware={robots.hardware}
+        openRequest={addRequest}
+      />
+    ),
+    [projectId, onServiceSelected, robots.hardware, addRequest]
+  )
+  return { renderContent, toolbar }
 }

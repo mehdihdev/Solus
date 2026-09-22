@@ -113,6 +113,8 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 **Decision:** Live Bench ships Sim mode (MuJoCo from the team's URDF/CAD, updating on CAD sync) and Real mode (serial/ROS telemetry) behind one UI and one telemetry packet format. Isaac Sim/Gazebo are integration targets (read their data), never competitors. No parallel-environment RL infrastructure, no photorealistic rendering, no experiment-tracking product (integrate W&B/MLflow instead).
 **Rejected:** Building a simulator/training platform (Isaac/Antioch's territory; years of work).
 
+**Amended (2026-09-12, SOLUSDEV-261; approved in chat):** SOL may start and stop an installed external simulator and, through the central confirmation gate, load a workspace model, edit graph-derived sensor positions or joint limits, and run a named routine with explicit joint ranges. Telemetry remains on the shared Live Bench transport; this does not introduce a simulator, training platform, or arbitrary-code execution interface.
+
 ## ADR-015: Customer tiers — one product, tiered go-to-market
 
 **Status:** Accepted
@@ -124,6 +126,8 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 
 **Status:** Accepted
 **Decision:** Guide mode (teaches, explains, assumes domain unfamiliarity) and Expert mode (terse, leads with answers) — per-user, switchable anytime, available on every tier. Every feature producing natural-language output consumes the mode setting.
+
+**Action-mode amendment (2026-09-13, SOLUSDEV-261; explicitly requested in-chat):** The separate Build action mode executes routine integration edits automatically under the authenticated user’s permissions. As requested: “on build mode, it should just auto build with full permissions” and “if it needs to do something drastic, like deleting something, or it doesn’t know what to do just give a small approval card”. Routine execution retains schema validation, project/source authorization, complete current previews, stale-state protection, single-use execution and truthful readback/auditing. Destructive actions, remote publication, installs, hardware access, credential/permission changes and unclassified actions retain compact human confirmation; ambiguous intent requires clarification. Guide action mode remains read-only. This refines central confirmation references for routine Build actions; it does not authorize blanket tool, tenant, or vendor-permission bypasses.
 **Rejected:** Modes as a tier differentiator.
 
 ## ADR-017: Pricing — no free-forever tier; base subscription + credit allowance
@@ -199,6 +203,7 @@ Concretely: outbound provider calls are counted per **provider account** (not pe
 - Credits are **per-user, with NO pooling** — regardless of whether the user is solo or in a team.
 - **Purchase packs:** $10 / $25 / $50 / $100, each displayed with an **estimated** query count. Estimates are **provisional** (no real cost-per-operation data yet): ship conservative, calibrate post-pilot.
 - **One-month free trial**, which must be **cost-capped** — a bounded credit grant, never unlimited.
+- **Development exception (2026-09-12, SOLUSDEV-261; explicitly approved in-chat):** Explicitly allowlisted development accounts may bypass credit and trial limits only in development environments. Cost logging, production limits, and tool approvals remain enforced.
 - **Plan starting credits (2026-08-08):** each paid plan carries a **one-time** credit grant applied when the plan first becomes live for a user — **BASIC 2,500**, **PRO 10,000** (4×) — sized so BASIC comfortably covers two projects of normal SOL usage. Idempotent per (user, plan): renewals never re-grant; upgrading BASIC→PRO grants PRO's amount once. Amounts are **CONFIG** (calibratable like the trial grant), never hardcoded in enforcement. Ongoing top-ups are the purchase packs — buying credits never requires a plan upgrade.
 - **Accounting:** an immutable, append-only **`credit_ledger`** is the source of truth, plus a cached per-user **`credit_balance`**. The **token→credit conversion rate embeds the margin and is CONFIG** (calibratable), never hardcoded. Per-call debits are written by the post-call cost hook (ADR-026).
 - **Conversion + margin (W0-03):** `credits = ceil(dollars × margin_multiplier × credits_per_dollar)`, prices in USD per 1M tokens, `ceil` so a real call never bills 0. **`margin_multiplier` defaults to 2.0** — it covers infra + failed/retried calls + trial grants + profit (NOT pure profit, which is why 2.0, not ~1.25). Both `margin_multiplier` and `credits_per_dollar` live in config (`models.yaml`), provisional until pilot calibration.
@@ -831,13 +836,19 @@ not posture:
    `OAuth2Delete` and `OAuth2ReadPII`, both forbidden on the record: Delete would let a confused
    agent wipe a customer's document). Scopes requested are the spec's own, minimised and
    recorded; a grant returned WIDER than requested is refused and never stored.
-5. **Tokens are per customer, held on the Source, and never Solus's.** The grant identifies the
+5. **Tokens are per customer, held on their connection, and never Solus's.** The grant identifies the
    CUSTOMER: the server acts as them, under their own vendor sign-in, spending their own API
    allocation. The token is stored in the SecretStore under a ref derived from the connected
    `Source`, resolved per call (hosted tokens are short-lived), refreshed in place, and swept on
    every source- and user-deletion path alongside the connector's own refs. A hosted server is
    never its own tile or `SourceType` — it is an add-on to a connection the customer already
-   made, so tenant scope is the Source's scope and no new scoping concept is invented.
+   made. **Amended 2026-09-12 (SOLUSDEV-261; approved in-chat):** For connectors
+   using AccountConnection, hosted add-on grants and capability state belong to
+   the connection owner and are stored under that account connection's SecretStore
+   reference. Project Sources reference that connection; invocation still requires
+   project/team authorization and the existing confirmation gate. Revoking the
+   account disables the hosted grant for all attached Sources. Existing
+   source-scoped grants remain supported during migration.
 6. **The authorization code completes through an AUTHENTICATED exchange.** The code lands on the
    desktop loopback and is posted to an authenticated route that binds the OAuth state to the
    requesting user. The connector-era unauthenticated `GET /{provider}/oauth/callback` is NOT
@@ -957,3 +968,35 @@ human reviewer at the MR — the model is never the reviewer.
 1. New decision: append an entry with the next ADR number, date it, set Status: Accepted.
 2. Changing a decision: set the old entry's Status to **Superseded by ADR-XXX**, add the new entry referencing what it replaces and why. Never delete history.
 3. Humans own decisions; agents may edit this file only under ADR-032 tier-2 (concrete change approved in-chat first, dedicated commit). An agent that believes a decision needs revisiting raises it in its design-review critique or completion report.
+
+
+---
+
+## ADR-019 / ADR-035 amendment: Onshape transport and reconciliation
+
+**Status:** Accepted (2026-09-13, SOLUSDEV-261; approved in-chat).
+
+Onshape transport selection is capability- and semantics-based. Prefer the
+admitted vendor-hosted FeatureScript MCP for supported equivalent operations;
+retain explicitly classified REST operations where no equivalent is available.
+Public App Store OAuth REST usage is exempt from the documented annual REST
+allowance; any separately observed hosted-service allocation is represented
+independently without assuming an annual cap from one sample. Authentication,
+rate limits, allowlists, project/account scope and uncertain-write safeguards
+remain enforced. Verified Solus writes drive dependency-aware invalidation and
+coalesced authoritative reconciliation rather than an unconditional full export
+after each write. Healthy registered webhooks replace routine change polling;
+bounded recovery checks remain explicit when delivery is unavailable. Geometry
+stays stale until verified, and incremental reconciliation preserves unchanged
+graph data. This amendment does not authorize additional OAuth scopes.
+
+## ADR-019 amendment: Onshape OAuth application quota identity
+
+**Status:** Accepted (2026-09-13, SOLUSDEV-261; approved in-chat).
+
+Scope Onshape's estimated usage and exhaustion flag by OAuth application plus
+provider account, preserving the old application's records and keeping secret
+rotation or reconnect on the same application in the same bucket. Changing the
+OAuth application must not inherit the previous application's exhaustion flag.
+This separates observed accounting contexts; it does not assert that the provider
+has granted a new allowance. Provider refusals remain authoritative.

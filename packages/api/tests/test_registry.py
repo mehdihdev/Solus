@@ -98,9 +98,9 @@ def test_build_registry_ships_the_roster() -> None:
     # (SOLUSDEV-102 ALT-8; mcp_acquire.py's config-key decision). KiCad
     # advertises its two design inputs — the netlist export (XML or
     # S-expression) and the .kicad_pcb board (SOLUSDEV-252, §5.2/§5.2a);
-    # its project_path key is still owed by a later ticket.
+    # Its live companion binding also advertises project_path.
     assert catalog["altium"]["config_fields"] == ["export", "project_path"]
-    assert catalog["kicad"]["config_fields"] == ["export", "board"]
+    assert catalog["kicad"]["config_fields"] == ["export", "board", "project_path"]
     # Onshape (SOLUSDEV-96 / CAD-01) is the thin-API mechanical CAD connector:
     # OAuth ONLY — an API key pair would reach only the DEVELOPER's documents.
     assert isinstance(registry.create("onshape"), OnshapeConnector)

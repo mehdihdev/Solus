@@ -6,8 +6,8 @@ enqueues incremental sync. **Payload treated as untrusted input per §7**" — a
 `SyncTrigger.WEBHOOK` has been a reserved, never-produced enum value ever since.
 This builds it, and takes that last clause literally.
 
-**The payload is a doorbell, not data.** Nothing is read out of the body: not the
-document id, not the event type, not a version. The route resolves the source
+**The payload is a doorbell, not graph data.** Bounded Onshape identity fields
+are retained only for deduplication and subscription health. The route resolves the source
 from the URL, returns 204, and schedules the ordinary probe — which asks the
 provider itself, with the source's own credentials, what actually changed. So a
 forged notification costs one debounced probe of a source whose token the sender
@@ -24,11 +24,13 @@ the annual allowance. Every change that arrives by push is a probe not spent.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Request, Response
+from fastapi import APIRouter, BackgroundTasks, FastAPI, Request, Response
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.connectors.webhook_token import WEBHOOK_TOKEN_KEY, token_matches
 from solus_api.core.errors import APIError
@@ -69,21 +71,82 @@ def _require_bounded_length(request: Request) -> None:
         declared_bytes = int(declared)
     except ValueError:
         raise APIError(411, "length_required", "Content-Length is invalid") from None
-    if declared_bytes > MAX_WEBHOOK_BYTES:
+    if declared_bytes < 0 or declared_bytes > MAX_WEBHOOK_BYTES:
         raise APIError(413, "payload_too_large", "Webhook payload too large")
 
 
-async def _drain_bounded(request: Request) -> None:
+async def _drain_bounded(request: Request) -> bytes:
     """Consume the body in chunks, abandoning it the moment it exceeds the cap.
 
     Nothing is kept: this endpoint reads no field from the payload, so the body
     exists only to be counted and discarded.
     """
     seen = 0
+    chunks = []
     async for chunk in request.stream():
         seen += len(chunk)
         if seen > MAX_WEBHOOK_BYTES:
             raise APIError(413, "payload_too_large", "Webhook payload too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _defer_onshape_recovery(session: AsyncSession, source: Source) -> None:
+    from datetime import timedelta
+
+    from solus_api.models import utcnow
+    from solus_api.services.onshape_webhooks import save_state, state_for
+
+    if source.type.value == "onshape":
+        await session.refresh(source, with_for_update=True)
+        save_state(
+            source,
+            {**state_for(source), "recover_after": (utcnow() + timedelta(days=1)).isoformat()},
+        )
+        await session.commit()
+
+
+async def _accept_onshape_hint(session: AsyncSession, source: Source, body: bytes) -> bool:
+    from solus_api.connectors.onshape import tracked_document_ids
+    from solus_api.models import utcnow
+    from solus_api.services.onshape_webhooks import (
+        claim_schedule,
+        hint_state,
+        save_state,
+        state_for,
+    )
+
+    if source.status not in (SourceStatus.CONNECTED, SourceStatus.SYNCING):
+        return False
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise APIError(400, "invalid_payload", "Expected a JSON webhook object") from None
+    if not isinstance(payload, dict):
+        raise APIError(400, "invalid_payload", "Expected a JSON webhook object")
+    document = payload.get("documentId")
+    if document is not None and document not in tracked_document_ids(source.config):
+        return False
+    state = state_for(source)
+    event_id = payload.get("messageId")
+    if event_id is not None and (not isinstance(event_id, str) or len(event_id) > 256):
+        raise APIError(400, "invalid_payload", "Invalid event identity")
+    if document and state.get("subscriptions", {}).get(document) == payload.get("webhookId"):
+        state["deliveries"] = {**state.get("deliveries", {}), document: utcnow().isoformat()}
+    if payload.get("event") == "webhook.unregister":
+        state["status"] = "failed"
+    previous_generation = state.get("generation", 0)
+    if payload.get("event") not in ("webhook.register", "webhook.ping"):
+        state = hint_state(state, event_id=event_id)
+    if state.get("generation", 0) == previous_generation:
+        save_state(source, state)
+        await session.commit()
+        return False
+    state, should_enqueue = claim_schedule(state)
+    save_state(source, state)
+    await session.commit()
+
+    return should_enqueue
 
 
 @router.post("/{provider}/{source_id}/{token}", status_code=204)
@@ -108,11 +171,11 @@ async def provider_webhook(
     # Content-Length up front, then re-enforce while streaming so a client that
     # lies about a small one still cannot overshoot.
     _require_bounded_length(request)
-    await _drain_bounded(request)
+    body = await _drain_bounded(request)
     # NOTE: the body is deliberately never PARSED, and after this point it is not
     # even retained. See the module docstring.
 
-    source = await session.scalar(select(Source).where(Source.id == source_id))
+    source = await session.scalar(select(Source).where(Source.id == source_id).with_for_update())
     # One response for "no such source", "wrong provider" and "bad token": a
     # distinguishable 404 would turn this into an oracle for which source ids
     # exist. Fails closed — a source that never registered has no digest and
@@ -128,6 +191,9 @@ async def provider_webhook(
         logger.info("webhook rejected provider=%.32r source=%s", provider, source_id)
         raise APIError(404, "not_found", "Unknown webhook endpoint")
 
+    if provider == "onshape" and not await _accept_onshape_hint(session, source, body):
+        return Response(status_code=204)
+
     # Rate-limit every AUTHORIZED delivery, before deciding what to do with it.
     # Ordering matters: a storm against a source that is mid-sync or errored must
     # be bounded too, and those paths exit early — so a limiter placed after them
@@ -138,9 +204,11 @@ async def provider_webhook(
     limiter = getattr(request.app.state, "webhook_limiter", None)
     if limiter is None:
         logger.error("webhook limiter is not configured; refusing to schedule work")
+        await _defer_onshape_recovery(session, source)
         return Response(status_code=204)
     if limiter.bump(str(source_id)) > WEBHOOK_DELIVERIES_PER_DAY:
         logger.warning("webhook delivery budget spent source=%s", source_id)
+        await _defer_onshape_recovery(session, source)
         return Response(status_code=204)
 
     if source.status is not SourceStatus.CONNECTED:
@@ -160,7 +228,7 @@ async def provider_webhook(
     return Response(status_code=204)
 
 
-async def _probe_source(app: object, source_id: uuid.UUID) -> None:
+async def _probe_source(app: FastAPI, source_id: uuid.UUID) -> None:
     """Schedule the ordinary sync for this source.
 
     Deliberately the SAME path a manual trigger and the sweep take, so a webhook
@@ -171,8 +239,18 @@ async def _probe_source(app: object, source_id: uuid.UUID) -> None:
     from solus_api.connectors.worker import execute_source_sync
     from solus_api.models import SyncTrigger
 
-    state = app.state  # type: ignore[attr-defined]
+    state = app.state
     try:
+        pool = getattr(state, "arq_pool", None)
+        if pool is None and state.settings.redis_url:
+            from solus_api.routers.sources import _arq_pool
+
+            pool = await _arq_pool(app)
+        if pool is not None:
+            await pool.enqueue_job(
+                "sync_source", str(source_id), _job_id=f"onshape-hint:{source_id}"
+            )
+            return
         await execute_source_sync(
             sessionmaker=state.sessionmaker,
             registry=state.connector_registry,

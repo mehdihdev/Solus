@@ -97,6 +97,18 @@ def is_connection_owned(secret_ref: str | None) -> bool:
     return bool(secret_ref) and str(secret_ref).startswith(CONNECTION_REF_PREFIX)
 
 
+ONSHAPE_APPLICATION_KEY = "_onshape_oauth_application"
+
+
+def onshape_application_for(row: AccountConnection | Source) -> str | None:
+    """Private verified grant metadata, mirrored only by bind_source."""
+    config = row.config if isinstance(row.config, dict) else {}
+    value = config.get(ONSHAPE_APPLICATION_KEY)
+    if isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value):
+        return value
+    return None
+
+
 def account_ref_for(row: AccountConnection | Source) -> str:
     """The identity the integration cache keys on. The provider's account id when
     the grant proved one; otherwise the row itself, so an unidentified account can
@@ -236,6 +248,7 @@ async def complete_connection(
     creds: Credentials,
     account: AccountInfo,
     access: str | None,
+    onshape_application: str | None = None,
 ) -> AccountConnection:
     """Land a finished handshake on the account it proved.
 
@@ -266,6 +279,8 @@ async def complete_connection(
         )
     ).first()
     connection = existing if existing is not None else pending
+    new_grant = existing is None and not pending.secret_ref and pending.account_external_id is None
+    may_bind_application = new_grant or onshape_application_for(connection) is not None
     if existing is not None:
         await session.delete(pending)
     secret_ref = connection_secret_ref(connection.id, provider)
@@ -277,6 +292,12 @@ async def complete_connection(
     connection.account_login = account.login
     connection.account_external_id = account.external_id
     connection.last_error = None
+    if provider == "onshape":
+        config = {k: v for k, v in connection.config.items() if k != ONSHAPE_APPLICATION_KEY}
+        # Unidentified legacy grants keep their existing ledger on reconnect.
+        if onshape_application is not None and may_bind_application:
+            config[ONSHAPE_APPLICATION_KEY] = onshape_application
+        connection.config = config
     if access:
         connection.config = {**connection.config, "access": access}
     await session.flush()
@@ -312,6 +333,11 @@ def bind_source(
     source.secret_ref = connection.secret_ref
     source.account_login = connection.account_login
     source.account_external_id = connection.account_external_id
+    config = {k: v for k, v in source.config.items() if k != ONSHAPE_APPLICATION_KEY}
+    application = onshape_application_for(connection)
+    if application is not None:
+        config[ONSHAPE_APPLICATION_KEY] = application
+    source.config = config
     if not preserve_state:
         source.status = SourceStatus.CONNECTED
         source.last_error = None
@@ -427,17 +453,46 @@ async def revoke_connection(
     source bound to it in every project, and drop the account's cached
     listings/exports (derived copies of the customer's CAD must not outlive the
     grant). Returns how many sources were cut off."""
+    # Serialize token deletion against hosted exchange/probe/refresh writes.
+    locked = await session.scalar(
+        select(AccountConnection)
+        .where(AccountConnection.id == connection.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if locked is None:
+        return 0
+    connection = locked
     await delete_connection_secrets(secret_store, connection)
     if cache is not None:
         await cache.invalidate_account(connection.provider.value, account_ref_for(connection))
     bound = (
-        await session.scalars(select(Source).where(Source.connection_id == connection.id))
+        await session.scalars(
+            select(Source).where(Source.connection_id == connection.id).with_for_update()
+        )
     ).all()
     for source in bound:
+        if source.type is SourceType.ONSHAPE:
+            from solus_api.connectors.webhook_token import WEBHOOK_TOKEN_KEY
+
+            state = dict(source.config.get("_onshape_webhook", {}))
+            source.config = {
+                key: value for key, value in source.config.items() if key != WEBHOOK_TOKEN_KEY
+            }
+            source.config = {
+                **source.config,
+                "_onshape_webhook": {
+                    **state,
+                    "status": "revoked",
+                    "deliveries": {},
+                    "cleanup_failed": bool(state.get("subscriptions")),
+                },
+            }
         source.status = SourceStatus.DISCONNECTED
         source.secret_ref = None
         source.connection_id = None
         source.last_error = {"code": "connection_revoked", "message": "The account was revoked"}
+    connection.config = {}
     connection.status = ConnectionStatus.REVOKED
     connection.secret_ref = None
     await session.flush()

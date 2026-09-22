@@ -28,6 +28,7 @@ import re
 import shutil
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from solus_companion.config import discover_servers
@@ -258,16 +259,26 @@ def test_discover_servers_finds_the_altium_launch(tmp_path: Path) -> None:
     assert servers[0].args == ()
 
 
-def test_discover_servers_finds_altium_in_the_real_tree() -> None:
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+def test_discover_servers_finds_altium_in_the_real_tree(
+    platform: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fork = MCP_ROOT / "altium"
     if not (fork / "allowlist.yaml").is_file():
         pytest.skip(
             "allowlist.yaml is a later ALT task's deliverable; real-tree discovery arms then"
         )
+    monkeypatch.setattr("solus_companion.config.sys", SimpleNamespace(platform=platform))
     servers = discover_servers(MCP_ROOT)
     by_name = {server.name: server for server in servers}
     assert "altium" in by_name
-    assert by_name["altium"].command == LAUNCH.resolve()
+    if platform == "win32":
+        assert by_name["altium"].command == LAUNCH_CMD.resolve()
+        assert by_name["altium"].unavailable_reason is None
+    else:
+        host = "Linux" if platform == "linux" else "macOS"
+        assert by_name["altium"].command is None
+        assert by_name["altium"].unavailable_reason == f"Altium Designer is not available on {host}"
 
 
 # --- M3 / T4-POSIX: the POSIX launcher actually scrubs the child env --------------

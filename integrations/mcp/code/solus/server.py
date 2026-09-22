@@ -3,22 +3,25 @@
 
 `bin/launch` execs THIS file. It builds a FastMCP (the MCP SDK's built-in
 `mcp.server.fastmcp`, from the fork-private venv) and registers exactly the
-roster: the reads `probe_environment` and `plan`, and the gated
-`create_environment`, `install`, `run`, `test`. Every gated tool calls
-`plan_action` first and executes EXACTLY that argv (`execute_plan`) — one
-source of truth. Logging goes to stderr only — stdout is the MCP protocol
-channel. Every tool returns a plain dict (structuredContent) and NEVER
-raises: any internal failure collapses to the documented refusal shape.
+roster of environment, Git and Arduino tools. Environment actions call
+`plan_action` first and execute exactly that argv (`execute_plan`). Git and
+Arduino actions use their complete state-bound dry-run plans. Logging goes to
+stderr only — stdout is the MCP protocol channel. Environment tools return their
+documented refusal shape. Repository tools expose stable protocol failures and
+preserve uncertain mutation outcomes.
 
 Importing this module has no side effects beyond the sys.path bootstrap;
 the server starts only under `main()`.
 """
 
+import asyncio
+import functools
 import logging
 import sys
-from collections.abc import Callable
+import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 _FORK_DIR = Path(__file__).resolve().parents[1]
 
@@ -37,13 +40,22 @@ _bootstrap_sys_path()
 # (relative imports); bin/launch execs it as a plain script, where only the
 # absolute `solus.*` names put on sys.path above can resolve.
 try:
+    from . import arduino_compile, arduino_process, arduino_toolchain, git_execution, git_operations
     from .execute import execute_plan, pinned_which, refusal
     from .plan import DEFAULT_ENVIRONMENT, DEFAULT_PYTHON, DEFAULT_TEST_TARGET, plan_action
     from .plan import DEFAULT_TIMEOUT_SECONDS as _DEFAULT_TIMEOUT
     from .probe import empty_probe, probe_environment
+    from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, AsyncOutput
     from .roster import TOOL_ROSTER
     from .workspace import workspace_root
 except ImportError:  # pragma: no cover - script mode under bin/launch
+    from solus import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        arduino_compile,
+        arduino_process,
+        arduino_toolchain,
+        git_execution,
+        git_operations,
+    )
     from solus.execute import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         execute_plan,
         pinned_which,
@@ -61,6 +73,11 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
     from solus.probe import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         empty_probe,
         probe_environment,
+    )
+    from solus.progress import (
+        CANCEL_EVENT,
+        OUTPUT_CALLBACK,
+        AsyncOutput,  # type: ignore[import-not-found, no-redef, unused-ignore]
     )
     from solus.roster import TOOL_ROSTER  # type: ignore[import-not-found, no-redef, unused-ignore]
     from solus.workspace import (
@@ -165,14 +182,155 @@ def tool_test(
     )
 
 
-_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
+def _git_call(operation: Callable[..., dict[str, Any]], **args: Any) -> dict[str, Any]:
+    try:
+        root = workspace_root()
+    except (OSError, RuntimeError):
+        raise ValueError("workspace_unavailable") from None
+    try:
+        return operation(root, **args)
+    except git_execution.GitOperationError as exc:
+        raise ValueError(str(exc)) from None
+    except OSError:
+        raise ValueError("git_unavailable") from None
+
+
+def tool_git_status() -> dict[str, Any]:
+    """Read the linked repository's HEAD, staged/unstaged paths and index fingerprint."""
+    return _git_call(git_operations.git_status)
+
+
+def tool_git_log(limit: int = 10) -> dict[str, Any]:
+    """Read up to 50 recent commits in the linked repository, with bounded output."""
+    return _git_call(git_operations.git_log, limit=limit)
+
+
+def tool_git_diff(scope: str, paths: list[str] | None = None) -> dict[str, Any]:
+    """Read the staged or unstaged diff, optionally for explicit workspace-relative paths."""
+    return _git_call(git_operations.git_diff, scope=scope, paths=paths)
+
+
+def tool_git_commit(
+    message: str, expected_head: str, expected_index_fingerprint: str, dry_run: bool = False
+) -> dict[str, Any]:
+    """Commit only the already staged index after approval of its complete diff and state.
+    dry_run previews without writing. Never stages files or resolves conflicts."""
+    return _git_call(
+        git_operations.git_commit,
+        message=message,
+        expected_head=expected_head,
+        expected_index_fingerprint=expected_index_fingerprint,
+        dry_run=dry_run,
+    )
+
+
+def tool_git_push(
+    remote: str,
+    branch: str,
+    expected_head: str,
+    expected_remote_head: str | None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Push one exact commit to an existing configured remote after explicit approval.
+    dry_run checks the destination and remote tip. Never force-pushes or adds credentials."""
+    return _git_call(
+        git_operations.git_push,
+        remote=remote,
+        branch=branch,
+        expected_head=expected_head,
+        expected_remote_head=expected_remote_head,
+        dry_run=dry_run,
+    )
+
+
+async def _arduino_call(operation: Callable[..., dict[str, Any]], **args: Any) -> dict[str, Any]:
+    """Keep MCP responsive and propagate cancellation into bounded owned work."""
+    cancelled = threading.Event()
+    token = arduino_process.CANCEL_EVENT.set(cancelled)
+    try:
+        return await asyncio.to_thread(operation, **args)
+    except asyncio.CancelledError:
+        cancelled.set()
+        raise
+    except arduino_toolchain.ArduinoError as exc:
+        raise ValueError(str(exc)) from None
+    except OSError:
+        raise ValueError("toolchain_unavailable") from None
+    finally:
+        arduino_process.CANCEL_EVENT.reset(token)
+
+
+async def tool_arduino_probe() -> dict[str, Any]:
+    """Verify the pinned Arduino CLI and Uno toolchain locally, without running the CLI."""
+    return await _arduino_call(arduino_toolchain.arduino_probe)
+
+
+async def tool_arduino_prepare(dry_run: bool = False) -> dict[str, Any]:
+    """Prepare the frozen Arduino Uno compiler after approval of all dependencies and paths.
+    dry_run previews without installing. Does not identify or access attached boards."""
+    return await _arduino_call(arduino_toolchain.arduino_prepare, dry_run=dry_run)
+
+
+async def tool_arduino_compile(
+    sketch: str, fqbn: Literal["arduino:avr:uno"], dry_run: bool = False
+) -> dict[str, Any]:
+    """Compile a linked workspace sketch for arduino:avr:uno after approval of the full plan.
+    Uses an offline isolated snapshot. Returns verified artifacts; never uploads to a board."""
+    try:
+        root = workspace_root()
+    except (OSError, RuntimeError):
+        raise ValueError("workspace_unavailable") from None
+    return await _arduino_call(
+        arduino_compile.arduino_compile, root=root, sketch=sketch, fqbn=fqbn, dry_run=dry_run
+    )
+
+
+_TOOLS: dict[str, Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]] = {
     "probe_environment": tool_probe_environment,
     "plan": tool_plan,
     "create_environment": tool_create_environment,
     "install": tool_install,
     "run": tool_run,
     "test": tool_test,
+    "git_status": tool_git_status,
+    "git_log": tool_git_log,
+    "git_diff": tool_git_diff,
+    "git_commit": tool_git_commit,
+    "git_push": tool_git_push,
+    "arduino_probe": tool_arduino_probe,
+    "arduino_prepare": tool_arduino_prepare,
+    "arduino_compile": tool_arduino_compile,
 }
+
+
+def _streaming_tool(server: Any, function: Callable[..., Any]) -> Callable[..., Any]:
+    """Use the SDK request context without exposing a model-controlled callback."""
+
+    @functools.wraps(function)
+    async def invoke(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        output = AsyncOutput(server.get_context())
+        output_token = OUTPUT_CALLBACK.set(output.output)
+        cancel_token = CANCEL_EVENT.set(output.cancelled)
+        worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        publisher = asyncio.create_task(output.publish())
+        try:
+            result = await asyncio.shield(worker)
+            output.finished.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(publisher), timeout=5)
+            except Exception:
+                publisher.cancel()
+            return dict(result)
+        except asyncio.CancelledError:
+            output.cancelled.set()
+            await asyncio.shield(worker)
+            raise
+        finally:
+            publisher.cancel()
+            OUTPUT_CALLBACK.reset(output_token)
+            CANCEL_EVENT.reset(cancel_token)
+
+    return invoke
 
 
 def build_server() -> Any:
@@ -182,7 +340,20 @@ def build_server() -> Any:
 
     server = FastMCP(SERVER_NAME)
     for name, function in _TOOLS.items():
-        server.tool(name=name, description=function.__doc__)(function)
+        registered_function = (
+            _streaming_tool(server, function) if name in {"run", "test"} else function
+        )
+        server.tool(name=name, description=function.__doc__)(registered_function)
+        if name.startswith(("git_", "arduino_")):
+            tool = server._tool_manager.get_tool(name)
+            if tool is None:
+                raise RuntimeError("Strict tool registration failed")
+            model = tool.fn_metadata.arg_model
+            model.model_config["extra"] = "forbid"
+            model.model_config["strict"] = True
+            model.model_config["hide_input_in_errors"] = True
+            model.model_rebuild(force=True)
+            tool.parameters = model.model_json_schema(by_alias=True)
     registered = {tool.name for tool in server._tool_manager.list_tools()}
     if registered != TOOL_ROSTER:
         raise RuntimeError(f"registered {sorted(registered)} != roster {sorted(TOOL_ROSTER)}")

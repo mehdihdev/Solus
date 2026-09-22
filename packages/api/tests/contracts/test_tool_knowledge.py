@@ -202,6 +202,8 @@ def test_the_enums_match_the_typescript_vocabularies() -> None:
         "kicad",
         "altium",
         "spice",
+        "code",
+        "isaac",
     ]
     assert [s.value for s in UiSurface] == [
         "toolbar",
@@ -211,6 +213,7 @@ def test_the_enums_match_the_typescript_vocabularies() -> None:
         "dialog",
         "keyboard",
         "status_bar",
+        "terminal",
     ]
     assert [p.value for p in Provenance] == ["vendor_docs", "observed_ui", "operator_authored"]
     assert ControlEffect.CREATE_FEATURE.value == "create_feature"
@@ -338,3 +341,13 @@ def test_a_part_name_in_prose_is_not_caught_and_the_doc_says_so() -> None:
     contract does not do" section is not boilerplate.
     """
     assert ToolKnowledge.model_validate({**base(), "description": "Hero Arm Bracket Rev C"})
+
+
+@pytest.mark.parametrize("tool", ["code", "isaac"])
+def test_execution_knowledge_retains_closed_boundary(tool: str) -> None:
+    record = {**base(), "tool": tool, "surface": "terminal", "effect": "execute"}
+    assert ToolKnowledge.model_validate(record).tool.value == tool
+    with pytest.raises(ValidationError):
+        ToolKnowledge.model_validate({**record, "command": "arbitrary input"})
+    with pytest.raises(ValidationError):
+        ToolKnowledge.model_validate({**record, "description": "/home/customer/private.ino"})

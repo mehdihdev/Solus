@@ -189,6 +189,13 @@ this cycle, yet this counter reads 0. So it is a **separate 2,500/year allocatio
 one `connectors/quota.py` defends. Strong, but **inferred from one data point** — do not
 state it as fact in user-facing copy, and consider metering it.
 
+**SOLUSDEV-261 correction (2026-09-13):** the observation above is retained as
+historical evidence, but the inferred separate annual entitlement is withdrawn.
+The approved ADR-019/035 amendment separates the documented public-App-Store REST
+exemption from independently observed MCP service restrictions. Solus no longer
+assumes or enforces a hosted 2500/year allowance from this sample. See
+[the current quota audit](ONSHAPE_QUOTA_AUDIT_SOLUSDEV-261.md).
+
 **Programmatic App Store subscription: VERIFIED IMPOSSIBLE.** The public OpenAPI
 (`1.220.87559`, 248 paths) has four purchase operations — `GET /accounts/purchases`,
 `GET /accounts/plans/{planId}/purchases`, `POST …/consume`, `DELETE …` — **none creates one**.

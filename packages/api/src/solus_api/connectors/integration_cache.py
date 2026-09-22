@@ -23,9 +23,11 @@ credentials prove, and it is what lets two projects — or two teammates — sha
 one fetch. A hit is only ever served to a caller that resolved that account's
 credentials, so an entry can never cross accounts.
 
-**Never cached here:** anything inside a confirmable operation (the action gate
-re-runs previews on purpose), and any 401 (the credential-refresh path keys off
-it). Neither is offered as a key kind, by construction.
+**Never cached here:** mutable target state inside a confirmable operation, or
+any failed fetch including 401 (credential refresh depends on that failure). The
+approved ADR-019/035 amendment permits immutable donor/specification reads keyed
+by account and a freshly verified revision; `onshape_read_cache.py` provides that
+restricted default-configuration entrypoint. Approval still refreshes target state.
 """
 
 from __future__ import annotations

@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     # models.yaml default of 100 credits/$ and margin 2.0, 1000 credits ≈ $5 of
     # real model spend. Calibrate from pilot data before production.
     trial_credit_grant: int = 1000
+    # ADR-024 explicit development exception. UUIDs are Solus User.id values;
+    # no account is exempt by default and only app_env == "dev" enables it.
+    development_unlimited_credit_user_ids: str = ""
     # One-time starting credits granted when a paid plan first becomes live for
     # a user (ADR-023/024, amended 2026-08-08). Keyed by PlanType value; missing
     # key = no grant (enterprise is custom per deal). PROVISIONAL like the trial
@@ -180,12 +183,6 @@ class Settings(BaseSettings):
     #: before the provider does — our count is a floor on our own spend, never
     #: a remaining balance, so leaving headroom is the honest posture.
     onshape_annual_call_allowance: int = 1800
-    #: SOLUSDEV-168. The hosted FeatureScript server bills a SEPARATE Onshape
-    #: allocation from the private-app one above: the spike read 0 used /2500
-    #: limit on an account that had already spent ~2,000 of the private-app
-    #: allowance in the same cycle. Strong, but inferred from ONE data point,
-    #: so it is configuration rather than a constant, and the meter fails open.
-    onshape_fs_annual_call_allowance: int = 2500
     #: Fraction of the allowance above which DEFERRABLE work (the sweep, agent
     #: turns) pauses. A user's explicit action still reaches the provider.
     integration_degrade_ratio: float = 0.7
@@ -337,6 +334,18 @@ class Settings(BaseSettings):
     def staff_user_id_set(self) -> set[uuid.UUID]:
         """Parsed staff ids (validated at construction)."""
         return {uuid.UUID(item) for item in _split_csv(self.staff_user_ids)}
+
+    @field_validator("development_unlimited_credit_user_ids")
+    @classmethod
+    def _development_credit_ids_are_uuids(cls, raw: str) -> str:
+        for item in _split_csv(raw):
+            uuid.UUID(item)
+        return raw
+
+    @property
+    def development_unlimited_credit_user_id_set(self) -> set[uuid.UUID]:
+        """Validated explicit account identities; never emails or implicit staff."""
+        return {uuid.UUID(item) for item in _split_csv(self.development_unlimited_credit_user_ids)}
 
     @property
     def cors_origin_list(self) -> list[str]:

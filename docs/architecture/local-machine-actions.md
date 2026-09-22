@@ -5,6 +5,11 @@ The built-in `machine` server owns file reads and writes. The I3 `code` server o
 all environment observation, creation, installation, script execution and tests.
 The former `machine` environment implementation and command tools are removed.
 
+The SOLUSDEV-261 repository extension also belongs to the existing `code` server:
+bounded Git observations and confirmed commit/push operations, specified in
+`docs/api/code-git-development.md`. It reuses the authenticated bridge and complete
+dry-run confirmation previews; no generic command executor is reintroduced.
+
 Governing references: `docs/contracts/action-gate.md`, `docs/contracts/bridge-protocol.md`,
 `docs/api/code-environment.md`, `docs/architecture/code-environment.md`, and the
 Solus-owned allowlists in `integrations/mcp/machine/` and `integrations/mcp/code/`.
@@ -22,6 +27,30 @@ SOL proposes a local action
       └─ code.create_environment / install / run / test → I3 code server
   → tool_result and best-effort post-action recording
 ```
+
+## Installed Isaac execution
+
+The approved ADR-014 amendment uses this same bridge and confirmation path.
+The cloud-owned Isaac adapter resolves `simulation_model` and every referenced
+entity through the current project graph scope before dispatch. Its fixed public
+schemas expose graph entity IDs; resolved model data, graph digests and scene
+generations remain internal. The registry replaces raw Isaac bridge entries with
+these wrappers, so native inventory cannot provide a second execution path.
+
+```text
+SOL → graph-bound Isaac tool → complete preview / central approval
+  → authenticated project bridge → companion-owned Isaac MCP server
+  → private bounded pipes → owned installed Isaac worker
+  → verified scene readback and private revision artifact
+```
+
+The server supports eight bounded operations described in
+`docs/api/isaac-development.md`: probe, status, start, stop, load model, edit joint
+limits, edit sensor pose and run the named routine. Start and all mutations require
+confirmation. Approval binds the graph snapshot and native scene generation;
+changes invalidate it. The worker controls only its own process and pinned SO-101
+asset closure. This integration introduces no Live Bench transport or arbitrary
+script execution interface.
 
 The companion inventory does not decide which tools require confirmation. The
 cloud allowlist provides that policy and the consent sentence. `machine.read_file`
@@ -92,3 +121,30 @@ removed environment implementation. Its machine command and multi-environment
 live gates do not establish coverage for this integrated design. Current evidence
 belongs in the SOLUSDEV-260 phase report and Cowork QA, distinguishing automated
 fixtures, live companion execution and platform-specific checks.
+
+### Bounded simulation graph setup
+
+The explicit SO-101 template setup creates manual, source-null simulation entities
+using the existing manual graph semantics. The server owns the pinned template,
+provenance and generated identities; clients cannot submit arbitrary attributes,
+entity IDs, URLs or scripts. The project-locked operation atomically creates the
+model and its links, joints, sensor and bottle, or returns an intact existing
+instance. It emits the existing graph-change hint. This supplies the graph input
+required by the owned Isaac adapter; simulator start/load remain centrally gated.
+
+## Autonomous routine Build amendment — SOLUSDEV-261
+
+ADR-016's 2026-09-13 user-approved amendment supersedes the universal card
+requirements above for reviewed routine Build operations. Guide remains read-only.
+The central code-owned policy validates schema, current authorization and two
+matching complete previews before dispatch, retaining the adapter's single-use
+state binding. It records Build authorization separately from human decisions;
+no confirmation row is fabricated or approved by the model. Mutation descriptors
+remain true. Unknown, destructive, install, remote publish, hardware and access
+changes still use the central manual gate. A native tool cannot opt itself in.
+
+File writes use the bounded before/after contract in `docs/api/local-machine-actions.md`: 
+a cloud wrapper holds the task-local fingerprint and supplies it only to the
+authenticated native call. Descriptor-confined replacement verifies unchanged
+state and readback; a preview creates no files or directories. Routine eligibility
+requires this wrapper, not raw advertised file-write metadata.

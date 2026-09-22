@@ -215,3 +215,23 @@ def test_the_cap_is_actually_applied_to_the_outcome() -> None:
 
     assert len(contain_result(call, big).content) <= TOOL_RESULT_CAP
     assert len(contain_result(call, big, cap=50_000).content) > TOOL_RESULT_CAP
+
+
+async def test_hosted_default_has_no_unverified_annual_quota_admission():
+    from unittest.mock import AsyncMock
+
+    # A historical REST-style ledger is not an observed hosted MCP entitlement.
+    redis = AsyncMock()
+    redis.get.side_effect = lambda key: None if key.endswith(":402") else "2500"
+    built = build_hosted_tools(
+        _NO_SESSIONS,
+        uuid.uuid4(),
+        secret_store=InMemorySecretStore(),
+        inventory=_inventory([_row("get_featurescript", GET_SCHEMA)]),
+        redis=redis,
+    )
+    assert len(built) == 1
+    preflight = built[0]._preflight
+    if preflight is not None:
+        await preflight()
+    redis.get.assert_not_awaited()

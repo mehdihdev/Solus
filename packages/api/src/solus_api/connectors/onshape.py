@@ -48,7 +48,9 @@ from solus_api.connectors.contracts import (
     AccountInfo,
     ConnectorError,
     Credentials,
+    EntityOut,
     OAuthConnector,
+    RelationOut,
     SyncContext,
     SyncError,
     SyncResult,
@@ -124,6 +126,8 @@ _METADATA_LIMIT = 128
 #: delete keys — a list value replaces wholesale, so deselecting actually shrinks
 #: the selection.
 SELECTION_KEY = "documents"
+# Reparse existing revision-keyed exports when the graph projection changes.
+PROJECTION_VERSION = "cad-geometry-v2"
 
 #: Cursor key holding the resolved default workspace per document (SOLUSDEV-167).
 #: Lives beside the microversions rather than in a cache — see `_probe`.
@@ -147,7 +151,9 @@ EXPORTABLE_COLLECTIONS: dict[str, str] = {"ASSEMBLY": _ASSEMBLIES, "PARTSTUDIO":
 #: each element costs a translation job — so both the selection and the expanded
 #: element set are bounded rather than "whatever the account holds".
 _MAX_DOCUMENTS = 50
-_MAX_ELEMENTS = 25
+_MAX_ELEMENTS = 256
+_MAX_STAGED_RECORDS = 100_000
+_MAX_STAGED_BYTES = 64 * 1024 * 1024
 _MAX_DOCUMENT_PAGES = 10
 #: Onshape CAPS `limit` at 20 on /documents and answers 400 for anything higher
 #: — confirmed against a live tenant, which is what the fixtures could not tell
@@ -155,6 +161,44 @@ _MAX_DOCUMENT_PAGES = 10
 _PAGE_LIMIT = 20
 #: Onshape's own ceiling for that parameter; the request must never exceed it.
 ONSHAPE_MAX_PAGE_LIMIT = 20
+
+
+class _StagingBudget:
+    """Bound complete graph staging independently of the per-element CAD parse cap."""
+
+    def __init__(self, records: int, byte_count: int) -> None:
+        self.records_left = records
+        self.bytes_left = byte_count
+
+    def consume(self, records: list[EntityOut] | list[RelationOut]) -> None:
+        if len(records) > self.records_left:
+            raise ConnectorError(
+                "selection_too_large", "Complete graph exceeds the staged record limit"
+            )
+        for record in records:
+            self.bytes_left -= len(record.model_dump_json().encode("utf-8"))
+            if self.bytes_left < 0:
+                raise ConnectorError(
+                    "selection_too_large", "Complete graph exceeds the staged byte limit"
+                )
+        self.records_left -= len(records)
+
+
+def _document_page_url(path: str) -> httpx.URL:
+    """Accept vendor pagination only on the trusted document-list endpoints."""
+    base = httpx.URL(ONSHAPE_API_BASE)
+    try:
+        url = base.join(path)
+    except httpx.InvalidURL as exc:
+        raise ConnectorError("api_error", "Onshape returned an invalid document page") from exc
+    if (
+        (url.scheme, url.host, url.port) != (base.scheme, base.host, base.port)
+        or url.userinfo
+        or url.fragment
+        or url.path not in {"/api/v6/documents", "/api/documents"}
+    ):
+        raise ConnectorError("api_error", "Onshape returned an unsafe document page")
+    return url
 
 
 def _raise_for_status(response: httpx.Response, what: str) -> None:
@@ -185,6 +229,8 @@ def _raise_for_status(response: httpx.Response, what: str) -> None:
         # dropped from the sync, and only a 404 may be read that way — every
         # other failure aborts rather than tombstoning live entities.
         raise ConnectorError("not_found", f"Onshape has no {what}")
+    if response.status_code == 400:
+        raise _BadRequestError("api_error", f"Onshape returned 400 for {what}")
     # Upstream text is untrusted and may echo request material — never surface
     # it; the status and our own label are enough to debug.
     raise ConnectorError("api_error", f"Onshape returned {response.status_code} for {what}")
@@ -199,8 +245,8 @@ class _Target:
     workspace_id: str
     element_id: str
     #: Which Onshape collection this element exports through — "assemblies" or
-    #: "partstudios". The ONLY element-type-specific thing in the ingest path;
-    #: everything downstream (poll, download, part metadata) is type-agnostic.
+    #: "partstudios". Only Part Studios support the optional parts metadata
+    #: enrichment; both collections share STEP parsing and graph projection.
     collection: str = _ASSEMBLIES
 
     @property
@@ -264,9 +310,23 @@ def _retry_wait(response: httpx.Response, attempt: int) -> float:
     return wait
 
 
+class _BadRequestError(ConnectorError):
+    """Typed HTTP 400, retaining the public connector error taxonomy."""
+
+
+class _RejectedTranslationError(ConnectorError):
+    """A translation submission was rejected before an export was created."""
+
+
+class _InvalidExportResourceError(ConnectorError):
+    """Malformed vendor identity must never be reinterpreted as empty geometry."""
+
+
 def _safe_upstream_id(value: str) -> str:
     if not _UPSTREAM_ID_RE.fullmatch(value):
-        raise ConnectorError("export_unavailable", "Onshape returned an unusable resource id")
+        raise _InvalidExportResourceError(
+            "export_unavailable", "Onshape returned an unusable resource id"
+        )
     return value
 
 
@@ -369,6 +429,7 @@ class OnshapeConnector(OAuthConnector):
     }
     #: OAuth-only: an API key pair could only ever read OUR documents.
     supports_token_connect: ClassVar[bool] = False
+    supports_document_tree: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -379,6 +440,8 @@ class OnshapeConnector(OAuthConnector):
         poll_interval: float = 1.0,
         max_documents: int = _MAX_DOCUMENTS,
         max_elements: int = _MAX_ELEMENTS,
+        max_staged_records: int = _MAX_STAGED_RECORDS,
+        max_staged_bytes: int = _MAX_STAGED_BYTES,
         max_document_pages: int = _MAX_DOCUMENT_PAGES,
         meter: CallMeter | None = None,
         cache: IntegrationCache | None = None,
@@ -390,7 +453,16 @@ class OnshapeConnector(OAuthConnector):
         self._poll_attempts = poll_attempts
         self._poll_interval = poll_interval
         self._max_documents = max_documents
+        for name, value, cap in (
+            ("max_elements", max_elements, _MAX_ELEMENTS),
+            ("max_staged_records", max_staged_records, _MAX_STAGED_RECORDS),
+            ("max_staged_bytes", max_staged_bytes, _MAX_STAGED_BYTES),
+        ):
+            if type(value) is not int or not 1 <= value <= cap:
+                raise ValueError(f"{name} must be an integer between 1 and {cap}")
         self._max_elements = max_elements
+        self._max_staged_records = max_staged_records
+        self._max_staged_bytes = max_staged_bytes
         self._max_document_pages = max_document_pages
         # SOLUSDEV-167. Defaulted to None so every existing construction —
         # tests, the picker, the plain registry factory — keeps working
@@ -501,7 +573,7 @@ class OnshapeConnector(OAuthConnector):
                 if current != stored.get(document_id):
                     return True
 
-        return False
+        return bool(document_ids) and ctx.cursor.get("projection_version") != PROJECTION_VERSION
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
         """Ingest every tracked document. One source now spans many documents, so
@@ -520,6 +592,7 @@ class OnshapeConnector(OAuthConnector):
         costs zero calls.
         """
         recorder = ErrorRecorder()
+        budget = _StagingBudget(self._max_staged_records, self._max_staged_bytes)
         entities: list[Any] = []
         relations: list[Any] = []
         microversions: dict[str, str] = {}
@@ -544,14 +617,20 @@ class OnshapeConnector(OAuthConnector):
                 if plan.microversion == _GONE:
                     continue
                 root = document_root(plan.document_id, names.get(plan.document_id))
+                root.properties["observed_microversion"] = plan.microversion
+                budget.consume([root])
                 entities.append(root)
                 for target in plan.targets:
                     target_entities, target_relations = await self._ingest(
                         client, target, recorder, version=plan.microversion
                     )
+                    contained = document_contains(root, target_entities, target_relations)
+                    budget.consume(target_entities)
+                    budget.consume(target_relations)
+                    budget.consume(contained)
                     entities.extend(target_entities)
                     relations.extend(target_relations)
-                    relations.extend(document_contains(root, target_entities, target_relations))
+                    relations.extend(contained)
 
         return SyncResult(
             entities=entities,
@@ -559,7 +638,11 @@ class OnshapeConnector(OAuthConnector):
             # `workspaces` rides beside the change tokens so the next probe costs
             # ONE call instead of two (SOLUSDEV-167). `detect_changes` compares
             # only the `microversions` key set, so the extra key is inert to it.
-            cursor={"microversions": microversions, WORKSPACES_KEY: resolved_workspaces},
+            cursor={
+                "microversions": microversions,
+                WORKSPACES_KEY: resolved_workspaces,
+                "projection_version": PROJECTION_VERSION,
+            },
             errors=recorder.finish(),
         )
 
@@ -574,30 +657,95 @@ class OnshapeConnector(OAuthConnector):
         """One element → graph records, namespaced to its document."""
         export = await self._cached(
             self._payload_key("export", target.document_id, version, target.element_id),
-            lambda: self._fetch_step(
+            lambda: self._geometry_export(client, target, version),
+        )
+        if export is None:
+            return [], []
+        metadata = (
+            await self._fetch_part_metadata(
                 client,
                 target.document_id,
                 target.workspace_id,
                 target.element_id,
-                target.collection,
-            ),
-        )
-        metadata = await self._fetch_part_metadata(
-            client,
-            target.document_id,
-            target.workspace_id,
-            target.element_id,
-            recorder,
-            version=version,
+                recorder,
+                version=version,
+            )
+            if target.collection == "partstudios"
+            else {}
         )
         model = self._enrich(await asyncio.to_thread(parse_step, export), metadata)
         # ONE recorder across every stage and every document, so the
         # MAX_SYNC_ERRORS bound is the documented per-sync cap rather than one
         # cap per document silently multiplied by the selection size.
         target_entities, target_relations, _ = build_mechanical_graph(
-            model, recorder, scope=target.scope, provenance=target.provenance
+            model,
+            recorder,
+            scope=target.scope,
+            provenance={**target.provenance, "observed_microversion": version},
         )
         return target_entities, target_relations
+
+    async def _geometry_export(
+        self, client: httpx.AsyncClient, target: _Target, version: str
+    ) -> str | None:
+        """Bracket workspace-only translation before publishing its revision cache."""
+        await self._require_export_revision(client, target, version)
+        try:
+            export = await self._fetch_step(
+                client,
+                target.document_id,
+                target.workspace_id,
+                target.element_id,
+                target.collection,
+            )
+        except ConnectorError as exc:
+            if isinstance(exc, _InvalidExportResourceError) or (
+                exc.code != "export_unavailable" and not isinstance(exc, _RejectedTranslationError)
+            ):
+                raise
+            if not await self._confirmed_empty(client, target, version):
+                raise
+            export = None
+        await self._require_export_revision(client, target, version)
+        return export
+
+    async def _require_export_revision(
+        self, client: httpx.AsyncClient, target: _Target, version: str
+    ) -> None:
+        self._validate_revision(version)
+        observed = await self._current_microversion(client, target.document_id, target.workspace_id)
+        if observed != version:
+            if self._cache is not None:
+                # The next explicit sync must probe again, never replay this
+                # known-stale plan or overwrite a concurrently observed signal.
+                await self._cache.invalidate(self._signal_key(target.document_id))
+            raise ConnectorError(
+                "revision_changed",
+                "Onshape workspace revision changed during export; snapshot was not applied",
+            )
+
+    @staticmethod
+    def _validate_revision(version: str) -> None:
+        if not isinstance(version, str) or not _ID_RE.fullmatch(version):
+            raise ConnectorError("revision_changed", "Onshape acquisition revision is invalid")
+
+    async def _confirmed_empty(
+        self, client: httpx.AsyncClient, target: _Target, version: str
+    ) -> bool:
+        # Read the plan's immutable microversion, so a concurrent deletion cannot
+        # turn an unrelated failed export into permission to drop graph geometry.
+        collection = "parts" if target.collection == "partstudios" else "assemblies"
+        if not _ID_RE.fullmatch(version):
+            return False
+        path = f"/api/v6/{collection}/d/{target.document_id}/m/{version}/e/{target.element_id}"
+        try:
+            body = await self.get_json(client, path, what="empty element check")
+        except ConnectorError:
+            return False
+        if collection == "parts":
+            return isinstance(body, list) and not body
+        root = body.get("rootAssembly") if isinstance(body, dict) else None
+        return isinstance(root, dict) and root.get("instances") == []
 
     # ----------------------------------------------------------- the cache
 
@@ -606,7 +754,7 @@ class OnshapeConnector(OAuthConnector):
 
     def _payload_key(self, kind: str, document_id: str, version: str, *parts: str) -> str:
         return IntegrationCache.payload_key(
-            self.provider, self._account_ref, document_id, version, kind, *parts
+            self.provider, self._account_ref, document_id, version, f"revision-v2-{kind}", *parts
         )
 
     async def _cached[T](self, key: str, fetch: Callable[[], Awaitable[T]]) -> T:
@@ -724,9 +872,10 @@ class OnshapeConnector(OAuthConnector):
         self, client: httpx.AsyncClient, document_id: str, workspace_id: str, version: str
     ) -> list[tuple[str, str]]:
         """The exportable elements at one version — cached by it."""
+        self._validate_revision(version)
 
         async def fetch() -> list[tuple[str, str]]:
-            return await self._exportable_elements(client, document_id, workspace_id)
+            return await self._exportable_elements(client, document_id, version)
 
         rows = await self._cached(self._payload_key("elements", document_id, version), fetch)
         # A cached list comes back as JSON lists; the plan wants pairs.
@@ -829,7 +978,7 @@ class OnshapeConnector(OAuthConnector):
         return raw
 
     async def _exportable_elements(
-        self, client: httpx.AsyncClient, document_id: str, workspace_id: str
+        self, client: httpx.AsyncClient, document_id: str, version: str
     ) -> list[tuple[str, str]]:
         """Every exportable element as `(element_id, collection)`.
 
@@ -838,9 +987,10 @@ class OnshapeConnector(OAuthConnector):
         allowance. The filter is dropped and applied here instead — same one
         call, both families, and unexportable tabs never reach a translation.
         """
+        self._validate_revision(version)
         body = await self.get_json(
             client,
-            f"/api/v6/documents/d/{document_id}/w/{workspace_id}/elements",
+            f"/api/v6/documents/d/{document_id}/m/{version}/elements",
             what="document elements",
         )
         elements: list[tuple[str, str]] = []
@@ -860,6 +1010,14 @@ class OnshapeConnector(OAuthConnector):
         tools apply, so nothing malformed can be stored under `SELECTION_KEY`."""
         tracked_document_ids({SELECTION_KEY: ids}, max_documents=self._max_documents)
 
+    async def list_document_tree(
+        self, creds: Credentials, node: str = "root", offset: int = 0
+    ) -> dict[str, Any]:
+        """Browse one validated folder page through the existing quota meter."""
+        from solus_api.connectors.onshape_tree import list_document_tree
+
+        return await list_document_tree(self, creds, node, offset)
+
     async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
         """Documents the authorized account can reach, for the app's picker.
 
@@ -867,13 +1025,22 @@ class OnshapeConnector(OAuthConnector):
         against a third-party API (§7).
         """
         items: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        seen_pages: set[httpx.URL] = set()
         async with self.http(creds) as client:
             path: str | None = "/api/v6/documents"
             params: dict[str, Any] | None = {"limit": _PAGE_LIMIT}
             for _ in range(self._max_document_pages):
                 if path is None:
                     break
-                body = await self.get_json(client, path, what="documents", params=params)
+                url = _document_page_url(path)
+                page_url = url.copy_merge_params(params or {})
+                if page_url in seen_pages:
+                    raise ConnectorError(
+                        "api_error", "Onshape repeated a document page; refresh the listing"
+                    )
+                seen_pages.add(page_url)
+                body = await self.get_json(client, str(url), what="documents", params=params)
                 if not isinstance(body, dict):
                     break
                 for document in body.get("items") or []:
@@ -882,6 +1049,9 @@ class OnshapeConnector(OAuthConnector):
                     raw = document.get("id", "")
                     if not isinstance(raw, str) or not _ID_RE.fullmatch(raw):
                         continue
+                    if raw in seen_ids:
+                        continue
+                    seen_ids.add(raw)
                     items.append(
                         {
                             "id": raw,
@@ -889,11 +1059,15 @@ class OnshapeConnector(OAuthConnector):
                             "subtitle": _owner_name(document),
                         }
                     )
-                    if len(items) >= self._max_documents:
-                        return items
                 next_link = body.get("next")
                 path = next_link if isinstance(next_link, str) and next_link else None
                 params = None
+            if path is not None:
+                raise ConnectorError(
+                    "listing_incomplete",
+                    "Onshape's document listing exceeded the page limit; "
+                    "contact support to expand the listing limit",
+                )
         return items
 
     # ----------------------------------------------------------- acquisition
@@ -921,12 +1095,18 @@ class OnshapeConnector(OAuthConnector):
         `collection` is the only element-type-specific part: a Part Studio
         translates through `/partstudios/`, an assembly through `/assemblies/`.
         """
-        started = await self.post_json(
-            client,
-            f"{element_base_path(collection, document_id, workspace_id, element_id)}/translations",
-            {"formatName": _EXPORT_FORMAT, "storeInDocument": False},
-            what="STEP translation request",
-        )
+        path = element_base_path(collection, document_id, workspace_id, element_id)
+        try:
+            started = await self.post_json(
+                client,
+                f"{path}/translations",
+                {"formatName": _EXPORT_FORMAT, "storeInDocument": False},
+                what="STEP translation request",
+            )
+        except _BadRequestError as exc:
+            # Only submission rejection may be an empty Part Studio. Polling,
+            # malformed JSON/IDs, auth and quota failures remain terminal.
+            raise _RejectedTranslationError(exc.code, str(exc)) from exc
         request_id = _safe_upstream_id(str(started.get("id", "")))
 
         external_id = _safe_upstream_id(await self._poll_translation(client, request_id))
@@ -1054,10 +1234,11 @@ class OnshapeConnector(OAuthConnector):
         assembly tree, with the loss recorded on the Sync row. A failure is
         never cached — only a table Onshape actually returned is.
         """
+        self._validate_revision(version)
         try:
             rows = await self._cached(
                 self._payload_key("parts", document_id, version, element_id),
-                lambda: self._read_part_metadata(client, document_id, workspace_id, element_id),
+                lambda: self._read_part_metadata(client, document_id, version, element_id),
             )
         except ConnectorError as exc:
             recorder.record(
@@ -1071,13 +1252,14 @@ class OnshapeConnector(OAuthConnector):
         }
 
     async def _read_part_metadata(
-        self, client: httpx.AsyncClient, document_id: str, workspace_id: str, element_id: str
+        self, client: httpx.AsyncClient, document_id: str, version: str, element_id: str
     ) -> list[tuple[str, str | None, str | None]]:
         """The raw table as `(name, part number, material)` rows — a JSON-safe
         shape, since it is what the cache stores."""
+        self._validate_revision(version)
         body = await self.get_json(
             client,
-            f"/api/v6/parts/d/{document_id}/w/{workspace_id}/e/{element_id}",
+            f"/api/v6/parts/d/{document_id}/m/{version}/e/{element_id}",
             what="part metadata",
         )
         table: list[tuple[str, str | None, str | None]] = []
@@ -1189,6 +1371,103 @@ class OnshapeConnector(OAuthConnector):
     ) -> Any:
         response = await self.request(client, "GET", path, what=what, params=params)
         return self._json(response, what)
+
+    async def immutable_feature_specs(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        document_id: str,
+        element_id: str,
+        microversion_id: str,
+        collection: str,
+    ) -> dict[str, Any]:
+        """Default-configuration specs at the caller's freshly observed tree revision."""
+        from solus_api.connectors.onshape_read_cache import (
+            OnshapeReadCache,
+            validated_feature_specs,
+        )
+
+        if collection not in ("partstudios", "assemblies"):
+            raise ConnectorError("config_invalid", "Unsupported feature specification collection")
+        for identity in (document_id, element_id, microversion_id):
+            self._validate_revision(identity)
+
+        async def acquire() -> dict[str, Any]:
+            body = await self.get_json(
+                client,
+                f"/api/v6/{collection}/d/{document_id}/m/{microversion_id}/e/{element_id}/featurespecs",
+                what="immutable feature specifications",
+            )
+            return validated_feature_specs(body)
+
+        if self._cache is None:
+            return await acquire()
+        return validated_feature_specs(
+            await OnshapeReadCache(self._cache, self._account_ref).fetch(
+                document_id=document_id,
+                element_id=element_id,
+                revision_kind="m",
+                revision_id=microversion_id,
+                kind="feature_spec",
+                collection="assemblies" if collection == "assemblies" else "partstudios",
+                fetch=acquire,
+            )
+        )
+
+    async def immutable_body_details(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        document_id: str,
+        element_id: str,
+        microversion_id: str,
+    ) -> Any:
+        """Default-configuration donor geometry at an immutable verified revision.
+
+        Callers still authorize the tracked donor and refresh mutable target state.
+        Both the route and returned revision are pinned before a cache entry exists.
+        """
+        from solus_api.connectors.onshape_read_cache import OnshapeReadCache
+
+        if any(
+            not isinstance(value, str) or not _ID_RE.fullmatch(value)
+            for value in (document_id, element_id, microversion_id)
+        ):
+            raise ConnectorError("invalid_config", "Invalid immutable donor identity")
+
+        async def fetch() -> Any:
+            body = await self.get_json(
+                client,
+                f"/api/v6/partstudios/d/{document_id}/m/{microversion_id}/e/{element_id}/bodydetails",
+                what="mate connector face",
+                params={"includeGeometricData": "true"},
+            )
+            observed = body.get("microversionId") if isinstance(body, dict) else None
+            if isinstance(observed, dict) and observed.get("btType") == "BTMicroversionId-366":
+                observed = observed.get("theId")
+            if (
+                not isinstance(body, dict)
+                or body.get("errorEnum", "NO_ERROR") != "NO_ERROR"
+                or not isinstance(body.get("bodies"), list)
+                or any(
+                    body.get(flag, False) is not False for flag in ("incomplete", "isIncomplete")
+                )
+                or body.get("isComplete", True) is not True
+                or observed != microversion_id
+            ):
+                raise ConnectorError("api_error", "Onshape returned an invalid donor revision")
+            return body
+
+        if self._cache is None:
+            return await fetch()
+        return await OnshapeReadCache(self._cache, self._account_ref).fetch(
+            document_id=document_id,
+            element_id=element_id,
+            revision_kind="m",
+            revision_id=microversion_id,
+            kind="donor_geometry",
+            fetch=fetch,
+        )
 
     async def post_json(
         self,

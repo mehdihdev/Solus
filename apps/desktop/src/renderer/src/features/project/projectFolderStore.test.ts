@@ -27,26 +27,29 @@ beforeEach(() => {
 })
 
 describe('projectFolderStore', () => {
-  it('links and reads a folder for a project', () => {
-    useProjectFolderStore.getState().setFolder('p1', { path: '/home/u/arm', repoUrl: 'r' })
+  it('links and reads a folder for a project', async () => {
+    installBridge()
+    await useProjectFolderStore.getState().setFolder('p1', { path: '/home/u/arm', repoUrl: 'r' })
     expect(useProjectFolderStore.getState().folders['p1']).toEqual({
       path: '/home/u/arm',
       repoUrl: 'r'
     })
   })
 
-  it('keeps links per project without cross-contamination', () => {
+  it('keeps links per project without cross-contamination', async () => {
+    installBridge()
     const store = useProjectFolderStore.getState()
-    store.setFolder('p1', { path: '/a' })
-    store.setFolder('p2', { path: '/b' })
+    await store.setFolder('p1', { path: '/a' })
+    await store.setFolder('p2', { path: '/b' })
     const { folders } = useProjectFolderStore.getState()
     expect(folders['p1'].path).toBe('/a')
     expect(folders['p2'].path).toBe('/b')
   })
 
-  it('clears a project link immutably', () => {
+  it('clears a project link immutably', async () => {
+    installBridge()
     const store = useProjectFolderStore.getState()
-    store.setFolder('p1', { path: '/a' })
+    await store.setFolder('p1', { path: '/a' })
     const before = useProjectFolderStore.getState().folders
     store.clearFolder('p1')
     expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
@@ -56,11 +59,11 @@ describe('projectFolderStore', () => {
 })
 
 describe('write-through to the ~/.solus registry (SOLUSDEV-166)', () => {
-  it('setFolder writes through to the machine registry', () => {
+  it('setFolder writes through to the machine registry', async () => {
     const bridge = installBridge()
-    useProjectFolderStore.getState().setFolder('p1', { path: '/a', repoUrl: 'r' })
+    await useProjectFolderStore.getState().setFolder('p1', { path: '/a', repoUrl: 'r' })
     expect(bridge.link).toHaveBeenCalledWith('p1', { path: '/a', repoUrl: 'r' })
-    // The cache updates optimistically regardless.
+    // Only an acknowledged registry write updates the cache.
     expect(useProjectFolderStore.getState().folders['p1']).toEqual({ path: '/a', repoUrl: 'r' })
   })
 
@@ -71,16 +74,16 @@ describe('write-through to the ~/.solus registry (SOLUSDEV-166)', () => {
     expect(bridge.unlink).toHaveBeenCalledWith('p1')
   })
 
-  it('degrades to cache-only outside the desktop app (no bridge)', () => {
-    useProjectFolderStore.getState().setFolder('p1', { path: '/a' })
-    expect(useProjectFolderStore.getState().folders['p1']).toEqual({ path: '/a' })
+  it('refuses a link without the native bridge instead of claiming integration', async () => {
+    expect(await useProjectFolderStore.getState().setFolder('p1', { path: '/a' })).toBe(false)
+    expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
   })
 
-  it('a rejected IPC write never breaks the UI update', () => {
+  it('a rejected IPC write reports failure and keeps the existing cache', async () => {
     const bridge = installBridge()
     bridge.link.mockRejectedValue(new Error('registry read-only'))
-    useProjectFolderStore.getState().setFolder('p1', { path: '/a' })
-    expect(useProjectFolderStore.getState().folders['p1']).toEqual({ path: '/a' })
+    expect(await useProjectFolderStore.getState().setFolder('p1', { path: '/a' })).toBe(false)
+    expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
   })
 })
 
@@ -108,4 +111,36 @@ describe('hydrateProjectFolders', () => {
     await hydrateProjectFolders()
     expect(useProjectFolderStore.getState().folders).toEqual({})
   })
+})
+
+it('waits for registry acknowledgement before publishing a folder and refuses ok:false', async () => {
+  const bridge = installBridge()
+  let finish!: (value: { ok: boolean }) => void
+  bridge.link.mockImplementation(
+    () =>
+      new Promise<{ ok: boolean }>((resolve) => {
+        finish = resolve
+      })
+  )
+  const pending = useProjectFolderStore.getState().setFolder('p1', { path: '/new' })
+  expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
+  finish({ ok: false })
+  expect(await pending).toBe(false)
+  expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
+})
+
+it('does not restore a cleared link when a pending registry write settles', async () => {
+  const bridge = installBridge()
+  let finish!: (value: { ok: boolean }) => void
+  bridge.link.mockImplementation(
+    () =>
+      new Promise<{ ok: boolean }>((resolve) => {
+        finish = resolve
+      })
+  )
+  const pending = useProjectFolderStore.getState().setFolder('p1', { path: '/new' })
+  useProjectFolderStore.getState().clearFolder('p1')
+  finish({ ok: true })
+  expect(await pending).toBe(false)
+  expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
 })

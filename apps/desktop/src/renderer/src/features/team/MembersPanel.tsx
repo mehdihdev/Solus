@@ -217,25 +217,12 @@ export function LiveMembers({
   }
   return (
     <Card pad={0}>
-      <div
-        style={{
-          padding: '10px 16px',
-          borderBottom: '1px solid var(--bd)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}
-      >
-        <Mono size={9.5}>
-          MEMBERS · {members.length}
-          {invites.length > 0 ? ` · ${invites.length} PENDING` : ''}
-        </Mono>
-        {canManage && onInvite && (
-          <Button kind="bare" size="sm" onClick={onInvite}>
-            <Icons.plus size={12} /> Invite
-          </Button>
-        )}
-      </div>
+      <MembersHeader
+        members={members}
+        invites={invites}
+        canManage={canManage}
+        onInvite={onInvite}
+      />
       {members.map((m) => (
         <MemberRow
           key={m.user_id}
@@ -263,35 +250,11 @@ export function LiveMembers({
           ? 'You have view access to this team.'
           : 'Teammates are notified when their changes cross into your domains.'}
       </div>
-      {confirm?.kind === 'remove' && (
-        <ConfirmModal
-          title="Remove member"
-          body={
-            <>
-              Remove <strong style={{ color: 'var(--tx)' }}>{confirm.member.email}</strong> from
-              this team? They lose access to every project in it.
-            </>
-          }
-          confirmLabel="Remove"
-          onClose={() => setConfirm(null)}
-          onConfirm={confirmed}
-        />
-      )}
-      {confirm?.kind === 'revoke' && (
-        <ConfirmModal
-          title="Revoke invite"
-          body={
-            <>
-              Revoke the invite for{' '}
-              <strong style={{ color: 'var(--tx)' }}>{confirm.invite.email}</strong>? Its token
-              stops working; you can send a new one.
-            </>
-          }
-          confirmLabel="Revoke"
-          onClose={() => setConfirm(null)}
-          onConfirm={confirmed}
-        />
-      )}
+      <MembershipConfirmation
+        confirm={confirm}
+        onClose={() => setConfirm(null)}
+        confirmed={confirmed}
+      />
     </Card>
   )
 }
@@ -444,27 +407,7 @@ export function InviteModal({
               ? 'Your personal workspace stays yours alone: sending this invite creates a new collaborative team (it counts against your plan) and Home switches to it.'
               : "They'll join with access to this team's projects."}
           </div>
-          <input
-            aria-label="Teammate email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="teammate@team.dev"
-            autoFocus
-            onKeyDown={(e) => e.key === 'Enter' && void send()}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              marginTop: 16,
-              background: 'var(--bg)',
-              color: 'var(--tx)',
-              border: '1px solid var(--bd)',
-              borderRadius: 3,
-              padding: '10px 12px',
-              fontSize: 13,
-              fontFamily: 'var(--font-ui)',
-              outline: 'none'
-            }}
-          />
+          <InviteEmail email={email} setEmail={setEmail} send={send} />
           {error && (
             <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{error}</div>
           )}
@@ -486,5 +429,112 @@ export function InviteModal({
         </>
       )}
     </ModalShell>
+  )
+}
+
+function MembersHeader({
+  members,
+  invites,
+  canManage,
+  onInvite
+}: Pick<LiveMembersProps, 'members' | 'invites' | 'canManage' | 'onInvite'>): React.JSX.Element {
+  return (
+    <div
+      style={{
+        padding: '10px 16px',
+        borderBottom: '1px solid var(--bd)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+      }}
+    >
+      <Mono size={9.5}>
+        MEMBERS · {members.length}
+        {invites.length > 0 ? ` · ${invites.length} PENDING` : ''}
+      </Mono>
+      {canManage && onInvite && (
+        <Button kind="bare" size="sm" onClick={onInvite}>
+          <Icons.plus size={12} /> Invite
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function InviteEmail({
+  email,
+  setEmail,
+  send
+}: {
+  email: string
+  setEmail: (email: string) => void
+  send: () => Promise<void>
+}): React.JSX.Element {
+  return (
+    <input
+      aria-label="Teammate email"
+      value={email}
+      onChange={(e) => setEmail(e.target.value)}
+      placeholder="teammate@team.dev"
+      autoFocus
+      onKeyDown={(e) => e.key === 'Enter' && void send()}
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        marginTop: 16,
+        background: 'var(--bg)',
+        color: 'var(--tx)',
+        border: '1px solid var(--bd)',
+        borderRadius: 3,
+        padding: '10px 12px',
+        fontSize: 13,
+        fontFamily: 'var(--font-ui)',
+        outline: 'none'
+      }}
+    />
+  )
+}
+
+function MembershipConfirmation({
+  confirm,
+  onClose,
+  confirmed
+}: {
+  confirm: PendingConfirm
+  onClose: () => void
+  confirmed: () => Promise<boolean | { message: string }>
+}): React.JSX.Element {
+  return (
+    <>
+      {confirm?.kind === 'remove' && (
+        <ConfirmModal
+          title="Remove member"
+          body={
+            <>
+              Remove <strong style={{ color: 'var(--tx)' }}>{confirm.member.email}</strong> from
+              this team? They lose access to every project in it.
+            </>
+          }
+          confirmLabel="Remove"
+          onClose={() => onClose()}
+          onConfirm={confirmed}
+        />
+      )}
+      {confirm?.kind === 'revoke' && (
+        <ConfirmModal
+          title="Revoke invite"
+          body={
+            <>
+              Revoke the invite for{' '}
+              <strong style={{ color: 'var(--tx)' }}>{confirm.invite.email}</strong>? Its token
+              stops working; you can send a new one.
+            </>
+          }
+          confirmLabel="Revoke"
+          onClose={() => onClose()}
+          onConfirm={confirmed}
+        />
+      )}
+    </>
   )
 }

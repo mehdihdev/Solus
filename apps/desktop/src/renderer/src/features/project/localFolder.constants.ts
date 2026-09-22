@@ -19,6 +19,7 @@ export const IDLE_POLL_MS = 30_000
 /** Each detected row enters this much after the one before it. */
 export const ROW_STAGGER_MS = 40
 
+export const COMPANION_RECONNECTING_NOTE = 'Connecting to this machine’s companion…'
 export const COMPANION_OFFLINE_NOTE = 'Solus companion is offline on this machine'
 export const VSCODE_MISSING_NOTE = 'VS Code is not installed on this machine'
 export const NOT_SCANNED_NOTE = 'Not scanned yet'
@@ -112,6 +113,7 @@ export function editorDisabledReason(
   view: LocalFolderView | null,
   status: LocalFolderStatus
 ): string | null {
+  if (status === 'loading') return COMPANION_RECONNECTING_NOTE
   if (!view || !view.source) return status === 'offline' ? API_UNREACHABLE_NOTE : NOT_SCANNED_NOTE
   if (!view.bridge.connected) return COMPANION_OFFLINE_NOTE
   if (view.bridge.tools_installed.vscode === false) return VSCODE_MISSING_NOTE
@@ -140,7 +142,8 @@ export function linkedFolderPresentation(
 ): LinkedFolderPresentation {
   const editorReason = editorDisabledReason(view, status)
   const source = view?.source ?? null
-  const bridgeOffline = source !== null && view !== null && !view.bridge.connected
+  const bridgeOffline =
+    status !== 'loading' && source !== null && view !== null && !view.bridge.connected
   return {
     editorReason,
     rootEntityId: rootProject(view)?.entity_id ?? null,
@@ -158,6 +161,7 @@ export function rowsDisabledReason(
   view: LocalFolderView | null,
   status: LocalFolderStatus
 ): string | null {
+  if (status === 'loading') return COMPANION_RECONNECTING_NOTE
   if (!view || !view.source) return status === 'offline' ? API_UNREACHABLE_NOTE : NOT_SCANNED_NOTE
   if (!view.bridge.connected) return COMPANION_OFFLINE_NOTE
   return null

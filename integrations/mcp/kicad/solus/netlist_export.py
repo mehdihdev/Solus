@@ -17,7 +17,11 @@ synthesized into kicadxml, returned with `degraded: true` and a stable reason
 tests/test_overlay_headless_degrade.py.
 """
 
+import posixpath
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +33,16 @@ from solus.cli_detect import (
     KICAD_CLI_UNAVAILABLE_REASON,
     detect_kicad_cli,
 )
+from solus.development.commit import read_schematic
+from solus.development.flatpak_export import encode_snapshot
+from solus.development.models import DevelopmentError
+from solus.development.structural import children, document, value
+from solus.export_files import publish_artifact
 from solus.trimming import SupportsToolDecorator
-from solus.workspace import artifact_destination, to_workspace_relative
+from solus.workspace import (
+    WorkspaceNotConfiguredError,
+    workspace_root,
+)
 
 # Local mirror of the cloud `artifact_inline_max_bytes` (bridge-contract size
 # caps): results at or below this inline the netlist as `content`; above it
@@ -39,6 +51,10 @@ ARTIFACT_INLINE_MAX_BYTES = 512 * 1024
 
 RESULT_FORMAT = "kicadxml"
 _CLI_EXPORT_TIMEOUT_SECONDS = 30.0  # matches upstream TIMEOUT_CONSTANTS["kicad_cli_export"]
+_MAX_SNAPSHOT_SHEETS = 64
+_MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
+_MAX_SNAPSHOT_DEPTH = 32
+_MAX_EXPORT_BYTES = 32 * 1024 * 1024
 
 
 def _find_schematic(project: Path) -> Path:
@@ -62,35 +78,138 @@ def _parse_netlist(schematic_path: str) -> dict[str, Any]:
     return netlist
 
 
+def _child_sheets(raw: bytes, path: str) -> Iterator[str]:
+    for sheet in children(document(raw), "sheet"):
+        references = [
+            value(prop, 2)
+            for prop in children(sheet, "property")
+            if value(prop).casefold() == "sheetfile"
+        ]
+        if len(references) != 1:
+            raise DevelopmentError("unsupported_symbol")
+        reference = references[0]
+        if not reference or reference.startswith("/") or any(c in reference for c in "$\\:"):
+            raise DevelopmentError("path_escapes_workspace")
+        yield posixpath.normpath(posixpath.join(posixpath.dirname(path), reference))
+
+
+@contextmanager
+def _schematic_snapshot(schematic: Path) -> Iterator[Path]:
+    """Capture no-follow reads once; neither export sink reopens customer paths."""
+    try:
+        root = workspace_root()
+        candidate = schematic if schematic.is_absolute() else root / schematic
+        relative = candidate.relative_to(root).as_posix()
+    except (ValueError, WorkspaceNotConfiguredError) as exc:
+        raise DevelopmentError("path_escapes_workspace") from exc
+    captured: dict[str, bytes] = {}
+    active: set[str] = set()
+    total = 0
+
+    def capture(path: str) -> None:
+        nonlocal total
+        if path in active or len(active) >= _MAX_SNAPSHOT_DEPTH:
+            raise DevelopmentError("unsupported_symbol")
+        if path in captured:
+            return
+        if len(captured) >= _MAX_SNAPSHOT_SHEETS:
+            raise DevelopmentError("file_too_large")
+        raw = read_schematic(root, path)
+        total += len(raw)
+        if total > _MAX_SNAPSHOT_BYTES:
+            raise DevelopmentError("file_too_large")
+        captured[path] = raw
+        active.add(path)
+        for child in _child_sheets(raw, path):
+            capture(child)
+        active.remove(path)
+
+    capture(relative)
+    # Keep relative child-sheet references functional inside the private mirror.
+    # Outside the bound workspace, the 0700 mirror cannot be renamed or written
+    # by workspace-confined tool capabilities. Same-user arbitrary OS code is
+    # outside this boundary. Flatpak receives the closure as bytes over stdin.
+    with tempfile.TemporaryDirectory(prefix=".solus-export-") as directory:
+        snapshot_root = Path(directory)
+        if snapshot_root.is_relative_to(root):
+            raise DevelopmentError("path_escapes_workspace")
+        for path, raw in captured.items():
+            destination = snapshot_root / path
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with destination.open("xb") as handle:
+                handle.write(raw)
+        yield snapshot_root / relative
+
+
 def _cli_export(cli: str, schematic: Path, filename: str) -> bytes | None:
     """Run the pinned kicad-cli with a FIXED argv; None on any failure so the
     caller degrades to the file parse instead of raising."""
-    destination = artifact_destination(f"{filename}.part")
-    argv = [
-        cli,
-        "sch",
-        "export",
-        "netlist",
-        "--format",
-        RESULT_FORMAT,
-        "--output",
-        str(destination),
-        str(schematic),
-    ]
     try:
-        # Fixed argv against the pinned binary — no shell, no PATH resolution.
-        completed = subprocess.run(  # noqa: S603
-            argv, capture_output=True, timeout=_CLI_EXPORT_TIMEOUT_SECONDS, check=False
-        )
+        adapter = Path(__file__).resolve().parents[1] / "bin/kicad-cli-flatpak"
+        if Path(cli).resolve() == adapter:
+            completed = subprocess.run(  # noqa: S603 — owned fixed helper adapter
+                [
+                    cli,
+                    "sch",
+                    "export",
+                    "netlist",
+                    "--format",
+                    RESULT_FORMAT,
+                    "--output",
+                    "-",
+                    "-",
+                ],
+                input=_snapshot_payload(schematic),
+                capture_output=True,
+                timeout=_CLI_EXPORT_TIMEOUT_SECONDS + 5,
+                check=False,
+            )
+            data = completed.stdout if completed.returncode == 0 else None
+        else:
+            data = _native_cli_export(cli, schematic)
+        if data is not None and len(data) > _MAX_EXPORT_BYTES:
+            raise DevelopmentError("file_too_large")
+        return data
     except (OSError, subprocess.SubprocessError):
-        destination.unlink(missing_ok=True)
         return None
-    if completed.returncode != 0 or not destination.is_file():
-        destination.unlink(missing_ok=True)
-        return None
-    data = destination.read_bytes()
-    destination.unlink(missing_ok=True)
-    return data
+
+
+def _snapshot_payload(schematic: Path) -> bytes:
+    root = next(parent for parent in schematic.parents if parent.name.startswith(".solus-export-"))
+    files = {
+        path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*.kicad_sch")
+    }
+    return encode_snapshot(schematic.relative_to(root).as_posix(), files)
+
+
+def _native_cli_export(cli: str, schematic: Path) -> bytes | None:
+    with tempfile.TemporaryFile() as output:
+        descriptor = output.fileno()
+        descriptor_root = "/proc/self/fd" if Path("/proc/self/fd").is_dir() else "/dev/fd"
+        argv = [
+            cli,
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            RESULT_FORMAT,
+            "--output",
+            f"{descriptor_root}/{descriptor}",
+            str(schematic.absolute()),
+        ]
+        # Fixed argv against the pinned binary — no shell or PATH resolution.
+        completed = subprocess.run(  # noqa: S603
+            argv,
+            pass_fds=(descriptor,),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_CLI_EXPORT_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        output.seek(0)
+        return output.read(_MAX_EXPORT_BYTES + 1)
 
 
 def _synthesize_kicadxml(netlist: dict[str, Any], schematic: Path) -> bytes:
@@ -130,14 +249,14 @@ def _package_result(
 ) -> dict[str, Any]:
     """The plan-locked envelope: inline at or below the cap, artifact above."""
     size = len(xml_bytes)
+    if size > _MAX_EXPORT_BYTES:
+        raise DevelopmentError("file_too_large")
     content: str | None = None
     artifact_path: str | None = None
     if size <= ARTIFACT_INLINE_MAX_BYTES:
         content = xml_bytes.decode("utf-8", errors="replace")
     else:
-        destination = artifact_destination(filename)
-        destination.write_bytes(xml_bytes)
-        artifact_path = to_workspace_relative(destination)
+        artifact_path = publish_artifact(filename, xml_bytes)
     return {
         "format": RESULT_FORMAT,
         "filename": filename,
@@ -163,14 +282,15 @@ def export_netlist_impl(project_path: str) -> dict[str, Any]:
     xml_bytes: bytes | None = None
     degraded = False
     reason: str | None = None
-    if cli is None:
-        degraded, reason = True, KICAD_CLI_UNAVAILABLE_REASON
-    else:
-        xml_bytes = _cli_export(cli, schematic, filename)
+    with _schematic_snapshot(schematic) as snapshot:
+        if cli is None:
+            degraded, reason = True, KICAD_CLI_UNAVAILABLE_REASON
+        else:
+            xml_bytes = _cli_export(cli, snapshot, filename)
+            if xml_bytes is None:
+                degraded, reason = True, KICAD_CLI_FAILED_REASON
         if xml_bytes is None:
-            degraded, reason = True, KICAD_CLI_FAILED_REASON
-    if xml_bytes is None:
-        xml_bytes = _synthesize_kicadxml(_parse_netlist(str(schematic)), schematic)
+            xml_bytes = _synthesize_kicadxml(_parse_netlist(str(snapshot)), schematic)
     return _package_result(xml_bytes, filename, degraded, reason)
 
 

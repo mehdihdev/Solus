@@ -5,6 +5,7 @@ import type { DetectedProject, LocalFolderView } from '../../lib/api/resources.l
 import {
   API_UNREACHABLE_NOTE,
   COMPANION_OFFLINE_NOTE,
+  COMPANION_RECONNECTING_NOTE,
   NOT_SCANNED_NOTE,
   OPEN_LABEL,
   VSCODE_MISSING_NOTE,
@@ -133,7 +134,7 @@ describe('editorDisabledReason', () => {
 
   it('waits for the first scan, and is honest when the API is unreachable', () => {
     expect(editorDisabledReason(view({ detected: [] }), 'ready')).toBe(NOT_SCANNED_NOTE)
-    expect(editorDisabledReason(null, 'loading')).toBe(NOT_SCANNED_NOTE)
+    expect(editorDisabledReason(null, 'loading')).toBe(COMPANION_RECONNECTING_NOTE)
     expect(editorDisabledReason(null, 'offline')).toBe(API_UNREACHABLE_NOTE)
   })
 })
@@ -233,4 +234,11 @@ describe('rowsDisabledReason', () => {
     expect(out.rowsReason).toBeNull()
     expect(out.editorReason).toBe(VSCODE_MISSING_NOTE)
   })
+})
+
+it('keeps every open control disabled during reconnection even with a previous connected view', () => {
+  const presentation = linkedFolderPresentation(view({}), 'loading')
+  expect(presentation.bridgeOffline).toBe(false)
+  expect(presentation.rowsReason).toBe(COMPANION_RECONNECTING_NOTE)
+  expect(presentation.editorReason).toBe(COMPANION_RECONNECTING_NOTE)
 })

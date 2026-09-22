@@ -51,6 +51,7 @@ from solus_api.livebench.sessions import SessionManager, load_local
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.routers import (
+    account_hosted,
     activity,
     artifacts,
     billing,
@@ -72,6 +73,7 @@ from solus_api.routers import (
     orchestration,
     panel,
     projects,
+    simulation_models,
     sol,
     solus_config,
     sources,
@@ -297,7 +299,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # — one channel per project — so a frame's channel, never its body, decides
     # who receives it.
     app.state.graph_hub = LiveHub(app.state.redis)
-    app.state.sessionmaker = build_sessionmaker(resolved_engine)
+    app.state.sessionmaker = build_sessionmaker(resolved_engine, settings=resolved_settings)
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     # T4b (MCP-04): the EDA family also gets a bridge export acquirer factory
     # here (the API process HAS a bridge session registry, unlike the ARQ
@@ -450,12 +452,14 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(local_folder.router)
     app.include_router(code_environment.router)
     app.include_router(hosted.router)
+    app.include_router(account_hosted.router)
     app.include_router(artifacts.router)
     app.include_router(solus_config.router)
     app.include_router(hardware_router.router)
     app.include_router(library_router.router)
     app.include_router(workspace_layout.router)
     app.include_router(entities.router)
+    app.include_router(simulation_models.router)
     app.include_router(sol.router)
     app.include_router(bench_router)
     app.include_router(bridge.router)

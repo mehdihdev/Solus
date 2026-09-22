@@ -2,6 +2,7 @@
 // One honesty contract, testable directly: render exactly what the backend
 // claims — never a guessed board, never a capability implied from a bare
 // connection, never an invented error explanation.
+import { getDesktopPlatform } from '../../../lib/desktopBridge'
 import { ApiError } from '../../../lib/api/envelope.types'
 import type {
   BenchDevice,
@@ -100,7 +101,37 @@ export function unmatchedSessions(
 /** One honest line per tool: companion state first, then the tool's server.
  *  A connected companion with no server for this tool means nothing is
  *  callable — never imply function from the connection alone. */
-export function toolStatusText(tool: LocalTool, bridge: BridgeStatus | null): string {
+const PLATFORM_NAMES: Record<string, string> = { linux: 'Linux', darwin: 'macOS', win32: 'Windows' }
+
+export function platformUnavailableReason(
+  tool: LocalTool,
+  platform: string | null = getDesktopPlatform()
+): string | null {
+  if (tool.supported_platforms == null) return null
+  if (tool.supported_platforms.length === 0) return 'Platform availability is unavailable'
+  if (!platform || !PLATFORM_NAMES[platform])
+    return 'Open the desktop app to check platform availability'
+  if (tool.supported_platforms.some((supported) => supported === platform)) return null
+  return `${tool.display_name} is not available on ${PLATFORM_NAMES[platform]}`
+}
+
+/** Existing bridge details encode an unavailable host without extending the protocol. */
+export function isPlatformUnavailableDetail(detail: string | null): boolean {
+  return (
+    detail !== null &&
+    /^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,79} is not available on (Linux|macOS|Windows|this operating system)$/.test(
+      detail
+    )
+  )
+}
+
+export function toolStatusText(
+  tool: LocalTool,
+  bridge: BridgeStatus | null,
+  platform: string | null = getDesktopPlatform()
+): string {
+  const unavailable = platformUnavailableReason(tool, platform)
+  if (unavailable) return unavailable
   if (!bridge?.connected) return 'Companion offline'
   const server = bridge.servers.find((s) => s.name === tool.type)
   if (!server) return 'Connected — no tools callable yet'

@@ -88,24 +88,14 @@ export function useMentionPicker(
     queueMicrotask(() => inputRef.current?.setSelectionRange(next.caret, next.caret))
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): boolean => {
-    if (!listOpen) return false
-    if (event.key === 'ArrowDown') {
-      setHighlight((h) => (h + 1) % results.length)
-    } else if (event.key === 'ArrowUp') {
-      setHighlight((h) => (h - 1 + results.length) % results.length)
-    } else if (event.key === 'Enter' && active) {
-      // Picking, not sending — Enter must not fire the form while the user is
-      // still choosing which node they meant.
-      choose(active)
-    } else if (event.key === 'Escape') {
-      setDismissed(true)
-    } else {
-      return false
-    }
-    event.preventDefault()
-    return true
-  }
+  const onKeyDown = mentionKeyHandler({
+    listOpen,
+    results,
+    active,
+    choose,
+    setHighlight,
+    setDismissed
+  })
 
   return {
     listOpen,
@@ -125,5 +115,40 @@ export function useMentionPicker(
       setPicked([])
       setCaret(0)
     }
+  }
+}
+
+function mentionKeyHandler({
+  listOpen,
+  results,
+  active,
+  choose,
+  setHighlight,
+  setDismissed
+}: {
+  listOpen: boolean
+  results: readonly Entity[]
+  active: Entity | null
+  choose: (entity: Entity) => void
+  setHighlight: React.Dispatch<React.SetStateAction<number>>
+  setDismissed: (dismissed: boolean) => void
+}): MentionPicker['onKeyDown'] {
+  return (event: React.KeyboardEvent<HTMLInputElement>): boolean => {
+    if (!listOpen) return false
+    if (event.key === 'ArrowDown') {
+      setHighlight((h) => (h + 1) % results.length)
+    } else if (event.key === 'ArrowUp') {
+      setHighlight((h) => (h - 1 + results.length) % results.length)
+    } else if (event.key === 'Enter' && active) {
+      // Picking, not sending — Enter must not fire the form while the user is
+      // still choosing which node they meant.
+      choose(active)
+    } else if (event.key === 'Escape') {
+      setDismissed(true)
+    } else {
+      return false
+    }
+    event.preventDefault()
+    return true
   }
 }

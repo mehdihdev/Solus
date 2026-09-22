@@ -1,6 +1,6 @@
-"""SOLUSDEV-250 — `allowlist.yaml` is the complete six-tool draft, validates
+"""SOLUSDEV-250 — `allowlist.yaml` is the complete fourteen-tool draft, validates
 against the cloud-side `ServerAllowlist`, survives the ingress gate, gates
-exactly the four acting tools with reasons, and agrees with the roster."""
+exactly the eight acting tools with reasons, and agrees with the roster."""
 
 import logging
 
@@ -17,8 +17,21 @@ from solus_api.bridge.frames import HelloData, HelloServer, HelloTool
 from code_paths import ALLOWLIST_YAML, FORK_DIR, MCP_ROOT, overlay_module  # isort: skip
 
 roster = overlay_module("roster")
-EXPECTED_READ = frozenset({"probe_environment", "plan"})
-EXPECTED_GATED = frozenset({"create_environment", "install", "run", "test"})
+EXPECTED_READ = frozenset(
+    {"probe_environment", "plan", "git_status", "git_log", "git_diff", "arduino_probe"}
+)
+EXPECTED_GATED = frozenset(
+    {
+        "create_environment",
+        "install",
+        "run",
+        "test",
+        "git_commit",
+        "git_push",
+        "arduino_prepare",
+        "arduino_compile",
+    }
+)
 
 
 def _parsed() -> ServerAllowlist:
@@ -31,7 +44,7 @@ def test_allowlist_validates_and_names_this_directory() -> None:
     assert parsed.url is None
 
 
-def test_roster_is_the_six_documented_tools() -> None:
+def test_roster_is_the_documented_tools() -> None:
     assert roster.READ_TOOLS == EXPECTED_READ
     assert roster.GATED_TOOLS == EXPECTED_GATED
     assert roster.TOOL_ROSTER == EXPECTED_READ | EXPECTED_GATED

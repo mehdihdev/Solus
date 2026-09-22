@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from solus_api.core.logging import redact_webhook_url
+
 logger = logging.getLogger("solus_api")
 
 _STATUS_CODES: dict[int, str] = {
@@ -99,5 +101,7 @@ def register_error_handlers(app: FastAPI) -> None:
         # Catch-all so a truly uncaught error still returns the §1.4 envelope
         # instead of FastAPI's default (unenveloped) 500. Log with full context
         # server-side; never leak the exception text to the client.
-        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        logger.exception(
+            "Unhandled error on %s %s", request.method, redact_webhook_url(request.url.path)
+        )
         return error_response(500, "internal_error", "Internal server error")

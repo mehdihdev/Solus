@@ -356,7 +356,7 @@ async def test_guide_mode_never_parks_or_connects(
     )
     assert response.status_code == 200
     assert _confirmation_id_from_sse(response.text) is None
-    assert "guide mode" in response.text
+    assert "Guide mode" in response.text
 
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session:

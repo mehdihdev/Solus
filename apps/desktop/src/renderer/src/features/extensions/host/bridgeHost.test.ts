@@ -128,119 +128,9 @@ describe('drops (§6.5) — no response, no oracle', () => {
 })
 
 describe('refusals (§6.4) — one error reply + a bridge_refused event', () => {
-  it('unknown method', async () => {
-    const h = harness()
-    expect(errorOf(await h.call('graph.delete'))).toBe('unknown_method')
-    expect(h.deps.emitRefusal).toHaveBeenCalledWith({
-      extensionId: 'bom',
-      version: '1.2.0',
-      method: 'graph.delete',
-      code: 'unknown_method'
-    })
-  })
-
-  it('scope not granted', async () => {
-    const h = harness()
-    expect(errorOf(await h.call('sol.ask', { prompt: 'x' }))).toBe('scope_denied')
-    expect(h.deps.sol.ask).not.toHaveBeenCalled()
-    expect(h.deps.emitRefusal).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 'scope_denied' })
-    )
-  })
-
-  it('blocked and disabled installs refuse everything with blocked', async () => {
-    const blocked = harness({ blocked: true })
-    expect(errorOf(await blocked.call('graph.getEntity', { entityId: 'e' }))).toBe('blocked')
-    const disabled = harness({ enabled: false })
-    expect(errorOf(await disabled.call('ui.ready'))).toBe('blocked')
-    expect(disabled.deps.emitRefusal).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 'blocked' })
-    )
-  })
-
-  it('dev mode refuses server-attributed methods but serves the rest', async () => {
-    const h = harness({ mode: 'dev', version: 'dev', grantedScopes: ['storage.own', 'graph.read'] })
-    expect(errorOf(await h.call('storage.get', { key: 'k' }))).toBe('blocked')
-    expect(h.deps.storage.get).not.toHaveBeenCalled()
-    const reply = await h.call('graph.getEntity', { entityId: 'e1' })
-    expect(reply?.ok).toBe(true)
-  })
-
-  it('rate limit: the window cap refuses the next request and does not run it', async () => {
-    const h = harness({}, { rateLimiter: createRateLimiter({ now: () => 0, maxRequests: 2 }) })
-    expect((await h.call('graph.getFocus'))?.ok).toBe(true)
-    expect((await h.call('graph.getFocus'))?.ok).toBe(true)
-    expect(errorOf(await h.call('graph.getFocus'))).toBe('rate_limited')
-    expect(h.deps.graph.focusedEntity).toHaveBeenCalledTimes(2)
-    expect(h.deps.emitRefusal).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 'rate_limited' })
-    )
-  })
-
-  it('rate limit: the in-flight cap refuses while a request is pending, then admits', async () => {
-    let release: (v: unknown) => void = () => undefined
-    const deps = fakeBridgeDeps()
-    ;(deps.graph.getEntity as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      () => new Promise((resolve) => (release = resolve))
-    )
-    const h = harness(
-      {},
-      { deps, rateLimiter: createRateLimiter({ now: () => 0, maxInFlight: 1 }) }
-    )
-    const first = h.call('graph.getEntity', { entityId: 'e' }, 'a')
-    expect(errorOf(await h.call('graph.getEntity', { entityId: 'e' }, 'b'))).toBe('rate_limited')
-    release({ id: 'e' })
-    expect((await first)?.ok).toBe(true)
-    expect((await h.call('graph.getEntity', { entityId: 'e' }, 'c'))?.ok).toBe(true)
-  })
-
-  it('a duplicate in-flight id is invalid_params', async () => {
-    let release: (v: unknown) => void = () => undefined
-    const deps = fakeBridgeDeps()
-    ;(deps.graph.getEntity as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      () => new Promise((resolve) => (release = resolve))
-    )
-    const h = harness({}, { deps })
-    const first = h.call('graph.getEntity', { entityId: 'e' }, 'same')
-    expect(errorOf(await h.call('graph.getFocus', {}, 'same'))).toBe('invalid_params')
-    expect(h.deps.graph.focusedEntity).not.toHaveBeenCalled()
-    release({ id: 'e' })
-    await first
-    // Both replies echo the same id; the pending one lands last and is the success.
-    expect(h.posted.at(-1)).toMatchObject({ id: 'same', ok: true })
-  })
-
-  it('param caps: an oversized storage value never reaches the store', async () => {
-    const h = harness()
-    const value = 'x'.repeat(BRIDGE_LIMITS.storageValueBytes + 1)
-    // Still under the 64 KiB message cap? No — so also assert a smaller-but-invalid case.
-    await h.raw({ v: 1, id: 'big', method: 'storage.set', params: { key: 'k', value } })
-    expect(h.deps.storage.set).not.toHaveBeenCalled()
-    expect(errorOf(await h.call('storage.set', { key: 'bad/key', value: 'v' }))).toBe(
-      'invalid_params'
-    )
-    expect(h.deps.storage.set).not.toHaveBeenCalled()
-  })
-
-  it('a projectId in params is invalid_params; the host project is used regardless', async () => {
-    const h = harness()
-    expect(errorOf(await h.call('graph.getEntity', { entityId: 'e', projectId: 'p2' }))).toBe(
-      'invalid_params'
-    )
-    expect(h.deps.graph.getEntity).not.toHaveBeenCalled()
-    await h.call('graph.getEntity', { entityId: 'e' })
-    expect(h.deps.graph.getEntity).toHaveBeenCalledWith('p1', 'e')
-  })
-
-  it('a handler throwing a generic error is internal and NOT a refusal event', async () => {
-    const deps = fakeBridgeDeps()
-    ;(deps.graph.search as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('kaboom'))
-    const h = harness({}, { deps })
-    const reply = await h.call('graph.search', { q: 'x' })
-    expect(errorOf(reply)).toBe('internal')
-    expect(reply && !reply.ok ? reply.error.message : '').not.toContain('kaboom')
-    expect(deps.emitRefusal).not.toHaveBeenCalled()
-  })
+  registerBridgeAuthorizationRefusalsTests()
+  registerBridgeConcurrencyAndParamsTests()
+  registerBridgeInternalErrorsTests()
 })
 
 describe('net.fetch (§6.5)', () => {
@@ -520,6 +410,160 @@ describe('results', () => {
 })
 
 describe('handshake and events (§6.2, §6.7)', () => {
+  registerBridgeHandshakeTests()
+  registerBridgeEventsAndPolicyTests()
+  registerBridgeTelemetryAndDisposalTests()
+})
+
+describe('§3 — nothing sensitive ever leaves the host', () => {
+  it('no outbound message contains the session token, a bearer header, or an API URL', async () => {
+    const deps = fakeBridgeDeps()
+    // A deps layer that HOLDS the token (as the real client does) must still
+    // never surface it in results.
+    ;(deps.graph.getEntity as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      void TOKEN
+      return { id: 'e', name: 'U1' }
+    })
+    const h = harness(
+      { grantedScopes: [...BASE.grantedScopes, 'sources.read', 'sol.ask'] },
+      { deps }
+    )
+    h.host.init()
+    await h.call('ui.ready')
+    await h.call('graph.getEntity', { entityId: 'e' })
+    await h.call('sources.list')
+    await h.call('sol.ask', { prompt: 'hi' })
+    await h.call('net.fetch', { url: 'https://api.octopart.com/x' })
+    await h.call('graph.delete')
+    const wire = JSON.stringify(h.posted)
+    expect(wire).not.toContain(TOKEN)
+    expect(wire).not.toMatch(/Bearer/i)
+    expect(wire).not.toMatch(/https?:\/\/(api\.test|127\.0\.0\.1|localhost)/)
+    expect(wire).not.toContain('Authorization')
+  })
+})
+
+function registerBridgeAuthorizationRefusalsTests(): void {
+  it('unknown method', async () => {
+    const h = harness()
+    expect(errorOf(await h.call('graph.delete'))).toBe('unknown_method')
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith({
+      extensionId: 'bom',
+      version: '1.2.0',
+      method: 'graph.delete',
+      code: 'unknown_method'
+    })
+  })
+
+  it('scope not granted', async () => {
+    const h = harness()
+    expect(errorOf(await h.call('sol.ask', { prompt: 'x' }))).toBe('scope_denied')
+    expect(h.deps.sol.ask).not.toHaveBeenCalled()
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'scope_denied' })
+    )
+  })
+
+  it('blocked and disabled installs refuse everything with blocked', async () => {
+    const blocked = harness({ blocked: true })
+    expect(errorOf(await blocked.call('graph.getEntity', { entityId: 'e' }))).toBe('blocked')
+    const disabled = harness({ enabled: false })
+    expect(errorOf(await disabled.call('ui.ready'))).toBe('blocked')
+    expect(disabled.deps.emitRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'blocked' })
+    )
+  })
+
+  it('dev mode refuses server-attributed methods but serves the rest', async () => {
+    const h = harness({ mode: 'dev', version: 'dev', grantedScopes: ['storage.own', 'graph.read'] })
+    expect(errorOf(await h.call('storage.get', { key: 'k' }))).toBe('blocked')
+    expect(h.deps.storage.get).not.toHaveBeenCalled()
+    const reply = await h.call('graph.getEntity', { entityId: 'e1' })
+    expect(reply?.ok).toBe(true)
+  })
+
+  it('rate limit: the window cap refuses the next request and does not run it', async () => {
+    const h = harness({}, { rateLimiter: createRateLimiter({ now: () => 0, maxRequests: 2 }) })
+    expect((await h.call('graph.getFocus'))?.ok).toBe(true)
+    expect((await h.call('graph.getFocus'))?.ok).toBe(true)
+    expect(errorOf(await h.call('graph.getFocus'))).toBe('rate_limited')
+    expect(h.deps.graph.focusedEntity).toHaveBeenCalledTimes(2)
+    expect(h.deps.emitRefusal).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'rate_limited' })
+    )
+  })
+}
+
+function registerBridgeConcurrencyAndParamsTests(): void {
+  it('rate limit: the in-flight cap refuses while a request is pending, then admits', async () => {
+    let release: (v: unknown) => void = () => undefined
+    const deps = fakeBridgeDeps()
+    ;(deps.graph.getEntity as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve))
+    )
+    const h = harness(
+      {},
+      { deps, rateLimiter: createRateLimiter({ now: () => 0, maxInFlight: 1 }) }
+    )
+    const first = h.call('graph.getEntity', { entityId: 'e' }, 'a')
+    expect(errorOf(await h.call('graph.getEntity', { entityId: 'e' }, 'b'))).toBe('rate_limited')
+    release({ id: 'e' })
+    expect((await first)?.ok).toBe(true)
+    expect((await h.call('graph.getEntity', { entityId: 'e' }, 'c'))?.ok).toBe(true)
+  })
+
+  it('a duplicate in-flight id is invalid_params', async () => {
+    let release: (v: unknown) => void = () => undefined
+    const deps = fakeBridgeDeps()
+    ;(deps.graph.getEntity as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve))
+    )
+    const h = harness({}, { deps })
+    const first = h.call('graph.getEntity', { entityId: 'e' }, 'same')
+    expect(errorOf(await h.call('graph.getFocus', {}, 'same'))).toBe('invalid_params')
+    expect(h.deps.graph.focusedEntity).not.toHaveBeenCalled()
+    release({ id: 'e' })
+    await first
+    // Both replies echo the same id; the pending one lands last and is the success.
+    expect(h.posted.at(-1)).toMatchObject({ id: 'same', ok: true })
+  })
+
+  it('param caps: an oversized storage value never reaches the store', async () => {
+    const h = harness()
+    const value = 'x'.repeat(BRIDGE_LIMITS.storageValueBytes + 1)
+    // Still under the 64 KiB message cap? No — so also assert a smaller-but-invalid case.
+    await h.raw({ v: 1, id: 'big', method: 'storage.set', params: { key: 'k', value } })
+    expect(h.deps.storage.set).not.toHaveBeenCalled()
+    expect(errorOf(await h.call('storage.set', { key: 'bad/key', value: 'v' }))).toBe(
+      'invalid_params'
+    )
+    expect(h.deps.storage.set).not.toHaveBeenCalled()
+  })
+
+  it('a projectId in params is invalid_params; the host project is used regardless', async () => {
+    const h = harness()
+    expect(errorOf(await h.call('graph.getEntity', { entityId: 'e', projectId: 'p2' }))).toBe(
+      'invalid_params'
+    )
+    expect(h.deps.graph.getEntity).not.toHaveBeenCalled()
+    await h.call('graph.getEntity', { entityId: 'e' })
+    expect(h.deps.graph.getEntity).toHaveBeenCalledWith('p1', 'e')
+  })
+}
+
+function registerBridgeInternalErrorsTests(): void {
+  it('a handler throwing a generic error is internal and NOT a refusal event', async () => {
+    const deps = fakeBridgeDeps()
+    ;(deps.graph.search as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('kaboom'))
+    const h = harness({}, { deps })
+    const reply = await h.call('graph.search', { q: 'x' })
+    expect(errorOf(reply)).toBe('internal')
+    expect(reply && !reply.ok ? reply.error.message : '').not.toContain('kaboom')
+    expect(deps.emitRefusal).not.toHaveBeenCalled()
+  })
+}
+
+function registerBridgeHandshakeTests(): void {
   it('init carries the §6.2 payload and nothing else', () => {
     const h = harness()
     h.host.init()
@@ -574,7 +618,9 @@ describe('handshake and events (§6.2, §6.7)', () => {
     h.host.sendEvent('theme.changed', { '--bg': '#fff' })
     expect(h.posted.at(-1)).toEqual({ v: 1, event: 'theme.changed', data: { '--bg': '#fff' } })
   })
+}
 
+function registerBridgeEventsAndPolicyTests(): void {
   it('focus.changed goes only to frames with focus.read or graph.read', async () => {
     const without = harness({ grantedScopes: ['sources.read'] })
     await without.call('ui.ready')
@@ -602,7 +648,9 @@ describe('handshake and events (§6.2, §6.7)', () => {
     h.host.updatePolicy({ ...BASE, blocked: true, enabled: false })
     expect(errorOf(await h.call('graph.getFocus'))).toBe('blocked')
   })
+}
 
+function registerBridgeTelemetryAndDisposalTests(): void {
   it('telemetry: subscribe → batched telemetry.sample events → unsubscribe; cap at 8', async () => {
     const h = harness()
     await h.call('ui.ready')
@@ -648,32 +696,4 @@ describe('handshake and events (§6.2, §6.7)', () => {
     h.host.sendEvent('theme.changed', {})
     expect(h.posted.length).toBe(before)
   })
-})
-
-describe('§3 — nothing sensitive ever leaves the host', () => {
-  it('no outbound message contains the session token, a bearer header, or an API URL', async () => {
-    const deps = fakeBridgeDeps()
-    // A deps layer that HOLDS the token (as the real client does) must still
-    // never surface it in results.
-    ;(deps.graph.getEntity as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      void TOKEN
-      return { id: 'e', name: 'U1' }
-    })
-    const h = harness(
-      { grantedScopes: [...BASE.grantedScopes, 'sources.read', 'sol.ask'] },
-      { deps }
-    )
-    h.host.init()
-    await h.call('ui.ready')
-    await h.call('graph.getEntity', { entityId: 'e' })
-    await h.call('sources.list')
-    await h.call('sol.ask', { prompt: 'hi' })
-    await h.call('net.fetch', { url: 'https://api.octopart.com/x' })
-    await h.call('graph.delete')
-    const wire = JSON.stringify(h.posted)
-    expect(wire).not.toContain(TOKEN)
-    expect(wire).not.toMatch(/Bearer/i)
-    expect(wire).not.toMatch(/https?:\/\/(api\.test|127\.0\.0\.1|localhost)/)
-    expect(wire).not.toContain('Authorization')
-  })
-})
+}

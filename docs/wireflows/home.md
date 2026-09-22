@@ -111,7 +111,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
     "Switch to" on a project card re-scopes every row in place.
 - **What already exists, beneath the row** (indented under the mark):
   - each linked **account grant**: login (one line, clipped), health badge,
-    "Used in … · scope", quota meter (H4), Re-authorize when needed, confirmed
+    "Used in … · scope", quota meter (H4), optional Re-authorize for OAuth accounts, confirmed
     **Revoke** naming the projects it disconnects;
   - each **legacy grant** (`GET /users/me/connections/legacy`): "Connected in a
     project, not yet on your account", **Sign in to move** → once the matching
@@ -125,8 +125,10 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **Scope is stated on every linked account**: `Read only`, `Read and edit`, or
   `Access level not recorded`. Scopes are fixed in connector code; nothing on
   this surface widens one.
-- **Re-authorize** appears on a grant whose last sign-in failed, with the
-  provider's message; it runs the same account-scope wizard and lands on the
+- **Re-authorize** remains available on linked OAuth accounts for deliberate
+  credential/application rotation, including healthy or quota-degraded accounts.
+  Failed sign-ins additionally show the provider's message. It runs the same
+  account-scope wizard and lands on the
   SAME grant (I1 dedupes by account), so the old token is replaced only once the
   new consent succeeded.
 - Hidden while offline (honest empty state elsewhere on Home). The Simulation
@@ -166,7 +168,9 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **At the wall** (allowance used, or the provider's 402 latched): the note
   explains cache-only mode — documents already synced stay readable, nothing
   new is fetched, no syncs run until the allowance resets — and says it is not
-  an error and needs no sign-in. The grant stays CONNECTED; no Re-authorize.
+  an error and needs no sign-in to resolve the quota itself. The grant stays
+  CONNECTED. Optional Re-authorize remains available for independent credential
+  rotation; it does not reset usage or the provider-exhaustion latch.
 - **Token expired** — the grant's last handshake failed, or a bound source's
   sync was refused with `invalid_credentials` — offers **Re-authorize** in
   place (the existing account-mode wizard; the row is replaced only once the
@@ -251,9 +255,16 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   moved here from the retired Project Overview hub): the CURRENT project's working
   copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
   then the path (one line, clipped with "…", full path in the title), **Open in
-  editor** / Open Folder / Unlink. Re-scopes with "Switch to" on a card. No
+  editor** / Show in file manager / Change folder / Unlink. Re-scopes with "Switch to" on a card. No
   current project → "Open or switch to a project to link a working copy on
   this computer." Not under the desktop bridge → its honest note.
+  Select/Change folder opens the native directory picker. Navigating into a
+  directory does not select it: **Select this folder** confirms the choice.
+  Solus waits for the machine registry to acknowledge the link before updating
+  the displayed path or requesting a graph scan. A failed local save is shown
+  inline and retains the previous link. Show in file manager only reveals it;
+  it never selects, changes or integrates a folder. Clone uses the same
+  acknowledged local-link sequence after the repository is created.
   **SOLUSDEV-249 (INTEGRATIONS I2):** linking also files the folder as a `local`
   source for THIS machine (`POST /local-folder`; unlink disconnects it). Under
   the path: the scan state — "Scanning…" (shimmer), "Scanned <ago>", or the

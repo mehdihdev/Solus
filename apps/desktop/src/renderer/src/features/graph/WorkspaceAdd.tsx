@@ -78,7 +78,9 @@ export function WorkspaceAdd({
               expanded={expanded}
               onExpand={(id) => {
                 setExpanded(expanded === id ? null : id)
-                void catalog.loadDocuments(id)
+                if (!state.accounts.find((account) => account.id === id)?.document_tree) {
+                  void catalog.loadDocuments(id)
+                }
               }}
             />
           )}

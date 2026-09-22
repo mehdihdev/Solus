@@ -7,12 +7,17 @@
 import type { Source, Sync } from '../../lib/api/resources'
 import { NO_FILES_ERROR, type EdaExportFile, type EdaExportFiles } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
-import { pollSync, syncErrorMessage, type SyncPollApi } from './sourceSync'
+import {
+  pollAcceptedSync,
+  indexedSyncDetail,
+  type SyncJobApi,
+  type SyncPollApi
+} from './sourceSync'
 
 export type { EdaExportFile, EdaExportFiles } from './kicadFiles'
 
 /** The slice of the typed API surface this orchestration depends on. */
-export interface EdaConnectApi extends SyncPollApi {
+export interface EdaConnectApi extends SyncPollApi, SyncJobApi {
   createSource: (
     projectId: string,
     input: { type: string; name: string; config?: Record<string, unknown> }
@@ -105,23 +110,24 @@ export async function runEdaConnect(
     })
 
     deps.onProgress(busy(`Parsing ${describeInputs(files)} & building the graph…`, source.id))
-    await deps.api.triggerSync(projectId, source.id)
+    const accepted = await deps.api.triggerSync(projectId, source.id)
 
-    const sync = await pollSync(deps.api, projectId, source.id, deps.sleep)
-    if (!sync) {
+    const job = await pollAcceptedSync(deps.api, projectId, accepted.job_id, deps.sleep)
+    if (!job) {
       const error = 'Sync timed out.'
       deps.onProgress({ phase: 'error', error, sourceId: source.id })
       return { ok: false, error, sourceId: source.id }
     }
-    if (sync.status === 'failed') {
-      const error = syncErrorMessage(sync)
+    if (job.status !== 'succeeded') {
+      const error =
+        job.error?.message ?? (job.status === 'cancelled' ? 'Sync cancelled.' : 'Sync failed.')
       deps.onProgress({ phase: 'error', error, sourceId: source.id })
       return { ok: false, error, sourceId: source.id }
     }
 
     const synced = await deps.api.getSource(projectId, source.id)
-    const count = synced.entity_count ?? sync.entities_created
-    const result = `Connected — ${count} entities indexed`
+    const detail = await indexedSyncDetail(deps.api, projectId, source.id, synced.entity_count)
+    const result = `Connected — ${detail}`
     deps.onProgress({ phase: 'done', sourceId: source.id, result })
     return { ok: true, sourceId: source.id, result }
   } catch (error) {

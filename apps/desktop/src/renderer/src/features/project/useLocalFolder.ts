@@ -8,7 +8,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api/envelope.types'
 import { disconnectSource } from '../../lib/api/resources'
 import {
-  EMPTY_LOCAL_FOLDER_VIEW,
   getLocalFolder,
   linkLocalFolder,
   openLocalFolderEntity,
@@ -97,11 +96,18 @@ export function useMachineIdentity(deps: Pick<LocalFolderDeps, 'machine'>): {
   return { machine, resolve }
 }
 
-export function useLocalFolder(
-  projectId: string | null,
-  linked: boolean,
-  deps: LocalFolderDeps = REAL_DEPS
-): LocalFolderController {
+function isFolderScanning(status: LocalFolderStatus, view: LocalFolderView | null): boolean {
+  return status === 'loading' || view?.source?.status === 'syncing'
+}
+
+function isCurrentProject(
+  scope: { projectId: string | null; live: boolean },
+  projectId: string
+): boolean {
+  return scope.live && scope.projectId === projectId
+}
+
+function useLocalFolderScope(projectId: string | null, linked: boolean, deps: LocalFolderDeps) {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const { machine, resolve: resolveMachine } = useMachineIdentity(deps)
   const [view, setView] = useState<LocalFolderView | null>(null)
@@ -109,37 +115,107 @@ export function useLocalFolder(
   // A response for a scope the hook has since left (project switch, unlink,
   // unmount) must never paint over the current one.
   const generation = useRef(0)
+  const reconnectUntil = useRef(0)
+  const scope = useRef({ projectId, linked, live: true })
+  const linking = useRef(false)
+  const linkVersion = useRef(0)
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearReconnectTimer = useCallback((): void => {
+    if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current)
+    reconnectTimer.current = null
+  }, [])
+  useEffect(
+    () => () => {
+      clearReconnectTimer()
+      linkVersion.current += 1
+      linking.current = false
+      reconnectUntil.current = 0
+    },
+    [projectId, clearReconnectTimer]
+  )
+  useEffect(() => {
+    scope.current = { projectId, linked, live: true }
+    return () => {
+      scope.current.live = false
+    }
+  }, [projectId, linked])
 
   const active = fetchEnabled && linked && projectId !== null && !!machine
 
+  return {
+    projectId,
+    machine,
+    resolveMachine,
+    view,
+    setView,
+    status,
+    setStatus,
+    generation,
+    reconnectUntil,
+    scope,
+    linking,
+    linkVersion,
+    reconnectTimer,
+    clearReconnectTimer,
+    active
+  }
+}
+
+function useLocalFolderReads(state: ReturnType<typeof useLocalFolderScope>, deps: LocalFolderDeps) {
+  const {
+    projectId,
+    machine,
+    view,
+    setView,
+    status,
+    setStatus,
+    generation,
+    reconnectUntil,
+    linking,
+    clearReconnectTimer,
+    active
+  } = state
+  const readView = useCallback(
+    async (project: string, identity: MachineIdentity): Promise<void> => {
+      const mine = generation.current
+      try {
+        const next = await deps.getLocalFolder(project, identity.id)
+        if (mine !== generation.current) return
+        if (next.bridge.connected) clearReconnectTimer()
+        setView(next)
+        setStatus(
+          !next.bridge.connected && Date.now() < reconnectUntil.current ? 'loading' : 'ready'
+        )
+      } catch {
+        if (mine !== generation.current) return
+        setView((previous) => {
+          setStatus(
+            Date.now() < reconnectUntil.current ? 'loading' : previous ? 'ready' : 'offline'
+          )
+          return previous
+        })
+      }
+    },
+    [deps, clearReconnectTimer, generation, reconnectUntil, setStatus, setView]
+  )
+
   const load = useCallback(async (): Promise<void> => {
-    // Inactive scopes render idle by derivation (see the return) — no state
-    // write here, so the effect that calls `load` never sets state synchronously.
-    if (!active || !projectId || !machine) return
-    const mine = generation.current
-    try {
-      const next = await deps.getLocalFolder(projectId, machine.id)
-      if (mine !== generation.current) return
-      setView(next)
-      setStatus('ready')
-    } catch {
-      if (mine !== generation.current) return
-      setView((previous) => {
-        setStatus(previous ? 'ready' : 'offline')
-        return previous
-      })
-    }
-  }, [active, projectId, machine, deps])
+    if (active && projectId && machine && !linking.current) await readView(projectId, machine)
+  }, [active, projectId, machine, readView, linking])
 
   useEffect(() => {
     generation.current += 1
-    void load()
+    let live = true
+    void Promise.resolve().then(async () => {
+      if (live) await load()
+    })
     return () => {
+      live = false
       generation.current += 1
     }
-  }, [load])
+  }, [load, generation])
 
-  const scanning = view?.source?.status === 'syncing'
+  const scanning = isFolderScanning(status, view)
   useInterval(() => void load(), scanning ? SYNCING_POLL_MS : IDLE_POLL_MS, active)
 
   useEffect(() => {
@@ -149,40 +225,119 @@ export function useLocalFolder(
     return () => window.removeEventListener('focus', onFocus)
   }, [active, load])
 
+  return { readView, load }
+}
+
+function useFolderLink(
+  state: ReturnType<typeof useLocalFolderScope>,
+  readView: ReturnType<typeof useLocalFolderReads>['readView'],
+  deps: LocalFolderDeps
+): LocalFolderController['link'] {
+  const {
+    projectId,
+    machine,
+    resolveMachine,
+    setView,
+    setStatus,
+    generation,
+    reconnectUntil,
+    scope,
+    linking,
+    linkVersion,
+    reconnectTimer,
+    clearReconnectTimer
+  } = state
   const link = useCallback(
-    async (path: string): Promise<void> => {
-      const resolved = machine ?? (await resolveMachine())
-      if (!projectId || !resolved) return
-      generation.current += 1
-      try {
-        const { source } = await deps.linkLocalFolder(projectId, {
-          machine_id: resolved.id,
-          machine_name: resolved.name,
-          folder_name: folderBasename(path)
-        })
-        setView((previous) => ({ ...(previous ?? EMPTY_LOCAL_FOLDER_VIEW), source }))
-        setStatus('ready')
-      } catch {
-        setStatus('offline')
-      }
-      await load()
-    },
-    [projectId, machine, resolveMachine, deps, load]
+    (path: string): Promise<void> =>
+      linkFolderAttempt(
+        path,
+        {
+          projectId,
+          machine,
+          resolveMachine,
+          setView,
+          setStatus,
+          generation,
+          reconnectUntil,
+          scope,
+          linking,
+          linkVersion,
+          reconnectTimer,
+          clearReconnectTimer
+        },
+        readView,
+        deps
+      ),
+    [
+      projectId,
+      machine,
+      resolveMachine,
+      deps,
+      readView,
+      clearReconnectTimer,
+      generation,
+      linkVersion,
+      linking,
+      reconnectTimer,
+      reconnectUntil,
+      scope,
+      setStatus,
+      setView
+    ]
   )
 
+  return link
+}
+
+export function useLocalFolder(
+  projectId: string | null,
+  linked: boolean,
+  deps: LocalFolderDeps = REAL_DEPS
+): LocalFolderController {
+  const state = useLocalFolderScope(projectId, linked, deps)
+  const { readView, load } = useLocalFolderReads(state, deps)
+  const link = useFolderLink(state, readView, deps)
+  const {
+    view,
+    setView,
+    status,
+    setStatus,
+    generation,
+    reconnectUntil,
+    clearReconnectTimer,
+    linkVersion,
+    linking,
+    active,
+    machine
+  } = state
   const unlink = useCallback(async (): Promise<void> => {
     const source = view?.source
     generation.current += 1
+    reconnectUntil.current = 0
+    clearReconnectTimer()
+    linkVersion.current += 1
+    linking.current = false
     setView(null)
     setStatus('idle')
     if (!projectId || !source) return
     await deps.disconnectSource(projectId, source.id, { retainEntities: true }).catch(() => null)
-  }, [projectId, view, deps])
+  }, [
+    projectId,
+    view,
+    deps,
+    clearReconnectTimer,
+    generation,
+    linkVersion,
+    linking,
+    reconnectUntil,
+    setStatus,
+    setView
+  ])
 
   const open = useCallback(
     async (entityId: string, tool: LocalOpenTool): Promise<OpenLocalFolderResult | null> => {
       const source = view?.source
-      if (!projectId || !source) return null
+      if (!projectId || !source || status === 'loading') return null
       try {
         return await deps.openLocalFolderEntity(projectId, source.id, { entity_id: entityId, tool })
       } catch (error) {
@@ -190,7 +345,7 @@ export function useLocalFolder(
         return { launched: false, tool, reason }
       }
     },
-    [projectId, view, deps]
+    [projectId, view, status, deps]
   )
 
   return {
@@ -201,5 +356,89 @@ export function useLocalFolder(
     unlink,
     open,
     refresh: load
+  }
+}
+
+type FolderLinkContext = Pick<
+  ReturnType<typeof useLocalFolderScope>,
+  | 'projectId'
+  | 'machine'
+  | 'resolveMachine'
+  | 'setView'
+  | 'setStatus'
+  | 'generation'
+  | 'reconnectUntil'
+  | 'scope'
+  | 'linking'
+  | 'linkVersion'
+  | 'reconnectTimer'
+  | 'clearReconnectTimer'
+>
+
+async function linkFolderAttempt(
+  path: string,
+  context: FolderLinkContext,
+  readView: ReturnType<typeof useLocalFolderReads>['readView'],
+  deps: LocalFolderDeps
+): Promise<void> {
+  const {
+    projectId,
+    machine,
+    resolveMachine,
+    setView,
+    setStatus,
+    generation,
+    reconnectUntil,
+    scope,
+    linking,
+    linkVersion,
+    reconnectTimer,
+    clearReconnectTimer
+  } = context
+  if (!projectId || !isCurrentProject(scope.current, projectId)) return
+  const version = ++linkVersion.current
+  const ownsAttempt = (): boolean =>
+    version === linkVersion.current && isCurrentProject(scope.current, projectId)
+  const resolved = machine ?? (await resolveMachine())
+  if (!resolved || !ownsAttempt()) return
+  generation.current += 1
+  clearReconnectTimer()
+  linking.current = true
+  reconnectUntil.current = Date.now() + 30_000
+  setView(null)
+  setStatus('loading')
+  const current = (): boolean => ownsAttempt() && scope.current.linked
+  reconnectTimer.current = setTimeout(() => {
+    if (!current()) return
+    reconnectTimer.current = null
+    linkVersion.current += 1
+    generation.current += 1
+    linking.current = false
+    reconnectUntil.current = 0
+    setView((previous) => {
+      setStatus(previous ? 'ready' : 'offline')
+      return previous
+    })
+    // Reconcile the source through a read only. A timed-out POST is never replayed.
+    void readView(projectId, resolved)
+  }, 30_000)
+  const finishAttempt = (): void => {
+    if (version === linkVersion.current) linking.current = false
+  }
+  try {
+    await deps.linkLocalFolder(projectId, {
+      machine_id: resolved.id,
+      machine_name: resolved.name,
+      folder_name: folderBasename(path)
+    })
+    finishAttempt()
+    if (current()) await readView(projectId, resolved)
+  } catch {
+    finishAttempt()
+    if (current()) {
+      clearReconnectTimer()
+      reconnectUntil.current = 0
+      setStatus('offline')
+    }
   }
 }

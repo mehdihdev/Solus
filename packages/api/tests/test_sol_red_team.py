@@ -650,3 +650,23 @@ async def test_a_failed_screen_read_degrades_and_the_turn_still_completes(
 
     assert events[-1].type is AgentEventType.MESSAGE
     assert SCREEN_READ_UNAVAILABLE in _fenced_screen(model.seen[0].messages[-1].text or "")
+
+
+async def test_last_model_call_synthesizes_prior_results_without_dispatch(
+    engine: AsyncEngine,
+) -> None:
+    executed: list[dict[str, Any]] = []
+    registry = _registry(executed)
+    rounds = tuple(
+        (ToolUse(id=f"summary-{i}", name="onshape.get_variables", args={"d": str(i)}),)
+        for i in range(MAX_MODEL_ROUNDS)
+    )
+    model = _CompliantModel(*rounds)
+    events = await _collect(_runner(model), await _funded_ctx(engine, registry))
+    assert model.calls == MAX_MODEL_ROUNDS
+    assert len(executed) == MAX_MODEL_ROUNDS - 1
+    assert model.seen[-1].tools == ()
+    assert "summar" in model.seen[-1].system.lower()
+    assert "parked" in model.seen[-1].system.lower()
+    assert any(message.tool_results for message in model.seen[-1].messages)
+    assert events[-1].type is AgentEventType.MESSAGE

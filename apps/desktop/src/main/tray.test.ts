@@ -74,6 +74,27 @@ const byLabel = (menu: TrayMenuItem[], label: string): TrayMenuItem => {
 }
 
 describe('createTray', () => {
+  registerTrayRenderingTests()
+  registerTrayActionsAndFallbacksTests()
+})
+
+describe('paintDot', () => {
+  it('paints a green dot in the bottom-right corner, leaving the rest untouched', () => {
+    const w = 22
+    const rgba = Buffer.alloc(w * w * 4, 0)
+    const out = paintDot(rgba, w, w)
+    expect(out).not.toBe(rgba)
+    const px = (x: number, y: number): number[] => [
+      ...out.subarray((y * w + x) * 4, (y * w + x) * 4 + 4)
+    ]
+    expect(px(19, 19)[3]).toBe(255) // dot centre opaque
+    expect(px(19, 19)[1]).toBeGreaterThan(150) // green channel in both BGRA and RGBA
+    expect(px(2, 2)).toEqual([0, 0, 0, 0])
+    expect(rgba.every((b) => b === 0)).toBe(true) // input not mutated
+  })
+})
+
+function registerTrayRenderingTests(): void {
   it('builds tooltip + menu from the state and rebuilds on update', () => {
     const h = harness()
     const tray = createTray(h.deps)
@@ -122,7 +143,9 @@ describe('createTray', () => {
     expect(next[7].label).toMatch(/Ctrl\+Shift\+Space/)
     expect(h.images.at(-1)).toBe('on')
   })
+}
 
+function registerTrayActionsAndFallbacksTests(): void {
   it('menu clicks call the callbacks; the checkbox toggles the current value', () => {
     const h = harness()
     const tray = createTray(h.deps)
@@ -165,20 +188,4 @@ describe('createTray', () => {
     expect(createTray(boom.deps)).toBeNull()
     expect(boom.deps.warn).toHaveBeenCalledTimes(1)
   })
-})
-
-describe('paintDot', () => {
-  it('paints a green dot in the bottom-right corner, leaving the rest untouched', () => {
-    const w = 22
-    const rgba = Buffer.alloc(w * w * 4, 0)
-    const out = paintDot(rgba, w, w)
-    expect(out).not.toBe(rgba)
-    const px = (x: number, y: number): number[] => [
-      ...out.subarray((y * w + x) * 4, (y * w + x) * 4 + 4)
-    ]
-    expect(px(19, 19)[3]).toBe(255) // dot centre opaque
-    expect(px(19, 19)[1]).toBeGreaterThan(150) // green channel in both BGRA and RGBA
-    expect(px(2, 2)).toEqual([0, 0, 0, 0])
-    expect(rgba.every((b) => b === 0)).toBe(true) // input not mutated
-  })
-})
+}

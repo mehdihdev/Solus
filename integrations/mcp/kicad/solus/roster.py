@@ -30,7 +30,14 @@ EXPOSED_UPSTREAM_TOOLS: frozenset[str] = frozenset(
 )
 
 # Solus-authored tools this overlay adds.
-SOLUS_AUTHORED_TOOLS: frozenset[str] = frozenset({"export_netlist"})
+SOLUS_AUTHORED_TOOLS: frozenset[str] = frozenset(
+    {
+        "export_netlist",
+        "get_symbol_definition",
+        "get_schematic_geometry",
+        "check_erc",
+    }
+)
 
 # What the running server actually registers.
 READ_ROSTER: frozenset[str] = EXPOSED_UPSTREAM_TOOLS | SOLUS_AUTHORED_TOOLS
@@ -38,7 +45,16 @@ READ_ROSTER: frozenset[str] = EXPOSED_UPSTREAM_TOOLS | SOLUS_AUTHORED_TOOLS
 # Solus-authored write tools (T2b). Allowlisted from day one (so no later MR
 # widened an existing allowlist - integrations/mcp/CLAUDE.md rule 2); each
 # carries requires_confirmation: true in allowlist.yaml.
-WRITE_ROSTER: frozenset[str] = frozenset({"set_symbol_property"})
+WRITE_ROSTER: frozenset[str] = frozenset(
+    {
+        "set_symbol_property",
+        "create_schematic",
+        "add_symbol",
+        "add_wire",
+        "add_net_label",
+        "mark_no_connect",
+    }
+)
 
 # The full registered surface: reads + confirmation-gated writes.
 FULL_ROSTER: frozenset[str] = READ_ROSTER | WRITE_ROSTER

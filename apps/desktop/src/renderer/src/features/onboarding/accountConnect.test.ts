@@ -49,6 +49,48 @@ function stubBridge(callback: { code?: string; error?: string }): OAuthBridge {
 }
 
 describe('runAccountConnect', () => {
+  registerAccountAndHostedLinkTests()
+
+  registerGrantAndCancellationTests()
+
+  registerExchangeFailureTests()
+})
+
+function registerAccountAndHostedLinkTests(): void {
+  it('completes hosted setup inside the account link before reporting done', async () => {
+    const progress: ConnectionState[] = []
+    const addOn = vi.fn(async () => 'FeatureScript enabled')
+    const result = await runAccountConnect(
+      {
+        api: stubApi(),
+        bridge: stubBridge({ code: 'cd' }),
+        onProgress: (s) => progress.push(s),
+        addOn
+      },
+      PROVIDER,
+      { redirectUri: 'http://127.0.0.1:7421/cb' }
+    )
+    expect(addOn).toHaveBeenCalledWith('c1')
+    expect(result.result).toContain('FeatureScript enabled')
+    expect(progress.at(-1)?.phase).toBe('done')
+  })
+
+  it('keeps a connected account when hosted setup fails', async () => {
+    const result = await runAccountConnect(
+      {
+        api: stubApi(),
+        bridge: stubBridge({ code: 'cd' }),
+        onProgress: () => {},
+        addOn: async () => {
+          throw new Error('Unavailable')
+        }
+      },
+      PROVIDER,
+      { redirectUri: 'http://127.0.0.1:7421/cb' }
+    )
+    expect(result.ok).toBe(true)
+    expect(result.result).toContain('setup incomplete')
+  })
   it('binds the account with NO project and reports who it connected as', async () => {
     const api = stubApi()
     const progress: ConnectionState[] = []
@@ -74,7 +116,9 @@ describe('runAccountConnect', () => {
       'done'
     ])
   })
+}
 
+function registerGrantAndCancellationTests(): void {
   it('sends the chosen grant in the start request', async () => {
     const api = stubApi()
     await runAccountConnect(
@@ -127,7 +171,9 @@ describe('runAccountConnect', () => {
     expect(result.error).toBe('Future CAD connect needs the desktop app.')
     expect(api.startOAuth).not.toHaveBeenCalled()
   })
+}
 
+function registerExchangeFailureTests(): void {
   it('never throws: an exchange failure becomes an error result', async () => {
     const api = stubApi({
       exchangeOAuth: vi.fn(async () => {
@@ -143,4 +189,4 @@ describe('runAccountConnect', () => {
     expect(result).toEqual({ ok: false, error: 'exchange exploded' })
     expect(progress.at(-1)).toEqual({ phase: 'error', error: 'exchange exploded' })
   })
-})
+}

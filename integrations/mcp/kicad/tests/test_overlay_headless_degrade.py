@@ -110,7 +110,7 @@ def test_export_netlist_degrades_headless_with_a_stable_reason(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _workspace(monkeypatch, tmp_path)
-    project = write_minimal_project(tmp_path / "proj")
+    project = write_minimal_project(tmp_path / "workspace/proj")
 
     result = export_netlist_impl(str(project))
 
@@ -128,7 +128,7 @@ def test_export_netlist_degrades_when_the_cli_is_present_but_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _workspace(monkeypatch, tmp_path)
-    project = write_minimal_project(tmp_path / "proj")
+    project = write_minimal_project(tmp_path / "workspace/proj")
     cli = _fake_cli(tmp_path, "exit 7")
     monkeypatch.setenv("KICAD_CLI_PATH", str(cli))
     detect_kicad_cli.cache_clear()
@@ -145,7 +145,7 @@ def test_export_netlist_uses_the_cli_when_available(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _workspace(monkeypatch, tmp_path)
-    project = write_minimal_project(tmp_path / "proj")
+    project = write_minimal_project(tmp_path / "workspace/proj")
     # The overlay's fixed argv is [cli, sch, export, netlist, --format,
     # kicadxml, --output, OUT, SCHEMATIC] — $7 is the output path.
     cli = _fake_cli(tmp_path, 'printf \'<export version="E"><components/></export>\' > "$7"')
@@ -181,7 +181,7 @@ def test_export_netlist_inlines_content_at_or_below_the_inline_cap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     workspace = _workspace(monkeypatch, tmp_path)
-    project = write_minimal_project(tmp_path / "proj")
+    project = write_minimal_project(tmp_path / "workspace/proj")
 
     result = export_netlist_impl(str(project))
 
@@ -198,7 +198,7 @@ def test_export_netlist_writes_a_workspace_artifact_above_the_inline_cap(
         "the inline cap mirrors the cloud artifact_inline_max_bytes constant"
     )
     workspace = _workspace(monkeypatch, tmp_path)
-    project = write_minimal_project(tmp_path / "proj")
+    project = write_minimal_project(tmp_path / "workspace/proj")
     # Synthesize a big netlist through the upstream parse seam so the
     # generated kicadxml crosses the cap.
     monkeypatch.setattr(
@@ -248,8 +248,7 @@ def test_registered_export_netlist_tool_degrades_without_raising(
 ) -> None:
     workspace = _workspace(monkeypatch, tmp_path)
     # H2: the registered tool now goes through the trimming-layer confinement
-    # check, so the project must live INSIDE the workspace (unlike a direct
-    # `export_netlist_impl` call, which bypasses that wrapper entirely).
+    # check; the export implementation independently confines discovered files.
     project = write_minimal_project(workspace / "proj")
     fake = FakeMCP()
     register_allowlisted_tools(fake)

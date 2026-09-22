@@ -38,6 +38,47 @@ beforeEach(() => {
 })
 
 describe('preferencesStore', () => {
+  registerPreferencesHydrationAndSaveTests()
+  registerPreferencesPromptSanitizationTests()
+})
+
+describe('preferencesStore — identity (SEC review H1)', () => {
+  it('drops the loaded document on sign-out and on an in-place identity swap', async () => {
+    const b = fakeBridge()
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'a@example.dev' } as never })
+    await act(async () => {
+      await usePreferencesStore.getState().load()
+    })
+    expect(usePreferencesStore.getState().status).toBe('ready')
+    useAuthStore.setState({ status: 'unauthenticated', user: null })
+    expect(usePreferencesStore.getState().status).toBe('idle')
+    expect(usePreferencesStore.getState().preferences.electrical).toBe('')
+
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'b@example.dev' } as never })
+    await act(async () => {
+      await usePreferencesStore.getState().load()
+    })
+    expect(b.read).toHaveBeenCalledTimes(2)
+    useAuthStore.setState({ status: 'authenticated', user: { email: 'c@example.dev' } as never })
+    expect(usePreferencesStore.getState().status).toBe('idle')
+    // The next turn re-reads from disk under the new identity, never the store.
+    await preferencesForTurn()
+    expect(b.read).toHaveBeenCalledTimes(3)
+  })
+
+  it('dedupes concurrent loads before the first settles', async () => {
+    const b = fakeBridge()
+    await act(async () => {
+      await Promise.all([
+        usePreferencesStore.getState().load(),
+        usePreferencesStore.getState().load()
+      ])
+    })
+    expect(b.read).toHaveBeenCalledTimes(1)
+  })
+})
+
+function registerPreferencesHydrationAndSaveTests(): void {
   it('starts idle and hydrates from the main process once', async () => {
     const b = fakeBridge()
     expect(usePreferencesStore.getState().status).toBe('idle')
@@ -93,7 +134,9 @@ describe('preferencesStore', () => {
     expect(ok).toBe(false)
     expect(usePreferencesStore.getState().preferences.mechanical).toBe(next.mechanical)
   })
+}
 
+function registerPreferencesPromptSanitizationTests(): void {
   it('cleans what it saves: over-cap text is truncated, control characters dropped', async () => {
     const b = fakeBridge()
     await act(async () => {
@@ -117,40 +160,4 @@ describe('preferencesStore', () => {
     const forTurn = await preferencesForTurn()
     expect(forTurn?.electrical).toBe(DOC.electrical)
   })
-})
-
-describe('preferencesStore — identity (SEC review H1)', () => {
-  it('drops the loaded document on sign-out and on an in-place identity swap', async () => {
-    const b = fakeBridge()
-    useAuthStore.setState({ status: 'authenticated', user: { email: 'a@example.dev' } as never })
-    await act(async () => {
-      await usePreferencesStore.getState().load()
-    })
-    expect(usePreferencesStore.getState().status).toBe('ready')
-    useAuthStore.setState({ status: 'unauthenticated', user: null })
-    expect(usePreferencesStore.getState().status).toBe('idle')
-    expect(usePreferencesStore.getState().preferences.electrical).toBe('')
-
-    useAuthStore.setState({ status: 'authenticated', user: { email: 'b@example.dev' } as never })
-    await act(async () => {
-      await usePreferencesStore.getState().load()
-    })
-    expect(b.read).toHaveBeenCalledTimes(2)
-    useAuthStore.setState({ status: 'authenticated', user: { email: 'c@example.dev' } as never })
-    expect(usePreferencesStore.getState().status).toBe('idle')
-    // The next turn re-reads from disk under the new identity, never the store.
-    await preferencesForTurn()
-    expect(b.read).toHaveBeenCalledTimes(3)
-  })
-
-  it('dedupes concurrent loads before the first settles', async () => {
-    const b = fakeBridge()
-    await act(async () => {
-      await Promise.all([
-        usePreferencesStore.getState().load(),
-        usePreferencesStore.getState().load()
-      ])
-    })
-    expect(b.read).toHaveBeenCalledTimes(1)
-  })
-})
+}

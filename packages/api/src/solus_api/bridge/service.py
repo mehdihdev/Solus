@@ -16,10 +16,13 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.command_output import current_output
 from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import ToolException
+from solus_api.agent.tools.untrusted import safe_relative_display_path
 from solus_api.bridge.frames import (
     ArtifactChunkData,
+    ToolOutputData,
     artifact_fetch_frame,
     redact_text,
     redact_value,
@@ -66,6 +69,13 @@ async def dispatch(
             loop = asyncio.get_running_loop()
             future: asyncio.Future[ToolResult] = loop.create_future()
             session.inflight[call.call_id] = future
+            if tool_name == "machine.write_file":
+                path = safe_relative_display_path(call.args.get("path"))
+                if path is not None:
+                    session.write_paths[call.call_id] = path
+            sink = current_output.get()
+            if tool_name in {"code.run", "code.test"} and sink is not None:
+                session.output_sinks[call.call_id] = sink
             try:
                 try:
                     await session.send(frame)
@@ -76,14 +86,38 @@ async def dispatch(
                 # Timeout-cancellation or completion: a late result for this id
                 # is then dropped as unknown (contract §5).
                 session.inflight.pop(call.call_id, None)
+                session.write_paths.pop(call.call_id, None)
+                session.output_sinks.pop(call.call_id, None)
+                session.output_limits.pop(call.call_id, None)
     finally:
         session.entered -= 1
+
+
+def ingest_output(session: BridgeSession, output: ToolOutputData) -> None:
+    future = session.inflight.get(output.call_id)
+    sink = session.output_sinks.get(output.call_id)
+    if future is None or future.done() or sink is None:
+        return
+    sequence, size = session.output_limits.get(output.call_id, (0, 0))
+    next_size = size + len(output.text.encode())
+    if output.sequence <= sequence:
+        return
+    if next_size > 262144:
+        sink.truncate()
+        return
+    session.output_limits[output.call_id] = (output.sequence, next_size)
+    # The sink buffers complete lines before redaction. Masking fragments here
+    # could erase the secret's key while leaving its next-chunk value visible.
+    sink.append(output.stream, output.text)
+    if output.truncated:
+        sink.truncate()
 
 
 def ingest_result(session: BridgeSession, result: ToolResult) -> None:
     """Deliver a companion result to its waiting dispatcher. Unknown, foreign,
     or already-answered call_ids are dropped + logged (replay defense, §5);
     first result wins. `value` is redacted BEFORE it can reach a consumer."""
+    path = session.write_paths.pop(result.call_id, None)
     future = session.inflight.pop(result.call_id, None)
     if future is None or future.done():
         logger.warning(
@@ -93,7 +127,12 @@ def ingest_result(session: BridgeSession, result: ToolResult) -> None:
         )
         return
     if result.ok and result.value is not None:
-        result = ToolResult.success(result.call_id, redact_value(result.value))
+        result = ToolResult.success(
+            result.call_id,
+            redact_value(
+                result.value, allowed_paths=frozenset({path}) if path is not None else frozenset()
+            ),
+        )
     elif result.error is not None:
         # SEC-M3: the error channel feeds model context/persistence too —
         # redact it exactly like values.
@@ -108,6 +147,7 @@ def fail_inflight(session: BridgeSession, message: str) -> None:
     """Resolve every pending dispatcher with a retryable failure (§5)."""
     pending = list(session.inflight.values())
     session.inflight.clear()
+    session.write_paths.clear()
     for future in pending:
         if not future.done():
             future.set_exception(ToolException(message, retryable=True))

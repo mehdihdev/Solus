@@ -46,6 +46,12 @@ function collect(): {
 }
 
 describe('runBuildProgress', () => {
+  registerBuildResultsTests()
+
+  registerBuildReadFailuresTests()
+})
+
+function registerBuildResultsTests(): void {
   it('returns an empty honest result when the project has no sources', async () => {
     const api = makeApi({ listSources: vi.fn(async () => []) })
     const { batches, onLines } = collect()
@@ -104,7 +110,9 @@ describe('runBuildProgress', () => {
       state: 'failed'
     })
   })
+}
 
+function registerBuildReadFailuresTests(): void {
   it('marks a source with no recorded sync as idle, never fabricating progress', async () => {
     const api = makeApi({ getSyncs: vi.fn(async () => []) })
     const { onLines } = collect()
@@ -169,4 +177,4 @@ describe('runBuildProgress', () => {
     expect(result.entityCount).toBeUndefined()
     expect(result.lines[0].state).toBe('ok')
   })
-})
+}

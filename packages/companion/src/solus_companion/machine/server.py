@@ -35,7 +35,10 @@ class ReadFileArgs(_Args):
 class WriteFileArgs(_Args):
     path: str
     content: str
+    model_config = ConfigDict(extra="forbid", strict=True)
     create_dirs: bool = False
+    dry_run: bool = False
+    expected_fingerprint: str | None = None
 
 
 def _object_schema(**props: dict[str, Any]) -> dict[str, Any]:
@@ -56,8 +59,7 @@ class _ToolSpec:
 _TOOLS: dict[str, _ToolSpec] = {
     "read_code_file": _ToolSpec(
         ReadFileArgs,
-        "Read saved UTF-8 source text (<=128 KiB; workspace only, "
-        "no sensitive paths or symlinks).",
+        "Read saved UTF-8 source text (<=128 KiB; workspace only, no sensitive paths or symlinks).",
         _object_schema(path=_STR, content=_STR, encoding=_STR, size_bytes={"type": "integer"}),
     ),
     "read_file": _ToolSpec(
@@ -67,7 +69,10 @@ _TOOLS: dict[str, _ToolSpec] = {
     ),
     "write_file": _ToolSpec(
         WriteFileArgs,
-        "Atomically write a text file inside the workspace (<= 200 KB).",
+        (
+            "Preview and atomically write bounded workspace text; "
+            "complete preview fingerprint required."
+        ),
         _object_schema(path=_STR, bytes_written={"type": "integer"}),
     ),
 }
@@ -148,7 +153,19 @@ class MachineServer:
         return dict(actions.read_file(self._root(), a.path))
 
     async def _write_file(self, a: WriteFileArgs) -> dict[str, Any]:
-        return dict(actions.write_file(self._root(), a.path, a.content, create_dirs=a.create_dirs))
+        if a.dry_run:
+            return dict(
+                actions.plan_write_file(self._root(), a.path, a.content, create_dirs=a.create_dirs)
+            )
+        return dict(
+            actions.write_file(
+                self._root(),
+                a.path,
+                a.content,
+                create_dirs=a.create_dirs,
+                expected_fingerprint=a.expected_fingerprint,
+            )
+        )
 
 
 _HANDLERS: dict[str, Handler] = {

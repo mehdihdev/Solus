@@ -10,10 +10,13 @@ failed those calls, and a reconnect is a new session (contract §5).
 import asyncio
 import base64
 import binascii
+import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
+from mcp.shared.session import ProgressFnT
 from mcp.types import CallToolResult, TextContent
 
 from solus_companion.artifacts import (
@@ -25,6 +28,7 @@ from solus_companion.frames import (
     ArtifactFetchIn,
     ToolCallIn,
     artifact_chunk_frame,
+    tool_output_frame,
     tool_result_error,
     tool_result_ok,
 )
@@ -46,7 +50,14 @@ NON_TEXT_NOTE = "non-text content omitted (too large to stage)"
 class ToolCaller(Protocol):
     """What dispatch needs from the supervisor (tests use fakes)."""
 
-    async def call_tool(self, server: str, tool: str, args: dict[str, Any]) -> CallToolResult: ...
+    async def call_tool(
+        self,
+        server: str,
+        tool: str,
+        args: dict[str, Any],
+        *,
+        progress_callback: ProgressFnT | None = None,
+    ) -> CallToolResult: ...
 
 
 class ArtifactUpload(Protocol):
@@ -135,6 +146,8 @@ class Dispatcher:
         self._uploader = uploader
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._closed = False
+        self._progress_lock = asyncio.Lock()
+        self._next_progress = 0.0
 
     def handle_tool_call(self, call: ToolCallIn) -> None:
         """Start one call as its own task; exactly one result will be sent."""
@@ -157,7 +170,10 @@ class Dispatcher:
                 call.call_id, "not_found", f"malformed tool name {call.tool!r}", retryable=False
             )
         try:
-            result = await self._supervisor.call_tool(server, tool, call.args)
+            if server == "code" and tool in {"run", "test"}:
+                result = await self._command_call(call, server, tool)
+            else:
+                result = await self._supervisor.call_tool(server, tool, call.args)
         except UnknownToolError as exc:
             return tool_result_error(call.call_id, "not_found", str(exc), retryable=False)
         except asyncio.CancelledError:
@@ -165,7 +181,10 @@ class Dispatcher:
         except Exception as exc:
             logger.warning("call %.64s failed: %s", call.call_id, type(exc).__name__)
             return tool_result_error(
-                call.call_id, "tool_error", str(exc) or type(exc).__name__, retryable=True
+                call.call_id,
+                "tool_error",
+                str(exc) or type(exc).__name__,
+                retryable=call.tool not in {"code.run", "code.test"},
             )
         # PUSH first: a declared `artifact_path` names a file on disk, which
         # must not be staged in memory. Everything else falls through to the
@@ -178,6 +197,66 @@ class Dispatcher:
         ):
             return await self._artifact_result(call, server, value)
         return map_result(call.call_id, result, self._artifacts)
+
+    async def _command_call(self, call: ToolCallIn, server: str, tool: str) -> CallToolResult:
+        sequence = 0
+        size = 0
+        active = True
+        exhausted = False
+
+        def accepting() -> bool:
+            return active and not self._closed and not exhausted
+
+        async def progress(progress: float, total: float | None, message: str | None) -> None:
+            nonlocal sequence, size, exhausted
+            if not accepting() or not message or len(message) > 16384:
+                return
+            try:
+                value = json.loads(message)
+            except (ValueError, TypeError):
+                return
+            if not isinstance(value, dict) or set(value) != {"stream", "text"}:
+                return
+            stream, text = value["stream"], value["text"]
+            if stream not in ("stdout", "stderr") or not isinstance(text, str) or len(text) > 2048:
+                return
+            async with self._progress_lock:
+                await asyncio.sleep(max(0.0, self._next_progress - time.monotonic()))
+                if not accepting():
+                    return
+                text_size = len(text.encode("utf-8", errors="replace"))
+                truncated = text in {
+                    "[command output truncated]\n",
+                    "[oversized output line suppressed]\n",
+                }
+                if sequence >= 255 or size + text_size > 256 * 1024 - 64:
+                    text = "[command output truncated]\n"
+                    truncated = exhausted = True
+                self._next_progress = time.monotonic() + 0.21
+                sequence += 1
+                size += text_size
+                try:
+                    await asyncio.wait_for(
+                        self._send(
+                            tool_output_frame(
+                                call.call_id,
+                                sequence,
+                                stream,
+                                text,
+                                truncated=truncated,
+                            )
+                        ),
+                        timeout=1.0,
+                    )
+                except Exception:
+                    exhausted = True
+
+        try:
+            return await self._supervisor.call_tool(
+                server, tool, call.args, progress_callback=progress
+            )
+        finally:
+            active = False
 
     async def _artifact_result(self, call: ToolCallIn, server: str, value: dict[str, Any]) -> str:
         """`artifact_path` → upload → REWRITE (strip the local path, insert the

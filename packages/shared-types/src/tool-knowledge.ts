@@ -41,6 +41,8 @@ export const TOOL_FAMILIES = [
   "kicad",
   "altium",
   "spice",
+  "code",
+  "isaac",
 ] as const;
 export type ToolFamily = (typeof TOOL_FAMILIES)[number];
 
@@ -53,6 +55,7 @@ export const UI_SURFACES = [
   "dialog",
   "keyboard",
   "status_bar",
+  "terminal",
 ] as const;
 export type UiSurface = (typeof UI_SURFACES)[number];
 
@@ -75,6 +78,7 @@ export const CONTROL_EFFECTS = [
   "export",
   "undo",
   "settings",
+  "execute",
 ] as const;
 export type ControlEffect = (typeof CONTROL_EFFECTS)[number];
 
@@ -318,7 +322,10 @@ function parseInvocation(raw: unknown): Invocation | null {
  * contract needs exactly this check and was casting instead — a `locator` of
  * `{w: 1e9, h: 1e9, image_b64: "..."}` reached the overlay unexamined.
  */
-export function parseLocator(raw: unknown, what = "locator"): ScreenLocator | null {
+export function parseLocator(
+  raw: unknown,
+  what = "locator",
+): ScreenLocator | null {
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== "object")
     throw new TypeError(`${what}: must be an object or null`);
@@ -396,10 +403,12 @@ const TK = [
   "locator",
   "provenance",
 ] as const;
-export const TOOL_KNOWLEDGE_FIELDS: CompleteKeysOf<ToolKnowledge, typeof TK> = TK;
+export const TOOL_KNOWLEDGE_FIELDS: CompleteKeysOf<ToolKnowledge, typeof TK> =
+  TK;
 
 const INV = ["menu_path", "shortcut"] as const;
 export const INVOCATION_FIELDS: CompleteKeysOf<Invocation, typeof INV> = INV;
 
 const SL = ["x", "y", "w", "h"] as const;
-export const SCREEN_LOCATOR_FIELDS: CompleteKeysOf<ScreenLocator, typeof SL> = SL;
+export const SCREEN_LOCATOR_FIELDS: CompleteKeysOf<ScreenLocator, typeof SL> =
+  SL;

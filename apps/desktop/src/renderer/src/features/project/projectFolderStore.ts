@@ -9,8 +9,8 @@
 // main-process-readable copy is ~/.solus/projects.json — that is what the
 // companion's SOLUS_COMPANION_WORKSPACE derives from at spawn, so a link that
 // only lived in localStorage kept the Altium fork failing closed. Mutations
-// write through to the registry over IPC (fire-and-forget: the UI keeps its
-// optimistic value and the main process logs registry failures); hydration
+// await the native registry acknowledgement before publishing the link. Failed
+// writes leave the display cache unchanged; hydration
 // merges the registry back into the cache at startup, registry winning.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
@@ -24,23 +24,36 @@ export interface FolderLink {
 
 export interface ProjectFolderState {
   folders: Record<string, FolderLink>
-  setFolder: (projectId: string, link: FolderLink) => void
+  setFolder: (projectId: string, link: FolderLink) => Promise<boolean>
   clearFolder: (projectId: string) => void
 }
 
 export const PROJECT_FOLDER_STORAGE_KEY = 'solus_project_folders_v1'
 
+const pendingLinks = new Map<string, symbol>()
+
 export const useProjectFolderStore = create<ProjectFolderState>()(
   persist(
     (set) => ({
       folders: {},
-      setFolder: (projectId, link) => {
-        set((s) => ({ folders: { ...s.folders, [projectId]: link } }))
-        void getDesktopFolderBridge()
-          ?.link(projectId, link)
-          .catch(() => undefined)
+      setFolder: async (projectId, link) => {
+        const bridge = getDesktopFolderBridge()
+        if (!bridge) return false
+        const attempt = Symbol()
+        pendingLinks.set(projectId, attempt)
+        try {
+          const result = await bridge.link(projectId, link)
+          if (result.ok !== true || pendingLinks.get(projectId) !== attempt) return false
+          set((s) => ({ folders: { ...s.folders, [projectId]: link } }))
+          return true
+        } catch {
+          return false
+        } finally {
+          if (pendingLinks.get(projectId) === attempt) pendingLinks.delete(projectId)
+        }
       },
       clearFolder: (projectId) => {
+        pendingLinks.delete(projectId)
         set((s) => {
           const next = { ...s.folders }
           delete next[projectId]

@@ -114,3 +114,26 @@ describe('BridgePill license capture', () => {
     expect(screen.queryByText(/upgrade/i)).not.toBeInTheDocument()
   })
 })
+
+it.each(['bring_your_license', 'upgrade_required'] as const)(
+  'does not offer %s for an OS-unavailable server',
+  async (license_state) => {
+    vi.mocked(useBridgeStatus).mockReturnValue({
+      ...READY,
+      servers: [
+        {
+          name: 'vendor',
+          state: 'not_launched',
+          detail: 'Test CAD is not available on Linux',
+          updated_at: '',
+          license_state
+        }
+      ]
+    })
+    render(<BridgePill projectId="p1" />)
+    await userEvent.click(screen.getByTestId('bridge-pill'))
+    expect(screen.getByText('Test CAD is not available on Linux')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add license/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/upgrade/i)).not.toBeInTheDocument()
+  }
+)

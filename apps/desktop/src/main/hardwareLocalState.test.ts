@@ -31,6 +31,12 @@ function setup() {
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })))
 
 describe('HardwareLocalStore', () => {
+  registerHardwareStatePersistenceTests()
+  registerHardwareStateIntegrityTests()
+  registerHardwareStateLimitsTests()
+})
+
+function registerHardwareStatePersistenceTests(): void {
   it('treats absence as empty without creating any private files on read', () => {
     const { store, home } = setup()
     expect(store.read(PROJECT)).toEqual({
@@ -84,7 +90,9 @@ describe('HardwareLocalStore', () => {
       expect(readdirSync(home)).toEqual([])
     }
   )
+}
 
+function registerHardwareStateIntegrityTests(): void {
   it.each([
     ['{not-json', 'invalid'],
     [JSON.stringify({ schema_version: 2, future: true }), 'newer'],
@@ -139,7 +147,9 @@ describe('HardwareLocalStore', () => {
     expect(readdirSync(directory)).toEqual(['hardware.json'])
     expect(readFileSync(path, 'utf8')).toBe('changed by another writer')
   })
+}
 
+function registerHardwareStateLimitsTests(): void {
   it('validates account/map limits before changing existing state', () => {
     const { store, path } = setup()
     store.updateAccount(PROJECT, ACCOUNT, () => ({ sources: {}, bindings: {} }))
@@ -156,4 +166,4 @@ describe('HardwareLocalStore', () => {
     })
     expect(readFileSync(path, 'utf8')).toBe(before)
   })
-})
+}

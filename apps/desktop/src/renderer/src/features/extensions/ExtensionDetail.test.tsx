@@ -11,122 +11,9 @@ const fail = (over: Partial<ExtensionActionResult>): ExtensionActionResult =>
   ({ ok: false, code: 'x', message: 'x', ...over }) as ExtensionActionResult
 
 describe('ExtensionDetail — header', () => {
-  it('marks a first-party bundle and offers the pin (STORE ST3)', () => {
-    const firstParty = manifest({ schema_version: 2, backend: { capability: 'bom', routes: true } })
-    render(
-      <ExtensionDetail
-        view={viewOf({ manifest: firstParty, install: {} })}
-        actions={fakeActions()}
-        onBack={vi.fn()}
-      />
-    )
-    expect(screen.getByTestId('first-party-badge')).toHaveTextContent('FIRST-PARTY')
-    expect(screen.getByRole('button', { name: 'Pin for all projects' })).toBeInTheDocument()
-  })
-
-  it('shows no first-party badge for a community bundle', () => {
-    render(
-      <ExtensionDetail view={viewOf({ install: {} })} actions={fakeActions()} onBack={vi.fn()} />
-    )
-    expect(screen.queryByTestId('first-party-badge')).toBeNull()
-  })
-
-  it('shows the meta line with the real install count', () => {
-    render(
-      <ExtensionDetail view={viewOf({ install: {} })} actions={fakeActions()} onBack={vi.fn()} />
-    )
-    expect(screen.getByRole('heading', { name: 'BOM' })).toBeInTheDocument()
-    expect(screen.getByText(/Solus · v1\.2\.0 · 412 installs · updated/)).toBeInTheDocument()
-  })
-
-  it('renders an honest dash when the catalog reports no count', () => {
-    render(
-      <ExtensionDetail
-        view={viewOf({ catalog: { install_count: null as never } })}
-        actions={fakeActions()}
-        onBack={vi.fn()}
-      />
-    )
-    expect(screen.getByText(/— installs/)).toBeInTheDocument()
-  })
-
-  it('offers Disable + Uninstall when installed, and confirms the uninstall', async () => {
-    const a = fakeActions()
-    const onBack = vi.fn()
-    render(<ExtensionDetail view={viewOf({ install: {} })} actions={a} onBack={onBack} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Disable' }))
-    expect(a.setEnabled).toHaveBeenCalledWith('bom', false)
-    await userEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
-    expect(screen.getByText(/Uninstall BOM\?/)).toBeInTheDocument()
-    // SOLUSDEV-246: uninstall leaves no trace — the copy says so.
-    expect(screen.getByText(/the graph data it added leave this project/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Uninstall extension' }))
-    expect(a.uninstall).toHaveBeenCalledWith('bom')
-    await waitFor(() => expect(onBack).toHaveBeenCalledOnce())
-  })
-
-  it('stays on the page and explains when the uninstall is refused', async () => {
-    const a = fakeActions({
-      uninstall: vi.fn(async () =>
-        fail({ code: 'forbidden', message: 'Only project members can change extensions here.' })
-      )
-    })
-    const onBack = vi.fn()
-    render(<ExtensionDetail view={viewOf({ install: {} })} actions={a} onBack={onBack} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Uninstall extension' }))
-    expect(await screen.findByText(/Only project members/)).toBeInTheDocument()
-    expect(onBack).not.toHaveBeenCalled()
-  })
-
-  it('offers Enable when installed but disabled', async () => {
-    const a = fakeActions()
-    render(
-      <ExtensionDetail
-        view={viewOf({ install: { enabled: false } })}
-        actions={a}
-        onBack={vi.fn()}
-      />
-    )
-    await userEvent.click(screen.getByRole('button', { name: 'Enable' }))
-    expect(a.setEnabled).toHaveBeenCalledWith('bom', true)
-  })
-
-  it('blocks Install while a source is missing', () => {
-    render(<ExtensionDetail view={viewOf()} actions={fakeActions()} onBack={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
-    expect(screen.getByText('NEEDS EDA')).toBeInTheDocument()
-  })
-
-  it('blocks Install when the team blocks the extension', () => {
-    render(
-      <ExtensionDetail
-        view={viewOf({ connected: ['eda'], blocked: true })}
-        actions={fakeActions()}
-        onBack={vi.fn()}
-      />
-    )
-    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
-    expect(screen.getByText('Blocked by your team')).toBeInTheDocument()
-  })
-
-  it('waits for the manifest before offering Install', () => {
-    const view = { ...viewOf({ connected: ['eda'] }), manifest: null }
-    render(<ExtensionDetail view={view} actions={fakeActions()} onBack={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
-  })
-
-  it('notes when an installed version has left the catalog', () => {
-    const view = viewOf({ install: {} })
-    render(
-      <ExtensionDetail
-        view={{ ...view, catalog: { ...view.catalog, inCatalog: false } }}
-        actions={fakeActions()}
-        onBack={vi.fn()}
-      />
-    )
-    expect(screen.getByText(/no longer in the catalog/)).toBeInTheDocument()
-  })
+  registerExtensionHeaderAndUninstallTests()
+  registerExtensionAvailabilityTests()
+  registerMissingCatalogVersionTests()
 })
 
 describe('ExtensionDetail — install flow', () => {
@@ -245,3 +132,126 @@ describe('ExtensionDetail — tabs', () => {
     expect(screen.getByText(/Loading/)).toBeInTheDocument()
   })
 })
+
+function registerExtensionHeaderAndUninstallTests(): void {
+  it('marks a first-party bundle and offers the pin (STORE ST3)', () => {
+    const firstParty = manifest({ schema_version: 2, backend: { capability: 'bom', routes: true } })
+    render(
+      <ExtensionDetail
+        view={viewOf({ manifest: firstParty, install: {} })}
+        actions={fakeActions()}
+        onBack={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId('first-party-badge')).toHaveTextContent('FIRST-PARTY')
+    expect(screen.getByRole('button', { name: 'Pin for all projects' })).toBeInTheDocument()
+  })
+
+  it('shows no first-party badge for a community bundle', () => {
+    render(
+      <ExtensionDetail view={viewOf({ install: {} })} actions={fakeActions()} onBack={vi.fn()} />
+    )
+    expect(screen.queryByTestId('first-party-badge')).toBeNull()
+  })
+
+  it('shows the meta line with the real install count', () => {
+    render(
+      <ExtensionDetail view={viewOf({ install: {} })} actions={fakeActions()} onBack={vi.fn()} />
+    )
+    expect(screen.getByRole('heading', { name: 'BOM' })).toBeInTheDocument()
+    expect(screen.getByText(/Solus · v1\.2\.0 · 412 installs · updated/)).toBeInTheDocument()
+  })
+
+  it('renders an honest dash when the catalog reports no count', () => {
+    render(
+      <ExtensionDetail
+        view={viewOf({ catalog: { install_count: null as never } })}
+        actions={fakeActions()}
+        onBack={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/— installs/)).toBeInTheDocument()
+  })
+
+  it('offers Disable + Uninstall when installed, and confirms the uninstall', async () => {
+    const a = fakeActions()
+    const onBack = vi.fn()
+    render(<ExtensionDetail view={viewOf({ install: {} })} actions={a} onBack={onBack} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Disable' }))
+    expect(a.setEnabled).toHaveBeenCalledWith('bom', false)
+    await userEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
+    expect(screen.getByText(/Uninstall BOM\?/)).toBeInTheDocument()
+    // SOLUSDEV-246: uninstall leaves no trace — the copy says so.
+    expect(screen.getByText(/the graph data it added leave this project/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Uninstall extension' }))
+    expect(a.uninstall).toHaveBeenCalledWith('bom')
+    await waitFor(() => expect(onBack).toHaveBeenCalledOnce())
+  })
+}
+
+function registerExtensionAvailabilityTests(): void {
+  it('stays on the page and explains when the uninstall is refused', async () => {
+    const a = fakeActions({
+      uninstall: vi.fn(async () =>
+        fail({ code: 'forbidden', message: 'Only project members can change extensions here.' })
+      )
+    })
+    const onBack = vi.fn()
+    render(<ExtensionDetail view={viewOf({ install: {} })} actions={a} onBack={onBack} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Uninstall' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Uninstall extension' }))
+    expect(await screen.findByText(/Only project members/)).toBeInTheDocument()
+    expect(onBack).not.toHaveBeenCalled()
+  })
+
+  it('offers Enable when installed but disabled', async () => {
+    const a = fakeActions()
+    render(
+      <ExtensionDetail
+        view={viewOf({ install: { enabled: false } })}
+        actions={a}
+        onBack={vi.fn()}
+      />
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    expect(a.setEnabled).toHaveBeenCalledWith('bom', true)
+  })
+
+  it('blocks Install while a source is missing', () => {
+    render(<ExtensionDetail view={viewOf()} actions={fakeActions()} onBack={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
+    expect(screen.getByText('NEEDS EDA')).toBeInTheDocument()
+  })
+
+  it('blocks Install when the team blocks the extension', () => {
+    render(
+      <ExtensionDetail
+        view={viewOf({ connected: ['eda'], blocked: true })}
+        actions={fakeActions()}
+        onBack={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
+    expect(screen.getByText('Blocked by your team')).toBeInTheDocument()
+  })
+
+  it('waits for the manifest before offering Install', () => {
+    const view = { ...viewOf({ connected: ['eda'] }), manifest: null }
+    render(<ExtensionDetail view={view} actions={fakeActions()} onBack={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Install' })).toBeDisabled()
+  })
+}
+
+function registerMissingCatalogVersionTests(): void {
+  it('notes when an installed version has left the catalog', () => {
+    const view = viewOf({ install: {} })
+    render(
+      <ExtensionDetail
+        view={{ ...view, catalog: { ...view.catalog, inCatalog: false } }}
+        actions={fakeActions()}
+        onBack={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/no longer in the catalog/)).toBeInTheDocument()
+  })
+}

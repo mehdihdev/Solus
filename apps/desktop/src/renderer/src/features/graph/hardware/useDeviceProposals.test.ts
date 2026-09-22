@@ -172,101 +172,9 @@ describe('remounts and project switches', () => {
 })
 
 describe('auto-propose', () => {
-  it('proposes in device order, at most two in flight, skipping ambiguous and bound devices', async () => {
-    const pending = deferProposals()
-    const { result } = mount(
-      [
-        device('usb_serial:BOUND'),
-        device('usb_serial:A'),
-        device('usb_serial:TWIN', { ambiguous: true }),
-        device('usb_serial:B'),
-        device('usb_serial:C')
-      ],
-      [{ ...robot, id: 'part', type: 'part', source_key: 'usb_serial:BOUND/1' }]
-    )
-    await act(async () => {})
-    expect(refsCalled()).toEqual(['usb_serial:A', 'usb_serial:B'])
-    expect(result.current.cards.map((c) => c.ref)).toEqual([
-      'usb_serial:A',
-      'usb_serial:TWIN',
-      'usb_serial:B',
-      'usb_serial:C'
-    ])
-    expect(result.current.cards[1]).toMatchObject({ status: 'failed', error: expect.any(String) })
-    await act(async () => pending[0].resolve(proposalFor('usb_serial:A')))
-    expect(refsCalled()).toEqual(['usb_serial:A', 'usb_serial:B', 'usb_serial:C'])
-    expect(result.current.cards[0]).toMatchObject({ status: 'proposed', attempts: 1 })
-    expect(hardware.proposeDetected).toHaveBeenCalledWith('p1', 'usb_serial:A')
-  })
+  registerProposalSchedulingTests()
 
-  it('never sends a private linked-folder path as repo_root', async () => {
-    useProjectFolderStore.setState({ folders: { p1: { path: '/work/repo' } } })
-    mount([device('usb_serial:A')])
-    await act(async () => {})
-    expect(hardware.proposeDetected).toHaveBeenCalledWith('p1', 'usb_serial:A')
-  })
-
-  it('backs off a silent device 5 s then 15 s, then stops', async () => {
-    vi.mocked(hardware.proposeDetected).mockImplementation((_p, ref) =>
-      Promise.resolve(proposalFor(ref, null))
-    )
-    const { result } = mount([device('usb_serial:A')])
-    await act(async () => {})
-    expect(result.current.cards[0].status).toBe('silent')
-    await act(async () => vi.advanceTimersByTime(4_999))
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
-    await act(async () => vi.advanceTimersByTime(1))
-    await act(async () => {})
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(2)
-    await act(async () => vi.advanceTimersByTime(15_000))
-    await act(async () => {})
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(3)
-    await act(async () => vi.advanceTimersByTime(60_000))
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(3)
-    expect(result.current.cards[0]).toMatchObject({ status: 'silent', attempts: 3 })
-  })
-
-  it('keeps a failure verbatim and re-proposes on retry', async () => {
-    vi.mocked(hardware.proposeDetected).mockRejectedValueOnce(new Error('runner absent: no bench'))
-    const { result } = mount([device('usb_serial:A')])
-    await act(async () => {})
-    expect(result.current.cards[0]).toMatchObject({
-      status: 'failed',
-      error: 'runner absent: no bench'
-    })
-    act(() => result.current.retry('usb_serial:A'))
-    await act(async () => {})
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(2)
-    expect(result.current.cards[0].status).toBe('proposed')
-  })
-
-  it('drops a device that leaves the list, clearing its timer, and re-shows a dismissed one on re-plug', async () => {
-    vi.mocked(hardware.proposeDetected).mockImplementation((_p, ref) =>
-      Promise.resolve(proposalFor(ref, null))
-    )
-    const a = device('usb_serial:A')
-    const { result, rerender } = mount([a, device('usb_serial:B')])
-    await act(async () => {})
-    act(() => result.current.dismiss('usb_serial:B'))
-    expect(result.current.cards.map((c) => c.ref)).toEqual(['usb_serial:A'])
-    rerender({ list: [], graph: [] })
-    expect(result.current.cards).toEqual([])
-    await act(async () => vi.advanceTimersByTime(30_000))
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(2)
-    rerender({ list: [device('usb_serial:B')], graph: [] })
-    expect(result.current.cards.map((c) => c.ref)).toEqual(['usb_serial:B'])
-  })
-
-  it('clears every timer on unmount', async () => {
-    vi.mocked(hardware.proposeDetected).mockImplementation((_p, ref) =>
-      Promise.resolve(proposalFor(ref, null))
-    )
-    const { unmount } = mount([device('usb_serial:A')])
-    await act(async () => {})
-    unmount()
-    await act(async () => vi.advanceTimersByTime(30_000))
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
-  })
+  registerProposalRecoveryTests()
 })
 
 describe('confirm / accept', () => {
@@ -331,63 +239,7 @@ describe('confirm / accept', () => {
     expect(result.current.cards[0].status).toBe('done')
   })
 
-  it('turns a 409 into a failed card naming the robot to retarget', async () => {
-    vi.mocked(hardware.confirmDetected).mockRejectedValue(
-      new ApiError(
-        409,
-        'conflict',
-        'usb_serial:A/1 is already part of robot 0f9c2f2a-1111-4222-8333-444455556666 — reconnecting a known machine needs no second robot'
-      )
-    )
-    const { result } = mount([device('usb_serial:A')])
-    await act(async () => {})
-    let out: hardware.ConfirmOut | null = confirmed
-    await act(async () => {
-      out = await result.current.confirm('usb_serial:A', { target: { kind: 'new', name: 'x' } })
-    })
-    expect(out).toBeNull()
-    expect(result.current.cards[0]).toMatchObject({
-      status: 'failed',
-      error: expect.stringContaining('is already part of robot'),
-      conflictRobotId: '0f9c2f2a-1111-4222-8333-444455556666'
-    })
-    expect(result.current.cards[0].proposal).not.toBeNull()
-  })
-
-  it('accepts a suggestion and marks the card done', async () => {
-    vi.mocked(hardware.acceptHardwareSuggestion).mockResolvedValue({
-      id: 'sug-1',
-      subject_ref: 'usb_serial:A',
-      subject_kind: 'device',
-      candidate_robot_id: 'robot-1',
-      confidence: 0.8,
-      tier: 'high',
-      evidence: [],
-      reason: null,
-      status: 'accepted',
-      created_at: '',
-      decided_at: null
-    })
-    const { result } = mount([device('usb_serial:A')])
-    await act(async () => {})
-    let ok = false
-    await act(async () => {
-      ok = await result.current.accept('usb_serial:A', 'sug-1')
-    })
-    expect(ok).toBe(true)
-    expect(hardware.acceptHardwareSuggestion).toHaveBeenCalledExactlyOnceWith('p1', 'sug-1')
-    expect(result.current.cards[0]).toMatchObject({ status: 'done', result: null })
-  })
-
-  it('shares one proposal state between two mounted consumers', async () => {
-    const first = mount([device('usb_serial:A')])
-    const second = mount([device('usb_serial:A')])
-    await act(async () => {})
-    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
-    expect(second.result.current.cards[0].status).toBe('proposed')
-    act(() => first.result.current.dismiss('usb_serial:A'))
-    expect(second.result.current.cards).toEqual([])
-  })
+  registerConfirmationRecoveryTests(confirmed)
 })
 
 it('expires proposal evidence across a same-project account A to B to A without reopening a busy port', async () => {
@@ -483,3 +335,163 @@ it('does not publish an old confirmation into a replugged appearance', async () 
   })
   expect(result.current.cards[0]?.result).toBeNull()
 })
+
+function registerProposalSchedulingTests(): void {
+  it('proposes in device order, at most two in flight, skipping ambiguous and bound devices', async () => {
+    const pending = deferProposals()
+    const { result } = mount(
+      [
+        device('usb_serial:BOUND'),
+        device('usb_serial:A'),
+        device('usb_serial:TWIN', { ambiguous: true }),
+        device('usb_serial:B'),
+        device('usb_serial:C')
+      ],
+      [{ ...robot, id: 'part', type: 'part', source_key: 'usb_serial:BOUND/1' }]
+    )
+    await act(async () => {})
+    expect(refsCalled()).toEqual(['usb_serial:A', 'usb_serial:B'])
+    expect(result.current.cards.map((c) => c.ref)).toEqual([
+      'usb_serial:A',
+      'usb_serial:TWIN',
+      'usb_serial:B',
+      'usb_serial:C'
+    ])
+    expect(result.current.cards[1]).toMatchObject({ status: 'failed', error: expect.any(String) })
+    await act(async () => pending[0].resolve(proposalFor('usb_serial:A')))
+    expect(refsCalled()).toEqual(['usb_serial:A', 'usb_serial:B', 'usb_serial:C'])
+    expect(result.current.cards[0]).toMatchObject({ status: 'proposed', attempts: 1 })
+    expect(hardware.proposeDetected).toHaveBeenCalledWith('p1', 'usb_serial:A')
+  })
+
+  it('never sends a private linked-folder path as repo_root', async () => {
+    useProjectFolderStore.setState({ folders: { p1: { path: '/work/repo' } } })
+    mount([device('usb_serial:A')])
+    await act(async () => {})
+    expect(hardware.proposeDetected).toHaveBeenCalledWith('p1', 'usb_serial:A')
+  })
+
+  it('backs off a silent device 5 s then 15 s, then stops', async () => {
+    vi.mocked(hardware.proposeDetected).mockImplementation((_p, ref) =>
+      Promise.resolve(proposalFor(ref, null))
+    )
+    const { result } = mount([device('usb_serial:A')])
+    await act(async () => {})
+    expect(result.current.cards[0].status).toBe('silent')
+    await act(async () => vi.advanceTimersByTime(4_999))
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
+    await act(async () => vi.advanceTimersByTime(1))
+    await act(async () => {})
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(2)
+    await act(async () => vi.advanceTimersByTime(15_000))
+    await act(async () => {})
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(3)
+    await act(async () => vi.advanceTimersByTime(60_000))
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(3)
+    expect(result.current.cards[0]).toMatchObject({ status: 'silent', attempts: 3 })
+  })
+}
+
+function registerProposalRecoveryTests(): void {
+  it('keeps a failure verbatim and re-proposes on retry', async () => {
+    vi.mocked(hardware.proposeDetected).mockRejectedValueOnce(new Error('runner absent: no bench'))
+    const { result } = mount([device('usb_serial:A')])
+    await act(async () => {})
+    expect(result.current.cards[0]).toMatchObject({
+      status: 'failed',
+      error: 'runner absent: no bench'
+    })
+    act(() => result.current.retry('usb_serial:A'))
+    await act(async () => {})
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(2)
+    expect(result.current.cards[0].status).toBe('proposed')
+  })
+
+  it('drops a device that leaves the list, clearing its timer, and re-shows a dismissed one on re-plug', async () => {
+    vi.mocked(hardware.proposeDetected).mockImplementation((_p, ref) =>
+      Promise.resolve(proposalFor(ref, null))
+    )
+    const a = device('usb_serial:A')
+    const { result, rerender } = mount([a, device('usb_serial:B')])
+    await act(async () => {})
+    act(() => result.current.dismiss('usb_serial:B'))
+    expect(result.current.cards.map((c) => c.ref)).toEqual(['usb_serial:A'])
+    rerender({ list: [], graph: [] })
+    expect(result.current.cards).toEqual([])
+    await act(async () => vi.advanceTimersByTime(30_000))
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(2)
+    rerender({ list: [device('usb_serial:B')], graph: [] })
+    expect(result.current.cards.map((c) => c.ref)).toEqual(['usb_serial:B'])
+  })
+
+  it('clears every timer on unmount', async () => {
+    vi.mocked(hardware.proposeDetected).mockImplementation((_p, ref) =>
+      Promise.resolve(proposalFor(ref, null))
+    )
+    const { unmount } = mount([device('usb_serial:A')])
+    await act(async () => {})
+    unmount()
+    await act(async () => vi.advanceTimersByTime(30_000))
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
+  })
+}
+
+function registerConfirmationRecoveryTests(confirmed: hardware.ConfirmOut): void {
+  it('turns a 409 into a failed card naming the robot to retarget', async () => {
+    vi.mocked(hardware.confirmDetected).mockRejectedValue(
+      new ApiError(
+        409,
+        'conflict',
+        'usb_serial:A/1 is already part of robot 0f9c2f2a-1111-4222-8333-444455556666 — reconnecting a known machine needs no second robot'
+      )
+    )
+    const { result } = mount([device('usb_serial:A')])
+    await act(async () => {})
+    let out: hardware.ConfirmOut | null = confirmed
+    await act(async () => {
+      out = await result.current.confirm('usb_serial:A', { target: { kind: 'new', name: 'x' } })
+    })
+    expect(out).toBeNull()
+    expect(result.current.cards[0]).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('is already part of robot'),
+      conflictRobotId: '0f9c2f2a-1111-4222-8333-444455556666'
+    })
+    expect(result.current.cards[0].proposal).not.toBeNull()
+  })
+
+  it('accepts a suggestion and marks the card done', async () => {
+    vi.mocked(hardware.acceptHardwareSuggestion).mockResolvedValue({
+      id: 'sug-1',
+      subject_ref: 'usb_serial:A',
+      subject_kind: 'device',
+      candidate_robot_id: 'robot-1',
+      confidence: 0.8,
+      tier: 'high',
+      evidence: [],
+      reason: null,
+      status: 'accepted',
+      created_at: '',
+      decided_at: null
+    })
+    const { result } = mount([device('usb_serial:A')])
+    await act(async () => {})
+    let ok = false
+    await act(async () => {
+      ok = await result.current.accept('usb_serial:A', 'sug-1')
+    })
+    expect(ok).toBe(true)
+    expect(hardware.acceptHardwareSuggestion).toHaveBeenCalledExactlyOnceWith('p1', 'sug-1')
+    expect(result.current.cards[0]).toMatchObject({ status: 'done', result: null })
+  })
+
+  it('shares one proposal state between two mounted consumers', async () => {
+    const first = mount([device('usb_serial:A')])
+    const second = mount([device('usb_serial:A')])
+    await act(async () => {})
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
+    expect(second.result.current.cards[0].status).toBe('proposed')
+    act(() => first.result.current.dismiss('usb_serial:A'))
+    expect(second.result.current.cards).toEqual([])
+  })
+}

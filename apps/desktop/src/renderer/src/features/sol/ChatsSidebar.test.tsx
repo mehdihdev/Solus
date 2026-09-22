@@ -97,7 +97,12 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     listSolConversations.mockResolvedValue([conversation('c1', 'Old name')])
     renameSolConversation.mockResolvedValue(conversation('c1', 'Diagnose run 41'))
     render(
-      <ChatsSidebar projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
+      <ChatsSidebar
+        projectId="p1"
+        activeConversationId={null}
+        onSelect={vi.fn()}
+        onNewChat={vi.fn()}
+      />
     )
     fireEvent.contextMenu(await screen.findByText('Old name'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
@@ -116,7 +121,12 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     deleteSolConversation.mockResolvedValue(undefined)
     const onNewChat = vi.fn()
     render(
-      <ChatsSidebar projectId="p1" activeConversationId="c1" onSelect={vi.fn()} onNewChat={onNewChat} />
+      <ChatsSidebar
+        projectId="p1"
+        activeConversationId="c1"
+        onSelect={vi.fn()}
+        onNewChat={onNewChat}
+      />
     )
     fireEvent.contextMenu(await screen.findByText('Project recap'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
@@ -130,7 +140,12 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     listSolConversations.mockResolvedValue([conversation('c1', 'Project recap')])
     deleteSolConversation.mockRejectedValue(new Error('404'))
     render(
-      <ChatsSidebar projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
+      <ChatsSidebar
+        projectId="p1"
+        activeConversationId={null}
+        onSelect={vi.fn()}
+        onNewChat={vi.fn()}
+      />
     )
     fireEvent.contextMenu(await screen.findByText('Project recap'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
@@ -143,7 +158,12 @@ describe('menu positioning (code review M)', () => {
   it('clamps the context menu inside the viewport near edges', async () => {
     listSolConversations.mockResolvedValue([conversation('c1', 'Project recap')])
     render(
-      <ChatsSidebar projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
+      <ChatsSidebar
+        projectId="p1"
+        activeConversationId={null}
+        onSelect={vi.fn()}
+        onNewChat={vi.fn()}
+      />
     )
     const row = await screen.findByText('Project recap')
     // Right-click at the very bottom-right corner of the window.

@@ -42,6 +42,10 @@ VENDOR_DOC_DOMAINS: Final[dict[ToolFamily, tuple[str, ...]]] = {
     ToolFamily.KICAD: ("docs.kicad.org", "gitlab.com/kicad/code/kicad"),
     ToolFamily.ALTIUM: ("www.altium.com/documentation",),
     ToolFamily.SPICE: ("ngspice.sourceforge.io",),
+    # SOLUSDEV-261: reviewed official execution documentation only. CODE contains
+    # distinct Git and Arduino controls; it is not a shared vendor version.
+    ToolFamily.CODE: ("git-scm.com/docs", "docs.arduino.cc/arduino-cli"),
+    ToolFamily.ISAAC: ("docs.isaacsim.omniverse.nvidia.com",),
 }
 
 

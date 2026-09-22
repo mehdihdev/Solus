@@ -19,7 +19,7 @@ linked folder ── local.scan_folder ──► FolderScan.dependencies ──�
                                      ├── GET /code-environment (desktop row + modal)
                                      └── code.resolve_environment (SOL tool, read-only)
                                                                           │
-   SOL (Do mode) ─► code.create_environment / install / run / test ── approval card ── companion
+   SOL (Build mode) ─► code.create_environment / install / run / test ── approval card ── companion
                     (bridge tools, requires_confirmation from the allowlist;   (the `code` server:
                      the card's rows are the server's OWN `plan` argv)          argv-only, confined,
                                                                                 bounded, never raises)
@@ -34,6 +34,18 @@ scan and I2/I4 bridge machinery and adapts SOL's environment records to I3. The 
 path. The adapter neither launches processes nor introduces a second command dispatcher.
 
 ## Observed environments and CODE records
+
+Repository operations extend this Code server through
+`docs/api/code-git-development.md`. Their state-bound dry-run previews cover the
+staged diff or exact push destination and commit; they do not reuse argv-only
+environment fingerprints as proof that repository state stayed unchanged.
+
+Arduino compilation extends the same server through `docs/api/code-arduino-development.md`.
+Its first slice isolates a pinned toolchain beneath the application worktree's
+virtual environment and compiles a bounded snapshot for an explicit Uno target.
+Preparation and compilation use the central approval gate. Device discovery,
+flashing and incremental output are separate steps; a build does not establish
+device identity or physical success.
 
 `code.probe_environment` accepts an optional workspace-relative environment path. Without it,
 the probe selects the first of `.venv`, `venv`, and `env`. An explicit target never falls back;
@@ -91,3 +103,13 @@ after the fact: it can never alter or lose the result.
 ## What was verified live
 
 See `docs/qa/COMPLETION_SOLUSDEV-250-i3-code-environment.md`.
+
+### Incremental execution output
+
+The existing code MCP process and authenticated companion socket carry execution
+output as an optional bounded progress extension (code-environment API plan).
+The bridge correlates each chunk only with an active approved invocation. An
+in-memory, bounded per-confirmation buffer presents output to that confirmation's
+owner through the existing API service; the card reads it during execution.
+Like the existing in-memory bridge registry, this stays behind a replaceable
+service seam. It is command output, not robot telemetry or a Live Bench channel.

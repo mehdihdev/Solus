@@ -43,6 +43,7 @@ from solus_api.connectors.onshape import (
     ONSHAPE_API_BASE,
     ONSHAPE_MAX_PAGE_LIMIT,
     ONSHAPE_OAUTH_BASE,
+    PROJECTION_VERSION,
     OnshapeConnector,
 )
 
@@ -68,12 +69,15 @@ def _ctx(cursor: dict[str, object] | None = None) -> SyncContext:
     return SyncContext(
         credentials=Credentials(token="access", refresh_token="refresh"),
         config=dict(CONFIG),
-        cursor=dict(cursor or {}),
+        cursor={"projection_version": PROJECTION_VERSION, **(cursor or {})},
     )
 
 
 def _mock_export(poll_payloads: list[Any] | None = None) -> None:
     """Wire the full acquisition path: microversion → translate → poll → download."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/assemblies/d/{DID}/m/abc123def456/e/{EID}").mock(
+        return_value=httpx.Response(200, json={"rootAssembly": {"instances": [{"id": "part"}]}})
+    )
     respx.get(f"{ONSHAPE_API_BASE}/api/users/sessioninfo").mock(
         return_value=httpx.Response(200, json=SESSION_INFO)
     )
@@ -90,9 +94,23 @@ def _mock_export(poll_payloads: list[Any] | None = None) -> None:
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/externaldata/external-data-1").mock(
         return_value=httpx.Response(200, text=STEP_EXPORT)
     )
-    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/{DID}/w/{WID}/e/{EID}").mock(
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/{DID}/m/abc123def456/e/{EID}").mock(
         return_value=httpx.Response(200, json=PARTS_METADATA)
     )
+
+
+def _partstudio_ctx() -> SyncContext:
+    """Keep metadata tests on the provider's Part Studio-only endpoint."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/{DID}").mock(
+        return_value=httpx.Response(200, json={"defaultWorkspace": {"id": WID}})
+    )
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/m/abc123def456/elements").mock(
+        return_value=httpx.Response(200, json=[{"id": EID, "elementType": "PARTSTUDIO"}])
+    )
+    respx.post(f"{ONSHAPE_API_BASE}/api/v6/partstudios/d/{DID}/w/{WID}/e/{EID}/translations").mock(
+        return_value=httpx.Response(200, json=TRANSLATION_STARTED)
+    )
+    return _selection_ctx([DID])
 
 
 # --------------------------------------------------------------- metadata
@@ -267,7 +285,11 @@ async def test_the_probe_costs_one_call_once_the_workspace_is_known() -> None:
     ctx = SyncContext(
         credentials=Credentials(token="at"),
         config={"documents": [DID]},
-        cursor={"microversions": {DID: "abc123def456"}, "workspaces": {DID: WID}},
+        cursor={
+            "microversions": {DID: "abc123def456"},
+            "workspaces": {DID: WID},
+            "projection_version": PROJECTION_VERSION,
+        },
     )
 
     assert await _connector().detect_changes(ctx) is False
@@ -373,7 +395,11 @@ async def test_an_empty_selection_is_a_connected_idle_source_not_an_error() -> N
 
     assert result.entities == []
     assert result.relations == []
-    assert result.cursor == {"microversions": {}, "workspaces": {}}
+    assert result.cursor == {
+        "microversions": {},
+        "workspaces": {},
+        "projection_version": PROJECTION_VERSION,
+    }
 
 
 @pytest.mark.parametrize("bad", [{"documents": "d1"}, {"documents": [1]}, {"documents": ["../x"]}])
@@ -457,7 +483,7 @@ async def test_part_numbers_from_metadata_reach_the_fingerprint_channel() -> Non
     reason a CAD part can ever collapse onto its schematic symbol (D-D)."""
     _mock_export()
 
-    by_key = {e.source_key: e for e in (await _connector().sync(_ctx())).entities}
+    by_key = {e.source_key: e for e in (await _connector().sync(_partstudio_ctx())).entities}
 
     assert by_key[f"{SCOPE}:Bracket/BasePlate"].modality_hints["part_number"] == "AL-6061-PLATE"
     assert by_key[f"{SCOPE}:Bracket/PegPair/Peg[0]"].modality_hints["part_number"] == "DIN-912-M4"
@@ -470,7 +496,7 @@ async def test_part_numbers_from_metadata_reach_the_fingerprint_channel() -> Non
 async def test_an_empty_part_number_is_never_invented() -> None:
     _mock_export()
 
-    by_key = {e.source_key: e for e in (await _connector().sync(_ctx())).entities}
+    by_key = {e.source_key: e for e in (await _connector().sync(_partstudio_ctx())).entities}
 
     assert "part_number" not in by_key[f"{SCOPE}:Bracket"].modality_hints
 
@@ -480,7 +506,7 @@ async def test_an_empty_part_number_is_never_invented() -> None:
 async def test_material_from_metadata_rides_properties() -> None:
     _mock_export()
 
-    by_key = {e.source_key: e for e in (await _connector().sync(_ctx())).entities}
+    by_key = {e.source_key: e for e in (await _connector().sync(_partstudio_ctx())).entities}
 
     assert by_key[f"{SCOPE}:Bracket/BasePlate"].properties["material"] == "Aluminium 6061"
 
@@ -687,11 +713,11 @@ async def test_metadata_failure_degrades_rather_than_failing_the_sync() -> None:
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/externaldata/external-data-1").mock(
         return_value=httpx.Response(200, text=STEP_EXPORT)
     )
-    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/{DID}/w/{WID}/e/{EID}").mock(
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/{DID}/m/abc123def456/e/{EID}").mock(
         return_value=httpx.Response(500)
     )
 
-    result = await _connector().sync(_ctx())
+    result = await _connector().sync(_partstudio_ctx())
 
     assert len([e for e in result.entities if e.type == "part"]) == 5
     assert len([e for e in result.entities if e.type == "cad_document"]) == 1
@@ -785,7 +811,7 @@ async def test_oversized_metadata_values_are_truncated_at_ingestion() -> None:
     AND into model context via `get_entity` — a 5 MB partNumber would be DB bloat
     and a token-cost channel sourced entirely from ingested content."""
     _mock_export()
-    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/{DID}/w/{WID}/e/{EID}").mock(
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/{DID}/m/abc123def456/e/{EID}").mock(
         return_value=httpx.Response(
             200,
             json=[
@@ -798,7 +824,7 @@ async def test_oversized_metadata_values_are_truncated_at_ingestion() -> None:
         )
     )
 
-    by_key = {e.source_key: e for e in (await _connector().sync(_ctx())).entities}
+    by_key = {e.source_key: e for e in (await _connector().sync(_partstudio_ctx())).entities}
     plate = by_key[f"{SCOPE}:Bracket/BasePlate"]
 
     assert len(plate.modality_hints["part_number"]) < 200
@@ -830,7 +856,7 @@ def _mock_account_document(
     element_id: str,
     *,
     workspace_id: str = "wsA",
-    microversion: str = "mv-1",
+    microversion: str = "mv1",
     part_studio_id: str | None = None,
     extra_elements: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -853,7 +879,7 @@ def _mock_account_document(
         elements.append({"id": part_studio_id, "elementType": "PARTSTUDIO"})
     elements.extend(extra_elements or [])
     respx.get(
-        f"{ONSHAPE_API_BASE}/api/v6/documents/d/{document_id}/w/{workspace_id}/elements"
+        f"{ONSHAPE_API_BASE}/api/v6/documents/d/{document_id}/m/{microversion}/elements"
     ).mock(return_value=httpx.Response(200, json=elements))
     respx.get(
         f"{ONSHAPE_API_BASE}/api/v6/documents/d/{document_id}/w/{workspace_id}/currentmicroversion"
@@ -868,7 +894,7 @@ def _mock_account_document(
             f"/w/{workspace_id}/e/{part_studio_id}/translations"
         ).mock(return_value=httpx.Response(200, json=TRANSLATION_STARTED))
         respx.get(
-            f"{ONSHAPE_API_BASE}/api/v6/parts/d/{document_id}/w/{workspace_id}/e/{part_studio_id}"
+            f"{ONSHAPE_API_BASE}/api/v6/parts/d/{document_id}/m/{microversion}/e/{part_studio_id}"
         ).mock(return_value=httpx.Response(200, json=PARTS_METADATA))
     respx.get(f"{ONSHAPE_API_BASE}/api/v8/translations/translation-req-1").mock(
         return_value=httpx.Response(200, json=TRANSLATION_DONE)
@@ -877,7 +903,7 @@ def _mock_account_document(
         f"{ONSHAPE_API_BASE}/api/v6/documents/d/{document_id}/externaldata/external-data-1"
     ).mock(return_value=httpx.Response(200, text=STEP_EXPORT))
     respx.get(
-        f"{ONSHAPE_API_BASE}/api/v6/parts/d/{document_id}/w/{workspace_id}/e/{element_id}"
+        f"{ONSHAPE_API_BASE}/api/v6/parts/d/{document_id}/m/{microversion}/e/{element_id}"
     ).mock(return_value=httpx.Response(200, json=PARTS_METADATA))
 
 
@@ -885,7 +911,7 @@ def _selection_ctx(document_ids: list[str], cursor: dict[str, Any] | None = None
     return SyncContext(
         credentials=Credentials(token="access", refresh_token="refresh"),
         config={"documents": document_ids},
-        cursor=dict(cursor or {}),
+        cursor={"projection_version": PROJECTION_VERSION, **(cursor or {})},
     )
 
 
@@ -952,22 +978,113 @@ async def test_a_rejected_document_listing_is_a_typed_error() -> None:
 
 
 @respx.mock
-async def test_list_selectable_paging_is_bounded() -> None:
-    """A `next` link that never ends must not loop forever against Onshape (§7)."""
+async def test_list_selectable_browses_beyond_the_tracking_limit() -> None:
+    route = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "items": [{"id": f"doc{i}"} for i in range(page * 20, (page + 1) * 20)],
+                    "next": f"/api/v6/documents?offset={(page + 1) * 20}" if page < 2 else None,
+                },
+            )
+            for page in range(3)
+        ]
+    )
+    connector = _connector()
+    items = await connector.list_selectable(Credentials(token="at"))
+    assert len(items) == 60
+    assert route.call_count == 3
+    with pytest.raises(ConnectorError) as excinfo:
+        connector.validate_selection([item["id"] for item in items])
+    assert excinfo.value.code == "config_invalid"
+
+
+@respx.mock
+async def test_list_selectable_deduplicates_across_unversioned_pages() -> None:
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
         return_value=httpx.Response(
             200,
             json={
-                "items": [{"id": "docA", "name": "A"}],
-                "next": f"{ONSHAPE_API_BASE}/api/v6/documents?offset=1",
+                "items": [{"id": "docA", "name": "First"}],
+                "next": f"{ONSHAPE_API_BASE}/api/documents?offset=20&limit=20",
             },
         )
     )
+    respx.get(f"{ONSHAPE_API_BASE}/api/documents").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [{"id": "docA", "name": "Duplicate"}, {"id": "docB"}],
+            },
+        )
+    )
+    items = await _connector().list_selectable(Credentials(token="at"))
+    assert [item["id"] for item in items] == ["docA", "docB"]
+    assert items[0]["name"] == "First"
 
+
+@respx.mock
+async def test_list_selectable_reports_incomplete_listing_at_page_bound() -> None:
+    route = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "items": [{"id": f"doc{page}"}],
+                    "next": f"/api/v6/documents?offset={page + 1}",
+                },
+            )
+            for page in range(3)
+        ]
+    )
     connector = OnshapeConnector(client_id="c", client_secret="s", max_document_pages=3)
-    items = await connector.list_selectable(Credentials(token="at"))
+    with pytest.raises(ConnectorError) as excinfo:
+        await connector.list_selectable(Credentials(token="at"))
+    assert excinfo.value.code == "listing_incomplete"
+    assert "limit" in excinfo.value.message.lower()
+    assert route.call_count == 3
 
-    assert len(items) == 3  # one per page, then the page bound stops it
+
+@respx.mock
+async def test_list_selectable_rejects_cyclic_pagination() -> None:
+    route = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        side_effect=[
+            httpx.Response(200, json={"items": [], "next": next_link})
+            for next_link in [
+                "/api/v6/documents?offset=20",
+                "/api/v6/documents?offset=40",
+                f"{ONSHAPE_API_BASE}/api/v6/documents?offset=20",
+            ]
+        ]
+    )
+    with pytest.raises(ConnectorError) as excinfo:
+        await _connector().list_selectable(Credentials(token="at"))
+    assert excinfo.value.code == "api_error"
+    assert route.call_count == 3
+
+
+@pytest.mark.parametrize(
+    "next_link",
+    [
+        "https://attacker.invalid/api/documents",
+        "//attacker.invalid/api/documents",
+        "http://cad.onshape.com/api/documents",
+        f"{ONSHAPE_API_BASE}:444/api/documents",
+        f"{ONSHAPE_API_BASE}/api/users/sessioninfo",
+        "https://user:password@cad.onshape.com/api/documents",
+    ],
+)
+@respx.mock
+async def test_list_selectable_rejects_unsafe_next_links(next_link: str) -> None:
+    route = respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        return_value=httpx.Response(200, json={"items": [], "next": next_link})
+    )
+    with pytest.raises(ConnectorError) as excinfo:
+        await _connector().list_selectable(Credentials(token="at"))
+    assert excinfo.value.code == "api_error"
+    assert route.call_count == 1
+    assert len(respx.calls) == 1
 
 
 @respx.mock
@@ -1003,6 +1120,25 @@ async def test_two_documents_sharing_a_part_name_never_collide_on_one_key() -> N
 
 @requires_occt
 @respx.mock
+async def test_assembly_import_skips_partstudio_metadata_without_losing_geometry() -> None:
+    _mock_account_document("docA", "elemA", part_studio_id="psA")
+    assembly_metadata = respx.get(f"{ONSHAPE_API_BASE}/api/v6/parts/d/docA/m/mv1/e/elemA").mock(
+        return_value=httpx.Response(404)
+    )
+
+    result = await _connector().sync(_selection_ctx(["docA"]))
+
+    assert assembly_metadata.call_count == 0
+    assert not result.errors
+    by_key = {entity.source_key: entity for entity in result.entities}
+    assert "docA:elemA:Bracket/BasePlate" in by_key
+    assert "part_number" not in by_key["docA:elemA:Bracket/BasePlate"].modality_hints
+    assert by_key["docA:psA:Bracket/BasePlate"].modality_hints["part_number"] == "AL-6061-PLATE"
+    assert any(relation.to_key == "docA:elemA:Bracket" for relation in result.relations)
+
+
+@requires_occt
+@respx.mock
 async def test_part_studios_are_ingested_alongside_assemblies() -> None:
     """SOLUSDEV-168. Part Studios are where people model and where FeatureScript
     lives, but element discovery asked Onshape for `elementType=ASSEMBLY`, so
@@ -1018,7 +1154,7 @@ async def test_part_studios_are_ingested_alongside_assemblies() -> None:
 
 @respx.mock
 async def test_a_part_studio_translates_through_the_partstudios_collection() -> None:
-    """The ONLY element-type-specific URL in the ingest path. Posting a Part
+    """The translation URL follows the element type. Posting a Part
     Studio to `/assemblies/.../translations` 404s, so the collection segment has
     to follow the element's type rather than being hardcoded."""
     _mock_account_document("docA", "elemA", part_studio_id="psA")
@@ -1182,20 +1318,20 @@ async def test_a_transient_failure_aborts_rather_than_tombstoning_the_other_docu
 
 @respx.mock
 async def test_detect_changes_is_true_when_any_selected_document_moves() -> None:
-    _mock_account_document("docA", "elemA", microversion="mv-1")
-    _mock_account_document("docB", "elemB", microversion="mv-CHANGED")
+    _mock_account_document("docA", "elemA", microversion="mv1")
+    _mock_account_document("docB", "elemB", microversion="mvCHANGED")
 
-    ctx = _selection_ctx(["docA", "docB"], {"microversions": {"docA": "mv-1", "docB": "mv-1"}})
+    ctx = _selection_ctx(["docA", "docB"], {"microversions": {"docA": "mv1", "docB": "mv1"}})
 
     assert await _connector().detect_changes(ctx) is True
 
 
 @respx.mock
 async def test_detect_changes_is_false_when_every_document_is_unchanged() -> None:
-    _mock_account_document("docA", "elemA", microversion="mv-1")
-    _mock_account_document("docB", "elemB", microversion="mv-2")
+    _mock_account_document("docA", "elemA", microversion="mv1")
+    _mock_account_document("docB", "elemB", microversion="mv2")
 
-    ctx = _selection_ctx(["docA", "docB"], {"microversions": {"docA": "mv-1", "docB": "mv-2"}})
+    ctx = _selection_ctx(["docA", "docB"], {"microversions": {"docA": "mv1", "docB": "mv2"}})
 
     assert await _connector().detect_changes(ctx) is False
 
@@ -1203,7 +1339,7 @@ async def test_detect_changes_is_false_when_every_document_is_unchanged() -> Non
 async def test_detect_changes_is_true_when_the_selection_itself_changed() -> None:
     """A newly picked document has no cursor entry, so it must schedule a sync
     without any API call at all."""
-    ctx = _selection_ctx(["docA", "docNew"], {"microversions": {"docA": "mv-1"}})
+    ctx = _selection_ctx(["docA", "docNew"], {"microversions": {"docA": "mv1"}})
 
     assert await _connector().detect_changes(ctx) is True
 
@@ -1258,11 +1394,11 @@ async def test_a_document_holding_no_assemblies_still_gets_a_cursor_entry() -> N
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/docEmpty").mock(
         return_value=httpx.Response(200, json={"id": "docEmpty", "defaultWorkspace": {"id": "wsA"}})
     )
-    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/docEmpty/w/wsA/elements").mock(
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/docEmpty/m/mvempty/elements").mock(
         return_value=httpx.Response(200, json=[])
     )
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/docEmpty/w/wsA/currentmicroversion").mock(
-        return_value=httpx.Response(200, json={"microversion": "mv-empty"})
+        return_value=httpx.Response(200, json={"microversion": "mvempty"})
     )
 
     result = await _connector().sync(_selection_ctx(["docA", "docEmpty"]))
@@ -1308,3 +1444,108 @@ async def test_identity_prefers_display_name_then_email_without_opaque_label(
     assert account.external_id == "6a6119601e205a332af613d8"
     assert account.login == expected
     assert account.name == name
+
+
+@requires_occt
+@respx.mock
+async def test_synced_cad_graph_carries_observed_revision_and_actual_geometry():
+    _mock_export()
+    result = await _connector().sync(_ctx())
+    assert all(e.properties["observed_microversion"] == "abc123def456" for e in result.entities)
+    parts = [e for e in result.entities if e.source_key != f"{DID}:document"]
+    assert parts
+    assert all(e.properties["geometry"]["length_unit"] == "mm" for e in parts)
+
+
+@respx.mock
+@pytest.mark.parametrize("marker", [None, "cad-geometry-v0", True, 1])
+async def test_old_projection_reingests_an_unchanged_onshape_revision(marker):
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").respond(
+        200, json=CURRENT_MICROVERSION
+    )
+    cursor = {"microversion": "abc123def456"}
+    if marker is not None:
+        cursor["projection_version"] = marker
+    context = SyncContext(credentials=Credentials(token="fixture"), config=CONFIG, cursor=cursor)
+    assert await _connector().detect_changes(context) is True
+
+
+@requires_occt
+@respx.mock
+async def test_successful_projection_records_version_and_then_skips_same_revision():
+    _mock_export()
+    connector = _connector()
+    result = await connector.sync(_ctx())
+    assert result.cursor["projection_version"] == PROJECTION_VERSION
+    context = SyncContext(
+        credentials=Credentials(token="fixture"), config=CONFIG, cursor=result.cursor
+    )
+    assert await connector.detect_changes(context) is False
+
+
+async def _staged_connector(monkeypatch, count=26, **kwargs):
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.document_graph import document_root
+
+    connector = OnshapeConnector(client_id="cid", client_secret="csecret", **kwargs)
+    monkeypatch.setattr(connector, "_locate", AsyncMock(return_value=("workspace", "revision")))
+    monkeypatch.setattr(
+        connector,
+        "_elements_at",
+        AsyncMock(return_value=[(f"e{i}", "partstudios") for i in range(count)]),
+    )
+
+    async def ingest(client, target, recorder, *, version):
+        return [document_root(target.element_id)], []
+
+    monkeypatch.setattr(connector, "_ingest", ingest)
+    return connector
+
+
+async def test_complete_staging_supports_twenty_six_elements(monkeypatch):
+    connector = await _staged_connector(monkeypatch)
+    result = await connector.sync(_selection_ctx(["docA"]))
+    assert len(result.entities) == 27 and len(result.relations) == 26
+    assert result.cursor["microversions"] == {"docA": "revision"}
+    assert {node.source_key for node in result.entities} >= {f"e{i}:document" for i in range(26)}
+
+
+async def test_late_staging_failure_returns_no_partial_snapshot(monkeypatch):
+    connector = await _staged_connector(monkeypatch)
+    original = connector._ingest
+    calls = []
+
+    async def ingest(client, target, recorder, *, version):
+        calls.append(target.element_id)
+        if target.element_id == "e25":
+            raise ConnectorError("export_unavailable", "late export failure")
+        return await original(client, target, recorder, version=version)
+
+    monkeypatch.setattr(connector, "_ingest", ingest)
+    ctx = _selection_ctx(["docA"], cursor={"microversions": {"docA": "old"}})
+    original_cursor = dict(ctx.cursor)
+    with pytest.raises(ConnectorError, match="late export failure"):
+        await connector.sync(ctx)
+    assert len(calls) == 26
+    assert ctx.cursor == original_cursor
+
+
+@pytest.mark.parametrize("limits", [{"max_staged_records": 2}, {"max_staged_bytes": 100}])
+async def test_staging_resource_budget_refuses_complete_result(monkeypatch, limits):
+    connector = await _staged_connector(monkeypatch, count=1, **limits)
+    with pytest.raises(ConnectorError) as error:
+        await connector.sync(_selection_ctx(["docA"]))
+    assert error.value.code == "selection_too_large"
+
+
+async def test_default_element_bound_still_refuses_257_before_export(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    connector = await _staged_connector(monkeypatch, count=257)
+    ingest = AsyncMock()
+    monkeypatch.setattr(connector, "_ingest", ingest)
+    with pytest.raises(ConnectorError) as error:
+        await connector.sync(_selection_ctx(["docA"]))
+    assert error.value.code == "selection_too_large"
+    ingest.assert_not_awaited()

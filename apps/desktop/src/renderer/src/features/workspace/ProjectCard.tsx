@@ -62,84 +62,20 @@ export function ProjectCard({
       onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && open()}
       style={{ display: 'flex', flexDirection: 'column', minWidth: 0, cursor: 'pointer' }}
     >
-      <div style={{ padding: '14px 16px 10px', flex: 1 }}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <span style={{ color: 'var(--acc)', marginTop: 1 }}>
-            <Icons.graph size={15} />
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              {project.name}
-            </div>
-            {project.description && (
-              <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2 }}>
-                {project.description}
-              </div>
-            )}
-          </div>
-          {canManage && (
-            <ProjectMenu
-              project={project}
-              canDelete={canDelete}
-              actions={actions}
-              onActionFailed={onActionFailed}
-            />
-          )}
-        </div>
-        <RecentRows activity={activity} />
-      </div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '8px 12px 8px 16px',
-          borderTop: '1px solid var(--bd)'
-        }}
-      >
-        <button
-          type="button"
-          className="interactive"
-          onClick={(e) => {
-            e.stopPropagation()
-            setShowActivity(true)
-          }}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            whiteSpace: 'nowrap',
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--mut)',
-            cursor: 'pointer',
-            fontFamily: 'var(--font-ui)',
-            fontSize: 11.5,
-            padding: 0
-          }}
-        >
-          All activity <Icons.arrowR size={11} />
-        </button>
-        <Button
-          kind={isCurrent ? 'ghost' : 'primary'}
-          size="sm"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (isSwitch) onSwitch(target)
-            else open()
-          }}
-        >
-          {footerLabel}
-        </Button>
-      </div>
+      <ProjectSummary
+        project={project}
+        activity={activity}
+        canManage={canManage}
+        canDelete={canDelete}
+        actions={actions}
+        onActionFailed={onActionFailed}
+      />
+      <ProjectFooter
+        isCurrent={isCurrent}
+        footerLabel={footerLabel}
+        onShowActivity={() => setShowActivity(true)}
+        onActivate={() => (isSwitch ? onSwitch(target) : open())}
+      />
       {showActivity && (
         // Rendered inside the clickable card: its clicks must not open the project.
         <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
@@ -151,6 +87,113 @@ export function ProjectCard({
         </div>
       )}
     </Card>
+  )
+}
+
+function ProjectSummary({
+  project,
+  activity,
+  canManage,
+  canDelete,
+  actions,
+  onActionFailed
+}: Pick<
+  ProjectCardProps,
+  'project' | 'activity' | 'canManage' | 'canDelete' | 'actions' | 'onActionFailed'
+>): React.JSX.Element {
+  return (
+    <div style={{ padding: '14px 16px 10px', flex: 1 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+        <span style={{ color: 'var(--acc)', marginTop: 1 }}>
+          <Icons.graph size={15} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {project.name}
+          </div>
+          {project.description && (
+            <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2 }}>
+              {project.description}
+            </div>
+          )}
+        </div>
+        {canManage && (
+          <ProjectMenu
+            project={project}
+            canDelete={canDelete}
+            actions={actions}
+            onActionFailed={onActionFailed}
+          />
+        )}
+      </div>
+      <RecentRows activity={activity} />
+    </div>
+  )
+}
+
+function ProjectFooter({
+  isCurrent,
+  footerLabel,
+  onShowActivity,
+  onActivate
+}: {
+  isCurrent: boolean
+  footerLabel: string
+  onShowActivity: () => void
+  onActivate: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '8px 12px 8px 16px',
+        borderTop: '1px solid var(--bd)'
+      }}
+    >
+      <button
+        type="button"
+        className="interactive"
+        onClick={(e) => {
+          e.stopPropagation()
+          onShowActivity()
+        }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          whiteSpace: 'nowrap',
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--mut)',
+          cursor: 'pointer',
+          fontFamily: 'var(--font-ui)',
+          fontSize: 11.5,
+          padding: 0
+        }}
+      >
+        All activity <Icons.arrowR size={11} />
+      </button>
+      <Button
+        kind={isCurrent ? 'ghost' : 'primary'}
+        size="sm"
+        onClick={(e) => {
+          e.stopPropagation()
+          onActivate()
+        }}
+      >
+        {footerLabel}
+      </Button>
+    </div>
   )
 }
 

@@ -1,4 +1,5 @@
 import type { ApiClient } from '../../lib/api/client'
+import { DocumentTreeCatalog } from './documentTreeCatalog'
 import { ApiError } from '../../lib/api/envelope.types'
 import {
   listConnections,
@@ -29,7 +30,10 @@ export class ServiceCatalog {
   private disposed = false
   private listeners = new Set<() => void>()
   private pending = new Map<string, Promise<void>>()
-  constructor(private client: ApiClient) {}
+  readonly tree: DocumentTreeCatalog
+  constructor(private client: ApiClient) {
+    this.tree = new DocumentTreeCatalog(client)
+  }
   snapshot = (): CatalogSnapshot => this.state
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -43,6 +47,7 @@ export class ServiceCatalog {
     this.listeners.forEach((listener) => listener())
   }
   dispose(): void {
+    this.tree.dispose()
     this.state = empty()
     this.disposed = true
     this.listeners.clear()

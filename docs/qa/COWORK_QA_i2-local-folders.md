@@ -102,9 +102,10 @@ scripts/install-mcp-forks.sh`). `integrations/mcp/local/.venv/bin/python3` must 
 - A file whose path segment is ≥40 characters of letters/digits/`._-`: it is skipped and the
   sync detail says "skipped: a path segment looked secret-shaped" — no `[REDACTED]` name in the
   graph.
-- Link before the companion is up (fresh app start): the card shows the sync's error text
-  "this machine's Solus companion is not connected" briefly, then the companion connects and
-  the scan lands without any click.
+- Link before the companion is up (fresh app start): during the bounded reconnect
+  interval, show connecting rather than a transient companion-unreachable error;
+  the companion connects and the scan lands without another click. If connection
+  has not recovered after 30 seconds, show the actual unavailable state.
 - `POST /api/v1/projects/{id}/sources` with `{"type":"local", …}` → `400 use_local_folder_route`.
 - `POST …/local-folder` with a 31-char `machine_id`, or an extra `path` field → `422`.
 - `POST …/local-folder/{source}/open` with `tool: "altium"` on a KiCad row → `400 unsupported_tool`;
@@ -123,3 +124,51 @@ scripts/install-mcp-forks.sh`). `integrations/mcp/local/.venv/bin/python3` must 
   switch-to-Do hint.
 
 - [ ] cross-feature checks
+
+## SOLUSDEV-261 reconnection regressions
+
+1. [ ] Link a folder using the native picker. Observe a connecting message while
+   the companion restarts; do not show an offline failure beside that message.
+2. [ ] Wait for the scan. Expect the selected machine's authoritative connected
+   state and detected files without manually scanning to clear an offline banner.
+3. [ ] Stop the companion or simulate a never-settling request in the test harness.
+   After 30 seconds, connecting must end. A timed-out link POST must not be replayed;
+   subsequent reconciliation is read-only. Open actions remain unavailable.
+4. [ ] Switch projects while machine lookup or link submission is pending. The old
+   result must not replace the new project's view or issue a stale link request.
+5. [ ] Verify non-connectivity scan failures remain visible; reconnection must not
+   hide malformed-project or parser errors.
+
+Automated tests cover the reconnect deadline, stale scopes, unmount and truthful
+open-control disabling. Native picker verification must be performed in desktop;
+the browser-only Home surface cannot exercise Electron's picker.
+
+## SOLUSDEV-261 folder selection regression
+
+Setup: run `pnpm dev:all` and use the Electron desktop app, signed in to a
+project with the companion running. Browser preview cannot operate the native
+folder picker. Use a disposable local project; do not change ForgeTS contents.
+
+- [ ] On Home, select **Select folder**. Navigate inside the desired directory,
+  then press **Select this folder**. Expect its name to appear only after the
+  companion's local registry acknowledges the link, followed by scan status.
+- [ ] On a linked folder, **Show in file manager** reveals it without changing
+  the integration. **Change folder** opens the selector and links the newly
+  confirmed directory. Cancel preserves the existing link.
+- [ ] Make the registry write fail in a controlled test environment. Selection
+  shows an actionable save failure, retains the old link, and sends no graph-link
+  request for the rejected folder.
+- [ ] Change projects while the picker is pending. A late result must not link
+  the new project. Switching back leaves selection controls usable.
+- [ ] Unlink while changing a folder. The late picker/registry completion must
+  not restore the cleared link or leave Select folder and Clone disabled.
+- [ ] Delay the graph-link API after native acknowledgement. Selection controls
+  remain responsive; the existing bounded connecting/scan status owns progress.
+- [ ] Clone a disposable repository. The completed clone must receive the same
+  registry acknowledgement before its folder is displayed or scanned. A save
+  failure reports that the clone exists but could not be linked.
+
+Automated verification: 81 passing tests across the folder card/store, local
+folder hook, local folder constants and graph node sidebar suites; focused ESLint and
+renderer TypeScript checks pass. Independent code and security reviews pass.
+The native picker interaction itself still requires the Electron walkthrough.

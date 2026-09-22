@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.billing.development import session_development_unlimited
 from solus_api.models import CreditBalance, CreditLedger, CreditTxnType
 
 
@@ -68,6 +69,8 @@ async def check_spend_allowed(
     actual cost PER concurrent slot before serialized pre-flights start blocking.
     Per-user concurrency/rate limits (ADR-019) bound N; the overshoot is bounded,
     not unbounded."""
+    if session_development_unlimited(session, user_id):
+        return True
     balance = await get_balance(session, user_id)
     return balance > 0 and balance >= estimated_credits
 

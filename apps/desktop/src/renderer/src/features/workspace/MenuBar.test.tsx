@@ -29,6 +29,11 @@ function renderBar(over: Partial<React.ComponentProps<typeof MenuBar>> = {}): {
 }
 
 describe('MenuBar', () => {
+  menuNavigationTests()
+  menuInteractionsTests()
+})
+
+function menuNavigationTests(): void {
   it('shows the four menus closed', () => {
     renderBar()
     for (const m of MENUS)
@@ -78,7 +83,9 @@ describe('MenuBar', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: 'Connect a device…' }))
     expect(onNavigate).toHaveBeenCalledWith('bench')
   })
+}
 
+function menuInteractionsTests(): void {
   it('Help links open outside the app over https only', async () => {
     renderBar()
     await userEvent.click(screen.getByRole('button', { name: 'Help' }))
@@ -115,4 +122,4 @@ describe('MenuBar', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(onSignOut).toHaveBeenCalledOnce()
   })
-})
+}

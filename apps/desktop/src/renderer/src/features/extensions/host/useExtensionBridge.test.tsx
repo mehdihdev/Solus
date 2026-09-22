@@ -80,6 +80,12 @@ afterEach(() => {
 })
 
 describe('useExtensionBridge', () => {
+  registerFrameHandshakeAndIdentityTests()
+  registerFrameAppearanceAndFocusEventsTests()
+  registerFramePolicyAndLifecycleTests()
+})
+
+function registerFrameHandshakeAndIdentityTests(): void {
   it('posts init on the iframe load and flips ready on ui.ready', async () => {
     const onReady = vi.fn()
     const m = mount({ onReady })
@@ -126,7 +132,9 @@ describe('useExtensionBridge', () => {
     await waitFor(() => expect(screen.getByTestId('dropped').textContent).toBe('1'))
     expect(responses()).toEqual([])
   })
+}
 
+function registerFrameAppearanceAndFocusEventsTests(): void {
   it('forwards focus changes as focus.changed once ready, deduplicated', async () => {
     const m = mount()
     m.send(readyRequest)
@@ -178,7 +186,9 @@ describe('useExtensionBridge', () => {
     )
     useSettingsStore.getState().setTheme('dark')
   })
+}
 
+function registerFramePolicyAndLifecycleTests(): void {
   it('announces a project switch as project.changed', async () => {
     const m = mount()
     m.send(readyRequest)
@@ -224,4 +234,4 @@ describe('useExtensionBridge', () => {
     expect(m.deps.graph.focusedEntity).not.toHaveBeenCalled()
     useSettingsStore.getState().setTheme('dark')
   })
-})
+}

@@ -55,6 +55,18 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('useOAuthConnect', () => {
+  registerOAuthDispatchTests()
+
+  registerOAuthInputResolutionTests()
+
+  registerOAuthCancellationTests()
+
+  registerOAuthAttemptIsolationTests()
+
+  registerOAuthProgressTests()
+})
+
+function registerOAuthDispatchTests(): void {
   it('starts the orchestration with the provider and the bridge redirect uri', async () => {
     withBridge()
     const { result } = renderHook(() => useOAuthConnect())
@@ -112,7 +124,9 @@ describe('useOAuthConnect', () => {
       label: 'a/one'
     })
   })
+}
 
+function registerOAuthInputResolutionTests(): void {
   it('chooses the generic fields step for a provider that declares no selection', async () => {
     withBridge()
     const { result } = renderHook(() => useOAuthConnect())
@@ -165,7 +179,9 @@ describe('useOAuthConnect', () => {
     act(() => result.current.cancel())
     await expect(outcome).resolves.toEqual({ error: 'Configuration cancelled.' })
   })
+}
 
+function registerOAuthCancellationTests(): void {
   it('after cancel, a LATER input request resolves null immediately instead of parking forever', async () => {
     withBridge()
     const { result } = renderHook(() => useOAuthConnect())
@@ -220,7 +236,9 @@ describe('useOAuthConnect', () => {
     act(() => emit?.({ phase: 'busy', stage: 'link', label: 'Linking…' }))
     expect(useOnboardingStore.getState().connections.github).toBeUndefined()
   })
+}
 
+function registerOAuthAttemptIsolationTests(): void {
   it("a superseded attempt's input request resolves null instead of stealing the new attempt's resolver", async () => {
     withBridge()
     const { result } = renderHook(() => useOAuthConnect())
@@ -273,7 +291,9 @@ describe('useOAuthConnect', () => {
     })
     await expect(outcome).resolves.toEqual({ config: { document_id: 'd2' } })
   })
+}
 
+function registerOAuthProgressTests(): void {
   it('routes progress into the onboarding store under the provider key', async () => {
     vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
     mockedRun.mockImplementation(async (deps) => {
@@ -290,4 +310,4 @@ describe('useOAuthConnect', () => {
       result: 'Connected — 5 entities indexed'
     })
   })
-})
+}

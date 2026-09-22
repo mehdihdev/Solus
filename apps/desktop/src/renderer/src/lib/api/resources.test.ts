@@ -104,118 +104,8 @@ describe('resource calls', () => {
 })
 
 describe('integration + source calls', () => {
-  it('listIntegrations hits /integrations', async () => {
-    const { client, calls } = stubClient([])
-    await listIntegrations(client)
-    expect(calls[0].path).toBe('/integrations')
-  })
-
-  it('listSources scopes to the project', async () => {
-    const { client, calls } = stubClient([])
-    await listSources('p1', client)
-    expect(calls[0].path).toBe('/projects/p1/sources')
-  })
-
-  it('getSource hits the single-source route', async () => {
-    const { client, calls } = stubClient({ id: 's1' })
-    await getSource('p1', 's1', client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1')
-  })
-
-  it('listSelectable hits the generic picker route under the source', async () => {
-    const { client, calls } = stubClient([])
-    await listSelectable('p1', 's1', client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1/selectable')
-  })
-
-  it('updateSource PATCHes the source config', async () => {
-    const { client, calls } = stubClient({ id: 's1' })
-    await updateSource('p1', 's1', { config: { repo: 'o/r', branch: 'main' } }, client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1')
-    expect(calls[0].options).toMatchObject({
-      method: 'PATCH',
-      body: { config: { repo: 'o/r', branch: 'main' } }
-    })
-  })
-
-  it('disconnectSource DELETEs the source, retaining entities by default', async () => {
-    const { client, calls } = stubClient({ id: 's1', retained_entities: true })
-    await disconnectSource('p1', 's1', {}, client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1?retain_entities=true')
-    expect((calls[0].options as { method?: string }).method).toBe('DELETE')
-  })
-
-  it('disconnectSource can remove entities when asked', async () => {
-    const { client, calls } = stubClient({ id: 's1', retained_entities: false })
-    await disconnectSource('p1', 's1', { retainEntities: false }, client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1?retain_entities=false')
-  })
-
-  it('triggerSync POSTs to the sync route', async () => {
-    const { client, calls } = stubClient({ job_id: 'j1', status: 'queued' })
-    await triggerSync('p1', 's1', client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1/sync')
-    expect(calls[0].options).toMatchObject({ method: 'POST' })
-  })
-
-  it('getSyncs reads the sync history', async () => {
-    const { client, calls } = stubClient([])
-    await getSyncs('p1', 's1', client)
-    expect(calls[0].path).toBe('/projects/p1/sources/s1/syncs')
-  })
-
-  it('getGraphNeighborhood requests the focused entity with a bounded depth', async () => {
-    const { client, calls } = stubClient({ entities: [], edges: [], truncated: false })
-    await getGraphNeighborhood('p1', 'e1', {}, client)
-    expect(calls[0].path).toBe('/projects/p1/graph?root=e1&depth=1')
-  })
-
-  it('getGraphNeighborhood passes filters and limit through', async () => {
-    const { client, calls } = stubClient({ entities: [], edges: [], truncated: false })
-    await getGraphNeighborhood(
-      'p1',
-      'e1',
-      { depth: 2, entity_types: ['ic', 'motor'], relation_types: ['drives'], limit: 50 },
-      client
-    )
-    expect(calls[0].path).toBe(
-      '/projects/p1/graph?root=e1&depth=2&entity_types=ic%2Cmotor&relation_types=drives&limit=50'
-    )
-  })
-
-  it('listEntities builds a filtered query string', async () => {
-    const { client, calls } = stubClient([])
-    await listEntities('p1', { type: 'code_module', source_id: 's1' }, client)
-    expect(calls[0].path).toBe('/projects/p1/entities?type=code_module&source_id=s1')
-  })
-
-  it('listEntities omits the query when no filters are given', async () => {
-    const { client, calls } = stubClient([])
-    await listEntities('p1', {}, client)
-    expect(calls[0].path).toBe('/projects/p1/entities')
-  })
-
-  it('listAllEntities follows the cursor until the last page', async () => {
-    const pages = [
-      { data: [{ id: 'e1' }, { id: 'e2' }], meta: { has_next: true, next_cursor: 'cur2' } },
-      { data: [{ id: 'e3' }], meta: { has_next: false, next_cursor: null } }
-    ]
-    const calls: string[] = []
-    const client: ApiClient = {
-      request: vi.fn(),
-      requestPage: vi.fn(async (path: string) => {
-        calls.push(path)
-        return pages[calls.length - 1] as never
-      })
-    }
-    const { listAllEntities } = await import('./resources')
-    const all = await listAllEntities('p1', client)
-    expect(all.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
-    expect(calls).toEqual([
-      '/projects/p1/entities?limit=500',
-      '/projects/p1/entities?limit=500&cursor=cur2'
-    ])
-  })
+  sourceApiRoutesTests()
+  graphApiQueriesTests()
 })
 
 // The bug this generalisation exists to prevent: the provider must reach the
@@ -386,126 +276,8 @@ describe('personalTeam', () => {
 })
 
 describe('team resources', () => {
-  it('lists members and changes a role', async () => {
-    const { listMembers, changeMemberRole } = await import('./resources')
-    const { client, calls } = stubClient([])
-    await listMembers('t1', client)
-    expect(calls[0].path).toBe('/teams/t1/members')
-    await changeMemberRole('t1', 'u2', 'admin', client)
-    expect(calls[1].path).toBe('/teams/t1/members/u2')
-    expect(calls[1].options).toMatchObject({ method: 'PATCH', body: { role: 'admin' } })
-  })
-
-  it('creates and revokes invites', async () => {
-    const { createInvite, revokeInvite } = await import('./resources')
-    const { client, calls } = stubClient({})
-    await createInvite('t1', { email: 'x@y.dev', role: 'member' }, client)
-    expect(calls[0].path).toBe('/teams/t1/invites')
-    expect(calls[0].options).toMatchObject({ method: 'POST' })
-    await revokeInvite('t1', 'i9', client)
-    expect(calls[1].path).toBe('/teams/t1/invites/i9')
-    expect(calls[1].options).toMatchObject({ method: 'DELETE' })
-  })
-
-  it('deletes a team', async () => {
-    const { deleteTeam } = await import('./resources')
-    const { client, calls } = stubClient(undefined)
-    await deleteTeam('t1', client)
-    // The API demands ?confirm=true (found in the HOME H5 live run).
-    expect(calls[0].path).toBe('/teams/t1?confirm=true')
-    expect(calls[0].options).toMatchObject({ method: 'DELETE' })
-  })
-
-  it('paginated list variants pass the cursor through as a query param', async () => {
-    const { listActivityPage, listNotificationsPage } = await import('./resources')
-    const { client, calls } = stubClient([])
-    await listActivityPage('t1', { cursor: 'cur9' }, client)
-    await listActivityPage('t1', {}, client)
-    await listActivityPage('t1', { projectId: 'p1', limit: 3 }, client)
-    await listNotificationsPage('cur9', client)
-    await listNotificationsPage(undefined, client)
-    expect(calls.map((c) => c.path)).toEqual([
-      '/teams/t1/activity?cursor=cur9',
-      '/teams/t1/activity',
-      '/teams/t1/activity?limit=3&project_id=p1',
-      '/users/me/notifications?cursor=cur9',
-      '/users/me/notifications'
-    ])
-  })
-
-  it('activity page requests carry limit and cursor together', async () => {
-    const { listActivityPage } = await import('./resources')
-    const { client, calls } = stubClient([])
-    await listActivityPage('t1', { limit: 100 }, client)
-    await listActivityPage('t1', { cursor: 'cur9', limit: 25 }, client)
-    expect(calls.map((c) => c.path)).toEqual([
-      '/teams/t1/activity?limit=100',
-      '/teams/t1/activity?cursor=cur9&limit=25'
-    ])
-  })
-
-  it('updates and clears the SOL custom instruction (SOLUSDEV-233)', async () => {
-    const { updateCustomInstruction } = await import('./resources')
-    const { client, calls } = stubClient({})
-    await updateCustomInstruction('Prefer metric units.', client)
-    await updateCustomInstruction(null, client)
-    expect(calls[0].path).toBe('/users/me/settings')
-    expect(calls[0].options).toMatchObject({
-      method: 'PATCH',
-      body: { sol_custom_instruction: 'Prefer metric units.' }
-    })
-    expect(calls[1].options).toMatchObject({ body: { sol_custom_instruction: null } })
-  })
-
-  it('fetches the credit usage meter (SOLUSDEV-233)', async () => {
-    const { getUsage } = await import('./resources')
-    const { client, calls } = stubClient({ used: 941, allowance: 10000, balance: 9059 })
-    const usage = await getUsage(client)
-    expect(calls[0].path).toBe('/users/me/usage')
-    expect(usage.used).toBe(941)
-  })
-
-  it('fetches team detail, activity, and notifications', async () => {
-    const { getTeamDetail, listNotifications, markNotificationRead, updateTeam } = await import(
-      './resources'
-    )
-    const { client, calls } = stubClient([])
-    await getTeamDetail('t1', client)
-    await listNotifications(client)
-    await markNotificationRead('n1', client)
-    await updateTeam('t1', { settings: { notify_project_created: false } }, client)
-    expect(calls.map((c) => c.path)).toEqual([
-      '/teams/t1',
-      '/users/me/notifications',
-      '/users/me/notifications/n1/read',
-      '/teams/t1'
-    ])
-  })
-
-  it('accepts an invite by token', async () => {
-    const { acceptInvite } = await import('./resources')
-    const { client, calls } = stubClient({ team_id: 't1', role: 'member' })
-    const result = await acceptInvite('tok_abc', client)
-    expect(calls[0].path).toBe('/invites/tok_abc/accept')
-    expect(calls[0].options).toMatchObject({ method: 'POST' })
-    expect(result).toMatchObject({ team_id: 't1', role: 'member' })
-  })
-
-  it('percent-encodes an invite token so it cannot alter the path', async () => {
-    const { acceptInvite } = await import('./resources')
-    const { client, calls } = stubClient({ team_id: 't1', role: 'member' })
-    await acceptInvite('a/b?c', client)
-    expect(calls[0].path).toBe('/invites/a%2Fb%3Fc/accept')
-  })
-
-  it('marks all notifications read', async () => {
-    const { markAllNotificationsRead } = await import('./resources')
-    const { client, calls } = stubClient({ updated: 3 })
-    const result = await markAllNotificationsRead(client)
-    expect(calls[0].path).toBe('/users/me/notifications/read-all')
-    expect(calls[0].options).toMatchObject({ method: 'POST' })
-    expect(result).toMatchObject({ updated: 3 })
-  })
+  teamMembershipAndPaginationTests()
+  teamSettingsAndNotificationsTests()
 })
 
 describe('project management', () => {
@@ -625,3 +397,245 @@ it('listAllSources follows every source page so existing document bindings are r
   expect(await listAllSources('p1', client)).toEqual([{ id: 'first' }, { id: 'last' }])
   expect(client.requestPage).toHaveBeenNthCalledWith(2, '/projects/p1/sources?limit=200&cursor=c2')
 })
+
+function sourceApiRoutesTests(): void {
+  it('listIntegrations hits /integrations', async () => {
+    const { client, calls } = stubClient([])
+    await listIntegrations(client)
+    expect(calls[0].path).toBe('/integrations')
+  })
+
+  it('listSources scopes to the project', async () => {
+    const { client, calls } = stubClient([])
+    await listSources('p1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources')
+  })
+
+  it('getSource hits the single-source route', async () => {
+    const { client, calls } = stubClient({ id: 's1' })
+    await getSource('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1')
+  })
+
+  it('listSelectable hits the generic picker route under the source', async () => {
+    const { client, calls } = stubClient([])
+    await listSelectable('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/selectable')
+  })
+
+  it('updateSource PATCHes the source config', async () => {
+    const { client, calls } = stubClient({ id: 's1' })
+    await updateSource('p1', 's1', { config: { repo: 'o/r', branch: 'main' } }, client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { config: { repo: 'o/r', branch: 'main' } }
+    })
+  })
+
+  it('disconnectSource DELETEs the source, retaining entities by default', async () => {
+    const { client, calls } = stubClient({ id: 's1', retained_entities: true })
+    await disconnectSource('p1', 's1', {}, client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1?retain_entities=true')
+    expect((calls[0].options as { method?: string }).method).toBe('DELETE')
+  })
+
+  it('disconnectSource can remove entities when asked', async () => {
+    const { client, calls } = stubClient({ id: 's1', retained_entities: false })
+    await disconnectSource('p1', 's1', { retainEntities: false }, client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1?retain_entities=false')
+  })
+
+  it('triggerSync POSTs to the sync route', async () => {
+    const { client, calls } = stubClient({ job_id: 'j1', status: 'queued' })
+    await triggerSync('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/sync')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+  })
+
+  it('getSyncs reads the sync history', async () => {
+    const { client, calls } = stubClient([])
+    await getSyncs('p1', 's1', client)
+    expect(calls[0].path).toBe('/projects/p1/sources/s1/syncs')
+  })
+}
+
+function graphApiQueriesTests(): void {
+  it('getGraphNeighborhood requests the focused entity with a bounded depth', async () => {
+    const { client, calls } = stubClient({ entities: [], edges: [], truncated: false })
+    await getGraphNeighborhood('p1', 'e1', {}, client)
+    expect(calls[0].path).toBe('/projects/p1/graph?root=e1&depth=1')
+  })
+
+  it('getGraphNeighborhood passes filters and limit through', async () => {
+    const { client, calls } = stubClient({ entities: [], edges: [], truncated: false })
+    await getGraphNeighborhood(
+      'p1',
+      'e1',
+      { depth: 2, entity_types: ['ic', 'motor'], relation_types: ['drives'], limit: 50 },
+      client
+    )
+    expect(calls[0].path).toBe(
+      '/projects/p1/graph?root=e1&depth=2&entity_types=ic%2Cmotor&relation_types=drives&limit=50'
+    )
+  })
+
+  it('listEntities builds a filtered query string', async () => {
+    const { client, calls } = stubClient([])
+    await listEntities('p1', { type: 'code_module', source_id: 's1' }, client)
+    expect(calls[0].path).toBe('/projects/p1/entities?type=code_module&source_id=s1')
+  })
+
+  it('listEntities omits the query when no filters are given', async () => {
+    const { client, calls } = stubClient([])
+    await listEntities('p1', {}, client)
+    expect(calls[0].path).toBe('/projects/p1/entities')
+  })
+
+  it('listAllEntities follows the cursor until the last page', async () => {
+    const pages = [
+      { data: [{ id: 'e1' }, { id: 'e2' }], meta: { has_next: true, next_cursor: 'cur2' } },
+      { data: [{ id: 'e3' }], meta: { has_next: false, next_cursor: null } }
+    ]
+    const calls: string[] = []
+    const client: ApiClient = {
+      request: vi.fn(),
+      requestPage: vi.fn(async (path: string) => {
+        calls.push(path)
+        return pages[calls.length - 1] as never
+      })
+    }
+    const { listAllEntities } = await import('./resources')
+    const all = await listAllEntities('p1', client)
+    expect(all.map((e) => e.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(calls).toEqual([
+      '/projects/p1/entities?limit=500',
+      '/projects/p1/entities?limit=500&cursor=cur2'
+    ])
+  })
+}
+
+function teamMembershipAndPaginationTests(): void {
+  it('lists members and changes a role', async () => {
+    const { listMembers, changeMemberRole } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listMembers('t1', client)
+    expect(calls[0].path).toBe('/teams/t1/members')
+    await changeMemberRole('t1', 'u2', 'admin', client)
+    expect(calls[1].path).toBe('/teams/t1/members/u2')
+    expect(calls[1].options).toMatchObject({ method: 'PATCH', body: { role: 'admin' } })
+  })
+
+  it('creates and revokes invites', async () => {
+    const { createInvite, revokeInvite } = await import('./resources')
+    const { client, calls } = stubClient({})
+    await createInvite('t1', { email: 'x@y.dev', role: 'member' }, client)
+    expect(calls[0].path).toBe('/teams/t1/invites')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    await revokeInvite('t1', 'i9', client)
+    expect(calls[1].path).toBe('/teams/t1/invites/i9')
+    expect(calls[1].options).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('deletes a team', async () => {
+    const { deleteTeam } = await import('./resources')
+    const { client, calls } = stubClient(undefined)
+    await deleteTeam('t1', client)
+    // The API demands ?confirm=true (found in the HOME H5 live run).
+    expect(calls[0].path).toBe('/teams/t1?confirm=true')
+    expect(calls[0].options).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('paginated list variants pass the cursor through as a query param', async () => {
+    const { listActivityPage, listNotificationsPage } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listActivityPage('t1', { cursor: 'cur9' }, client)
+    await listActivityPage('t1', {}, client)
+    await listActivityPage('t1', { projectId: 'p1', limit: 3 }, client)
+    await listNotificationsPage('cur9', client)
+    await listNotificationsPage(undefined, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1/activity?cursor=cur9',
+      '/teams/t1/activity',
+      '/teams/t1/activity?limit=3&project_id=p1',
+      '/users/me/notifications?cursor=cur9',
+      '/users/me/notifications'
+    ])
+  })
+
+  it('activity page requests carry limit and cursor together', async () => {
+    const { listActivityPage } = await import('./resources')
+    const { client, calls } = stubClient([])
+    await listActivityPage('t1', { limit: 100 }, client)
+    await listActivityPage('t1', { cursor: 'cur9', limit: 25 }, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1/activity?limit=100',
+      '/teams/t1/activity?cursor=cur9&limit=25'
+    ])
+  })
+}
+
+function teamSettingsAndNotificationsTests(): void {
+  it('updates and clears the SOL custom instruction (SOLUSDEV-233)', async () => {
+    const { updateCustomInstruction } = await import('./resources')
+    const { client, calls } = stubClient({})
+    await updateCustomInstruction('Prefer metric units.', client)
+    await updateCustomInstruction(null, client)
+    expect(calls[0].path).toBe('/users/me/settings')
+    expect(calls[0].options).toMatchObject({
+      method: 'PATCH',
+      body: { sol_custom_instruction: 'Prefer metric units.' }
+    })
+    expect(calls[1].options).toMatchObject({ body: { sol_custom_instruction: null } })
+  })
+
+  it('fetches the credit usage meter (SOLUSDEV-233)', async () => {
+    const { getUsage } = await import('./resources')
+    const { client, calls } = stubClient({ used: 941, allowance: 10000, balance: 9059 })
+    const usage = await getUsage(client)
+    expect(calls[0].path).toBe('/users/me/usage')
+    expect(usage.used).toBe(941)
+  })
+
+  it('fetches team detail, activity, and notifications', async () => {
+    const { getTeamDetail, listNotifications, markNotificationRead, updateTeam } = await import(
+      './resources'
+    )
+    const { client, calls } = stubClient([])
+    await getTeamDetail('t1', client)
+    await listNotifications(client)
+    await markNotificationRead('n1', client)
+    await updateTeam('t1', { settings: { notify_project_created: false } }, client)
+    expect(calls.map((c) => c.path)).toEqual([
+      '/teams/t1',
+      '/users/me/notifications',
+      '/users/me/notifications/n1/read',
+      '/teams/t1'
+    ])
+  })
+
+  it('accepts an invite by token', async () => {
+    const { acceptInvite } = await import('./resources')
+    const { client, calls } = stubClient({ team_id: 't1', role: 'member' })
+    const result = await acceptInvite('tok_abc', client)
+    expect(calls[0].path).toBe('/invites/tok_abc/accept')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    expect(result).toMatchObject({ team_id: 't1', role: 'member' })
+  })
+
+  it('percent-encodes an invite token so it cannot alter the path', async () => {
+    const { acceptInvite } = await import('./resources')
+    const { client, calls } = stubClient({ team_id: 't1', role: 'member' })
+    await acceptInvite('a/b?c', client)
+    expect(calls[0].path).toBe('/invites/a%2Fb%3Fc/accept')
+  })
+
+  it('marks all notifications read', async () => {
+    const { markAllNotificationsRead } = await import('./resources')
+    const { client, calls } = stubClient({ updated: 3 })
+    const result = await markAllNotificationsRead(client)
+    expect(calls[0].path).toBe('/users/me/notifications/read-all')
+    expect(calls[0].options).toMatchObject({ method: 'POST' })
+    expect(result).toMatchObject({ updated: 3 })
+  })
+}

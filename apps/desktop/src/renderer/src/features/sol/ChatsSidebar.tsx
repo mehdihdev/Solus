@@ -288,33 +288,7 @@ export function ChatsSidebar({
         minHeight: 0
       }}
     >
-      <div
-        style={{
-          padding: '14px 14px 10px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}
-      >
-        <Mono size={9.5}>CHATS</Mono>
-        <button
-          type="button"
-          aria-label="New chat"
-          className="interactive"
-          onClick={onNewChat}
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--bd)',
-            borderRadius: 4,
-            color: 'var(--tx)',
-            cursor: 'pointer',
-            padding: '3px 6px',
-            display: 'inline-flex'
-          }}
-        >
-          <Icons.plus size={12} />
-        </button>
-      </div>
+      <ChatsHeader onNewChat={onNewChat} />
       <ChatList
         projectId={projectId}
         conversations={conversations}
@@ -351,6 +325,38 @@ export function ChatsSidebar({
           }}
         />
       )}
+    </div>
+  )
+}
+
+function ChatsHeader({ onNewChat }: { onNewChat: () => void }): React.JSX.Element {
+  return (
+    <div
+      style={{
+        padding: '14px 14px 10px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+      }}
+    >
+      <Mono size={9.5}>CHATS</Mono>
+      <button
+        type="button"
+        aria-label="New chat"
+        className="interactive"
+        onClick={onNewChat}
+        style={{
+          background: 'transparent',
+          border: '1px solid var(--bd)',
+          borderRadius: 4,
+          color: 'var(--tx)',
+          cursor: 'pointer',
+          padding: '3px 6px',
+          display: 'inline-flex'
+        }}
+      >
+        <Icons.plus size={12} />
+      </button>
     </div>
   )
 }

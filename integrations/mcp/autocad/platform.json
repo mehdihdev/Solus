@@ -1,0 +1,7 @@
+{
+  "display_name": "AutoCAD",
+  "supported_platforms": [
+    "darwin",
+    "win32"
+  ]
+}

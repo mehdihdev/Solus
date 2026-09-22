@@ -34,6 +34,23 @@ const handlers = (): {
 })
 
 describe('registerGlobalHotkeys (docs/architecture/sol-window.md §2-§3)', () => {
+  registerShortcutRegistrationTests()
+  registerShortcutFailureFallbacksTests()
+})
+
+it('enables the Wayland portal without replacing other Chromium features', () => {
+  const commandLine = { getSwitchValue: vi.fn(() => 'ExistingFeature'), appendSwitch: vi.fn() }
+  enableShortcutPortal(commandLine, { platform: 'linux', arch: 'arm64', session: 'wayland' })
+  expect(commandLine.appendSwitch).toHaveBeenCalledWith(
+    'enable-features',
+    'ExistingFeature,GlobalShortcutsPortal'
+  )
+  commandLine.appendSwitch.mockClear()
+  enableShortcutPortal(commandLine, { platform: 'darwin', arch: 'arm64', session: 'macos' })
+  expect(commandLine.appendSwitch).not.toHaveBeenCalled()
+})
+
+function registerShortcutRegistrationTests(): void {
   it('registers the portable summon chord even with a working native hook', () => {
     const s = fakeShortcuts()
     const h = handlers()
@@ -85,7 +102,9 @@ describe('registerGlobalHotkeys (docs/architecture/sol-window.md §2-§3)', () =
       ACCELERATORS.circleMode
     ])
   })
+}
 
+function registerShortcutFailureFallbacksTests(): void {
   it('a register() that throws is also a message', () => {
     const s = fakeShortcuts()
     s.api.register.mockImplementation(() => {
@@ -113,16 +132,4 @@ describe('registerGlobalHotkeys (docs/architecture/sol-window.md §2-§3)', () =
     expect(s.api.unregister).not.toHaveBeenCalled()
     expect(s.api.unregisterAll).not.toHaveBeenCalled()
   })
-})
-
-it('enables the Wayland portal without replacing other Chromium features', () => {
-  const commandLine = { getSwitchValue: vi.fn(() => 'ExistingFeature'), appendSwitch: vi.fn() }
-  enableShortcutPortal(commandLine, { platform: 'linux', arch: 'arm64', session: 'wayland' })
-  expect(commandLine.appendSwitch).toHaveBeenCalledWith(
-    'enable-features',
-    'ExistingFeature,GlobalShortcutsPortal'
-  )
-  commandLine.appendSwitch.mockClear()
-  enableShortcutPortal(commandLine, { platform: 'darwin', arch: 'arm64', session: 'macos' })
-  expect(commandLine.appendSwitch).not.toHaveBeenCalled()
-})
+}

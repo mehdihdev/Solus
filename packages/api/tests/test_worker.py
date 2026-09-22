@@ -206,3 +206,204 @@ async def test_one_large_tenant_cannot_starve_every_other_team(engine: Any) -> N
     assert by_team.get(big_team_id, 0) <= _MAX_SOURCES_PER_TEAM_PER_SWEEP, (
         "one tenant took more than its per-sweep share"
     )
+
+
+async def test_onshape_reconciliation_acknowledges_only_captured_generation(maker, monkeypatch):
+    from solus_api.connectors.worker import _run
+    from solus_api.services.onshape_webhooks import hint_state, save_state, state_for
+
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        row.type = SourceType.ONSHAPE
+        save_state(row, hint_state({}))
+        await db.commit()
+
+    async def reconcile(**kwargs):
+        async with maker() as db:
+            row = await db.get(Source, source.id, with_for_update=True)
+            save_state(row, hint_state(state_for(row)))
+            sync = Sync(source_id=row.id, project_id=row.project_id, status=JobStatus.SUCCEEDED)
+            db.add(sync)
+            await db.commit()
+            return sync.id
+
+    monkeypatch.setattr("solus_api.connectors.worker.run_sync", reconcile)
+    from solus_api.models import SyncTrigger
+
+    await _run(
+        StubConnector(), source.id, maker, store, SyncTrigger.WEBHOOK, None, None, False, None
+    )
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        assert state_for(row)["generation"] == 2
+        assert state_for(row)["acknowledged"] == 1
+
+
+async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker):
+    from unittest.mock import AsyncMock
+
+    from solus_api.models import utcnow
+    from solus_api.services.onshape_webhooks import save_state
+
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        row.type = SourceType.ONSHAPE
+        row.config = {"documents": ["doc"]}
+        save_state(
+            row,
+            {
+                "status": "registered",
+                "subscriptions": {"doc": "hook"},
+                "deliveries": {"doc": utcnow().isoformat()},
+            },
+        )
+        await db.commit()
+    registry = ConnectorRegistry()  # No Onshape factory: a provider call would fail.
+    enqueue = AsyncMock()
+    assert (
+        await run_change_detection(
+            sessionmaker=maker, registry=registry, secret_store=store, enqueue=enqueue
+        )
+        == 0
+    )
+    enqueue.assert_not_called()
+
+
+async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.httpcache import InMemoryCacheStore
+    from solus_api.connectors.integration_cache import IntegrationCache
+    from solus_api.connectors.onshape import PROJECTION_VERSION, OnshapeConnector
+    from solus_api.connectors.worker import sync_source
+    from solus_api.services.connections import account_ref_for
+    from solus_api.services.onshape_webhooks import hint_state, save_state, state_for
+
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    document, workspace = "a" * 24, "b" * 24
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        row.type = SourceType.ONSHAPE
+        row.config = {"documents": [document]}
+        row.cursor = {
+            "microversions": {document: "old"},
+            "workspaces": {document: workspace},
+            "projection_version": PROJECTION_VERSION,
+        }
+        save_state(row, hint_state({}))
+        await db.commit()
+    cache = IntegrationCache(InMemoryCacheStore())
+    await cache.record_signal(
+        cache.signal_key("onshape", account_ref_for(source), document),
+        {"workspace": workspace, "version": "old"},
+    )
+    fresh_probe = AsyncMock(return_value="new")
+    synced = AsyncMock(return_value=SyncResult(cursor={"microversions": {document: "new"}}))
+
+    def factory(ctx):
+        connector = OnshapeConnector(
+            client_id="test",
+            client_secret="test",
+            cache=cache,
+            account_ref=ctx.account_ref,
+            signal_max_age_seconds=None if ctx.purpose == "webhook" else 300,
+        )
+        connector._current_microversion = fresh_probe
+        connector.sync = synced
+        return connector
+
+    registry = ConnectorRegistry()
+    registry.register_scoped("onshape", factory)
+    await sync_source(
+        {"sessionmaker": maker, "registry": registry, "secret_store": store},
+        str(source.id),
+        webhook=True,
+    )
+    fresh_probe.assert_awaited_once()
+    synced.assert_awaited_once()
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        assert row.cursor["microversions"][document] == "new"
+        assert state_for(row)["acknowledged"] == 1
+
+
+async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker):
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.worker import recover_onshape_hints
+    from solus_api.models import utcnow
+    from solus_api.services.onshape_webhooks import hint_state, save_state
+
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        row.type = SourceType.ONSHAPE
+        row.last_synced_at = utcnow()
+        save_state(row, hint_state({}))
+        for index in range(3):
+            db.add(
+                Source(
+                    project_id=row.project_id,
+                    team_id=row.team_id,
+                    type=SourceType.ONSHAPE,
+                    name=f"healthy{index}",
+                    status=SourceStatus.CONNECTED,
+                    config={},
+                    last_synced_at=utcnow() - timedelta(days=1),
+                )
+            )
+        await db.commit()
+    redis = AsyncMock()
+    assert await recover_onshape_hints({"sessionmaker": maker, "redis": redis}) == 1
+    redis.enqueue_job.assert_awaited_once_with(
+        "sync_source", str(source.id), _job_id=f"onshape-recovery:{source.id}", webhook=True
+    )
+
+
+async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker):
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from solus_api.models import utcnow
+    from solus_api.services.onshape_webhooks import save_state
+
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        row.type = SourceType.ONSHAPE
+        row.last_synced_at = utcnow()
+        for index in range(3):
+            healthy = Source(
+                project_id=row.project_id,
+                team_id=row.team_id,
+                type=SourceType.ONSHAPE,
+                name=f"healthy{index}",
+                status=SourceStatus.CONNECTED,
+                config={"documents": ["doc"]},
+                last_synced_at=utcnow() - timedelta(days=1),
+            )
+            save_state(
+                healthy,
+                {
+                    "status": "registered",
+                    "subscriptions": {"doc": "hook"},
+                    "deliveries": {"doc": utcnow().isoformat()},
+                },
+            )
+            db.add(healthy)
+        await db.commit()
+    registry = ConnectorRegistry()
+    registry.register("onshape", StubConnector)
+    enqueue = AsyncMock()
+    kwargs = dict(sessionmaker=maker, registry=registry, secret_store=store, enqueue=enqueue)
+    assert await run_change_detection(**kwargs) == 0
+    assert await run_change_detection(**kwargs) == 1
+    enqueue.assert_awaited_once_with(source.id)

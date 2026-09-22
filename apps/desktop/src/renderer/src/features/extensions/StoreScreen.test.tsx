@@ -79,6 +79,11 @@ async function renderStore(): Promise<void> {
 }
 
 describe('StoreScreen', () => {
+  registerStoreCatalogAndRequirementsTests()
+  registerStoreNavigationAndLayoutsTests()
+})
+
+function registerStoreCatalogAndRequirementsTests(): void {
   it('asks for a project when none is open', () => {
     useWorkspaceStore.setState({ project: null })
     render(<StoreScreen />)
@@ -132,7 +137,9 @@ describe('StoreScreen', () => {
     expect(screen.getByText('Nothing installed in this project yet.')).toBeInTheDocument()
     expect(screen.getByText(/catalog is unavailable/i)).toBeInTheDocument()
   })
+}
 
+function registerStoreNavigationAndLayoutsTests(): void {
   it('counts the updates available across installed extensions', async () => {
     vi.mocked(ext.listProjectExtensions).mockImplementation(() =>
       page([
@@ -184,4 +191,4 @@ describe('StoreScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /Create extension/ }))
     expect(screen.getByRole('heading', { name: 'Create an extension' })).toBeInTheDocument()
   })
-})
+}

@@ -278,11 +278,11 @@ function settled(card: DeviceCardState | undefined): card is DeviceCardState {
   return card !== undefined && card.status !== 'confirming' && card.status !== 'done'
 }
 
-export function useDeviceProposals(
+function usePendingDeviceCards(
   projectId: string | null,
   devices: DetectedDeviceOut[] | null,
   entities: readonly Entity[] | null
-): DeviceProposals {
+) {
   const generation = useWorkspaceSessionGeneration()
   // Cards belong to the project that produced them; a switch shows nothing
   // until reconcile() has run for the new project.
@@ -313,35 +313,16 @@ export function useDeviceProposals(
     [pending, states]
   )
 
-  const confirm = useCallback(
-    async (ref: string, input: ConfirmInput): Promise<ConfirmOut | null> => {
-      const card = useStore.getState().states[ref]
-      if (!projectId || !current(projectId, generation) || !settled(card) || !card.proposal)
-        return null
-      const appearance = useStore.getState().appearances[ref]
-      const body = confirmBody(card.proposal, input)
-      patch(ref, { status: 'confirming', error: null, conflictRobotId: null })
-      const confirmationStart = startConfirmation()
-      try {
-        const result = await confirmDetected(projectId, ref, body)
-        // The robot's card closes hw:confirm_to_node when it mounts (GraphCard).
-        if (!currentAppearance(projectId, generation, ref, appearance)) return null
-        awaitMark(result.robot.id, confirmationStart)
-        if (currentAppearance(projectId, generation, ref, appearance))
-          patch(ref, { status: 'done', result })
-        return result
-      } catch (failure) {
-        if (currentAppearance(projectId, generation, ref, appearance))
-          patch(ref, {
-            status: 'failed',
-            error: hardwareErrorText(failure),
-            conflictRobotId: conflictRobotId(failure)
-          })
-        return null
-      }
-    },
-    [projectId, generation]
-  )
+  return { cards, generation }
+}
+
+export function useDeviceProposals(
+  projectId: string | null,
+  devices: DetectedDeviceOut[] | null,
+  entities: readonly Entity[] | null
+): DeviceProposals {
+  const { cards, generation } = usePendingDeviceCards(projectId, devices, entities)
+  const confirm = useDeviceConfirmation(projectId, generation)
 
   const accept = useCallback(
     async (ref: string, suggestionId: string): Promise<boolean> => {
@@ -388,4 +369,41 @@ export function useDeviceProposals(
   )
 
   return { cards, confirm, accept, dismiss, retry }
+}
+
+function useDeviceConfirmation(
+  projectId: string | null,
+  generation: ReturnType<typeof useWorkspaceSessionGeneration>
+): DeviceProposals['confirm'] {
+  const confirm = useCallback(
+    async (ref: string, input: ConfirmInput): Promise<ConfirmOut | null> => {
+      const card = useStore.getState().states[ref]
+      if (!projectId || !current(projectId, generation) || !settled(card) || !card.proposal)
+        return null
+      const appearance = useStore.getState().appearances[ref]
+      const body = confirmBody(card.proposal, input)
+      patch(ref, { status: 'confirming', error: null, conflictRobotId: null })
+      const confirmationStart = startConfirmation()
+      try {
+        const result = await confirmDetected(projectId, ref, body)
+        // The robot's card closes hw:confirm_to_node when it mounts (GraphCard).
+        if (!currentAppearance(projectId, generation, ref, appearance)) return null
+        awaitMark(result.robot.id, confirmationStart)
+        if (currentAppearance(projectId, generation, ref, appearance))
+          patch(ref, { status: 'done', result })
+        return result
+      } catch (failure) {
+        if (currentAppearance(projectId, generation, ref, appearance))
+          patch(ref, {
+            status: 'failed',
+            error: hardwareErrorText(failure),
+            conflictRobotId: conflictRobotId(failure)
+          })
+        return null
+      }
+    },
+    [projectId, generation]
+  )
+
+  return confirm
 }

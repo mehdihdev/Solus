@@ -35,6 +35,7 @@ from solus_contracts import SOLUS_HOME_DIRNAME
 
 from solus_companion import __version__
 from solus_companion.credentials import CredentialRelay
+from solus_companion.platforms import unavailable_reason
 
 logger = logging.getLogger("solus.companion.config")
 
@@ -120,6 +121,7 @@ class ServerLaunch:
     #: The fork runs in its own directory. Without this it inherits the
     #: companion's, which the launch contract forbids.
     cwd: Path | None = None
+    unavailable_reason: str | None = None
 
 
 class TokenBox:
@@ -435,6 +437,10 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
             # is how a cloud-side fork (no Node here) took the bridge down with
             # an abnormal session end before `hello` (SOLUSDEV-252, live).
             logger.info("server %r is launched by %s; not starting it here", name, owner)
+            continue
+        reason = unavailable_reason(root_resolved, server_dir, sys.platform)
+        if reason is not None:
+            servers.append(ServerLaunch(name=name, unavailable_reason=reason))
             continue
         url = _server_url(allowlist, name)
         if url == "":  # declared, but refused as non-loopback

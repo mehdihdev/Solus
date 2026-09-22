@@ -227,3 +227,16 @@ founder call with every consuming lane merged-up in the same window.
 
 Any change that weakens property 1, 3 or 5 is a security change, not a contract change, and
 goes to a human (CLAUDE.md §7).
+
+## Build action policy amendment — SOLUSDEV-261 (2026-09-13)
+
+The user explicitly requested routine Build edits execute automatically. The
+mutation descriptor remains true, so Guide still structurally refuses writes.
+The central dispatcher may execute only a trusted code-owned routine tool in
+Build mode after schema/authorization and complete fresh preview validation.
+This is a distinct audited Build authorization, never a fabricated human approval.
+Consume authorization before dispatch; duplicate, cancelled or uncertain writes
+must not be retried automatically. Preserve native single-use bindings, project
+and source restrictions, fingerprints and postwrite readback. Unknown/destructive,
+remote publish, installs, hardware, credential/permission operations remain
+manual. No model/fork-supplied metadata can opt into routine execution.

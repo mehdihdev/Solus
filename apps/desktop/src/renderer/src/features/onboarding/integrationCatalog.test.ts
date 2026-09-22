@@ -33,6 +33,60 @@ const FUSION_TOOL: LocalTool = {
 }
 
 describe('loadIntegrationCatalog', () => {
+  registerLiveCatalogCapabilitiesTests()
+
+  registerCatalogFallbacksTests()
+})
+
+describe('loadIntegrationCatalog — local-bridge tiles (SOLUSDEV-72)', () => {
+  // The acceptance bar: the NEXT local tool must need zero frontend edits.
+  it('derives a REAL local-bridge tile from the live local-tools registry', async () => {
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => [FUSION_TOOL])
+    )
+    const fusion = catalog.find((e) => e.id === 'fusion')
+    expect(fusion?.mode).toBe('local-bridge')
+    expect(fusion?.name).toBe('Fusion')
+    // The registry entry rides along so the connect action can show its
+    // guidance without a per-tool lookup.
+    expect(fusion?.localTool).toEqual(FUSION_TOOL)
+  })
+
+  it('a tool the frontend has never heard of still gets a tile', async () => {
+    const next: LocalTool = { ...FUSION_TOOL, type: 'blender', display_name: 'Blender' }
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => [next])
+    )
+    expect(catalog.find((e) => e.id === 'blender')?.mode).toBe('local-bridge')
+    expect(catalog.find((e) => e.id === 'blender')?.name).toBe('Blender')
+  })
+
+  it('never duplicates a provider that already has a drivable tile', async () => {
+    const githubTool: LocalTool = { ...FUSION_TOOL, type: 'github', display_name: 'GitHub' }
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => [githubTool])
+    )
+    const github = catalog.filter((e) => e.id === 'github')
+    expect(github).toHaveLength(1)
+    expect(github[0].mode).toBe('oauth')
+  })
+
+  it('a failing local-tools fetch degrades to no bridge tiles, not an error', async () => {
+    const catalog = await loadIntegrationCatalog(
+      vi.fn(async () => LIVE),
+      vi.fn(async () => {
+        throw new Error('offline')
+      })
+    )
+    expect(catalog.find((e) => e.mode === 'local-bridge')).toBeUndefined()
+    expect(catalog.find((e) => e.id === 'github')?.mode).toBe('oauth')
+  })
+})
+
+function registerLiveCatalogCapabilitiesTests(): void {
   it('marks live committed-export providers as export-file connectable', async () => {
     const catalog = await loadIntegrationCatalog(
       vi.fn(async () => LIVE),
@@ -97,7 +151,9 @@ describe('loadIntegrationCatalog', () => {
     expect(catalog.find((e) => e.id === 'ros')).toBeUndefined()
     expect(catalog.find((e) => e.id === 'jira')).toBeUndefined()
   })
+}
 
+function registerCatalogFallbacksTests(): void {
   it('drops a curated provider the live registry no longer carries', async () => {
     const withoutKicad = LIVE.filter((integration) => integration.type !== 'kicad')
     const catalog = await loadIntegrationCatalog(
@@ -139,52 +195,4 @@ describe('loadIntegrationCatalog', () => {
     expect(byId.get('github')?.configFields).toEqual(['repo', 'branch'])
     expect(byId.get('kicad')?.mode).toBe('export-file')
   })
-})
-
-describe('loadIntegrationCatalog — local-bridge tiles (SOLUSDEV-72)', () => {
-  // The acceptance bar: the NEXT local tool must need zero frontend edits.
-  it('derives a REAL local-bridge tile from the live local-tools registry', async () => {
-    const catalog = await loadIntegrationCatalog(
-      vi.fn(async () => LIVE),
-      vi.fn(async () => [FUSION_TOOL])
-    )
-    const fusion = catalog.find((e) => e.id === 'fusion')
-    expect(fusion?.mode).toBe('local-bridge')
-    expect(fusion?.name).toBe('Fusion')
-    // The registry entry rides along so the connect action can show its
-    // guidance without a per-tool lookup.
-    expect(fusion?.localTool).toEqual(FUSION_TOOL)
-  })
-
-  it('a tool the frontend has never heard of still gets a tile', async () => {
-    const next: LocalTool = { ...FUSION_TOOL, type: 'blender', display_name: 'Blender' }
-    const catalog = await loadIntegrationCatalog(
-      vi.fn(async () => LIVE),
-      vi.fn(async () => [next])
-    )
-    expect(catalog.find((e) => e.id === 'blender')?.mode).toBe('local-bridge')
-    expect(catalog.find((e) => e.id === 'blender')?.name).toBe('Blender')
-  })
-
-  it('never duplicates a provider that already has a drivable tile', async () => {
-    const githubTool: LocalTool = { ...FUSION_TOOL, type: 'github', display_name: 'GitHub' }
-    const catalog = await loadIntegrationCatalog(
-      vi.fn(async () => LIVE),
-      vi.fn(async () => [githubTool])
-    )
-    const github = catalog.filter((e) => e.id === 'github')
-    expect(github).toHaveLength(1)
-    expect(github[0].mode).toBe('oauth')
-  })
-
-  it('a failing local-tools fetch degrades to no bridge tiles, not an error', async () => {
-    const catalog = await loadIntegrationCatalog(
-      vi.fn(async () => LIVE),
-      vi.fn(async () => {
-        throw new Error('offline')
-      })
-    )
-    expect(catalog.find((e) => e.mode === 'local-bridge')).toBeUndefined()
-    expect(catalog.find((e) => e.id === 'github')?.mode).toBe('oauth')
-  })
-})
+}

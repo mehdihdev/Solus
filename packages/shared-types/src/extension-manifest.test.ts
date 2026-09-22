@@ -65,6 +65,130 @@ function parsed(value: unknown): ExtensionManifest {
   return result.manifest;
 }
 
+const INVALID_MANIFEST_CASES: [string, unknown][] = [
+  ["null", null],
+  ["array", []],
+  ["string", "x"],
+  ["no views", { ...MINIMAL, views: {} }],
+  [
+    "scope outside the closed set",
+    {
+      ...MINIMAL,
+      permissions: { scopes: ["filesystem.write"], network: [] },
+      store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
+    },
+  ],
+  [
+    "http network origin",
+    {
+      ...MINIMAL,
+      permissions: { scopes: [], network: ["http://api.example"] },
+      store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
+    },
+  ],
+  [
+    "network origin with a path",
+    {
+      ...MINIMAL,
+      permissions: { scopes: [], network: ["https://api.example/v1"] },
+      store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
+    },
+  ],
+  [
+    "select without options",
+    {
+      ...MINIMAL,
+      settings: { fields: [{ key: "mode", type: "select", label: "Mode" }] },
+    },
+  ],
+  [
+    "default of the wrong type",
+    {
+      ...MINIMAL,
+      settings: {
+        fields: [{ key: "n", type: "number", label: "N", default: "ten" }],
+      },
+    },
+  ],
+  [
+    "duplicate setting keys",
+    {
+      ...MINIMAL,
+      settings: {
+        fields: [
+          { key: "a", type: "boolean", label: "A" },
+          { key: "a", type: "boolean", label: "B" },
+        ],
+      },
+    },
+  ],
+  [
+    "http store link",
+    {
+      ...MINIMAL,
+      store: {
+        overview: "OVERVIEW.md",
+        links: { documentation: "http://x.example" },
+      },
+    },
+  ],
+  [
+    "overview that is not markdown",
+    { ...MINIMAL, store: { overview: "OVERVIEW.exe" } },
+  ],
+  [
+    "absolute icon path",
+    {
+      ...MINIMAL,
+      views: {
+        page: { entry: "page.html", icon: "/etc/icon.svg", label: "P" },
+      },
+    },
+  ],
+  [
+    "unknown requires kind",
+    {
+      ...MINIMAL,
+      extension: { ...MINIMAL.extension, requires: [["bluetooth"]] },
+    },
+  ],
+  [
+    "empty requires group",
+    {
+      ...MINIMAL,
+      extension: { ...MINIMAL.extension, requires: [[]] },
+    },
+  ],
+  [
+    "non-semver version",
+    {
+      ...MINIMAL,
+      extension: { ...MINIMAL.extension, version: "v1" },
+    },
+  ],
+  [
+    "summary over the cap",
+    {
+      ...MINIMAL,
+      extension: {
+        ...MINIMAL.extension,
+        summary: "x".repeat(MANIFEST_LIMITS.summary + 1),
+      },
+    },
+  ],
+  [
+    "too many scopes",
+    {
+      ...MINIMAL,
+      permissions: {
+        scopes: [...PERMISSION_SCOPES, "graph.read"],
+        network: [],
+      },
+      store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
+    },
+  ],
+];
+
 describe("the shared fixtures parse", () => {
   test("full manifest is valid and every declared block survives", () => {
     const m = parsed(FULL);
@@ -154,6 +278,29 @@ describe("field lists match the Python-emitted manifest", () => {
 });
 
 describe("strict rejection (parity with the Python model)", () => {
+  registerManifestFieldValidationTests();
+  registerInvalidManifestShapeTests();
+  registerNetworkPrivacyRequirementTests();
+});
+
+describe("ids", () => {
+  test("slug rule is lowercase, folder-safe, 2–64 chars", () => {
+    expect(EXTENSION_ID_RE.test("bom")).toBe(true);
+    expect(EXTENSION_ID_RE.test("can-telemetry-2")).toBe(true);
+    expect(EXTENSION_ID_RE.test("b")).toBe(false);
+    expect(EXTENSION_ID_RE.test("Bom")).toBe(false);
+    expect(EXTENSION_ID_RE.test("2bom")).toBe(false);
+    expect(EXTENSION_ID_RE.test("a".repeat(65))).toBe(false);
+  });
+
+  test("object-internal names are refused even though the regex admits them", () => {
+    expect(isSafeExtensionId("constructor")).toBe(false);
+    expect(isSafeExtensionId("prototype")).toBe(false);
+    expect(isSafeExtensionId("bom")).toBe(true);
+  });
+});
+
+function registerManifestFieldValidationTests(): void {
   test.each([
     ["bad id", badId, /extension\.id/],
     ["missing privacy policy", missingPrivacy, /privacy_policy/],
@@ -181,133 +328,15 @@ describe("strict rejection (parity with the Python model)", () => {
       reason: "newer",
     });
   });
+}
 
-  test.each([
-    ["null", null],
-    ["array", []],
-    ["string", "x"],
-    ["no views", { ...MINIMAL, views: {} }],
-    [
-      "scope outside the closed set",
-      {
-        ...MINIMAL,
-        permissions: { scopes: ["filesystem.write"], network: [] },
-        store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
-      },
-    ],
-    [
-      "http network origin",
-      {
-        ...MINIMAL,
-        permissions: { scopes: [], network: ["http://api.example"] },
-        store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
-      },
-    ],
-    [
-      "network origin with a path",
-      {
-        ...MINIMAL,
-        permissions: { scopes: [], network: ["https://api.example/v1"] },
-        store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
-      },
-    ],
-    [
-      "select without options",
-      {
-        ...MINIMAL,
-        settings: { fields: [{ key: "mode", type: "select", label: "Mode" }] },
-      },
-    ],
-    [
-      "default of the wrong type",
-      {
-        ...MINIMAL,
-        settings: {
-          fields: [{ key: "n", type: "number", label: "N", default: "ten" }],
-        },
-      },
-    ],
-    [
-      "duplicate setting keys",
-      {
-        ...MINIMAL,
-        settings: {
-          fields: [
-            { key: "a", type: "boolean", label: "A" },
-            { key: "a", type: "boolean", label: "B" },
-          ],
-        },
-      },
-    ],
-    [
-      "http store link",
-      {
-        ...MINIMAL,
-        store: {
-          overview: "OVERVIEW.md",
-          links: { documentation: "http://x.example" },
-        },
-      },
-    ],
-    [
-      "overview that is not markdown",
-      { ...MINIMAL, store: { overview: "OVERVIEW.exe" } },
-    ],
-    [
-      "absolute icon path",
-      {
-        ...MINIMAL,
-        views: {
-          page: { entry: "page.html", icon: "/etc/icon.svg", label: "P" },
-        },
-      },
-    ],
-    [
-      "unknown requires kind",
-      {
-        ...MINIMAL,
-        extension: { ...MINIMAL.extension, requires: [["bluetooth"]] },
-      },
-    ],
-    [
-      "empty requires group",
-      {
-        ...MINIMAL,
-        extension: { ...MINIMAL.extension, requires: [[]] },
-      },
-    ],
-    [
-      "non-semver version",
-      {
-        ...MINIMAL,
-        extension: { ...MINIMAL.extension, version: "v1" },
-      },
-    ],
-    [
-      "summary over the cap",
-      {
-        ...MINIMAL,
-        extension: {
-          ...MINIMAL.extension,
-          summary: "x".repeat(MANIFEST_LIMITS.summary + 1),
-        },
-      },
-    ],
-    [
-      "too many scopes",
-      {
-        ...MINIMAL,
-        permissions: {
-          scopes: [...PERMISSION_SCOPES, "graph.read"],
-          network: [],
-        },
-        store: { overview: "OVERVIEW.md", privacy_policy: "PRIVACY.md" },
-      },
-    ],
-  ])("%s", (_label, value) => {
+function registerInvalidManifestShapeTests(): void {
+  test.each(INVALID_MANIFEST_CASES)("%s", (_label, value) => {
     expect(parseExtensionManifest(value).ok).toBe(false);
   });
+}
 
+function registerNetworkPrivacyRequirementTests(): void {
   test("declaring only network still requires a privacy policy", () => {
     const result = parseExtensionManifest({
       ...MINIMAL,
@@ -315,21 +344,4 @@ describe("strict rejection (parity with the Python model)", () => {
     });
     expect(result.ok).toBe(false);
   });
-});
-
-describe("ids", () => {
-  test("slug rule is lowercase, folder-safe, 2–64 chars", () => {
-    expect(EXTENSION_ID_RE.test("bom")).toBe(true);
-    expect(EXTENSION_ID_RE.test("can-telemetry-2")).toBe(true);
-    expect(EXTENSION_ID_RE.test("b")).toBe(false);
-    expect(EXTENSION_ID_RE.test("Bom")).toBe(false);
-    expect(EXTENSION_ID_RE.test("2bom")).toBe(false);
-    expect(EXTENSION_ID_RE.test("a".repeat(65))).toBe(false);
-  });
-
-  test("object-internal names are refused even though the regex admits them", () => {
-    expect(isSafeExtensionId("constructor")).toBe(false);
-    expect(isSafeExtensionId("prototype")).toBe(false);
-    expect(isSafeExtensionId("bom")).toBe(true);
-  });
-});
+}

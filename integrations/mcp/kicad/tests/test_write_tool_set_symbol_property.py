@@ -36,8 +36,23 @@ from solus.write.errors import (  # isort: skip
 from solus.write.set_symbol_property import (  # isort: skip
     RESULT_KEYS,
     register_write_tools,
-    set_symbol_property_impl,
+    set_symbol_property_impl as _bound_impl,
 )
+
+
+from solus.development.models import DevelopmentError, fingerprint
+from solus.workspace import workspace_root
+
+
+def set_symbol_property_impl(path, reference, property_name, value):
+    """Legacy regression cases use an actual observed digest, never bypass binding."""
+    target = Path(path)
+    relative = (
+        str(target.relative_to(workspace_root()))
+        if target.is_relative_to(workspace_root())
+        else path
+    )
+    return _bound_impl(relative, reference, property_name, value, fingerprint(target.read_bytes()))
 
 
 def _workspace_with_sample(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
@@ -76,7 +91,7 @@ def test_real_mpn_edit_changes_only_the_targeted_value(
 
     result = set_symbol_property_impl(str(copy_path), "U1", "MPN", "STM32F030F4P7")
 
-    assert result == {
+    assert {key: result[key] for key in RESULT_KEYS} == {
         "changed": True,
         "reference": "U1",
         "property": "MPN",
@@ -162,6 +177,12 @@ def test_adversarial_values_produce_a_correct_splice(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, adversarial_value: str
 ) -> None:
     copy_path = _workspace_with_sample(monkeypatch, tmp_path)
+    if len(adversarial_value) > 400:
+        before = copy_path.read_bytes()
+        with pytest.raises(DevelopmentError, match="file_too_large"):
+            set_symbol_property_impl(str(copy_path), "U1", "MPN", adversarial_value)
+        assert copy_path.read_bytes() == before
+        return
     result = set_symbol_property_impl(str(copy_path), "U1", "MPN", adversarial_value)
     assert result["changed"] is True
     assert result["new_value"] == adversarial_value
@@ -181,7 +202,7 @@ def test_values_with_control_characters_refuse_cleanly_and_never_corrupt(
     copy_path = _workspace_with_sample(monkeypatch, tmp_path)
     before = copy_path.read_bytes()
 
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "U1", "MPN", hostile_value)
 
     assert excinfo.value.reason == REASON_UNSUPPORTED_VALUE
@@ -197,7 +218,7 @@ def test_a_value_over_the_l3_size_cap_refuses_cleanly_and_never_corrupts(
     before = copy_path.read_bytes()
     oversize_value = "x" * (MAX_PROPERTY_VALUE_BYTES + 1)
 
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "U1", "MPN", oversize_value)
 
     assert excinfo.value.reason == REASON_UNSUPPORTED_VALUE
@@ -212,7 +233,7 @@ def test_refuses_unknown_reference_and_leaves_file_untouched(
 ) -> None:
     copy_path = _workspace_with_sample(monkeypatch, tmp_path)
     before = copy_path.read_bytes()
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "U99", "MPN", "X")
     assert excinfo.value.reason == REASON_REFERENCE_NOT_FOUND
     assert copy_path.read_bytes() == before
@@ -223,7 +244,7 @@ def test_refuses_unknown_property_and_leaves_file_untouched(
 ) -> None:
     copy_path = _workspace_with_sample(monkeypatch, tmp_path)
     before = copy_path.read_bytes()
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "U1", "NoSuchProperty", "X")
     assert excinfo.value.reason == REASON_PROPERTY_NOT_FOUND
     assert copy_path.read_bytes() == before
@@ -245,7 +266,7 @@ def test_refuses_duplicate_reference_as_ambiguous(
         b")"
     )
     before = copy_path.read_bytes()
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "R1", "Value", "1k")
     assert excinfo.value.reason == REASON_AMBIGUOUS_TARGET
     assert copy_path.read_bytes() == before
@@ -265,7 +286,7 @@ def test_refuses_duplicate_property_as_ambiguous(
         b")"
     )
     before = copy_path.read_bytes()
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "R1", "Value", "1k")
     assert excinfo.value.reason == REASON_AMBIGUOUS_TARGET
     assert copy_path.read_bytes() == before
@@ -279,7 +300,7 @@ def test_refuses_a_path_outside_the_workspace(
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(workspace))
     outside = tmp_path / "outside.kicad_sch"
     shutil.copyfile(SOLUS_SAMPLE_SCH, outside)
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(outside), "U1", "MPN", "X")
     assert excinfo.value.reason == REASON_PATH_ESCAPES_WORKSPACE
 
@@ -290,7 +311,7 @@ def test_refuses_an_oversize_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(workspace))
     huge = workspace / "huge.kicad_sch"
     huge.write_bytes(b"(kicad_sch)" + b" " * (8 * 1024 * 1024 + 1))
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(huge), "U1", "MPN", "X")
     assert excinfo.value.reason == REASON_FILE_TOO_LARGE
 
@@ -318,7 +339,7 @@ def test_hostile_schematic_inputs_only_ever_raise_refusalerror(
     hostile = workspace / "hostile.kicad_sch"
     hostile.write_bytes(hostile_bytes)
 
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(hostile), "U1", "MPN", "X")
 
     assert excinfo.value.reason == REASON_FILE_TOO_LARGE
@@ -339,12 +360,14 @@ async def test_tool_wrapper_maps_a_recursion_error_to_a_refusal(
 
     monkeypatch.setattr("solus.write.set_symbol_property.locate_property_value", _boom)
 
-    result = await fake.tools["set_symbol_property"](
-        schematic_path=str(copy_path), reference="U1", property="MPN", value="X"
-    )
-
-    assert result["changed"] is False
-    assert result["reason"] == "guard_failed"
+    with pytest.raises(ValueError, match="guard_failed"):
+        await fake.tools["set_symbol_property"](
+            schematic_path=copy_path.name,
+            expected_fingerprint=fingerprint(copy_path.read_bytes()),
+            reference="U1",
+            property="MPN",
+            value="X",
+        )
 
 
 async def test_tool_wrapper_maps_an_os_error_to_a_refusal(
@@ -361,12 +384,14 @@ async def test_tool_wrapper_maps_an_os_error_to_a_refusal(
 
     monkeypatch.setattr("solus.write.set_symbol_property.locate_property_value", _boom)
 
-    result = await fake.tools["set_symbol_property"](
-        schematic_path=str(copy_path), reference="U1", property="MPN", value="X"
-    )
-
-    assert result["changed"] is False
-    assert result["reason"] == "guard_failed"
+    with pytest.raises(ValueError, match="guard_failed"):
+        await fake.tools["set_symbol_property"](
+            schematic_path=copy_path.name,
+            expected_fingerprint=fingerprint(copy_path.read_bytes()),
+            reference="U1",
+            property="MPN",
+            value="X",
+        )
 
 
 def test_guard_injection_via_monkeypatch_refuses_and_leaves_no_temp_litter(
@@ -384,7 +409,7 @@ def test_guard_injection_via_monkeypatch_refuses_and_leaves_no_temp_litter(
         raise RefusalError(REASON_GUARD_FAILED)
 
     monkeypatch.setattr("solus.write.set_symbol_property.verify_byte_stable_splice", _always_fails)
-    with pytest.raises(RefusalError) as excinfo:
+    with pytest.raises((RefusalError, DevelopmentError)) as excinfo:
         set_symbol_property_impl(str(copy_path), "U1", "MPN", "STM32F030F4P9")
 
     assert excinfo.value.reason == "guard_failed"
@@ -404,14 +429,14 @@ async def test_tool_wrapper_returns_a_refusal_shaped_result_on_bad_reference(
     fake = FakeMCP()
     register_write_tools(fake)
 
-    result = await fake.tools["set_symbol_property"](
-        schematic_path=str(copy_path), reference="U99", property="MPN", value="X"
-    )
-
-    assert result["changed"] is False
-    assert result["reason"] == REASON_REFERENCE_NOT_FOUND
-    assert result["old_value"] is None
-    assert result["new_value"] is None
+    with pytest.raises(ValueError, match="reference_not_found"):
+        await fake.tools["set_symbol_property"](
+            schematic_path=copy_path.name,
+            expected_fingerprint=fingerprint(copy_path.read_bytes()),
+            reference="U99",
+            property="MPN",
+            value="X",
+        )
 
 
 async def test_tool_wrapper_returns_the_success_shape_on_a_real_edit(
@@ -422,7 +447,11 @@ async def test_tool_wrapper_returns_the_success_shape_on_a_real_edit(
     register_write_tools(fake)
 
     result = await fake.tools["set_symbol_property"](
-        schematic_path=str(copy_path), reference="U1", property="MPN", value="STM32F030F4P7"
+        schematic_path=copy_path.name,
+        expected_fingerprint=fingerprint(copy_path.read_bytes()),
+        reference="U1",
+        property="MPN",
+        value="STM32F030F4P7",
     )
 
     assert RESULT_KEYS <= set(result)
@@ -458,3 +487,104 @@ def test_set_symbol_property_is_still_pending_wiring_in_the_roster() -> None:
     registered — flips to EXPOSED only when roster.py/registration.py are
     updated by whoever owns those files (see completion report)."""
     assert "set_symbol_property" in WRITE_ROSTER
+
+
+@pytest.mark.asyncio
+async def test_bound_property_preview_is_complete_and_write_preserves_other_bytes(
+    monkeypatch, tmp_path
+):
+    from solus.development.models import fingerprint
+
+    path = _workspace_with_sample(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    fake = FakeMCP()
+    register_write_tools(fake)
+    tool = fake.tools["set_symbol_property"]
+    args = dict(
+        schematic_path=path.name,
+        reference="R1",
+        property="Value",
+        value="10k",
+        expected_fingerprint=fingerprint(before),
+    )
+    preview = await tool(**args, dry_run=True)
+    assert preview["dry_run"] is True
+    assert path.read_bytes() == before
+    assert {"label": "R1 · Value", "before": "4.7k", "after": "10k"} in preview["preview"]
+    result = await tool(**args)
+    assert result["verified"] is True
+    located = locate_property_value(before, "R1", "Value")
+    assert path.read_bytes() == before[: located.start] + b'"10k"' + before[located.end :]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["stale", "missing", "oversize"])
+async def test_bound_property_refuses_unsafe_or_incomplete_write(monkeypatch, tmp_path, failure):
+    from solus.development.models import fingerprint
+
+    path = _workspace_with_sample(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    fake = FakeMCP()
+    register_write_tools(fake)
+    args = dict(
+        schematic_path=path.name,
+        reference="R1",
+        property="Value",
+        value="10k",
+        expected_fingerprint=fingerprint(before),
+    )
+    if failure == "stale":
+        args["expected_fingerprint"] = fingerprint(b"old")
+    elif failure == "missing":
+        args.pop("expected_fingerprint")
+    else:
+        args["value"] = "x" * 401
+    with pytest.raises(ValueError):
+        await fake.tools["set_symbol_property"](**args, dry_run=True)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [{"unexpected": True}, {"dry_run": "true"}])
+async def test_property_real_mcp_rejects_coercion_and_extra_fields(monkeypatch, tmp_path, extra):
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ToolError
+    from solus.trimming import TrimmingRegistrar
+
+    path = _workspace_with_sample(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    server = FastMCP("property boundary")
+    register_write_tools(TrimmingRegistrar(server, allowed={"set_symbol_property"}))
+    args = dict(
+        schematic_path=path.name,
+        reference="R1",
+        property="Value",
+        value="10k",
+        expected_fingerprint=fingerprint(before),
+        dry_run=True,
+    )
+    with pytest.raises(ToolError):
+        await server.call_tool("set_symbol_property", {**args, **extra})
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_property_real_mcp_refusal_is_error_not_success(monkeypatch, tmp_path):
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ToolError
+    from solus.trimming import TrimmingRegistrar
+
+    path = _workspace_with_sample(monkeypatch, tmp_path)
+    server = FastMCP("property refusal")
+    register_write_tools(TrimmingRegistrar(server, allowed={"set_symbol_property"}))
+    with pytest.raises(ToolError, match="stale_plan"):
+        await server.call_tool(
+            "set_symbol_property",
+            dict(
+                schematic_path=path.name,
+                reference="R1",
+                property="Value",
+                value="10k",
+                dry_run=True,
+            ),
+        )

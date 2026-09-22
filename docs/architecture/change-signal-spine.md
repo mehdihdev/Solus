@@ -228,3 +228,99 @@ stays queued; ARQ defers that specific job by 30 seconds, with a two-hour wall-c
 Cancellation/expiry marks only the matching project's unfinished job, preserves completed work,
 and does not reset a newer synchronization. Other worker jobs retain their existing timeouts.
 A failed change probe never advances the last successful sync timestamp.
+
+### SOLUSDEV-261 — approved native Onshape writes
+
+A successful approval of a registered native Onshape write is another change
+producer. The confirmation route uses the stored arguments and current project/
+team scope, resolves the live tracked source and grant, removes only the target
+document's cached signal, and enqueues the existing sync job with the deciding
+user. Both existing source and account fallback cache identities are invalidated;
+immutable payload caches remain intact. Invalidation failures are surfaced rather
+than silently trusting the old microversion.
+
+Approval never waits for CAD export, including when development `sync_inline` is
+enabled. The existing queue/worker, change probe, ingestion and `graph.changed`
+publication remain authoritative. Rejections, stale/failed executions, reads and
+unknown hosted operations do not produce this hint. Scheduling failure preserves
+the successful CAD outcome and instructs the user to retry source sync, never the
+already-applied mutation. Scheduling uses a separate database session so its
+failure cannot poison confirmation history.
+
+## Onshape transport/reconciliation amendment — SOLUSDEV-261
+
+The approved ADR-019/035 amendment supersedes blanket polling and blanket bans on
+caching inside confirmable operations. Mutable target state and microversion
+checks remain fresh; reuse is limited to immutable donor revisions and
+specifications bound to a freshly verified revision and account scope.
+
+Onshape webhook lifecycle and dirty generations live in internal Source.config
+metadata (`_onshape_webhook`), not the replacement connector cursor. Updates lock
+the Source row and merge only this internal key. Registration records document
+subscriptions, status and observed delivery health. Dirty generation increases
+for accepted external hints and verified local writes; a worker captures a
+generation and acknowledges only that generation after successful full-snapshot
+reconciliation. Later generations survive and schedule a trailing run. Provider
+payloads never supply project/team/acting-user authority. Bounded event identity
+storage deduplicates deliveries; saturation retains dirty state rather than
+silently dropping freshness. Existing ARQ work executes reconciliation; a bounded
+local sweep recovers unacknowledged generations after enqueue failure/restart.
+
+Healthy registered subscriptions replace routine vendor polling. Missing, failed,
+or unverified subscriptions retain explicit bounded recovery behavior; localhost
+callbacks are unavailable, never reported healthy. Vendor registration must use
+pinned Onshape transport with owner credentials and a validated public HTTPS
+callback. Source removal/revocation invalidates local webhook authority immediately;
+remote cleanup is best effort with recorded failure. No webhook carries graph
+facts. Graph state becomes current only after authoritative reconciliation.
+
+Acquisition continues to return a complete SyncResult. Larger documents use
+bounded complete staging; failures do not apply a partial snapshot. Dependency
+closure remains conservative when cross-tab effects cannot be proven. Coalescing
+avoids a full export after each operation without treating intended writes as
+verified downstream geometry.
+
+### Onshape revision proof and OAuth quota identity (SOLUSDEV-261)
+
+Acquisition reads element lists and part metadata at the planned immutable
+microversion. Workspace-only asynchronous STEP translations require fresh revision
+checks before submission and after completion/download, both matching the planned
+revision. Drift fails the complete snapshot without publishing a cache payload or
+automatically replaying an export. A new acquisition cache namespace excludes
+payloads stored before revision verification; the projection version requests one
+quota-gated repair sync for existing sources. Cold exports add two verification
+reads; validated warm export payloads do not repeat them.
+
+Onshape quota estimates and provider-exhaustion flags are scoped to the OAuth
+application that issued the grant plus the provider account. Reconnecting or
+rotating a secret for the same application does not reset either. A configured
+application change cannot relabel a previously issued token. Legacy records remain
+intact; application attribution must be established by successful authorization,
+not client-supplied source configuration. This implements the approved ADR-019
+application-identity amendment without asserting a renewed provider allowance.
+
+### SOL turn reconciliation deferral (SOLUSDEV-261)
+
+A Build turn may perform several independently verified native CAD writes.
+Reconciliation must retain durable dirty generations while waiting for that
+turn's writes to finish. Before an already-admitted native write is invoked,
+record the affected source dirty, invalidate its document signal and acquire a
+server-owned turn hold in existing source reconciliation metadata. This is
+bookkeeping after authorization, never authority to execute a model proposal.
+It also covers uncertain outcomes and cancellation without replaying a write.
+
+Each hold has an independent server UUID and fixed expiry bounded by the turn's
+300-second deadline plus 30 seconds; at most 32 live owners are admitted per
+source. Row locks protect updates. Never evict another live owner or release
+its hold. Turn cleanup releases only its own holds and schedules one normal
+reconciliation per dirty source when no live holds remain. Failed cleanup or
+enqueue is recovered through durable dirty state and hold expiry. Successful
+write results report graph sync as deferred, not queued or current. Standalone
+confirmation decisions retain immediate scheduling.
+
+Webhook, sweep/recovery and already-queued job admission respect live holds;
+accepted jobs stay queued under existing bounded defer semantics. Direct CAD
+reads and mandatory write readbacks remain immediate. Exports started before a
+hold still rely on revision bracketing and may fail; this is not transactional
+isolation against concurrent editors. Generation acknowledgments never clear
+later changes. No new public route, database column or tool authority is added.

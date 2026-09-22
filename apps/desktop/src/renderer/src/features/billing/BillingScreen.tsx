@@ -127,7 +127,13 @@ function BillingLive({ data }: { data: BillingData }): React.JSX.Element {
         </Card>
       )}
       <CancellationBar sub={subscription} />
-      <CurrentPlanCard sub={subscription} credits={credits} busy={busy} onManage={openPortal} />
+      <CurrentPlanCard
+        sub={subscription}
+        credits={credits}
+        unlimited={data.unlimited}
+        busy={busy}
+        onManage={openPortal}
+      />
 
       <div
         style={{
@@ -221,11 +227,13 @@ function CancellationBar({ sub }: { sub: Subscription | null }): React.JSX.Eleme
 function CurrentPlanCard({
   sub,
   credits,
+  unlimited,
   busy,
   onManage
 }: {
   sub: Subscription | null
   credits: number | null
+  unlimited: boolean
   busy: boolean
   onManage: () => void
 }): React.JSX.Element {
@@ -233,7 +241,9 @@ function CurrentPlanCard({
     return (
       <Card pad={20} style={{ marginTop: 20 }}>
         <div style={{ fontSize: 12.5, color: 'var(--mut)' }}>
-          No active subscription on this account yet. Choose a plan below to start.
+          {unlimited
+            ? 'Unlimited (development)'
+            : 'No active subscription on this account yet. Choose a plan below to start.'}
         </div>
       </Card>
     )
@@ -265,7 +275,11 @@ function CurrentPlanCard({
         )}
         <Row label="Credits">
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-            {credits === null ? '—' : credits.toLocaleString()}
+            {unlimited
+              ? 'Unlimited (development)'
+              : credits === null
+                ? '—'
+                : credits.toLocaleString()}
           </span>
         </Row>
         <Row label="Seats">
@@ -308,20 +322,7 @@ function PlanCard({
       <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2, lineHeight: 1.4 }}>
         {def.tagline}
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 10 }}>
-        {def.price ? (
-          <>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600 }}>
-              ${interval === 'year' ? def.price.year : def.price.month}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--mut)' }}>
-              {interval === 'year' ? '/year' : '/month'}
-            </span>
-          </>
-        ) : (
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--mut)' }}>Custom pricing</span>
-        )}
-      </div>
+      <PlanPrice def={def} interval={interval} />
       <div style={{ marginTop: 8 }}>
         {def.features.map((feature) => (
           <div
@@ -460,5 +461,30 @@ function CreditPacks({
         ))}
       </div>
     </>
+  )
+}
+
+function PlanPrice({
+  def,
+  interval
+}: {
+  def: PlanCardDef
+  interval: CheckoutInterval
+}): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 10 }}>
+      {def.price ? (
+        <>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600 }}>
+            ${interval === 'year' ? def.price.year : def.price.month}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--mut)' }}>
+            {interval === 'year' ? '/year' : '/month'}
+          </span>
+        </>
+      ) : (
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--mut)' }}>Custom pricing</span>
+      )}
+    </div>
   )
 }

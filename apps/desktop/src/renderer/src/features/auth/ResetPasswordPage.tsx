@@ -10,7 +10,7 @@ import { useAuthStore } from '../../store/authStore'
 
 type Step = 'request' | 'confirm'
 
-export function ResetPasswordPage(): React.JSX.Element {
+function usePasswordReset() {
   const navigate = useNavigate()
   const requestReset = useAuthStore((s) => s.requestPasswordReset)
   const confirmReset = useAuthStore((s) => s.confirmPasswordReset)
@@ -46,6 +46,39 @@ export function ResetPasswordPage(): React.JSX.Element {
     setDone(true)
   }
 
+  return {
+    navigate,
+    step,
+    email,
+    setEmail,
+    code,
+    setCode,
+    password,
+    setPassword,
+    error,
+    busy,
+    done,
+    sendCode,
+    setNewPassword
+  }
+}
+
+export function ResetPasswordPage(): React.JSX.Element {
+  const {
+    navigate,
+    step,
+    email,
+    setEmail,
+    code,
+    setCode,
+    password,
+    setPassword,
+    error,
+    busy,
+    done,
+    sendCode,
+    setNewPassword
+  } = usePasswordReset()
   return (
     <AuthCard
       title="Reset your password"
@@ -66,25 +99,13 @@ export function ResetPasswordPage(): React.JSX.Element {
       {done ? (
         <InlineSuccess>Password updated — sign in with your new password.</InlineSuccess>
       ) : step === 'request' ? (
-        <>
-          <Field
-            label="EMAIL"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            placeholder="you@team.dev"
-            autoComplete="email"
-            error={error ?? undefined}
-            onSubmit={sendCode}
-          />
-          <BusySubmit
-            busy={busy}
-            label="Send recovery code"
-            busyLabel="Sending…"
-            onClick={sendCode}
-            style={{ marginTop: 6 }}
-          />
-        </>
+        <RecoveryEmailForm
+          email={email}
+          setEmail={setEmail}
+          error={error}
+          sendCode={sendCode}
+          busy={busy}
+        />
       ) : (
         <>
           <Field
@@ -115,5 +136,38 @@ export function ResetPasswordPage(): React.JSX.Element {
         </>
       )}
     </AuthCard>
+  )
+}
+
+function RecoveryEmailForm({
+  email,
+  setEmail,
+  error,
+  sendCode,
+  busy
+}: Pick<
+  ReturnType<typeof usePasswordReset>,
+  'email' | 'setEmail' | 'error' | 'sendCode' | 'busy'
+>): React.JSX.Element {
+  return (
+    <>
+      <Field
+        label="EMAIL"
+        type="email"
+        value={email}
+        onChange={setEmail}
+        placeholder="you@team.dev"
+        autoComplete="email"
+        error={error ?? undefined}
+        onSubmit={sendCode}
+      />
+      <BusySubmit
+        busy={busy}
+        label="Send recovery code"
+        busyLabel="Sending…"
+        onClick={sendCode}
+        style={{ marginTop: 6 }}
+      />
+    </>
   )
 }

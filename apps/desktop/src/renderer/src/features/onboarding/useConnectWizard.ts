@@ -12,9 +12,9 @@
 // Home's connected-accounts card, where the confirmed Disconnect already lives. And a flow that
 // completed successfully despite the cancel keeps its source and is reported —
 // finished work is never silently discarded.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
-import type { Connection } from '../../lib/api/resources'
+import { listSelectable, type Connection, type SelectableItem } from '../../lib/api/resources'
 import { linkedAccountFor } from '../workspace/useAccountConnections'
 import type { WizardScope } from './connectSteps'
 import {
@@ -73,6 +73,7 @@ export interface UseConnectWizard {
   pickFiles: (files: File[]) => Promise<void>
   /** Close the wizard. Mid-flight this cancels the attempt. */
   close: () => void
+  refreshSelection: () => Promise<SelectableItem[]>
   select: ReturnType<typeof useOAuthConnect>['select']
   submitConfig: ReturnType<typeof useOAuthConnect>['submitConfig']
   chooseAccess: ReturnType<typeof useOAuthConnect>['chooseAccess']
@@ -106,7 +107,7 @@ async function readExportFiles(files: readonly File[]): Promise<EdaExportFile[] 
   }
 }
 
-export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWizard {
+function useWizardAttempt(options: UseConnectWizardOptions) {
   const { projectId, onConnected, scope = 'project', linkedConnections = [] } = options
   const [active, setActive] = useState<CatalogEntry | null>(null)
   const linkedAccount =
@@ -116,43 +117,88 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
   /** The latest attempt per entry id. */
   const attempts = useRef<Record<string, Attempt>>({})
 
+  // Home can switch account → project scope in the same event that opens the
+  // wizard. Use the committed context; a previous sign-in failure is no longer
+  // the current project-selection attempt after an account becomes available.
+  const linkedAccountId = linkedAccount?.id
+  useEffect(() => {
+    if (!active || !linkedAccountId) return
+    const attempt = attempts.current[active.id]
+    if (attempt && !attempt.settled) return
+    const store = useOnboardingStore.getState()
+    if (store.connections[active.id]?.phase === 'error') store.clearConnection(active.id)
+  }, [active, linkedAccountId])
+
   const beginAttempt = (entry: CatalogEntry): Attempt => {
     const attempt: Attempt = { cancelled: false, settled: false }
     attempts.current[entry.id] = attempt
     return attempt
   }
 
-  /** One settlement path for both engines, keyed to ITS OWN attempt. */
-  const settle = (entry: CatalogEntry, attempt: Attempt, result: { ok: boolean }): void => {
-    attempt.settled = true
-    if (result.ok) {
-      // Success is reported even after a cancel: the work is real, the source
-      // exists, and hiding it would be dishonest. The list refresh surfaces it.
-      onConnected?.()
-      return
-    }
-    // A cancelled failure ends quiet: progress was suppressed and the state
-    // cleared at close(). Sweep once more in case a write predated the latch —
-    // but only when no newer attempt owns this entry's tile.
-    if (attempt.cancelled && attempts.current[entry.id] === attempt) {
-      useOnboardingStore.getState().clearConnection(entry.id)
-    }
+  const settle = settleWizardAttempt(attempts, onConnected)
+
+  const { guard, refreshSelection } = wizardAvailability(
+    active,
+    scope,
+    projectId,
+    linkedConnections
+  )
+
+  const close = (): void => {
+    const entry = active
+    setActive(null)
+    if (!entry) return
+    const attempt = attempts.current[entry.id]
+    // Settled (done, error, or never started): keep the tile state — an error
+    // stays retryable, a done stays done. Only an in-flight attempt cancels.
+    if (!attempt || attempt.settled) return
+    attempt.cancelled = true
+    // Unblock any waiting input step / abort the browser handshake so the
+    // flow settles, and suppress the owning engine's further progress writes.
+    if (entry.mode === 'oauth') oauth.cancel()
+    else eda.cancel()
+    useOnboardingStore.getState().clearConnection(entry.id)
   }
 
-  const guard = (entry: CatalogEntry): boolean => {
-    const { failConnect } = useOnboardingStore.getState()
-    if (scope === 'project' && !projectId) {
-      failConnect(entry.id, NOT_LINKED_ERROR)
-      return false
-    }
-    if (entry.mode === 'oauth' && !getDesktopOAuthBridge()) {
-      failConnect(entry.id, noBridgeError(entry.name))
-      return false
-    }
-    return true
+  return {
+    active,
+    linkedAccount,
+    setActive,
+    oauth,
+    eda,
+    projectId,
+    scope,
+    linkedConnections,
+    guard,
+    beginAttempt,
+    settle,
+    close,
+    refreshSelection
   }
+}
 
-  const begin = async (): Promise<void> => {
+export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWizard {
+  const context = useWizardAttempt(options)
+  return {
+    active: context.active,
+    linkedAccount: context.linkedAccount,
+    open: context.setActive,
+    begin: beginOAuthAttempt(context),
+    pickFiles: beginExportAttempt(context),
+    close: context.close,
+    refreshSelection: context.refreshSelection,
+    select: context.oauth.select,
+    submitConfig: context.oauth.submitConfig,
+    chooseAccess: context.oauth.chooseAccess
+  }
+}
+
+function beginOAuthAttempt(
+  context: ReturnType<typeof useWizardAttempt>
+): UseConnectWizard['begin'] {
+  const { active, guard, beginAttempt, scope, oauth, settle, linkedConnections, projectId } =
+    context
+  return async (): Promise<void> => {
     const entry = active
     if (!entry || !guard(entry)) return
     const attempt = beginAttempt(entry)
@@ -168,8 +214,13 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     })
     settle(entry, attempt, result)
   }
+}
 
-  const pickFiles = async (files: File[]): Promise<void> => {
+function beginExportAttempt(
+  context: ReturnType<typeof useWizardAttempt>
+): UseConnectWizard['pickFiles'] {
+  const { active, guard, projectId, beginAttempt, settle, eda } = context
+  return async (files: File[]): Promise<void> => {
     const entry = active
     if (!entry || !guard(entry)) return
     const { failConnect } = useOnboardingStore.getState()
@@ -202,32 +253,66 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
     const result = await eda.start(projectId, entry.id, assembled.inputs)
     settle(entry, attempt, result)
   }
+}
 
-  const close = (): void => {
-    const entry = active
-    setActive(null)
-    if (!entry) return
-    const attempt = attempts.current[entry.id]
-    // Settled (done, error, or never started): keep the tile state — an error
-    // stays retryable, a done stays done. Only an in-flight attempt cancels.
-    if (!attempt || attempt.settled) return
-    attempt.cancelled = true
-    // Unblock any waiting input step / abort the browser handshake so the
-    // flow settles, and suppress the owning engine's further progress writes.
-    if (entry.mode === 'oauth') oauth.cancel()
-    else eda.cancel()
-    useOnboardingStore.getState().clearConnection(entry.id)
+function wizardAvailability(
+  active: CatalogEntry | null,
+  scope: WizardScope,
+  projectId: string | null,
+  linkedConnections: readonly Connection[]
+) {
+  const guard = (entry: CatalogEntry): boolean => {
+    const { failConnect } = useOnboardingStore.getState()
+    if (scope === 'project' && !projectId) {
+      failConnect(entry.id, NOT_LINKED_ERROR)
+      return false
+    }
+    const reusesAccount = scope === 'project' && linkedAccountFor(linkedConnections, entry.id)
+    if (entry.mode === 'oauth' && !reusesAccount && !getDesktopOAuthBridge()) {
+      failConnect(entry.id, noBridgeError(entry.name))
+      return false
+    }
+    return true
   }
 
-  return {
-    active,
-    linkedAccount,
-    open: setActive,
-    begin,
-    pickFiles,
-    close,
-    select: oauth.select,
-    submitConfig: oauth.submitConfig,
-    chooseAccess: oauth.chooseAccess
+  const refreshSelection = async (): Promise<SelectableItem[]> => {
+    const state = active ? useOnboardingStore.getState().connections[active.id] : undefined
+    if (
+      scope !== 'project' ||
+      !projectId ||
+      state?.phase !== 'busy' ||
+      state.stage !== 'configure' ||
+      !state.sourceId ||
+      !state.selectable
+    ) {
+      throw new Error('No active source selection to refresh.')
+    }
+    return listSelectable(projectId, state.sourceId, undefined, { refresh: true })
   }
+
+  return { guard, refreshSelection }
+}
+
+function settleWizardAttempt(
+  attempts: { current: Record<string, Attempt> },
+  onConnected: UseConnectWizardOptions['onConnected']
+) {
+  /** One settlement path for both engines, keyed to ITS OWN attempt. */
+  const settle = (entry: CatalogEntry, attempt: Attempt, result: { ok: boolean }): void => {
+    attempt.settled = true
+    if (result.ok) {
+      // Success is reported even after a cancel: the work is real, the source
+      // exists, and hiding it would be dishonest. The list refresh surfaces it.
+      onConnected?.()
+      return
+    }
+    // A cancelled failure ends quiet: progress was suppressed and the state
+    // cleared at close(). Sweep once more in case a write predated the latch —
+    // but only when no newer attempt owns this entry's tile.
+    if (attempt.cancelled && attempts.current[entry.id] === attempt) {
+      useOnboardingStore.getState().clearConnection(entry.id)
+    }
+  }
+
+  return settle
 }

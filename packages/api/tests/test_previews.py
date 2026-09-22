@@ -158,8 +158,7 @@ async def test_before_values_are_capped_strings() -> None:
 async def test_registered_kicad_write_previews_through_the_bridge(
     db: AsyncSession, engine: AsyncEngine
 ) -> None:
-    """`build_sol_registry` hands the KiCad write a preview that READS the netlist
-    over the same live session, and the confirmation gate renders it as a diff."""
+    """The registered write returns its complete native dry-run through the same session."""
     import asyncio
     import json
     from datetime import UTC, datetime
@@ -190,7 +189,11 @@ async def test_registered_kicad_write_previews_through_the_bridge(
     async def _send(frame: str) -> None:
         data = json.loads(frame)["data"]
         sent.append(data)
-        answer = {"components": {"R1": {"value": "10k"}}}
+        answer = {
+            "ok": True,
+            "dry_run": True,
+            "preview": [{"label": "R1 · Value", "before": "10k", "after": "4k7"}],
+        }
         asyncio.get_running_loop().call_soon(
             ingest_result, holder["s"], ToolResult.success(data["call_id"], answer)
         )
@@ -235,11 +238,20 @@ async def test_registered_kicad_write_previews_through_the_bridge(
             "reference": "R1",
             "property": "Value",
             "value": "4k7",
+            "expected_fingerprint": "0123456789abcdef" * 4,
         },
     )
     assert rows[0] == {"label": "R1 · Value", "before": "10k", "after": "4k7"}
-    assert sent[0]["tool"] == "kicad.extract_project_netlist"
-    assert sent[0]["args"] == {"project_path": "hw/main.kicad_pro"}
+    assert len(sent) == 1
+    assert sent[0]["tool"] == "kicad.set_symbol_property"
+    assert sent[0]["args"] == {
+        "schematic_path": "hw/main.kicad_sch",
+        "reference": "R1",
+        "property": "Value",
+        "value": "4k7",
+        "expected_fingerprint": "0123456789abcdef" * 4,
+        "dry_run": True,
+    }
 
 
 def test_project_path_refuses_escapes_before_any_dispatch() -> None:

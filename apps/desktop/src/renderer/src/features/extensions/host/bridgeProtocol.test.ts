@@ -13,94 +13,8 @@ import {
 const valid = { v: 1, id: 'req-1', method: 'graph.getFocus', params: {} }
 
 describe('parseBridgeRequest', () => {
-  it('accepts a well-formed v1 request and rebuilds it as a fresh literal', () => {
-    const parsed = parseBridgeRequest({ ...valid, extra: 'ignored' })
-    expect(parsed).toEqual(valid)
-    expect(parsed).not.toHaveProperty('extra')
-  })
-
-  it.each([
-    ['wrong version', { ...valid, v: 2 }],
-    ['string version', { ...valid, v: '1' }],
-    ['missing id', { v: 1, method: 'x', params: {} }],
-    ['empty id', { ...valid, id: '' }],
-    ['oversized id', { ...valid, id: 'a'.repeat(BRIDGE_LIMITS.idLength + 1) }],
-    ['id with forbidden chars', { ...valid, id: 'a b' }],
-    ['non-string method', { ...valid, method: 42 }],
-    ['array params', { ...valid, params: [] }],
-    ['null params', { ...valid, params: null }],
-    ['missing params', { v: 1, id: 'x', method: 'm' }],
-    ['not an object', 'hello'],
-    ['null', null],
-    ['array', [valid]]
-  ])('drops %s', (_label, data) => {
-    expect(parseBridgeRequest(data)).toBeNull()
-  })
-
-  it('accepts an id at exactly the cap', () => {
-    expect(parseBridgeRequest({ ...valid, id: 'a'.repeat(BRIDGE_LIMITS.idLength) })).not.toBeNull()
-  })
-
-  it('drops a message whose serialized form exceeds 64 KiB', () => {
-    const big = { ...valid, params: { q: 'x'.repeat(BRIDGE_LIMITS.messageBytes) } }
-    expect(parseBridgeRequest(big)).toBeNull()
-  })
-
-  it('measures bytes, not characters', () => {
-    // 30k four-byte code points → 120 KB even though only 60k UTF-16 units.
-    const big = { ...valid, params: { q: '😀'.repeat(30_000) } }
-    expect(parseBridgeRequest(big)).toBeNull()
-  })
-
-  describe('structural bounds (SEC-M2) — decided before any JSON.stringify', () => {
-    const nest = (depth: number): Record<string, unknown> =>
-      depth === 0 ? { leaf: 1 } : { child: nest(depth - 1) }
-    const wide = (keys: number): Record<string, number> =>
-      Object.fromEntries(Array.from({ length: keys }, (_, i) => [`k${i}`, i]))
-
-    it.each([
-      ['a chain deeper than the depth cap', nest(BRIDGE_LIMITS.paramsDepth + 1)],
-      ['an object with more keys than the cap', wide(BRIDGE_LIMITS.paramsKeys + 1)],
-      [
-        'more nodes than the cap',
-        { rows: Array.from({ length: BRIDGE_LIMITS.paramsNodes + 1 }, () => 0) }
-      ],
-      ['a string past the per-string cap', { s: 'x'.repeat(BRIDGE_LIMITS.paramsStringBytes + 1) }],
-      [
-        'strings that in total exceed the message cap',
-        { a: 'x'.repeat(40_000), b: 'y'.repeat(40_000) }
-      ]
-    ])('rejects %s without serializing it', (_label, params) => {
-      const stringify = vi.spyOn(JSON, 'stringify')
-      expect(parseBridgeRequest({ ...valid, params })).toBeNull()
-      expect(stringify).not.toHaveBeenCalled()
-      stringify.mockRestore()
-    })
-
-    it('accepts a message at the depth and key caps', () => {
-      expect(
-        parseBridgeRequest({ ...valid, params: nest(BRIDGE_LIMITS.paramsDepth - 1) })
-      ).not.toBeNull()
-      expect(
-        parseBridgeRequest({ ...valid, params: wide(BRIDGE_LIMITS.paramsKeys) })
-      ).not.toBeNull()
-    })
-
-    it('a cyclic params object is rejected by the bounds, never by a throwing stringify', () => {
-      const stringify = vi.spyOn(JSON, 'stringify')
-      const cyclic: Record<string, unknown> = {}
-      cyclic.self = cyclic
-      expect(parseBridgeRequest({ ...valid, params: cyclic })).toBeNull()
-      expect(stringify).not.toHaveBeenCalled()
-      stringify.mockRestore()
-    })
-  })
-
-  it('drops an unserializable message instead of throwing', () => {
-    const cyclic: Record<string, unknown> = { ...valid }
-    cyclic.params = { self: cyclic }
-    expect(parseBridgeRequest(cyclic)).toBeNull()
-  })
+  registerBridgeEnvelopeValidationTests()
+  registerBridgeStructuralBoundsTests()
 })
 
 describe('METHOD_SCOPES', () => {
@@ -167,3 +81,96 @@ describe('METHOD_SCOPES', () => {
     ])
   })
 })
+
+function registerBridgeEnvelopeValidationTests(): void {
+  it('accepts a well-formed v1 request and rebuilds it as a fresh literal', () => {
+    const parsed = parseBridgeRequest({ ...valid, extra: 'ignored' })
+    expect(parsed).toEqual(valid)
+    expect(parsed).not.toHaveProperty('extra')
+  })
+
+  it.each([
+    ['wrong version', { ...valid, v: 2 }],
+    ['string version', { ...valid, v: '1' }],
+    ['missing id', { v: 1, method: 'x', params: {} }],
+    ['empty id', { ...valid, id: '' }],
+    ['oversized id', { ...valid, id: 'a'.repeat(BRIDGE_LIMITS.idLength + 1) }],
+    ['id with forbidden chars', { ...valid, id: 'a b' }],
+    ['non-string method', { ...valid, method: 42 }],
+    ['array params', { ...valid, params: [] }],
+    ['null params', { ...valid, params: null }],
+    ['missing params', { v: 1, id: 'x', method: 'm' }],
+    ['not an object', 'hello'],
+    ['null', null],
+    ['array', [valid]]
+  ])('drops %s', (_label, data) => {
+    expect(parseBridgeRequest(data)).toBeNull()
+  })
+
+  it('accepts an id at exactly the cap', () => {
+    expect(parseBridgeRequest({ ...valid, id: 'a'.repeat(BRIDGE_LIMITS.idLength) })).not.toBeNull()
+  })
+
+  it('drops a message whose serialized form exceeds 64 KiB', () => {
+    const big = { ...valid, params: { q: 'x'.repeat(BRIDGE_LIMITS.messageBytes) } }
+    expect(parseBridgeRequest(big)).toBeNull()
+  })
+
+  it('measures bytes, not characters', () => {
+    // 30k four-byte code points → 120 KB even though only 60k UTF-16 units.
+    const big = { ...valid, params: { q: '😀'.repeat(30_000) } }
+    expect(parseBridgeRequest(big)).toBeNull()
+  })
+}
+
+function registerBridgeStructuralBoundsTests(): void {
+  describe('structural bounds (SEC-M2) — decided before any JSON.stringify', () => {
+    const nest = (depth: number): Record<string, unknown> =>
+      depth === 0 ? { leaf: 1 } : { child: nest(depth - 1) }
+    const wide = (keys: number): Record<string, number> =>
+      Object.fromEntries(Array.from({ length: keys }, (_, i) => [`k${i}`, i]))
+
+    it.each([
+      ['a chain deeper than the depth cap', nest(BRIDGE_LIMITS.paramsDepth + 1)],
+      ['an object with more keys than the cap', wide(BRIDGE_LIMITS.paramsKeys + 1)],
+      [
+        'more nodes than the cap',
+        { rows: Array.from({ length: BRIDGE_LIMITS.paramsNodes + 1 }, () => 0) }
+      ],
+      ['a string past the per-string cap', { s: 'x'.repeat(BRIDGE_LIMITS.paramsStringBytes + 1) }],
+      [
+        'strings that in total exceed the message cap',
+        { a: 'x'.repeat(40_000), b: 'y'.repeat(40_000) }
+      ]
+    ])('rejects %s without serializing it', (_label, params) => {
+      const stringify = vi.spyOn(JSON, 'stringify')
+      expect(parseBridgeRequest({ ...valid, params })).toBeNull()
+      expect(stringify).not.toHaveBeenCalled()
+      stringify.mockRestore()
+    })
+
+    it('accepts a message at the depth and key caps', () => {
+      expect(
+        parseBridgeRequest({ ...valid, params: nest(BRIDGE_LIMITS.paramsDepth - 1) })
+      ).not.toBeNull()
+      expect(
+        parseBridgeRequest({ ...valid, params: wide(BRIDGE_LIMITS.paramsKeys) })
+      ).not.toBeNull()
+    })
+
+    it('a cyclic params object is rejected by the bounds, never by a throwing stringify', () => {
+      const stringify = vi.spyOn(JSON, 'stringify')
+      const cyclic: Record<string, unknown> = {}
+      cyclic.self = cyclic
+      expect(parseBridgeRequest({ ...valid, params: cyclic })).toBeNull()
+      expect(stringify).not.toHaveBeenCalled()
+      stringify.mockRestore()
+    })
+  })
+
+  it('drops an unserializable message instead of throwing', () => {
+    const cyclic: Record<string, unknown> = { ...valid }
+    cyclic.params = { self: cyclic }
+    expect(parseBridgeRequest(cyclic)).toBeNull()
+  })
+}

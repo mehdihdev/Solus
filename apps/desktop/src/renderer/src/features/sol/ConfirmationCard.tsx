@@ -19,6 +19,8 @@
 import { useCallback, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import type { ConfirmationRow, PendingConfirmation } from '../../lib/api/solStream'
+import './ConfirmationCard.css'
+import { CommandOutput } from './CommandOutput'
 
 /** Mono uppercases by default; a value being approved must render exactly as it
  *  will execute. */
@@ -27,29 +29,74 @@ const VERBATIM = { textTransform: 'none' } as const
 export type ConfirmationDecision = 'approve' | 'reject'
 
 export interface ConfirmationCardProps {
+  readonly projectId?: string
   readonly pending: PendingConfirmation
   /** Resolves once the decision is recorded. Rejection is a decision too. */
   readonly onDecide: (decision: ConfirmationDecision) => Promise<void>
 }
 
+function DiffValue({ value }: { value: string | null }): React.JSX.Element {
+  return (
+    <span className="confirmation-card__value">
+      {value === null ? (
+        <em className="confirmation-card__empty">Not provided</em>
+      ) : value === '' ? (
+        <em className="confirmation-card__empty">Empty string</em>
+      ) : (
+        value
+      )}
+    </span>
+  )
+}
+
 function DiffRow({ row }: { row: ConfirmationRow }): React.JSX.Element {
   return (
-    <li style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '2px 0' }}>
-      <Mono style={{ ...VERBATIM, color: 'var(--mut)', minWidth: 0, flex: '0 1 40%' }}>
-        {row.label}
-      </Mono>
-      {row.before !== null && (
-        <>
-          <Mono style={{ ...VERBATIM, textDecoration: 'line-through', color: 'var(--mut)' }}>
-            {row.before}
-          </Mono>
-          <span aria-hidden style={{ color: 'var(--mut)' }}>
-            →
-          </span>
-        </>
-      )}
-      <Mono style={{ ...VERBATIM, color: 'var(--acc)' }}>{row.after ?? '—'}</Mono>
+    <li className="confirmation-card__change">
+      <strong className="confirmation-card__label">{row.label}</strong>
+      <dl className="confirmation-card__comparison">
+        <div className="confirmation-card__before">
+          <dt>Before</dt>
+          <dd>
+            <DiffValue value={row.before} />
+          </dd>
+        </div>
+        <div className="confirmation-card__after">
+          <dt>After</dt>
+          <dd>
+            <DiffValue value={row.after} />
+          </dd>
+        </div>
+      </dl>
     </li>
+  )
+}
+
+function CompletePreview({ rows }: { rows: readonly ConfirmationRow[] }): React.JSX.Element {
+  const brief =
+    rows.length <= 2 &&
+    rows.every((row) =>
+      [row.label, row.before, row.after].every(
+        (value) => value === null || (value.length <= 160 && !value.includes('\n'))
+      )
+    )
+  return (
+    <details className="confirmation-card__preview" open={brief}>
+      <summary>
+        {rows.length === 1 ? 'Review 1 change' : `Review all ${rows.length} changes`}
+      </summary>
+      <div
+        className="confirmation-card__scroll"
+        role="region"
+        aria-label="Complete proposed changes"
+        tabIndex={0}
+      >
+        <ul aria-label="Proposed changes" className="confirmation-card__changes">
+          {rows.map((row, index) => (
+            <DiffRow key={`${row.label}-${index}`} row={row} />
+          ))}
+        </ul>
+      </div>
+    </details>
   )
 }
 
@@ -79,7 +126,110 @@ function DecisionFailure({
   )
 }
 
-export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): React.JSX.Element {
+function approvalStatus(closed: boolean, busy: boolean): string {
+  if (closed) return 'Approval closed'
+  return busy ? 'Recording decision…' : 'Awaiting approval'
+}
+
+function ActiveCommandOutput({
+  busy,
+  projectId,
+  pending
+}: {
+  busy: ConfirmationDecision | null
+  projectId: string | undefined
+  pending: PendingConfirmation
+}): React.JSX.Element | null {
+  if (busy !== 'approve' || !projectId || !['code.run', 'code.test'].includes(pending.tool))
+    return null
+  return (
+    <CommandOutput
+      key={pending.confirmationId}
+      projectId={projectId}
+      confirmationId={pending.confirmationId}
+    />
+  )
+}
+
+export function ConfirmationCard({
+  pending,
+  onDecide,
+  projectId
+}: ConfirmationCardProps): React.JSX.Element {
+  const { busy, failed, decide } = useConfirmationDecision(onDecide)
+
+  return (
+    <section aria-label="Action needs your approval" className="confirmation-card">
+      <header className="confirmation-card__header">
+        <h3>Review this action</h3>
+        <span className="confirmation-card__status">
+          {approvalStatus(failed?.terminal === true, busy !== null)}
+        </span>
+      </header>
+
+      <p className="confirmation-card__summary">{pending.summary}</p>
+
+      <div className="confirmation-card__actions">
+        <button
+          className="confirmation-card__approve"
+          type="button"
+          onClick={() => void decide('approve')}
+          disabled={busy !== null || failed?.terminal === true}
+        >
+          {busy === 'approve' ? 'Applying…' : 'Approve'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void decide('reject')}
+          disabled={busy !== null || failed?.terminal === true}
+        >
+          Reject
+        </button>
+      </div>
+
+      {pending.preview.length > 0 ? (
+        <CompletePreview rows={pending.preview} />
+      ) : (
+        <Mono style={{ color: 'var(--mut)' }}>
+          This tool could not describe its change — review the action above before approving.
+        </Mono>
+      )}
+
+      <ConfirmationDetails pending={pending} />
+
+      {failed !== null && (
+        <div role="alert">
+          <DecisionFailure failed={failed} />
+        </div>
+      )}
+      <ActiveCommandOutput busy={busy} projectId={projectId} pending={pending} />
+    </section>
+  )
+}
+
+function ConfirmationDetails({ pending }: { pending: PendingConfirmation }): React.JSX.Element {
+  return (
+    <details className="confirmation-card__details">
+      <summary>Technical details</summary>
+      <dl>
+        <div>
+          <dt>Tool</dt>
+          <dd>{pending.tool}</dd>
+        </div>
+        <div>
+          <dt>Approval ID</dt>
+          <dd>{pending.confirmationId}</dd>
+        </div>
+      </dl>
+    </details>
+  )
+}
+
+function useConfirmationDecision(onDecide: ConfirmationCardProps['onDecide']): {
+  busy: ConfirmationDecision | null
+  failed: { message: string; terminal: boolean } | null
+  decide: (decision: ConfirmationDecision) => Promise<void>
+} {
   const [busy, setBusy] = useState<ConfirmationDecision | null>(null)
   const [failed, setFailed] = useState<{ message: string; terminal: boolean } | null>(null)
 
@@ -119,55 +269,5 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
     [onDecide]
   )
 
-  return (
-    <section
-      aria-label="Action needs your approval"
-      style={{
-        border: '1px solid var(--acc)',
-        borderRadius: 8,
-        padding: 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <strong>SOL needs your approval</strong>
-        <Mono style={{ color: 'var(--mut)' }}>{pending.tool}</Mono>
-      </div>
-
-      <p style={{ margin: 0 }}>{pending.summary}</p>
-
-      {pending.preview.length > 0 ? (
-        <ul aria-label="Proposed changes" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {pending.preview.map((row, index) => (
-            <DiffRow key={`${row.label}-${index}`} row={row} />
-          ))}
-        </ul>
-      ) : (
-        <Mono style={{ color: 'var(--mut)' }}>
-          This tool could not describe its change — review the action above before approving.
-        </Mono>
-      )}
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          type="button"
-          onClick={() => void decide('approve')}
-          disabled={busy !== null || failed?.terminal === true}
-        >
-          {busy === 'approve' ? 'Applying…' : 'Approve'}
-        </button>
-        <button
-          type="button"
-          onClick={() => void decide('reject')}
-          disabled={busy !== null || failed?.terminal === true}
-        >
-          Reject
-        </button>
-      </div>
-
-      {failed !== null && <DecisionFailure failed={failed} />}
-    </section>
-  )
+  return { busy, failed, decide }
 }

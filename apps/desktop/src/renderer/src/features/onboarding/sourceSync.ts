@@ -1,7 +1,7 @@
 // Shared sync-polling helpers for real connect flows (GitHub, committed-export
 // EDA). Extracted from githubConnect.ts (SOLUSDEV-100) so every connector polls
 // and reports sync failures the same way. Transport is injected — no React.
-import type { Sync } from '../../lib/api/resources'
+import type { Sync, SyncJob } from '../../lib/api/resources'
 
 export interface SyncPollApi {
   getSyncs: (projectId: string, sourceId: string) => Promise<Sync[]>
@@ -15,7 +15,7 @@ export const defaultSleep = (ms: number): Promise<void> =>
 
 /** The latest sync is the most relevant; backend returns history ordered. */
 export function latestSync(syncs: Sync[]): Sync | undefined {
-  return syncs[syncs.length - 1]
+  return syncs[0]
 }
 
 /**
@@ -48,4 +48,42 @@ export function syncErrorMessage(sync: Sync): string {
     if (typeof message === 'string' && message) return message
   }
   return 'Sync failed.'
+}
+
+/** The accepted job is authoritative; history can precede its Sync record. */
+export interface SyncJobApi {
+  getJob: (jobId: string) => Promise<SyncJob>
+}
+
+export async function pollAcceptedSync(
+  api: SyncJobApi,
+  projectId: string,
+  jobId: string,
+  sleep: (ms: number) => Promise<void> = defaultSleep
+): Promise<SyncJob | undefined> {
+  for (let attempt = 0; attempt < POLL_MAX_TRIES; attempt += 1) {
+    const job = await api.getJob(jobId)
+    if (job.id !== jobId || job.project_id !== projectId) {
+      throw new Error('The import job does not match this project and request.')
+    }
+    if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled') {
+      return job
+    }
+    await sleep(POLL_INTERVAL_MS)
+  }
+  return undefined
+}
+
+/** Prefer the current source count; history is only an optional fallback. */
+export async function indexedSyncDetail(
+  api: SyncPollApi,
+  projectId: string,
+  sourceId: string,
+  entityCount: number | undefined
+): Promise<string> {
+  if (entityCount !== undefined) return `${entityCount} entities indexed`
+  const sync = latestSync(await api.getSyncs(projectId, sourceId))
+  return sync?.status === 'succeeded'
+    ? `${sync.entities_created} entities indexed`
+    : 'sync completed'
 }

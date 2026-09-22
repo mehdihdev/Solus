@@ -182,6 +182,36 @@ async def test_refresh_keeps_a_non_rotated_refresh_token(monkeypatch: pytest.Mon
     assert fresh.refresh_token == "rt1"
 
 
+async def test_refresh_explicitly_requests_only_pinned_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_url: str, kwargs: dict[str, Any]) -> httpx.Response:
+        assert kwargs["data"]["scope"] == "OAuth2Read OAuth2Write"
+        return _json_response(200, {"access_token": "at2", "expires_in": 3599})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _transport(handler))
+    await refresh_token(FS_MCP, CLIENT, HostedToken("at1", "rt1", 0.0), now=1.0)
+
+
+async def test_refresh_still_refuses_broader_returned_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_url: str, _kwargs: dict[str, Any]) -> httpx.Response:
+        return _json_response(
+            200,
+            {
+                "access_token": "at2",
+                "expires_in": 3599,
+                "scope": "OAuth2Read OAuth2Write OAuth2Delete OAuth2ReadPII",
+            },
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _transport(handler))
+    with pytest.raises(RemoteAuthError) as caught:
+        await refresh_token(FS_MCP, CLIENT, HostedToken("at1", "rt1", 0.0), now=1.0)
+    assert caught.value.code == "scope_escalation"
+
+
 async def test_refresh_takes_a_rotated_refresh_token(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(_url: str, _kwargs: dict[str, Any]) -> httpx.Response:
         return _json_response(

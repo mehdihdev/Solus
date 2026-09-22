@@ -194,6 +194,58 @@ describe('useHomeTeam — loading', () => {
 })
 
 describe('useHomeTeam — mutations', () => {
+  homeTeamInvitesTests()
+  homeTeamMembershipMutationsTests()
+})
+
+describe('useHomeTeam — review fixes (SOLUSDEV-244 / HOME H5)', () => {
+  it('names a refused member mutation instead of swallowing it', async () => {
+    const { result } = mount()
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.removeMember).mockRejectedValue(new ApiError(403, 'forbidden', 'x'))
+    expect(await result.current.actions.remove('u1')).toEqual({ ok: false, reason: 'forbidden' })
+    vi.mocked(resources.changeMemberRole).mockRejectedValue(new ApiError(409, 'last_owner', 'x'))
+    expect(await result.current.actions.changeRole('u1', 'member')).toEqual({
+      ok: false,
+      reason: 'last_owner'
+    })
+    vi.mocked(resources.revokeInvite).mockRejectedValue(new Error('ECONNREFUSED'))
+    expect(await result.current.actions.revoke('i1')).toEqual({ ok: false, reason: 'failed' })
+  })
+
+  it('a 500 on the invite listing is a real failure, not "no pending invites"', async () => {
+    vi.mocked(resources.listInvites).mockRejectedValue(new ApiError(500, 'error', 'x'))
+    const { result } = mount()
+    await waitFor(() => expect(result.current.status).toBe('offline'))
+  })
+
+  it('a member refresh that resolves after a team switch never lands on the new team', async () => {
+    let releaseRoster: (rows: resources.TeamMemberApi[]) => void = () => undefined
+    vi.mocked(resources.removeMember).mockResolvedValue(undefined)
+    const { result, rerender } = renderHook(({ team }) => useHomeTeam(team, ME, refreshHome), {
+      initialProps: { team: TEAM }
+    })
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    // The OLD team's refresh hangs until released; the NEW team answers at once.
+    vi.mocked(resources.listMembers).mockImplementation((id) =>
+      id === 't1'
+        ? new Promise<resources.TeamMemberApi[]>((resolve) => (releaseRoster = resolve))
+        : Promise.resolve([MEMBERS[0]])
+    )
+    const pending = result.current.actions.remove('u2')
+    // Switch to another team while the old team's refresh is in flight.
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, id: 't2', name: 'Arm Lab' })
+    rerender({ team: OTHER })
+    await waitFor(() => expect(result.current.detail?.name).toBe('Arm Lab'))
+    releaseRoster(MEMBERS)
+    await act(async () => {
+      await pending
+    })
+    expect(result.current.members).toEqual([MEMBERS[0]])
+  })
+})
+
+function homeTeamInvitesTests(): void {
   it('invites and hands back the one-time token; refreshes pending invites', async () => {
     vi.mocked(resources.createInvite).mockResolvedValue(INVITE)
     const { result } = mount()
@@ -248,7 +300,9 @@ describe('useHomeTeam — mutations', () => {
       reason: 'invalid_email'
     })
   })
+}
 
+function homeTeamMembershipMutationsTests(): void {
   it('changes a role, removes a member, revokes an invite, refreshing the slice', async () => {
     vi.mocked(resources.changeMemberRole).mockResolvedValue(MEMBERS[1])
     vi.mocked(resources.removeMember).mockResolvedValue(undefined)
@@ -287,51 +341,4 @@ describe('useHomeTeam — mutations', () => {
     expect(await result.current.actions.deleteTeam()).toBe(true)
     expect(useWorkspaceStore.getState().teamId).toBe('t-me')
   })
-})
-
-describe('useHomeTeam — review fixes (SOLUSDEV-244 / HOME H5)', () => {
-  it('names a refused member mutation instead of swallowing it', async () => {
-    const { result } = mount()
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    vi.mocked(resources.removeMember).mockRejectedValue(new ApiError(403, 'forbidden', 'x'))
-    expect(await result.current.actions.remove('u1')).toEqual({ ok: false, reason: 'forbidden' })
-    vi.mocked(resources.changeMemberRole).mockRejectedValue(new ApiError(409, 'last_owner', 'x'))
-    expect(await result.current.actions.changeRole('u1', 'member')).toEqual({
-      ok: false,
-      reason: 'last_owner'
-    })
-    vi.mocked(resources.revokeInvite).mockRejectedValue(new Error('ECONNREFUSED'))
-    expect(await result.current.actions.revoke('i1')).toEqual({ ok: false, reason: 'failed' })
-  })
-
-  it('a 500 on the invite listing is a real failure, not "no pending invites"', async () => {
-    vi.mocked(resources.listInvites).mockRejectedValue(new ApiError(500, 'error', 'x'))
-    const { result } = mount()
-    await waitFor(() => expect(result.current.status).toBe('offline'))
-  })
-
-  it('a member refresh that resolves after a team switch never lands on the new team', async () => {
-    let releaseRoster: (rows: resources.TeamMemberApi[]) => void = () => undefined
-    vi.mocked(resources.removeMember).mockResolvedValue(undefined)
-    const { result, rerender } = renderHook(({ team }) => useHomeTeam(team, ME, refreshHome), {
-      initialProps: { team: TEAM }
-    })
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    // The OLD team's refresh hangs until released; the NEW team answers at once.
-    vi.mocked(resources.listMembers).mockImplementation((id) =>
-      id === 't1'
-        ? new Promise<resources.TeamMemberApi[]>((resolve) => (releaseRoster = resolve))
-        : Promise.resolve([MEMBERS[0]])
-    )
-    const pending = result.current.actions.remove('u2')
-    // Switch to another team while the old team's refresh is in flight.
-    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, id: 't2', name: 'Arm Lab' })
-    rerender({ team: OTHER })
-    await waitFor(() => expect(result.current.detail?.name).toBe('Arm Lab'))
-    releaseRoster(MEMBERS)
-    await act(async () => {
-      await pending
-    })
-    expect(result.current.members).toEqual([MEMBERS[0]])
-  })
-})
+}

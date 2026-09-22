@@ -18,6 +18,7 @@ Everything is respx-mocked; no network, no live tenant.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 import httpx
@@ -30,6 +31,7 @@ from fixtures.onshape_sample import (
 )
 from solus_api.connectors.contracts import ConnectorError, Credentials
 from solus_api.connectors.onshape import ONSHAPE_API_BASE, OnshapeConnector
+from solus_api.connectors.onshape_confirmation import PreviewBinding
 from solus_api.connectors.onshape_ops import operation_by_name
 
 DID, WID, EID = "d1", "w1", "e1"
@@ -45,6 +47,11 @@ async def _run(name: str, args: dict[str, Any]) -> Any:
     assert operation is not None
     connector = _conn()
     async with connector.http(Credentials(token="t")) as client:
+        if name == "onshape.update_feature":
+            binding = PreviewBinding()
+            binding.remember(args, await operation.preview(connector, client, args))
+            with binding.execution(args):
+                return await operation.run(connector, client, args)
         return await operation.run(connector, client, args)
 
 
@@ -63,9 +70,16 @@ def _mock(router: respx.MockRouter) -> None:
     router.get(f"{ONSHAPE_API_BASE}{_BASE}/bodydetails").mock(
         httpx.Response(200, json=BODY_DETAILS_RICH)
     )
-    router.get(f"{ONSHAPE_API_BASE}{_BASE}/features").mock(
-        httpx.Response(200, json=FEATURE_TREE_WITH_PARAMETERS)
-    )
+
+    def feature_tree(request):
+        tree = deepcopy(FEATURE_TREE_WITH_PARAMETERS)
+        tree["featureStates"] = {"F2": {"featureStatus": "OK"}}
+        for call in router.calls:
+            if call.request.method == "POST" and "/features/featureid/" in str(call.request.url):
+                tree["features"][0]["message"] = json.loads(call.request.content)["feature"]
+        return httpx.Response(200, json=tree)
+
+    router.get(f"{ONSHAPE_API_BASE}{_BASE}/features").mock(side_effect=feature_tree)
 
 
 # --------------------------------------------------------- resolve_reference
@@ -372,3 +386,297 @@ async def test_update_feature_is_confirmation_gated() -> None:
     assert operation is not None
     assert operation.requires_confirmation is True
     assert "write" in operation.tags
+
+
+@respx.mock
+async def test_preview_supports_current_flat_feature_objects() -> None:
+    feature = FEATURE_TREE_WITH_PARAMETERS["features"][0]["message"]
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(
+        200, json={"features": [feature], "sourceMicroversion": "mv-a"}
+    )
+    rows = await _preview(
+        "onshape.update_feature",
+        {
+            "document_id": DID,
+            "workspace_id": WID,
+            "element_id": EID,
+            "feature_id": "F2",
+            "parameters": {"depth": "2 mm"},
+        },
+    )
+    assert {"label": "Extrude 1 · depth", "before": "10 mm", "after": "2 mm"} in rows
+    assert all(call.request.method == "GET" for call in respx.calls)
+
+
+@pytest.mark.parametrize(
+    "features", [None, {}, [None], [{"message": None}], [{"featureId": "F2"}, {"featureId": "F2"}]]
+)
+@respx.mock
+async def test_preview_refuses_malformed_or_duplicate_feature_collection(features: Any) -> None:
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(200, json={"features": features})
+    with pytest.raises(ConnectorError) as error:
+        await _preview(
+            "onshape.update_feature",
+            {
+                "document_id": DID,
+                "workspace_id": WID,
+                "element_id": EID,
+                "feature_id": "F2",
+                "parameters": {"depth": "2 mm"},
+            },
+        )
+    assert error.value.code == "api_error"
+
+
+@respx.mock
+async def test_quantity_preview_uses_expression_despite_computed_value() -> None:
+    parameter = {
+        "btType": "BTMParameterQuantity-147",
+        "parameterId": "depth",
+        "expression": "10 mm",
+        "value": 0.01,
+        "units": "meter",
+        "isInteger": False,
+        "nodeId": "synthetic",
+        "libraryRelationType": "DEFAULT",
+        "parameterName": "Depth",
+    }
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(
+        200,
+        json={
+            "sourceMicroversion": "mv-a",
+            "features": [
+                {
+                    "featureId": "F2",
+                    "name": "Extrude 1",
+                    "parameters": [parameter],
+                }
+            ],
+        },
+    )
+    rows = await _preview(
+        "onshape.update_feature",
+        {
+            "document_id": DID,
+            "workspace_id": WID,
+            "element_id": EID,
+            "feature_id": "F2",
+            "parameters": {"depth": "2 mm"},
+        },
+    )
+    assert {"label": "Extrude 1 · depth", "before": "10 mm", "after": "2 mm"} in rows
+    assert all(call.request.method == "GET" for call in respx.calls)
+    from solus_api.connectors.onshape_refs import _rewritten_value
+
+    assert _rewritten_value(parameter, "2 mm", "depth") == {**parameter, "expression": "2 mm"}
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        {"btType": "UnknownQuantity", "expression": "10 mm", "value": 0.01},
+        {"btType": "BTMParameterQuantity-147", "expression": "10 mm", "unknown": 1},
+        {"btType": "BTMParameterQuantity-147", "expression": None, "value": 0.01},
+    ],
+)
+def test_quantity_selector_does_not_guess_other_shapes(parameter: dict[str, Any]) -> None:
+    from solus_api.connectors.onshape_refs import _rewritten_value
+
+    with pytest.raises(ConnectorError, match="ambiguous"):
+        _rewritten_value(parameter, "2 mm", "depth")
+
+
+@pytest.mark.parametrize("feature_id", ["../bad", "a/b", "a?b", "a#b"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@respx.mock(assert_all_called=False)
+async def test_hostile_feature_ids_never_reach_mutation(feature_id: str, wrapped: bool) -> None:
+    feature = {
+        "featureId": feature_id,
+        "parameters": [{"parameterId": "depth", "expression": "1 mm"}],
+    }
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(
+        200, json={"features": [{"message": feature} if wrapped else feature]}
+    )
+    with pytest.raises(ConnectorError):
+        await _run(
+            "onshape.update_feature",
+            {
+                "document_id": DID,
+                "workspace_id": WID,
+                "element_id": EID,
+                "feature_id": feature_id,
+                "parameters": {"depth": "2 mm"},
+            },
+        )
+    assert not respx.calls
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@respx.mock
+async def test_hostile_live_feature_id_is_refused_before_preview(wrapped: bool) -> None:
+    feature = {"featureId": "../bad", "parameters": []}
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(
+        200,
+        json={
+            "features": [
+                {"featureId": "F2", "parameters": []},
+                {"message": feature} if wrapped else feature,
+            ]
+        },
+    )
+    with pytest.raises(ConnectorError) as error:
+        await _preview(
+            "onshape.update_feature",
+            {
+                "document_id": DID,
+                "workspace_id": WID,
+                "element_id": EID,
+                "feature_id": "F2",
+                "parameters": {},
+            },
+        )
+    assert error.value.code == "api_error"
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        None,
+        {},
+        [None],
+        [{"expression": "1 mm"}],
+        [
+            {"parameterId": "depth", "expression": "1 mm"},
+            {"parameterId": "depth", "expression": "3 mm"},
+        ],
+    ],
+)
+@pytest.mark.parametrize("preview", [False, True])
+@respx.mock
+async def test_full_parameter_collection_validated_before_edit(
+    parameters: Any, preview: bool
+) -> None:
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(
+        200, json={"features": [{"featureId": "F2", "parameters": parameters}]}
+    )
+    with pytest.raises(ConnectorError) as error:
+        await (_preview if preview else _run)(
+            "onshape.update_feature",
+            {
+                "document_id": DID,
+                "workspace_id": WID,
+                "element_id": EID,
+                "feature_id": "F2",
+                "parameters": {},
+            },
+        )
+    assert error.value.code == "api_error"
+    assert all(call.request.method == "GET" for call in respx.calls)
+
+
+@respx.mock
+async def test_preview_accepts_vendor_feature_id_with_underscore() -> None:
+    identity = "Synthetic_feature_0"
+    respx.get(f"{ONSHAPE_API_BASE}{_BASE}/features").respond(
+        200,
+        json={
+            "sourceMicroversion": "mv-a",
+            "features": [
+                {
+                    "featureId": identity,
+                    "name": "Extrude",
+                    "parameters": [
+                        {"parameterId": "depth", "expression": "1 mm"},
+                    ],
+                }
+            ],
+        },
+    )
+    rows = await _preview(
+        "onshape.update_feature",
+        {
+            "document_id": DID,
+            "workspace_id": WID,
+            "element_id": EID,
+            "feature_id": identity,
+            "parameters": {"depth": "2 mm"},
+        },
+    )
+    assert {"label": "Extrude · depth", "before": "1 mm", "after": "2 mm"} in rows
+
+
+@pytest.mark.parametrize("failure", ["missing_binding", "stale", "bad_readback", "read_error"])
+async def test_feature_update_requires_bound_state_and_verified_readback(failure):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.onshape_confirmation import PreviewBinding
+
+    tree = deepcopy(FEATURE_TREE_WITH_PARAMETERS)
+    tree["featureStates"] = {"F2": {"featureStatus": "OK"}}
+    connector = _conn()
+    connector.get_json = AsyncMock(return_value=tree)
+    connector.post_json = AsyncMock(return_value={})
+    args = {
+        "document_id": DID,
+        "workspace_id": WID,
+        "element_id": EID,
+        "feature_id": "F2",
+        "parameters": {"depth": "30 mm"},
+    }
+    operation = operation_by_name("onshape.update_feature")
+    binding = PreviewBinding()
+    async with connector.http(Credentials(token="t")) as client:
+        rows = await operation.preview(connector, client, args)
+        binding.remember(args, rows)
+        if failure == "missing_binding":
+            with pytest.raises(ConnectorError, match="observation"):
+                await operation.run(connector, client, args)
+        else:
+            changed = deepcopy(tree)
+            if failure == "stale":
+                changed["sourceMicroversion"] = "new-mv"
+                connector.get_json.return_value = changed
+            elif failure == "read_error":
+                connector.get_json.side_effect = [tree, ConnectorError("api_error", "read failed")]
+            with binding.execution(args), pytest.raises(ConnectorError) as error:
+                await operation.run(connector, client, args)
+            assert error.value.code == (
+                "stale_state" if failure == "stale" else "mutation_unverified"
+            )
+    assert connector.post_json.await_count == (0 if failure in {"missing_binding", "stale"} else 1)
+
+
+async def test_feature_update_binds_semantics_but_allows_vendor_transport_churn():
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.onshape_confirmation import PreviewBinding
+
+    tree = deepcopy(FEATURE_TREE_WITH_PARAMETERS)
+    tree["featureStates"] = {"F2": {"featureStatus": "OK"}}
+    fresh = deepcopy(tree)
+    fresh["serializationVersion"] = "1.2.21"
+    fresh["features"][0]["message"]["parameters"][0]["nodeId"] = "generated"
+    after = deepcopy(fresh)
+    after["features"][0]["message"]["parameters"][0].update(expression="30 mm", value=0.03)
+    connector = _conn()
+    connector.get_json = AsyncMock(side_effect=[tree, fresh, after])
+    connector.post_json = AsyncMock(return_value={})
+    args = {
+        "document_id": DID,
+        "workspace_id": WID,
+        "element_id": EID,
+        "feature_id": "F2",
+        "parameters": {"depth": "30 mm"},
+    }
+    operation = operation_by_name("onshape.update_feature")
+    binding = PreviewBinding()
+    async with connector.http(Credentials(token="t")) as client:
+        rows = await operation.preview(connector, client, args)
+        assert any(row["label"] == "Feature state fingerprint" for row in rows)
+        binding.remember(args, rows)
+        with binding.execution(args):
+            result = await operation.run(connector, client, args)
+    assert result["verified"] is True
+    assert connector.post_json.call_args.args[2]["serializationVersion"] == "1.2.21"

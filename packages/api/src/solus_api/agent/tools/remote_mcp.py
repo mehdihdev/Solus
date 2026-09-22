@@ -218,7 +218,8 @@ FS_MCP = RemoteMCPSpec(
     connect_notice=(
         "Connecting Onshape also enables FeatureScript authoring through the "
         "Onshape Labs FeatureScript app on your account. It runs as you, using "
-        "your own Onshape sign-in, and consumes your account's API allocation. "
+        "your own Onshape sign-in. Separate vendor service limits may apply; "
+        "Solus does not assume an annual allocation for this hosted service. "
         "Disconnecting Solus leaves the app enabled — remove it from the Onshape "
         "App Store if you want it gone."
     ),

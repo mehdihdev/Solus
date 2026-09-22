@@ -148,20 +148,7 @@ async function captureCallback(
       }
     }
 
-    const handle = (req: IncomingMessage, res: ServerResponse): void => {
-      const parsed = req.url
-        ? parseOAuthCallback(req.url, expectedState, undefined, stateParam)
-        : null
-      if (parsed === null) {
-        res.statusCode = 404
-        res.end()
-        return
-      }
-      res.statusCode = 200
-      res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      res.end(DONE_HTML)
-      finish(parsed)
-    }
+    const handle = callbackHandler(expectedState, stateParam, finish)
 
     const timer = setTimeout(() => finish({ error: 'Sign-in timed out.' }), TIMEOUT_MS)
     activeFinish = finish
@@ -200,4 +187,25 @@ function listen(
   })
   active.push(server)
   server.listen(port, host, onReady)
+}
+
+function callbackHandler(
+  expectedState: string,
+  stateParam: StateParam,
+  finish: (result: OAuthCallbackResult) => void
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return (req, res) => {
+    const parsed = req.url
+      ? parseOAuthCallback(req.url, expectedState, undefined, stateParam)
+      : null
+    if (parsed === null) {
+      res.statusCode = 404
+      res.end()
+      return
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.end(DONE_HTML)
+    finish(parsed)
+  }
 }

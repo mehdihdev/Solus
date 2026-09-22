@@ -311,7 +311,13 @@ async def test_truncated_scan_is_reported_not_hidden() -> None:
 async def test_detect_changes_compares_digest() -> None:
     acquirer = _Acquirer(None, digest="d" * 32)
     connector = LocalFolderConnector(acquirer=acquirer)
-    assert await connector.detect_changes(_ctx({"digest": "d" * 32})) is False
+    assert (
+        await connector.detect_changes(
+            _ctx({"digest": "d" * 32, "projection_version": "arduino-observations-v1"})
+        )
+        is False
+    )
+    assert await connector.detect_changes(_ctx({"digest": "d" * 32})) is True
     assert await connector.detect_changes(_ctx({"digest": "e" * 32})) is True
     assert await connector.detect_changes(_ctx({})) is True
     assert acquirer.scan_calls == 0

@@ -182,8 +182,8 @@ function atLevel(parentId: string | null, page = 0): Location {
   return { parentId, page, origin: ORIGIN, screenAnchor: null, direction: 'out', revealedId: null }
 }
 
-export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel {
-  const { entities, relations, projectId, positions, onSelect } = props
+function useNavigationLevel(props: GraphNavigatorProps) {
+  const { entities, relations, projectId, positions } = props
   const index = useScopedIndex(entities, relations, projectId)
   const [location, setLocation] = useState<Location>(() => atLevel(null))
   const parent = index.entities.get(location.parentId ?? '')
@@ -198,6 +198,38 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
   const trail = parent ? [...index.pathTo(parent.id).map((step) => step.entity), parent] : []
   const rootRef = useRef<HTMLElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+  return {
+    index,
+    location,
+    setLocation,
+    parent,
+    level,
+    page,
+    visible,
+    geometry,
+    links,
+    trail,
+    rootRef,
+    viewportRef
+  }
+}
+
+export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel {
+  const { positions, onSelect } = props
+  const {
+    index,
+    location,
+    setLocation,
+    parent,
+    level,
+    page,
+    visible,
+    geometry,
+    links,
+    trail,
+    rootRef,
+    viewportRef
+  } = useNavigationLevel(props)
   const select = useCallback(
     (entity: Entity): void => onSelect(entity, index.pathTo(entity.id)),
     [index, onSelect]
@@ -209,7 +241,7 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
       const origin = entity ? layoutLevel([entity], positions)[entity.id] : ORIGIN
       setLocation({ ...atLevel(entity?.id ?? null), origin })
     },
-    [index, onSelect, positions]
+    [index, onSelect, positions, setLocation]
   )
   const enter = useCallback(
     (entity: Entity): boolean => {
@@ -223,7 +255,7 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
       })
       return true
     },
-    [index, geometry.points, onSelect]
+    [index, geometry.points, onSelect, rootRef, setLocation]
   )
   const back = useCallback((): boolean => {
     if (!parent) return false
@@ -231,18 +263,7 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
     go(ancestor ?? null)
     return true
   }, [index, parent, go])
-  const showLinked = (entity: Entity): void => {
-    const ancestorId = index.parent.get(entity.id)?.id ?? null
-    const ancestor = index.entities.get(ancestorId ?? '')
-    const siblings = childrenOf(index, ancestorId)
-    const targetPage = Math.floor(
-      siblings.findIndex((candidate) => candidate.id === entity.id) / MAX_VISIBLE_NODES
-    )
-    // The revealed level packs around its parent's saved point, as entering it would.
-    const origin = ancestor ? layoutLevel([ancestor], positions)[ancestor.id] : ORIGIN
-    setLocation({ ...atLevel(ancestorId, Math.max(0, targetPage)), origin, revealedId: entity.id })
-    onSelect(entity, index.pathTo(entity.id))
-  }
+  const showLinked = linkedEntityNavigation(index, positions, setLocation, onSelect)
   const key = `${parent?.id ?? 'root'}:${page}`
   useWheelNavigation(rootRef, index, parent, enter, back)
   useViewportFocus(viewportRef, key, location)
@@ -297,4 +318,24 @@ function useProjectedLinks(
       ),
     [index, visible]
   )
+}
+
+function linkedEntityNavigation(
+  index: NavigationIndex,
+  positions: GraphNavigatorProps['positions'],
+  setLocation: ReturnType<typeof useNavigationLevel>['setLocation'],
+  onSelect: GraphNavigatorProps['onSelect']
+): NavigationModel['showLinked'] {
+  return (entity: Entity): void => {
+    const ancestorId = index.parent.get(entity.id)?.id ?? null
+    const ancestor = index.entities.get(ancestorId ?? '')
+    const siblings = childrenOf(index, ancestorId)
+    const targetPage = Math.floor(
+      siblings.findIndex((candidate) => candidate.id === entity.id) / MAX_VISIBLE_NODES
+    )
+    // The revealed level packs around its parent's saved point, as entering it would.
+    const origin = ancestor ? layoutLevel([ancestor], positions)[ancestor.id] : ORIGIN
+    setLocation({ ...atLevel(ancestorId, Math.max(0, targetPage)), origin, revealedId: entity.id })
+    onSelect(entity, index.pathTo(entity.id))
+  }
 }

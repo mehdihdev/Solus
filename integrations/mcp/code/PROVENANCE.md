@@ -54,20 +54,29 @@ performs LATER, on confirmation, act on the USER's workspace venv (ADR-031 amend
 
 - **Allowlist:** `./allowlist.yaml` — authoritative; per-tool `requires_confirmation` lives THERE.
   DRAFT until human-ratified at the MR (integrations/mcp/CLAUDE.md rule 2).
-- **Exposed / upstream total:** `6 / 6` — there is no upstream surface to trim; the server
-  registers exactly the six allowlisted tools (`solus/roster.py`, pinned by
+- **Exposed / upstream total:** `14 / 14` — there is no upstream surface to trim; the server
+  registers exactly the fourteen allowlisted tools (`solus/roster.py`, pinned by
   `tests/test_code_allowlist_shape.py` and `tests/test_code_server.py`).
-- **Destructive tools:** `create_environment`, `install`, `run`, `test` (all
+- **Destructive tools:** `create_environment`, `install`, `run`, `test`, `git_commit`, `git_push`,
+  `arduino_prepare`, `arduino_compile` (all
   `requires_confirmation: true` — they write to, download into, or execute code on the customer
   machine; `run`/`test` are declared interpreter tools per the security template §5).
-  `probe_environment` and `plan` are read-only (`plan` is pure).
+  `probe_environment`, `plan`, `git_status`, `git_log`, `git_diff` and `arduino_probe` are read-only
+  (`plan` is pure). Git writes require complete dry-run previews and state checks;
+  `docs/api/code-git-development.md` governs the SOLUSDEV-261 extension.
+  `docs/api/code-arduino-development.md` governs the pinned, sandboxed Uno compiler
+  and dependency preparation, with complete previews and no device access. Human
+  shipping sign-offs below remain outstanding and are not supplied by agent tests.
 
 ## Update / rebase policy
 
 - **CVE intake:** the CI dependency-audit job (CLAUDE.md §7) against `requirements.lock.txt`
   on every pipeline, plus GitHub Security Advisories on `modelcontextprotocol/python-sdk` (the
-  `mcp` package) — the only third-party code this server runs. The lock is byte-identical to the
-  `local` fork's below the header: one advisory triage covers both.
+  `mcp` package). The Python lock is byte-identical to the `local` fork's below
+  the header: one advisory triage covers both. Arduino execution additionally uses
+  the CLI and nine vendor archives pinned in `solus/arduino_manifest.py`, plus the
+  installed Bubblewrap sandbox. Changes to those pins or sandbox assumptions require
+  the Arduino API-plan and security re-review; never fetch rolling dependencies.
 - **Cadence:** no upstream to diff. A CVE in a pinned dependency → regenerate the lock and
   re-materialize within **14 days**.
 - **Rebase procedure:** n/a. Dependency bumps: regenerate `requirements.lock.txt`

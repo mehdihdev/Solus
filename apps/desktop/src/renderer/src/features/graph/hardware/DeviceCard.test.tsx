@@ -144,6 +144,18 @@ describe('DeviceCard — the sentence', () => {
 })
 
 describe('DeviceCard — the question', () => {
+  registerDeviceNamingTests()
+
+  registerDeviceChoicesTests()
+})
+
+describe('DeviceCard — silent, failed, confirming, done', () => {
+  registerDeviceFailuresTests()
+
+  registerConnectionStatusTests()
+})
+
+function registerDeviceNamingTests(): void {
   it('needs a 1..512-char name for a new robot, trims it, and never sends before Add', async () => {
     mount({})
     expect(screen.getByText('What is this?')).toBeInTheDocument()
@@ -184,7 +196,9 @@ describe('DeviceCard — the question', () => {
     mount({}, { robots: [] })
     expect(screen.queryByRole('combobox')).toBeNull()
   })
+}
 
+function registerDeviceChoicesTests(): void {
   it('asks the disambiguation question verbatim, then the name, sending the chosen config', async () => {
     mount({
       proposal: {
@@ -229,9 +243,9 @@ describe('DeviceCard — the question', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Not now' }))
     expect(handlers.onDismiss).toHaveBeenCalledOnce()
   })
-})
+}
 
-describe('DeviceCard — silent, failed, confirming, done', () => {
+function registerDeviceFailuresTests(): void {
   it('says nothing answered and offers Retry', async () => {
     mount({ status: 'silent', proposal: { ...proposal, driver_id: null } })
     expect(screen.getByText('Nothing answered yet — is it powered and free?')).toBeInTheDocument()
@@ -296,7 +310,9 @@ describe('DeviceCard — silent, failed, confirming, done', () => {
     mount({ status: 'done', result })
     expect(screen.getByRole('status')).toHaveTextContent('Added · connected')
   })
+}
 
+function registerConnectionStatusTests(): void {
   it('reports the saved asynchronous connection attempt as connecting', () => {
     mount({
       status: 'done',
@@ -326,4 +342,4 @@ describe('DeviceCard — silent, failed, confirming, done', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Added · bench session cap reached')
     expect(screen.queryByRole('button')).toBeNull()
   })
-})
+}

@@ -41,8 +41,9 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from solus_api.agent.tools.mcp_tool import MCPServerSpec, MCPTool, call_remote
 from solus_api.agent.tools.remote_mcp import HOSTED_SERVERS, RemoteAuthError, RemoteMCPSpec
@@ -50,9 +51,15 @@ from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import Tool, ToolException
 from solus_api.connectors import hosted_oauth
 from solus_api.connectors.hosted_oauth import HostedToken
-from solus_api.connectors.quota import QuotaBlockedError
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
-from solus_api.models import Source, SourceStatus
+from solus_api.models import (
+    AccountConnection,
+    ConnectionStatus,
+    Source,
+    SourceStatus,
+    SourceType,
+    utcnow,
+)
 
 logger = logging.getLogger("solus.agent.tools.hosted")
 
@@ -90,6 +97,22 @@ def _tool_error(exc: RemoteAuthError) -> ToolException:
     )
 
 
+def _hosted_source_available() -> ColumnElement[bool]:
+    """A REST quota failure does not revoke the separate hosted OAuth grant.
+
+    Only the trusted runtime's exact Onshape quota error is exempted. All other
+    source failures remain blocked; account/grant checks still run separately.
+    """
+    return or_(
+        Source.status == SourceStatus.CONNECTED,
+        and_(
+            Source.type == SourceType.ONSHAPE,
+            Source.status == SourceStatus.ERROR,
+            Source.last_error["code"].as_string() == "quota_exhausted",
+        ),
+    )
+
+
 class SourceHostedAuth:
     """Resolves ONE Source's hosted-server bearer token, refreshing on expiry.
 
@@ -105,23 +128,92 @@ class SourceHostedAuth:
         project_id: uuid.UUID,
         spec: RemoteMCPSpec,
         secret_store: SecretStore,
+        source_id: str | None = None,
+        connection_id: str | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._project_id = project_id
         self._spec = spec
         self._secret_store = secret_store
+        self._source_id = source_id
+        self._connection_id = connection_id
 
-    async def _secret_ref(self) -> str:
-        source = await connected_source(self._session_factory, self._project_id, self._spec)
+    async def _secret_ref(self, session: AsyncSession) -> tuple[str, Source | AccountConnection]:
+        query = (
+            select(Source)
+            .where(
+                Source.project_id == self._project_id,
+                Source.type == self._spec.source_type,
+                _hosted_source_available(),
+            )
+            .order_by(Source.id)
+        )
+        if self._source_id is not None:
+            query = query.where(Source.id == uuid.UUID(self._source_id))
+        source = await session.scalar(query)
         if source is None or not source.secret_ref:
             raise RemoteAuthError(
                 "not_connected",
                 "No Onshape source is connected to this project. Connect one in Sources first.",
             )
-        return hosted_oauth.token_secret_ref(source.secret_ref, self._spec.name)
+        if self._source_id is not None and str(source.connection_id or "") != str(
+            self._connection_id or ""
+        ):
+            raise RemoteAuthError(
+                "not_connected", "The connected account changed; reload the tools"
+            )
+        ref = source.secret_ref
+        owner: Source | AccountConnection = source
+        if source.connection_id is not None:
+            account = await session.scalar(
+                select(AccountConnection)
+                .where(
+                    AccountConnection.id == source.connection_id,
+                    AccountConnection.provider == self._spec.source_type,
+                    AccountConnection.status == ConnectionStatus.CONNECTED,
+                )
+                .with_for_update()
+            )
+            if account is None or not account.secret_ref:
+                raise RemoteAuthError(
+                    "not_connected", "The connected account is no longer available"
+                )
+            stored = account.config.get(INVENTORY_KEY) if isinstance(account.config, dict) else None
+            if not isinstance(stored, dict) or self._spec.name not in stored:
+                raise RemoteAuthError(
+                    "not_enabled", "Enable the hosted add-on on the connected account"
+                )
+            ref = account.secret_ref
+            owner = account
+        return hosted_oauth.token_secret_ref(ref, self._spec.name), owner
 
     async def headers(self) -> Mapping[str, str]:
-        ref = await self._secret_ref()
+        async with self._session_factory() as session:
+            ref, owner = await self._secret_ref(session)
+            try:
+                headers = await self._token_headers(ref)
+            except RemoteAuthError as exc:
+                if exc.code in {"reconnect_required", "scope_escalation", "not_enabled"}:
+                    self._invalidate_readiness(owner)
+                    await session.commit()
+                raise
+            await session.commit()
+            return headers
+
+    def _invalidate_readiness(self, owner: Source | AccountConnection) -> None:
+        config = dict(owner.config or {})
+        states = dict(config.get(STATE_KEY) or {})
+        states[self._spec.name] = {
+            "state": "not_enabled",
+            "tool_count": 0,
+            "checked_at": utcnow().isoformat(),
+            "detail": "Reconnect FeatureScript from the connected Onshape account.",
+        }
+        inventory = dict(config.get(INVENTORY_KEY) or {})
+        inventory.pop(self._spec.name, None)
+        owner.config = {**config, STATE_KEY: states, INVENTORY_KEY: inventory}
+
+    async def _token_headers(self, ref: str) -> Mapping[str, str]:
         try:
             token = HostedToken.from_json(await self._secret_store.get(ref))
         except SecretNotFoundError as exc:
@@ -175,24 +267,51 @@ async def load_hosted_inventory(session: AsyncSession, project_id: uuid.UUID) ->
     """
     sources = (
         await session.scalars(
-            select(Source).where(
+            select(Source)
+            .where(
                 Source.project_id == project_id,
-                Source.status == SourceStatus.CONNECTED,
+                _hosted_source_available(),
                 Source.type.in_({spec.source_type for spec in HOSTED_SERVERS.values()}),
             )
+            .order_by(Source.id)
         )
     ).all()
     inventory: dict[str, Any] = {}
     for source in sources:
-        config = source.config if isinstance(source.config, dict) else {}
+        account = None
+        if source.connection_id is not None:
+            account = await session.scalar(
+                select(AccountConnection)
+                .where(
+                    AccountConnection.id == source.connection_id,
+                    AccountConnection.provider == source.type,
+                    AccountConnection.status == ConnectionStatus.CONNECTED,
+                )
+                .execution_options(populate_existing=True)
+            )
+            if account is None or not account.secret_ref:
+                continue
+        owner = account or source
+        config = owner.config if isinstance(owner.config, dict) else {}
         stored = config.get(INVENTORY_KEY)
         if not isinstance(stored, Mapping):
             continue
         for server, entry in stored.items():
             # Re-checked against the LIVE registry: a grant for a server Solus no
             # longer speaks to must not resurrect it.
-            if server in HOSTED_SERVERS and isinstance(entry, Mapping):
-                inventory[server] = entry
+            spec = HOSTED_SERVERS.get(server)
+            if spec is not None and spec.source_type == source.type and isinstance(entry, Mapping):
+                inventory.setdefault(
+                    server,
+                    {
+                        **entry,
+                        "source_id": str(source.id),
+                        "connection_id": str(source.connection_id)
+                        if source.connection_id
+                        else None,
+                        "account_ref": owner.account_external_id or f"source:{source.id}",
+                    },
+                )
     return inventory
 
 
@@ -212,7 +331,7 @@ async def connected_source(
             select(Source).where(
                 Source.project_id == project_id,
                 Source.type == spec.source_type,
-                Source.status == SourceStatus.CONNECTED,
+                _hosted_source_available(),
             )
         )
         return source
@@ -324,61 +443,6 @@ def _target_label(read_args: dict[str, Any]) -> str:
     return " ".join(parts)[:150] or "Feature Studio"
 
 
-# ------------------------------------------------------------------ the meter
-
-
-def _meter_preflight(
-    spec: RemoteMCPSpec,
-    *,
-    redis: Any | None,
-    account_ref: str,
-    allowance: int,
-    degrade_ratio: float,
-) -> Any:
-    """Admission for calls that spend the CUSTOMER's provider allowance.
-
-    Registration meters nothing: `exec.run_tool` only logs, and every budget in
-    the system is model-call scoped inside the gateway. But a hosted MCP call
-    burns the customer's own Onshape API allocation, and ADR-019 as amended
-    (SOLUSDEV-167) says third-party integration quotas are a SECOND budget,
-    counted per PROVIDER ACCOUNT, in Redis, failing OPEN. That is exactly
-    `CallMeter` — under a DISTINCT provider key, because the spike measured a
-    separate pool (0 used on an account that had already spent ~2,000 of the
-    private-app allowance), so sharing `onshape`'s ledger would corrupt both.
-    """
-    from solus_api.connectors.quota import CallMeter
-
-    meter = CallMeter(
-        redis,
-        provider=spec.name,
-        account_ref=account_ref,
-        year=_current_year(),
-        allowance=allowance,
-        degrade_ratio=degrade_ratio,
-        # A SOL turn is deferrable: it must yield the degraded band to a human's
-        # own explicit click, never inherit that privilege.
-        purpose="agent",
-    )
-
-    async def preflight() -> None:
-        try:
-            await meter.admit()
-        except QuotaBlockedError as exc:
-            raise ToolException(
-                f"{exc.message}. FeatureScript calls use your Onshape account's own API allowance.",
-                code=ToolErrorCode.UNAUTHORIZED,
-                retryable=False,
-            ) from exc
-
-    return preflight
-
-
-def _current_year() -> int:
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).year
-
-
 # --------------------------------------------------------------- the tool set
 
 
@@ -411,8 +475,6 @@ def build_hosted_tools(
     secret_store: SecretStore | None,
     inventory: Mapping[str, Any] | None,
     redis: Any | None = None,
-    allowance: int = 2500,
-    degrade_ratio: float = 0.7,
 ) -> list[Tool]:
     """Every hosted-server tool for ONE project, from the PERSISTED inventory.
 
@@ -420,6 +482,12 @@ def build_hosted_tools(
     the network work happened at connect time. Returns `[]` without a secret
     store — offering tools that can only ever fail is worse than not offering
     them (the same fail-closed rule `build_onshape_tools` follows).
+
+    Hosted service limits are observed from the vendor, not inferred from one
+    account sample. No annual entitlement has been verified for this service.
+    `redis` remains a caller-compatible argument, not an active hosted quota
+    policy. Vendor refusals and the shared transport's rate/retry/auth controls
+    are unchanged; the separate REST quota meter is not consulted here.
     """
     if secret_store is None or not inventory:
         return []
@@ -437,13 +505,8 @@ def build_hosted_tools(
             project_id=project_id,
             spec=spec,
             secret_store=secret_store,
-        )
-        preflight = _meter_preflight(
-            spec,
-            redis=redis,
-            account_ref=str(stored.get("account_ref") or f"project-scope:{project_id}"),
-            allowance=allowance,
-            degrade_ratio=degrade_ratio,
+            source_id=stored.get("source_id"),
+            connection_id=stored.get("connection_id"),
         )
         previews = _previews(spec, stored, auth)
         for entry in stored.get("tools") or []:
@@ -473,7 +536,6 @@ def build_hosted_tools(
                     ),
                     secret_store=secret_store,
                     headers_provider=auth.headers_or_refuse,
-                    preflight=preflight,
                     preview=previews.get(remote_name),
                 )
             )

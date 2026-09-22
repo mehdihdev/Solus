@@ -19,6 +19,7 @@ Everything here is respx-mocked; no network, no live tenant.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -33,6 +34,7 @@ from fixtures.onshape_sample import (
 )
 from solus_api.connectors.contracts import ConnectorError, Credentials
 from solus_api.connectors.onshape import ONSHAPE_API_BASE, OnshapeConnector
+from solus_api.connectors.onshape_confirmation import PreviewBinding
 from solus_api.connectors.onshape_ops import (
     READ_OPERATIONS,
     WRITE_OPERATIONS,
@@ -41,7 +43,7 @@ from solus_api.connectors.onshape_ops import (
 
 DID, WID, EID = "d1", "w1", "e1"
 _VARS_PATH = f"/api/v6/variables/d/{DID}/w/{WID}/e/{EID}/variables"
-_SPECS_PATH = f"/api/v6/partstudios/d/{DID}/w/{WID}/e/{EID}/featurespecs"
+_SPECS_PATH = f"/api/v6/partstudios/d/{DID}/m/mvabc/e/{EID}/featurespecs"
 _FEATURES_PATH = f"/api/v6/partstudios/d/{DID}/w/{WID}/e/{EID}/features"
 
 
@@ -54,6 +56,12 @@ async def _run(name: str, args: dict[str, Any]) -> Any:
     assert operation is not None
     connector = _conn()
     async with connector.http(Credentials(token="t")) as client:
+        if name == "onshape.set_variable":
+            assert operation.preview is not None
+            binding = PreviewBinding()
+            binding.remember(args, await operation.preview(connector, client, args))
+            with binding.execution(args):
+                return await operation.run(connector, client, args)
         return await operation.run(connector, client, args)
 
 
@@ -69,7 +77,17 @@ def _mock_variables(router: respx.MockRouter) -> None:
     router.get(f"{ONSHAPE_API_BASE}/api/v6/documents/{DID}").mock(
         httpx.Response(200, json=WORKSPACE_INFO)
     )
-    router.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=VARIABLES))
+
+    def observed(request):
+        writes = [
+            call
+            for call in router.calls
+            if call.request.method == "POST" and call.request.url.path == _VARS_PATH
+        ]
+        variables = json.loads(writes[-1].request.content) if writes else VARIABLES[0]["variables"]
+        return httpx.Response(200, json=[{"variables": variables}])
+
+    router.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(side_effect=observed)
 
 
 # ------------------------------------------------------------- registration
@@ -182,7 +200,12 @@ async def test_set_variable_preview_shows_before_and_after() -> None:
         {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"},
     )
 
-    assert rows == [{"label": "width", "before": "120 mm", "after": "150 mm"}]
+    assert len(rows) == 2
+    by_name = {row["label"]: row for row in rows}
+    assert json.loads(by_name["width"]["before"])["expression"] == "120 mm"
+    assert json.loads(by_name["width"]["after"])["expression"] == "150 mm"
+    assert by_name["count"]["before"] == by_name["count"]["after"]
+    assert json.loads(by_name["count"]["after"])["type"] == "NUMBER"
 
 
 @respx.mock
@@ -194,7 +217,156 @@ async def test_preview_of_a_new_variable_has_no_before() -> None:
         {"document_id": DID, "element_id": EID, "name": "height", "expression": "40 mm"},
     )
 
-    assert rows == [{"label": "height", "before": None, "after": "40 mm"}]
+    assert len(rows) == 3
+    added = next(row for row in rows if row["label"] == "height")
+    assert added["before"] is None
+    assert json.loads(added["after"]) == {"name": "height", "type": "ANY", "expression": "40 mm"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        [None],
+        [{}],
+        [{"variables": {}}],
+        [{"variables": [None]}],
+        [{"variables": [{"name": "x", "expression": "1"}]}],
+        [{"variables": [{"name": "x", "type": "NUMBER", "expression": 1}]}],
+        [{"variables": [{"name": "x", "type": "NUMBER", "expression": "1", "description": False}]}],
+        [
+            {"variables": [{"name": "x", "type": "NUMBER", "expression": "1"}]},
+            {"variables": [{"name": "x", "type": "NUMBER", "expression": "2"}]},
+        ],
+    ],
+)
+@pytest.mark.parametrize("action", ["read", "preview", "write"])
+@respx.mock
+async def test_variable_malformed_table_never_drops_entries(body, action):
+    _mock_variables(respx.mock)
+    respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=body))
+    posted = respx.post(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=[]))
+    args = {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"}
+    with pytest.raises(ConnectorError):
+        if action == "read":
+            await _run("onshape.get_variables", args)
+        elif action == "preview":
+            await _preview("onshape.set_variable", args)
+        else:
+            await _run("onshape.set_variable", args)
+    assert not posted.called
+
+
+@pytest.mark.parametrize("readback", [VARIABLES, {}, [{"variables": []}]])
+@respx.mock
+async def test_variable_postwrite_mismatch_is_uncertain(readback):
+    _mock_variables(respx.mock)
+    respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(
+        side_effect=[
+            httpx.Response(200, json=VARIABLES),
+            httpx.Response(200, json=VARIABLES),
+            httpx.Response(200, json=readback),
+        ]
+    )
+    posted = respx.post(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=[]))
+    with pytest.raises(ConnectorError) as exc:
+        await _run(
+            "onshape.set_variable",
+            {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"},
+        )
+    assert posted.call_count == 1
+    assert exc.value.code == "mutation_unverified"
+
+
+@respx.mock
+async def test_variable_complete_preview_binds_type_and_empty_description():
+    _mock_variables(respx.mock)
+    body = [
+        {
+            "variables": [
+                {"name": "width", "type": "LENGTH", "expression": "120 mm", "description": ""}
+            ]
+        }
+    ]
+    respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=body))
+    rows = await _preview(
+        "onshape.set_variable",
+        {
+            "document_id": DID,
+            "element_id": EID,
+            "name": "width",
+            "expression": "150 mm",
+            "type": "ANY",
+        },
+    )
+    assert json.loads(rows[0]["before"])["type"] == "LENGTH"
+    assert json.loads(rows[0]["after"]) == {
+        "name": "width",
+        "type": "ANY",
+        "expression": "150 mm",
+        "description": "",
+    }
+
+
+@pytest.mark.parametrize("count,expression", [(41, "1"), (1, "1" * 401)])
+@respx.mock
+async def test_variable_preview_refuses_incomplete_card(count, expression):
+    _mock_variables(respx.mock)
+    body = [
+        {
+            "variables": [
+                {"name": f"v{i}", "type": "NUMBER", "expression": expression} for i in range(count)
+            ]
+        }
+    ]
+    respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=body))
+    with pytest.raises(ConnectorError):
+        await _preview(
+            "onshape.set_variable",
+            {"document_id": DID, "element_id": EID, "name": "v0", "expression": "2"},
+        )
+
+
+@respx.mock
+async def test_variable_failed_postwrite_read_is_uncertain():
+    _mock_variables(respx.mock)
+    respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(
+        side_effect=[
+            httpx.Response(200, json=VARIABLES),
+            httpx.Response(200, json=VARIABLES),
+            httpx.Response(503, json={"message": "unavailable"}),
+        ]
+    )
+    respx.post(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=[]))
+    with pytest.raises(ConnectorError) as exc:
+        await _run(
+            "onshape.set_variable",
+            {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"},
+        )
+    assert exc.value.code == "mutation_unverified"
+
+
+@pytest.mark.parametrize("bound", [False, True])
+@respx.mock
+async def test_variable_requires_unchanged_active_binding_before_post(bound):
+    _mock_variables(respx.mock)
+    posted = respx.post(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=[]))
+    args = {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"}
+    operation = operation_by_name("onshape.set_variable")
+    connector = _conn()
+    async with connector.http(Credentials(token="t")) as client:
+        if bound:
+            binding = PreviewBinding()
+            binding.remember(args, await operation.preview(connector, client, args))
+            changed = [{"variables": [{"name": "width", "type": "LENGTH", "expression": "121 mm"}]}]
+            respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(httpx.Response(200, json=changed))
+            with binding.execution(args), pytest.raises(ConnectorError) as exc:
+                await operation.run(connector, client, args)
+        else:
+            with pytest.raises(ConnectorError) as exc:
+                await operation.run(connector, client, args)
+    assert exc.value.code == "stale_state"
+    assert not posted.called
 
 
 # ------------------------------------------------------------ add_feature
@@ -204,7 +376,7 @@ async def test_preview_of_a_new_variable_has_no_before() -> None:
 _ENVELOPE = {
     "features": [],
     "serializationVersion": "1.2.7",
-    "sourceMicroversion": "mv-abc",
+    "sourceMicroversion": "mvabc",
     "libraryVersion": 2522,
 }
 
@@ -216,7 +388,17 @@ def _mock_specs(
         httpx.Response(200, json=WORKSPACE_INFO)
     )
     router.get(f"{ONSHAPE_API_BASE}{_SPECS_PATH}").mock(httpx.Response(200, json=specs))
-    router.get(f"{ONSHAPE_API_BASE}{_FEATURES_PATH}").mock(httpx.Response(200, json=_ENVELOPE))
+
+    def tree(request):
+        import copy
+
+        result = copy.deepcopy(_ENVELOPE)
+        if any(call.request.method == "POST" for call in router.calls):
+            result["features"] = [copy.deepcopy(ADD_FEATURE_RESPONSE["feature"])]
+            result["featureStates"] = {"F9": {"featureStatus": "OK"}}
+        return httpx.Response(200, json=result)
+
+    router.get(f"{ONSHAPE_API_BASE}{_FEATURES_PATH}").mock(side_effect=tree)
 
 
 @respx.mock
@@ -300,7 +482,7 @@ async def test_add_feature_echoes_the_write_envelope_and_rejects_skew() -> None:
 
     sent = json.loads(posted.calls[0].request.read().decode())
     assert sent["serializationVersion"] == "1.2.7"
-    assert sent["sourceMicroversion"] == "mv-abc"
+    assert sent["sourceMicroversion"] == "mvabc"
     assert sent["libraryVersion"] == 2522
     assert sent["rejectMicroversionSkew"] is True
 
@@ -429,3 +611,110 @@ async def test_add_feature_returns_the_new_feature_id() -> None:
     )
 
     assert result["feature_id"] == "F9"
+    assert result["verified"] is True
+    assert respx.calls[-1].request.method == "GET"
+
+
+@respx.mock
+async def test_variable_empty_204_requires_fresh_complete_readback():
+    _mock_variables(respx.mock)
+    posted = respx.post(f"{ONSHAPE_API_BASE}{_VARS_PATH}").respond(204)
+    result = await _run(
+        "onshape.set_variable",
+        {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"},
+    )
+    assert result["expression"] == "150 mm"
+    assert posted.call_count == 1
+    calls = [(call.request.method, call.request.url.path) for call in respx.calls]
+    assert calls[-2:] == [("POST", _VARS_PATH), ("GET", _VARS_PATH)]
+
+
+@respx.mock
+@pytest.mark.parametrize("readback_status", [200, 401])
+async def test_variable_204_mismatch_or_failed_readback_is_uncertain(readback_status):
+    _mock_variables(respx.mock)
+    reads = respx.get(f"{ONSHAPE_API_BASE}{_VARS_PATH}").mock(
+        side_effect=[
+            httpx.Response(200, json=VARIABLES),
+            httpx.Response(200, json=VARIABLES),
+            httpx.Response(readback_status, json=VARIABLES),
+        ]
+    )
+    posted = respx.post(f"{ONSHAPE_API_BASE}{_VARS_PATH}").respond(204)
+    with pytest.raises(ConnectorError) as error:
+        await _run(
+            "onshape.set_variable",
+            {"document_id": DID, "element_id": EID, "name": "width", "expression": "150 mm"},
+        )
+    assert error.value.code == "mutation_unverified"
+    assert posted.call_count == 1
+    assert reads.call_count == 3
+
+
+@respx.mock
+async def test_unrelated_post_json_still_refuses_empty_204():
+    respx.post(f"{ONSHAPE_API_BASE}{_FEATURES_PATH}").respond(204)
+    connector = _conn()
+    async with connector.http(Credentials(token="t")) as client:
+        with pytest.raises(ConnectorError, match="malformed JSON"):
+            await connector.post_json(client, _FEATURES_PATH, {}, what="feature creation")
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing_id",
+        "missing",
+        "duplicate",
+        "name",
+        "type",
+        "unhealthy",
+        "suppressed",
+        "unauthorized",
+        "post_error",
+    ],
+)
+async def test_add_feature_requires_authoritative_healthy_readback(failure):
+    import copy
+
+    _mock_specs(respx.mock)
+    created = copy.deepcopy(ADD_FEATURE_RESPONSE)
+    actual = copy.deepcopy(created["feature"])
+    readback = {"features": [actual], "featureStates": {"F9": {"featureStatus": "OK"}}}
+    if failure == "missing_id":
+        created["feature"].pop("featureId")
+    elif failure == "missing":
+        readback["features"] = []
+    elif failure == "duplicate":
+        readback["features"].append(actual)
+    elif failure == "name":
+        actual["name"] = "Other"
+    elif failure == "type":
+        actual["featureType"] = "Other"
+    elif failure == "unhealthy":
+        readback["featureStates"]["F9"]["featureStatus"] = "ERROR"
+    elif failure == "suppressed":
+        actual["suppressed"] = True
+    respx.get(f"{ONSHAPE_API_BASE}{_FEATURES_PATH}").mock(
+        side_effect=[
+            httpx.Response(200, json=_ENVELOPE),
+            httpx.Response(401 if failure == "unauthorized" else 200, json=readback),
+        ]
+    )
+    posted = respx.post(f"{ONSHAPE_API_BASE}{_FEATURES_PATH}").respond(
+        401 if failure == "post_error" else 200, json=created
+    )
+    with pytest.raises(ConnectorError) as error:
+        await _run(
+            "onshape.add_feature",
+            {
+                "document_id": DID,
+                "element_id": EID,
+                "feature_type": "extrude",
+                "name": "Boss",
+                "parameters": {"depth": "12 mm"},
+            },
+        )
+    assert error.value.code == "mutation_unverified"
+    assert posted.call_count == 1

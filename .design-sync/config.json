@@ -1,0 +1,190 @@
+{
+  "projectId": "14b41eeb-8ea1-4831-aff6-de4f87c38348",
+  "shape": "package",
+  "pkg": "@solus/desktop",
+  "globalName": "Solus",
+  "entry": ".design-sync/entry.tsx",
+  "srcDir": "apps/desktop/src/renderer/src",
+  "tsconfig": "apps/desktop/tsconfig.web.json",
+  "cssEntry": ".design-sync/solus-base.css",
+  "extraFonts": [
+    "node_modules/@fontsource/ibm-plex-sans/400.css",
+    "node_modules/@fontsource/ibm-plex-sans/500.css",
+    "node_modules/@fontsource/ibm-plex-sans/600.css",
+    "node_modules/@fontsource/ibm-plex-sans/700.css",
+    "node_modules/@fontsource/ibm-plex-mono/400.css",
+    "node_modules/@fontsource/ibm-plex-mono/500.css"
+  ],
+  "componentSrcMap": {
+    "Avatar": "apps/desktop/src/renderer/src/components/ui/Avatar.tsx",
+    "Button": "apps/desktop/src/renderer/src/components/ui/Button.tsx",
+    "Card": "apps/desktop/src/renderer/src/components/ui/Card.tsx",
+    "ContextMenu": "apps/desktop/src/renderer/src/components/ui/ContextMenu.tsx",
+    "DomainChip": "apps/desktop/src/renderer/src/components/ui/DomainChip.tsx",
+    "Field": "apps/desktop/src/renderer/src/components/ui/Field.tsx",
+    "KV": "apps/desktop/src/renderer/src/components/ui/KV.tsx",
+    "Mono": "apps/desktop/src/renderer/src/components/ui/Mono.tsx",
+    "Segmented": "apps/desktop/src/renderer/src/components/ui/Segmented.tsx",
+    "SolusLogo": "apps/desktop/src/renderer/src/components/ui/SolusLogo.tsx",
+    "Spark": "apps/desktop/src/renderer/src/components/ui/Spark.tsx",
+    "Spinner": "apps/desktop/src/renderer/src/components/ui/Spinner.tsx",
+    "Switch": "apps/desktop/src/renderer/src/components/ui/Switch.tsx",
+    "Wordmark": "apps/desktop/src/renderer/src/components/ui/Wordmark.tsx",
+    "ProjectCard": "apps/desktop/src/renderer/src/features/workspace/ProjectCard.tsx",
+    "GraphCard": "apps/desktop/src/renderer/src/features/graph/navigation/GraphCard.tsx",
+    "DeviceCard": null,
+    "ExtensionCard": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
+    "ExtensionIconTile": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
+    "PublisherBadge": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
+    "AvailabilityPill": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
+    "SectionLabel": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
+    "ConnectTile": null,
+    "CodeEnvironmentCard": "apps/desktop/src/renderer/src/features/graph/CodeEnvironmentCard.tsx",
+    "ExtensionIcon": "apps/desktop/src/renderer/src/features/extensions/host/ExtensionIcon.tsx",
+    "ModeBadge": "apps/desktop/src/renderer/src/features/sol/ModeBadge.tsx",
+    "RegionCard": "apps/desktop/src/renderer/src/features/sol/RegionCard.tsx",
+    "ClassifyIndicator": "apps/desktop/src/renderer/src/features/sol/ClassifyIndicator.tsx",
+    "SolMarkdown": "apps/desktop/src/renderer/src/features/sol/Markdown.tsx",
+    "SolusComposer": "apps/desktop/src/renderer/src/features/graph/SolusComposer.tsx",
+    "ScreenEmptyState": "apps/desktop/src/renderer/src/features/workspace/ScreenEmptyState.tsx",
+    "PlanLimitNotice": "apps/desktop/src/renderer/src/features/workspace/PlanLimitNotice.tsx",
+    "AlertScreen": "apps/desktop/src/renderer/src/features/graph/AlertScreen.tsx",
+    "FrameSkeleton": "apps/desktop/src/renderer/src/features/extensions/frame/FrameStates.tsx",
+    "FrameCard": "apps/desktop/src/renderer/src/features/extensions/frame/FrameStates.tsx",
+    "TwoStepDelete": "apps/desktop/src/renderer/src/features/graph/sidebar/TwoStepDelete.tsx",
+    "LabeledSelect": "apps/desktop/src/renderer/src/features/graph/hardware/LabeledSelect.tsx",
+    "Section": "apps/desktop/src/renderer/src/features/settings/settingsUi.tsx",
+    "Row": "apps/desktop/src/renderer/src/features/settings/settingsUi.tsx",
+    "InlineError": "apps/desktop/src/renderer/src/features/settings/settingsUi.tsx",
+    "StepDots": "apps/desktop/src/renderer/src/features/onboarding/StepDots.tsx",
+    "GithubButton": "apps/desktop/src/renderer/src/features/auth/GithubButton.tsx",
+    "TitleBar": "apps/desktop/src/renderer/src/features/workspace/TitleBar.tsx",
+    "PageHeader": "apps/desktop/src/renderer/src/features/extensions/pageview/PageHeader.tsx",
+    "PageIconTile": "apps/desktop/src/renderer/src/features/extensions/pageview/PageHeader.tsx",
+    "DevBadge": "apps/desktop/src/renderer/src/features/extensions/pageview/PageHeader.tsx",
+    "WidgetSlot": "apps/desktop/src/renderer/src/features/canvas/WidgetSlot.tsx",
+    "FocusSummaryWidget": "apps/desktop/src/renderer/src/features/workspace/widgets/FocusSummaryWidget.tsx",
+    "NeighborsWidget": "apps/desktop/src/renderer/src/features/workspace/widgets/NeighborsWidget.tsx",
+    "Icons": null
+  },
+  "docsDir": ".design-sync/docs",
+  "guidelinesGlob": [
+    "brand/README.md"
+  ],
+  "libOverrides": {
+    "dts.mjs": "KV is a real component with an ALL-CAPS name; and no .d.ts tree exists so props are read from the .tsx sources"
+  },
+  "overrides": {
+    "ContextMenu": {
+      "cardMode": "single",
+      "primaryStory": "SectionMenu",
+      "viewport": "900x700"
+    },
+    "GithubButton": {
+      "cardMode": "column"
+    },
+    "WidgetSlot": {
+      "cardMode": "column"
+    },
+    "ExtensionCard": {
+      "cardMode": "column"
+    },
+    "ExtensionIconTile": {
+      "cardMode": "column"
+    },
+    "PublisherBadge": {
+      "cardMode": "column"
+    },
+    "SectionLabel": {
+      "cardMode": "column"
+    },
+    "FrameCard": {
+      "cardMode": "column"
+    },
+    "FrameSkeleton": {
+      "cardMode": "column"
+    },
+    "AlertScreen": {
+      "cardMode": "column"
+    },
+    "LabeledSelect": {
+      "cardMode": "column"
+    },
+    "StepDots": {
+      "cardMode": "column"
+    },
+    "PageHeader": {
+      "cardMode": "column"
+    },
+    "PageIconTile": {
+      "cardMode": "column"
+    },
+    "Avatar": {
+      "cardMode": "column"
+    },
+    "Card": {
+      "cardMode": "column"
+    },
+    "DomainChip": {
+      "cardMode": "column"
+    },
+    "Field": {
+      "cardMode": "column"
+    },
+    "Segmented": {
+      "cardMode": "column"
+    },
+    "SolusLogo": {
+      "cardMode": "column"
+    },
+    "Spark": {
+      "cardMode": "column"
+    },
+    "Spinner": {
+      "cardMode": "column"
+    },
+    "Switch": {
+      "cardMode": "column"
+    },
+    "Wordmark": {
+      "cardMode": "column"
+    },
+    "InlineError": {
+      "cardMode": "column"
+    },
+    "Row": {
+      "cardMode": "column"
+    },
+    "Section": {
+      "cardMode": "column"
+    },
+    "TwoStepDelete": {
+      "cardMode": "column"
+    },
+    "ClassifyIndicator": {
+      "cardMode": "column"
+    },
+    "ModeBadge": {
+      "cardMode": "column"
+    },
+    "RegionCard": {
+      "cardMode": "column"
+    },
+    "SolMarkdown": {
+      "cardMode": "column"
+    },
+    "PlanLimitNotice": {
+      "cardMode": "column"
+    },
+    "ProjectCard": {
+      "cardMode": "column"
+    },
+    "ScreenEmptyState": {
+      "cardMode": "column"
+    },
+    "TitleBar": {
+      "cardMode": "column"
+    }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

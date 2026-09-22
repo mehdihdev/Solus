@@ -16,7 +16,7 @@ from typing import Any
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolError, ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import UNTRUSTED_TEXT_CAP
-from solus_api.bridge.allowlist import supports_dry_run
+from solus_api.bridge.allowlist import requires_complete_preview, supports_dry_run
 from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.bridge.service import dispatch
 
@@ -38,6 +38,25 @@ def _row(label: str, value: str) -> dict[str, Any]:
     return {"label": label, "before": None, "after": value}
 
 
+def _diff_rows(preview: Any) -> list[dict[str, Any]]:
+    """Validate bounded companion-supplied changes without altering their values."""
+    if not isinstance(preview, list) or not 1 <= len(preview) <= 40:
+        return []
+    for row in preview:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"label", "before", "after"}
+            or not isinstance(row["label"], str)
+            or not row["label"].strip()
+            or any(
+                value is not None and (not isinstance(value, str) or len(value) > 400)
+                for value in row.values()
+            )
+        ):
+            return []
+    return [dict(row) for row in preview]
+
+
 def _plan_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """A companion dry-run plan as consent rows (action-gate.md `DiffRow`).
 
@@ -47,6 +66,8 @@ def _plan_rows(plan: dict[str, Any]) -> list[dict[str, Any]]:
     than dumped — a row a person cannot read is not consent.
     """
     rows: list[dict[str, Any]] = []
+    if "preview" in plan:
+        return _diff_rows(plan["preview"])
     if isinstance(plan.get("argv"), list):
         rows.append(_row("command", shlex.join(str(part) for part in plan["argv"])))
     for key in ("cwd", "kind", "name", "path", "content"):
@@ -86,6 +107,7 @@ class BridgeTool:
         preview: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]] | None = None,
     ) -> None:
         self._descriptor = descriptor
+        self.requires_complete_preview = requires_complete_preview(descriptor.name)
         if preview is not None:
             # SOLUSDEV-251: set on the INSTANCE only (as MCPTool does) — the
             # confirmation gate reads `getattr(tool, "preview", None)` and treats
@@ -136,11 +158,15 @@ class BridgeTool:
         a create_environment is several commands. Argument rows show none of
         that, so the person was approving something other than what would run.
 
-        Raising is the documented degrade path (`_build_preview` catches and
-        falls back to argument rows): a preview that fails must never make the
-        action unapprovable.
+        Legacy tools may fall back to argument rows if previewing fails. Tools
+        covered by requires_complete_preview must return explicit, complete
+        change rows; the confirmation gate refuses them otherwise.
         """
         plan = await self.invoke({**args, "dry_run": True})
         # `dry_run: false` coming back means it RAN — an execution result, not a
         # plan. Render nothing rather than pass it off as a preview.
-        return _plan_rows(plan) if plan.get("dry_run") is True else []
+        if plan.get("dry_run") is not True:
+            return []
+        if self.requires_complete_preview:
+            return _diff_rows(plan.get("preview"))
+        return _plan_rows(plan)

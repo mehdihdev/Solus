@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { ApiError } from '../../../lib/api/envelope.types'
 import type { BenchDevice, BenchSession, BridgeStatus, LocalTool } from '../../../lib/api/resources'
 import {
+  platformUnavailableReason,
   connectErrorText,
   deviceTitle,
   simulatorName,
@@ -264,6 +265,30 @@ describe('connectErrorText', () => {
     )
     expect(connectErrorText(new Error('fetch failed'))).toBe(
       "Couldn't reach the Solus API — try again once you're back online."
+    )
+  })
+})
+
+describe('platform availability', () => {
+  const tool: LocalTool = {
+    type: 'vendor',
+    display_name: 'Test CAD',
+    hosting: 'vendor-run',
+    url_host: 'localhost',
+    connect_notice: '',
+    requires: 'companion',
+    supported_platforms: ['darwin', 'win32']
+  }
+  it('reports the native host restriction before companion offline', () => {
+    expect(toolStatusText(tool, null, 'linux')).toBe('Test CAD is not available on Linux')
+    expect(toolStatusText(tool, null, 'darwin')).toBe('Companion offline')
+  })
+  it('fails closed for unknown host and invalid metadata', () => {
+    expect(platformUnavailableReason(tool, null)).toBe(
+      'Open the desktop app to check platform availability'
+    )
+    expect(platformUnavailableReason({ ...tool, supported_platforms: [] }, 'linux')).toBe(
+      'Platform availability is unavailable'
     )
   })
 })

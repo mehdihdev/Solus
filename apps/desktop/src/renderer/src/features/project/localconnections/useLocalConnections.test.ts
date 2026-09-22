@@ -40,6 +40,43 @@ beforeEach(() => {
 })
 
 describe('useLocalConnections', () => {
+  localConnectionsPollingTests()
+  localConnectionsIsolationTests()
+})
+
+describe('useLocalTools', () => {
+  it('fetches once while enabled and returns the tool list', async () => {
+    useWorkspaceStore.setState({ linked: true })
+    mockedTools.mockResolvedValue([
+      {
+        type: 'fusion',
+        display_name: 'Fusion',
+        hosting: 'vendor-run',
+        url_host: '127.0.0.1:27182',
+        connect_notice: 'Launch Fusion',
+        requires: 'companion'
+      }
+    ])
+    const { result } = renderHook(() => useLocalTools())
+    await act(async () => undefined)
+    expect(mockedTools).toHaveBeenCalledTimes(1)
+    expect(result.current?.[0].display_name).toBe('Fusion')
+  })
+
+  it('degrades to null when gated or unreachable', async () => {
+    const { result } = renderHook(() => useLocalTools())
+    expect(mockedTools).not.toHaveBeenCalled()
+    expect(result.current).toBeNull()
+
+    useWorkspaceStore.setState({ linked: true })
+    mockedTools.mockRejectedValue(new Error('unreachable'))
+    const { result: failed } = renderHook(() => useLocalTools())
+    await act(async () => undefined)
+    expect(failed.current).toBeNull()
+  })
+})
+
+function localConnectionsPollingTests(): void {
   it('never fetches while workspace fetches are disabled', () => {
     vi.useFakeTimers()
     try {
@@ -91,7 +128,9 @@ describe('useLocalConnections', () => {
       vi.useRealTimers()
     }
   })
+}
 
+function localConnectionsIsolationTests(): void {
   it('never leaks one project’s data across a project switch', async () => {
     vi.useFakeTimers()
     try {
@@ -122,36 +161,4 @@ describe('useLocalConnections', () => {
       vi.useRealTimers()
     }
   })
-})
-
-describe('useLocalTools', () => {
-  it('fetches once while enabled and returns the tool list', async () => {
-    useWorkspaceStore.setState({ linked: true })
-    mockedTools.mockResolvedValue([
-      {
-        type: 'fusion',
-        display_name: 'Fusion',
-        hosting: 'vendor-run',
-        url_host: '127.0.0.1:27182',
-        connect_notice: 'Launch Fusion',
-        requires: 'companion'
-      }
-    ])
-    const { result } = renderHook(() => useLocalTools())
-    await act(async () => undefined)
-    expect(mockedTools).toHaveBeenCalledTimes(1)
-    expect(result.current?.[0].display_name).toBe('Fusion')
-  })
-
-  it('degrades to null when gated or unreachable', async () => {
-    const { result } = renderHook(() => useLocalTools())
-    expect(mockedTools).not.toHaveBeenCalled()
-    expect(result.current).toBeNull()
-
-    useWorkspaceStore.setState({ linked: true })
-    mockedTools.mockRejectedValue(new Error('unreachable'))
-    const { result: failed } = renderHook(() => useLocalTools())
-    await act(async () => undefined)
-    expect(failed.current).toBeNull()
-  })
-})
+}

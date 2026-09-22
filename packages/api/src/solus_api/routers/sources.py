@@ -66,6 +66,7 @@ from solus_api.services.connections import (
     delete_legacy_family_if_retired,
     is_connection_owned,
     list_documents,
+    onshape_application_for,
     owned_connection,
     reusable_source,
     sweep_after_commit,
@@ -128,6 +129,7 @@ def _resolve_connector(
                     team_id=ctx.team.id,
                     acting_user_id=ctx.user.id,
                     account_ref=account_ref_for(source),
+                    onshape_application=onshape_application_for(source),
                     purpose=purpose,
                 ),
             )
@@ -162,7 +164,8 @@ async def _quota_states(request: Request, sources: list[Source]) -> dict[uuid.UU
             ConnectorContext(
                 project_id=source.project_id,
                 team_id=source.team_id,
-                account_ref=source.account_external_id,
+                account_ref=account_ref_for(source),
+                onshape_application=onshape_application_for(source),
             ),
         )
         states[source.id] = await meter.state()

@@ -13,6 +13,7 @@ import type { ConnectionState } from './onboardingStore'
 interface ConnectTileProps {
   integration: Integration
   state?: ConnectionState
+  unavailableReason?: string | null
   /** Open the connect wizard for this integration. */
   onOpen: () => void
 }
@@ -80,15 +81,21 @@ function TileMark({ integration }: { integration: Integration }): React.JSX.Elem
   )
 }
 
-export function ConnectTile({ integration, state, onOpen }: ConnectTileProps): React.JSX.Element {
+export function ConnectTile({
+  integration,
+  state,
+  onOpen,
+  unavailableReason
+}: ConnectTileProps): React.JSX.Element {
   return (
     <Card
       pad={0}
-      onClick={onOpen}
+      onClick={unavailableReason ? undefined : onOpen}
+      aria-disabled={unavailableReason ? true : undefined}
       style={{
-        cursor: 'pointer',
+        cursor: unavailableReason ? 'default' : 'pointer',
         overflow: 'hidden',
-        borderColor: borderFor(state),
+        borderColor: borderFor(unavailableReason ? undefined : state),
         transition: 'border-color 0.2s'
       }}
     >
@@ -98,7 +105,11 @@ export function ConnectTile({ integration, state, onOpen }: ConnectTileProps): R
           <div style={{ fontSize: 13.5, fontWeight: 600 }}>{integration.name}</div>
           <div style={{ fontSize: 11, color: 'var(--mut)' }}>{integration.kind}</div>
         </div>
-        <TileIndicator state={state} />
+        {unavailableReason ? (
+          <span style={{ color: 'var(--mut)', fontSize: 12 }}>Unavailable</span>
+        ) : (
+          <TileIndicator state={state} />
+        )}
       </div>
       <div
         style={{
@@ -108,7 +119,11 @@ export function ConnectTile({ integration, state, onOpen }: ConnectTileProps): R
           background: 'var(--bg)'
         }}
       >
-        <TileFooter state={state} />
+        {unavailableReason ? (
+          <span style={{ color: 'var(--mut)', fontSize: 11 }}>{unavailableReason}</span>
+        ) : (
+          <TileFooter state={state} />
+        )}
       </div>
     </Card>
   )

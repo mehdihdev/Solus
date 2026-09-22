@@ -15,6 +15,7 @@ expired, or provider-mismatched is rejected. Tokens never touch a response.
 
 from __future__ import annotations
 
+import hashlib
 import secrets as pysecrets
 import uuid
 from datetime import timedelta
@@ -110,11 +111,12 @@ async def list_local_tools(_user: CurrentUser) -> dict[str, Any]:
     the generic `local-bridge` tile: the next tool is a catalog entry here, never
     a frontend edit."""
     from solus_api.agent.tools.mcp_servers import MCP_SERVER_CATALOG
+    from solus_api.bridge.platforms import platform_fields
 
     tools = [
         {
             "type": spec.name,
-            "display_name": spec.name.replace("_", " ").capitalize(),
+            **platform_fields(spec.name),
             "hosting": "vendor-run",
             "url_host": urlsplit(spec.url).netloc,
             "connect_notice": spec.connect_notice,
@@ -360,6 +362,7 @@ async def _complete_oauth(
     await session.delete(record)
     await session.flush()
     access = connection.config.get("access") if isinstance(connection.config, dict) else None
+    client_id = getattr(connector, "_client_id", None)
     try:
         connection = await complete_connection(
             session,
@@ -369,6 +372,11 @@ async def _complete_oauth(
             creds=creds,
             account=account,
             access=access if isinstance(access, str) else None,
+            onshape_application=(
+                hashlib.sha256(client_id.encode()).hexdigest()
+                if provider == "onshape" and isinstance(client_id, str) and client_id
+                else None
+            ),
         )
     except StaleHandshakeError:
         # A second state for a row that already completed: refused, so a

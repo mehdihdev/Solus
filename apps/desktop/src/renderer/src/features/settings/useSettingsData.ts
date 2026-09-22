@@ -107,59 +107,9 @@ export function useSettingsData(): SettingsData {
     setErrors((prev) => ({ ...prev, [field]: message }))
   }, [])
 
-  const setSolMode = useCallback(
-    async (mode: SolMode): Promise<boolean> => {
-      const previous = useSettingsStore.getState().solMode
-      setStoreSolMode(mode)
-      setError('sol_mode', null)
-      try {
-        await updateSolMode(mode)
-        return true
-      } catch (error) {
-        setStoreSolMode(previous)
-        setError('sol_mode', errorMessage(error, 'Could not update SOL mode.'))
-        return false
-      }
-    },
-    [setStoreSolMode, setError]
-  )
-
-  const setConsent = useCallback(
-    async (next: boolean): Promise<boolean> => {
-      const previous = consent
-      setConsentState(next)
-      setError('consent', null)
-      try {
-        await updateConsent(next)
-        return true
-      } catch (error) {
-        setConsentState(previous)
-        setError('consent', errorMessage(error, 'Could not save your choice.'))
-        return false
-      }
-    },
-    [consent, setError]
-  )
-
-  const updateName = useCallback(
-    async (name: string): Promise<boolean> => {
-      const trimmed = name.trim()
-      if (!trimmed) {
-        setError('name', 'Name cannot be blank.')
-        return false
-      }
-      setError('name', null)
-      try {
-        const me = await updateProfile({ name: trimmed })
-        setProfile(me)
-        return true
-      } catch (error) {
-        setError('name', errorMessage(error, 'Could not save your name.'))
-        return false
-      }
-    },
-    [setError]
-  )
+  const setSolMode = useSetSolMode(setStoreSolMode, setError)
+  const setConsent = useSetConsent(consent, setConsentState, setError)
+  const updateName = useUpdateName(setProfile, setError)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -177,4 +127,76 @@ export function useSettingsData(): SettingsData {
     errors,
     actions: { setSolMode, setConsent, updateName, refresh }
   }
+}
+
+type SetFieldError = (field: SettingsField, message: string | null) => void
+
+function useSetSolMode(
+  setStoreSolMode: (mode: SolMode) => void,
+  setError: SetFieldError
+): SettingsActions['setSolMode'] {
+  return useCallback(
+    async (mode: SolMode): Promise<boolean> => {
+      const previous = useSettingsStore.getState().solMode
+      setStoreSolMode(mode)
+      setError('sol_mode', null)
+      try {
+        await updateSolMode(mode)
+        return true
+      } catch (error) {
+        setStoreSolMode(previous)
+        setError('sol_mode', errorMessage(error, 'Could not update SOL mode.'))
+        return false
+      }
+    },
+    [setStoreSolMode, setError]
+  )
+}
+
+function useSetConsent(
+  consent: boolean,
+  setConsentState: (value: boolean) => void,
+  setError: SetFieldError
+): SettingsActions['setConsent'] {
+  return useCallback(
+    async (next: boolean): Promise<boolean> => {
+      const previous = consent
+      setConsentState(next)
+      setError('consent', null)
+      try {
+        await updateConsent(next)
+        return true
+      } catch (error) {
+        setConsentState(previous)
+        setError('consent', errorMessage(error, 'Could not save your choice.'))
+        return false
+      }
+    },
+    [consent, setError, setConsentState]
+  )
+}
+
+function useUpdateName(
+  setProfile: (profile: Me) => void,
+  setError: SetFieldError
+): SettingsActions['updateName'] {
+  return useCallback(
+    async (name: string): Promise<boolean> => {
+      const trimmed = name.trim()
+      if (!trimmed) {
+        setError('name', 'Name cannot be blank.')
+        return false
+      }
+      setError('name', null)
+      try {
+        const me = await updateProfile({ name: trimmed })
+        setProfile(me)
+        return true
+      } catch (error) {
+        setError('name', errorMessage(error, 'Could not save your name.'))
+        return false
+      }
+    },
+    [setError, setProfile]
+  )
 }

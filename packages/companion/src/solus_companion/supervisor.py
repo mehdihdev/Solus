@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.shared.session import ProgressFnT
 from mcp.types import CallToolResult, Tool
 
 from solus_companion.config import ServerLaunch, is_loopback_url
@@ -116,7 +117,7 @@ class ServerHandle:
     def __init__(self, launch: ServerLaunch, notify: Callable[[], None]) -> None:
         self.launch = launch
         self.state = ServerState.NOT_LAUNCHED
-        self.detail: str | None = None
+        self.detail: str | None = launch.unavailable_reason
         self.changed_at = datetime.now(UTC)
         self.active_calls = 0
         self.session: ClientSession | None = None
@@ -215,6 +216,8 @@ class ServerHandle:
             return await self._start_locked()
 
     async def _start_locked(self) -> bool:
+        if self.launch.unavailable_reason is not None:
+            return False
         self._set_state(ServerState.LAUNCHING)
         self._stop = asyncio.Event()
         started = asyncio.Event()
@@ -328,7 +331,14 @@ class Supervisor:
         forks = [handle.status_entry() for handle in self._handles.values()]
         return forks + [server.status_entry() for server in self._builtins.values()]
 
-    async def call_tool(self, server: str, tool: str, args: dict[str, Any]) -> CallToolResult:
+    async def call_tool(
+        self,
+        server: str,
+        tool: str,
+        args: dict[str, Any],
+        *,
+        progress_callback: ProgressFnT | None = None,
+    ) -> CallToolResult:
         """Forward one call; ONE restart attempt if the session is dead."""
         builtin = self._builtins.get(server)
         if builtin is not None:
@@ -338,26 +348,38 @@ class Supervisor:
         handle = self._handles.get(server)
         if handle is None or (handle.tool_names and tool not in handle.tool_names):
             raise UnknownToolError(f"unknown tool {server}.{tool}")
+        if handle.launch.unavailable_reason is not None:
+            raise ServerUnavailableError(handle.launch.unavailable_reason)
         handle.begin_call()
         try:
-            return await self._call_on(handle, server, tool, args)
+            return await self._call_on(
+                handle, server, tool, args, progress_callback=progress_callback
+            )
         finally:
             handle.end_call()
 
     async def _call_on(
-        self, handle: ServerHandle, server: str, tool: str, args: dict[str, Any]
+        self,
+        handle: ServerHandle,
+        server: str,
+        tool: str,
+        args: dict[str, Any],
+        *,
+        progress_callback: ProgressFnT | None = None,
     ) -> CallToolResult:
         session = handle.session
         if session is None:
             session = await self._revive(handle, dead=None)
             if tool not in handle.tool_names:
                 raise UnknownToolError(f"unknown tool {server}.{tool}")
-            return await session.call_tool(tool, args)
+            return await session.call_tool(tool, args, progress_callback=progress_callback)
         try:
-            return await session.call_tool(tool, args)
+            return await session.call_tool(tool, args, progress_callback=progress_callback)
         except asyncio.CancelledError:
             raise
         except Exception:
+            if server == "code" and tool in {"run", "test"}:
+                raise  # execution may already have applied; never replay
             logger.warning("server %r call failed; attempting one restart", server)
             fresh = await self._revive(handle, dead=session)
             return await fresh.call_tool(tool, args)
@@ -387,7 +409,7 @@ class Supervisor:
     async def ensure_healthy(self) -> None:
         """Periodic health pass: ping each server; restart the dead ones."""
         for handle in self._handles.values():
-            if handle.state is ServerState.FAILED:
+            if handle.launch.unavailable_reason is not None or handle.state is ServerState.FAILED:
                 continue
             session = handle.session
             if session is not None and await self._ping(handle):
@@ -402,7 +424,7 @@ class Supervisor:
         entry (key NAMES only — no secret value ever reaches this function).
         The next status frame carries it to the cloud's read surface."""
         handle = self._handles.get(server)
-        if handle is None:
+        if handle is None or handle.launch.unavailable_reason is not None:
             logger.info("license ack for unsupervised server %r ignored", server)
             return
         if ok:

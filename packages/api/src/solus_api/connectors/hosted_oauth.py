@@ -88,8 +88,8 @@ def client_secret_ref(server: str) -> str:
 def token_secret_ref(source_secret_ref: str, server: str) -> str:
     """Where ONE customer's grant for ONE hosted server lives.
 
-    Derived from the Source's own ref so the credential inherits the Source's
-    tenancy and, critically, its DELETION: `disconnect_source` and
+    Derived from the authoritative account connection ref for account-backed
+    Sources, or the legacy Source ref. It inherits that owner's DELETION: `disconnect_source` and
     `delete_projects_cascade` both sweep from `Source.secret_ref`, and a
     credential family they cannot derive is a live OAuth2Write grant that
     outlives the customer revoking us (the bug `mcp-license/{team_id}/…` already
@@ -375,6 +375,7 @@ async def refresh_token(
         data={
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
+            "scope": " ".join(spec.scopes),
             **_client_form(client),
         },
         code="token_unreachable",

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 
 from code_paths import overlay_module  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
@@ -55,6 +56,39 @@ async def test_tools_advertise_object_schemas_and_required_args() -> None:
     assert set(tools["run"].inputSchema["required"]) == {"script"}
     assert "required" not in tools["create_environment"].inputSchema
     assert "required" not in tools["test"].inputSchema
+
+
+async def test_git_tools_have_explicit_schemas_and_protocol_refusals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = server.build_server()
+    tools = {tool.name: tool for tool in await built.list_tools()}
+    for name in ("git_status", "git_log", "git_diff", "git_commit", "git_push"):
+        assert name in tools
+        assert "root" not in tools[name].inputSchema.get("properties", {})
+    assert set(tools["git_commit"].inputSchema["required"]) == {
+        "message",
+        "expected_head",
+        "expected_index_fingerprint",
+    }
+    assert set(tools["git_push"].inputSchema["required"]) == {
+        "remote",
+        "branch",
+        "expected_head",
+        "expected_remote_head",
+    }
+    monkeypatch.delenv("SOLUS_MCP_WORKSPACE", raising=False)
+    with pytest.raises(ToolError, match="workspace_unavailable"):
+        await built.call_tool("git_status", {})
+
+
+@pytest.mark.parametrize("arguments", [{"limit": 1, "unexpected": True}, {"limit": "1"}])
+async def test_git_transport_rejects_extra_fields_and_type_coercion(arguments, monkeypatch) -> None:
+    reached = []
+    monkeypatch.setattr(server, "_git_call", lambda *_args, **kwargs: reached.append(kwargs) or {})
+    with pytest.raises(ToolError):
+        await server.build_server().call_tool("git_log", arguments)
+    assert reached == []
 
 
 async def test_plan_over_the_wire(ws: Path) -> None:

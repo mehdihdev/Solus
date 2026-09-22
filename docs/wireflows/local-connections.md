@@ -83,3 +83,21 @@ to honest copy with disabled controls, never fabricated availability:
 - No devices: "no serial devices detected", not an empty void.
 - Session start failure: the backend's error verbatim (`too_many_sessions`, `device_ambiguous` +
   candidates, `source_unavailable`, validation text).
+
+## Platform availability (SOLUSDEV-261)
+
+Local-tool rows and catalog tiles compare `supported_platforms` with the native desktop platform. Unsupported tools show “<Tool> is not available on <OS>” in neutral styling, including while the companion is offline, with Connect disabled. Unknown host platforms cannot connect to restricted tools. Invalid metadata displays “Platform availability is unavailable” and disables Connect. The companion reports unsupported servers as `not_launched` with the same human-readable reason, advertises no tools for them, and never launches, calls, or retries them. Compatible-but-missing installations still report ordinary startup failures. This uses the existing bridge state vocabulary; unavailable servers do not make the companion error badge red.
+
+The bridge popover hides Add license and Upgrade required for OS-unavailable servers: a license or plan change cannot make an unsupported desktop application run. Compatible servers retain their existing license guidance.
+
+### SO-101 model setup
+
+Home → Connected accounts → Simulation offers an explicit SO-101 model setup
+panel for the open project. Before Add model, show that it creates a simulation
+model with eight links, six joints, one jaw contact sensor and a bottle from the
+pinned official SO-101 template; the sensor/bottle are example scene additions,
+not measured hardware. The setup does not start a simulator. On success show the
+returned graph model identity and direct the user to SOL to probe/start/load via
+the existing approval flow. Pending/error states remain local; a project change
+must discard stale results. The legacy Live Bench Isaac unavailable row is omitted
+on this surface because the owned companion path is separate from Live Bench.

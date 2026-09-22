@@ -28,7 +28,7 @@ import threading
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
-from solus.confinement import confinement_refusal
+from solus.confinement import REASON_PATH_ESCAPES_WORKSPACE, confinement_refusal
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -93,10 +93,16 @@ def _harden(fn: Callable[..., Any]) -> Callable[..., Any]:
     pinned to None, stdout diverted."""
     has_ctx = "ctx" in inspect.signature(fn).parameters
 
+    def refuse(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+        refusal = confinement_refusal(kwargs)
+        if refusal is not None and getattr(fn, "_solus_strict_refusals", False):
+            raise ValueError(REASON_PATH_ESCAPES_WORKSPACE)
+        return refusal
+
     if inspect.iscoroutinefunction(fn):
 
         async def async_wrapper(**kwargs: Any) -> Any:
-            refusal = confinement_refusal(kwargs)
+            refusal = refuse(kwargs)
             if refusal is not None:
                 return refusal
             if has_ctx:
@@ -111,7 +117,7 @@ def _harden(fn: Callable[..., Any]) -> Callable[..., Any]:
     else:
 
         def sync_wrapper(**kwargs: Any) -> Any:
-            refusal = confinement_refusal(kwargs)
+            refusal = refuse(kwargs)
             if refusal is not None:
                 return refusal
             if has_ctx:
@@ -154,7 +160,28 @@ class TrimmingRegistrar:
                 self._blocked.append(name)
                 return fn  # never registered anywhere — dead in-process
             self._registered.append(name)
+            strict = getattr(fn, "_solus_strict_refusals", False) is True
+            packaged = any(
+                base.__module__.startswith("fastmcp.") for base in type(self._backing).__mro__
+            )
+            if strict and packaged:
+                from solus.strict_tool import register_strict_tool
+
+                register_strict_tool(self._backing, _harden(fn), **kwargs)
+                return fn
             self._backing.tool(*args, **kwargs)(_harden(fn))
+            if strict:
+                manager = getattr(self._backing, "_tool_manager", None)
+                if manager is not None:
+                    tool = manager.get_tool(name)
+                    if tool is None:
+                        raise RuntimeError("Owned tool registration failed")
+                    model = tool.fn_metadata.arg_model
+                    model.model_config["extra"] = "forbid"
+                    model.model_config["strict"] = True
+                    model.model_config["hide_input_in_errors"] = True
+                    model.model_rebuild(force=True)
+                    tool.parameters = model.model_json_schema(by_alias=True)
             return fn
 
         return decorator

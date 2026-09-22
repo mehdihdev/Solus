@@ -35,6 +35,18 @@ describe('EMAIL_PATTERN', () => {
 })
 
 describe('LiveMembers', () => {
+  memberRosterAndRolesTests()
+  membershipRemovalConfirmationTests()
+})
+
+describe('InviteModal', () => {
+  inviteTokenLifecycleTests()
+  inviteFailuresAndTeamTransitionTests()
+})
+
+type InviteFnType = (email: string) => Promise<InviteOutcome>
+
+function memberRosterAndRolesTests(): void {
   it('renders the roster with each role', () => {
     render(
       <LiveMembers
@@ -87,7 +99,9 @@ describe('LiveMembers', () => {
     expect(onChangeRole).toHaveBeenCalledWith('u2', 'admin')
     expect(await screen.findByRole('alert')).toHaveTextContent(MEMBER_FAILURE.forbidden)
   })
+}
 
+function membershipRemovalConfirmationTests(): void {
   it('removing a member is confirmed with the person named; cancel calls nothing', async () => {
     const onRemove = vi.fn(async () => ({ ok: true as const }))
     render(
@@ -151,9 +165,9 @@ describe('LiveMembers', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     await waitFor(() => expect(onRevoke).toHaveBeenCalledWith('i1'))
   })
-})
+}
 
-describe('InviteModal', () => {
+function inviteTokenLifecycleTests(): void {
   it('rejects an invalid email inline', async () => {
     const onInvite = vi.fn(async () => sent('x'))
     render(<InviteModal onClose={vi.fn()} onInvite={onInvite} />)
@@ -192,7 +206,9 @@ describe('InviteModal', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+}
 
+function inviteFailuresAndTeamTransitionTests(): void {
   it('warns BEFORE Send that inviting from the personal team creates a counted team', () => {
     render(<InviteModal onClose={vi.fn()} onInvite={vi.fn()} isPersonal />)
     expect(screen.getByText(/creates a new collaborative team/)).toBeInTheDocument()
@@ -245,6 +261,4 @@ describe('InviteModal', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Upgrade' }))
     expect(onUpgrade).toHaveBeenCalled()
   })
-})
-
-type InviteFnType = (email: string) => Promise<InviteOutcome>
+}

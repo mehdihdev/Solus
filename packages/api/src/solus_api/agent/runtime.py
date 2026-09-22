@@ -25,8 +25,10 @@ if TYPE_CHECKING:
     from solus_contracts.extension_manifest import ExtensionManifest
 
     from solus_api.agent.confirmations import ParkedCall
+    from solus_api.agent.execution_policy import BuildExecutionPolicy
     from solus_api.agent.tools.mcp_tool import MCPTool
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
+    from solus_api.agent.tools.tool import Tool
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
@@ -41,7 +43,8 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -61,6 +64,7 @@ from solus_api.agent.tools import (
     build_get_entity_tool,
 )
 from solus_api.agent.tools.exec import run_tool
+from solus_api.agent.turn_limits import GUIDE_LIMITS, turn_limits
 from solus_api.models import SolMode
 from solus_api.orchestration import bump_complexity, estimate_complexity, gateway
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
@@ -71,7 +75,7 @@ from solus_api.orchestration.type_estimator import estimate_tokens
 # §7 loop/recursion guard: an upper bound on tool calls per turn so a runaway loop
 # can never fan out unboundedly. The scaffold proposes ≤1; the guard protects the seam
 # for the real runner that swaps in later.
-MAX_TOOL_CALLS = 8
+MAX_TOOL_CALLS = GUIDE_LIMITS.tool_calls
 #: The companion's ungated inventory read, by its composed bridge name. Feeds
 #: `link_environment` the facts the model is not allowed to supply.
 _CODE_ENVIRONMENTS: Final = "code.probe_environment"
@@ -152,9 +156,11 @@ def build_sol_registry(
         # (house pattern) so the reasoning import graph grows the checker
         # dependency only when wired.
         from solus_api.agent.tools.builtin import build_builtin_tools
+        from solus_api.agent.tools.rail_current import build_rail_current_tool
 
         for tool in build_builtin_tools(systems, project_id):
             registry.register(tool)
+        registry.register(build_rail_current_tool(systems, project_id))
     if connectors is not None:
         from solus_api.agent.tools.read_code_file import build_read_code_file_tool
 
@@ -177,11 +183,13 @@ def build_sol_registry(
         # Registered ALONGSIDE the SOLX-04 tools below, not instead of them: the
         # two sets are disjoint (`onshape.*` vs `solus.*`) and answer different
         # questions — connecting a source versus operating one.
+        from solus_api.agent.execution_policy import register_owned_routine
         from solus_api.agent.tools.onshape_tools import build_onshape_tools
 
         for tool in build_onshape_tools(
             session_factory, project_id, secret_store=secret_store, connectors=connectors
         ):
+            register_owned_routine(tool, family="onshape")
             registry.register(tool)
     if connectors is not None and user_id is not None and team_id is not None:
         # SOLX-04: connecting a tool is a SOL action. Function-local import so
@@ -422,6 +430,7 @@ def _register_bridge_tools(
 
     Function-local imports like BridgeTool itself: the reasoning import graph
     stays MCP-ignorant; the catalog is consulted only when a bridge is wired."""
+    from solus_api.agent.execution_policy import register_owned_routine
     from solus_api.agent.tools.mcp_servers import (
         MCP_SERVER_CATALOG,
         build_license_preflight,
@@ -436,6 +445,10 @@ def _register_bridge_tools(
     environments: EnvironmentFetch | None = None
     tools: list[BridgeTool] = []
     for spec in session.inventory:
+        # Internal simulator inputs carry resolved graph data. Only the owned
+        # graph adapter may expose Isaac operations to SOL.
+        if spec.server == "isaac" or spec.descriptor.name.startswith("isaac."):
+            continue
         # Automatic code reads must resolve graph identity and the turn's selected
         # revision through read_code_file. Keep this native primitive available to
         # that wrapper's internal dispatch, never as a model-visible fallback.
@@ -474,6 +487,7 @@ def _register_bridge_tools(
             ),
         )
         tools.append(tool)
+        register_owned_routine(tool, family="bridge")
         # BOTH conditions, every time. The name pins WHICH tool and the gate flag
         # pins WHAT KIND of tool may be reached this way: a rename in the machine
         # allowlist must lose `link_environment`, and a gated tool must never be
@@ -495,11 +509,60 @@ def _register_bridge_tools(
 
     from solus_api.services.code_environment_adapter import with_environment_recording
 
+    for owned_tool in _owned_isaac_tools(
+        session_factory, project_id, bridge, user_id, team_id, bridge_call_cap_bytes
+    ):
+        register_owned_routine(owned_tool, family="isaac")
+        registry.register(owned_tool)
+
     for tool in tools:
+        registered = _owned_machine_tool(tool)
         registry.register(
-            with_environment_recording(tool, environments, session_factory, project_id, user_id)
+            with_environment_recording(
+                registered, environments, session_factory, project_id, user_id
+            )
         )
     return environments
+
+
+def _owned_machine_tool(tool: "Tool") -> "Tool":
+    from solus_api.agent.execution_policy import register_owned_routine
+    from solus_api.agent.tools.machine_writes import build_machine_write_tool
+
+    if tool.descriptor.name != "machine.write_file":
+        return tool
+    writer = build_machine_write_tool(tool)
+    register_owned_routine(writer, family="machine")
+    return writer
+
+
+def _owned_isaac_tools(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    bridge: "BridgeSessionRegistry",
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    call_cap_bytes: int,
+) -> list["Tool"]:
+    from solus_api.agent.tools.isaac_tools import build_isaac_tools
+    from solus_api.bridge.tool import BridgeTool
+
+    session = bridge.get(user_id, team_id, project_id)
+    if session is None:
+        return []
+    raw = {
+        spec.descriptor.name: BridgeTool(
+            descriptor=spec.descriptor,
+            sessions=bridge,
+            user_id=user_id,
+            team_id=team_id,
+            project_id=project_id,
+            call_cap_bytes=call_cap_bytes,
+        )
+        for spec in session.inventory
+        if spec.server == "isaac" and spec.descriptor.name.startswith("isaac.")
+    }
+    return build_isaac_tools(session_factory, project_id, raw)
 
 
 def _bridge_reader(
@@ -588,6 +651,7 @@ class AgentRunContext:
     #: (see modes.build_mode_dispatch), this field just makes the choice explicit
     #: and inspectable. Guide is the safe default — it never mutates.
     action_mode: ActionMode = ActionMode.GUIDE
+    executed_build_calls: set[str] = field(default_factory=set)
     #: S1-W3: the composer's "Think harder". One tier above what the estimator
     #: says the live message needs (HARD stays HARD), passed to the gateway as an
     #: EXPLICIT tier — so on window overflow it refuses rather than escalates,
@@ -644,13 +708,13 @@ DispatchFn = Callable[[ToolCall], Awaitable[ToolResult]]
 
 def confirmation_refusal(registry: ToolRegistry, call: ToolCall) -> ToolResult | None:
     """The CENTRAL destructive-action gate (CLAUDE.md §7, SEC-H1). A tool whose
-    descriptor carries `requires_confirmation` may NOT be dispatched without the
-    user explicitly approving the concrete action.
+    descriptor carries `requires_confirmation` reaches this fallback only when
+    the trusted Build routine policy has not authorized its concrete action.
 
     This is the FALLBACK: a flat refusal, used when no confirmation flow is
     wired. When a `park` IS supplied to `build_dispatch` (SOLUS-ONS-A5) the call
     is parked for approval instead — see `gate_tool_call`. Either way a
-    destructive tool is never dispatched from inside a turn.
+    unclassified or destructive tool is never dispatched from inside a turn.
 
     A runner cannot skip this: `build_dispatch` fuses gate-then-invoke into one
     callable and hands out only that, so no runner ever holds the registry (the
@@ -688,7 +752,14 @@ async def gate_tool_call(
     return None if parked is None else parked.result
 
 
-def build_dispatch(registry: ToolRegistry, park: "ParkFn | None") -> "DispatchFn":
+def build_dispatch(
+    registry: ToolRegistry,
+    park: "ParkFn | None",
+    *,
+    routine_policy: "BuildExecutionPolicy | None" = None,
+    routine_outcome: Callable[[ToolCall, ToolResult], Awaitable[ToolResult]] | None = None,
+    routine_start: Callable[[ToolCall], Awaitable[None]] | None = None,
+) -> "DispatchFn":
     """The gated dispatcher handed to a runner.
 
     Gate-then-invoke is fused into ONE callable so there is no ungated path to
@@ -704,6 +775,34 @@ def build_dispatch(registry: ToolRegistry, park: "ParkFn | None") -> "DispatchFn
     """
 
     async def gated(call: ToolCall) -> ToolResult:
+        call = call.model_copy(update={"args": deepcopy(call.args)})
+        automatic = await routine_policy.prepare(call) if routine_policy is not None else False
+        if isinstance(automatic, ToolResult):
+            return automatic
+        if automatic is True:
+            assert routine_policy is not None
+            try:
+                if routine_start is not None:
+                    await routine_start(call)
+            except Exception:
+                return routine_policy.finish(
+                    ToolResult.failure(
+                        call.call_id,
+                        ToolError(
+                            code=ToolErrorCode.UNAVAILABLE,
+                            message="Build bookkeeping failed. Nothing was executed.",
+                            retryable=False,
+                        ),
+                    )
+                )
+            routine_policy.execution_started(call)
+            result = routine_policy.finish(await registry.invoke(call))
+            if routine_outcome is not None:
+                try:
+                    result = await routine_outcome(call, result)
+                except Exception:
+                    logger.warning("Build post-action hook failed for %s", call.tool)
+            return result
         refusal = await gate_tool_call(registry, park, call)
         if refusal is not None:
             # "Why did this tool not run?" must be answerable from logs. exec's
@@ -753,7 +852,7 @@ class ScaffoldRunner:
         complexity = derive_complexity(ctx.interaction_context)
 
         results: list[ToolResult] = []
-        for call in plan_tool_calls(ctx.prompt)[:MAX_TOOL_CALLS]:
+        for call in plan_tool_calls(ctx.prompt)[: turn_limits(ctx.action_mode).tool_calls]:
             yield AgentEvent.tool_call(call)
             result = await ctx.dispatch(call)  # gates, then invokes — §7
             results.append(result)
@@ -831,7 +930,7 @@ class ScaffoldRunner:
 #: making another PAID model call, and cannot see a model that answers with zero
 #: tool calls forever. One guard per concern — the runner does not re-count tool
 #: calls, and the transport does not count rounds.
-MAX_MODEL_ROUNDS: Final = 5
+MAX_MODEL_ROUNDS: Final = GUIDE_LIMITS.model_rounds
 #: A tool loop needs more headroom than the gateway's 4096 text default — and
 #: Responses-style providers count REASONING tokens against max_output_tokens
 #: (OpenAI recommends headroom), so 8192 could truncate a reasoned tool round.
@@ -841,6 +940,45 @@ _ROUND_LIMIT = (
     "I stopped after several rounds of tool calls without reaching an answer. "
     "Try narrowing the question."
 )
+
+
+def _round_conversation(
+    system: str, turns: tuple[Turn, ...], tools: tuple[Any, ...], synthesis: bool
+) -> ToolConversation:
+    if synthesis:
+        system += (
+            "\nThis is the final response within this turn's budget. No tools are available. "
+            "Summarize observed results, unresolved gaps, and parked actions. "
+            "Distinguish completed actions from pending approvals; do not propose or replay "
+            "tool calls, infer success, or claim unobserved results."
+        )
+        tools = ()
+    return ToolConversation(system=system, messages=turns, tools=tools)
+
+
+def _limit_outcome(use: Any, tools: tuple[ToolDescriptor, ...]) -> ToolOutcome:
+    call = ToolCall(tool=prompt.resolve_tool_name(use.name, tools), args=use.args, call_id=use.id)
+    result = ToolResult.failure(
+        call.call_id,
+        ToolError(
+            code=ToolErrorCode.UNAVAILABLE,
+            message="This turn reached its tool limit. This request was not executed.",
+            retryable=False,
+        ),
+    )
+    return prompt.contain_result(call, result)
+
+
+def _terminal_reply(completion: Any, synthesis: bool, context: Context) -> AgentEvent | None:
+    if synthesis and completion.tool_calls:
+        return AgentEvent.message(
+            "The final summary was not completed. I stopped without executing additional "
+            "tools; earlier results and pending approvals remain unchanged."
+        )
+    if not completion.tool_calls:
+        prose, citations = reason.sanitize_reply(completion.text, context)
+        return AgentEvent.message(prose, citations=citations)
+    return None
 
 
 def _preferences_tokens(preferences: "Mapping[str, str] | None", estimator: Any) -> int:
@@ -886,6 +1024,7 @@ class LlmRunner:
             ctx.custom_instruction,
             ctx.engineering_preferences,
             with_screenshot=ctx.screenshot is not None,
+            action_mode=ctx.action_mode,
         )
         tools = prompt.tool_specs(ctx.tools)
         nonce = prompt.new_nonce()
@@ -950,7 +1089,10 @@ class LlmRunner:
         complexity = self._complexity_override(ctx)
         route_type: RouteType | None = None
 
-        for _ in range(MAX_MODEL_ROUNDS):
+        limits = turn_limits(ctx.action_mode)
+        tool_calls = 0
+        for round_index in range(limits.model_rounds):
+            synthesis = round_index == limits.model_rounds - 1 or tool_calls >= limits.tool_calls
             completion = None
             async with ctx.sessionmaker() as session:
                 stream = gateway.stream(
@@ -967,7 +1109,7 @@ class LlmRunner:
                     estimate_from=ctx.prompt,
                     complexity=complexity,
                     type=route_type,
-                    conversation=ToolConversation(system=system, messages=turns, tools=tools),
+                    conversation=_round_conversation(system, turns, tools, synthesis),
                     user_id=ctx.user_id,
                     session=session,
                     redis=ctx.redis,
@@ -990,12 +1132,9 @@ class LlmRunner:
             if completion is None:
                 break
             complexity, route_type = completion.model.complexity, completion.model.route_type
-            if not completion.tool_calls:
-                # Post-process: prose stripped of any model-authored Sources
-                # line; verified citations travel as STRUCTURED data the model
-                # cannot impersonate (SOL-02 review H1).
-                prose, citations = reason.sanitize_reply(completion.text, context)
-                yield AgentEvent.message(prose, citations=citations)
+            terminal = _terminal_reply(completion, synthesis, context)
+            if terminal is not None:
+                yield terminal
                 return
 
             turns = (
@@ -1010,7 +1149,11 @@ class LlmRunner:
                 ),
             )
             outcomes: list[ToolOutcome] = []
-            for use in completion.tool_calls:
+            admitted = completion.tool_calls[: limits.tool_calls - tool_calls]
+            outcomes.extend(
+                _limit_outcome(use, ctx.tools) for use in completion.tool_calls[len(admitted) :]
+            )
+            for use in admitted:
                 # The provider's own tool_use id becomes the call id, so results
                 # correlate exactly with no mapping table anywhere.
                 # The model answers with the name it was OFFERED (provider
@@ -1020,6 +1163,7 @@ class LlmRunner:
                     args=use.args,
                     call_id=use.id,
                 )
+                tool_calls += 1
                 yield AgentEvent.tool_call(call)
                 result = await ctx.dispatch(call)  # gates, then invokes
                 descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
@@ -1033,13 +1177,14 @@ class LlmRunner:
                     call=call,
                     result=result,
                     descriptor=descriptor,
-                    # A `requires_confirmation` tool is NEVER executed from inside
-                    # a turn: the gate parks it and Guide mode refuses it, both off
-                    # this same flag. Its refusal is `ok=False`, so filing on
-                    # `not ok` alone filed a false Errors row per model round the
-                    # moment SOL PROPOSED the action. Its real failure is filed
-                    # where it really runs — confirmations.decide_confirmation.
-                    executed=descriptor is not None and not descriptor.requires_confirmation,
+                    # Mutation flags still protect Guide; actual Build dispatch
+                    # is recorded separately. A parked/refused write must never
+                    # be filed as though it ran. Manual failures remain in the
+                    # confirmation decision path.
+                    executed=(
+                        call.call_id in ctx.executed_build_calls
+                        or (descriptor is not None and not descriptor.requires_confirmation)
+                    ),
                 )
                 # EVERY outcome goes back to the model, including a parked one.
                 # A failure it can correct (NOT_FOUND for a hallucinated tool,

@@ -229,6 +229,93 @@ RUN_PLAN: dict[str, Any] = {
 }
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "create_schematic",
+        "add_symbol",
+        "add_wire",
+        "add_net_label",
+        "mark_no_connect",
+    ],
+)
+async def test_schematic_preview_uses_exact_companion_diff(name: str) -> None:
+    tool = _machine_tool(InMemoryBridgeSessionRegistry(), _fresh_scope(), f"kicad.{name}")
+    assert getattr(tool, "requires_complete_preview", False) is True
+    diff = [
+        {"label": "Symbol", "before": None, "after": "R1 · 10 kΩ"},
+        {"label": "File fingerprint", "before": "old:hash", "after": "new:hash"},
+    ]
+    rows, seen = await _rows(
+        f"kicad.{name}",
+        {"schematic_path": "robot.kicad_sch"},
+        {
+            "dry_run": True,
+            "preview": diff,
+        },
+    )
+    assert rows == diff
+    assert seen == [{"schematic_path": "robot.kicad_sch", "dry_run": True}]
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [
+        [{"label": "x", "before": None, "after": "a" * 401}],
+        [{"label": "x", "before": None, "after": "x", "command": "untrusted"}],
+        [{"label": "x", "before": [], "after": "x"}],
+        [{"label": "x", "before": None, "after": "x"}] * 41,
+    ],
+)
+def test_malformed_companion_diff_cannot_be_rendered_as_consent(diff) -> None:
+    from solus_api.bridge.tool import _plan_rows
+
+    assert _plan_rows({"dry_run": True, "preview": diff}) == []
+
+
+async def test_required_schematic_preview_never_accepts_legacy_command_rows() -> None:
+    rows, _ = await _rows(
+        "kicad.add_symbol",
+        {"schematic_path": "robot.kicad_sch"},
+        {"dry_run": True, "argv": ["unrelated"], "path": "unrelated"},
+    )
+    assert rows == []
+
+
+@pytest.mark.parametrize("name", ["code.git_commit", "code.git_push"])
+async def test_git_operations_require_complete_state_bound_previews(name: str) -> None:
+    tool = _machine_tool(InMemoryBridgeSessionRegistry(), _fresh_scope(), name)
+    assert tool.requires_complete_preview is True
+    diff = [{"label": "Repository state", "before": "old", "after": "new"}]
+    rows, seen = await _rows(
+        name, {"expected_head": "observed"}, {"dry_run": True, "preview": diff}
+    )
+    assert rows == diff
+    assert seen == [{"expected_head": "observed", "dry_run": True}]
+    rows, _ = await _rows(name, {}, {"dry_run": True, "argv": ["git", "commit"]})
+    assert rows == []
+
+
+async def test_complete_git_preview_preserves_indentation_and_newlines() -> None:
+    patch = "@@ -1 +1 @@\n-    run()\n+\trun()\n"
+    diff = [{"label": "Complete staged diff", "before": None, "after": patch}]
+    rows, _ = await _rows("code.git_commit", {}, {"dry_run": True, "preview": diff})
+    assert rows == diff
+
+
+@pytest.mark.parametrize("control", ["\x00", "\x1b", "\u202e"])
+async def test_complete_preview_refuses_hidden_control_characters(control: str) -> None:
+    rows, _ = await _rows(
+        "code.git_commit",
+        {},
+        {
+            "dry_run": True,
+            "preview": [{"label": "Change", "before": None, "after": "safe" + control + "hidden"}],
+        },
+    )
+    assert rows == []
+
+
 def _machine_tool(sessions: InMemoryBridgeSessionRegistry, scope: Scope, name: str) -> BridgeTool:
     return BridgeTool(
         descriptor=ToolDescriptor(
@@ -377,3 +464,60 @@ async def test_a_companion_that_ignores_dry_run_never_becomes_the_card() -> None
         {"dry_run": False, "argv": ["make"], "cwd": "/ws", "exit_code": 0},
     )
     assert rows == [{"label": "argv", "before": None, "after": '["make"]'}]
+
+
+async def test_incremental_output_is_correlated_and_never_finishes_call() -> None:
+    from solus_api.agent.command_output import OutputBuffer, current_output
+    from solus_api.bridge.frames import ToolOutputData
+    from solus_api.bridge.service import dispatch, ingest_output
+
+    sent: list[str] = []
+    session = _live_session(sent, _fresh_scope())
+    output = OutputBuffer()
+    token = current_output.set(output)
+    try:
+        task = asyncio.create_task(dispatch(session, "code.run", {}, call_cap_bytes=CALL_CAP))
+        await asyncio.sleep(0)
+        call_id = json.loads(sent[0])["data"]["call_id"]
+        chunk = ToolOutputData(call_id=call_id, sequence=1, stream="stdout", text="first\n")
+        ingest_output(_live_session([], _fresh_scope()), chunk)
+        assert output.chunks == []
+        ingest_output(session, chunk)
+        ingest_output(session, chunk)
+        assert output.chunks[0]["text"] == "first\n" and not task.done()
+        ingest_result(session, ToolResult.success(call_id, {"exit_code": 0}))
+        await task
+        ingest_output(session, chunk.model_copy(update={"sequence": 2}))
+        assert len(output.chunks) == 1
+        assert not session.output_sinks and not session.output_limits
+    finally:
+        current_output.reset(token)
+
+
+async def test_output_byte_budget_and_sender_marker_are_explicit() -> None:
+    from solus_api.agent.command_output import OutputBuffer, current_output
+    from solus_api.bridge.frames import ToolOutputData
+    from solus_api.bridge.service import dispatch, ingest_output
+
+    sent: list[str] = []
+    session = _live_session(sent, _fresh_scope())
+    output = OutputBuffer()
+    token = current_output.set(output)
+    task = asyncio.create_task(dispatch(session, "code.run", {}, call_cap_bytes=CALL_CAP))
+    try:
+        await asyncio.sleep(0)
+        call_id = json.loads(sent[0])["data"]["call_id"]
+        for sequence in range(1, 35):
+            ingest_output(
+                session,
+                ToolOutputData(
+                    call_id=call_id, sequence=sequence, stream="stdout", text="😀" * 2047 + "\n"
+                ),
+            )
+        assert output.truncated
+        assert len(str(output.chunks)) < 270000
+        ingest_result(session, ToolResult.success(call_id, {}))
+        await task
+    finally:
+        task.cancel()
+        current_output.reset(token)
