@@ -8,7 +8,7 @@
       Every style is a pure function of time: seek(t) recomputes the whole frame.
       No CSS transitions, no timers, no state carried between frames.
       ?play loops it in realtime, ?t=<seconds> freezes a frame, ?debug shows the beat.
-      Look: the solusforge.com design (dark UI, blue accent, blue SOL orb) on a light canvas, set in IBM Plex.
+      Look: the solusforge.com design (dark UI, blue accent, blue SOL orb) on the site's near-black, set in IBM Plex.
     -->
     <style>
       @font-face {
@@ -42,7 +42,7 @@
         src: url(fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2");
       }
       :root {
-        --canvas: #e6e9ee;
+        --canvas: #05070b;
         --panel: #0b0e13;
         --card: #101722;
         --card2: #0e141d;
@@ -77,6 +77,15 @@
         color: var(--tx);
         -webkit-font-smoothing: antialiased;
       }
+      #sky {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          1500px 760px at 50% -12%,
+          rgba(28, 58, 122, 0.42) 0%,
+          transparent 70%
+        );
+      }
       #world {
         position: absolute;
         left: 0;
@@ -91,7 +100,7 @@
         height: 14000px;
         background-image: radial-gradient(
           circle,
-          rgba(14, 22, 36, 0.13) 1.5px,
+          rgba(255, 255, 255, 0.05) 1.5px,
           transparent 1.9px
         );
         background-size: 40px 40px;
@@ -181,13 +190,14 @@
         font:
           500 22px PlexMono,
           monospace;
-        color: #0008;
+        color: #fff8;
         display: none;
       }
     </style>
   </head>
   <body>
     <div id="stage">
+      <div id="sky"></div>
       <div id="world">
         <div id="dots"></div>
         <div id="shape">
@@ -1028,7 +1038,7 @@
                 top: 514px;
                 height: 92px;
                 font: 500 34px PlexMono;
-                color: var(--mut);
+                color: #a9b8d4;
                 gap: 12px;
               "
             >
@@ -1140,6 +1150,7 @@
         blue: [47, 107, 220],
         panel: [11, 14, 19],
         edit: [8, 11, 16],
+        navy: [13, 27, 51],
       };
       const DOM = {
         sw: "#62a9ff",
@@ -1177,8 +1188,8 @@
         [B(9, 1), { y: 544, w: 1400, h: 804, r: 30, s: 1.1 }],
         [B(11, 1), { x: HOME.x, y: HOME.y, w: 820, h: 300, r: 30, s: 1.55 }],
         [B(12, 1), { w: 740, h: 104, r: 26, s: 1.85 }],
-        [B(12, 3), { w: 150, h: 150, r: 75, fill: "blue", s: 1.9 }],
-        [B(13, 1), { w: 1560, h: 720, r: 36, fill: "panel", s: 1.0 }],
+        // End card floods past the frame edges: a full-screen takeover, then the loop's one orb.
+        [B(12, 3), { w: 2240, h: 1320, r: 40, fill: "navy", s: 1.0 }],
         [
           B(14, 3),
           {
@@ -1223,8 +1234,6 @@
       };
       const orbness = track(1, [
         [B(1, 3), 0, SP.fadeOut],
-        [B(12, 3), 1, SP.snap],
-        [B(13, 1), 0, SP.fadeOut],
         [B(14, 3), 1, SP.snap],
       ]);
       const press = track(1, [
@@ -1253,8 +1262,7 @@
         [B(10, 4) - 0.03, 1640, 866, SP.drag, 0.3],
         [B(11, 1), 1355, 314],
         [B(11, 3), 1560, 402],
-        [B(12, 4), ...REST],
-        [B(14, 1), HOME.x - 110, HOME.y + 280],
+        [B(13, 4), HOME.x - 150, HOME.y + 210], // Join the waitlist
         [B(14, 4), ...REST],
       ];
       const cx = track(
@@ -1284,7 +1292,7 @@
         B(8, 4),
         B(9, 3),
         B(11, 1),
-        B(14, 2),
+        B(14, 1),
       ];
       const DRAG = { down: B(10, 2), up: B(10, 4) };
       const held = (t) =>
@@ -1311,7 +1319,6 @@
           B(11, 1),
           B(12, 1),
           B(12, 3),
-          B(13, 1),
           B(14, 3),
         ].map((t) => ({ t, kind: "swish" })),
         ...[B(2, 1), B(2, 2), B(2, 3), B(2, 4)].map((t) => ({
@@ -1336,8 +1343,10 @@
         { t: B(10, 1), kind: "warn" },
         { t: B(11, 4), kind: "pop" },
         { t: B(12, 1) + 0.08, kind: "chime" },
-        ...[B(13, 2), B(13, 3)].map((t) => ({ t, kind: "tick" })),
-        { t: B(13, 4), kind: "chime" },
+        { t: B(12, 4), kind: "tick" },
+        { t: B(13, 1), kind: "chime" }, // headline lands on the downbeat
+        { t: B(13, 2), kind: "tick" },
+        { t: B(13, 3), kind: "pop" },
       ].sort((a, b) => a.t - b.t);
 
       // ── Static content built once (plain DOM, no state) ─────────────────────────
@@ -1618,7 +1627,7 @@
         L_bench: [B(9, 1) + 0.1, B(11, 1)],
         L_deploy: [B(11, 1) + 0.12, B(12, 1)],
         L_toast: [B(12, 1) + 0.1, B(12, 3)],
-        L_cta: [B(13, 1) + 0.1, B(14, 3)],
+        L_cta: [B(12, 3) + 0.14, B(14, 3)],
       };
       const px = (v) => `${v.toFixed(2)}px`;
       const show = (n, v) => {
@@ -1692,8 +1701,8 @@
           height: px(S.h),
           borderRadius: px(Math.min(S.r, S.w / 2, S.h / 2)),
           background: `rgb(${fill.map((f) => Math.round(clamp(f(t), 0, 255))).join(",")})`,
-          // Elevation on the light canvas + the site's hairline on dark surfaces (not on the orb).
-          boxShadow: `0 ${px(26 - 12 * o)} ${px(70 - 30 * o)} rgba(14,22,40,${(0.3 - 0.1 * o).toFixed(3)}), inset 0 0 0 1.5px rgba(255,255,255,${(0.07 * (1 - o)).toFixed(3)})`,
+          // Depth on the near-black canvas + the site's hairline on dark surfaces (not on the orb).
+          boxShadow: `0 ${px(26 - 12 * o)} ${px(70 - 30 * o)} rgba(0,0,0,${(0.55 - 0.25 * o).toFixed(3)}), inset 0 0 0 1.5px rgba(255,255,255,${(0.09 * (1 - o)).toFixed(3)})`,
         });
         el.orbfill.style.opacity = o.toFixed(3);
 
@@ -1956,14 +1965,14 @@
           ).toFixed(3);
         },
         L_cta(t) {
-          rise(el.ctaBrand, t, B(13, 1) + 0.12);
-          rise(el.ctaL1, t, B(13, 2) - 0.04);
-          rise(el.ctaL2, t, B(13, 3) - 0.04);
-          rise(el.ctaBtn, t, B(13, 4) - 0.04);
-          rise(el.ctaUrl, t, B(13, 4) + 0.06);
-          const hov = step(t - B(14, 1) + 0.06, SP.snap);
+          rise(el.ctaBrand, t, B(12, 4) - 0.04);
+          rise(el.ctaL1, t, B(13, 1) - 0.04);
+          rise(el.ctaL2, t, B(13, 2) - 0.04);
+          rise(el.ctaBtn, t, B(13, 3) - 0.04);
+          rise(el.ctaUrl, t, B(13, 3) + 0.06);
+          const hov = step(t - B(13, 4) + 0.06, SP.snap);
           el.ctaBtn.style.background = mix(ACC, ACC_HOV, hov);
-          el.ctaBtn.style.transform += ` scale(${(1 + 0.02 * hov - 0.04 * pulse(t, B(14, 2) - 0.05, SP.lead, 0.1)).toFixed(4)})`;
+          el.ctaBtn.style.transform += ` scale(${(1 + 0.02 * hov - 0.04 * pulse(t, B(14, 1) - 0.05, SP.lead, 0.1)).toFixed(4)})`;
         },
       };
       const SOL_KNOB = liquid([5, 43], [[B(6, 1), 45, 83]]);

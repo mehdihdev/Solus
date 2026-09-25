@@ -2,14 +2,14 @@
 
 `solus-showcase.mp4` — 1920×1080, 60 fps, 28.48 s, loops seamlessly. The blue SOL orb is the one shape: it
 morphs, never cuts, through the product story on a 14-bar grid at 118 BPM. The UI is the solusforge.com look
-(dark surfaces, domain-tinted borders, blue accent) set in IBM Plex, on a light cool-gray canvas for contrast.
+(dark surfaces, domain-tinted borders, blue accent) set in IBM Plex, on the site's near-black canvas with its soft blue top glow.
 
-| Bars  | Act                       | What happens                                                                                                                                                               |
-| ----- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1–4   | One graph                 | Orb → _Connect sources_ → GitHub / KiCad / Onshape / ROS sync → fingerprint match (CAM_v2 · OV9281_IC · camera_node → `camera_module`, 94%) → Robotics Context Model graph |
-| 5–8   | Catch it before it breaks | Push into the IMU → autocomplete flags an I2C 0x68 conflict → _Ask SOL_ → Guide→Expert toggle → fix `0x68 → 0x60` → loader → check → system proving 42/42                  |
-| 9–12  | Run it                    | Live Bench: sim vs real `motor_current`, anomaly +62%, scrub + spring back to LIVE → Deploy → flash → toast → orb                                                          |
-| 13–14 | Call to action            | Orb blooms into the end card: _The Greatest Robotics Tool You Could Ever Have_ · **Join the waitlist** · solusforge.com → folds back into the orb                          |
+| Bars  | Act                       | What happens                                                                                                                                                                                           |
+| ----- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1–4   | One graph                 | Orb → _Connect sources_ → GitHub / KiCad / Onshape / ROS sync → fingerprint match (CAM_v2 · OV9281_IC · camera_node → `camera_module`, 94%) → Robotics Context Model graph                             |
+| 5–8   | Catch it before it breaks | Push into the IMU → autocomplete flags an I2C 0x68 conflict → _Ask SOL_ → Guide→Expert toggle → fix `0x68 → 0x60` → loader → check → system proving 42/42                                              |
+| 9–12  | Run it                    | Live Bench: sim vs real `motor_current`, anomaly +62%, scrub + spring back to LIVE → Deploy → flash → toast                                                                                            |
+| 12–14 | Call to action            | The toast floods into a full-screen navy end card: _The Greatest Robotics Tool You Could Ever Have_ · **Join the waitlist** · solusforge.com → it collapses into the orb, which is frame 1 of the loop |
 
 The acts start on the song's three crash cymbals (bars 1, 5, 9). `storyboard.png` has one still per beat.
 
