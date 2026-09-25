@@ -132,6 +132,10 @@ def main() -> None:
     music = np.pad(music, ((0, n - len(music)), (0, 0)))
     fade = np.minimum(1, np.minimum(np.arange(n), n - 1 - np.arange(n)) / (SEAM_FADE_S * SR))
     music *= fade[:, None]
+    # Soft ending: equal-power fade of the song under the end card (window from the page).
+    f0, f1 = (round(float(x) * SR) for x in cues.get("musicFade", [cues["T"], cues["T"]]))
+    u = np.clip((np.arange(n) - f0) / max(f1 - f0, 1), 0, 1)
+    music *= np.cos(0.5 * np.pi * u)[:, None]
 
     sfx = np.zeros(n)
     bank = {k: (s := make(), peak_index(s)) for k, make in SOUNDS.items()}

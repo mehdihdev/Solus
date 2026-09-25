@@ -4,12 +4,12 @@
 morphs, never cuts, through the product story on a 14-bar grid at 118 BPM. The UI is the solusforge.com look
 (dark surfaces, domain-tinted borders, blue accent) set in IBM Plex, on the site's near-black canvas with its soft blue top glow.
 
-| Bars  | Act                       | What happens                                                                                                                                                                                           |
-| ----- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1–4   | One graph                 | Orb → _Connect sources_ → GitHub / KiCad / Onshape / ROS sync → fingerprint match (CAM_v2 · OV9281_IC · camera_node → `camera_module`, 94%) → Robotics Context Model graph                             |
-| 5–8   | Catch it before it breaks | Push into the IMU → autocomplete flags an I2C 0x68 conflict → _Ask SOL_ → Guide→Expert toggle → fix `0x68 → 0x60` → loader → check → system proving 42/42                                              |
-| 9–12  | Run it                    | Live Bench: sim vs real `motor_current`, anomaly +62%, scrub + spring back to LIVE → Deploy → flash → toast                                                                                            |
-| 12–14 | Call to action            | The toast floods into a full-screen navy end card: _The Greatest Robotics Tool You Could Ever Have_ · **Join the waitlist** · solusforge.com → it collapses into the orb, which is frame 1 of the loop |
+| Bars  | Act                       | What happens                                                                                                                                                                                                                                                                      |
+| ----- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1–4   | One graph                 | Orb → _Connect sources_ → GitHub / KiCad / Onshape / ROS sync → fingerprint match (CAM_v2 · OV9281_IC · camera_node → `camera_module`, 94%) → Robotics Context Model graph                                                                                                        |
+| 5–8   | Catch it before it breaks | Push into the IMU → autocomplete flags an I2C 0x68 conflict → _Ask SOL_ → Guide→Expert toggle → fix `0x68 → 0x60` → loader → check → system proving 42/42                                                                                                                         |
+| 9–12  | Run it                    | Live Bench: sim vs real `motor_current`, anomaly +62%, scrub + spring back to LIVE → Deploy → flash → toast                                                                                                                                                                       |
+| 12–14 | Call to action            | The toast dissolves and the end card takes over the full frame on the UI canvas: _The Greatest Robotics Tool You Could Ever Have_ · **Join the waitlist** · solusforge.com. The text fades, the orb grows back from a point (frame 1 of the loop) and the song fades out under it |
 
 The acts start on the song's three crash cymbals (bars 1, 5, 9). `storyboard.png` has one still per beat.
 
@@ -39,6 +39,7 @@ python3 tools/encode.py              # ffmpeg tmix motion blur + mux → solus-s
   and the leading edge is faster than the trailing one, so the pill stretches in the direction it moves.
 - The scrub handle is direct manipulation: while held, its value is computed from the cursor. On release
   it springs back to LIVE from wherever it was let go, stretching when dragged past the end.
+- The orb is the first iteration's build in Solus blue: off-centre highlight (#dbe9ff → #8fbcff → #4c8dff) plus a blurred glow; UI states stay flat.
 - Springs are damped to 0.94–1.0: motion settles with ≤0.02% overshoot (no bounce).
 - The loop ends on the orb shifted by `HOME` (1360, 280), a multiple of the 40 px dot grid, so the last
   frame matches the first (cursor position and speed included).

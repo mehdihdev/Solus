@@ -113,11 +113,17 @@
         position: absolute;
         inset: 0;
         background: radial-gradient(
-          circle at 35% 30%,
-          #7fb2ff 0%,
-          #2f6bdc 45%,
-          #0d2a66 100%
+          circle at 38% 34%,
+          #dbe9ff 0%,
+          #8fbcff 24%,
+          #4c8dff 60%,
+          #4c8dff 100%
         );
+      }
+      #glow {
+        position: absolute;
+        background: #4c8dff;
+        filter: blur(34px);
       }
       .L {
         position: absolute;
@@ -200,6 +206,7 @@
       <div id="sky"></div>
       <div id="world">
         <div id="dots"></div>
+        <div id="glow"></div>
         <div id="shape">
           <div id="orbfill"></div>
 
@@ -1150,7 +1157,7 @@
         blue: [47, 107, 220],
         panel: [11, 14, 19],
         edit: [8, 11, 16],
-        navy: [13, 27, 51],
+        clear: [11, 14, 19], // alpha 0: the shape dissolves and content sits on the canvas
       };
       const DOM = {
         sw: "#62a9ff",
@@ -1168,6 +1175,7 @@
       // ── The one shape: keyframed rect + camera ──────────────────────────────────
       const ORB = { x: 0, y: 0, w: 150, h: 150, r: 75, fill: "blue", s: 1.9 };
       const HOME = { x: 1360, y: 280 }; // final orb spot; multiple of the 40px dot grid → loop is seamless
+      const ORB_BACK = B(14, 3) + 0.18; // CTA text fades from 14.3, then the orb grows back
       const KEYS = [
         [B(1, 3), { w: 460, h: 104, r: 26 }],
         [B(2, 1), { w: 1060, h: 200, r: 30, fill: "panel", s: 1.5 }],
@@ -1188,19 +1196,26 @@
         [B(9, 1), { y: 544, w: 1400, h: 804, r: 30, s: 1.1 }],
         [B(11, 1), { x: HOME.x, y: HOME.y, w: 820, h: 300, r: 30, s: 1.55 }],
         [B(12, 1), { w: 740, h: 104, r: 26, s: 1.85 }],
-        // End card floods past the frame edges: a full-screen takeover, then the loop's one orb.
-        [B(12, 3), { w: 2240, h: 1320, r: 40, fill: "navy", s: 1.0 }],
+        // End card: the toast dissolves into the canvas and the CTA takes over the full frame.
+        [B(12, 3), { w: 2240, h: 1320, r: 40, fill: "clear", s: 1.0 }],
+        // Return to the orb without a boxy morph: while invisible the shape jumps to a point,
+        // then grows as a circle (r ≥ w/2 the whole way). Quicker zoom so it settles by the seam.
         [
-          B(14, 3),
+          B(14, 3) + 0.13,
+          { w: 0, h: 0, r: 75, ssp: { r: 0.03, d: 1 }, csp: { r: 0.42, d: 1 } },
+        ],
+        [
+          ORB_BACK,
           {
             w: 150,
             h: 150,
             r: 75,
             fill: "blue",
             s: 1.9,
+            ssp: { r: 0.34, d: 0.97 },
             csp: { r: 0.42, d: 1 },
           },
-        ], // quicker zoom: settled exactly by the seam
+        ],
       ];
       const states = [];
       KEYS.reduce((prev, [t, delta]) => {
@@ -1211,7 +1226,11 @@
       const prop = (p, sp) =>
         track(
           ORB[p],
-          states.map(([t, s], i) => [t, s[p], (sp && KEYS[i][1].csp) || sp]),
+          states.map(([t, s], i) => [
+            t,
+            s[p],
+            sp ? KEYS[i][1].csp || sp : KEYS[i][1].ssp,
+          ]),
         );
       const shp = {
         x: prop("x"),
@@ -1220,6 +1239,14 @@
         h: prop("h"),
         r: prop("r"),
       };
+      const alpha = track(
+        1,
+        states.map(([t, s]) => [
+          t,
+          s.fill === "clear" ? 0 : 1,
+          s.fill === "clear" ? SP.slow : SP.lead,
+        ]),
+      );
       const fill = [0, 1, 2].map((i) =>
         track(
           RGB.blue[i],
@@ -1234,7 +1261,7 @@
       };
       const orbness = track(1, [
         [B(1, 3), 0, SP.fadeOut],
-        [B(14, 3), 1, SP.snap],
+        [ORB_BACK, 1, SP.lead],
       ]);
       const press = track(1, [
         [B(1, 2) - 0.1, 1.035, SP.snap],
@@ -1319,7 +1346,7 @@
           B(11, 1),
           B(12, 1),
           B(12, 3),
-          B(14, 3),
+          ORB_BACK,
         ].map((t) => ({ t, kind: "swish" })),
         ...[B(2, 1), B(2, 2), B(2, 3), B(2, 4)].map((t) => ({
           t: t + 0.06,
@@ -1347,6 +1374,7 @@
         { t: B(13, 1), kind: "chime" }, // headline lands on the downbeat
         { t: B(13, 2), kind: "tick" },
         { t: B(13, 3), kind: "pop" },
+        { t: ORB_BACK + 0.06, kind: "chime" }, // the orb's return: last note of the loop
       ].sort((a, b) => a.t - b.t);
 
       // ── Static content built once (plain DOM, no state) ─────────────────────────
@@ -1688,11 +1716,12 @@
         const S = {
           x: shp.x(t),
           y: shp.y(t),
-          w: Math.max(8, shp.w(t) * k),
-          h: Math.max(8, shp.h(t) * k),
+          w: Math.max(0, shp.w(t) * k),
+          h: Math.max(0, shp.h(t) * k),
           r: shp.r(t) * k,
         };
 
+        const a = clamp(alpha(t));
         el.world.style.transform = `translate(960px,540px) scale(${c.s.toFixed(5)}) translate(${px(-c.x)},${px(-c.y)})`;
         Object.assign(el.shape.style, {
           left: px(S.x - S.w / 2),
@@ -1700,11 +1729,20 @@
           width: px(S.w),
           height: px(S.h),
           borderRadius: px(Math.min(S.r, S.w / 2, S.h / 2)),
-          background: `rgb(${fill.map((f) => Math.round(clamp(f(t), 0, 255))).join(",")})`,
-          // Depth on the near-black canvas + the site's hairline on dark surfaces (not on the orb).
-          boxShadow: `0 ${px(26 - 12 * o)} ${px(70 - 30 * o)} rgba(0,0,0,${(0.55 - 0.25 * o).toFixed(3)}), inset 0 0 0 1.5px rgba(255,255,255,${(0.09 * (1 - o)).toFixed(3)})`,
+          background: `rgba(${fill.map((f) => Math.round(clamp(f(t), 0, 255))).join(",")},${a.toFixed(3)})`,
+          // Depth on the near-black canvas + the site's hairline on dark surfaces (the orb glows instead).
+          boxShadow: `0 26px 70px rgba(0,0,0,${(0.55 * (1 - o) * a).toFixed(3)}), inset 0 0 0 1.5px rgba(255,255,255,${(0.09 * (1 - o) * a).toFixed(3)})`,
         });
         el.orbfill.style.opacity = o.toFixed(3);
+        Object.assign(el.glow.style, {
+          left: px(S.x - S.w / 2),
+          top: px(S.y - S.h / 2),
+          width: px(S.w),
+          height: px(S.h),
+          borderRadius: px(S.w / 2),
+          opacity: (0.5 * o).toFixed(3),
+          display: o > 0.01 ? "block" : "none",
+        });
 
         for (const L of layers) {
           const [a, b] = WINDOWS[L.n.id];
@@ -1991,7 +2029,9 @@
       const DEBUG = params.has("debug");
       el.debug.style.display = DEBUG ? "block" : "none";
       window.seek = seek;
-      window.SHOWCASE = { T, P, FPS, FRAMES, CUES, beat: B };
+      // The song fades (equal-power) under the end card so the video ends softly, not on a cut.
+      const MUSIC_FADE = [B(13, 1), T];
+      window.SHOWCASE = { T, P, FPS, FRAMES, CUES, MUSIC_FADE, beat: B };
       document.fonts.ready.then(() => {
         seek(+params.get("t") || 0);
         window.READY = true;

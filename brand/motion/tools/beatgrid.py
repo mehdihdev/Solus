@@ -29,15 +29,7 @@ Float = NDArray[np.float64]
 
 
 def decode(path: Path) -> Float:
-    raw = ffmpeg("-i",
-            str(path),
-            "-ac",
-            "1",
-            "-ar",
-            str(SR),
-            "-f",
-            "f32le",
-            "-")
+    raw = ffmpeg("-i", str(path), "-ac", "1", "-ar", str(SR), "-f", "f32le", "-")
     return np.frombuffer(raw, np.float32).astype(np.float64)
 
 
@@ -113,18 +105,20 @@ def main() -> None:
         "act_breaks": [round(c - start, 4) for c in crashes if start <= c < start + duration],
     }
     (ROOT / "audio" / "beatgrid.json").write_text(json.dumps(grid, indent=2) + "\n")
-    ffmpeg("-y",
-            "-ss",
-            f"{start:.4f}",
-            "-t",
-            f"{duration:.4f}",
-            "-i",
-            str(SONG),
-            "-ar",
-            str(SR),
-            "-ac",
-            "2",
-            str(ROOT / "audio" / "loop.wav"))
+    ffmpeg(
+        "-y",
+        "-ss",
+        f"{start:.4f}",
+        "-t",
+        f"{duration:.4f}",
+        "-i",
+        str(SONG),
+        "-ar",
+        str(SR),
+        "-ac",
+        "2",
+        str(ROOT / "audio" / "loop.wav"),
+    )
     print(json.dumps({k: v for k, v in grid.items() if k != "downbeats_in_song"}, indent=2))
 
 

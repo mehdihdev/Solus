@@ -124,6 +124,7 @@ async function cues(browser) {
   const data = await page.evaluate(() => ({
     T: window.SHOWCASE.T,
     cues: window.SHOWCASE.CUES,
+    musicFade: window.SHOWCASE.MUSIC_FADE,
   }));
   writeFileSync(
     join(ROOT, "audio", "cues.json"),
