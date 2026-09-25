@@ -1,0 +1,4 @@
+# Intermediate renders (subframes are ~1.5 GB); the final MP4 lives next to showcase.html
+render/
+audio/loop.wav
+audio/mix.wav

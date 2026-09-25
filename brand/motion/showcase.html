@@ -1,0 +1,1810 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Solus Showcase</title>
+    <!--
+      SOLUSDEV-400 — product showcase motion piece.
+      Every style is a pure function of time: seek(t) recomputes the whole frame.
+      No CSS transitions, no timers, no state carried between frames.
+      ?play loops it in realtime, ?t=<seconds> freezes a frame, ?debug shows the beat.
+    -->
+    <style>
+      @font-face {
+        font-family: Plex;
+        font-weight: 400;
+        src: url(fonts/ibm-plex-sans-latin-400-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Plex;
+        font-weight: 500;
+        src: url(fonts/ibm-plex-sans-latin-500-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Plex;
+        font-weight: 600;
+        src: url(fonts/ibm-plex-sans-latin-600-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: PlexMono;
+        font-weight: 400;
+        src: url(fonts/ibm-plex-mono-latin-400-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: PlexMono;
+        font-weight: 500;
+        src: url(fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2");
+      }
+      :root {
+        --ink: #0a0c0f;
+        --surface: #f4f2ee;
+        --card: #ffffff;
+        --line: #e3dfd7;
+        --track: #eae7e1;
+        --text: #14171c;
+        --muted: #7a808a;
+        --amber: #e5a43b;
+        --edit: #15181d;
+        --edit-line: #262b33;
+        --sw: #62a9ff;
+        --el: #e5a43b;
+        --me: #e87fae;
+        --rt: #5bcd8c;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--ink);
+      }
+      #stage {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--ink);
+        font-family: Plex, sans-serif;
+        color: var(--text);
+        -webkit-font-smoothing: antialiased;
+      }
+      #world {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+      }
+      #dots {
+        position: absolute;
+        left: -6000px;
+        top: -6000px;
+        width: 14000px;
+        height: 14000px;
+        background-image: radial-gradient(
+          circle,
+          rgba(255, 255, 255, 0.075) 1.5px,
+          transparent 1.9px
+        );
+        background-size: 40px 40px;
+      }
+      #glow {
+        position: absolute;
+        background: var(--amber);
+        filter: blur(34px);
+      }
+      #shape {
+        position: absolute;
+        overflow: hidden;
+      }
+      #orbfill {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          circle at 38% 34%,
+          #fbe3a6 0%,
+          #efbb58 24%,
+          #e5a43b 60%,
+          #e5a43b 100%
+        );
+      }
+      .L {
+        position: absolute;
+        display: none;
+        transform-origin: 50% 50%;
+      }
+      .abs {
+        position: absolute;
+      }
+      .mono {
+        font-family: PlexMono, monospace;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+      }
+      .card {
+        position: absolute;
+        background: var(--card);
+        border: 1.5px solid var(--line);
+        border-radius: 20px;
+        box-sizing: border-box;
+      }
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        flex: none;
+      }
+      .ico {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .btn {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        border-radius: 999px;
+        font-weight: 600;
+        box-sizing: border-box;
+      }
+      #cursor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 44px;
+        height: 44px;
+        transform-origin: 6px 4px;
+      }
+      #debug {
+        position: absolute;
+        right: 24px;
+        bottom: 20px;
+        font:
+          500 22px PlexMono,
+          monospace;
+        color: #fff8;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="world">
+        <div id="dots"></div>
+        <div id="glow"></div>
+        <div id="shape">
+          <div id="orbfill"></div>
+
+          <!-- Bar 1: Connect sources pill -->
+          <div class="L" id="L_pill" data-w="440" data-h="100" data-a="c">
+            <div
+              class="row"
+              style="
+                height: 100px;
+                justify-content: center;
+                gap: 14px;
+                font: 600 34px Plex;
+                color: var(--ink);
+              "
+            >
+              <svg
+                class="ico"
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                style="stroke-width: 2.6"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Connect sources
+            </div>
+          </div>
+
+          <!-- Bar 2: source tray -->
+          <div
+            class="L"
+            id="L_tray"
+            data-w="1060"
+            data-h="200"
+            data-a="c"
+          ></div>
+
+          <!-- Bar 3: fingerprint -->
+          <div class="L" id="L_fp" data-w="1180" data-h="560" data-a="c">
+            <div class="abs row" style="left: 50px; top: 36px; gap: 14px">
+              <span style="font: 600 26px Plex">Fingerprint match</span>
+              <span class="muted" style="font: 400 22px Plex"
+                >3 entities across 3 tools · same physical part?</span
+              >
+            </div>
+            <div id="fpCards"></div>
+            <div id="fpSignals"></div>
+            <div
+              class="abs"
+              id="fpPct"
+              style="
+                left: 790px;
+                top: 282px;
+                font: 600 104px/1 Plex;
+                letter-spacing: -3px;
+              "
+            >
+              0%
+            </div>
+            <div
+              class="abs muted"
+              style="left: 794px; top: 400px; font: 400 22px Plex"
+            >
+              match confidence
+            </div>
+            <div
+              class="btn"
+              id="fpConfirm"
+              style="
+                left: 930px;
+                top: 450px;
+                width: 200px;
+                height: 64px;
+                background: var(--amber);
+                color: var(--ink);
+                font-size: 24px;
+              "
+            >
+              Confirm
+            </div>
+          </div>
+
+          <!-- Bar 4: graph -->
+          <div class="L" id="L_graph" data-w="1400" data-h="780" data-a="c">
+            <svg
+              class="abs"
+              id="gEdges"
+              width="1400"
+              height="780"
+              viewBox="-700 -390 1400 780"
+              style="left: 0; top: 0"
+            ></svg>
+            <div id="gNodes"></div>
+            <div class="abs" id="gFoot" style="left: 50px; top: 704px">
+              <div style="font: 600 24px Plex">Robotics Context Model</div>
+              <div
+                class="muted mono"
+                id="gCount"
+                style="font: 400 19px PlexMono; margin-top: 4px"
+              >
+                0 entities · 0 relations
+              </div>
+            </div>
+            <div
+              class="abs row"
+              id="gLegend"
+              style="right: 50px; top: 40px; gap: 26px; font: 500 19px Plex"
+            ></div>
+          </div>
+
+          <!-- Bar 5: editor + autocomplete warning -->
+          <div
+            class="L"
+            id="L_edit"
+            data-w="1000"
+            data-h="480"
+            data-a="tl"
+            style="color: #e6e9ee"
+          >
+            <div
+              class="abs row"
+              style="
+                left: 0;
+                top: 0;
+                width: 1000px;
+                height: 64px;
+                border-bottom: 1.5px solid var(--edit-line);
+                gap: 14px;
+                padding-left: 36px;
+                box-sizing: border-box;
+              "
+            >
+              <span class="mono" style="font: 500 21px PlexMono">camera.h</span>
+              <span class="mono" style="font: 400 19px PlexMono; color: #6d7580"
+                >firmware / rover_fw</span
+              >
+            </div>
+            <div
+              class="abs mono"
+              id="edCode"
+              style="
+                left: 36px;
+                top: 92px;
+                font: 400 30px/52px PlexMono;
+                white-space: pre;
+              "
+            ></div>
+            <svg
+              class="abs"
+              id="edSquig"
+              width="76"
+              height="14"
+              viewBox="0 0 76 14"
+              style="left: 0; top: 0"
+            >
+              <path
+                d="M2 7 q4.5 -6 9 0 t9 0 t9 0 t9 0 t9 0 t9 0 t9 0 t9 0"
+                fill="none"
+                stroke="var(--amber)"
+                stroke-width="2.4"
+                stroke-linecap="round"
+              />
+            </svg>
+            <div
+              class="abs"
+              id="edWarn"
+              style="
+                left: 0;
+                top: 300px;
+                width: 1000px;
+                height: 180px;
+                border-top: 1.5px solid var(--edit-line);
+              "
+            >
+              <svg
+                class="ico abs"
+                width="40"
+                height="40"
+                viewBox="0 0 24 24"
+                style="left: 36px; top: 36px; color: var(--amber)"
+              >
+                <path d="M12 3.5 21.5 20h-19z" />
+                <path d="M12 10v4.5M12 17.2v.1" />
+              </svg>
+              <div
+                class="abs"
+                style="left: 96px; top: 34px; font: 600 27px Plex"
+              >
+                I2C address conflict
+              </div>
+              <div
+                class="abs"
+                style="
+                  left: 96px;
+                  top: 76px;
+                  font: 400 22px Plex;
+                  color: #9aa2ad;
+                "
+              >
+                0x68 is already used by
+                <span style="color: #e6e9ee">IMU · MPU-6050</span> on bus 1
+              </div>
+              <div
+                class="btn"
+                id="edAsk"
+                style="
+                  left: 770px;
+                  top: 80px;
+                  width: 180px;
+                  height: 64px;
+                  background: #f4f2ee;
+                  color: var(--ink);
+                  font-size: 23px;
+                "
+              >
+                <span
+                  style="
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: radial-gradient(
+                      circle at 38% 34%,
+                      #fbe3a6,
+                      #e5a43b 62%
+                    );
+                  "
+                ></span
+                >Ask SOL
+              </div>
+            </div>
+          </div>
+
+          <!-- Bars 5-7: SOL panel -->
+          <div class="L" id="L_sol" data-w="1000" data-h="620" data-a="tl">
+            <div
+              class="abs"
+              style="
+                left: 40px;
+                top: 40px;
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: radial-gradient(
+                  circle at 38% 34%,
+                  #fbe3a6,
+                  #efbb58 24%,
+                  #e5a43b 60%
+                );
+              "
+            ></div>
+            <div
+              class="abs"
+              style="left: 96px; top: 40px; font: 600 30px/40px Plex"
+            >
+              SOL
+            </div>
+            <div
+              class="abs muted"
+              style="left: 164px; top: 44px; font: 400 21px/34px Plex"
+            >
+              camera.h · I2C bus 1
+            </div>
+            <div
+              class="abs"
+              id="solGuide"
+              style="left: 668px; top: 44px; font: 500 22px/34px Plex"
+            >
+              Guide
+            </div>
+            <div
+              class="abs"
+              id="solTrack"
+              style="
+                left: 752px;
+                top: 36px;
+                width: 88px;
+                height: 48px;
+                border-radius: 24px;
+              "
+            ></div>
+            <div
+              class="abs"
+              id="solKnob"
+              style="
+                top: 41px;
+                height: 38px;
+                border-radius: 19px;
+                background: #fff;
+              "
+            ></div>
+            <div
+              class="abs"
+              id="solExpert"
+              style="left: 856px; top: 44px; font: 500 22px/34px Plex"
+            >
+              Expert
+            </div>
+            <div
+              class="abs row"
+              style="
+                left: 40px;
+                top: 118px;
+                height: 56px;
+                padding: 0 22px;
+                gap: 12px;
+                border-radius: 16px;
+                background: var(--track);
+                font: 400 21px Plex;
+              "
+            >
+              <svg
+                class="ico"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                style="color: #c7892a"
+              >
+                <path d="M12 3.5 21.5 20h-19z" />
+                <path d="M12 10v4.5M12 17.2v.1" />
+              </svg>
+              <span>0x68 conflicts with IMU · MPU-6050 on I2C bus 1</span>
+            </div>
+            <div
+              class="abs"
+              id="solText"
+              style="
+                left: 40px;
+                top: 206px;
+                width: 920px;
+                font: 400 31px/1.38 Plex;
+              "
+            ></div>
+            <div
+              class="abs mono"
+              id="solDiff"
+              style="
+                left: 40px;
+                top: 346px;
+                width: 920px;
+                font: 400 25px/54px PlexMono;
+                border-radius: 16px;
+                overflow: hidden;
+              "
+            >
+              <div
+                style="background: #f6e7e4; color: #9b5a50; padding-left: 22px"
+              >
+                <span style="opacity: 0.6">−</span> #define CAM_I2C <s>0x68</s>
+              </div>
+              <div
+                style="background: #e5f4ea; color: #256a41; padding-left: 22px"
+              >
+                <span style="opacity: 0.6">+</span> #define CAM_I2C
+                <b style="font-weight: 500">0x60</b>
+              </div>
+            </div>
+            <div
+              class="abs muted"
+              style="left: 40px; top: 546px; font: 400 21px/40px Plex"
+            >
+              1 file changed · firmware/camera.h
+            </div>
+            <div
+              class="btn"
+              id="solApply"
+              style="
+                left: 760px;
+                top: 530px;
+                width: 200px;
+                height: 64px;
+                color: #fff;
+                font-size: 24px;
+              "
+            >
+              Apply fix
+            </div>
+          </div>
+
+          <!-- Bar 7: loader → check → fixed pill -->
+          <div class="L" id="L_load" data-w="132" data-h="132" data-a="c">
+            <svg width="132" height="132" viewBox="0 0 132 132">
+              <circle
+                cx="66"
+                cy="66"
+                r="38"
+                fill="none"
+                stroke="#dedad2"
+                stroke-width="8"
+              />
+              <circle
+                id="loadArc"
+                cx="66"
+                cy="66"
+                r="38"
+                fill="none"
+                stroke="var(--ink)"
+                stroke-width="8"
+                stroke-linecap="round"
+                pathLength="1"
+                stroke-dasharray="0.28 1"
+                transform="rotate(-90 66 66)"
+              />
+            </svg>
+          </div>
+          <div class="L" id="L_check" data-w="132" data-h="132" data-a="c">
+            <svg width="132" height="132" viewBox="0 0 132 132">
+              <path
+                id="checkPath"
+                d="M42 68 58 84 91 50"
+                fill="none"
+                stroke="var(--ink)"
+                stroke-width="9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                pathLength="1"
+                stroke-dasharray="1 1"
+              />
+            </svg>
+          </div>
+          <div class="L" id="L_fixed" data-w="620" data-h="100" data-a="c">
+            <div
+              class="row"
+              style="
+                height: 100px;
+                justify-content: center;
+                gap: 16px;
+                font: 500 31px Plex;
+              "
+            >
+              <span
+                style="
+                  width: 40px;
+                  height: 40px;
+                  border-radius: 20px;
+                  background: var(--amber);
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                "
+              >
+                <svg
+                  class="ico"
+                  width="26"
+                  height="26"
+                  viewBox="0 0 24 24"
+                  style="stroke-width: 2.8; color: var(--ink)"
+                >
+                  <path d="M5 12.5 10 17.5 19 7.5" /></svg
+              ></span>
+              Fix applied <span class="muted">· 0 conflicts</span>
+            </div>
+          </div>
+
+          <!-- Bars 7-10: tabs (persist across Checks and Bench) -->
+          <div class="L" id="L_tabs" data-w="720" data-h="96" data-a="tc">
+            <div
+              class="abs"
+              style="
+                left: 0;
+                top: 0;
+                width: 720px;
+                height: 96px;
+                border-radius: 48px;
+                background: var(--track);
+              "
+            ></div>
+            <div
+              class="abs"
+              id="tabInd"
+              style="
+                top: 12px;
+                height: 72px;
+                border-radius: 36px;
+                background: var(--ink);
+              "
+            ></div>
+            <div id="tabLabels"></div>
+          </div>
+
+          <!-- Bar 8: system proving -->
+          <div
+            class="L"
+            id="L_checks"
+            data-w="900"
+            data-h="620"
+            data-a="tc"
+            data-top="24"
+          >
+            <div
+              class="abs"
+              style="left: 50px; top: 132px; font: 600 28px Plex"
+            >
+              System proving
+            </div>
+            <div
+              class="abs mono muted"
+              id="ckCount"
+              style="right: 50px; top: 136px; font: 400 22px PlexMono"
+            >
+              0 / 42 checks
+            </div>
+            <div id="ckRows"></div>
+          </div>
+
+          <!-- Bars 9-10: Live Bench -->
+          <div
+            class="L"
+            id="L_bench"
+            data-w="1400"
+            data-h="780"
+            data-a="tc"
+            data-top="24"
+          >
+            <div
+              class="abs mono"
+              style="left: 110px; top: 120px; font: 500 31px/60px PlexMono"
+            >
+              motor_current
+            </div>
+            <div
+              class="abs muted"
+              style="left: 376px; top: 120px; font: 400 21px/60px Plex"
+            >
+              rover-01 · amps · 200 Hz
+            </div>
+            <div
+              class="abs"
+              style="
+                left: 930px;
+                top: 118px;
+                width: 220px;
+                height: 60px;
+                border-radius: 30px;
+                background: var(--track);
+              "
+            ></div>
+            <div
+              class="abs"
+              id="segInd"
+              style="
+                top: 122px;
+                height: 52px;
+                border-radius: 26px;
+                background: var(--ink);
+              "
+            ></div>
+            <div
+              class="abs"
+              id="segSim"
+              style="
+                left: 934px;
+                top: 118px;
+                width: 104px;
+                text-align: center;
+                font: 500 22px/60px Plex;
+              "
+            >
+              Sim
+            </div>
+            <div
+              class="abs"
+              id="segReal"
+              style="
+                left: 1042px;
+                top: 118px;
+                width: 104px;
+                text-align: center;
+                font: 500 22px/60px Plex;
+              "
+            >
+              Real
+            </div>
+            <div
+              class="btn"
+              id="benchDeploy"
+              style="
+                left: 1180px;
+                top: 118px;
+                width: 170px;
+                height: 60px;
+                background: var(--amber);
+                color: var(--ink);
+                font-size: 23px;
+              "
+            >
+              <svg
+                class="ico"
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                style="stroke-width: 2.4"
+              >
+                <path d="M12 16V4M6.5 9.5 12 4l5.5 5.5M4.5 20h15" /></svg
+              >Deploy
+            </div>
+            <svg
+              class="abs"
+              id="chart"
+              width="1400"
+              height="780"
+              viewBox="-700 0 1400 780"
+              style="left: 0; top: 0"
+            ></svg>
+            <div
+              class="abs"
+              id="tip"
+              style="
+                padding: 14px 18px;
+                border-radius: 16px;
+                background: var(--ink);
+                color: #f4f2ee;
+                font: 400 19px/1.45 Plex;
+                white-space: nowrap;
+              "
+            ></div>
+          </div>
+
+          <!-- Bar 11: deploy -->
+          <div class="L" id="L_deploy" data-w="820" data-h="300" data-a="c">
+            <div
+              class="abs"
+              style="
+                left: 56px;
+                top: 52px;
+                width: 64px;
+                height: 64px;
+                border-radius: 18px;
+                background: var(--ink);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #f4f2ee;
+              "
+            >
+              <svg class="ico" width="36" height="36" viewBox="0 0 24 24">
+                <rect x="3.5" y="6" width="17" height="12" rx="2" />
+                <path
+                  d="M7 6V3.5M11 6V3.5M15 6V3.5M7 20.5V18M11 20.5V18M15 20.5V18"
+                />
+                <rect x="8" y="9.5" width="5" height="5" rx="1" />
+              </svg>
+            </div>
+            <div
+              class="abs"
+              style="left: 144px; top: 50px; font: 600 32px Plex"
+            >
+              Flash firmware
+            </div>
+            <div
+              class="abs mono muted"
+              style="left: 144px; top: 96px; font: 400 20px PlexMono"
+            >
+              rover_fw v0.4.2 → Arduino Mega 2560
+            </div>
+            <div
+              class="abs"
+              style="
+                left: 56px;
+                top: 170px;
+                width: 708px;
+                height: 14px;
+                border-radius: 7px;
+                background: var(--track);
+              "
+            ></div>
+            <div
+              class="abs"
+              id="dpBar"
+              style="
+                left: 56px;
+                top: 170px;
+                height: 14px;
+                border-radius: 7px;
+                background: var(--ink);
+              "
+            ></div>
+            <div
+              class="abs"
+              id="dpStatus"
+              style="left: 56px; top: 210px; font: 500 22px/36px Plex"
+            ></div>
+            <div
+              class="abs mono muted"
+              id="dpPct"
+              style="right: 56px; top: 210px; font: 400 22px/36px PlexMono"
+            ></div>
+          </div>
+
+          <!-- Bar 12: toast -->
+          <div class="L" id="L_toast" data-w="720" data-h="104" data-a="c">
+            <div
+              class="row"
+              style="
+                height: 104px;
+                justify-content: center;
+                gap: 16px;
+                font: 500 29px Plex;
+              "
+            >
+              <span
+                style="
+                  width: 40px;
+                  height: 40px;
+                  border-radius: 20px;
+                  background: var(--amber);
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                "
+              >
+                <svg
+                  class="ico"
+                  width="26"
+                  height="26"
+                  viewBox="0 0 24 24"
+                  style="stroke-width: 2.8; color: var(--ink)"
+                >
+                  <path d="M5 12.5 10 17.5 19 7.5" /></svg
+              ></span>
+              Deployed
+              <span class="mono" style="font-size: 27px">rover_fw v0.4.2</span>
+              <span class="muted">→ rover-01</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <svg id="cursor" viewBox="0 0 44 44">
+        <path
+          d="M7 4 7 34 14.6 27.2 19.4 38.4 25 36 20.3 25 30.6 25Z"
+          fill="#fff"
+          stroke="#0a0c0f"
+          stroke-width="2.2"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <div id="debug"></div>
+    </div>
+
+    <script>
+      "use strict";
+      // ── Grid (from tools/beatgrid.py → audio/beatgrid.json) ─────────────────────
+      const P = 0.5085176709890492; // seconds per beat, 117.99 BPM
+      const FPS = 60;
+      const FRAMES = 1465;
+      const T = FRAMES / FPS; // loop length; 12 bars
+      const B = (bar, beat = 1) => ((bar - 1) * 4 + (beat - 1)) * P;
+
+      // ── Math ────────────────────────────────────────────────────────────────────
+      const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+      const lerp = (a, b, u) => a + (b - a) * u;
+      const ease = (u) => {
+        u = clamp(u);
+        return u * u * (3 - 2 * u);
+      };
+
+      // Closed-form step response of a damped spring. r = response (s), d = damping ratio.
+      function step(t, sp) {
+        if (t <= 0) return 0;
+        const w = (2 * Math.PI) / sp.r,
+          z = sp.d;
+        if (z >= 1) return 1 - Math.exp(-w * t) * (1 + w * t);
+        const wd = w * Math.sqrt(1 - z * z);
+        return (
+          1 -
+          Math.exp(-z * w * t) *
+            (Math.cos(wd * t) + ((z * w) / wd) * Math.sin(wd * t))
+        );
+      }
+      const SP = {
+        morph: { r: 0.5, d: 0.84 }, // ≈1% overshoot: the "tiny overshoot at most"
+        snap: { r: 0.3, d: 0.9 },
+        lead: { r: 0.2, d: 0.86 }, // leading edge of liquid indicators
+        trail: { r: 0.42, d: 0.92 }, // trailing edge
+        cam: { r: 0.78, d: 1 },
+        move: { r: 0.42, d: 1 },
+        drag: { r: 0.24, d: 1 },
+        fadeIn: { r: 0.3, d: 1 },
+        fadeOut: { r: 0.16, d: 1 },
+        count: { r: 0.45, d: 1 },
+        slow: { r: 0.55, d: 1 },
+      };
+      // A value that changes target many times = sum of one spring per change. Pure in t.
+      const track = (v0, keys) => (t) => {
+        let v = v0,
+          prev = v0;
+        for (const [tk, vk, sp] of keys) {
+          v += (vk - prev) * step(t - tk, sp || SP.morph);
+          prev = vk;
+        }
+        return v;
+      };
+      // 0→1 at tIn, back to 0 at tOut (own enter/exit timing for swapped content).
+      const vis = (t, tIn, tOut = Infinity) =>
+        step(t - tIn, SP.fadeIn) * (1 - step(t - tOut, SP.fadeOut));
+      const pulse = (t, t0, sp = SP.snap, hold = 0.07) =>
+        step(t - t0, sp) - step(t - t0 - hold, sp);
+
+      // Two-edge liquid indicator: moving right, the right edge leads; moving left, the left edge leads.
+      function liquid(v0, moves) {
+        const lKeys = [],
+          rKeys = [];
+        let prev = v0;
+        for (const [t, l, r] of moves) {
+          const right = l > prev[0];
+          lKeys.push([t, l, right ? SP.trail : SP.lead]);
+          rKeys.push([t, r, right ? SP.lead : SP.trail]);
+          prev = [l, r];
+        }
+        const L = track(v0[0], lKeys),
+          R = track(v0[1], rKeys);
+        return (t) => [L(t), R(t)];
+      }
+
+      // ── Palette ─────────────────────────────────────────────────────────────────
+      const RGB = {
+        amber: [229, 164, 59],
+        surface: [244, 242, 238],
+        edit: [21, 24, 29],
+      };
+      const DOM = {
+        sw: "#62a9ff",
+        el: "#e5a43b",
+        me: "#e87fae",
+        rt: "#5bcd8c",
+      };
+      const $ = (id) => document.getElementById(id);
+
+      // ── The one shape: keyframed rect + camera ──────────────────────────────────
+      const ORB = { x: 0, y: 0, w: 150, h: 150, r: 75, fill: "amber", s: 1.9 };
+      const HOME = { x: 1360, y: 280 }; // final orb spot; multiple of the 40px dot grid → loop is seamless
+      const KEYS = [
+        [B(1, 3), { w: 440, h: 100, r: 50 }],
+        [B(2, 1), { w: 1060, h: 200, r: 40, fill: "surface", s: 1.5 }],
+        [B(3, 1), { w: 1180, h: 560, r: 36, s: 1.25 }],
+        [B(4, 1), { w: 1400, h: 780, r: 36, s: 1.1 }],
+        [B(4, 4), { s: 1.0 }],
+        [
+          B(5, 1),
+          { x: 430, y: -200, w: 1000, h: 330, r: 28, fill: "edit", s: 1.45 },
+        ],
+        [B(5, 2), { y: -125, h: 480, s: 1.4 }],
+        [B(5, 4), { y: -60, h: 620, r: 32, fill: "surface", s: 1.28 }],
+        [B(7, 1), { x: 790, y: 190, w: 132, h: 132, r: 66, s: 2.0 }],
+        [B(7, 2), { fill: "amber" }],
+        [B(7, 3), { w: 620, h: 100, r: 50, fill: "surface", s: 1.8 }],
+        [B(7, 4), { w: 720, h: 96, r: 48, s: 1.75 }],
+        [B(8, 1), { y: 464, w: 900, h: 644, r: 40, s: 1.3 }],
+        [B(9, 1), { y: 544, w: 1400, h: 804, r: 36, s: 1.1 }],
+        [B(11, 1), { x: HOME.x, y: HOME.y, w: 820, h: 300, r: 40, s: 1.55 }],
+        [B(12, 1), { w: 720, h: 104, r: 52, s: 1.85 }],
+        [B(12, 3), { w: 150, h: 150, r: 75, fill: "amber", s: 1.9 }],
+      ];
+      const states = [];
+      KEYS.reduce((prev, [t, delta]) => {
+        const s = { ...prev, ...delta };
+        states.push([t, s]);
+        return s;
+      }, ORB);
+      const prop = (p, sp) =>
+        track(
+          ORB[p],
+          states.map(([t, s]) => [t, s[p], sp]),
+        );
+      const shp = {
+        x: prop("x"),
+        y: prop("y"),
+        w: prop("w"),
+        h: prop("h"),
+        r: prop("r"),
+      };
+      const fill = [0, 1, 2].map((i) =>
+        track(
+          RGB.amber[i],
+          states.map(([t, s]) => [t, RGB[s.fill][i], SP.snap]),
+        ),
+      );
+      // Camera: the loop's end state is the start state shifted by HOME (a dot-grid multiple).
+      const cam = {
+        x: prop("x", SP.cam),
+        y: prop("y", SP.cam),
+        s: prop("s", SP.cam),
+      };
+      const orbness = track(1, [
+        [B(1, 3), 0, SP.fadeOut],
+        [B(12, 3), 1, SP.snap],
+      ]);
+      const press = track(1, [
+        [B(1, 2) - 0.1, 1.07, SP.snap],
+        [B(1, 3) - 0.07, 0.95, SP.lead],
+        [B(1, 3) + 0.03, 1, SP.snap],
+      ]);
+
+      // ── Cursor (world coords, projected through the camera) ─────────────────────
+      // [arrive, x, y, spring?, lead?] — each move starts `lead` seconds before it must land.
+      const moves = [
+        [B(1, 2), 18, 14],
+        [B(2, 2), 560, 150],
+        [B(3, 4), 440, 202],
+        [B(4, 2), 150, 90],
+        [B(5, 1), 430, -200],
+        [B(5, 3), 790, 47],
+        [B(6, 1), 726, -310],
+        [B(6, 4), 790, 190],
+        [B(7, 2) + 0.1, 900, 262],
+        [B(8, 4), 1022, 214],
+        [B(9, 3), 1184, 314],
+        [B(10, 2), 1440, 866],
+        [B(10, 2) + 0.32, 1242, 866, SP.drag, 0.26],
+        [B(10, 4) - 0.03, 1640, 866, SP.drag, 0.3],
+        [B(11, 1), 1355, 314],
+        [B(11, 3), 1560, 402],
+        [B(12, 4), HOME.x + 130, HOME.y + 120],
+      ];
+      const cx = track(
+        130,
+        moves.map(([t, x, , sp, lead]) => [
+          t - (lead ?? 0.34),
+          x,
+          sp || SP.move,
+        ]),
+      );
+      const cy = track(
+        120,
+        moves.map(([t, , y, sp, lead]) => [
+          t - (lead ?? 0.34),
+          y,
+          sp || SP.move,
+        ]),
+      );
+      const clicks = [
+        B(1, 3),
+        B(2, 1),
+        B(3, 4),
+        B(5, 1),
+        B(5, 3),
+        B(6, 1),
+        B(7, 1),
+        B(8, 4),
+        B(9, 3),
+        B(11, 1),
+      ];
+      const DRAG = { down: B(10, 2), up: B(10, 4) };
+      const held = (t) =>
+        clicks.reduce((a, c) => a + pulse(t, c - 0.05, SP.lead, 0.1), 0) +
+        step(t - DRAG.down + 0.04, SP.lead) -
+        step(t - DRAG.up, SP.lead);
+
+      // ── Sound cues (read by tools/render.mjs; mixed by tools/mix.py at measured peaks) ──
+      const CUES = [
+        ...clicks.map((t) => ({ t, kind: "click" })),
+        { t: DRAG.down, kind: "click" },
+        { t: DRAG.up, kind: "release" },
+        { t: 0, kind: "pop" },
+        ...[
+          B(1, 3),
+          B(2, 1),
+          B(3, 1),
+          B(4, 1),
+          B(5, 1),
+          B(5, 4),
+          B(7, 1),
+          B(8, 1),
+          B(9, 1),
+          B(11, 1),
+          B(12, 1),
+          B(12, 3),
+        ].map((t) => ({ t, kind: "swish" })),
+        ...[B(2, 1), B(2, 2), B(2, 3), B(2, 4)].map((t) => ({
+          t: t + 0.06,
+          kind: "tick",
+        })),
+        ...[B(3, 2), B(3, 2) + 0.09, B(3, 2) + 0.18, B(3, 2) + 0.27].map(
+          (t) => ({ t, kind: "tick" }),
+        ),
+        { t: B(3, 4) + 0.05, kind: "chime" },
+        ...[B(4, 1), B(4, 2), B(4, 3)].map((t) => ({
+          t: t + 0.05,
+          kind: "tick",
+        })),
+        ...[0.14, 0.26, 0.38].map((d) => ({ t: B(5, 1) + d, kind: "type" })),
+        { t: B(5, 2) - 0.1, kind: "type" },
+        { t: B(5, 2), kind: "warn" },
+        { t: B(7, 2), kind: "pop" },
+        { t: B(7, 3), kind: "chime" },
+        ...[B(8, 1), B(8, 2), B(8, 3)].map((t) => ({ t, kind: "tick" })),
+        { t: B(8, 3) + 0.1, kind: "chime" },
+        { t: B(10, 1), kind: "warn" },
+        { t: B(11, 4), kind: "pop" },
+        { t: B(12, 1) + 0.08, kind: "chime" },
+      ].sort((a, b) => a.t - b.t);
+
+      // ── Static content built once (plain DOM, no state) ─────────────────────────
+      const ICON = {
+        github:
+          '<circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 7.7v8.6M18 10.2c0 4-6 3-11 6.4"/>',
+        kicad:
+          '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/><path d="M9.5 3v3.5M14.5 3v3.5M9.5 17.5V21M14.5 17.5V21M3 9.5h3.5M3 14.5h3.5M17.5 9.5H21M17.5 14.5H21"/>',
+        onshape:
+          '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
+        ros: '<circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M11 7 6 16M13 7l5 9M7.2 18h9.6"/>',
+      };
+      const svgIcon = (d, size, style = "") =>
+        `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" style="${style}">${d}</svg>`;
+      const CHECK = '<path d="M5 12.5 10 17.5 19 7.5"/>';
+
+      const SOURCES = [
+        ["github", "GitHub", "rover-firmware"],
+        ["kicad", "KiCad", "mainboard_v3"],
+        ["onshape", "Onshape", "Rover assembly"],
+        ["ros", "ROS 2", "humble · 14 nodes"],
+      ];
+      $("L_tray").innerHTML = SOURCES.map(
+        ([k, name, sub], i) => `
+        <div class="card" id="chip${i}" style="left:${40 + i * 250}px;top:32px;width:230px;height:136px">
+          <div class="abs" style="left:22px;top:22px;color:var(--ink)">${svgIcon(ICON[k], 38)}</div>
+          <div class="abs" id="chipOk${i}" style="left:172px;top:22px;width:34px;height:34px;border-radius:17px;background:var(--amber);display:flex;align-items:center;justify-content:center">${svgIcon(CHECK, 22, "stroke-width:3;color:var(--ink)")}</div>
+          <div class="abs" style="left:22px;top:70px;font:600 25px Plex">${name}</div>
+          <div class="abs muted" style="left:22px;top:102px;font:400 17px Plex">${sub}</div>
+        </div>`,
+      ).join("");
+
+      const FP = [
+        ["me", "Onshape", "CAM_v2"],
+        ["el", "KiCad", "OV9281_IC"],
+        ["rt", "ROS 2", "camera_node"],
+      ];
+      $("fpCards").innerHTML = FP.map(
+        ([d, src, name], i) => `
+        <div class="card" id="fpCard${i}" style="left:${50 + i * 370}px;top:110px;width:340px;height:120px">
+          <div class="abs row" style="left:26px;top:22px;gap:10px;font:400 19px Plex" ><span class="dot" style="background:${DOM[d]}"></span><span class="muted">${src}</span></div>
+          <div class="abs mono" style="left:26px;top:58px;font:500 29px PlexMono">${name}</div>
+          ${
+            i === 1
+              ? `<div class="abs" id="fpMerged" style="inset:0;border-radius:20px;background:var(--card)">
+            <div class="abs row" style="left:26px;top:22px;gap:10px;font:400 19px Plex"><span class="row" style="gap:5px">${FP.map(([dd]) => `<span class="dot" style="background:${DOM[dd]}"></span>`).join("")}</span><span class="muted">3 sources · 1 part</span></div>
+            <div class="abs mono" style="left:26px;top:58px;font:500 29px PlexMono">camera_module</div></div>`
+              : ""
+          }
+        </div>`,
+      ).join("");
+      const SIGNALS = [
+        ["Semantic", 0.82],
+        ["Supply chain", 1.0],
+        ["Topology", 0.93],
+        ["Spatial", 0.88],
+      ];
+      $("fpSignals").innerHTML = SIGNALS.map(
+        ([name], i) => `
+        <div class="abs" style="left:50px;top:${292 + i * 55}px;font:400 22px/26px Plex">${name}</div>
+        <div class="abs" style="left:290px;top:${300 + i * 55}px;width:360px;height:10px;border-radius:5px;background:var(--track)"></div>
+        <div class="abs" id="fpBar${i}" style="left:290px;top:${300 + i * 55}px;height:10px;border-radius:5px;background:var(--ink)"></div>`,
+      ).join("");
+
+      const NODES = [
+        {
+          id: "cam",
+          x: 0,
+          y: 10,
+          w: 330,
+          name: "camera_module",
+          sub: "OV9281 · 3 sources",
+          d: ["me", "el", "rt"],
+        },
+        {
+          id: "fw",
+          x: -440,
+          y: -215,
+          name: "rover_fw",
+          sub: "firmware · C++",
+          d: ["sw"],
+          at: B(4, 1),
+        },
+        {
+          id: "imu",
+          x: 430,
+          y: -200,
+          name: "IMU",
+          sub: "MPU-6050 · 0x68",
+          d: ["el"],
+          at: B(4, 1),
+        },
+        {
+          id: "drv",
+          x: 440,
+          y: 205,
+          name: "motor_driver",
+          sub: "DRV8833",
+          d: ["el"],
+          at: B(4, 2),
+        },
+        {
+          id: "chs",
+          x: -440,
+          y: 205,
+          name: "chassis_v3",
+          sub: "Onshape part",
+          d: ["me"],
+          at: B(4, 2),
+        },
+        {
+          id: "nav",
+          x: 0,
+          y: -250,
+          name: "nav_stack",
+          sub: "ROS 2 node",
+          d: ["rt"],
+          at: B(4, 3),
+        },
+        {
+          id: "jet",
+          x: 0,
+          y: 262,
+          name: "rover-01",
+          sub: "Jetson Orin",
+          d: ["rt"],
+          at: B(4, 3),
+        },
+      ];
+      const EDGES = [
+        ["cam", "fw", "reads_from"],
+        ["cam", "imu", "shares_bus"],
+        ["cam", "drv"],
+        ["cam", "chs", "mounted_on"],
+        ["cam", "nav", "publishes_to"],
+        ["cam", "jet", "deployed_on"],
+        ["fw", "imu"],
+        ["drv", "chs"],
+      ];
+      const node = (id) => NODES.find((n) => n.id === id);
+      $("gNodes").innerHTML = NODES.map((n) => {
+        const w = n.w || 250,
+          h = 84;
+        const dots = n.d
+          .map((d) => `<span class="dot" style="background:${DOM[d]}"></span>`)
+          .join("");
+        return `<div class="card" id="gn_${n.id}" style="left:${700 + n.x - w / 2}px;top:${390 + n.y - h / 2}px;width:${w}px;height:${h}px;border-radius:22px">
+          <div class="abs row" style="left:22px;top:18px;gap:10px"><span class="row" style="gap:5px">${dots}</span><span class="mono" style="font:500 22px PlexMono">${n.name}</span></div>
+          <div class="abs muted" style="left:22px;top:48px;font:400 17px Plex">${n.sub}</div></div>`;
+      }).join("");
+      $("gEdges").innerHTML = EDGES.map(([a, b, label], i) => {
+        const A = node(a),
+          Bn = node(b);
+        const mx = (A.x + Bn.x) / 2,
+          my = (A.y + Bn.y) / 2;
+        const lbl = label
+          ? `<text id="gl${i}" x="${mx}" y="${my - 10}" text-anchor="middle" font-family="PlexMono" font-size="16" fill="#8b919a" stroke="#f4f2ee" stroke-width="10" paint-order="stroke">${label}</text>`
+          : "";
+        return `<path id="ge${i}" d="M${A.x} ${A.y} Q ${mx + (A.y - Bn.y) * 0.08} ${my + (Bn.x - A.x) * 0.08} ${Bn.x} ${Bn.y}" fill="none" stroke="#c9c4ba" stroke-width="2" pathLength="1" stroke-dasharray="1 1"/>${lbl}`;
+      }).join("");
+      $("gLegend").innerHTML = [
+        ["sw", "Software"],
+        ["el", "Electrical"],
+        ["me", "Mechanical"],
+        ["rt", "Runtime"],
+      ]
+        .map(
+          ([d, n], i) =>
+            `<span class="row" id="lg${i}" style="gap:9px"><span class="dot" style="background:${DOM[d]}"></span>${n}</span>`,
+        )
+        .join("");
+
+      const TABS = ["Graph", "Checks", "Bench"];
+      const tabSpan = (i) => [12 + i * 232, 12 + (i + 1) * 232];
+      $("tabLabels").innerHTML = TABS.map(
+        (n, i) =>
+          `<div class="abs" id="tab${i}" style="left:${tabSpan(i)[0]}px;top:12px;width:232px;text-align:center;font:500 26px/72px Plex">${n}</div>`,
+      ).join("");
+
+      const CHECKS = [
+        ["Pin assignments", "86 pins · 0 conflicts"],
+        ["I2C addresses", "bus 1 · 0x60, 0x68"],
+        ["Voltage levels", "3.3 V ↔ 3.3 V logic"],
+        ["Power budget", "4.1 A of 6.0 A"],
+        ["Connectors & packages", "23 mates checked"],
+      ];
+      const CK_AT = [B(8, 1), B(8, 1), B(8, 2), B(8, 2), B(8, 3)];
+      $("ckRows").innerHTML = CHECKS.map(
+        ([n, sub], i) => `
+        <div class="abs" style="left:50px;top:${190 + i * 80}px;width:800px;height:68px;border-top:1.5px solid var(--line)"></div>
+        <div class="abs" style="left:50px;top:${204 + i * 80}px;font:500 24px Plex">${n}</div>
+        <div class="abs mono muted" style="left:380px;top:${208 + i * 80}px;font:400 19px PlexMono">${sub}</div>
+        <div class="abs" id="ckSpin${i}" style="left:806px;top:${204 + i * 80}px;width:30px;height:30px;border-radius:15px;box-sizing:border-box;border:3px solid #d6d1c8"></div>
+        <div class="abs" id="ckOk${i}" style="left:804px;top:${202 + i * 80}px;width:34px;height:34px;border-radius:17px;background:var(--ink);display:flex;align-items:center;justify-content:center">${svgIcon(CHECK, 22, "stroke-width:3;color:#fff")}</div>`,
+      ).join("");
+
+      // Telemetry: deterministic sim prediction + real trace with the anomaly at u = 0.84.
+      const SPIKE = 0.84;
+      const gauss = (u, c, w) => Math.exp(-(((u - c) / w) ** 2));
+      const sim = (u) =>
+        1.25 +
+        0.32 * Math.sin(u * 8.5 + 0.4) +
+        0.14 * Math.sin(u * 21 + 1.3) +
+        0.55 * gauss(u, SPIKE, 0.05);
+      const real = (u) =>
+        sim(u) +
+        0.07 * Math.sin(u * 97) +
+        0.05 * Math.sin(u * 171 + 2) +
+        1.28 * gauss(u, SPIKE, 0.012);
+      const X = (u) => -590 + 1240 * u,
+        Y = (a) => 650 - 100 * a;
+      const pathOf = (f) =>
+        Array.from(
+          { length: 401 },
+          (_, i) =>
+            `${i ? "L" : "M"}${X(i / 400).toFixed(1)} ${Y(f(i / 400)).toFixed(1)}`,
+        ).join("");
+      const spikeU = (() => {
+        let best = SPIKE;
+        for (let u = 0.8; u < 0.88; u += 0.0005)
+          if (real(u) > real(best)) best = u;
+        return best;
+      })();
+      $("chart").innerHTML = `
+        ${[0, 1, 2, 3, 4].map((a) => `<line x1="-590" x2="650" y1="${Y(a)}" y2="${Y(a)}" stroke="#e3dfd7" stroke-width="1.5"/><text x="-610" y="${Y(a) + 6}" text-anchor="end" font-family="PlexMono" font-size="17" fill="#8b919a">${a} A</text>`).join("")}
+        <rect id="anBand" x="${X(spikeU) - 26}" y="${Y(4)}" width="52" height="${Y(0) - Y(4)}" rx="10" fill="rgba(229,164,59,.16)"/>
+        <path id="simLine" d="${pathOf(sim)}" fill="none" stroke="#a9a397" stroke-width="2.5" stroke-dasharray="7 7"/>
+        <path id="realLine" d="${pathOf(real)}" fill="none" stroke="#0a0c0f" stroke-width="3" stroke-linejoin="round" pathLength="1" stroke-dasharray="1 1"/>
+        <g id="anMark"><circle cx="${X(spikeU)}" cy="${Y(real(spikeU))}" r="11" fill="none" stroke="#e5a43b" stroke-width="3.5"/>
+          <rect x="${X(spikeU) - 60}" y="${Y(4) - 44}" width="120" height="34" rx="17" fill="#e5a43b"/>
+          <text x="${X(spikeU)}" y="${Y(4) - 21}" text-anchor="middle" font-family="Plex" font-weight="600" font-size="17" fill="#0a0c0f">ANOMALY</text></g>
+        <line id="scrubLine" y1="${Y(4)}" y2="${Y(0)}" stroke="#0a0c0f" stroke-width="1.5"/>
+        <circle id="scrubDot" r="7" fill="#0a0c0f"/>
+        <line x1="-590" x2="650" y1="700" y2="700" stroke="#d6d1c8" stroke-width="4" stroke-linecap="round"/>
+        <line id="tlFill" x1="-590" y1="700" y2="700" stroke="#0a0c0f" stroke-width="4" stroke-linecap="round"/>
+        <text x="-590" y="746" font-family="PlexMono" font-size="17" fill="#8b919a">−20 s</text>
+        <text id="liveTxt" x="650" y="746" text-anchor="end" font-family="Plex" font-weight="600" font-size="17" fill="#8b919a">LIVE</text>
+        <rect id="handle" y="680" height="40" rx="12" fill="#0a0c0f"/>`;
+      const spikeA = real(spikeU),
+        simA = sim(spikeU);
+      $("tip").innerHTML =
+        `<span style="font-weight:600;font-size:22px">${spikeA.toFixed(1)} A</span>  <span style="color:#e5a43b">+${Math.round((spikeA / simA - 1) * 100)}% vs sim</span><br><span style="color:#9aa2ad">sim ${simA.toFixed(1)} A · t −3.2 s · stall at wheel_left</span>`;
+
+      const CODE = [
+        ["1", "#include", " &lt;Wire.h&gt;"],
+        ["2", "#define", " CAM_I2C  "],
+        ["3", "Wire", ".begin(SDA, SCL);"],
+      ];
+      const GUIDE_TXT =
+        "Two parts on one I2C bus can’t share an address, like two houses with the same street number. Your IMU already answers at 0x68, so…";
+      const EXPERT_TXT =
+        "Move the camera to 0x60. The IMU is fixed at 0x68 (AD0 tied low on the PCB).";
+
+      // ── Frame ───────────────────────────────────────────────────────────────────
+      const el = {};
+      document.querySelectorAll("[id]").forEach((n) => (el[n.id] = n));
+      const layers = [...document.querySelectorAll(".L")].map((n) => ({
+        n,
+        w: +n.dataset.w,
+        h: +n.dataset.h,
+        a: n.dataset.a,
+        top: +(n.dataset.top || 0),
+      }));
+      const WINDOWS = {
+        L_pill: [B(1, 3) + 0.1, B(2, 1)],
+        L_tray: [B(2, 1) + 0.04, B(3, 1)],
+        L_fp: [B(3, 1) + 0.1, B(4, 1)],
+        L_graph: [B(4, 1) + 0.05, B(5, 1)],
+        L_edit: [B(5, 1) + 0.12, B(5, 4)],
+        L_sol: [B(5, 4) + 0.12, B(7, 1)],
+        L_load: [B(7, 1) + 0.08, B(7, 2)],
+        L_check: [B(7, 2) + 0.02, B(7, 3)],
+        L_fixed: [B(7, 3) + 0.1, B(7, 4)],
+        L_tabs: [B(7, 4) + 0.06, B(11, 1)],
+        L_checks: [B(8, 1) + 0.1, B(9, 1)],
+        L_bench: [B(9, 1) + 0.1, B(11, 1)],
+        L_deploy: [B(11, 1) + 0.12, B(12, 1)],
+        L_toast: [B(12, 1) + 0.1, B(12, 3)],
+      };
+      const px = (v) => `${v.toFixed(2)}px`;
+      const show = (n, v) => {
+        if (n._disp === undefined)
+          n._disp =
+            n.style.display && n.style.display !== "none"
+              ? n.style.display
+              : "block";
+        if (v < 0.003) {
+          n.style.display = "none";
+          return false;
+        }
+        n.style.display = n._disp;
+        n.style.opacity = v.toFixed(3);
+        const b = (1 - v) * 10;
+        n.style.filter = b > 0.05 ? `blur(${b.toFixed(2)}px)` : "none";
+        n.style.transform = `scale(${(0.965 + 0.035 * v).toFixed(4)})`;
+        return true;
+      };
+      const pop = (n, t, t0, extra = "") => {
+        const v = step(t - t0, SP.snap);
+        show(n, clamp(v));
+        n.style.transform = `scale(${(0.8 + 0.2 * v).toFixed(4)})${extra}`;
+        return v;
+      };
+      const mix = (a, b, u) =>
+        `rgb(${a.map((c, i) => Math.round(lerp(c, b[i], u))).join(",")})`;
+      const INK = [10, 12, 15],
+        WHITE = [255, 255, 255],
+        MUTED = [122, 128, 138],
+        TEXT = [20, 23, 28];
+      const project = (wx, wy, c) => [
+        960 + (wx - c.x) * c.s,
+        540 + (wy - c.y) * c.s,
+      ];
+
+      function seek(tIn) {
+        const t = ((tIn % T) + T) % T;
+        const c = { x: cam.x(t), y: cam.y(t), s: cam.s(t) };
+        const o = orbness(t);
+        const breathe =
+          1 +
+          (0.018 * Math.sin((2 * Math.PI * 6 * t) / T) +
+            0.05 * pulse(t, 0, SP.lead, 0.06)) *
+            o;
+        const k = press(t) * breathe;
+        const S = {
+          x: shp.x(t),
+          y: shp.y(t),
+          w: Math.max(8, shp.w(t) * k),
+          h: Math.max(8, shp.h(t) * k),
+          r: shp.r(t) * k,
+        };
+
+        el.world.style.transform = `translate(960px,540px) scale(${c.s.toFixed(5)}) translate(${px(-c.x)},${px(-c.y)})`;
+        Object.assign(el.shape.style, {
+          left: px(S.x - S.w / 2),
+          top: px(S.y - S.h / 2),
+          width: px(S.w),
+          height: px(S.h),
+          borderRadius: px(Math.min(S.r, S.w / 2, S.h / 2)),
+          background: `rgb(${fill.map((f) => Math.round(clamp(f(t), 0, 255))).join(",")})`,
+        });
+        el.orbfill.style.opacity = o.toFixed(3);
+        Object.assign(el.glow.style, {
+          left: px(S.x - S.w / 2),
+          top: px(S.y - S.h / 2),
+          width: px(S.w),
+          height: px(S.h),
+          borderRadius: px(S.w / 2),
+          opacity: (0.4 * o).toFixed(3),
+          display: o > 0.01 ? "block" : "none",
+        });
+
+        for (const L of layers) {
+          const [a, b] = WINDOWS[L.n.id];
+          if (!show(L.n, vis(t, a, b))) continue;
+          L.n.style.left = px(L.a === "tl" ? 0 : (S.w - L.w) / 2);
+          // The tab bar is the whole shape at 7.4, then insets as the panel grows under it.
+          const inset =
+            L.n.id === "L_tabs" ? 24 * clamp((S.h - 96) / 300) : L.top;
+          L.n.style.top = px(L.a === "c" ? (S.h - L.h) / 2 : inset);
+          L.n.style.width = `${L.w}px`;
+          L.n.style.height = `${L.h}px`;
+          L.n.style.transformOrigin = L.a === "c" ? "50% 50%" : "50% 0";
+          UPDATE[L.n.id]?.(t);
+        }
+
+        const [sx, sy] = project(cx(t), cy(t), c);
+        const hk = clamp(held(t));
+        el.cursor.style.transform = `translate(${px(sx - 6)},${px(sy - 4)}) scale(${(1 - 0.14 * hk).toFixed(4)})`;
+        if (DEBUG)
+          el.debug.textContent = `bar ${Math.floor(t / (4 * P)) + 1}.${(Math.floor(t / P) % 4) + 1}  t=${t.toFixed(3)}`;
+      }
+
+      // Per-state content updates — each reads only t.
+      const UPDATE = {
+        L_tray(t) {
+          SOURCES.forEach((_, i) => {
+            const t0 = B(2, 1 + i);
+            pop(el[`chip${i}`], t, t0 - 0.02);
+            pop(el[`chipOk${i}`], t, t0 + 0.06);
+          });
+        },
+        L_fp(t) {
+          SIGNALS.forEach(
+            ([, v], i) =>
+              (el[`fpBar${i}`].style.width = px(
+                360 * v * step(t - B(3, 2) - i * 0.09, SP.snap),
+              )),
+          );
+          el.fpPct.textContent = `${Math.round(94 * step(t - B(3, 3) + 0.08, SP.count))}%`;
+          const pr = pulse(t, B(3, 4) - 0.05, SP.lead, 0.1);
+          el.fpConfirm.style.transform = `scale(${1 - 0.05 * pr})`;
+          const m = step(t - B(3, 4) - 0.06, SP.morph);
+          const gone = step(t - B(3, 4) - 0.14, SP.fadeOut);
+          [370, 0, -370].forEach((dx, i) => {
+            const card = el[`fpCard${i}`];
+            card.style.transform = `translate(${px(dx * m)},0) scale(${1 - 0.06 * m * Math.abs(i - 1)})`;
+            card.style.zIndex = i === 1 ? 2 : 1;
+            if (i !== 1) card.style.opacity = (1 - gone).toFixed(3);
+          });
+          const merged = step(t - B(3, 4) - 0.1, SP.fadeIn);
+          el.fpMerged.style.opacity = merged.toFixed(3);
+          el.fpMerged.style.filter =
+            merged < 0.98 ? `blur(${((1 - merged) * 6).toFixed(2)}px)` : "none";
+          el.fpCard1.style.borderColor = mix(
+            [227, 223, 215],
+            [229, 164, 59],
+            merged,
+          );
+        },
+        L_graph(t) {
+          NODES.forEach((n) => pop(el[`gn_${n.id}`], t, n.at ?? B(4, 1) - 0.1));
+          EDGES.forEach(([, b, label], i) => {
+            const at = node(b).at + 0.12;
+            el[`ge${i}`].style.strokeDashoffset = (
+              1 - step(t - at, SP.slow)
+            ).toFixed(4);
+            if (label)
+              el[`gl${i}`].style.opacity = step(
+                t - at - 0.2,
+                SP.fadeIn,
+              ).toFixed(3);
+          });
+          [0, 1, 2, 3].forEach((i) => {
+            const v = step(t - B(4, 3) - i * 0.06, SP.fadeIn);
+            el[`lg${i}`].style.opacity = v.toFixed(3);
+          });
+          const cnt = step(t - B(4, 4) + 0.1, SP.count);
+          el.gCount.textContent = `${Math.round(128 * cnt)} entities · ${Math.round(342 * cnt)} relations · 4 sources`;
+          el.gFoot.style.opacity = clamp(
+            step(t - B(4, 4) + 0.1, SP.fadeIn),
+          ).toFixed(3);
+          const hover = step(t - B(5, 1) + 0.25, SP.snap);
+          el.gn_imu.style.borderColor = mix(
+            [227, 223, 215],
+            [229, 164, 59],
+            hover,
+          );
+        },
+        L_edit(t) {
+          const typed = [0.14, 0.26, 0.38, P - 0.1].filter(
+            (d) => t >= B(5, 1) + d,
+          ).length;
+          const val = "0x68".slice(0, typed);
+          const caret =
+            t < B(5, 2) + 0.2
+              ? '<span style="display:inline-block;width:3px;height:34px;background:#e5a43b;vertical-align:-6px"></span>'
+              : "";
+          el.edCode.innerHTML = CODE.map(
+            ([n, kw, rest], i) =>
+              `<span style="color:#4b525c">${n}</span>   <span style="color:#8a93a0">${kw}</span>${rest}${i === 1 ? `<span style="color:#f0c27a">${val}</span>${caret}` : ""}`,
+          ).join("\n");
+          const w = step(t - B(5, 2), SP.snap);
+          el.edSquig.style.left = px(36 + 18 * 21); // value starts after 21 mono chars (30px Plex Mono = 18px/char)
+          el.edSquig.style.top = px(92 + 52 + 44);
+          el.edSquig.style.clipPath = `inset(0 ${(100 * (1 - w)).toFixed(1)}% 0 0)`;
+          el.edWarn.style.opacity = step(t - B(5, 2) - 0.06, SP.fadeIn).toFixed(
+            3,
+          );
+          el.edAsk.style.transform = `scale(${1 - 0.05 * pulse(t, B(5, 3) - 0.05, SP.lead, 0.1)})`;
+        },
+        L_sol(t) {
+          const flip = B(6, 1);
+          const [l, r] = SOL_KNOB(t);
+          const on = clamp((l - 5) / 40);
+          el.solTrack.style.background = mix([214, 209, 200], INK, on);
+          Object.assign(el.solKnob.style, {
+            left: px(752 + l),
+            width: px(r - l),
+          });
+          el.solGuide.style.color = mix(TEXT, MUTED, on);
+          el.solExpert.style.color = mix(MUTED, TEXT, on);
+          const stream = (txt, a, b) =>
+            txt.slice(0, Math.round(txt.length * ease((t - a) / (b - a))));
+          const guideV = 1 - step(t - flip, SP.fadeOut),
+            expV = step(t - flip - 0.1, SP.fadeIn);
+          el.solText.innerHTML =
+            t < flip + 0.05
+              ? `<span style="opacity:${guideV.toFixed(3)}">${stream(GUIDE_TXT, B(5, 4) + 0.18, flip + 0.05)}</span>`
+              : `<span style="opacity:${expV.toFixed(3)};filter:blur(${((1 - expV) * 6).toFixed(2)}px)">${stream(EXPERT_TXT, flip + 0.12, B(6, 2) + 0.3)}</span>`;
+          show(el.solDiff, step(t - B(6, 3), SP.fadeIn));
+          const hov = step(t - B(6, 4) + 0.06, SP.snap);
+          el.solApply.style.background = mix(INK, [229, 164, 59], hov);
+          el.solApply.style.color = mix(WHITE, INK, hov);
+          el.solApply.style.transform = `scale(${1 + 0.03 * hov})`;
+          el.solApply.style.opacity = step(
+            t - B(6, 3) + 0.1,
+            SP.fadeIn,
+          ).toFixed(3);
+        },
+        L_load(t) {
+          el.loadArc.setAttribute(
+            "transform",
+            `rotate(${(-90 + (t - B(7, 1)) * 720).toFixed(1)} 66 66)`,
+          );
+        },
+        L_check(t) {
+          el.checkPath.style.strokeDashoffset = (
+            1 - step(t - B(7, 2) - 0.04, SP.snap)
+          ).toFixed(4);
+        },
+        L_tabs(t) {
+          const [l, r] = TAB_IND(t);
+          Object.assign(el.tabInd.style, { left: px(l), width: px(r - l) });
+          TABS.forEach((_, i) => {
+            const [a, b] = tabSpan(i);
+            const cover = clamp((Math.min(b, r) - Math.max(a, l)) / (b - a));
+            el[`tab${i}`].style.color = mix(TEXT, WHITE, cover);
+          });
+        },
+        L_checks(t) {
+          const done = track(0, [
+            [B(8, 1), 14, SP.count],
+            [B(8, 2), 28, SP.count],
+            [B(8, 3), 42, SP.count],
+          ])(t);
+          el.ckCount.textContent = `${Math.round(done)} / 42 checks${done > 41.5 ? " · all passed" : ""}`;
+          CK_AT.forEach((at, i) => {
+            el[`ckSpin${i}`].style.opacity = (
+              1 - step(t - at, SP.fadeOut)
+            ).toFixed(3);
+            el[`ckSpin${i}`].style.transform = `rotate(${(t * 400) % 360}deg)`;
+            el[`ckSpin${i}`].style.borderTopColor = "#0a0c0f";
+            pop(el[`ckOk${i}`], t, at + i * 0.05 * (i % 2));
+          });
+        },
+        L_bench(t) {
+          const [l, r] = SEG_IND(t);
+          Object.assign(el.segInd.style, {
+            left: px(930 + l),
+            width: px(r - l),
+          });
+          const toReal = clamp((l - 4) / 108);
+          el.segSim.style.color = mix(WHITE, TEXT, toReal);
+          el.segReal.style.color = mix(TEXT, WHITE, toReal);
+          el.simLine.style.opacity = step(t - B(9, 1) - 0.1, SP.fadeIn).toFixed(
+            3,
+          );
+          el.simLine.style.clipPath = `inset(0 ${(100 * (1 - ease((t - B(9, 1) - 0.1) / (P * 1.4)))).toFixed(2)}% 0 0)`;
+          const draw = ease((t - B(9, 3) - 0.05) / (B(10, 1) - B(9, 3) - 0.05));
+          el.realLine.style.strokeDashoffset = (1 - draw).toFixed(4);
+          const an = step(t - B(10, 1), SP.snap);
+          el.anBand.style.opacity = an.toFixed(3);
+          el.anMark.style.opacity = an.toFixed(3);
+          el.anMark.style.transformOrigin = `${X(spikeU)}px ${Y(real(spikeU))}px`;
+          el.anMark.style.transform = `scale(${(0.7 + 0.3 * an).toFixed(4)})`;
+          // Scrub handle: direct manipulation while held, spring back to LIVE on release.
+          const hx = SCRUB(t);
+          const past = Math.max(0, hx - 650);
+          const stretch = 150 * (1 - Math.exp(-past / 190));
+          const hl = Math.min(hx, 650) - 12,
+            hr = Math.min(hx, 650) + 12 + stretch;
+          el.handle.setAttribute("x", hl.toFixed(1));
+          el.handle.setAttribute("width", (hr - hl).toFixed(1));
+          el.handle.setAttribute(
+            "height",
+            (40 - 8 * (1 - Math.exp(-past / 190))).toFixed(1),
+          );
+          el.handle.setAttribute(
+            "y",
+            (680 + 4 * (1 - Math.exp(-past / 190))).toFixed(1),
+          );
+          el.handle.style.opacity = step(t - B(9, 1) - 0.2, SP.fadeIn).toFixed(
+            3,
+          );
+          el.tlFill.setAttribute("x2", Math.min(hx, 650).toFixed(1));
+          const scrubbing = t > DRAG.down && hx < 640;
+          const u = clamp((Math.min(hx, 650) + 590) / 1240);
+          const sv = scrubbing ? 1 : 0;
+          el.scrubLine.setAttribute("x1", X(u));
+          el.scrubLine.setAttribute("x2", X(u));
+          el.scrubDot.setAttribute("cx", X(u));
+          el.scrubDot.setAttribute("cy", Y(real(u)));
+          const scrubV = clamp(
+            step(t - DRAG.down - 0.05, SP.fadeIn) -
+              step(t - B(10, 3) - 0.14, SP.fadeOut),
+          );
+          el.scrubLine.style.opacity = el.scrubDot.style.opacity = (
+            scrubV * sv
+          ).toFixed(3);
+          const near = clamp(1 - Math.abs(X(u) - X(spikeU)) / 70) * scrubV;
+          el.tip.style.opacity = near.toFixed(3);
+          el.tip.style.left = px(700 + X(spikeU) - 470);
+          el.tip.style.top = px(Y(real(spikeU)) + 10 + 8 * (1 - near));
+          const live = step(t - DRAG.up - 0.05, SP.snap);
+          el.liveTxt.setAttribute("fill", mix(MUTED, [199, 137, 42], live));
+          el.benchDeploy.style.transform = `scale(${1 - 0.05 * pulse(t, B(11, 1) - 0.05, SP.lead, 0.1)})`;
+        },
+        L_deploy(t) {
+          const p = clamp(
+            track(0, [
+              [B(11, 1) + 0.2, 0.34, SP.slow],
+              [B(11, 2), 0.71, SP.slow],
+              [B(11, 3), 0.93, SP.slow],
+              [B(11, 4) - 0.12, 1, SP.snap],
+            ])(t),
+          );
+          el.dpBar.style.width = px(708 * p);
+          const done = step(t - B(11, 4), SP.snap);
+          el.dpPct.textContent = `${Math.round(p * 100)}%`;
+          el.dpStatus.innerHTML =
+            done > 0.5
+              ? `<span style="display:inline-flex;align-items:center;gap:10px">${svgIcon(CHECK, 24, "stroke-width:3;color:#c7892a")}Flashed in 3.2 s · verified</span>`
+              : "Uploading · 247 KB";
+          el.dpStatus.style.opacity = (
+            done > 0.5 ? clamp(done * 2 - 1) : 1 - clamp(done * 2)
+          ).toFixed(3);
+        },
+      };
+      const SOL_KNOB = liquid([5, 43], [[B(6, 1), 45, 83]]);
+      const TAB_IND = liquid(tabSpan(1), [[B(8, 4), ...tabSpan(2)]]);
+      const SEG_IND = liquid([4, 108], [[B(9, 3), 112, 216]]);
+      // Scrub value in local chart x: follows the cursor while held; springs back to LIVE (650) from wherever it was released.
+      const LOCAL_X = (t) => cx(t) - 790;
+      const rel = LOCAL_X(DRAG.up);
+      const SCRUB = (t) => {
+        if (t < DRAG.down) return 650;
+        if (t < DRAG.up) return LOCAL_X(t);
+        return 650 + (rel - 650) * (1 - step(t - DRAG.up, { r: 0.4, d: 0.8 }));
+      };
+
+      const params = new URLSearchParams(location.search);
+      const DEBUG = params.has("debug");
+      el.debug.style.display = DEBUG ? "block" : "none";
+      window.seek = seek;
+      window.SHOWCASE = { T, P, FPS, FRAMES, CUES, beat: B };
+      document.fonts.ready.then(() => {
+        seek(+params.get("t") || 0);
+        window.READY = true;
+        if (params.has("play")) {
+          const t0 = performance.now();
+          const loop = () => {
+            seek((performance.now() - t0) / 1000);
+            requestAnimationFrame(loop);
+          };
+          requestAnimationFrame(loop);
+        }
+      });
+    </script>
+  </body>
+</html>
