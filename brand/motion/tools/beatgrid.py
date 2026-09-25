@@ -21,7 +21,7 @@ SONG = ROOT / "audio" / "brainiac-mixkit-167.mp3"
 SR = 44100
 HOP = 512
 WIN = 2048
-BARS = 12
+BARS = 14
 FPS = 60
 CRASH_RATIO = 4.0  # >5 kHz energy jump that marks a crash on a downbeat
 

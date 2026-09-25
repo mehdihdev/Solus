@@ -63,9 +63,10 @@ async function beats(browser) {
   const dir = join(OUT, "beats");
   mkdirSync(dir, { recursive: true });
   const [page] = await openPages(browser, 1, "?debug");
-  const { P } = await page.evaluate(() => window.SHOWCASE);
+  const { P, T } = await page.evaluate(() => window.SHOWCASE);
+  const beatCount = Math.round(T / P);
   // Mid-beat: the moment a viewer reads the state that landed on the beat.
-  for (let i = 0; i < 48; i++) {
+  for (let i = 0; i < beatCount; i++) {
     const name = `b${String(i + 1).padStart(2, "0")}_bar${Math.floor(i / 4) + 1}.${(i % 4) + 1}.png`;
     await shot(page, i * P + P * 0.55, join(dir, name), "png");
   }
@@ -78,7 +79,7 @@ async function beats(browser) {
     "-i",
     join(dir, "b*.png"),
     "-vf",
-    "scale=480:-1,tile=8x6:padding=6:color=0x222222",
+    `scale=480:-1,tile=8x${Math.ceil(beatCount / 8)}:padding=6:color=0x222222`,
     "-frames:v",
     "1",
     join(OUT, "beats-sheet.png"),

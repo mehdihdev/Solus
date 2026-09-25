@@ -1,13 +1,15 @@
 # Solus showcase — motion piece (SOLUSDEV-400)
 
-`solus-showcase.mp4` — 1920×1080, 60 fps, 24.42 s, loops seamlessly. The SOL orb is the one shape: it
-morphs, never cuts, through the product story on a 12-bar grid at 118 BPM.
+`solus-showcase.mp4` — 1920×1080, 60 fps, 28.48 s, loops seamlessly. The blue SOL orb is the one shape: it
+morphs, never cuts, through the product story on a 14-bar grid at 118 BPM. The UI is the solusforge.com look
+(dark surfaces, domain-tinted borders, blue accent) set in IBM Plex, on a light cool-gray canvas for contrast.
 
-| Bars | Act                       | What happens                                                                                                                                                               |
-| ---- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1–4  | One graph                 | Orb → _Connect sources_ → GitHub / KiCad / Onshape / ROS sync → fingerprint match (CAM_v2 · OV9281_IC · camera_node → `camera_module`, 94%) → Robotics Context Model graph |
-| 5–8  | Catch it before it breaks | Push into the IMU → autocomplete flags an I2C 0x68 conflict → _Ask SOL_ → Guide→Expert toggle → fix `0x68 → 0x60` → loader → check → system proving 42/42                  |
-| 9–12 | Run it                    | Live Bench: sim vs real `motor_current`, anomaly +62%, scrub + spring back to LIVE → Deploy → flash → toast → orb                                                          |
+| Bars  | Act                       | What happens                                                                                                                                                               |
+| ----- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1–4   | One graph                 | Orb → _Connect sources_ → GitHub / KiCad / Onshape / ROS sync → fingerprint match (CAM_v2 · OV9281_IC · camera_node → `camera_module`, 94%) → Robotics Context Model graph |
+| 5–8   | Catch it before it breaks | Push into the IMU → autocomplete flags an I2C 0x68 conflict → _Ask SOL_ → Guide→Expert toggle → fix `0x68 → 0x60` → loader → check → system proving 42/42                  |
+| 9–12  | Run it                    | Live Bench: sim vs real `motor_current`, anomaly +62%, scrub + spring back to LIVE → Deploy → flash → toast → orb                                                          |
+| 13–14 | Call to action            | Orb blooms into the end card: _The Greatest Robotics Tool You Could Ever Have_ · **Join the waitlist** · solusforge.com → folds back into the orb                          |
 
 The acts start on the song's three crash cymbals (bars 1, 5, 9). `storyboard.png` has one still per beat.
 
@@ -37,6 +39,7 @@ python3 tools/encode.py              # ffmpeg tmix motion blur + mux → solus-s
   and the leading edge is faster than the trailing one, so the pill stretches in the direction it moves.
 - The scrub handle is direct manipulation: while held, its value is computed from the cursor. On release
   it springs back to LIVE from wherever it was let go, stretching when dragged past the end.
+- Springs are damped to 0.94–1.0: motion settles with ≤0.02% overshoot (no bounce).
 - The loop ends on the orb shifted by `HOME` (1360, 280), a multiple of the 40 px dot grid, so the last
   frame matches the first (cursor position and speed included).
 
