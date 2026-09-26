@@ -109,6 +109,9 @@ def build_sol_registry(
     enqueue: Any | None = None,
     artifact_ttl_seconds: int | None = None,
     brave_tools: "Sequence[MCPTool] | None" = None,
+    presence_service: Any | None = None,
+    companion_deployment_service: Any | None = None,
+    scene_enqueue: Any | None = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -120,6 +123,9 @@ def build_sol_registry(
     start, fixed here before any model or ingested content is seen. The bridge
     package relays JSON only, so the reasoning import graph stays MCP-free."""
     registry = ToolRegistry()
+    _register_scene(registry, session_factory, project_id, user_id, scene_enqueue)
+    _register_presence(registry, presence_service)
+    _register_companion_deployment(registry, companion_deployment_service)
     registry.register(build_get_entity_tool(session_factory, project_id))
     # The bridge tools come FIRST: the machine's own `list_environments` read is
     # what `link_environment` (a user tool) files from, and a tool cannot be built
@@ -1276,3 +1282,31 @@ class LlmRunner:
             Turn(role="user", text="\n".join((context.fenced(nonce), live)), images=images)
         )
         return tuple(turns)
+
+
+def _register_presence(registry: ToolRegistry, service: Any | None) -> None:
+    if service is not None:
+        from solus_api.agent.tools.firmware_presence import make_presence_tool
+
+        registry.register(make_presence_tool(service))
+
+
+def _register_companion_deployment(registry: ToolRegistry, service: Any | None) -> None:
+    if service is not None:
+        from solus_api.agent.tools.companion_deployment import make_companion_deployment_tool
+
+        registry.register(make_companion_deployment_tool(service))
+
+
+def _register_scene(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    scene_enqueue: Any | None,
+) -> None:
+    if user_id is not None and scene_enqueue is not None:
+        from solus_api.agent.tools.bench_scene import build_bench_scene_tools
+
+        for tool in build_bench_scene_tools(session_factory, project_id, user_id, scene_enqueue):
+            registry.register(tool)

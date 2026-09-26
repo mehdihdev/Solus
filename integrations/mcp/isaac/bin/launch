@@ -10,4 +10,4 @@ if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then exit 78; fi
 WORKSPACE="${SOLUS_MCP_WORKSPACE:-}"
 if [ -z "$WORKSPACE" ]; then exit 78; fi
 cd -- "$WORKSPACE"
-exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 SOLUS_MCP_WORKSPACE="$WORKSPACE" "$PYTHON" "$FORK_DIR/solus/server.py"
+exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 SOLUS_MCP_WORKSPACE="$WORKSPACE" SOLUS_ISAAC_RUNTIME="${SOLUS_ISAAC_RUNTIME:-}" "$PYTHON" "$FORK_DIR/solus/server.py"

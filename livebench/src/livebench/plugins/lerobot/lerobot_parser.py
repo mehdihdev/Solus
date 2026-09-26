@@ -24,6 +24,7 @@ from typing import Any, ClassVar, Final
 from solus_api.hardware.config import CalibrationMode
 
 from livebench.hardware.repo_config import RepoConfigMatch, RepoPartDecl
+from livebench.recognition.firmware import decode_extraction_source
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ _NORM_MODES: Final = {
 }
 _PROTOCOL_HINTS: Final = {"Feetech": "feetech-sts", "Dynamixel": "dynamixel-2"}
 _CALIBRATION_KEYS: Final = ("drive_mode", "homing_offset", "range_min", "range_max")
-_TOGGLE_NOTE: Final = "lerobot toggles this with use_degrees"
+_TOGGLE_NOTE: Final = "Normalization depends on a runtime condition; mode is unresolved."
 _SAFE_NAME: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*")  # one path segment, never `..`
 
 
@@ -73,8 +74,7 @@ def _int_const(node: ast.expr | None) -> int | None:
 def _resolve_norm(
     node: ast.expr | None, assigns: Mapping[str, ast.expr], hops: int = 0
 ) -> tuple[CalibrationMode | None, bool]:
-    """(mode, toggled). A conditional whose branches include DEGREES resolves to DEGREES —
-    physical units win — otherwise to its else-branch; `toggled` says a conditional decided."""
+    """(mode, toggled). Conditional modes require runtime evidence and stay unresolved."""
     if node is None or hops > _MAX_NAME_HOPS:
         return None, False
     if isinstance(node, ast.Attribute) and _ident(node.value) == "MotorNormMode":
@@ -82,10 +82,7 @@ def _resolve_norm(
     if isinstance(node, ast.Name):
         return _resolve_norm(assigns.get(node.id), assigns, hops + 1)
     if isinstance(node, ast.IfExp):
-        body, _ = _resolve_norm(node.body, assigns, hops + 1)
-        orelse, _ = _resolve_norm(node.orelse, assigns, hops + 1)
-        degrees = CalibrationMode.DEGREES in (body, orelse)
-        return (CalibrationMode.DEGREES if degrees else orelse), True
+        return None, True
     return None, False
 
 
@@ -305,6 +302,31 @@ class LerobotConfigParser:
         self._calibration_root = (
             _lerobot_calibration_root() if calibration_root is None else calibration_root
         )
+
+    def extract_bytes(
+        self, source: bytes, *, suffix: str, source_ref: str
+    ) -> list[RepoConfigMatch]:
+        """Read one authorized file by AST; no adjacent files or calibration cache."""
+        if suffix != ".py":
+            return []
+        text = decode_extraction_source(source, source_ref)
+        try:
+            tree = ast.parse(text)
+        except (ValueError, SyntaxError, RecursionError) as exc:
+            raise ValueError("Invalid Python source for configuration review") from exc
+        nodes = list(itertools.islice(ast.walk(tree), 20001))
+        classes = [node for node in nodes if isinstance(node, ast.ClassDef)]
+        if len(nodes) > 20000 or len(classes) > _MAX_CLASSES:
+            raise ValueError("Python source exceeds configuration review budget")
+        matches: list[RepoConfigMatch] = []
+        for node in classes:
+            klass = _lerobot_class(node, Path(source_ref))
+            if klass is not None:
+                matches.extend(
+                    dataclasses.replace(match, source=source_ref, port_hint=None)
+                    for match in _lerobot_matches(klass, [])
+                )
+        return matches
 
     def scan(self, root: Path, files: list[Path]) -> list[RepoConfigMatch]:
         classes = (

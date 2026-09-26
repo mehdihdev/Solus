@@ -127,7 +127,7 @@ _METADATA_LIMIT = 128
 #: the selection.
 SELECTION_KEY = "documents"
 # Reparse existing revision-keyed exports when the graph projection changes.
-PROJECTION_VERSION = "cad-geometry-v2"
+PROJECTION_VERSION = "cad-geometry-v3"
 
 #: Cursor key holding the resolved default workspace per document (SOLUSDEV-167).
 #: Lives beside the microversions rather than in a cache — see `_probe`.
@@ -448,6 +448,7 @@ class OnshapeConnector(OAuthConnector):
         account_ref: str | None = None,
         signal_max_age_seconds: float | None = None,
     ) -> None:
+        self.scene_export_observer: Callable[[str, str, str, str], None] | None = None
         self._client_id = client_id
         self._client_secret = client_secret
         self._poll_attempts = poll_attempts
@@ -661,6 +662,8 @@ class OnshapeConnector(OAuthConnector):
         )
         if export is None:
             return [], []
+        if self.scene_export_observer is not None:
+            self.scene_export_observer(target.document_id, target.element_id, version, export)
         metadata = (
             await self._fetch_part_metadata(
                 client,

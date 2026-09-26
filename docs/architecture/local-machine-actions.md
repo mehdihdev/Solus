@@ -30,6 +30,15 @@ SOL proposes a local action
 
 ## Installed Isaac execution
 
+The workspace application connection panel is an opt-in, read-only projection of
+the owned adapter's probe/status tools through the existing exact-scope bridge.
+Connect/Disconnect control only status monitoring, with ten-second polling and
+stale-session/project result rejection. They neither launch nor stop an application,
+import a platform, suggest a robot, seed a scene, nor create telemetry. Installation
+and owned-process observations preserve unknown values; a non-owned application is
+not claimed absent. The safe HTTP projection is specified in isaac-development.md.
+Reviewed model execution remains isolated from this vendor-free connection path.
+
 The approved ADR-014 amendment uses this same bridge and confirmation path.
 The cloud-owned Isaac adapter resolves `simulation_model` and every referenced
 entity through the current project graph scope before dispatch. Its fixed public
@@ -48,7 +57,7 @@ The server supports eight bounded operations described in
 `docs/api/isaac-development.md`: probe, status, start, stop, load model, edit joint
 limits, edit sensor pose and run the named routine. Start and all mutations require
 confirmation. Approval binds the graph snapshot and native scene generation;
-changes invalidate it. The worker controls only its own process and pinned SO-101
+changes invalidate it. The worker controls only its own process and validated graph-selected
 asset closure. This integration introduces no Live Bench transport or arbitrary
 script execution interface.
 
@@ -124,13 +133,12 @@ fixtures, live companion execution and platform-specific checks.
 
 ### Bounded simulation graph setup
 
-The explicit SO-101 template setup creates manual, source-null simulation entities
-using the existing manual graph semantics. The server owns the pinned template,
-provenance and generated identities; clients cannot submit arbitrary attributes,
-entity IDs, URLs or scripts. The project-locked operation atomically creates the
-model and its links, joints, sensor and bottle, or returns an intact existing
-instance. It emits the existing graph-change hint. This supplies the graph input
-required by the owned Isaac adapter; simulator start/load remain centrally gated.
+Explicit schema-v2 model setup references existing scoped graph link, joint and
+sensor identities. The project-locked operation atomically creates only a model
+root and containment edges; it never fabricates a robot, modifies source entities,
+or starts a simulator. Asset identity is a caller-supplied validated manifest;
+its files remain inside the authorized workspace until copied privately by the
+native worker. Simulator start/load remain centrally gated.
 
 ## Autonomous routine Build amendment — SOLUSDEV-261
 
@@ -148,3 +156,13 @@ a cloud wrapper holds the task-local fingerprint and supplies it only to the
 authenticated native call. Descriptor-confined replacement verifies unchanged
 state and readback; a preview creates no files or directories. Routine eligibility
 requires this wrapper, not raw advertised file-write metadata.
+
+### Isaac generic graph model boundary
+
+Isaac loads schema-v2 graph-bound robot models from the linked workspace's
+`.solus/isaac/models/<manifest-sha256>/` closure. Native verification copies only
+manifested regular files through no-follow descriptors and validates bounded
+fixed/revolute declarative URDF before import. Cloud registration references
+existing project graph identities; it creates only a model root and containment.
+Articulation discovery replaces robot-specific prim paths. Generic bounded joint
+trajectories report tracking; object/grasp assumptions are not supplied implicitly.

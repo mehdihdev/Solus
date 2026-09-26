@@ -1,6 +1,6 @@
 // SOLUSDEV-250 P3 — one device, one sentence, one question. Every claim the
 // card shows is the wire's (headline, error, session error); nothing auto-adds.
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetMarks, recordDeviceFrame } from '../../../lib/perf/marks'
@@ -140,6 +140,67 @@ describe('DeviceCard — the sentence', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Not now' }))
     expect(handlers.onDismiss).toHaveBeenCalledOnce()
+  })
+})
+
+describe('DeviceCard — observed USB identity', () => {
+  it('distinguishes identical proposals by serial and current port without naming them', () => {
+    for (const [serial, port] of [
+      ['S1', '/dev/ttyACM1'],
+      ['S2', '/dev/ttyACM0']
+    ]) {
+      mount({
+        ref: `usb:${serial}`,
+        device: {
+          ...base.device,
+          identity: { kind: 'usb_serial', binding: serial },
+          identity_basis: 'serial',
+          last_seen_path: port
+        },
+        proposal: { ...proposal, summary: '6 servos detected' }
+      })
+    }
+    const cards = screen.getAllByRole('article')
+    expect(within(cards[0]).getByText('USB serial S1 · Current port /dev/ttyACM1')).toBeVisible()
+    expect(within(cards[1]).getByText('USB serial S2 · Current port /dev/ttyACM0')).toBeVisible()
+    for (const card of cards) {
+      expect(within(card).getByRole('textbox', { name: 'Robot name' })).toHaveValue('')
+    }
+  })
+
+  it('shows the observed port and explains a port-bound identity without claiming a serial', () => {
+    mount({
+      device: {
+        ...base.device,
+        identity: { kind: 'usb_serial', binding: 'port-3-1.2' },
+        identity_basis: 'port_position',
+        last_seen_path: '/dev/ttyUSB0'
+      }
+    })
+    expect(
+      screen.getByText(
+        /no serial number — identity is tied to this USB port; keep it plugged in here/
+      )
+    ).toBeVisible()
+    expect(screen.getByText(/Current port \/dev\/ttyUSB0/)).toBeVisible()
+    expect(screen.queryByText(/USB serial/)).toBeNull()
+  })
+
+  it('shows a current port without inventing a serial when identity is unavailable', () => {
+    mount({ device: { ...base.device, last_seen_path: '/dev/ttyACM2' } })
+    expect(screen.getByText('Current port /dev/ttyACM2')).toBeVisible()
+    expect(screen.queryByText(/USB serial/)).toBeNull()
+  })
+
+  it('does not mislabel another transport binding as a USB serial', () => {
+    mount({
+      device: {
+        ...base.device,
+        transport: 'ble',
+        identity: { kind: 'ble', binding: 'observed-address' }
+      }
+    })
+    expect(screen.queryByText(/USB serial|Current port/)).toBeNull()
   })
 })
 
@@ -343,3 +404,19 @@ function registerConnectionStatusTests(): void {
     expect(screen.queryByRole('button')).toBeNull()
   })
 }
+
+it('offers an explicit MCU connection for a silent USB identity', async () => {
+  mount({
+    status: 'silent',
+    proposal: {
+      ...proposal,
+      driver_id: null,
+      rows: [],
+      identity: { kind: 'usb_serial', binding: 'S1' }
+    }
+  })
+  await userEvent.type(nameInput(), 'Uno')
+  await userEvent.click(screen.getByRole('button', { name: 'Add MCU connection' }))
+  expect(handlers.onConfirm).toHaveBeenCalledWith({ target: { kind: 'new', name: 'Uno' } })
+  expect(screen.getByText(/firmware.*unknown/i)).toBeInTheDocument()
+})

@@ -2,7 +2,10 @@
 // mode badge, sees-screen dot, pin, close), the degraded-state status line,
 // the region card / refused line, and the SolChat body behind the auth guard.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, within } from '@testing-library/react'
+import * as solApi from './solApi'
+import { decideSolConfirmation } from '../../lib/api/resources'
+import { resetSolChatSessions } from './solChatStore'
 import { SolWindow } from './SolWindow'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceStore'
@@ -26,7 +29,8 @@ vi.mock('./solApi', () => ({
 vi.mock('../../lib/api/resources', async (importOriginal) => ({
   // Spread the real module: ArtifactCard (via SolChat) reads SOLUS_SECTIONS at load.
   ...(await importOriginal<typeof import('../../lib/api/resources')>()),
-  classifyQuery: vi.fn()
+  classifyQuery: vi.fn(),
+  decideSolConfirmation: vi.fn()
 }))
 
 const PLACEHOLDER = 'Ask about a signal, a change, a part…'
@@ -206,4 +210,45 @@ describe('SolWindow auth guard (the retired OrbWindow pattern)', () => {
     await mount()
     expect(screen.queryByPlaceholderText(PLACEHOLDER)).not.toBeInTheDocument()
   })
+})
+
+it('mounts Guide tasks and hides them when Build is selected', async () => {
+  await mount()
+  expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
+  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+  expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+})
+
+it('shows the fixture hole diff in the actual SOL window and requires an explicit decision', async () => {
+  resetSolChatSessions()
+  vi.mocked(solApi.createSolConversation).mockResolvedValue({
+    id: 'c-hole'
+  } as solApi.SolConversation)
+  vi.mocked(decideSolConfirmation).mockResolvedValue({ ok: true } as Awaited<
+    ReturnType<typeof decideSolConfirmation>
+  >)
+  vi.mocked(solApi.streamSolMessage).mockImplementation(async ({ onEvent }) => {
+    onEvent({
+      type: 'tool_confirmation',
+      pending: {
+        confirmationId: 'hole-card',
+        tool: 'onshape.add_feature',
+        summary: 'Add a 6 mm hole fixture',
+        preview: [{ label: '6 mm hole fixture', before: null, after: 'new hole (diameter=6 mm)' }]
+      }
+    })
+  })
+  await mount()
+  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: 'Add a 6 mm hole' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  const card = await screen.findByLabelText('Action needs your approval')
+  expect(within(card).getByText('new hole (diameter=6 mm)')).toBeInTheDocument()
+  expect(decideSolConfirmation).not.toHaveBeenCalled()
+  await act(async () => {
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }))
+  })
+  expect(decideSolConfirmation).toHaveBeenCalledWith('p1', 'hole-card', 'approve')
 })

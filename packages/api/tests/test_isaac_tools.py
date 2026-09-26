@@ -2,6 +2,8 @@
 
 import asyncio
 import copy
+import hashlib
+import json
 import uuid
 from typing import Any
 
@@ -14,18 +16,56 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 SESSION = str(uuid.uuid4())
-ASSET = "a1be9138359e044a007a4981817f3a8783fca47985b424f3fa9ca3d02e12b5b9"
-LINKS = (
-    "base_link",
-    "shoulder_link",
-    "upper_arm_link",
-    "lower_arm_link",
-    "wrist_link",
-    "gripper_link",
-    "gripper_frame_link",
-    "moving_jaw_so101_v1_link",
-)
-JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+LINKS = ("pedestal", "boom", "tool_mount")
+JOINTS = ("azimuth", "elevation")
+
+
+def simulation_model(
+    identities: list[str], *, joint_count: int = 2, sensor: bool = True
+) -> dict[str, Any]:
+    files = {"models/robot.urdf": "a" * 64}
+    asset = {
+        "urdf_path": "models/robot.urdf",
+        "files": files,
+        "sha256": hashlib.sha256(
+            json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    links = [{"entity_id": identities[i], "name": f"link_{i}"} for i in range(joint_count + 1)]
+    joints = [
+        {
+            "entity_id": identities[joint_count + 1 + i],
+            "name": f"axis_{i}",
+            "parent_link_entity_id": links[i]["entity_id"],
+            "child_link_entity_id": links[i + 1]["entity_id"],
+            "lower_rad": -1.0 - i * 0.1,
+            "upper_rad": 1.0 + i * 0.1,
+        }
+        for i in range(joint_count)
+    ]
+    sensors = (
+        [
+            {
+                "entity_id": identities[-1],
+                "parent_link_entity_id": links[-1]["entity_id"],
+                "kind": "contact",
+                "translation_m": [0.0, 0.0, 0.0],
+                "orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "radius_m": 0.01,
+            }
+        ]
+        if sensor
+        else []
+    )
+    return {
+        "schema_version": 2,
+        "asset": asset,
+        "links": links,
+        "joints": joints,
+        "sensors": sensors,
+    }
+
+
 NAMES = (
     "probe",
     "status",
@@ -105,41 +145,18 @@ async def graph(
         GraphEntity(
             project_id=project.id, domain=Domain.MECHANICAL, kind="component", name=name, attrs={}
         )
-        for name in (*LINKS, *JOINTS, "contact", "bottle")
+        for name in (*LINKS, *JOINTS, "contact")
     ]
     db.add_all(entities)
     await db.flush()
     if nested_foreign:
         entities[-1].project_id = other.id
-    model = {
-        "schema_version": 1,
-        "asset": "so101_new_calib_v1",
-        "asset_sha256": ASSET,
-        "links": [{"entity_id": str(e.id), "name": e.name} for e in entities[:8]],
-        "joints": [{"entity_id": str(e.id), "name": e.name} for e in entities[8:14]],
-        "sensors": [
-            {
-                "entity_id": str(entities[14].id),
-                "parent_link_entity_id": str(entities[0].id),
-                "kind": "contact",
-                "translation_m": [0, 0, 0],
-                "orientation_wxyz": [1, 0, 0, 0],
-                "radius_m": 0.01,
-            }
-        ],
-        "bottle": {
-            "entity_id": str(entities[15].id),
-            "translation_m": [0, 0, 0],
-            "radius_m": 0.03,
-            "height_m": 0.1,
-            "mass_kg": 0.1,
-        },
-    }
+    model = simulation_model([str(entity.id) for entity in entities])
     root = GraphEntity(
         project_id=project.id,
         domain=Domain.MECHANICAL,
         kind="assembly",
-        name="SO-101",
+        name="Synthetic arm",
         attrs={"simulation_model": model},
     )
     db.add(root)
@@ -185,7 +202,7 @@ async def test_load_resolves_every_entity_and_consumes_approval(
     assert await tool.invoke(args) == {"ok": True, "session_id": SESSION}
     writes = [arg for name, arg in calls if name == "load_model" and not arg["dry_run"]]
     assert len(writes) == 1
-    assert writes[0]["resolved_model"]["asset_sha256"] == ASSET
+    assert writes[0]["resolved_model"]["asset"] == root.attrs["simulation_model"]["asset"]
     assert writes[0]["model_entity_id"] == str(root.id)
     assert writes[0]["expected_scene_generation"] == 0
     assert len(writes[0]["graph_digest"]) == 64
@@ -321,7 +338,7 @@ async def test_no_complete_native_preview_means_no_action(
     "bad",
     [{"asset": "other"}, {"script": "bad"}, {"schema_version": True}, {"asset_sha256": "b" * 64}],
 )
-async def test_graph_model_is_strict_and_pinned(
+async def test_graph_model_is_strict_and_versioned(
     db: AsyncSession, engine: AsyncEngine, bad: dict[str, Any]
 ) -> None:
     project, root, _ = await graph(db)
@@ -349,29 +366,26 @@ async def test_loaded_operations_bind_exact_graph_targets(
     state.update({"loaded": True, "model_entity_id": str(root.id), "graph_digest": digest})
     args: dict[str, Any] = {"session_id": SESSION}
     if operation == "set_joint_limits":
-        args.update({"joint_entity_id": str(entities[8].id), "lower": -0.5, "upper": 0.5})
+        args.update({"joint_entity_id": str(entities[3].id), "lower": -0.5, "upper": 0.5})
     if operation == "set_sensor_pose":
         args.update(
             {
-                "sensor_entity_id": str(entities[14].id),
+                "sensor_entity_id": str(entities[5].id),
                 "translation_m": [0.01, 0, 0],
                 "orientation_wxyz": [1, 0, 0, 0],
             }
         )
     if operation == "run_routine":
-        positions = [{"joint_entity_id": str(e.id), "position_rad": 0.0} for e in entities[8:14]]
+        positions = [{"joint_entity_id": str(e.id), "position_rad": 0.0} for e in entities[3:5]]
         args.update(
             {
-                "routine": "grasp_bottle",
+                "routine": "joint_trajectory",
                 "duration_s": 10.0,
                 "joints": [
                     {"joint_entity_id": str(e.id), "lower": -0.1, "upper": 0.1}
-                    for e in entities[8:14]
+                    for e in entities[3:5]
                 ],
-                "waypoints": [
-                    {"phase": phase, "positions": positions}
-                    for phase in ("approach", "close", "lift")
-                ],
+                "waypoints": [{"positions": positions} for _ in range(3)],
             }
         )
     tool = built["isaac." + operation]
@@ -381,7 +395,7 @@ async def test_loaded_operations_bind_exact_graph_targets(
     assert write["graph_digest"] == digest
     assert write["expected_scene_generation"] == 0
     if operation == "run_routine":
-        assert write["routine_spec"]["routine"] == "grasp_bottle"
+        assert write["routine_spec"]["routine"] == "joint_trajectory"
     else:
         assert write["entity_id"] == args.get("joint_entity_id", args.get("sensor_entity_id"))
 
@@ -452,20 +466,19 @@ async def test_native_mapper_redaction_and_full_routine_binding_fit_card(db, eng
         )
     }
     tool = wrappers["isaac.run_routine"]
-    ids = [str(entity.id) for entity in entities[8:14]]
+    ids = [str(entity.id) for entity in entities[3:5]]
     args = {
         "session_id": SESSION,
-        "routine": "grasp_bottle",
+        "routine": "joint_trajectory",
         "duration_s": 6,
         "joints": [{"joint_entity_id": identity, "lower": -0.1, "upper": 0.1} for identity in ids],
         "waypoints": [
             {
-                "phase": phase,
                 "positions": [
                     {"joint_entity_id": identity, "position_rad": 0.05} for identity in ids
                 ],
             }
-            for phase in ("approach", "close", "lift")
+            for _ in range(3)
         ],
     }
     rows = await tool.preview(args)
@@ -485,3 +498,75 @@ async def test_malformed_wire_fingerprint_refused(engine, value):
     native["isaac.start"].plan["fingerprint"] = value
     with pytest.raises(ToolException):
         await built["isaac.start"].preview({})
+
+
+async def test_legacy_model_refused_with_migration_guidance(db, engine):
+    project, root, _ = await graph(db)
+    root.attrs = {"simulation_model": {"schema_version": 1}}
+    await db.commit()
+    built, _, calls, _ = tools(engine, project.id)
+    with pytest.raises(ToolException, match="version 2"):
+        await built["isaac.load_model"].preview(
+            {"session_id": SESSION, "model_entity_id": str(root.id)}
+        )
+    assert not any(name == "load_model" for name, _ in calls)
+
+
+async def test_joint_bounds_come_from_selected_model(db, engine):
+    project, root, entities = await graph(db)
+    built, _, calls, state = tools(engine, project.id)
+    graph_state = await built["isaac.set_joint_limits"].resolver.resolve(str(root.id))
+    state.update(loaded=True, model_entity_id=str(root.id), graph_digest=graph_state.digest)
+    args = {
+        "session_id": SESSION,
+        "joint_entity_id": str(entities[3].id),
+        "lower": -1.1,
+        "upper": 0.5,
+    }
+    with pytest.raises(ToolException, match="model limits"):
+        await built["isaac.set_joint_limits"].preview(args)
+    assert not any(name == "set_joint_limits" for name, _ in calls)
+    args["lower"] = -0.9
+    await built["isaac.set_joint_limits"].preview(args)
+    await built["isaac.set_joint_limits"].invoke(args)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "duplicate_range",
+        "missing_position",
+        "foreign_position",
+        "duplicate_position",
+        "outside_model",
+    ],
+)
+async def test_invalid_trajectory_never_reaches_native_action(db, engine, damage):
+    project, root, entities = await graph(db)
+    built, _, calls, state = tools(engine, project.id)
+    resolved = await built["isaac.run_routine"].resolver.resolve(str(root.id))
+    state.update(loaded=True, model_entity_id=str(root.id), graph_digest=resolved.digest)
+    ids = [str(entity.id) for entity in entities[3:5]]
+    args = {
+        "session_id": SESSION,
+        "routine": "joint_trajectory",
+        "duration_s": 3.0,
+        "joints": [{"joint_entity_id": identity, "lower": -0.5, "upper": 0.5} for identity in ids],
+        "waypoints": [
+            {"positions": [{"joint_entity_id": identity, "position_rad": 0.1} for identity in ids]}
+        ],
+    }
+    positions = args["waypoints"][0]["positions"]
+    if damage == "duplicate_range":
+        args["joints"].append(args["joints"][0].copy())
+    elif damage == "missing_position":
+        positions.pop()
+    elif damage == "foreign_position":
+        positions[0]["joint_entity_id"] = str(uuid.uuid4())
+    elif damage == "duplicate_position":
+        positions.append(positions[0].copy())
+    else:
+        args["joints"][0]["lower"] = -1.5
+    with pytest.raises(ToolException):
+        await built["isaac.run_routine"].preview(args)
+    assert not any(name == "run_routine" for name, _ in calls)

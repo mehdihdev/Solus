@@ -39,7 +39,7 @@ from typing import Any, Final
 
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolResult
-from solus_api.agent.tools.untrusted import redact_value
+from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.models import SOL_CUSTOM_INSTRUCTION_CAP, SolMode
 from solus_api.orchestration.providers import ToolOutcome, ToolSpec, Turn
 
@@ -450,7 +450,12 @@ def contain_result(call: ToolCall, result: ToolResult, *, cap: int | None = None
             "message": (error.message if error is not None else "")[:512],
         }
     else:
-        payload = {"ok": True, "value": redact_value(result.value)}
+        payload = {
+            "ok": True,
+            "value": redact_value(
+                result.value, allowed_paths=call_display_paths(call.tool, call.args)
+            ),
+        }
     # Same encoder as any other untrusted block: one ASCII line, no fence token.
     return ToolOutcome(
         id=call.call_id,

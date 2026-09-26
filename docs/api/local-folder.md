@@ -85,6 +85,14 @@ Existing routes that already serve local sources unchanged: `GET /sources` (list
 `POST /sources/{id}/sync` (routes a `local` source inline, never to ARQ),
 `GET /sources/{id}/syncs`.
 
+Manual-sync dispatch preserves the same API-process acquisition boundary for
+KiCad and Altium sources: only the API registry owns their live desktop export
+acquirers. With normal asynchronous sync enabled, these three providers run as
+API background tasks after the 202 response, retaining the requesting actor's
+bridge scope; they are not sent to an ARQ process without that bridge. Remote
+provider syncs, including Onshape, continue through the configured ARQ worker.
+The explicit test/bare-development inline override remains available.
+
 Events: `local_folder.linked {machine_name, folder_name}` · `local_folder.opened
 {tool, entity_kind, launched}` · the sync's own `source.synced`.
 

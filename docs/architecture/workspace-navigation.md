@@ -72,9 +72,22 @@ once and persist them: subsequent imports place new nodes without rearranging ex
 Spatial account/group boundaries expose useful populated assemblies and individual parts.
 Current account anchors are client-only presentation nodes (`account:<key>`, integration domain
 sentinel), grouped by proven connection identity with source fallback. They never enter shared
-Focus or `PUT /workspace-layout`; dragging one is session-local. Real entity UUID coordinates
-remain project-shared. Persisted typed group placement is later work, not a fake graph UUID.
+Focus or `PUT /workspace-layout`. Under the September 15 UI brief, their positions persist in
+separate account/project-scoped local presentation preferences, with finite bounded coordinates.
+Real entity UUID coordinates remain project-shared. Shared typed group placement remains later
+work; local preferences never manufacture graph UUIDs or enter shared Focus.
 Explicit arrange/reset is the only automatic layout rewrite requested by a user.
+
+Initial placement uses deterministic organic packing near the current parent, with non-aligned
+offsets and collision avoidance, rather than grid cells or a tree layout. Existing saved points
+are never recomputed. Visible projected edges aggregate real relationships and counts, draw
+curved paths with midpoint labels, and distinguish cross-domain links from quiet containment.
+Pending suggestions use existing project-authorized proposal evidence and explicit decisions;
+rendering them never generates or accepts links.
+
+Small graph overviews may fit the visible card bounds using presentation zoom without changing
+world coordinates. Drag deltas are converted back into world units before persistence. Framing
+is recomputed for viewport or visible membership changes, never to rearrange a dragged node.
 
 Keep the documented 24-card visible bound and explicit additional-child navigation until measured
 rendering evidence justifies a separately documented bound. Project snapshots may be complete;

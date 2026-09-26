@@ -12,7 +12,7 @@ import logging
 import uuid
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Path, Query, Request
+from fastapi import APIRouter, Header, Path, Query, Request
 from pydantic import BaseModel, ConfigDict
 
 from solus_api.core.errors import APIError
@@ -22,6 +22,7 @@ from solus_api.graph.live import graph_changed_frame
 from solus_api.hardware.config import ConfigLayer, FieldProvenance, HardwareConfig, merge_layers
 from solus_api.hardware.detect import DetectedDeviceOut
 from solus_api.hardware.library import ID_PATTERN, DefinitionKind, PartDefinition, load_library
+from solus_api.hardware.library_import import import_standalone_part
 from solus_api.hardware.links import (
     PartObservation,
     RobotCandidate,
@@ -59,7 +60,8 @@ class PlatformImportIn(BaseModel):
 
 class PartImportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    robot_id: uuid.UUID
+    robot_id: uuid.UUID | None = None
+    name: RobotName | None = None
     category: Category | None = None  # defaults to the definition's
 
 
@@ -248,19 +250,49 @@ async def import_part(
     request: Request,
     ctx: ProjectCtx,
     session: SessionDep,
+    idempotency_key: Annotated[uuid.UUID | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     library = load_library()
     part = library.parts.get(definition_id)
     if part is None:
         raise APIError(404, "not_found", "part definition not found")
+    if body.robot_id is None:
+        if body.name is None or idempotency_key is None:
+            raise APIError(
+                422, "validation_error", "Standalone imports require a name and operation key"
+            )
+        result, replayed = await import_standalone_part(
+            session,
+            ctx.project.id,
+            ctx.user.id,
+            idempotency_key,
+            part,
+            name=body.name,
+            category=body.category or part.category,
+        )
+        if not replayed:
+            _emit_library_event(
+                ctx,
+                session,
+                "hardware.library_imported",
+                {
+                    "definition_id": part.id,
+                    "entity_id": result["entity"]["id"],
+                    "parts": 1,
+                },
+            )
+        await session.commit()
+        if not replayed:
+            await _publish(request, ctx.project.id, entities=1, relations=0)
+        return envelope(result)
     robot = await robot_root(session, ctx.project.id, body.robot_id)
     entity = await _attach_definition(
         session,
         ctx.project.id,
         robot,
         part,
-        name=part.name,
+        name=body.name or part.name,
         category=body.category or part.category,
         extra={},
     )

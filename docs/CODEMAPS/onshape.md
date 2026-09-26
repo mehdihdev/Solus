@@ -10,7 +10,7 @@ Default 256 exportable elements; 100,000 records / 64 MiB staged graph bounds.
 Immutable element/metadata reads use `/m/{revision}`. Workspace STEP translations
 check the current revision before submission and after download; drift aborts the
 complete snapshot. `revision-v2-*` payload keys exclude old associations;
-`cad-geometry-v2` cursors force one repair ingestion for existing tracked sources.
+`cad-geometry-v3` cursors force one repair ingestion for existing tracked sources.
 `connectors/integration_cache.py` partitions reads by account.
 `connectors/onshape_read_cache.py` caches validated immutable donor geometry and
 feature specs. `OnshapeConnector.immutable_feature_specs` serves six sites:

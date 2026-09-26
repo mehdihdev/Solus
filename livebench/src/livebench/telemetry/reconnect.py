@@ -43,6 +43,39 @@ class ReconnectingSource:
         self._sleep = sleep
         self._closed = False
         self._current: PacketSource | None = None
+        self._opening: asyncio.Task[PacketSource | None] | None = None
+        self._stop = asyncio.Event()
+
+    async def _open(self) -> PacketSource | None:
+        try:
+            # Shielded by the caller: cancelling a thread await cannot stop a
+            # blocking USB open. Retain ownership until its result is cleaned up.
+            source = await asyncio.to_thread(self._factory)
+            self._current = source
+            if self._is_closed():
+                await self._close_current()
+                return None
+            return source
+        except Exception as exc:
+            logger.warning("link open failed: %s; reconnecting", type(exc).__name__)
+            return None
+
+    async def _close_current(self) -> None:
+        source, self._current = self._current, None
+        if source is not None:
+            await source.aclose()
+
+    async def _backoff(self, seconds: float) -> None:
+        nap = asyncio.ensure_future(self._sleep(seconds))
+        stopped = asyncio.create_task(self._stop.wait())
+        try:
+            await asyncio.wait((nap, stopped), return_when=asyncio.FIRST_COMPLETED)
+            if nap.done():
+                await nap
+        finally:
+            nap.cancel()
+            stopped.cancel()
+            await asyncio.gather(nap, stopped, return_exceptions=True)
 
     def _is_closed(self) -> bool:
         # A method, not a bare attribute read: `aclose` flips the flag from another
@@ -54,25 +87,31 @@ class ReconnectingSource:
         while not self._is_closed():
             # Off-loop: a serial factory blocks in `pyserial.Serial(...)`, and a
             # wedged USB open must never stall the event loop (SOLUSDEV-72).
-            source = await asyncio.to_thread(self._factory)
-            self._current = source
             try:
-                async for packet in source:
-                    backoff = self._start  # a live link resets the schedule
-                    yield packet
-                    if self._is_closed():
-                        return
+                self._opening = asyncio.create_task(self._open())
+                source = await asyncio.shield(self._opening)
+                if source is not None:
+                    async for packet in source:
+                        if self._is_closed():
+                            return
+                        backoff = self._start  # a live link resets the schedule
+                        yield packet
+                        if self._is_closed():
+                            return
+            except asyncio.CancelledError:
+                self._closed = True
+                self._stop.set()
+                raise
             except Exception as exc:
                 logger.warning("link dropped: %s; reconnecting", type(exc).__name__)
             finally:
-                self._current = None
-                await source.aclose()
+                await self._close_current()
             if self._is_closed():
                 return
-            await self._sleep(backoff)
+            await self._backoff(backoff)
             backoff = min(backoff * 2, self._cap)
 
     async def aclose(self) -> None:
         self._closed = True
-        if self._current is not None:
-            await self._current.aclose()
+        self._stop.set()
+        await self._close_current()

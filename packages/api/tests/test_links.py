@@ -5,6 +5,7 @@ ranked suggestions out — precision over recall, nothing auto-accepts. `persist
 `list_suggestions` / `decide_suggestion` are the durable side of the same contract.
 """
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -31,7 +32,7 @@ from solus_api.hardware.links import (
 )
 from solus_api.models import HardwareSuggestion, SuggestionStatus
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hardware"
 
@@ -532,3 +533,115 @@ async def test_serialize_suggestion_matches_the_documented_shape(
     assert payload["status"] == row.status
     assert payload["created_at"] == row.created_at
     assert payload["decided_at"] == row.decided_at
+
+
+@pytest.mark.parametrize("variant", ["same", "reordered", "duplicates", "reason"])
+async def test_declined_evidence_is_not_reproposed(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, variant: str
+) -> None:
+    project = uuid.UUID(await _hw_project(client, alice_headers))
+    robot = await _hw_robot(client, alice_headers, str(project))
+    user = await me(client, alice_headers)
+    original = _suggestion("usb:AAAA/6", robot)
+    evidence = [*original.evidence, _match(Modality.FIRMWARE_SYMBOL, 0.5, external_ref="repo:a")]
+    original = original.model_copy(update={"evidence": evidence})
+    rows = await persist_suggestions(db, project, [original])
+    await decide_suggestion(db, project, rows[0].id, False, uuid.UUID(user["id"]), "wrong arm")
+    await db.commit()
+    replacement = original.model_copy(
+        update={
+            "evidence": list(reversed(evidence))
+            if variant == "reordered"
+            else evidence * 2
+            if variant == "duplicates"
+            else evidence,
+            "reason": "new explanation" if variant == "reason" else original.reason,
+            "confidence": 0.9,
+        }
+    )
+    assert await persist_suggestions(db, project, [replacement]) == []
+    assert (await list_suggestions(db, project, SuggestionStatus.REJECTED))[0].reason == "wrong arm"
+
+
+async def test_changed_evidence_and_other_subjects_targets_and_projects_can_propose(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    project = uuid.UUID(await _hw_project(client, alice_headers))
+    other = uuid.UUID(await _hw_project(client, bob_headers))
+    robot = await _hw_robot(client, alice_headers, str(project))
+    target = await _hw_robot(client, alice_headers, str(project))
+    other_robot = await _hw_robot(client, bob_headers, str(other))
+    user = await me(client, alice_headers)
+    original = _suggestion("usb:AAAA/6", robot)
+    rows = await persist_suggestions(db, project, [original])
+    await decide_suggestion(db, project, rows[0].id, False, uuid.UUID(user["id"]))
+    await db.commit()
+    variants = [
+        original.model_copy(
+            update={"evidence": [_match(Modality.BUS_ENUMERATION, 0.8, external_ref="usb:BBBB/6")]}
+        ),
+        original.model_copy(update={"subject_kind": "device"}),
+        original.model_copy(update={"subject_ref": "usb:AAAA/5"}),
+        original.model_copy(update={"candidate_robot_id": target}),
+    ]
+    assert len(await persist_suggestions(db, project, variants)) == 4
+    assert (
+        len(
+            await persist_suggestions(
+                db, other, [original.model_copy(update={"candidate_robot_id": other_robot})]
+            )
+        )
+        == 1
+    )
+
+
+async def test_concurrent_rediscovery_waits_for_decline_commit(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, engine: AsyncEngine
+) -> None:
+    project = uuid.UUID(await _hw_project(client, alice_headers))
+    robot = await _hw_robot(client, alice_headers, str(project))
+    user = await me(client, alice_headers)
+    suggestion = _suggestion("usb:AAAA/6", robot)
+    rows = await persist_suggestions(db, project, [suggestion])
+    await db.commit()
+    await decide_suggestion(db, project, rows[0].id, False, uuid.UUID(user["id"]))
+    entered = asyncio.Event()
+
+    async def rediscover() -> list[HardwareSuggestion]:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as concurrent:
+            entered.set()
+            result = await persist_suggestions(concurrent, project, [suggestion])
+            await concurrent.commit()
+            return result
+
+    task = asyncio.create_task(rediscover())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+        await db.commit()
+        assert await asyncio.wait_for(task, timeout=5) == []
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_decision_refreshes_a_stale_session_after_another_decision(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, engine: AsyncEngine
+) -> None:
+    project = uuid.UUID(await _hw_project(client, alice_headers))
+    robot = await _hw_robot(client, alice_headers, str(project))
+    user = uuid.UUID((await me(client, alice_headers))["id"])
+    rows = await persist_suggestions(db, project, [_suggestion("usb:AAAA/6", robot)])
+    await db.commit()
+    async with async_sessionmaker(engine, expire_on_commit=False)() as concurrent:
+        stale = await concurrent.get(HardwareSuggestion, rows[0].id)
+        assert stale is not None and stale.status is SuggestionStatus.PENDING
+        await decide_suggestion(db, project, rows[0].id, False, user)
+        await db.commit()
+        with pytest.raises(APIError) as error:
+            await decide_suggestion(concurrent, project, rows[0].id, True, user)
+        assert error.value.status_code == 409

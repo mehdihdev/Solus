@@ -1,6 +1,7 @@
-// CSP connect-src widening for the live Solus REST client (SOLUSDEV-152; the
+// CSP connect-src widening for the live Solus REST and telemetry clients (SOLUSDEV-152; the
 // standing TODO in index.html). The renderer's Content-Security-Policy must list
-// the API origin under connect-src, or the browser blocks every fetch to the API
+// the exact HTTP(S) API origin and its WS(S) counterpart under connect-src, or
+// the browser blocks API fetches and live telemetry sockets
 // BEFORE it is sent ("Refused to connect ... violates the document's CSP") — which
 // surfaces in the app as the misleading "Solus can't reach its API" state.
 //
@@ -32,18 +33,27 @@ export function resolveApiBaseUrl(apiBaseUrl: string | undefined): string {
  */
 export function apiOriginForCsp(apiBaseUrl: string | undefined): string | null {
   try {
-    return new URL(resolveApiBaseUrl(apiBaseUrl)).origin
+    const url = new URL(resolveApiBaseUrl(apiBaseUrl))
+    return ['http:', 'https:'].includes(url.protocol) && !url.hostname.includes('*')
+      ? url.origin
+      : null
   } catch {
     return null
   }
 }
 
 /**
- * Add `origin` to the CSP meta's `connect-src` directive. Idempotent (never
+ * Add the HTTP(S) API origin and its exact WS(S) counterpart to connect-src.
+ * No wildcard or additional host/port is granted. Idempotent (never
  * double-adds) and a no-op when `origin` is null or no `connect-src` is present.
  */
 export function widenConnectSrc(html: string, origin: string | null): string {
   if (!origin) return html
+  const apiOrigin = apiOriginForCsp(origin)
+  if (!apiOrigin) return html
+  const socket = new URL(apiOrigin)
+  socket.protocol = socket.protocol === 'https:' ? 'wss:' : 'ws:'
+  const allowed = [apiOrigin, socket.origin]
   // Anchor on the CSP `content="..."` attribute so a stray "connect-src" mention
   // in a nearby HTML comment is never matched. `[^"]` keeps the match inside the
   // attribute; `[^";]` captures just the connect-src directive's source list.
@@ -51,8 +61,9 @@ export function widenConnectSrc(html: string, origin: string | null): string {
     /(content="[^"]*?connect-src\s+)([^";]*)/,
     (match, prefix: string, sources: string) => {
       const list = sources.trim()
-      if (list.split(/\s+/).includes(origin)) return match
-      return `${prefix}${list} ${origin}`
+      const existing = new Set(list.split(/\s+/))
+      const missing = allowed.filter((item) => !existing.has(item))
+      return missing.length ? `${prefix}${list} ${missing.join(' ')}` : match
     }
   )
 }

@@ -53,6 +53,7 @@ from solus_api.models import (
     WidgetLayout,
 )
 from solus_api.services.events import emit_event
+from solus_api.widgets.graph_events import publish_widget_graph_changed
 from solus_api.widgets.graph_nodes import (
     facts_from_install,
     find_widget_node,
@@ -262,8 +263,10 @@ async def install_extension(
     install = await svc.get_install(session, ctx.project.id, extension.id)
     if install is None:
         created = await _create_install(session, ctx, extension, target, requested)
+        await publish_widget_graph_changed(request, ctx.project.id)
         return _json(201, await _item(session, ctx, created))
     await _update_install(session, ctx, extension, install, target, declared, requested)
+    await publish_widget_graph_changed(request, ctx.project.id)
     return _json(200, await _item(session, ctx, install))
 
 
@@ -403,6 +406,8 @@ async def patch_install(
         else:
             _emit(session, ctx, "extension.disable", {**base, "reason": "user"})
     await session.commit()
+    if body.enabled is not None:
+        await publish_widget_graph_changed(request, ctx.project.id)
     return envelope(await _item(session, ctx, install))
 
 
@@ -465,6 +470,7 @@ async def uninstall_extension(
         },
     )
     await session.commit()
+    await publish_widget_graph_changed(request, ctx.project.id)
     return Response(status_code=204)
 
 

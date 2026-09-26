@@ -1,3 +1,4 @@
+import { findNativeGuideTarget, readNativeWindowProperty } from './sol-window/nativeGuideTarget'
 import {
   app,
   shell,
@@ -295,6 +296,9 @@ const HOTKEYS_OFF: KeyHookLoad = {
  * degrades with a plain-language message rather than throwing: the app must
  * boot on a box with no hook, no indicator host and no capture.
  */
+let guideScopeGeneration = 0
+let guideSignedIn = false
+let guideProject: string | null = null
 function startSol(): void {
   const basics = detectPlatformBasics(process.env, process.platform, process.arch)
   const settings = createSolSettings(realLocalStateDeps)
@@ -326,6 +330,7 @@ function startSol(): void {
   }
   let hotkeysOn = settings.get().hotkeys
   settings.onChange((next) => {
+    guideScopeGeneration += 1
     if (next.screenIntelligence) lastRegionRefused = false
     if (next.hotkeys !== hotkeysOn) {
       hotkeysOn = next.hotkeys
@@ -333,7 +338,24 @@ function startSol(): void {
     }
     publish()
   })
-  registerSolIpcHandlers(ipcMain, { windows, settings, state }, isSolSender)
+  registerSolIpcHandlers(
+    ipcMain,
+    {
+      windows,
+      settings,
+      state,
+      guideScope: () => (guideSignedIn && guideProject ? guideScopeGeneration : null),
+      guideTarget: () =>
+        findNativeGuideTarget({
+          session: basics.session,
+          displays: screen
+            .getAllDisplays()
+            .map((display) => ({ id: String(display.id), bounds: display.bounds })),
+          read: readNativeWindowProperty
+        })
+    },
+    isSolSender
+  )
 
   startSolTray(basics, settings, windows)
 
@@ -685,6 +707,8 @@ function registerCompanionHandlers(): void {
   // A null token is sign-out: the extension windows go with the session.
   ipcMain.handle('bridge:token', (event, token: unknown) => {
     if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
+      guideScopeGeneration += 1
+      guideSignedIn = typeof token === 'string' && token.length > 0
       sendAccessToken(token)
       hardwareSources?.setToken(token)
       if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
@@ -696,6 +720,8 @@ function registerCompanionHandlers(): void {
   // id that is not a single safe path segment.
   ipcMain.handle('bridge:project', (event, projectId: unknown) => {
     if (isMainRendererSender(event) && (typeof projectId === 'string' || projectId === null)) {
+      guideScopeGeneration += 1
+      guideProject = projectId
       setCompanionProject(projectId)
       hardwareSources?.setProject(projectId)
     }

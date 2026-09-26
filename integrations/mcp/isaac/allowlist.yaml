@@ -20,7 +20,7 @@ tools:
     requires_confirmation: true
     files_errors: true
     timeout_seconds: 165
-    reason: Replaces the owned scene with the pinned graph-bound SO-101 model and bottle
+    reason: Replaces the owned scene with the validated graph-bound robot model
   - name: set_joint_limits
     requires_confirmation: true
     files_errors: true
@@ -35,4 +35,4 @@ tools:
     requires_confirmation: true
     files_errors: true
     timeout_seconds: 55
-    reason: Runs a finite grasp_bottle trajectory with explicit joint ranges and physical readback
+    reason: Runs a finite joint_trajectory with explicit joint ranges and physical readback

@@ -11,6 +11,7 @@ import type { SolMode } from '../../../store/settingsStore'
 import { markDeviceRendered } from '../../../lib/perf/marks'
 import {
   cardGlyph,
+  connectionOnly,
   cardQuestion,
   cardSentence,
   conflictText,
@@ -63,10 +64,24 @@ function suggestedName(robots: readonly Entity[], suggestion: HardwareSuggestion
   )
 }
 
+function observedUsbIdentity(device: DeviceCardState['device']): string {
+  if (device.transport !== 'usb_serial' && device.transport !== 'usb_can') return ''
+  const binding = device.identity?.binding
+  const portBound = device.identity_basis === 'port_position' || binding?.startsWith('port-')
+  const identity = portBound
+    ? 'no serial number — identity is tied to this USB port; keep it plugged in here'
+    : binding && device.identity_basis !== 'none'
+      ? `USB serial ${binding}`
+      : ''
+  const port = device.last_seen_path
+  return [identity, port ? `Current port ${port}` : ''].filter(Boolean).join(' · ')
+}
+
 export function DeviceCard(props: DeviceCardProps): React.JSX.Element {
   const { state, mode, compact } = props
   const sentence = cardSentence(state.device, state.proposal, state.status)
   const notes = mode === 'Guide' && state.proposal ? evidenceNotes(state.proposal) : ''
+  const identity = observedUsbIdentity(state.device)
   // Once per device ref: the rail and Add › Hardware both mount this card.
   useEffect(() => {
     markDeviceRendered(state.ref)
@@ -80,6 +95,7 @@ export function DeviceCard(props: DeviceCardProps): React.JSX.Element {
         <span>{sentence}</span>
         {state.status === 'proposing' && <Spinner size={11} />}
       </p>
+      {identity && <p className="device-card-note">{identity}</p>}
       {notes && <p className="device-card-note">{notes}</p>}
       <CardBody {...props} />
     </article>
@@ -111,7 +127,10 @@ function CardBody(props: DeviceCardProps): React.JSX.Element | null {
         {doneText(state.result)}
       </p>
     )
-  if (state.status === 'silent' || (state.status === 'failed' && !state.proposal))
+  if (
+    (state.status === 'silent' && !connectionOnly(state.proposal)) ||
+    (state.status === 'failed' && !state.proposal)
+  )
     return (
       <p role={state.status === 'failed' ? 'alert' : undefined} className="device-card-row">
         <span>{state.status === 'silent' ? SILENT_TEXT : state.error}</span>
@@ -233,7 +252,9 @@ function NameRow({
     })
   return (
     <div className="device-card-row">
-      <span>What is this?</span>
+      <span>
+        {connectionOnly(proposal) ? 'Firmware and protocol are unknown.' : 'What is this?'}
+      </span>
       <input
         aria-label="Robot name"
         value={name}
@@ -266,7 +287,7 @@ function NameRow({
         <Spinner size={11} />
       ) : (
         <Button kind="primary" size="sm" disabled={!ready} onClick={add}>
-          Add
+          {connectionOnly(proposal) ? 'Add MCU connection' : 'Add'}
         </Button>
       )}
     </div>

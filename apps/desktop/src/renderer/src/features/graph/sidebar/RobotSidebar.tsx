@@ -285,6 +285,10 @@ function RobotRail(props: RobotSidebarProps): React.JSX.Element {
         state={state}
         mode={mode}
         onAttach={canEdit ? { robotName: entity.name, attach } : undefined}
+        linkReview={{
+          robots: entities.filter((item) => item.type === 'physical_robot'),
+          onChanged
+        }}
       />
       {attachError && <p role="alert">{attachError}</p>}
       {canEdit && (

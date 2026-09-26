@@ -312,6 +312,14 @@ same creation transaction. Definition/model labels are preview data, not default
 Definitions remain curated data; vendor-specific parsing remains in plugins. Library imports
 may produce link suggestions but do not auto-bind a detected device.
 
+September 15 UI compatibility increment: the existing part import accepts optional `robot_id`
+and `name`, retaining existing robot-targeted callers. Omitting `robot_id` requires an explicit
+nonblank `name` and UUID `Idempotency-Key`; it creates one unassigned part and its independent
+v2 component config with library provenance, without creating a robot. Replays return the same
+entity/config IDs; changed input under the same key returns 409. Unknown fields remain rejected.
+Optional `category` overrides the definition's category. The response remains
+`{entity, config_entry_id}`. The full platform-child naming extension above is separate.
+
 ## 6. Bench session extension
 
 Under `/api/v1/projects/{project_id}`, `POST /bench/sessions` accepts real-mode
@@ -333,8 +341,9 @@ messages and type-only logging. A retired or inconsistent CONFIG graph identity 
 runtime values; inconsistent live history returns 409 `config_conflict` without repairing it on GET.
 
 The retained `repo_root` compatibility request field is not file-read authority: non-null values
-return 422 without inspecting the path. The bounded parser/proposal expansion remains a later
-task; verified shared calibration values can be used after explicit local relinking now.
+return 422 without inspecting the path. The bounded parser/proposal flow accepts only explicitly
+authorized `source_refs`, as detailed below; calibration values still require verified local
+evidence and do not follow from a repository normalization declaration alone.
 
 The unchanged telemetry packet uses per-part endpoint keys derived from configured bus bindings.
 Signals not claimed by a validated unique part remain unresolved; do not select the first
@@ -363,3 +372,239 @@ paths, calibration contents, credentials or another project's session details.
 Unsupported protocol or missing calibration blocks the requested operation with a typed setup
 reason; it does not prohibit saving hardware context. Model/compatibility/simulation actions
 retain their existing budgets and confirmation gates; no motion/flashing is part of discovery.
+
+## SOLUSDEV-262 — physical topology (implementation in progress)
+
+`GET /robots/{robot_id}/topology` reads the project's live manual robot topology without writes.
+Use centralized ProjectCtx. Wrong-project, deleted or absent robot returns 404. The response is
+an envelope containing `{robot_id, nodes, edges, roots}`. Nodes reference live graph entity IDs,
+with name, hardware role (brain/bus/device/part), optional brain kind (host/mcu/onboard), optional
+category, known channel/software/presence facts and bounded evidence. Edges reference node IDs
+and carry their known protocol/address. Unknown facts are null/absent, never guessed. Roots are
+entry node IDs in the robot's projection. Imported parts retain their original graph identity.
+The envelope is `{data: {robot_id, nodes, edges, roots}}`. Node keys are `id`, `name`, `role`,
+`brain_kind`, `category`, `channel`, `software`, `presence`, and `evidence` (`by`, `source`).
+Edge keys are `id`, `source`, `target`, `protocol`, and `address`. The renderer imports generated
+`RobotTopology` aliases from the checked-in OpenAPI schema and validates responses at runtime.
+
+This endpoint does not enumerate or open ports, create missing topology, mutate CONFIG, or
+resolve ambiguous ownership. Stored legacy evidence is transformed by a snapshot-backed data
+migration, and accepted new hardware writes maintain topology in their existing transaction.
+Category records may remain as compatibility ownership storage, but are not topology nodes.
+Runtime adapters consume the same preserved config/binding facts; a visual parent is never
+permission to operate a device. Source extraction and manual changes remain reviewed proposals.
+
+### SOLUSDEV-262 — declined link evidence
+
+Rejected device/part-to-robot suggestions stay rejected for the same project, subject kind,
+subject reference, target robot and canonical evidence set. Evidence ordering and duplicate
+records do not make a new set. A changed evidence set may create a new proposal; neither
+confidence display, regenerated reason wording nor a repeated scan reopens the old proposal.
+Pending suggestions remain deduplicated. Persistence and decisions share the existing project
+lock so concurrent rediscovery/decline cannot recreate a dismissed suggestion. No automatic
+attachment or new route is introduced.
+
+### SOLUSDEV-262 — reviewed local host topology
+
+Two member-only, verified-user routes under `/robots/{robot_id}/topology/host`:
+
+- `POST /propose`: body `{endpoint_id, machine_id, local_source_id, software_entity_id?,
+  endpoint_brain_kind?}` where IDs are UUIDs, machine_id is bounded opaque identity, and
+  endpoint_brain_kind is optional `mcu` (an explicit user declaration, not a USB inference).
+  Returns `{data:{proposal_digest, host_name, endpoint_id, machine_id, local_source_id,
+  software_entity_id, endpoint_brain_kind, topology, notes}}`. Topology previews the proposed
+  host/USB nesting without writes. Digest binds current graph/config/source evidence and inputs.
+- `POST /confirm`: same body plus `proposal_digest`, with UUID `Idempotency-Key`. Recompute all
+  authority and evidence within the project lock, reject changed evidence with409
+  `proposal_changed`, then persist and return `{data:RobotTopology}`. Use the existing 24-hour
+  account/project-scoped hardware operation ledger. A replay performs no new mutation.
+
+The exact caller user/team/project bridge session must match machine_id and the active,
+caller-owned LOCAL source (its machine_id and user_id must also match). The source's canonical
+local clone must exist. Optional software must be that local clone/folder or a same-source local code/file entity.
+Remote code-host repositories are references, not the running control software. This association
+is a user declaration of local control software, not proof of a running process. The local hardware provider must read its fixed,
+private companion identity without creating files and match the session before associating its
+currently enumerated USB endpoint. Missing provider/identity, cloud-only execution, stale source,
+wrong endpoint or another user's source refuses; client machine_id alone grants no authority.
+
+Host IDs are project+machine scoped; USB bus and existing endpoint IDs are stable. Persist
+reviewed host edges separately from CONFIG-derived edges so config resync preserves the
+association when its endpoint remains valid and removes stale connectivity when it changes.
+No CONFIG subjects, calibration or runtime ownership changes. Shared hosts retain one identity;
+per-robot software declarations must not overwrite another robot's evidence. MCU kind is only
+set from explicit accepted declaration or exact board evidence. Host presence reports only
+what is verified, never assumes the loop shim is installed. Emit graph change and a bounded
+hardware topology confirmation event. No hardware writes are authorized by either route.
+
+### SOLUSDEV-262 — authorized extraction review
+
+`POST /robots/{robot_id}/topology/extraction/propose` accepts strict body
+`{brain_id: UUID, source_ref: "source:<UUID>", source_kind: "firmware" | "host_config"}`.
+Require centralized project membership, member role and verified user. The live brain must
+belong to the requested robot projection. Resolve the reference from the caller's private
+hardware-source state through the local runner; never accept paths or expand to a parent folder.
+
+Return `{data: {robot_id, brain_id, source_ref, proposal_digest, extraction}}`, where extraction
+is the bounded internal TopologyExtraction shape. Its source namespace is server-generated.
+Digest binds project/account, robot/brain identity and versions, opaque source reference, verified
+content digest, extraction kind and canonical evidence. Recheck scope and bytes after parsing;
+stale evidence refuses. Absolute file paths and path-bearing port/calibration fields are not
+returned, logged or emitted. No graph, CONFIG, calibration, operation-ledger or hardware writes.
+
+Use existing portable failures: 404 not_found, 409 source_changed/proposal_changed, 422
+relink_required/validation_error and 503 source_unavailable. Unsupported kinds/formats refuse;
+successful empty extraction is distinct from invalid or unavailable input. There is no generic
+extraction-confirm route in this slice.
+
+### SOLUSDEV-262 explicit extraction acceptance
+
+POST `/api/v1/projects/{project_id}/hardware/robots/{robot_id}/topology/extraction/confirm`
+uses centralized ProjectCtx + verified member and the same authorized one-file acquisition as
+propose. Strict request extends ExtractionRequest with proposal_digest, operation_id(UUID),
+selections:[{row_index:int>=0,name:string1..120,entity_id?:UUID}] (1..256). Each index is unique.
+Recompute source bytes and proposal under the project lock; mismatch409. Referenced retained
+entity must belong to this robot's current topology and project. No auto-assignment from names.
+A new selection creates a nonoperational evidence node; explicit retained identity adds evidence
+without replacing it. Source evidence never silently changes CONFIG/calibration or starts I/O.
+Store reviewed rows and typed evidence-only graph relations to the scoped brain, with exact source
+namespace/digest and user provenance. Canonical operation replay returns the same IDs; changed
+body with reused operation ID409. Response {robot_id,brain_id,proposal_digest,entity_ids,created}.
+Emit identifier-only scoped graph event after commit. Empty extraction is displayed, not accepted
+as invented devices. CONFIG projection resync preserves independently reviewed evidence nodes.
+
+Presence preparers are provider-owned internal capabilities (not client-supplied executables).
+Their immutable result carries source UTF-8, firmware bytes, source/binary SHA256, bounded profile
+and observed connection identity. Preparing is side-effect-free on hardware; applying is exposed
+only as a registered confirmation-required SOL tool. Initial API/brain-card integration is added
+against these concrete preparers, not a placeholder flash acknowledgement.
+
+### SOLUSDEV-262 local presence preparation and gated flash
+
+Provisioned onboard companion fixture/runtime seam: `POST /api/v1/projects/{project_id}/hardware/companion-deployments/prepare`
+accepts only `{target_id:UUID,artifact_id:UUID}` and requires a verified project member.
+Returns 201 `{plan_id,target_id,artifact_id,artifact_sha256,target_version,status:prepared}`.
+It is unavailable (503) unless the desktop/local host explicitly supplies a scoped deployment
+service factory; the cloud/default application never opens SSH. The provider resolves the target
+for the current project/user; request bodies cannot specify hosts, paths, credentials or commands.
+Only retained, caller-owned, project-scoped offline bundle artifacts from a trusted bundle builder
+are eligible. A system graph plan binds the creator, target version, host authority and byte digest.
+Registered `hardware.deploy_companion({plan_id})` requires complete central confirmation. Preview
+includes target, instance, version, bundle digest, prerequisite service enrollment and restart.
+Execution revalidates all authority, persists uncertainty before remote work, and requires a fresh
+authenticated companion handshake before success. Attempted plans never retry automatically.
+The initial provider requires `/usr/local/libexec/solus-companion-deploy.py`, a pre-enrolled
+`solus-companion.service`, and private `~/.solus/companion-deploy` state. Bare-target bootstrap and
+live SSH are deferred; injected SSH/helper fixtures establish only software behavior.
+
+Existing-firmware integration uses a separately selected authorized LOCAL source and an exact
+existing `.ino` path from its manifest. The offer displays include/setup/loop telemetry snippets
+for explicit numeric variables, channel names, units and existing baud. It requests a complete
+machine-file diff with `force_confirmation:true`; it never treats a hardware `source:<UUID>`
+reference or a connected remote repository as a machine workspace grant. Serial conflicts,
+ambiguous anchors or inaccessible source files refuse the offer; no flash or loop execution follows.
+
+The presence base `/api/v1/projects/{project_id}/hardware/robots/{robot_id}/brains/{brain_id}/presence`
+also supports a reviewed wiring workflow. All routes require a verified project member:
+
+- `POST /wiring/propose`: `{profile_id,mode:typed|schematic|probe,wiring?:[{channel,pin,kind:analog_input|digital_input}],source_id?:UUID,run_id?:UUID}`.
+  At most 16 declared inputs; typed mode requires explicit declarations. Schematic mode reads
+  only a visible project electrical source; probe mode reads only a retained project run for
+  this robot/device. Source and run observations remain evidence, never guessed drivers.
+  Returns `{proposal_id,digest,profile_id,mode,wiring,observations:[{detail,confidence}],unresolved,status:proposed}`.
+- `POST /wiring/{proposal_id}/accept`: `{digest}` rechecks the same actor, target CONFIG,
+  source/run evidence and proposal digest. Returns `{proposal_id,digest,status:accepted}`.
+  Acceptance persists graph evidence attached to the brain; no transport opens and no CONFIG
+  part or pin ownership is invented. Stale evidence returns 409; inaccessible evidence returns 404.
+- Existing `/prepare` adds `kind:topology` and `wiring_proposal_id:UUID`. That kind requires
+  a current accepted proposal, revalidated during compile and again at flash confirmation.
+  Supported inputs generate named readings; an explicitly accepted empty proposal generates
+  heartbeat only. Unsupported/I2C observations remain unresolved, never fabricated devices.
+
+Provider profiles own pin validation: Uno A0–A5, Nano A0–A7, digital D2–D13. Serial pins,
+duplicate channels/pins and output modes are refused. Firmware supports bounded status queries
+and input telemetry, with no actuation. Probe analog values cannot establish attached hardware;
+zero I2C responders cannot establish empty wiring. The erase preview always warns that a linked
+repository may contain the existing sketch. A reference repository is not local control code.
+
+`GET /api/v1/projects/{project_id}/hardware/presence/profiles` returns bounded installed provider
+profiles with display labels and availability; verified member only. `POST /hardware/robots/
+{robot_id}/brains/{brain_id}/presence/prepare` accepts {profile_id,kind:heartbeat|probe,channel}
+(strict bounded fields). It resolves the brain's accepted connection, captures current enumerated
+USB identity, refuses boards with incompatible vendor profile or accepted actuator bus, and
+compiles without device writes. Returns {plan_id,source,source_sha256,binary_sha256,target,profile,
+status:prepared}; source/binary artifacts are retained, plan graph node references robot/brain.
+Unavailable compiler/profile returns explicit503; no fake prepared record. No native paths accepted.
+
+Registered tool `hardware.flash_presence` accepts only {plan_id:UUID}, requires_confirmation=true.
+Registry is rebuilt through get_sol_registry with requesting user/project, artifact store and the
+local provider. No raw registry invocation route is added. Preview reads the exact retained source/
+binary digests and fresh target snapshot; includes full source, binary SHA256, profile, target,
+erase warning. Source/private plan creation identity is checked. Decision revalidates plan status,
+artifact bytes, graph binding and USB identity, and obtains machine-wide exclusive advisory serial
+ownership before upload; device-in-use fails before upload. The uploader re-resolves immediately
+before opening. Successful result marks flashed; pre-write failure unchanged; interrupted/error
+write unknown. No automatic resume or retry of an unknown flash. Existing central approval log
+records decision; scoped presence event records IDs/status/digests only. Serialless QA autoapproval
+remains forbidden. The initial provider is local dev only; cloud exposes no local flash capability.
+
+Transport-only MCU acceptance: the existing detection confirm request adds explicit
+`connection_only:true` (defaultfalse). Only a freshly revalidated USB identity with no recognized
+driver/rows is eligible. Accepted rows must be empty. Persist identity + an empty nonoperational
+CONFIG and topology; firmware/protocol stays unknown and no session starts. This explicit action
+lets an unprogrammed MCU reach the presence preparation card without inventing a driver. Existing
+robot/identity conflicts and project operation replay safeguards apply; it never replaces an
+operational configuration or flashes hardware. UI labels this action Add MCU connection and
+shows the existing firmware-unknown warning.
+
+### SOLUSDEV-262 retained-part rediscovery
+
+When a device binding is missing, an exact retained part identity may support a rebind suggestion
+without requiring every observed bus address to have been accepted previously. A candidate must
+have one unambiguous canonical robot owner, membership in that owner's retained CONFIG, and a
+matching fresh device reference and bus address. Names, model similarity and unmatched addresses
+are not identity evidence. Acceptance preserves the existing partial part/calibration map and does
+not create parts for other responding addresses. Conflicting owner evidence produces no suggestion.
+
+### Explicit CAD/part link review
+
+`POST /hardware/parts/{part_id}/suggestions` requires verified project membership with member
+role. It accepts no body and returns the existing bounded suggestion list envelope. It recomputes
+only confirmed canonical/same-identity graph evidence from the unassigned source part to one
+canonically owned robot part; names and shape similarity alone yield no suggestion. Foreign or
+missing parts return 404. Existing decline evidence memory applies. Existing suggestion accept
+revalidates the exact association and delegates to the normal part-attachment transaction; stale,
+ambiguous or conflicting ownership returns a non-mutating refusal. No hardware session starts.
+# Demo acceptance follow-up: authorized repo proposal evidence
+
+### Schematic input evidence
+
+In schematic mode each nonempty wiring row also identifies `component_entity_id`
+and `connected_entity_id`, two distinct visible components in the selected source.
+Both must have connector-owned `connected_to` edges to the same net. The selected
+component edge must explicitly identify the requested logical pin, either in
+`pins` itself or its exported `pin_functions` mapping (physical pin number to
+declared logical function). Names, net labels, profiles and model suggestions are
+not evidence of a pin assignment. Missing, ambiguous or mismatched evidence refuses
+with `409 wiring_unproven`. Typed/probe modes cannot claim schematic component IDs.
+The complete graph snapshot continues to bind acceptance and later compilation;
+changed connectivity requires fresh review. Empty wiring remains a truthful empty
+proposal. KiCad XML and S-expression exports preserve optional `pinfunction`
+observations on these edges without inferring omitted names.
+
+Stable-device propose and confirm accept optional `source_refs: string[]` (maximum 32,
+unique opaque `source:<UUID>` references). Every reference is read through
+`LocalHardwareSources` using the authenticated account and project, only on an installed
+local runner. Raw `repo_root` remains rejected. Propose parses bounded verified UTF-8
+bytes through registered private parser capabilities; no repository code executes and
+no adjacent file or external calibration cache is read. Unknown runtime normalization
+remains unknown. Matches retain opaque source provenance and content-bound identities.
+
+Confirm revalidates all supplied source grants and content digests before reusing a
+proposal. Proposal cache identity includes account, project, device and the evidence
+snapshot; a different account, revoked grant or changed source cannot accept cached
+repo names. A stale or missing source requires relinking/review, never a silent fallback.
+The desktop supplies references from its account/project hardware source picker, never
+local paths; source changes invalidate pending proposals. Existing requests without
+source references retain wire-only behavior. Choosing a repo role is explicit and binds
+to stable device identity, never its current tty path.

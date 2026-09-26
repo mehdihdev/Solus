@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from sqlalchemy import select
@@ -445,6 +445,7 @@ async def discover_research_tools(
 
 async def get_sol_registry(
     request: Request,
+    background_tasks: BackgroundTasks,
     ctx: ProjectCtx,
     session: SessionDep,
     sessionmaker: SessionMakerDep,
@@ -471,11 +472,15 @@ async def get_sol_registry(
     # dependency graph must not grow httpx/mcp just to resolve a route.
     from solus_api.agent.runtime import build_sol_registry
     from solus_api.agent.tools.hosted_tools import load_hosted_inventory
+    from solus_api.hardware.companion_deployment import get_companion_deployment_service
+    from solus_api.hardware.presence import PresenceService
+    from solus_api.routers.sol import create_scene_enqueue
     from solus_api.widgets.guard import load_bundle_capabilities
 
     return build_sol_registry(
         sessionmaker,
         ctx.project.id,
+        scene_enqueue=create_scene_enqueue(request, background_tasks, settings, ctx),
         bridge=bridge_sessions,
         user_id=ctx.user.id,
         team_id=ctx.team.id,
@@ -498,6 +503,22 @@ async def get_sol_registry(
         # SOLUSDEV-252 P6: the web `research` tool, bound to whatever the
         # Brave fork advertised for THIS request (none = not registered).
         brave_tools=await discover_research_tools(secret_store, settings.bridge_allowlist_root),
+        presence_service=(
+            PresenceService(
+                session,
+                ctx.project.id,
+                ctx.user.id,
+                request.app.state.artifact_store,
+                request.app.state.presence_provider,
+            )
+            if getattr(request.app.state, "presence_provider", None) is not None
+            else None
+        ),
+        companion_deployment_service=(
+            get_companion_deployment_service(request, session, ctx.project.id, ctx.user.id)
+            if getattr(request.app.state, "companion_deployment_service_factory", None) is not None
+            else None
+        ),
     )
 
 

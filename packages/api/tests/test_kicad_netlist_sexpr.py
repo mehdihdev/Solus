@@ -207,7 +207,7 @@ def test_control_character_in_atom_or_string_is_refused_as_export_invalid() -> N
 
 def test_unread_sublists_are_never_materialized(monkeypatch: pytest.MonkeyPatch) -> None:
     # Scoped traversal at the reader level: a comp's `sheetpath`/`tstamps`/
-    # `description`/`units` and a node's `pinfunction`/`pintype` are never read,
+    # `description`/`units` and a node's `pintype` are never read,
     # so they must not count against the node guard (S3 — the cap is only
     # defensible if legitimate dense netlists stay far under it).
     from solus_api.connectors import kicad_sexpr
@@ -222,7 +222,7 @@ def test_unread_sublists_are_never_materialized(monkeypatch: pytest.MonkeyPatch)
           (property (name "MPN") (value "RC0603"))))
       (nets
         (net (code "1") (name "OK")
-          (node (ref "R1") (pin "1") (pinfunction {noise}) (pintype {noise})))))"""
+          (node (ref "R1") (pin "1") (pinfunction "sense") (pintype {noise})))))"""
     netlist = parse_sexpr_netlist(text)
     assert netlist.components[0].part_number == "RC0603"
     assert netlist.components[0].schematic_symbol_name == "R"

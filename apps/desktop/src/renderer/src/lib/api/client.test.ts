@@ -443,3 +443,20 @@ function requestMutationInvalidationTests(ok: (payload: unknown) => Response): v
     await expect(fresh).resolves.toBe('after')
   })
 }
+
+it('transmits an explicit operation key for replay-safe writes only when provided', async () => {
+  const fetchImpl = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }))
+  const client = createApiClient({ baseUrl: 'http://api/v1', fetchImpl })
+  await client.request('/hardware/entities', {
+    method: 'POST',
+    body: { name: 'Sensor' },
+    idempotencyKey: 'stable-operation'
+  })
+  expect(fetchImpl.mock.calls[0][1]?.headers).toMatchObject({
+    'Idempotency-Key': 'stable-operation'
+  })
+  await client.request('/hardware/entities')
+  expect(fetchImpl.mock.calls[1][1]?.headers).not.toHaveProperty('Idempotency-Key')
+})

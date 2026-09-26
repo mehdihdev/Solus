@@ -46,6 +46,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Final
 
 from solus_api.connectors.contracts import ConnectorError
@@ -123,6 +124,23 @@ class NetRecord:
     name: str | None
     net_class: str | None
     nodes: tuple[tuple[str | None, str | None], ...]
+    pin_functions: Mapping[tuple[str | None, str | None], str | None] = dataclass_field(
+        default_factory=dict
+    )
+
+
+def merge_pin_functions(
+    declarations: Iterable[tuple[str | None, str | None, str | None]],
+) -> dict[tuple[str | None, str | None], str | None]:
+    """Duplicate declarations must agree; an ambiguous pin never regains a name."""
+    result: dict[tuple[str | None, str | None], str | None] = {}
+    for ref, pin, function in declarations:
+        key = (ref, pin)
+        if key not in result:
+            result[key] = function
+        elif result[key] != function:
+            result[key] = None
+    return result
 
 
 def build_components(records: Iterable[ComponentRecord], warnings: list[str]) -> list[Component]:
@@ -173,7 +191,8 @@ def build_nets(records: Iterable[NetRecord], warnings: list[str]) -> list[Net]:
             if not ref or not pin:
                 skipped_nodes += 1
                 continue
-            nodes.append(Node(designator=ref, pin=pin))
+            function = record.pin_functions.get((ref, pin))
+            nodes.append(Node(designator=ref, pin=pin, pin_function=function))
         nets.append(Net(name=record.name, nodes=tuple(nodes), net_class=record.net_class))
     if skipped_nets:
         warnings.append(f"skipped {skipped_nets} net(s) without a name")
@@ -231,6 +250,10 @@ def _net_records(root: ET.Element) -> Iterator[NetRecord]:
             name=net.get("name"),
             net_class=net.get("class"),
             nodes=tuple((node.get("ref"), node.get("pin")) for node in net.findall("node")),
+            pin_functions=merge_pin_functions(
+                (node.get("ref"), node.get("pin"), node.get("pinfunction"))
+                for node in net.findall("node")
+            ),
         )
 
 

@@ -62,3 +62,26 @@ evidence of a vendor SaaS release. Current SOL note loading is version-unfiltere
 - **Fusion — deferred, honestly.** No Autodesk Fusion on this Mac (only VMware Fusion);
   `capture-fusion-tools.py` fails with "could not reach the Fusion MCP server at
   http://127.0.0.1:27182/mcp" as designed. The allowlist stays empty; nothing is invented.
+
+## SOLUSDEV-262 — surface-aware Guide integration
+
+The SOL window mounts the existing TU09 guide task picker/panel in Guide mode. Trusted
+application metadata selects scriptable, browser or native presentation; KB control placement
+is not a host-surface classification. Scriptable tasks show commands as instructions only;
+browser tasks stay in-app; native tasks may explicitly hand off to TU10 if supported, otherwise
+retain the side panel. Capture uses the existing consented capture path only. Missing/version-thin
+knowledge says it is uncertain; no guessed control coordinates or implicit capture. Mode,
+account, project or task change cancels stale guides and overlay handoffs.
+
+Guide permits read-only context inspection and never dispatches a mutation. Build keeps guide/do
+wire compatibility and existing confirmation admission. The S4 hole fixture uses the gated
+onshape.add_feature path and proves actual diff → explicit decision → write. It does not claim
+that separately authorized SOLUSDEV-261 routine-policy actions have been revoked. Attachment
+shortcut semantics prevail: Ctrl+Space toggles mode; existing summon shortcut stays unchanged.
+
+Native Guide target discovery is main-process read-only and sender-authenticated. On X11 it
+uses pinned xprop/xwininfo argument arrays with time/output bounds, an exact normalized
+WM_CLASS allowlist, exactly one matching window, and positive bounded on-display geometry.
+Scope generations invalidate late lookups across account/project changes. Missing tools,
+unsupported platforms or ambiguous windows fall back to the side panel. Renderer text cannot
+select arbitrary processes, commands or target geometry; discovery does not capture pixels.

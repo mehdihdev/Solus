@@ -205,6 +205,7 @@ function registerDeviceConfirmationAndAssignmentTests(): void {
       target: { kind: 'existing', robot_id: 'r1' },
       accepted: [{ row_id: 'usb_serial:5B42/1', function_name: 'elbow', category: 'actuators' }],
       start_session: true,
+      connection_only: false,
       window_seconds: 1
     }
     const out = {

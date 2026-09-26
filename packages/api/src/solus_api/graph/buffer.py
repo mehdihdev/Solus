@@ -42,7 +42,14 @@ class TelemetryBuffer(Protocol):
     """The recent-values buffer seam. Both backends satisfy it structurally."""
 
     async def append(
-        self, project_id: UUID, entity_id: UUID, signal: str, timestamp: datetime, value: float
+        self,
+        project_id: UUID,
+        entity_id: UUID,
+        signal: str,
+        timestamp: datetime,
+        value: float,
+        *,
+        unit: str | None = None,
     ) -> None: ...
 
     async def recent(
@@ -87,10 +94,17 @@ class InMemoryTelemetryBuffer:
         self._entities: dict[UUID, list[UUID]] = {}
 
     async def append(
-        self, project_id: UUID, entity_id: UUID, signal: str, timestamp: datetime, value: float
+        self,
+        project_id: UUID,
+        entity_id: UUID,
+        signal: str,
+        timestamp: datetime,
+        value: float,
+        *,
+        unit: str | None = None,
     ) -> None:
         ring = self._rings.setdefault((project_id, entity_id, signal), deque(maxlen=self._capacity))
-        ring.append(RecentSample(timestamp=timestamp, value=value))
+        ring.append(RecentSample(timestamp=timestamp, value=value, unit=unit))
         signals = self._signals.setdefault((project_id, entity_id), [])
         if signal not in signals:
             signals.append(signal)
@@ -144,12 +158,23 @@ class RedisTelemetryBuffer:
         return f"{_KEY_PREFIX}:e:{project_id}"
 
     async def append(
-        self, project_id: UUID, entity_id: UUID, signal: str, timestamp: datetime, value: float
+        self,
+        project_id: UUID,
+        entity_id: UUID,
+        signal: str,
+        timestamp: datetime,
+        value: float,
+        *,
+        unit: str | None = None,
     ) -> None:
         ring_key = self._ring_key(project_id, entity_id, signal)
         signals_key = self._signals_key(project_id, entity_id)
         entities_key = self._entities_key(project_id)
-        await self._redis.rpush(ring_key, json.dumps({"t": timestamp.isoformat(), "v": value}))
+        sample = RecentSample(timestamp=timestamp, value=value, unit=unit)
+        await self._redis.rpush(
+            ring_key,
+            json.dumps({"t": sample.timestamp.isoformat(), "v": sample.value, "u": sample.unit}),
+        )
         await self._redis.ltrim(ring_key, -self._capacity, -1)  # bound to last `capacity`
         await self._redis.sadd(signals_key, signal)
         await self._redis.sadd(entities_key, str(entity_id))
@@ -167,7 +192,7 @@ class RedisTelemetryBuffer:
     ) -> list[RecentSample]:
         raw = await self._redis.lrange(self._ring_key(project_id, entity_id, signal), 0, -1)
         samples = [
-            RecentSample(timestamp=datetime.fromisoformat(d["t"]), value=d["v"])
+            RecentSample(timestamp=datetime.fromisoformat(d["t"]), value=d["v"], unit=d.get("u"))
             for d in (json.loads(item) for item in raw)
         ]
         return _apply_since_limit(samples, since, limit)

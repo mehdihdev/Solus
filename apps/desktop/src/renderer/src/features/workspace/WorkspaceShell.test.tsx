@@ -19,6 +19,39 @@ import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import { usePinsStore } from '../extensions/pinsStore'
 import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 
+const workspaceActions = vi.hoisted(() => ({ enabled: false }))
+vi.mock('../graph/WorkspaceScreen', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../graph/WorkspaceScreen')>()
+  return {
+    ...actual,
+    WorkspaceScreen: (props: import('../graph/WorkspaceScreen').WorkspaceScreenProps) =>
+      workspaceActions.enabled ? (
+        <div data-testid="workspace-actions" data-request={props.openAddRequest?.tab ?? ''}>
+          <button onClick={() => props.onAddRequestConsumed?.(props.openAddRequest?.sequence ?? 0)}>
+            Consume hardware request
+          </button>
+          <button onClick={props.onOpenBench}>Open registered Live Bench</button>
+          <button onClick={() => props.onOpenWidget?.('scope')}>Open registered scope</button>
+        </div>
+      ) : (
+        <actual.WorkspaceScreen {...props} />
+      )
+  }
+})
+
+vi.mock('../bench/BenchScreen', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../bench/BenchScreen')>()
+  return {
+    ...actual,
+    BenchScreen: (props: import('../bench/BenchScreen').BenchScreenProps) =>
+      workspaceActions.enabled ? (
+        <button onClick={props.onAddHardware}>Add hardware from bench</button>
+      ) : (
+        <actual.BenchScreen {...props} />
+      )
+  }
+})
+
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
 vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
@@ -120,6 +153,7 @@ function renderShell(): ReturnType<typeof render> {
 }
 
 beforeEach(() => {
+  workspaceActions.enabled = false
   useShellStore.getState().reset()
   useWorkspaceStore.getState().reset()
   useExtensionsStore.getState().reset()
@@ -160,6 +194,17 @@ beforeEach(() => {
 })
 
 describe('WorkspaceShell — chrome', () => {
+  it('routes registered widget actions from Workspace to Bench and extension pages', async () => {
+    workspaceActions.enabled = true
+    renderShell()
+    await userEvent.click(screen.getByText('Workspace'))
+    await userEvent.click(screen.getByText('Open registered Live Bench'))
+    expect(useShellStore.getState().lastMain).toBe('bench')
+    await userEvent.click(screen.getByText('Workspace'))
+    await userEvent.click(screen.getByText('Open registered scope'))
+    expect(await screen.findByTestId('ext-page-screen')).toHaveTextContent('page:scope')
+  })
+
   it('opens on Home with an honest no-project topbar fallback', async () => {
     renderShell()
     // Authenticated sessions now attempt a real fetch first (spinner), then
@@ -745,3 +790,17 @@ function extensionStoreAndSignoutTests(): void {
     expect(usePinsStore.getState().pins).toEqual([])
   })
 }
+
+it('opens and consumes the existing Workspace Hardware request without reopening it later', async () => {
+  workspaceActions.enabled = true
+  useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Robot' } })
+  renderShell()
+  await userEvent.click(screen.getByText('Live Bench'))
+  await userEvent.click(screen.getByText('Add hardware from bench'))
+  expect(await screen.findByTestId('workspace-actions')).toHaveAttribute('data-request', 'hardware')
+  await userEvent.click(screen.getByText('Consume hardware request'))
+  expect(screen.getByTestId('workspace-actions')).toHaveAttribute('data-request', '')
+  await userEvent.click(screen.getByText('Live Bench'))
+  await userEvent.click(screen.getByText('Workspace'))
+  expect(screen.getByTestId('workspace-actions')).toHaveAttribute('data-request', '')
+})

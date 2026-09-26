@@ -1,6 +1,6 @@
 # Wireflow — Hardware onboarding (SOLUSDEV-250/260 integration)
 
-Authority: the SOLUSDEV-248 and SOLUSDEV-250 ticket briefs; `docs/architecture/hardware-onboarding.md`;
+Authority: the September 15 UI brief supersedes earlier presentation in the SOLUSDEV-248 and SOLUSDEV-250 ticket briefs; `docs/architecture/hardware-onboarding.md`;
 `docs/api/hardware.md` (routes). This file governs the flow; visual polish within it is
 implementer judgment (CLAUDE.md §3). Every claim a card makes comes from a live backend response —
 offline / runner-absent degrades to honest copy with disabled controls, never fabricated
@@ -16,17 +16,20 @@ Two places, one model:
 
 1. The **Hardware** tab of the workspace **Add** panel (`features/graph/WorkspaceAdd.tsx`, the
    `hardware` prop → `HardwareAddPanel`). Inline sections lead to a collapsed unassigned
-   disclosure. Preserve the existing file/connector-parts flow and its private local-source
-   subsection alongside sourcing; replacing the old card grid must not remove relinking.
+   disclosure. Private local configuration/calibration sources appear directly below detected
+   devices, with Choose local file, Verify and Relink controls. They are not hidden inside
+   Unassigned parts; that disclosure retains the connector-parts flow.
 
 ```
 | Add › Hardware                                                            |
 | <intro line — SOL mode>                                                   |
 | Devices found            <live list of pending device cards>              |
+| Local configuration and calibration   [Choose local file] [Refresh]       |
 | Search                   [ Search parts and platforms — e.g. … ]          |
 |                          rows: name · part|platform · summary · action    |
-| Describe something new   [ What is it? ]  Category ▾ (guessed)  Part of ▾ |
-| Sourced                  [ Find a part from suppliers ]                   |
+|                          supplier results inline after explicit search    |
+| Describe something new   [ What is it? ] [Add]                             |
+|                          optional ownership/category details inline       |
 | ▸ Unassigned parts                                                        |
 ```
 
@@ -95,7 +98,7 @@ A card is **a sentence, one question, Add**:
 
 ## Flow 3 — Search
 
-1. One box (`GET /hardware/library?q=`, 250 ms debounce; the empty query lists the curated seed).
+1. One box (`GET /hardware/library?q=`, 250 ms debounce; empty input keeps the panel compact).
    Placeholder names no product. Results are one flat list: **name · kind (part | platform) ·
    summary**. No match → "Nothing in the library matches."; a failed search shows the error verbatim.
 2. A **platform** row → **Add as new robot** reveals an inline name field (empty, placeholder =
@@ -103,37 +106,36 @@ A card is **a sentence, one question, Add**:
    robot + parts + config with provenance `library`; the robot view reloads. When the import raised
    link suggestions against detected devices the row says "A link suggestion is pending — the
    device card offers it." (no ids).
-3. A **part** row → **Add to [robot ▾]** (the only robot preselected) →
-   `POST /hardware/library/parts/{id}/import {robot_id}` in the definition's default category. No
-   robot yet → **Add to a new robot** with an inline name field: the robot is created first
-   (explicit new-robot action with a required name) and the part imported under it. This is
-   not the standalone-part flow: the per-entity API supports unassigned parts without a robot,
-   while its dedicated inline creation control remains later work.
+3. A **part** row provides an inline required name and optional robot placement, followed by
+   **Add** → `POST /hardware/library/parts/{id}/import {name, robot_id?}`. Without a robot,
+   this creates one standalone part and its independent library-provenance config. It requires
+   `Idempotency-Key`; retries of an uncertain operation retain that key, while a completed
+   operation clears it. Existing robot imports preserve the definition's default category.
 4. Every row has a **Details** disclosure that lazily reads `GET /hardware/library/{kind}/{id}`
    and lists the definition's facts as-is: maker, driver, notes, key specs (resolution,
    calibration, telemetry channels) for a part; the slots (role · part @ address) for a platform.
    No preview pane — nothing is hidden, and specs belong to the sidebar later.
 
-## Flow 4 — Sourced
+## Flow 4 — Supplier results in Search
 
-One button, **Find a part from suppliers** → the sourcing panel (STORE ST5, `sourcing.md`) on
-its **Workspace door**, exactly as before: the same two-door panel the BOM uses, defaulting to
-_From CAD_ so SOL derives the torque from one of the project's assemblies; the selected candidate
-enters the chosen robot category as a PLANNED part and the robot view reloads (`onCreated`).
-Disabled offline like every other control.
+Supplier search uses the same query as the library search and the existing sourcing engine.
+An explicit credit-labelled action starts metered work; typing and opening Hardware do not.
+Results, progress, errors and specs stay inline. Selecting an actual supplier candidate uses
+the existing planned-part selection endpoint and refreshes the graph. No Hardware sourcing modal
+or separate Sourced section remains. The independent BOM sourcing flow is retained.
 
 ## Flow 5 — Describe something new
 
-1. One field, **What is it?** As the user types, **Category ▾** follows a deterministic keyword
+1. One field, **What is it?** Optional inline details expose **Category ▾**, following a deterministic keyword
    guess over the name (`categoryFromName`: motor / servo / pump / valve → Actuators; camera /
    encoder / pressure → Sensors; battery / regulator → Power; controller / board → Controllers;
    gripper / suction → End effectors; cable / connector → Wiring; else Structure) and is marked
-   **guessed** until the user picks one; the pick sticks. **Part of ▾** lists the robots, the
+   **suggested** until the user picks one; this local fallback is not represented as a SOL model call. The pick sticks. **Part of ▾** lists the robots, the
    first preselected.
 2. **Add** with a robot → `POST /hardware/robots/{robot_id}/parts {name, category, specs: {},
 lifecycle: planned}` → the part appears under the category with `origin=manual`; the field
-   clears. **Add with no robot** → the described thing IS the robot: `POST /entities {type:
-physical_robot, name}`; the copy says so ("No robot yet — this becomes the robot.").
+   clears. **Add with no robot** → `POST /hardware/entities {kind: part, name}` creates an
+   unassigned part without a container robot. Description and Add alone suffice; specs are optional.
 3. No spec fields here. Guide mode says why: "Specs come later — from SOL, from a datasheet, or
    never." Later promotion goes through `POST …/parts/{part_id}/lifecycle` and changes neither
    the part's id nor its edges. `HARDWARE_SPEC_FIELDS` (generic per category, never per product
@@ -199,3 +201,100 @@ serial-less copy, two simultaneous confirms, replug and late-response rejection.
 confirmation response-to-node separately from browser receipt-to-card and physical detection.
 Native picker, calibration relink and actual arm streaming remain unverified until exercised;
 fixture or API success alone does not establish those gates. No motion or flashing is part of QA.
+
+## SOLUSDEV-262 — brain-first presentation (implementation in progress)
+
+The new user brief replaces category zoom with robot → brain → bus → device → part. Category
+chips filter parts while preserving their ancestor context. Host, MCU and onboard cards show
+known software/firmware, channel and downstream wiring; missing facts say unknown. A board
+that is both an upstream device and downstream brain appears once. Existing names and part
+identity persist; new name fields remain empty and no proposal is auto-accepted.
+
+Cards remain canvas-edge/Add-panel controls. Bare-MCU onboarding asks one question at a time:
+what is wired → typed/schematic/probe evidence → review topology → generated-sketch diff →
+approve flash → observe actual telemetry. Probe cards explicitly disclose firmware erasure;
+floating analog values do not assert connected parts. A missing USB serial is visibly explained.
+
+### Reviewed host and local control software
+
+An endpoint brain card offers “Connect this computer” within the existing canvas card. It uses
+the current project's local folder source and the desktop companion identity. If no folder is
+linked, reuse the existing project-folder selector in the card. Only local code/folder entities
+from that source are available as control-software choices; linked remote repositories remain
+references. Show the selected folder/software name before requesting a topology proposal.
+The review shows host → USB → endpoint, the existing downstream wiring, and provenance. A
+separate confirmation applies the graph change; cancel does not apply it. Selection changes,
+project/account changes, or stale evidence invalidate the pending review. Unavailable desktop
+identity/bridge and unsynchronized local sources explain why connection is unavailable.
+The resulting card describes software as a user declaration, not proof of a running process
+or installed telemetry shim. Unknown endpoint type remains unknown unless explicitly declared.
+
+### SOLUSDEV-262 W5 — registered widget roots
+
+Project overview lifts persisted Live Bench and installed widget registrations into top-level
+nodes, preserving graph UUIDs and underlying contains relations. No installed registration means
+no fabricated widget node. Cards show installation/blocked state and open the existing supported
+page view; disabled or blocked widgets explain their state and cannot open. Live Bench opens its
+existing tab. Installation/removal refreshes this projection from current project graph data.
+For older projects whose persisted registration layer is absent, Workspace initializes it through
+the existing member-authorized reconcile action, then rereads the graph. Failed initialization
+shows a bounded retry control; a viewer is told that a project member must initialize widgets.
+
+### Local evidence review
+
+Within the existing brain card, select a local evidence file using the native hardware-source
+picker, choose firmware or configuration, then request extraction. Cancellation leaves no review.
+Show candidates with their original pin/address provenance and unknown/conflicting facts. Explain
+that this is source evidence, not verified wiring or running code. No accept/connect/flash action
+is implied by this review. Changing file, kind, brain, robot, project or account invalidates it,
+including A→B→A transitions. Browser preview explains unavailable native selection.
+
+Extraction review shows selectable bounded rows, explicit editable names, and a Confirm evidence
+button. Nothing is preselected or autoaccepted. Empty success says no evidence was found. Confirm
+revalidates the exact source and graph proposal; stale source resets review. Success identifies
+retained/created nodes and refreshes the brain tree. This evidence-only operation does not connect
+hardware, change calibration or deploy code.
+
+### Presence firmware card
+
+An MCU brain offers explicit board profile and heartbeat/probe selection. Preparing displays the
+complete generated source, exact observed target and binary digest; probe explains erasure and
+raw analog/I2C limits. It never claims CH340 identifies an Uno or empty firmware. Request flash
+review sends only the retained plan ID through the existing SOL Build chat and registered
+hardware.flash_presence tool, then shows the existing complete-source confirmation card.
+Preparation and requesting review do not approve a flash. Profiles unavailable or configured
+actuator boards remain blocked. Account/project/brain/profile changes discard stale responses.
+
+A transport-only USB device with no recognized protocol offers Add MCU connection after the user
+enters a name. This records only the observed connection, then reveals its brain/presence card;
+it starts no telemetry and claims neither empty firmware nor a specific board. Named channel
+acceptance sends only explicit user/proposal names; unnamed actuator rows use the server's stable
+RobotName-Motor-N default, not an invented client channel name.
+
+### Host mirror offer
+
+After explicitly accepting a host and local control source, offer a Python loop-file selection
+within that source. The user supplies the control-object name, insertion anchor, method, dictionary
+signal mapping, argument selector when needed, units and loopback receiver port. Show the exact
+`solus_telemetry` mirror snippet before requesting a change. SOL reads the chosen file through
+existing authorized machine tools and offers a fingerprinted before/after diff at the central
+confirmation gate. Missing write authority or an ambiguous anchor prevents the edit. The offer
+never asserts that the shim is installed or that a control process is running. Selection and
+account/project changes invalidate the offer; no remote repository is substituted for a local file.
+
+An unassigned source part offers “Find robot links” as an explicit action in the existing robot
+sidebar. Display a supported candidate by robot name with confidence and evidence, plus separate
+Accept and Decline controls. No match is an honest result. Decline is remembered for the same
+evidence; Accept revalidates before attaching the existing part. Account/project/part changes
+invalidate outstanding results. No source part is autoattached from its name or a GET request.
+# SOLUSDEV-262 wiring completion amendment
+
+Inside the existing MCU presence card, offer three explicit choices: type wiring, use a
+schematic, or inspect a recorded probe. Typed wiring collects channel, pin and input kind.
+Schematic and probe choices select scoped existing evidence and show observations/confidence
+and unresolved devices. A probe first uses the existing erase/code/target confirmation and
+must be recorded before its observations can be selected. Never display floating pins as parts.
+Review, then Accept wiring, then Prepare firmware are separate actions. Changing the profile,
+source, target or declarations invalidates the prepared review. Empty accepted wiring produces
+heartbeat only; named supported inputs produce readings. Existing firmware may be in a linked
+repository; the full erase warning and complete generated source remain visible before flash.

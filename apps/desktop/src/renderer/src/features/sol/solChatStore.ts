@@ -79,6 +79,8 @@ export interface ChatItem {
 export type ChatStatus = 'loading' | 'ready' | 'offline'
 
 export interface SolSession {
+  /** Explicit review choice for this mounted conversation session; never persisted. */
+  forceConfirmation?: boolean
   /** Which conversation the transcript belongs to; null = fresh chat. */
   conversationId: string | null
   items: readonly ChatItem[]
@@ -133,6 +135,10 @@ function patchSession(projectId: string, fn: (session: SolSession) => SolSession
       [projectId]: fn(state.sessions[projectId] ?? EMPTY_SESSION)
     }
   }))
+}
+
+export function setForceConfirmation(projectId: string, forceConfirmation: boolean): void {
+  patchSession(projectId, (session) => ({ ...session, forceConfirmation }))
 }
 
 /** The session streams while ANY project's turn streams (one turn per project). */
@@ -310,6 +316,7 @@ export async function syncSession(projectId: string): Promise<void> {
   patchSession(projectId, (s) => ({
     ...EMPTY_SESSION,
     conversationId: active,
+    forceConfirmation: s.conversationId === active && s.forceConfirmation === true,
     streaming: s.streaming,
     status: 'loading'
   }))
@@ -409,13 +416,20 @@ export function startNewChat(projectId: string): void {
   void syncSession(projectId)
 }
 
+function confirmationOptions(options?: { forceConfirmation?: boolean }): {
+  forceConfirmation?: true
+} {
+  return options?.forceConfirmation === true ? { forceConfirmation: true } : {}
+}
+
 export async function sendMessage(
   projectId: string,
   content: string,
   actionMode: SolActionMode,
   mentions: readonly string[] = [],
   thinkHarder = false,
-  screenshot?: SolScreenshot
+  screenshot?: SolScreenshot,
+  options?: { forceConfirmation?: boolean }
 ): Promise<boolean> {
   const text = content.trim()
   if (!text || !admitTurn(projectId)) return false
@@ -452,6 +466,7 @@ export async function sendMessage(
       actionMode,
       mentions,
       thinkHarder,
+      ...confirmationOptions(options),
       // SOLUSDEV-244: the user's engineering conventions ride along with every
       // turn (null when nothing is written or outside the desktop app).
       preferences: await preferencesForTurn(),

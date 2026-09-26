@@ -1,7 +1,6 @@
 """Exercise SDK and installer boundaries without invoking vendor runtime code."""
 
 import asyncio
-import hashlib
 import json
 import os
 import sys
@@ -13,28 +12,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[4]))
-from integrations.mcp.isaac.solus import actions, materialize, scene, server, worker
-
-
-def test_materialize_verified_cache_and_refuse_unknown_existing(tmp_path, monkeypatch):
-    package = tmp_path / "fork/solus"
-    package.mkdir(parents=True)
-    monkeypatch.setattr(materialize, "__file__", str(package / "materialize.py"))
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "robot.urdf").write_bytes(b"robot")
-    (package / "so101_manifest.json").write_text(
-        json.dumps({"robot.urdf": hashlib.sha256(b"robot").hexdigest()})
-    )
-    monkeypatch.setattr(sys, "argv", ["materialize", str(source)])
-    materialize.main()
-    assert len(materialize.materialize(source)) == 64
-    cached = tmp_path / "fork/.venv/assets/so101/robot.urdf"
-    cached.chmod(0o600)
-    cached.write_bytes(b"unknown")
-    with pytest.raises(ValueError):
-        materialize.materialize(source)
-    assert cached.read_bytes() == b"unknown"
+from integrations.mcp.isaac.solus import actions, scene, server, worker
 
 
 def make_service_type(tmp_path, captured):
@@ -138,6 +116,7 @@ def test_worker_bootstrap_binds_workspace_journal_and_closes_descriptors(tmp_pat
             str(write_reply),
             "00000000-0000-4000-8000-000000000001",
             str(workspace),
+            str(tmp_path / "configured-runtime"),
         ],
     )
     try:

@@ -1,4 +1,44 @@
 /* Device cards (SOLUSDEV-250 P3): one sentence, one question. Tokens only. */
+.hardware-sources {
+  margin-block: 16px;
+  padding: 14px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  background: var(--bg);
+  font: 12px/1.5 var(--font-ui);
+  color: var(--tx);
+}
+.hardware-sources h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.hardware-sources p {
+  color: var(--mut);
+  font-size: 11px;
+  margin: 6px 0 12px;
+}
+.hardware-sources [role='alert'] {
+  color: var(--err);
+}
+.hardware-sources ul {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+.hardware-sources li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bd);
+}
+.hardware-sources li > span {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+  font: 11px var(--font-mono);
+}
 .device-card {
   display: flex;
   flex-direction: column;
@@ -112,4 +152,51 @@
   padding: 6px 12px;
   font: 11px var(--font-mono);
   cursor: pointer;
+}
+
+/* Hardware uses the available viewport, while the Integrations panel keeps its layout.
+   All detected cards and their evidence remain visible; secondary paths sit alongside. */
+.workspace-add-panel:has(> .hardware-add) {
+  position: fixed;
+  top: 110px;
+  left: max(72px, calc((100vw - 1100px) / 2));
+  max-height: calc(100vh - 130px);
+  width: min(1100px, calc(100vw - 100px));
+  max-width: calc(100vw - 100px);
+  min-width: 0;
+  box-sizing: border-box;
+}
+.hardware-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 20px;
+  align-items: start;
+}
+.hardware-add > section:first-of-type,
+.hardware-add > :not(section) {
+  grid-column: 1 / -1;
+}
+.hardware-add .devices-found {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+.hardware-add .devices-found > li,
+.hardware-add > section {
+  min-width: 0;
+}
+.hardware-add .device-card input,
+.hardware-add .device-card select {
+  min-width: 0;
+}
+@media (max-width: 1099px) {
+  .hardware-add .devices-found {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 759px) {
+  .hardware-add,
+  .hardware-add .devices-found {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

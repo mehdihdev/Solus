@@ -20,6 +20,7 @@ import {
 } from '../project/localconnections/presentation'
 import { useLocalConnections } from '../project/localconnections/useLocalConnections'
 import { ModalShell } from '../workspace/modals'
+import { SavedRobotConnections } from './SavedRobotConnections'
 
 export function ConnectDeviceModal({
   projectId,
@@ -64,6 +65,7 @@ export function ConnectDeviceModal({
             <Devices data={data} onConnect={start} onStop={stop} />
           )}
         </div>
+        <SavedRobotConnections projectId={projectId} onConnect={start} />
         <div style={{ display: 'flex', marginTop: 18, justifyContent: 'flex-end' }}>
           <Button kind="ghost" size="sm" onClick={onClose}>
             Close

@@ -184,6 +184,11 @@ async def ingest_telemetry(
     return envelope({"accepted": accepted, "unresolved": unresolved, "rejected": rejected})
 
 
+@router.get("/telemetry-devices")
+async def observed_telemetry_devices(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
+    return envelope({"device_ids": get_plumbing(request).observed_device_ids(ctx.project.id)})
+
+
 @router.get("/recent/{entity_id}")
 async def recent_values(
     ctx: ProjectCtx,
@@ -365,6 +370,7 @@ def _device_wire(device: Any) -> dict[str, Any]:
         "vid": f"{identity.vid:04x}",
         "pid": f"{identity.pid:04x}",
         "board": board.name if board is not None else None,
+        "headline": getattr(board, "headline", None),
         "board_class": board.kind.value if board is not None else None,
         "mcu_known": identity.mcu_known,
         "confidence": identity.evidence.confidence,
@@ -652,12 +658,21 @@ async def stop_session(
 async def device_recent(
     ctx: ProjectCtx,
     request: Request,
+    session: SessionDep,
     device_id: Annotated[list[str], Query(min_length=1, max_length=16)],
     limit: Annotated[int | None, Query(ge=1, le=512)] = None,
+    focus_entity_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Batched by design: the desktop polls every visible device panel in ONE
     request per cycle, so N streaming devices never multiply the request rate
     into the shared per-user budget."""
+    from solus_api.livebench.focus_scope import focus_entity_ids
+
+    allowed = (
+        await focus_entity_ids(session, ctx.project.id, focus_entity_id)
+        if focus_entity_id is not None
+        else None
+    )
     plumbing = get_plumbing(request)
     for one in device_id:
         if not 1 <= len(one) <= 512:
@@ -665,4 +680,15 @@ async def device_recent(
     views = [
         await plumbing.get_device_recent(ctx.project.id, one, limit=limit) for one in device_id
     ]
-    return envelope({"devices": [v.model_dump(mode="json") for v in views]})
+    manager = get_session_manager(request)
+    devices = []
+    for view in views:
+        if allowed is not None and view.resolved_entity_id not in allowed:
+            continue
+        device = view.model_dump(mode="json")
+        roles = manager.channel_roles(ctx.project.id, view.device_id)
+        for series in device["signals"]:
+            if series["signal"] in roles:
+                series["display_role"] = roles[series["signal"]]
+        devices.append(device)
+    return envelope({"devices": devices})

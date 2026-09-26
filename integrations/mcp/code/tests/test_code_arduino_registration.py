@@ -21,6 +21,7 @@ async def test_arduino_schemas_are_closed_and_workspace_is_not_caller_selected()
         "arduino_probe": set(),
         "arduino_prepare": {"dry_run"},
         "arduino_compile": {"sketch", "fqbn", "dry_run"},
+        "arduino_upload": {"sketch", "fqbn", "build_id", "device_ref", "dry_run"},
     }
     for name, properties in expected.items():
         schema = tools[name].inputSchema
@@ -95,7 +96,11 @@ async def test_prepare_does_not_block_mcp_and_cancellation_reaches_worker(
 
 def test_arduino_execution_requires_complete_approval_and_error_filing() -> None:
     tools = {item["name"]: item for item in yaml.safe_load(ALLOWLIST_YAML.read_text())["tools"]}
-    for name, deadline in (("arduino_prepare", 630), ("arduino_compile", 150)):
+    for name, deadline in (
+        ("arduino_prepare", 630),
+        ("arduino_compile", 150),
+        ("arduino_upload", 150),
+    ):
         assert tools[name]["requires_confirmation"] is True
         assert tools[name]["files_errors"] is True
         assert tools[name]["timeout_seconds"] == deadline
@@ -103,6 +108,32 @@ def test_arduino_execution_requires_complete_approval_and_error_filing() -> None
         assert supports_dry_run(f"code.{name}")
     assert tools["arduino_probe"]["requires_confirmation"] is False
     assert tools["arduino_probe"]["timeout_seconds"] == 15
+
+
+async def test_upload_transport_binds_workspace_and_retains_device_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(tmp_path))
+    calls = []
+
+    def upload(root, **args):
+        calls.append((root, args))
+        return {"ok": False, "started": True, "device_state": "unknown", "stderr_tail": "failed"}
+
+    monkeypatch.setattr(server.arduino_upload, "arduino_upload", upload)
+    args = {
+        "sketch": "Sensor",
+        "fqbn": "arduino:avr:uno",
+        "build_id": "ec6a0d74-253a-4a77-ac4d-c950c24dca27",
+        "device_ref": "usb:port-1-2",
+    }
+    _, result = await server.build_server().call_tool("arduino_upload", args)
+    assert result["device_state"] == "unknown"
+    assert calls == [(tmp_path, {**args, "dry_run": False})]
+    with pytest.raises(ToolError):
+        await server.build_server().call_tool("arduino_upload", {**args, "port": "/dev/ttyUSB0"})
+    assert len(calls) == 1
 
 
 async def test_artifact_summary_survives_actual_model_containment(

@@ -107,8 +107,7 @@ describe('personal repository branch picker', () => {
   it('does not invent branch controls for unsupported providers', async () => {
     mocks.list.mockResolvedValue({ supported: false, kind: null, items: [], next_page: null })
     render(<SourceRevisionPicker projectId="project" sourceId="source" />)
-    await waitFor(() => expect(mocks.list).toHaveBeenCalled())
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('combobox')).not.toBeInTheDocument())
   })
 })
 

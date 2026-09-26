@@ -51,6 +51,7 @@ _COMPLETE_PREVIEW_TOOLS: Final = frozenset(
         "code.git_push",
         "code.arduino_prepare",
         "code.arduino_compile",
+        "code.arduino_upload",
         "isaac.start",
         "isaac.stop",
         "isaac.load_model",

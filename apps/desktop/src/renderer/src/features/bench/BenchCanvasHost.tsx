@@ -8,7 +8,7 @@
 // requirement hints are judged against real sources, never assumed met
 // (docs/wireflows/widget-canvas.md "Header", "Picker"). Developer registrations
 // with a widget view (EXT-20) go in as the picker's Developer section.
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { Focus, SourceKind } from '@solus/shared-types'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -19,7 +19,6 @@ import { selectDevRegistration, useDevExtensionsStore } from '../devExtensions/d
 import { connectedKinds } from '../extensions/extensionLogic'
 import { useProjectSources } from '../project/useProjectSources'
 import type { MainScreen } from '../workspace/shellStore'
-import { ConnectDeviceModal } from './ConnectDeviceModal'
 
 export interface BenchCanvasHostProps {
   readonly projectId: string
@@ -29,15 +28,18 @@ export interface BenchCanvasHostProps {
   readonly sessions: readonly BenchSession[] | null
   /** Shell navigation for the picker's "Browse the Store". */
   readonly onNavigate?: (screen: MainScreen) => void
+  readonly onAddHardware?: () => void
+  readonly embedded?: boolean
 }
 
 /** What the header's status line may honestly say (SOLUSDEV-152 rules). */
-type BenchHeaderStatus = 'focused' | 'unknown' | 'nothing-streaming'
+type BenchHeaderStatus = 'focused' | 'unknown' | 'nothing-streaming' | 'awaiting-data'
 
 const STATUS_LABEL: Readonly<Record<BenchHeaderStatus, string>> = {
   focused: 'FOCUSED',
   unknown: 'NO PART FOCUSED',
-  'nothing-streaming': 'NOTHING STREAMING'
+  'nothing-streaming': 'NOTHING STREAMING',
+  'awaiting-data': 'AWAITING DEVICE DATA'
 }
 
 /**
@@ -51,7 +53,7 @@ function benchHeaderStatus(
   sessions: readonly BenchSession[] | null
 ): BenchHeaderStatus {
   if (focus !== null) return 'focused'
-  return sessions === null ? 'unknown' : 'nothing-streaming'
+  return sessions === null ? 'unknown' : sessions.length > 0 ? 'awaiting-data' : 'nothing-streaming'
 }
 
 const TITLE_STYLE: React.CSSProperties = {
@@ -63,16 +65,19 @@ const TITLE_STYLE: React.CSSProperties = {
 }
 
 function BenchHeader({
-  projectId,
   focus,
-  sessions
-}: Pick<BenchCanvasHostProps, 'projectId' | 'focus' | 'sessions'>): React.JSX.Element {
+  sessions,
+  onAddHardware,
+  embedded
+}: Pick<
+  BenchCanvasHostProps,
+  'projectId' | 'focus' | 'sessions' | 'onAddHardware' | 'embedded'
+>): React.JSX.Element {
   const status = benchHeaderStatus(focus, sessions)
-  const [connecting, setConnecting] = useState(false)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <h1 style={TITLE_STYLE}>Live Bench</h1>
+        <h2 style={TITLE_STYLE}>{embedded ? 'Workspace widgets' : 'Live Bench'}</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, minWidth: 0 }}>
           <Mono size={9.5}>{STATUS_LABEL[status]}</Mono>
           {focus !== null && (
@@ -90,13 +95,10 @@ function BenchHeader({
           )}
         </div>
       </div>
-      {status === 'nothing-streaming' && (
-        <Button kind="primary" size="sm" onClick={() => setConnecting(true)}>
-          Connect a device
+      {status === 'nothing-streaming' && !embedded && (
+        <Button kind="primary" size="sm" onClick={onAddHardware}>
+          Add hardware
         </Button>
-      )}
-      {connecting && (
-        <ConnectDeviceModal projectId={projectId} onClose={() => setConnecting(false)} />
       )}
     </div>
   )
@@ -137,7 +139,7 @@ function useDevWidgets(): readonly DevWidgetEntry[] {
 }
 
 export function BenchCanvasHost(props: BenchCanvasHostProps): React.JSX.Element {
-  const { projectId, focus, onFocusChange, sessions, onNavigate } = props
+  const { projectId, focus, onFocusChange, sessions, onNavigate, onAddHardware } = props
   const kinds = useConnectedKinds()
   const dev = useDevWidgets()
   return (
@@ -145,7 +147,15 @@ export function BenchCanvasHost(props: BenchCanvasHostProps): React.JSX.Element 
       projectId={projectId}
       focus={focus}
       onFocusChange={onFocusChange}
-      header={<BenchHeader projectId={projectId} focus={focus} sessions={sessions} />}
+      header={
+        <BenchHeader
+          projectId={projectId}
+          embedded={props.embedded}
+          focus={focus}
+          sessions={sessions}
+          onAddHardware={onAddHardware ?? (onNavigate ? () => onNavigate('workspace') : undefined)}
+        />
+      }
       onOpenStore={onNavigate ? () => onNavigate('store') : undefined}
       connectedKinds={kinds}
       dev={dev}

@@ -177,3 +177,151 @@ existing vendor-hygiene ratchets and three-machine fixture proof (recorded UDP/C
 Record real Electron and available LeRobot tests separately from fixtures; unavailable ELEGOO
 is not verified. Measure enumeration/proposal/confirmation/first-packet spans before choosing
 optimizations, and do not infer runtime performance from unit test success.
+
+## SOLUSDEV-262 — brain topology amendment (implementation in progress)
+
+The user-approved brain-centric brief supersedes the category presentation above. A robot is
+presented as brains → buses → devices → parts. A controller on an upstream bus and a brain
+with a downstream bus is one entity. Brain kinds are host, mcu and onboard; unknown firmware,
+software or wiring stays unknown. Category is classification/filter metadata, not the presented
+tree. Existing ownership remains separate from physical connectivity: one host may control
+multiple robots without duplicating its identity. Each robot presents its scoped projection.
+
+Topology is project-scoped graph evidence. Preserve part, CONFIG, robot and canonical IDs,
+calibration, provenance, source-owned fields and bindings. The transitional storage keeps
+legacy ownership/category records until their consumers can safely retire them; the topology
+projection excludes category nodes. No GET creates graph/config data. Migration adds only
+facts justified by stored connection/bus evidence, marks unknowns explicitly, and is rehearsed
+on a restored database snapshot before applying to populated data. New discoveries still need
+review; the migration is not permission to invent host software or automatically assign devices.
+
+Typed topology reads and reviewed updates use the hardware API. Runtime telemetry remains
+Pattern 2 through existing drivers/session ownership. Graph presentation must not create a
+parallel transport or move telemetry through MCP. Extraction adapters reuse firmware/repo/KiCad
+paths and normalize onboard observations. Their output is evidence, never hidden acceptance.
+
+The present board with CH340 VID/PID has no USB serial. Its bridge identity cannot establish
+board model or empty firmware. The session's serial-only automatic QA policy remains inactive
+for it; any future flash needs a concrete manual approval using freshly resolved connection
+identity. Never infer permission to flash motor-driver boards from the presence of a user.
+
+The first delivered slice persists `hardware_brain` endpoint nodes and `hardware_bus` nodes
+from accepted CONFIG evidence. `hardware_topology_member` selects a robot's projection;
+`hardware_connected_to` expresses endpoint → bus → retained part connectivity. Neither grants
+runtime ownership. Stable project/endpoint-scoped IDs let shared projections reuse entities.
+Conflicting channels for one shared endpoint and multiple active addresses for one part are
+rejected transactionally. The migration validates canonical CONFIG nodes/links before writes.
+Reviewed host attribution is specified below. Onboard deployment uses the existing desktop
+deployment boundary and explicit central confirmation. The initial provider requires an already
+enrolled target with a configured companion service and pinned host identity; bare-target
+provisioning remains unsupported. An immutable offline bundle, target version and artifact digest
+are checked before install/start, and the expected companion handshake is required for success.
+No cloud service opens SSH and no fixture is evidence of a live deployment. Unsupported
+kind/software/presence facts stay unknown.
+
+From-scratch MCU wiring is a proposal graph node followed by explicit acceptance. Typed pin
+declarations, visible schematic graph evidence and retained device-scoped probe observations
+converge on a bounded input-only wiring plan. Provider-owned pin validation is separate from
+shared graph/provenance logic. Accepted evidence never rewrites runtime CONFIG or permits
+driver-board flashing. Preparation and central confirmation revalidate target and evidence;
+unknown protocols remain unresolved rather than receiving invented register reads.
+
+Reviewed local-host attachment extends the foundation with one project/machine host and USB
+bus, connected to existing controller endpoints. Proposal/confirmation uses the existing
+project lock and hardware operation ledger. Caller-owned local source + exact live bridge
+session + matching read-only local machine identity establishes this API's physical attachment;
+a client-supplied machine ID alone does not. Software is an explicit graph-backed declaration,
+not a claim that a process or shim is running. Shared host projections retain separate robot
+association evidence. CONFIG resync cannot erase valid reviewed host edges or retain links to
+an obsolete controller binding. See the hardware API's local-host section for exact routes.
+### SOLUSDEV-262 extraction evidence boundary
+
+Source adapters normalize already-authorized parser results or project-scoped electrical graph
+observations into bounded, immutable records with `bus`, `device`, `protocol`, `address`, and
+optional `part_candidate`, plus source namespace and provenance. These are candidates, not graph
+assignments. Preserve unknown fields, contradictory evidence, original pin/address text, and
+source/entity references. Distinguish an empty successful extraction from unavailable or invalid
+input. Deterministic normalization deduplicates exact evidence only within its source namespace.
+
+The existing API hardware layer owns this internal model, consumed by the existing Live Bench
+parser adapters. Firmware/config adapters reuse current parsers; schematic adapters consume the
+existing component-to-net graph and its pin arrays; onboard adapters consume supplied recorded
+observations. This boundary performs no filesystem acquisition, commands, device I/O, or graph
+mutation. Local graph/source association alone never authorizes reading a path. Runtime use must
+pass through an explicitly documented authorized proposal/confirmation path; topology GET remains
+read-only and host attachment does not implicitly execute extraction.
+
+### Authorized single-file extraction review
+
+The existing native hardware-source picker grants one-file access, recorded privately per
+account/project with a content digest. Extraction resolves only that opaque source reference
+through LocalHardwareSources on the authenticated local runner. It never scans the parent
+folder, follows a graph path, creates a temporary checkout, or executes selected code. Firmware
+and structured-config parsers expose bounded byte entry points shared with existing readers.
+Native paths are removed before candidates enter the response. Initial acquisition accepts the
+existing JSON/YAML/TOML/Python formats; folder and C++ picker expansion are separate capabilities.
+
+The proposal route is read-only and binds robot/brain scope, verified source bytes and canonical
+evidence into a digest. A candidate review does not create operational CONFIG or grant device
+access. Arbitrary extraction confirmation is deferred until explicit selections, names, retained
+identity and non-operational evidence storage have a documented acceptance shape.
+
+### Reviewed extraction application
+
+Explicit selected evidence rows may be accepted through extraction/confirm, after the proposal
+is recomputed under the project lock. This creates evidence-only graph nodes/relations connected
+to the selected brain or enriches explicitly retained robot entity IDs. It is separate from
+operational CONFIG and from the endpoint projection marker; CONFIG synchronization cannot delete
+independently reviewed evidence. Candidate similarity grants no device ownership or runtime access.
+
+### Presence preparation and execution
+
+Presence preparation generates bounded source from an explicitly selected provider profile and
+reviewed topology; it never modifies an existing firmware project. The vendor-owned compiler
+adapter builds source plus bundled telemetry library in a private temporary directory with pinned
+binary/profile arguments, timeout/output/size limits, and process cleanup on cancellation. Prepared
+source and binary are immutable retained project artifacts, with SHA256 and target connection
+snapshot. Preparation performs no upload or device writes. Supported initial sketches are a
+heartbeat and an I2C/analog probe. Analog samples are raw observations, not evidence of attached
+parts; absent I2C responses mean no responding devices, not proof every pin is unwired. Generated
+command protocol accepts status queries only; it contains no actuation commands.
+
+Execution must be a registered confirmation-required tool through the existing SOL gate; the
+preview shows full generated source, profile, exact target identity, binary digest and erase warning.
+Decision-time revalidation checks source/binary digests, selected connection identity and exclusive
+ownership. A serialless target requires explicit manual profile selection and a fresh connection
+snapshot; the automatic QA approver remains ineligible. Existing motor-driver boards are excluded
+from this session's flash capability. A denied/stale card reaches no device; interrupted upload
+reports unknown firmware state. There is no ungated production flash route or raw shell tool.
+
+### Host I/O mirroring
+
+A host-side adapter may publish completed observations through the existing authenticated
+`POST /projects/{project_id}/bench/telemetry` route. One program owns each physical serial bus;
+Solus does not open a second connection to observe an externally controlled robot. The generic
+Python HTTP publisher validates LB-06 packets, queues bounded copies and sends bounded batches
+on a background thread. HTTP runs outside the motor loop; slow, rejected or unavailable ingestion
+drops telemetry and exposes counters, never changes commands or retries stale control samples.
+Explicit URL, project, device identity, signal mapping, units and user access token are required.
+No credential extraction, implicit authentication or control permission follows from ingestion.
+
+The existing method shim observes explicitly selected completed synchronous calls without extra
+reads or altered results. Alternatively, a controller submits copies immediately after its existing
+reads. Measured position and commanded targets remain separate quantities. Raw encoder counts
+use `encoder_count` with `tick`; normalized position uses its verified normalization unit. The
+receiving graph resolves part identities through the existing project-scoped resolver. An
+unconfirmed identity remains unresolved, even when visible in the device view.
+
+Live Bench discovers recently ingested external device IDs separately from serial sessions;
+server receipt time determines discovery expiry. Discovery does not fabricate sessions, take
+ownership, or imply recording/control support. Source insertion still uses the existing reviewed
+local-file diff for app tools; linking a folder is not permission to edit an external controller.
+The older loopback UDP sink is a low-level library option, not a completed UDP/JSON-lines robot
+onboarding flow; its receiver identity checks must not be weakened to impersonate USB devices.
+
+Presence compilation/upload lives behind the plugin boundary: `plugins/arduino/presence_provider.py`
+owns board profiles, compatible USB identities and protocol eligibility. `livebench.local` delegates
+discovery through the plugin roster; shared graph orchestration does not name a board vendor.
+Retained, CONFIG-authorized part identities can ground partial-map rediscovery by exact device
+reference and bus address; only a unique canonical owner yields a suggestion. This preserves
+partial mappings instead of treating additional unaccepted responders as conflicting identity.

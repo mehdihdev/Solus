@@ -172,3 +172,76 @@ by your team` when policy blocks it; each of those disables `Add`. When the
 - Events: `widget_layout.changed { projectId, slots: N, refs: [...] }` on each
   successful PUT; `widget_layout.pruned { droppedRefs }` when unknown refs are
   removed.
+
+## SOLUSDEV-262 L1 amendment
+
+Session discovery continues while a project is open, regardless of Workspace focus. With
+observed devices, one device-keyed telemetry composition remains mounted; focus narrows through
+confirmed graph mapping instead of stopping discovery or changing data sources. Clearing focus
+restores all current devices. Unrelated/unmapped focus states explain the absence of a confirmed
+mapping. Starting/disconnected sessions remain visibly distinct from confirmed empty inventory.
+Account/project switches discard previous in-flight results; request ordering cannot restore old
+state. A genuinely empty bench offers Add → Hardware inline through the existing Workspace flow.
+
+### SOLUSDEV-262 saved robot sessions
+
+Live Bench's Manage connections dialog also searches saved physical robots in the current
+project. A separate Connect button opens the existing robot-config session endpoint, resolving
+its accepted protocol and calibration server-side. It never infers a driver from a USB bridge.
+Search is bounded; explicit text search can find robots outside the first page. Missing or
+incomplete configuration shows the existing setup error. Request progress prevents duplicate
+starts. Account/project changes invalidate lists and pending responses. Existing session Stop
+controls remain available. Connecting starts telemetry only; no motion control is introduced.
+
+## SOLUSDEV-262 Runs and findings
+
+The existing Live Bench tab contains a Runs panel: choose an active saved robot session and name
+the capture, Start recording, then Stop. It never starts motion. Show count, origin and complete/
+truncated/interrupted state. Saved runs open timestamp scrubbing and their retained artifact.
+Select a baseline to compare aligned signals, unit compatibility, config/source changes and
+evidence-linked differences. Findings use headline→explanation→detail with graph part/code/CAD
+references; no-finding and missing-evidence are valid. Guide explains the evidence; Expert stays
+terse. Optional SOL narration is an explicit metered action, never an automatic perpacket call.
+
+Live Bench offers Signals, Scene and Runs views. Scene imports an explicitly chosen local
+URDF/MJCF artifact for a saved robot; the user reviews joint-to-accepted-part mappings before
+live motion visualization. Each model has display translation/rotation controls persisted per
+account/project/model, and explicit reimport for revised source files. All robots share one
+orbitable view. Missing meshes, stale mappings, WebGL failure and jointless geometry explain
+what is unavailable. Display placement never sends a hardware command.
+
+### SOLUSDEV-262 recorded sensor playback
+
+Runs playback shares its exact recorded timestamp with numeric signals and sensor artifact
+references. Each reference offers an explicit Open frame action. The scoped artifact content
+route supplies bytes; camera preview accepts only PNG/JPEG/WebP (no SVG/HTML), bounded to8MiB.
+LiDAR preview accepts bounded JSON {schema_version:1,unit:"m",points:[[x,y,z],...]} with at most
+10000 finite triples and displays a labelled XY projection with Z range. No coordinates or
+frames are synthesized. Missing/unsupported/unavailable media shows a reason. New timestamp,
+run, project, or account clears media and cancels stale loads; object URLs are revoked.
+
+Scene models offer explicit CAD mesh association: choose an existing model mesh key and a
+project CAD leaf from the source picker, then confirm. Show observed microversion and queued,
+current, stale or unavailable refresh status. Normal successful CAD sync updates only that mesh
+while retaining model placement and valid joint mapping; no manual refresh is required for each
+microversion. Unlinked model structures remain explicit imports.
+
+Signal widgets retain accepted part names; unnamed detected actuator parts default to
+RobotName-Motor-N using the stable observed bus address. Existing user/repo names are never
+replaced. Charts display timestamped anomaly markers only from existing project/session-scoped
+anomaly evidence. Missing evidence means no marker; unit conversion preserves marker timestamps.
+
+## 2026-09-15 Live Bench presentation amendment
+
+The user's four-phase UI brief replaces the Live Bench signals/scene/runs tabs with one view.
+A header contains display Pause and evidence-derived STREAMING / PAUSED / NO STREAM status.
+The left column is approximately 300 px: SCENE + Spawn, a dark dotted scene, explicit absent
+camera/depth sentences, and a footer that distinguishes actual CAD links from missing bindings.
+The right pane uses a responsive grid of signal windows with an actual eight-second history,
+large current values, inline persisted names, filled sparklines and amber `no unit` when unknown.
+Clicking a signal scopes it; renaming does not accidentally scope it. Placeholder names/units
+produce the brief's explanation and a link into hardware identity confirmation. Findings follow
+under LIVE REASONING, with unavailable evidence distinguished from no observed findings.
+Capture/playback and installed widgets remain reachable inline rather than hidden behind tabs.
+Channel additions/removals update automatically; pausing display does not stop hardware, mutate
+session configuration or bypass a confirmation gate.

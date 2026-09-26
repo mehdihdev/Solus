@@ -374,6 +374,68 @@ async def test_import_part_cannot_reach_another_projects_robot(
 # ----------------------------------------------------------------------- authz
 
 
+async def test_import_standalone_part_preserves_definition_and_replays(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    project_id, _ = await _project(client, alice_headers)
+    headers = {**alice_headers, "Idempotency-Key": str(uuid.uuid4())}
+    url = _url(project_id, "parts", "bmp390", "import")
+    body = {"name": "Cabin pressure"}
+    response = await client.post(url, headers=headers, json=body)
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    assert data["entity"]["name"] == "Cabin pressure"
+    assert data["entity"]["properties"]["definition_id"] == "bmp390"
+    assert "robot_id" not in data["entity"]["properties"]
+    config = await client.get(
+        f"/api/v1/projects/{project_id}/hardware/entities/{data['entity']['id']}/config",
+        headers=alice_headers,
+    )
+    component = config.json()["data"]["config"]["component"]
+    assert component["lifecycle"] == "planned"
+    assert {row["name"] for row in component["telemetry"]} == {
+        "bmp390.pressure",
+        "bmp390.temperature",
+    }
+    robots = await db.scalars(
+        select(GraphEntity).where(
+            GraphEntity.project_id == uuid.UUID(project_id), GraphEntity.kind == "physical_robot"
+        )
+    )
+    assert list(robots) == []
+    replay = await client.post(url, headers=headers, json=body)
+    assert replay.status_code == 201 and replay.json()["data"] == data
+    conflict = await client.post(url, headers=headers, json={"name": "Changed name"})
+    assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize("body", [{}, {"name": ""}, {"name": "  "}, {"name": "Sensor", "extra": 1}])
+async def test_standalone_import_requires_reviewed_name(
+    client: AsyncClient, alice_headers: dict[str, str], body: dict[str, Any]
+) -> None:
+    project_id, _ = await _project(client, alice_headers)
+    response = await client.post(
+        _url(project_id, "parts", "bmp390", "import"),
+        headers={**alice_headers, "Idempotency-Key": str(uuid.uuid4())},
+        json=body,
+    )
+    assert response.status_code == 422
+
+
+async def test_standalone_import_requires_key_and_project_membership(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    project_id, _ = await _project(client, alice_headers)
+    url = _url(project_id, "parts", "bmp390", "import")
+    missing = await client.post(url, headers=alice_headers, json={"name": "Sensor"})
+    assert missing.status_code == 422
+    await me(client, bob_headers)
+    foreign = await client.post(
+        url, headers={**bob_headers, "Idempotency-Key": str(uuid.uuid4())}, json={"name": "Sensor"}
+    )
+    assert foreign.status_code == 404
+
+
 @pytest.mark.parametrize("route", ["list", "get", "import_platform", "import_part"])
 async def test_a_non_member_gets_404_on_every_library_route(
     client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str], route: str

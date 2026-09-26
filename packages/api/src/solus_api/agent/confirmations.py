@@ -55,7 +55,7 @@ from solus_api.agent.tools.shapes import (
     ToolResult,
 )
 from solus_api.agent.tools.tool import ToolException
-from solus_api.agent.tools.untrusted import redact_text
+from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
 from solus_api.models import ConfirmationStatus, Conversation, ToolConfirmation, User, utcnow
 
 logger = logging.getLogger("solus.agent.confirmations")
@@ -103,9 +103,10 @@ def _summarize(descriptor: ToolDescriptor, args: dict[str, Any]) -> str:
     So a descriptor may carry `consent_summary`, which Solus writes; when it is
     present the untrusted description is not used here at all.
     """
+    allowed_paths = call_display_paths(descriptor.name, args)
     rendered = ", ".join(
         f"{_single_line(key, _LABEL_CAP)}={_single_line(repr(value), _VALUE_CAP)}"
-        for key, value in sorted(args.items())
+        for key, value in sorted(redact_value(args, allowed_paths=allowed_paths).items())
     )
     trusted = descriptor.consent_summary
     if trusted is None and descriptor.description_trusted:
@@ -182,7 +183,10 @@ async def _build_preview(
     rows on failure so the caller refuses to park or execute the action.
     """
     required = force_complete or getattr(tool, "requires_complete_preview", False) is True
-    fallback = [] if required else _argument_rows(args)
+    allowed_paths = call_display_paths(
+        getattr(getattr(tool, "descriptor", None), "name", None), args
+    )
+    fallback = [] if required else _argument_rows(args, allowed_paths=allowed_paths)
     builder = getattr(tool, "preview", None)
     if builder is None:
         return fallback
@@ -214,12 +218,14 @@ async def _build_preview(
                 "before": None
                 if row.get("before") is None
                 else redact_text(
-                    row["before"] if required else _single_line(row["before"], _VALUE_CAP)
+                    row["before"] if required else _single_line(row["before"], _VALUE_CAP),
+                    allowed_paths=allowed_paths,
                 ),
                 "after": None
                 if row.get("after") is None
                 else redact_text(
-                    row["after"] if required else _single_line(row["after"], _VALUE_CAP)
+                    row["after"] if required else _single_line(row["after"], _VALUE_CAP),
+                    allowed_paths=allowed_paths,
                 ),
             }
         )
@@ -249,7 +255,9 @@ def _complete_preview(rows: Any) -> bool:
     )
 
 
-def _argument_rows(args: dict[str, Any]) -> list[dict[str, Any]]:
+def _argument_rows(
+    args: dict[str, Any], *, allowed_paths: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
     """The diff for an action that has no before → after: what it will run with.
 
     A shell command, a firmware flash and a robot move do not REPLACE a value,
@@ -268,10 +276,11 @@ def _argument_rows(args: dict[str, Any]) -> list[dict[str, Any]]:
                 _single_line(
                     value if isinstance(value, str) else json.dumps(value, default=str),
                     _VALUE_CAP,
-                )
+                ),
+                allowed_paths=allowed_paths,
             ),
         }
-        for key, value in sorted(args.items())
+        for key, value in sorted(redact_value(args, allowed_paths=allowed_paths).items())
     ][:_MAX_PREVIEW_ROWS]
 
 

@@ -23,6 +23,7 @@ from solus_api.extensions.ratelimit import (
 from solus_api.models import Role
 from solus_api.schemas import serialize_entity, serialize_relation
 from solus_api.services.events import emit_event
+from solus_api.widgets.graph_events import publish_widget_graph_changed
 from solus_api.widgets.graph_nodes import (
     WorkspaceGraph,
     load_workspace_graph,
@@ -87,6 +88,8 @@ async def reconcile_workspace_graph_route(
             },
         )
     await session.commit()
+    # Reconcile may create workspace/Live Bench singletons outside widget-only counts.
+    await publish_widget_graph_changed(request, ctx.project.id)
     return envelope(
         {
             **_graph_payload(outcome.graph),

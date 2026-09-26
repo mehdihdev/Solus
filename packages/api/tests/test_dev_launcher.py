@@ -204,7 +204,17 @@ def test_bind_probe_reuses_time_wait_socket(ports: ModuleType) -> None:
 
 @pytest.mark.parametrize(
     "failure",
-    ["schema", "api", "desktop", "unhealthy", "reload", "stdin", "worker", "redis_disabled"],
+    [
+        "schema",
+        "api",
+        "desktop",
+        "unhealthy",
+        "reload",
+        "stdin",
+        "worker",
+        "redis_disabled",
+        "inline_override",
+    ],
 )
 def test_dependency_and_api_failures_stop_launcher(tmp_path: Path, failure: str) -> None:
     root = Path(__file__).resolve().parents[3]
@@ -212,7 +222,9 @@ def test_dependency_and_api_failures_stop_launcher(tmp_path: Path, failure: str)
     scripts.mkdir()
     shutil.copyfile(root / "scripts/dev-all.sh", scripts / "dev-all.sh")
     (tmp_path / "packages/api").mkdir(parents=True)
-    (tmp_path / ".env").write_text("VITE_SUPABASE_URL=https://example.invalid\n")
+    (tmp_path / ".env").write_text(
+        "VITE_SUPABASE_URL=https://example.invalid\nSOLUS_SYNC_INLINE=true\n"
+    )
     (tmp_path / "docker-compose.local.yml").write_text("services: {}\n")
     binaries = tmp_path / "bin"
     binaries.mkdir()
@@ -221,6 +233,8 @@ def test_dependency_and_api_failures_stop_launcher(tmp_path: Path, failure: str)
         "node": 'case "$*" in *process.execPath*) echo "$NODE_PATH";; *) exit 0;; esac',
         "uv": (
             'echo "uv $*" >> "$COMMAND_LOG"; '
+            'case "$*" in *uvicorn*|*"arq solus_api.worker_main.WorkerSettings"*) '
+            'printf "sync-inline=%s\\n" "${SOLUS_SYNC_INLINE-unset}" >> "$COMMAND_LOG";; esac; '
             'case "$*" in '
             "*dev_ports.py*--check-port*) exit 0;; "
             '*dev_ports.py*) echo "8123 5210 compose";; '
@@ -258,7 +272,8 @@ def test_dependency_and_api_failures_stop_launcher(tmp_path: Path, failure: str)
     result = subprocess.run(
         ["bash", str(scripts / "dev-all.sh")],
         env={
-            **os.environ,
+            **{key: value for key, value in os.environ.items() if key != "SOLUS_SYNC_INLINE"},
+            **({"SOLUS_SYNC_INLINE": "true"} if failure == "inline_override" else {}),
             "PATH": f"{binaries}:/usr/bin:/bin",
             "NODE_PATH": str(binaries / "node"),
             "SOLUS_NODE_BIN": str(binaries / "node"),
@@ -295,6 +310,15 @@ def test_dependency_and_api_failures_stop_launcher(tmp_path: Path, failure: str)
     if failure == "reload":
         assert commands.count("--ready") > 3
         assert "API remained unhealthy" not in result.stdout
+    if failure not in {"schema", "api"}:
+        expected_inline = (
+            "unset"
+            if failure == "redis_disabled"
+            else ("true" if failure == "inline_override" else "false")
+        )
+        assert f"sync-inline={expected_inline}" in commands
+        if failure != "redis_disabled":
+            assert commands.count(f"sync-inline={expected_inline}") == 2
 
 
 @pytest.fixture

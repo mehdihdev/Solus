@@ -23,6 +23,7 @@ import type { Entity } from '../../lib/api/resources'
 import { useClassifyPreview } from './useClassifyPreview'
 import { useMentionPicker, type MentionPicker } from './useMentionPicker'
 import type { SolActionMode, SolScreenshot } from './solApi'
+import { selectSession, setForceConfirmation, useSolChatStore } from './solChatStore'
 import { regionToScreenshot, useSolActionMode, useSolWindowStore } from './solWindowStore'
 import {
   useSolChat,
@@ -434,6 +435,33 @@ function RegionChip({ onDismiss }: { onDismiss: () => void }): React.JSX.Element
   )
 }
 
+function ReviewPreference({
+  checked,
+  onChange,
+  streaming
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  streaming: boolean
+}): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', ...MUTED }}>
+      <Switch
+        checked={checked}
+        onChange={onChange}
+        ariaLabel="Confirm every change"
+        disabled={streaming}
+      />
+      <span>
+        Confirm every change
+        <span style={{ display: 'block', fontSize: 10 }}>
+          Choose before sending. Review each proposed change before SOL applies it.
+        </span>
+      </span>
+    </div>
+  )
+}
+
 type ComposerSend = (text: string, mentions: readonly string[], thinkHarder: boolean) => void
 
 function Composer({
@@ -444,6 +472,8 @@ function Composer({
   onModeChange,
   regionAttached,
   onDismissRegion,
+  forceConfirmation,
+  onForceConfirmationChange,
   onSend
 }: ComposerProps): React.JSX.Element {
   const [input, setInput] = useState('')
@@ -499,6 +529,11 @@ function Composer({
         />
         <SendButton streaming={streaming} empty={empty} />
       </div>
+      <ReviewPreference
+        checked={forceConfirmation}
+        onChange={onForceConfirmationChange}
+        streaming={streaming}
+      />
       <ClassifyIndicator
         preview={classify.preview}
         override={classify.override}
@@ -527,6 +562,9 @@ export function SolChat({
   // parked on a null project, which is inert (no fetch, no store writes).
   const ownChat = useSolChat(shared ? null : projectId)
   const chat = shared ?? ownChat
+  const forceConfirmation = useSolChatStore(
+    (state) => selectSession(state, projectId).forceConfirmation ?? false
+  )
   const { mode, setMode } = useSolActionMode()
   // The circled region (SOL window only — main pushes it to that renderer).
   // Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
@@ -540,9 +578,11 @@ export function SolChat({
     thinkHarder: boolean
   ): void => {
     const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
-    void chat.send(text, mode, mentions, thinkHarder, screenshot).then((ok) => {
-      if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
-    })
+    void chat
+      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation })
+      .then((ok) => {
+        if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
+      })
   }
   if (!projectId) {
     return (
@@ -575,6 +615,8 @@ export function SolChat({
         onModeChange={setMode}
         regionAttached={region !== null}
         onDismissRegion={clearRegion}
+        forceConfirmation={forceConfirmation}
+        onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
         onSend={sendWithRegion}
       />
     </div>
@@ -617,5 +659,7 @@ interface ComposerProps {
   onModeChange: (mode: SolActionMode) => void
   regionAttached: boolean
   onDismissRegion: () => void
+  forceConfirmation: boolean
+  onForceConfirmationChange: (checked: boolean) => void
   onSend: ComposerSend
 }

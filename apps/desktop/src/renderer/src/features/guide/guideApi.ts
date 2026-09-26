@@ -52,10 +52,14 @@ export interface GuideDetail {
 export function listGuides(
   tool: string,
   version: string,
-  client: ApiClient = api
+  client: ApiClient = api,
+  signal?: AbortSignal
 ): Promise<GuideSummary[]> {
   const qs = new URLSearchParams({ tool, version }).toString()
-  return client.request<GuideSummary[]>(`/toolkb/guides?${qs}`, { method: 'GET' })
+  return client.request<GuideSummary[]>(`/toolkb/guides?${qs}`, {
+    method: 'GET',
+    ...(signal ? { signal } : {})
+  })
 }
 
 export function getGuide(

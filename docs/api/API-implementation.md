@@ -658,12 +658,12 @@ Cancelling a finished job → `409 job_not_cancellable` (`"Job is already cancel
 Per token (per client IP when unauthenticated), fixed 60 s window, per process. Reads and writes
 are **separate buckets** (SOLUSDEV-234):
 
-| Budget                                   | Setting                                 | Default  |
-| ---------------------------------------- | --------------------------------------- | -------- |
-| Reads (`GET`/`HEAD`/`OPTIONS`)           | `SOLUS_RATE_LIMIT_PER_MINUTE`           | **1200** |
-| Writes (everything else)                 | `SOLUS_WRITE_RATE_LIMIT_PER_MINUTE`     | **120**  |
-| `POST /orchestration/classify` (own bucket) | `SOLUS_CLASSIFY_RATE_LIMIT_PER_MINUTE` | 600      |
-| `POST /panel/pair/start` (own bucket)    | `SOLUS_PANEL_PAIR_RATE_LIMIT_PER_MINUTE` | 120     |
+| Budget                                      | Setting                                  | Default  |
+| ------------------------------------------- | ---------------------------------------- | -------- |
+| Reads (`GET`/`HEAD`/`OPTIONS`)              | `SOLUS_RATE_LIMIT_PER_MINUTE`            | **1200** |
+| Writes (everything else)                    | `SOLUS_WRITE_RATE_LIMIT_PER_MINUTE`      | **120**  |
+| `POST /orchestration/classify` (own bucket) | `SOLUS_CLASSIFY_RATE_LIMIT_PER_MINUTE`   | 600      |
+| `POST /panel/pair/start` (own bucket)       | `SOLUS_PANEL_PAIR_RATE_LIMIT_PER_MINUTE` | 120      |
 
 The read budget is sized for one desktop session's steady-state polling (the Live Bench widget
 is 2 req/s, the bridge/sources/extensions/widget pollers ~1 req/s, and a workspace load pages the
@@ -858,18 +858,18 @@ All routes are under `/api/v1/projects/{project_id}/sol` and resolve through `Pr
 reaches it, so another tenant OR another teammate in the same project gets `404`. Writes
 require the `member` role; reads need only a resolvable project.
 
-| Method | Path                               | Purpose                                                                                 | Success |
-| ------ | ---------------------------------- | --------------------------------------------------------------------------------------- | ------- |
-| GET    | `/sol/tools`                       | List the W0-04 tool descriptors SOL may invoke (fixed by code)                          | `200`   |
-| POST   | `/sol/conversations`               | Create a conversation (`{title?}`)                                                      | `201`   |
-| GET    | `/sol/conversations`               | List the caller's conversations (cursor-paginated)                                      | `200`   |
-| GET    | `/sol/conversations/{id}`          | Get one owned conversation                                                              | `200`   |
-| DELETE | `/sol/conversations/{id}`          | Soft-delete an owned conversation                                                       | `204`   |
-| GET    | `/sol/conversations/{id}/turns`    | List a conversation's turns (cursor-paginated)                                          | `200`   |
-| GET    | `/sol/conversations/{id}/confirmations` | Restore this owner's active, unexpired approval cards | `200` |
-| PATCH  | `/sol/conversations/{id}`          | Rename an owned conversation (`{title}`, non-blank, trimmed — SOLUSDEV-233)             | `200`   |
-| POST   | `/sol/conversations/{id}/messages` | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
-| POST   | `/sol/confirmations/{id}`          | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
+| Method | Path                                    | Purpose                                                                                 | Success |
+| ------ | --------------------------------------- | --------------------------------------------------------------------------------------- | ------- |
+| GET    | `/sol/tools`                            | List the W0-04 tool descriptors SOL may invoke (fixed by code)                          | `200`   |
+| POST   | `/sol/conversations`                    | Create a conversation (`{title?}`)                                                      | `201`   |
+| GET    | `/sol/conversations`                    | List the caller's conversations (cursor-paginated)                                      | `200`   |
+| GET    | `/sol/conversations/{id}`               | Get one owned conversation                                                              | `200`   |
+| DELETE | `/sol/conversations/{id}`               | Soft-delete an owned conversation                                                       | `204`   |
+| GET    | `/sol/conversations/{id}/turns`         | List a conversation's turns (cursor-paginated)                                          | `200`   |
+| GET    | `/sol/conversations/{id}/confirmations` | Restore this owner's active, unexpired approval cards                                   | `200`   |
+| PATCH  | `/sol/conversations/{id}`               | Rename an owned conversation (`{title}`, non-blank, trimmed — SOLUSDEV-233)             | `200`   |
+| POST   | `/sol/conversations/{id}/messages`      | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
+| POST   | `/sol/confirmations/{id}`               | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
 
 SOLX-04: `GET /sol/tools` additionally lists `solus.list_integrations`, `solus.connect_integration` (destructive — parks through the CTR-03 gate), and `solus.verify_integration` when the connector registry is wired. Connecting from chat is discovery → confirm → verify; OAuth providers are pointed at the in-app flow (credentials never pass through tool arguments).
 
@@ -885,7 +885,7 @@ same active row and stored preview within the same owner's conversation. A
 conversation row lock serializes concurrent park checks and inserts. This does
 not reuse decided/expired rows or treat chat text as approval.
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, mentions?, preferences?}` where `action_mode` is
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, preferences?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
@@ -1071,6 +1071,19 @@ later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the wind
 to continuous delivery without a contract change. Durable telemetry history stays out of scope
 (LNK-06 decision: live ephemeral values only).
 
+### Observed telemetry devices (SOLUSDEV-262 additive amendment)
+
+`GET /api/v1/projects/{project_id}/bench/telemetry-devices` returns the standard
+response envelope with `data: {device_ids: string[]}`. Central `ProjectCtx`
+authorization applies (unauthenticated 401, non-member 404). Sorted, unique IDs
+come only from valid packets actually ingested, including unresolved devices;
+this creates neither a session nor serial ownership. The server uses monotonic
+arrival time, never producer timestamps, and expires observations after 15 seconds.
+The ephemeral index admits at most 128 devices per project and 256 projects;
+new keys at capacity are ignored until expired entries are reclaimed. Existing
+entries refresh while full. API restart clears this index. Live Bench merges
+these IDs with session devices and uses the existing batched device-recent route.
+
 ## 15b. Bench sessions & local sources (SOLUSDEV-72) — LIVE
 
 Tier-1 route-plan amendment (ADR-032), documented alongside implementation and called out in the
@@ -1159,3 +1172,36 @@ Full plan — request/response shapes, the bounded-reader publish flow and revie
 `409 grants_required`, settings validation, storage caps (64 KiB / 256 KiB), widget-layout
 shape, the `X-Solus-Extension` attribution rule, data events, rate budgets, error catalogue and
 the security checklist — lives in [extensions.md](extensions.md).
+
+### SOLUSDEV-262 — packet units and device-view continuity
+
+Recent telemetry samples add optional `unit: string|null`, copied from each packet's unit map.
+Missing units remain unknown. Preserve units per sample across changes; do not infer from signal
+names or convert stored values. Both memory and Redis buffers retain this metadata. Existing
+unitless Redis rows still read with null units. The LB-06 packet contract is unchanged.
+
+`bench/device-recent` continues serving a device after it resolves to a graph entity by reading
+that entity's project-scoped recent buffer. Resolution must not make a streaming device disappear
+from the no-focus view. Limits, identity scoping and negative/zero-limit behavior stay explicit.
+
+The local `GET /projects/{project_id}/bench/sources` device rows also expose optional `headline`
+metadata from the USB board definition. Both local connection pickers and discovery cards render
+this tentative hint; `board`, `mcu_known`, serial ambiguity and explicit port confirmation retain
+their existing meaning. Missing headlines preserve legacy fallback wording.
+
+### SOLUSDEV-262 — optional Live Bench focus narrowing
+
+`GET /projects/{project_id}/bench/device-recent` accepts optional UUID `focus_entity_id`.
+Absent: existing device-keyed batch behavior, including unresolved observations. Present:
+validate a live entity in the authorized project, then return only requested device views whose
+resolved entity belongs to that entity or its accepted physical topology descendants. Physical
+robot membership edges select its projection; brain/bus traversal follows accepted hardware
+connectivity, never arbitrary source relations or name similarity. Unknown mapping yields
+`devices:[]`, not unfiltered fallback; wrong-project/deleted focus returns404. Read-only: do not
+open ports, create graph facts, alter focus, or change telemetry ownership.
+
+
+**SOLUSDEV-262 reviewed offers.** `force_confirmation` is a strict boolean, default false.
+When true, the per-turn Build policy cannot automatically authorize owned routines; mutating
+calls follow the existing confirmation-card/decision path. Explicit host-mirror offers send true.
+The flag does not grant tool, workspace or project authority and does not make Guide executable.

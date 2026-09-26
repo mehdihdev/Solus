@@ -1,7 +1,7 @@
 """SOLUSDEV-246 (STORE ST4) — the committed BOM bundle folder IS a publishable bundle.
 
 Mirrors `test_fixture_bundle_folder.py`: zips
-`packages/shared-types/fixtures/extension-bundles/bom/`, runs the full bundle
+`packages/api/src/solus_api/extensions/bundled/bom/`, runs the full bundle
 validator, and checks the first-party gate matches the in-repo `bom` capability.
 """
 
@@ -14,7 +14,7 @@ from solus_api.widgets.registry import discover_capabilities
 from solus_contracts.extension_manifest import declares_first_party
 from test_fixture_bundle_folder import zip_folder
 
-FOLDER = API_DIR.parent / "shared-types" / "fixtures" / "extension-bundles" / "bom"
+FOLDER = API_DIR / "src" / "solus_api" / "extensions" / "bundled" / "bom"
 
 
 def test_the_bom_folder_passes_the_full_bundle_validator() -> None:

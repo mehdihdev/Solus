@@ -24,8 +24,10 @@ import type { Entity } from '../../../lib/api/resources'
 import { awaitMark, startConfirmation } from '../../../lib/perf/marks'
 import { useWorkspaceSessionGeneration, workspaceSessionGeneration } from '../workspaceSession'
 import { hardwareErrorText, robotIdFromMessage } from './detected'
+import { useProposalSources } from './useProposalSources'
 import {
   AMBIGUOUS_NOTE,
+  connectionOnly,
   defaultAccepted,
   pendingDevices,
   type DeviceCardState
@@ -48,6 +50,9 @@ export interface DeviceProposals {
 interface ProposalsStore {
   generation: number
   projectId: string | null
+  sourceKey: string
+  sourceRefs: string[] | null
+  sourceError: string | null
   states: Record<string, DeviceCardState>
   appearances: Record<string, symbol>
   dismissed: ReadonlySet<string>
@@ -59,6 +64,9 @@ const NO_CARDS: Record<string, DeviceCardState> = {}
 const EMPTY: ProposalsStore = {
   generation: -1,
   projectId: null,
+  sourceKey: '',
+  sourceRefs: null,
+  sourceError: null,
   states: NO_CARDS,
   appearances: {},
   dismissed: new Set()
@@ -172,25 +180,55 @@ function prunedDismissals(
   return kept.length === dismissed.size ? dismissed : new Set(kept)
 }
 
+function applySourceError(states: Cards, error: string | null): void {
+  if (!error) return
+  for (const ref of Object.keys(states)) states[ref] = { ...states[ref], status: 'failed', error }
+}
+
+function sourceOptions(): { source_refs: string[] } | undefined {
+  const refs = useStore.getState().sourceRefs
+  return refs?.length ? { source_refs: refs } : undefined
+}
+function requestProposal(projectId: string, ref: string): Promise<ProposalOut> {
+  const options = sourceOptions()
+  return options ? proposeDetected(projectId, ref, options) : proposeDetected(projectId, ref)
+}
+
 /** Rebuild the card map from the pending set. A no-op rebuild keeps the store
  *  identity so consumers do not re-render. */
 function reconcile(
   projectId: string | null,
   generation: number,
   pending: readonly DetectedDeviceOut[],
-  listed: ReadonlySet<string>
+  listed: ReadonlySet<string>,
+  sources: ReturnType<typeof useProposalSources>
 ): void {
   useStore.setState((store) => {
-    const reset = store.projectId !== projectId || store.generation !== generation
+    const reset =
+      store.projectId !== projectId ||
+      store.generation !== generation ||
+      store.sourceKey !== sources.key
     if (reset) clearTimers()
     const previous = reset ? NO_CARDS : store.states
     const states = rebuildCards(previous, pending)
+    applySourceError(states, sources.error)
     const appearances = Object.fromEntries(
       Object.keys(states).map((ref) => [ref, (!reset && store.appearances[ref]) || Symbol(ref)])
     )
     const dismissed = prunedDismissals(reset ? new Set() : store.dismissed, listed)
     const unchanged = !reset && dismissed === store.dismissed && sameCards(previous, states)
-    return unchanged ? store : { projectId, generation, states, appearances, dismissed }
+    return unchanged
+      ? store
+      : {
+          projectId,
+          generation,
+          sourceKey: sources.key,
+          sourceRefs: sources.refs,
+          sourceError: sources.error,
+          states,
+          appearances,
+          dismissed
+        }
   })
 }
 
@@ -222,7 +260,7 @@ async function propose(
   appearance: symbol
 ): Promise<void> {
   try {
-    const proposal = await proposeDetected(projectId, ref)
+    const proposal = await requestProposal(projectId, ref)
     if (!currentAppearance(projectId, generation, ref, appearance)) return
     const attempts = (useStore.getState().states[ref]?.attempts ?? 0) + 1
     const silent = proposal.driver_id === null
@@ -247,7 +285,12 @@ async function propose(
 /** Start the next interrogations in device order, up to the in-flight cap. */
 function schedule(projectId: string): void {
   const generation = useStore.getState().generation
-  if (!current(projectId, generation)) return
+  if (
+    !current(projectId, generation) ||
+    useStore.getState().sourceRefs === null ||
+    useStore.getState().sourceError
+  )
+    return
   for (const card of Object.values(useStore.getState().states)) {
     if (inFlight.size >= MAX_IN_FLIGHT) return
     if (card.status !== 'proposing' || card.device.ambiguous || inFlight.has(card.ref)) continue
@@ -269,7 +312,8 @@ function confirmBody(proposal: ProposalOut, input: ConfirmInput): ConfirmIn {
     target,
     accepted: defaultAccepted(proposal),
     ...(input.repoConfigId ? { repo_config_id: input.repoConfigId } : {}),
-    start_session: true,
+    connection_only: connectionOnly(proposal),
+    start_session: !connectionOnly(proposal),
     window_seconds: 1
   }
 }
@@ -282,8 +326,9 @@ function usePendingDeviceCards(
   projectId: string | null,
   devices: DetectedDeviceOut[] | null,
   entities: readonly Entity[] | null
-) {
+): { cards: DeviceCardState[]; generation: number } {
   const generation = useWorkspaceSessionGeneration()
+  const sources = useProposalSources(projectId)
   // Cards belong to the project that produced them; a switch shows nothing
   // until reconcile() has run for the new project.
   const states = useStore((store) =>
@@ -305,9 +350,13 @@ function usePendingDeviceCards(
     const listed = new Set(
       (devices ?? []).flatMap((device) => (device.device_ref ? [device.device_ref] : []))
     )
-    reconcile(projectId, generation, pending, listed)
+    reconcile(projectId, generation, pending, listed, {
+      key: sources.key,
+      refs: sources.refs,
+      error: sources.error
+    })
     if (projectId) schedule(projectId)
-  }, [projectId, generation, pending, devices])
+  }, [projectId, generation, pending, devices, sources.key, sources.refs, sources.error])
   const cards = useMemo(
     () => pending.flatMap((device) => states[device.device_ref ?? ''] ?? []),
     [pending, states]
@@ -381,7 +430,7 @@ function useDeviceConfirmation(
       if (!projectId || !current(projectId, generation) || !settled(card) || !card.proposal)
         return null
       const appearance = useStore.getState().appearances[ref]
-      const body = confirmBody(card.proposal, input)
+      const body = { ...confirmBody(card.proposal, input), ...sourceOptions() }
       patch(ref, { status: 'confirming', error: null, conflictRobotId: null })
       const confirmationStart = startConfirmation()
       try {

@@ -13,6 +13,7 @@ later (data events persist nothing without consent, and the action gate expires 
 from __future__ import annotations
 
 import enum
+import json
 import uuid
 from collections.abc import Sequence
 from typing import Any, Final, Literal
@@ -26,6 +27,7 @@ from solus_api.core.errors import APIError
 from solus_api.fingerprint.contract import Modality, ModalityMatch
 from solus_api.hardware.config import BusMapEntry, HardwareConfig
 from solus_api.models import HardwareSuggestion, SuggestionStatus, utcnow
+from solus_api.services.solus_graph import lock_project
 
 TIER_CEILING: Final[dict[Modality, float]] = {
     Modality.BUS_ENUMERATION: 0.92,
@@ -217,21 +219,37 @@ def suggest_links(
 # ------------------------------------------------------------------ persistence
 
 
+def _evidence_set(evidence: Sequence[dict[str, Any]]) -> frozenset[str]:
+    """Compare facts independently of record ordering, duplicates and object-key order."""
+    return frozenset(json.dumps(item, sort_keys=True, separators=(",", ":")) for item in evidence)
+
+
 async def persist_suggestions(
     session: AsyncSession, project_id: uuid.UUID, suggestions: Sequence[LinkSuggestion]
 ) -> list[HardwareSuggestion]:
-    """Insert pending rows; a (subject, robot) pair already pending is skipped (idempotent)."""
+    """Deduplicate pending proposals and retain declined evidence across rediscovery."""
+    await lock_project(session, project_id)
     rows: list[HardwareSuggestion] = []
     for suggestion in suggestions:
-        existing = await session.scalar(
-            select(HardwareSuggestion.id).where(
+        evidence = [m.model_dump(mode="json") for m in suggestion.evidence]
+        existing = await session.scalars(
+            select(HardwareSuggestion)
+            .where(
                 HardwareSuggestion.project_id == project_id,
+                HardwareSuggestion.subject_kind == suggestion.subject_kind,
                 HardwareSuggestion.subject_ref == suggestion.subject_ref,
                 HardwareSuggestion.candidate_robot_id == suggestion.candidate_robot_id,
-                HardwareSuggestion.status == SuggestionStatus.PENDING,
+                HardwareSuggestion.status.in_(
+                    [SuggestionStatus.PENDING, SuggestionStatus.REJECTED]
+                ),
             )
+            .execution_options(populate_existing=True)
         )
-        if existing is not None:
+        canonical = _evidence_set(evidence)
+        if any(
+            row.status is SuggestionStatus.PENDING or _evidence_set(row.evidence) == canonical
+            for row in existing
+        ):
             continue
         row = HardwareSuggestion(
             project_id=project_id,
@@ -240,7 +258,7 @@ async def persist_suggestions(
             candidate_robot_id=suggestion.candidate_robot_id,
             confidence=suggestion.confidence,
             tier=suggestion.tier.value,
-            evidence=[m.model_dump(mode="json") for m in suggestion.evidence],
+            evidence=evidence,
             reason=suggestion.reason,
             status=SuggestionStatus.PENDING,
         )
@@ -272,8 +290,16 @@ async def decide_suggestion(
 ) -> HardwareSuggestion:
     """Accept or reject one pending row. Accepting supersedes the pending siblings for the
     same subject — one subject links to one robot."""
-    row = await session.get(HardwareSuggestion, suggestion_id)
-    if row is None or row.project_id != project_id:
+    await lock_project(session, project_id)
+    row = await session.scalar(
+        select(HardwareSuggestion)
+        .where(
+            HardwareSuggestion.id == suggestion_id,
+            HardwareSuggestion.project_id == project_id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
         raise APIError(404, "not_found", "Suggestion not found")
     if row.status is not SuggestionStatus.PENDING:
         raise APIError(409, "conflict", f"Suggestion already {row.status.value}")
@@ -288,6 +314,7 @@ async def decide_suggestion(
             select(HardwareSuggestion).where(
                 HardwareSuggestion.project_id == project_id,
                 HardwareSuggestion.subject_ref == row.subject_ref,
+                HardwareSuggestion.subject_kind == row.subject_kind,
                 HardwareSuggestion.status == SuggestionStatus.PENDING,
                 HardwareSuggestion.id != row.id,
             )

@@ -490,6 +490,31 @@ WebSocket implementations live behind the isolated telemetry service boundary (A
 
 **Locked at finalization (§7.1):** SSE for agent response streaming, WS for telemetry — Electron's Chromium renderer supports both natively, and the one-shot nature of agent responses fits SSE.
 
+**SOLUSDEV-262 live-display implementation:** the documented
+`/ws/v1/bench/sessions/{session_id}` initially implements read-only telemetry.
+Within five seconds the browser sends one bounded JSON authentication frame
+`{type:"authenticate", token:<normal bearer token>, project_id:<UUID>}`.
+Credentials never appear in URLs or logs. The server uses the centralized token,
+user and project authorization checks and verifies that the session belongs to
+that project before emitting any data. Token expiry is checked each streaming
+iteration; membership and graph visibility are rechecked at most five seconds
+apart and when observed session mappings change. Expiration, failed reauthorization,
+session end or disconnect terminates delivery. Control/motion messages are not implemented.
+
+Server frames are `{type:"telemetry", project_id, session_id,
+devices:[<DeviceRecentOut>...]}` using the existing device-recent signal shape,
+actual sample timestamps and confirmed signal roles. Changed snapshots are
+coalesced at at most 10 Hz, with bounded history (128 samples per signal inside
+eight seconds), session-scoped device selection and bounded subscriber resources.
+Streaming reads the existing telemetry buffer without opening hardware or polling
+the database on each frame. Slow consumers must not build an unbounded backlog or
+block acquisition. When no snapshot changes, a liveness frame
+`{type:"heartbeat", project_id, session_id}` is sent every five seconds; it never
+refreshes sample timestamps. The renderer shares a session stream across signals, widgets
+and scene, clearing data across account/project changes. REST recent-values reads
+remain a fallback; fallback cadence must not be described as realtime. A gap marks
+established channels stale instead of deleting their cards or inventing samples.
+
 **Amended — SOLUSDEV-167:** the **project event channel is SSE**, not WS. The original choice assumed the bridge's WS auth could be reused; it cannot — that pattern reads an `Authorization` header, which is available only because the companion is a Python client. A browser `WebSocket` cannot set headers, so WS here would mean inventing a second credential path (subprotocol- or query-carried) plus reconnect logic in the client, to buy a bidirectional channel nothing needs. SSE runs under the ordinary `ProjectCtx` dependency and reuses the shipped client parser. Consequently there is **no client `subscribe` frame and no topic set** — connecting to a project's stream IS the subscription, and `graph.changed` was the only event type produced until SOLUSDEV-250 added `hardware.devices_changed` (below). `warnings` and `jobs` become additional event types on the same stream when their producers exist; `presence` stays **[DEFERRED — §7.2.4]** on its own schema. The SSE `event:` name is the frame's `type` (a lowercase dotted token); a frame without a valid one is sent as `graph.changed`.
 
 **Amended — SOLUSDEV-250 (hot-detect):** the same stream carries `hardware.devices_changed` — `{type, project_id, devices: [<GET /hardware/detected row>…], at}`. Unlike `graph.changed` it is a **full current list**, not a hint: the data is small, ephemeral and machine-local (there is no server state to refetch), and absence from the list is the removal. Produced only by the **local** API process (`hardware/device_watch.py`): it diffs `detect_devices()` at ~1 Hz (no port opened, nothing enumerated while the process has no subscriber) and emits only when the list changes. Delivery is **local-only** — `LiveHub.publish_local`, never Redis — so one machine's devices never appear in another machine's session. Informational: it does not touch the graph, and nothing auto-accepts from it. WS remains the telemetry transport (`/ws/v1/bench/sessions/{session_id}`), where the client genuinely sends control input.
@@ -723,7 +748,7 @@ remain separate policies; no annual MCP entitlement is inferred.
 
 Existing source-sync jobs now acquire immutable element/metadata revisions and
 verify workspace STEP translations before publishing `revision-v2-*` cache entries.
-The `cad-geometry-v2` cursor repairs existing tracked sources once after successful
+The `cad-geometry-v3` cursor repairs existing tracked sources once after successful
 reingestion. All six feature-spec callers use immutable `/m/` specs selected from a
 fresh feature tree, with account/revision/collection isolation. Full details and
 cold/warm request costs are in `onshape-development.md`. Existing job identity,

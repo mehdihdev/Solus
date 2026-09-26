@@ -14,10 +14,10 @@ def test_revision_is_readable_immutable_and_confined(tmp_path):
     fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         store = RevisionStore(fd, str(UUID(int=1)))
-        result = store.publish(1, {"model": {"asset": "so101_new_calib_v1"}})
+        result = store.publish(1, {"model": {"asset": "fixture_model_v2"}})
         assert (
             json.loads((tmp_path / result["relative_path"]).read_text())["model"]["asset"]
-            == "so101_new_calib_v1"
+            == "fixture_model_v2"
         )
         with pytest.raises(FileExistsError):
             store.publish(1, {"different": True})

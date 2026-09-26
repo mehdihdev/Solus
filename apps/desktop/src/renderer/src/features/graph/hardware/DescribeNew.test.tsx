@@ -4,12 +4,14 @@ import userEvent from '@testing-library/user-event'
 import * as hardware from '../../../lib/api/hardware'
 import * as robotsApi from '../../../lib/api/physicalRobots'
 import type { Entity } from '../../../lib/api/resources'
+import { createUnassignedPart } from './createUnassignedPart'
 import { DescribeNew } from './DescribeNew'
 
 vi.mock('../../../lib/api/hardware', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/api/hardware')>()),
   createHardwarePart: vi.fn()
 }))
+vi.mock('./createUnassignedPart', () => ({ createUnassignedPart: vi.fn() }))
 vi.mock('../../../lib/api/physicalRobots', () => ({ createPhysicalRobot: vi.fn() }))
 
 const robot: Entity = {
@@ -45,6 +47,7 @@ function renderDescribe(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(createUnassignedPart).mockResolvedValue(part)
   vi.mocked(hardware.createHardwarePart).mockResolvedValue({ entity: part, config_entry_id: 'e' })
   vi.mocked(robotsApi.createPhysicalRobot).mockResolvedValue({ ...robot, id: 'robot-new' })
 })
@@ -93,21 +96,18 @@ it('targets the chosen robot when several exist', async () => {
   )
 })
 
-it('with no robot, the described thing is the robot', async () => {
+it('with no robot, creates an unassigned part in one click without a hidden robot', async () => {
   renderDescribe([])
-  expect(screen.queryByRole('combobox', { name: 'Part of' })).not.toBeInTheDocument()
-  await userEvent.type(screen.getByRole('textbox', { name: 'What is it?' }), '  Bench arm  ')
-  expect(screen.getByText('No robot yet — this becomes the robot.')).toBeInTheDocument()
+  await userEvent.type(screen.getByRole('textbox', { name: 'What is it?' }), 'Wrist IMU')
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-  expect(robotsApi.createPhysicalRobot).toHaveBeenCalledExactlyOnceWith(
+  expect(createUnassignedPart).toHaveBeenCalledWith(
     'p1',
-    undefined,
-    'Bench arm'
+    'Wrist IMU',
+    'sensors',
+    expect.any(String)
   )
-  await waitFor(() =>
-    expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'robot-new' }))
-  )
-  expect(hardware.createHardwarePart).not.toHaveBeenCalled()
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith(part))
+  expect(robotsApi.createPhysicalRobot).not.toHaveBeenCalled()
 })
 
 it('shows the failure verbatim and keeps the draft', async () => {
@@ -132,4 +132,21 @@ it('is terse in Expert mode and inert offline', () => {
   expect(screen.queryByText(/from a datasheet/)).not.toBeInTheDocument()
   expect(screen.getByRole('textbox', { name: 'What is it?' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled()
+})
+
+it('keeps guidance available inside compact options without pushing Add below the fold', () => {
+  render(
+    <DescribeNew
+      projectId="p1"
+      mode="Guide"
+      robots={[robot]}
+      onCreated={onCreated}
+      disabled={false}
+      compact
+    />
+  )
+  const guidance = screen.getByText(/Specs come later/)
+  expect(guidance.closest('details')).not.toHaveAttribute('open')
+  expect(guidance.closest('details')).not.toBeNull()
+  expect(screen.getByRole('button', { name: 'Add' }).closest('details')).toBeNull()
 })

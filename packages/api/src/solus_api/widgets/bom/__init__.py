@@ -5,7 +5,7 @@ canonical parts: a part in CAD, the schematic and the purchase list is one row
 (`rows.py`), lifecycle state per row (R5), supplier preferences and cost targets
 from the bundle's settings / repo `[ext.bom]` section, CSV export (`routes.py`),
 and a SOL tool for planned rows (`tools.py`). The bundle folder lives at
-``packages/shared-types/fixtures/extension-bundles/bom/``.
+``packages/api/src/solus_api/extensions/bundled/bom/``.
 """
 
 from __future__ import annotations

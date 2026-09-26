@@ -41,9 +41,9 @@ export function simulatorMark(kind: BenchSimulatorKind): string {
   return SIMULATOR_MARKS[kind]
 }
 
-/** Row title. A `usb_bridge` device NEVER shows a guessed board — the bridge
- *  chip is all we can see, so say "something on USB", not a verdict. */
+/** Preserve a definition-provided tentative hint without deriving a board identity. */
 export function deviceTitle(device: BenchDevice): string {
+  if (device.headline) return device.headline
   if (device.board_class === 'usb_bridge') return 'something on USB'
   return device.board ?? 'Unknown device'
 }

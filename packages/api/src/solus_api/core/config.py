@@ -311,6 +311,8 @@ class Settings(BaseSettings):
     # docs/schemas/extensions.md §8.4). Evaluated by `deps.require_staff`; never
     # returned by any route. Malformed entries fail at startup, not at first use.
     staff_user_ids: str = ""
+    # Explicit existing staff account used to provision shipped Store releases.
+    first_party_publisher_id: uuid.UUID | None = None
     # §12 write-group budgets. PROVISIONAL pending the Phase 4 security pass —
     # the setting NAMES are the contract, not these values.
     extension_publishes_per_hour_per_user: int = 10

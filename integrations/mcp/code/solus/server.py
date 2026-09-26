@@ -16,6 +16,7 @@ the server starts only under `main()`.
 
 import asyncio
 import functools
+import inspect
 import logging
 import sys
 import threading
@@ -40,7 +41,14 @@ _bootstrap_sys_path()
 # (relative imports); bin/launch execs it as a plain script, where only the
 # absolute `solus.*` names put on sys.path above can resolve.
 try:
-    from . import arduino_compile, arduino_process, arduino_toolchain, git_execution, git_operations
+    from . import (
+        arduino_compile,
+        arduino_process,
+        arduino_toolchain,
+        arduino_upload,
+        git_execution,
+        git_operations,
+    )
     from .execute import execute_plan, pinned_which, refusal
     from .plan import DEFAULT_ENVIRONMENT, DEFAULT_PYTHON, DEFAULT_TEST_TARGET, plan_action
     from .plan import DEFAULT_TIMEOUT_SECONDS as _DEFAULT_TIMEOUT
@@ -53,6 +61,7 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
         arduino_compile,
         arduino_process,
         arduino_toolchain,
+        arduino_upload,
         git_execution,
         git_operations,
     )
@@ -285,6 +294,32 @@ async def tool_arduino_compile(
     )
 
 
+async def tool_arduino_upload(
+    sketch: str,
+    fqbn: Literal["arduino:avr:uno"],
+    build_id: str,
+    device_ref: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Preview one verified workspace application build; execution is currently unavailable.
+    Upload refuses until exclusive serial ownership can be handed to the uploader.
+    Select a current USB device_ref, never a tty path. Prior firmware is unknown.
+    A started failure has unknown device state and must never be retried automatically."""
+    try:
+        root = workspace_root()
+    except (OSError, RuntimeError):
+        raise ValueError("workspace_unavailable") from None
+    return await _arduino_call(
+        arduino_upload.arduino_upload,
+        root=root,
+        sketch=sketch,
+        fqbn=fqbn,
+        build_id=build_id,
+        device_ref=device_ref,
+        dry_run=dry_run,
+    )
+
+
 _TOOLS: dict[str, Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]] = {
     "probe_environment": tool_probe_environment,
     "plan": tool_plan,
@@ -300,6 +335,7 @@ _TOOLS: dict[str, Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]] = {
     "arduino_probe": tool_arduino_probe,
     "arduino_prepare": tool_arduino_prepare,
     "arduino_compile": tool_arduino_compile,
+    "arduino_upload": tool_arduino_upload,
 }
 
 
@@ -311,7 +347,12 @@ def _streaming_tool(server: Any, function: Callable[..., Any]) -> Callable[..., 
         output = AsyncOutput(server.get_context())
         output_token = OUTPUT_CALLBACK.set(output.output)
         cancel_token = CANCEL_EVENT.set(output.cancelled)
-        worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        operation = (
+            function(*args, **kwargs)
+            if inspect.iscoroutinefunction(function)
+            else asyncio.to_thread(function, *args, **kwargs)
+        )
+        worker = asyncio.create_task(operation)
         publisher = asyncio.create_task(output.publish())
         try:
             result = await asyncio.shield(worker)
@@ -323,6 +364,8 @@ def _streaming_tool(server: Any, function: Callable[..., Any]) -> Callable[..., 
             return dict(result)
         except asyncio.CancelledError:
             output.cancelled.set()
+            if inspect.iscoroutinefunction(function):
+                worker.cancel()
             await asyncio.shield(worker)
             raise
         finally:
@@ -341,7 +384,9 @@ def build_server() -> Any:
     server = FastMCP(SERVER_NAME)
     for name, function in _TOOLS.items():
         registered_function = (
-            _streaming_tool(server, function) if name in {"run", "test"} else function
+            _streaming_tool(server, function)
+            if name in {"run", "test", "arduino_upload"}
+            else function
         )
         server.tool(name=name, description=function.__doc__)(registered_function)
         if name.startswith(("git_", "arduino_")):

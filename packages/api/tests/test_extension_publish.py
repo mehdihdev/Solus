@@ -330,6 +330,7 @@ async def test_missing_bundle_part_is_422(
         (build_zip(without(minimal_files(), "extension.toml")), "extension.toml: missing"),
         (build_zip(without(minimal_files(), "OVERVIEW.md")), "store.overview"),
     ],
+    ids=["not-zip", "missing-manifest", "missing-overview"],
 )
 async def test_invalid_bundle_is_422_bundle_invalid_with_problems(
     client: AsyncClient,

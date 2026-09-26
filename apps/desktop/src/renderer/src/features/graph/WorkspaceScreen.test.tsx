@@ -1,3 +1,4 @@
+import { createUnassignedPart } from './hardware/createUnassignedPart'
 // Workspace screen: honest empty states (SOLUSDEV-152) plus the entity
 // navigator (SOLUSDEV-242) — real entities render as bounded node cards, and
 // selecting one drives the shared focus store (one bounded neighbourhood
@@ -19,6 +20,11 @@ import { streamProjectEvents, type ProjectEvent } from '../../lib/api/projectEve
 import { useDetectedDevicesStore } from './hardware/detectedDevicesStore'
 import { placementNearRail } from './hardware/deviceCardRules'
 import { resetDeviceProposals } from './hardware/useDeviceProposals'
+import { reconcileWidgetGraph } from '../../lib/api/widgetGraph'
+
+vi.mock('../../lib/api/widgetGraph', () => ({ reconcileWidgetGraph: vi.fn() }))
+
+vi.mock('./hardware/createUnassignedPart', () => ({ createUnassignedPart: vi.fn() }))
 
 vi.mock('../../lib/api/projectEvents', () => ({ streamProjectEvents: vi.fn() }))
 
@@ -86,6 +92,7 @@ function linkProject(): void {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(reconcileWidgetGraph).mockImplementation(() => new Promise<void>(() => undefined))
   // The robot sidebar's per-robot reads: nothing streaming, nothing pending, no config.
   vi.mocked(resources.listBenchSessions).mockResolvedValue([])
   vi.mocked(resources.listAllSources).mockResolvedValue([])
@@ -345,8 +352,12 @@ describe('WorkspaceScreen — the canvas-edge device rail', () => {
     expect(await screen.findByRole('button', { name: 'Select Bench arm' })).toBeInTheDocument()
     expect(screen.getByTestId('graph-node-arm')).toHaveAttribute('data-domain', 'project')
     await waitFor(() => expect(resources.listAllEntities).toHaveBeenCalledTimes(2))
-    // Not live yet: no position is saved for an optimistic id.
-    expect(workspaceApi.saveWorkspaceLayout).not.toHaveBeenCalled()
+    // Existing defaults may save, but the optimistic robot must not be persisted yet.
+    expect(
+      vi
+        .mocked(workspaceApi.saveWorkspaceLayout)
+        .mock.calls.every(([, layout]) => !Object.hasOwn(layout.positions, 'arm'))
+    ).toBe(true)
     await act(async () => releaseRefetch())
     // The authoritative robot replaces the optimistic one — still one card, same name.
     expect(screen.getAllByRole('button', { name: 'Select Bench arm' })).toHaveLength(1)
@@ -361,7 +372,11 @@ describe('WorkspaceScreen — the canvas-edge device rail', () => {
     )
     await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('arm'))
     await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Robot name' })).toBeNull())
-    expect(workspaceApi.saveWorkspaceLayout).toHaveBeenCalledTimes(1)
+    expect(
+      vi
+        .mocked(workspaceApi.saveWorkspaceLayout)
+        .mock.calls.filter(([, layout]) => Object.hasOwn(layout.positions, 'arm'))
+    ).toHaveLength(1)
   })
 })
 
@@ -650,12 +665,12 @@ function registerRobotChildCreationTests(): void {
 }
 
 function registerRootRobotCreationTests(): void {
-  it('makes the described thing the robot when the project has none', async () => {
+  it('adds the described part unassigned when the project has no robot', async () => {
     linkProject()
     const rover: resources.Entity = {
       ...entity('rover', 'Rover MK2'),
-      type: 'physical_robot',
-      domain: 'project',
+      type: 'part',
+      domain: 'mechanical',
       origin: 'manual',
       source_id: null,
       project_id: 'p1',
@@ -669,24 +684,28 @@ function registerRootRobotCreationTests(): void {
       edges: [],
       truncated: false
     })
-    vi.mocked(robotApi.createPhysicalRobot).mockResolvedValue(rover)
+    vi.mocked(createUnassignedPart).mockResolvedValue(rover)
     render(<WorkspaceScreen />)
     await userEvent.click(await screen.findByRole('button', { name: 'Add' }))
     await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
     const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
     await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Rover MK2')
     expect(describe.queryByRole('combobox', { name: 'Part of' })).not.toBeInTheDocument()
-    expect(describe.getByText('No robot yet — this becomes the robot.')).toBeInTheDocument()
+    expect(
+      describe.getByText('This part stays unassigned until you choose a robot.')
+    ).toBeInTheDocument()
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0))
     vi.mocked(resources.listAllEntities).mockResolvedValue([bracket, rover])
     await userEvent.click(describe.getByRole('button', { name: 'Add' }))
     await waitFor(() =>
-      expect(robotApi.createPhysicalRobot).toHaveBeenCalledExactlyOnceWith(
+      expect(createUnassignedPart).toHaveBeenCalledExactlyOnceWith(
         'p1',
-        undefined,
-        'Rover MK2'
+        'Rover MK2',
+        expect.any(String),
+        expect.any(String)
       )
     )
+    expect(robotApi.createPhysicalRobot).not.toHaveBeenCalled()
     expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
     expect(await screen.findByRole('button', { name: 'Select Rover MK2' })).toBeInTheDocument()
     await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('rover'))
@@ -777,3 +796,112 @@ function deviceRailFixture() {
 
   return { signIn, leader, boundPart, rail }
 }
+
+it('renders registered Live Bench and widgets at overview and opens existing destinations', async () => {
+  linkProject()
+  const registration = (id: string, type: string, name: string): resources.Entity => ({
+    id,
+    type,
+    name,
+    domain: 'workspace',
+    origin: 'system',
+    project_id: 'p1',
+    source_key: null
+  })
+  const root = registration('workspace-root', 'solus:workspace', 'Workspace')
+  const bench = registration('bench-root', 'solus:live_bench', 'Live Bench')
+  const widget = {
+    ...registration('widget-root', 'solus:widget', 'Parts list'),
+    properties: {
+      slug: 'parts-list',
+      enabled: true,
+      blocked: false,
+      views: ['page'],
+      version: '1.0'
+    }
+  }
+  vi.mocked(resources.getProject).mockResolvedValue(detailWith(3, 2))
+  vi.mocked(resources.listAllEntities).mockResolvedValue([root, bench, widget])
+  vi.mocked(workspaceApi.listAllRelations).mockResolvedValue(
+    [bench, widget].map((child) => ({
+      id: `edge-${child.id}`,
+      type: 'contains',
+      from_entity_id: root.id,
+      to_entity_id: child.id
+    }))
+  )
+  const openBench = vi.fn()
+  const openWidget = vi.fn()
+  render(<WorkspaceScreen onOpenBench={openBench} onOpenWidget={openWidget} />)
+  expect(await screen.findByTestId('graph-node-bench-root')).toBeInTheDocument()
+  expect(screen.getByTestId('graph-node-widget-root')).toBeInTheDocument()
+  expect(screen.queryByTestId('graph-node-workspace-root')).not.toBeInTheDocument()
+  expect(screen.getByTestId('graph-navigator')).toHaveAttribute('data-depth', '0')
+  fireEvent.click(screen.getByRole('button', { name: 'Open Live Bench' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open Parts list' }))
+  expect(openBench).toHaveBeenCalledOnce()
+  expect(openWidget).toHaveBeenCalledWith('parts-list')
+})
+
+it('opens the Hardware tab for a consumed external request only once', async () => {
+  linkProject()
+  vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+  vi.mocked(resources.listAllEntities).mockResolvedValue([entity('part', 'Existing part')])
+  const consumed = vi.fn()
+  const view = render(
+    <WorkspaceScreen
+      openAddRequest={{ tab: 'hardware', sequence: 1 }}
+      onAddRequestConsumed={consumed}
+    />
+  )
+  expect(await screen.findByRole('tab', { name: 'Hardware' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  expect(consumed).toHaveBeenCalledWith(1)
+  view.rerender(<WorkspaceScreen onAddRequestConsumed={consumed} />)
+  expect(consumed).toHaveBeenCalledTimes(1)
+})
+
+it('initializes legacy registrations and renders the persisted Live Bench after refresh', async () => {
+  linkProject()
+  vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+  vi.mocked(resources.listAllEntities).mockResolvedValue([entity('part', 'Existing part')])
+  let finish!: () => void
+  vi.mocked(reconcileWidgetGraph).mockReturnValue(
+    new Promise<void>((resolve) => {
+      finish = resolve
+    })
+  )
+  render(<WorkspaceScreen />)
+  await waitFor(() => expect(reconcileWidgetGraph).toHaveBeenCalledTimes(1))
+  expect(screen.queryByTestId('graph-node-persisted-bench')).not.toBeInTheDocument()
+  vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0))
+  vi.mocked(resources.listAllEntities).mockResolvedValue([
+    entity('part', 'Existing part'),
+    {
+      id: 'persisted-bench',
+      source_key: null,
+      project_id: 'p1',
+      type: 'solus:live_bench',
+      name: 'Live Bench',
+      domain: 'workspace',
+      origin: 'system'
+    }
+  ])
+  await act(async () => finish())
+  expect(await screen.findByTestId('graph-node-persisted-bench')).toBeInTheDocument()
+  expect(reconcileWidgetGraph).toHaveBeenCalledTimes(1)
+})
+
+it('explains member-required initialization and exposes a manual retry', async () => {
+  linkProject()
+  vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
+  vi.mocked(resources.listAllEntities).mockResolvedValue([entity('part', 'Existing part')])
+  vi.mocked(reconcileWidgetGraph).mockRejectedValue(new ApiError(403, 'FORBIDDEN', 'private'))
+  render(<WorkspaceScreen />)
+  expect(await screen.findByText(/project member must initialize widgets/i)).toBeInTheDocument()
+  expect(screen.queryByText('private')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry widget initialization' }))
+  await waitFor(() => expect(reconcileWidgetGraph).toHaveBeenCalledTimes(2))
+})

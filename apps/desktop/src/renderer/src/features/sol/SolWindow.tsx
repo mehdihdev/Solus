@@ -17,6 +17,7 @@ import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceStore'
 import type { SolState } from '../../../../main/sol-window/solWindow'
 import { SolChat } from './SolChat'
+import { GuideTasks } from '../guide/GuideTasks'
 import { useSolSessionStore } from './solSessionStore'
 import { connectSolBridge, useSolWindowStore } from './solWindowStore'
 
@@ -84,6 +85,7 @@ function statusLines(state: SolState | null): string[] {
 
 function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
   const status = useAuthStore((s) => s.status)
+  const mode = useSolWindowStore((s) => s.state?.actionMode)
   if (status === 'loading') {
     return (
       <Centered>
@@ -94,7 +96,12 @@ function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
   if (status === 'unauthenticated') {
     return <Centered>Sign in from the main Solus window to use SOL here.</Centered>
   }
-  return <SolChat projectId={projectId} layout="panel" />
+  return (
+    <>
+      {mode === 'guide' && projectId && <GuideTasks />}
+      <SolChat projectId={projectId} layout="panel" />
+    </>
+  )
 }
 
 export function SolWindow(): React.JSX.Element {

@@ -12,13 +12,13 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field, field_validator
+from pydantic import Field, StrictBool, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -56,7 +56,7 @@ from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
 from solus_api.agent.tools import ToolRegistry
 from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
-from solus_api.agent.tools.untrusted import redact_value
+from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.agent.turn_limits import turn_limits
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
@@ -78,6 +78,7 @@ from solus_api.models import (
     ConfirmationStatus,
     Conversation,
     ConversationTurn,
+    GraphEntity,
     Role,
     Source,
     ToolConfirmation,
@@ -229,6 +230,8 @@ class MessageCreate(StrictModel):
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
     #: request-level choice.
     action_mode: ActionMode = ActionMode.GUIDE
+    #: A review request can reduce Build authority; prompt text cannot restore it.
+    force_confirmation: StrictBool = False
     #: S1-W3: the composer's "Think harder" — the runner bumps the estimator's
     #: tier by one for this turn. Never a model name: routing stays Solus's.
     think_harder: bool = False
@@ -507,7 +510,10 @@ async def _persist_turn(
                 # this row is served back out of /turns to the browser, so a
                 # secret-shaped tool value would otherwise sit in Postgres in the
                 # clear AND render in the UI (SOLUS-RUN-01).
-                attrs=redact_value({"call": call, "result": result}),
+                attrs=redact_value(
+                    {"call": call, "result": result},
+                    allowed_paths=call_display_paths(call.get("tool"), call.get("args")),
+                ),
             )
         assistant = await SERVICE.append_turn(
             session,
@@ -955,7 +961,9 @@ async def post_message(
     # SOLUSDEV-251: vendor-documented tool knowledge rides each mapped write
     # tool's description as a fenced note (global table, never project data).
     descriptors = with_knowledge_notes(tuple(registry.list()), await load_knowledge_notes(session))
-    routine_policy = BuildExecutionPolicy(registry, body.action_mode)
+    routine_policy = BuildExecutionPolicy(
+        registry, body.action_mode, force_confirmation=body.force_confirmation
+    )
     turn_sync = create_turn_sync(request, settings, ctx, sessionmaker)
 
     async def routine_outcome(call: ToolCall, result: ToolResult) -> ToolResult:
@@ -1159,7 +1167,21 @@ async def decide_tool_confirmation(
             role=TurnRole.TOOL,
             content=f"{tool_name} → {_decision_summary(body.decision, result)}",
             attrs=redact_value(
-                {"confirmation_id": str(confirmation_id), "result": result.model_dump(mode="json")}
+                {
+                    "confirmation_id": str(confirmation_id),
+                    "call": {
+                        "tool": decided.tool,
+                        "args": {
+                            key: value
+                            for key, value in decided.args.items()
+                            if key in {"path", "schematic_path"}
+                            and isinstance(value, str)
+                            and value in call_display_paths(decided.tool, decided.args)
+                        },
+                    },
+                    "result": result.model_dump(mode="json"),
+                },
+                allowed_paths=call_display_paths(decided.tool, decided.args),
             ),
         )
 
@@ -1180,3 +1202,58 @@ async def decide_tool_confirmation(
     )
     await session.commit()
     return envelope(result.model_dump(mode="json"))
+
+
+def create_scene_enqueue(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: SettingsDep,
+    ctx: ProjectCtx,
+) -> Callable[[AsyncSession, GraphEntity], Awaitable[uuid.UUID]]:
+    """Share the source queue and actor scope; never retain the SSE dependency session."""
+
+    async def enqueue_scene(session: AsyncSession, pending: GraphEntity) -> uuid.UUID:
+        from solus_api.graph.live import graph_changed_frame
+        from solus_api.routers.sources import enqueue_sync
+        from solus_api.services.physical_robots import GraphChangeCounts
+
+        require_role(ctx, Role.MEMBER)
+        source = await session.scalar(
+            select(Source).where(
+                Source.id == uuid.UUID(pending.attrs["cad_source_id"]),
+                Source.project_id == ctx.project.id,
+                Source.team_id == ctx.team.id,
+            )
+        )
+        if source is None:
+            raise APIError(404, "not_found", "CAD source not found")
+        emit_event(
+            session,
+            user=ctx.user,
+            event_type="bench.scene_cad_import_requested",
+            team_id=ctx.team.id,
+            project_id=ctx.project.id,
+            payload={"import_id": str(pending.id)},
+        )
+        job_id = await enqueue_sync(
+            session,
+            ctx,
+            source,
+            request,
+            background_tasks,
+            settings.model_copy(update={"sync_inline": False}),
+            Response(),
+        )
+        await request.app.state.graph_hub.publish(
+            ctx.project.id,
+            graph_changed_frame(
+                project_id=ctx.project.id,
+                source_id=None,
+                sync_id=None,
+                counts=GraphChangeCounts(entities_created=1),
+                at=utcnow().isoformat(),
+            ),
+        )
+        return job_id
+
+    return enqueue_scene

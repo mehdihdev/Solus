@@ -90,14 +90,29 @@ Local-tool rows and catalog tiles compare `supported_platforms` with the native 
 
 The bridge popover hides Add license and Upgrade required for OS-unavailable servers: a license or plan change cannot make an unsupported desktop application run. Compatible servers retain their existing license guidance.
 
-### SO-101 model setup
+### Simulation model setup
 
-Home → Connected accounts → Simulation offers an explicit SO-101 model setup
-panel for the open project. Before Add model, show that it creates a simulation
-model with eight links, six joints, one jaw contact sensor and a bottle from the
-pinned official SO-101 template; the sensor/bottle are example scene additions,
-not measured hardware. The setup does not start a simulator. On success show the
-returned graph model identity and direct the user to SOL to probe/start/load via
-the existing approval flow. Pending/error states remain local; a project change
-must discard stale results. The legacy Live Bench Isaac unavailable row is omitted
-on this surface because the owned companion path is separate from Live Bench.
+Simulation models must be explicitly registered from existing graph bindings and
+schema-v2 local asset manifests. No vendor-specific template is created from the
+connection panel. Registration does not start a simulator; SOL uses the existing
+probe/start/load approval flow with the selected graph model identity. Pending
+results remain scoped to the originating project and are discarded on change.
+
+### External telemetry producers (SOLUSDEV-262)
+
+Live Bench also discovers devices from authenticated external telemetry ingestion
+through `GET /bench/telemetry-devices`, polling every five seconds while online.
+Their IDs merge with session IDs without duplicates and use the existing signal
+panels, even before graph binding. No synthetic session or serial connection is
+created. External IDs expire after 15 seconds without packets; failed discovery
+clears its results. Account/project/workspace-generation changes immediately hide
+old results and discard late responses. Session controls still refer only to real
+Solus-owned sessions.
+
+### Isaac model selection after generic-model cleanup
+
+Select an explicit schema-v2 graph simulation model and authorized workspace asset
+closure. Missing or legacy model bindings show an actionable refusal; no default
+robot, bottle, joint mapping or grasp routine is substituted. Review the complete
+load or bounded joint-trajectory preview before execution. Result cards report
+observed joint tracking only. Existing confirmation and stale-state flows remain.

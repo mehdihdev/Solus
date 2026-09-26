@@ -24,6 +24,7 @@ class ArduinoCliRunner:
         return [
             self._binary,
             "upload",
+            "--verify",
             "--fqbn",
             self._fqbn,
             "-p",
@@ -37,13 +38,43 @@ class ArduinoCliRunner:
         # at the WRITING phase and treat the other phases as no-ops.
         if phase is not FlashPhase.WRITING:
             return
-        process = await asyncio.create_subprocess_exec(
-            *self.upload_argv(artifact),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        output, _ = await process.communicate()
+        await run_cli(self.upload_argv(artifact))
+
+
+async def run_cli(argv: list[str], *, timeout: float = 120, output_limit: int = 65536) -> bytes:
+    """Supervise a pinned tool with bounded output and cleanup on every exit path."""
+    if not argv or not Path(argv[0]).is_absolute():
+        raise FlashError("compiler binary must be an absolute pinned path")
+    if timeout <= 0 or output_limit <= 0:
+        raise ValueError("positive supervision limits required")
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    )
+    output = bytearray()
+    try:
+        async with asyncio.timeout(timeout):
+            assert process.stdout is not None
+            while chunk := await process.stdout.read(4096):
+                if len(output) + len(chunk) > output_limit:
+                    raise FlashError("arduino-cli exceeded output limit")
+                output.extend(chunk)
+            await process.wait()
         if process.returncode != 0:
-            raise FlashError(
-                f"arduino-cli exited {process.returncode}: {output[-500:].decode(errors='replace')}"
-            )
+            # Tool output can contain local paths or project source: never echo it into errors.
+            raise FlashError(f"arduino-cli exited {process.returncode}")
+        return bytes(output)
+    except TimeoutError as exc:
+        raise FlashError("arduino-cli timed out; device state may be unknown") from exc
+    finally:
+        # The compiler launches children; terminate the private process group as well.
+        import os
+        import signal
+
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await process.wait()

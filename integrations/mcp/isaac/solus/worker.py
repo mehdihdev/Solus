@@ -12,7 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "solus"
 from .actions import MutationUnverifiedError
-from .runtime import MAX_FRAME, RUNTIME, validate_frame
+from .runtime import MAX_FRAME, validate_frame
 
 
 def serve_frames(reader: BinaryIO, writer: BinaryIO, generation: str, engine: Any) -> None:
@@ -59,12 +59,13 @@ def main() -> None:
     request_fd, reply_fd = int(sys.argv[1]), int(sys.argv[2])
     generation = sys.argv[3]
     workspace_fd = int(sys.argv[4])
-    del sys.argv[1:5]
+    runtime = Path(sys.argv[5])
+    del sys.argv[1:6]
     from isaacsim import SimulationApp
 
     app = SimulationApp(
         {"headless": True, "disable_viewport_updates": True},
-        experience=str(RUNTIME / "apps/isaacsim.exp.base.python.kit"),
+        experience=str(runtime / "apps/isaacsim.exp.base.python.kit"),
     )
     from .actions import ActionEngine
     from .artifacts import RevisionStore
@@ -73,7 +74,7 @@ def main() -> None:
     scene = NativeScene(app)
     engine = ActionEngine(
         scene,
-        Path(__file__).resolve().parents[1] / ".venv/assets/so101",
+        Path(f"/proc/self/fd/{workspace_fd}"),
         Path.cwd(),
         revision_store=RevisionStore(workspace_fd, generation),
     )

@@ -1,5 +1,54 @@
 # Arduino preparation and compilation — SOLUSDEV-261
 
+## Workspace firmware upload follow-up
+
+The tool `code.arduino_upload` is registered on this same owned Code server.
+
+**Current execution limit:** previews are available, but every non-dry-run call
+refuses with `device_ownership_unavailable` before device inspection or launch.
+An O_PATH device handle and occupancy snapshot cannot reserve the serial driver
+for a CLI that reopens the port. Live upload remains unfinished until the uploader
+accepts an already-open exclusive descriptor. Use Arduino IDE for a manually
+supervised upload in the meantime; no firmware was flashed by this slice.
+The requirements below describe the intended execution path, not a passed live
+acceptance result.
+Strict input: `{sketch,fqbn:"arduino:avr:uno",build_id:UUID,
+device_ref:string,dry_run?:false}`. The sketch remains workspace-relative and
+unchanged from its retained immutable build. Resolve its deterministic build ID
+from the current workspace/source/toolchain; verify the complete manifest and
+all artifact bytes. Select exactly its application HEX, never a bootloader image.
+Missing, stale, foreign-workspace or ambiguous outputs refuse.
+
+Resolve `device_ref` from current native USB enumeration, never a caller tty path.
+Serial identity is preferred; serial-less identity uses the observed USB topology
+location and is explicitly labeled port-bound, not a unique board. Refuse missing,
+ambiguous or changed identities, occupied ports and incompatible known board
+profiles. The Uno FQBN is the explicitly selected profile, not an inference from a
+generic USB bridge. The card distinguishes observed USB/board facts from that
+selected profile. Prior firmware is explicitly unknown unless verified evidence
+exists; never imply a backup or known sketch. No driver-board flashing.
+
+Upload always requires a complete fresh human confirmation and cannot enter the
+routine Build allowlist. Preview includes device identity/basis, selected profile,
+source/build/manifest/artifact digests, overwrite consequence and full owned argv.
+Revalidate device, source, build and toolchain immediately before execution under
+the operation lock. Open only the selected verified character device and hold its
+identity through the operation; no scan opens or auto-reset probes. The bounded
+sandbox grants only that device, verified toolchain and retained build snapshot;
+network remains unavailable. Use pinned CLI `upload --verify`, no caller flags,
+profiles, programmer or environment. One attempt only; cancellation/timeouts kill
+the process group and never retry automatically.
+
+Use `device_state:unchanged|unknown|flashed`: refusal before launch is unchanged,
+any uncertain started upload is unknown, only verified success is flashed. Return
+bounded command/stdout/stderr evidence and register `files_errors:true`; failures
+file once through existing Error logging. Existing authenticated Code execution
+output events may carry bounded actual upload output. The card's execution state
+shows progress without invented erase/write percentages. No telemetry payloads,
+new bridge frame or new generic command executor. After success the existing
+hardware watcher/interrogation path must rediscover firmware-declared channels;
+no channel is fabricated from the upload request.
+
 This tier-1 supplement extends `code-environment.md`. Governing documents are
 ADR-031/032, `docs/architecture/code-environment.md`,
 `docs/architecture/local-machine-actions.md`, `docs/contracts/action-gate.md`,

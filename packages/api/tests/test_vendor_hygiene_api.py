@@ -40,3 +40,36 @@ def test_shared_hardware_and_livebench_modules_name_no_vendor() -> None:
         "Vendors live in hardware/definitions/ (the seed) and livebench plugins, never in "
         "shared code. Offenders:\n" + "\n".join(offenders)
     )
+
+
+CONNECTION_PATHS = (
+    "packages/api/src/solus_api/services/isaac_connection.py",
+    "packages/api/src/solus_api/routers/isaac_connection.py",
+    "integrations/mcp/isaac/solus/controller.py",
+    "integrations/mcp/isaac/solus/server.py",
+    "apps/desktop/src/renderer/src/lib/api/resources.isaacConnection.ts",
+    "apps/desktop/src/renderer/src/features/workspace/IsaacConnectionPanel.tsx",
+    "apps/desktop/src/renderer/src/features/workspace/ConnectedAccountsCard.tsx",
+)
+
+
+def connection_offenders(paths: list[Path]) -> list[str]:
+    return [
+        f"{path.name}:{index}:{match.group(0)}"
+        for path in paths
+        for index, line in enumerate(path.read_text().splitlines(), 1)
+        if (match := VENDOR_WORDS.search(line))
+    ]
+
+
+def test_application_connection_paths_have_no_product_names() -> None:
+    root = SRC_ROOT.parents[3]
+    paths = [root / relative for relative in CONNECTION_PATHS]
+    assert all(path.is_file() for path in paths)
+    assert not connection_offenders(paths)
+
+
+def test_connection_ratchet_catches_deliberately_reintroduced_product(tmp_path: Path) -> None:
+    injected = tmp_path / "connection.ts"
+    injected.write_text('const connect = () => offer("SO-101")\n')
+    assert connection_offenders([injected]) == ["connection.ts:1:SO-101"]

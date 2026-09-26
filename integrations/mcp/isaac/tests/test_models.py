@@ -10,45 +10,24 @@ from integrations.mcp.isaac.solus.models import Model, Routine, plan_routine
 
 
 def fixture():
-    links = [
-        "base_link",
-        "shoulder_link",
-        "upper_arm_link",
-        "lower_arm_link",
-        "wrist_link",
-        "gripper_link",
-        "gripper_frame_link",
-        "moving_jaw_so101_v1_link",
+    from integrations.mcp.isaac.tests.test_generic_models import fixture as generic
+
+    data = generic()
+    data["sensors"] = [
+        {
+            "entity_id": str(UUID(int=40)),
+            "parent_link_entity_id": data["links"][-1]["entity_id"],
+            "kind": "contact",
+            "translation_m": [0.0, 0.0, 0.0],
+            "orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "radius_m": 0.01,
+        }
     ]
-    joints = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
-    return {
-        "schema_version": 1,
-        "asset": "so101_new_calib_v1",
-        "asset_sha256": "a" * 64,
-        "links": [{"entity_id": str(UUID(int=i + 1)), "name": n} for i, n in enumerate(links)],
-        "joints": [{"entity_id": str(UUID(int=i + 20)), "name": n} for i, n in enumerate(joints)],
-        "sensors": [
-            {
-                "entity_id": str(UUID(int=40)),
-                "parent_link_entity_id": str(UUID(int=8)),
-                "kind": "contact",
-                "translation_m": [0.0, 0.0, 0.0],
-                "orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
-                "radius_m": 0.01,
-            }
-        ],
-        "bottle": {
-            "entity_id": str(UUID(int=50)),
-            "translation_m": [0.2, 0.0, 0.1],
-            "radius_m": 0.025,
-            "height_m": 0.15,
-            "mass_kg": 0.1,
-        },
-    }
+    return data
 
 
 def test_valid_model():
-    assert Model.model_validate(fixture()).asset == "so101_new_calib_v1"
+    assert Model.model_validate(fixture()).asset.urdf_path == "robot.urdf"
 
 
 @pytest.mark.parametrize("bad", [True, "0.1", float("nan"), float("inf")])
@@ -83,12 +62,12 @@ def test_model_rejects_unsafe_bindings(mutation):
 def routine(model):
     positions = [{"joint_entity_id": j.entity_id, "position_rad": 0.05} for j in model.joints]
     return {
-        "routine": "grasp_bottle",
+        "routine": "joint_trajectory",
         "duration_s": 6.0,
         "joints": [
             {"joint_entity_id": j.entity_id, "lower": -0.1, "upper": 0.1} for j in model.joints
         ],
-        "waypoints": [{"phase": p, "positions": positions} for p in ["approach", "close", "lift"]],
+        "waypoints": [{"positions": positions} for _ in range(3)],
     }
 
 
@@ -108,7 +87,7 @@ def test_bad_routine(mutation):
     model = Model.model_validate(fixture())
     data = routine(model)
     if mutation == "missing_phase":
-        data["waypoints"].pop()
+        data["waypoints"] = []
     elif mutation == "missing_joint":
         data["waypoints"][0]["positions"] = data["waypoints"][0]["positions"][:-1]
     elif mutation == "range":

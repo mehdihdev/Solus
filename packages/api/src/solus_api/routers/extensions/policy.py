@@ -7,6 +7,7 @@ Writes ride a per-team `FixedWindowLimiter` (§12) and emit the §11 events:
 `extension.disable` per project whose install a block just switched off.
 """
 
+import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request, Response
@@ -32,8 +33,10 @@ from solus_api.extensions.policy import (
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.extensions.schemas import serialize_policy
 from solus_api.extensions.slugs import SlugPath
-from solus_api.models import Extension, Role, TeamExtensionPolicy
+from solus_api.models import Extension, ExtensionInstall, Project, Role, TeamExtensionPolicy
 from solus_api.services.events import emit_event
+from solus_api.widgets.graph_events import publish_widget_graph_changed
+from solus_api.widgets.graph_nodes import update_widget_node
 
 router = APIRouter(prefix="/api/v1/teams/{team_id}/extensions/policies")
 
@@ -119,6 +122,34 @@ def _emit_disables(
         )
 
 
+async def _refresh_blocked_nodes(
+    session: SessionDep, team_id: uuid.UUID, extension: Extension, *, blocked: bool
+) -> list[uuid.UUID]:
+    """Refresh only this team's installed widget registrations inside the policy transaction."""
+    installs = await session.scalars(
+        select(ExtensionInstall)
+        .join(Project, Project.id == ExtensionInstall.project_id)
+        .where(
+            Project.team_id == team_id,
+            Project.deleted_at.is_(None),
+            ExtensionInstall.extension_id == extension.id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    affected: list[uuid.UUID] = []
+    for install in installs:
+        node = await update_widget_node(
+            session,
+            install.project_id,
+            extension.slug,
+            blocked=blocked,
+            enabled=install.enabled and not blocked,
+        )
+        if node is not None:
+            affected.append(install.project_id)
+    return affected
+
+
 # ------------------------------------------------------------------- routes
 @router.get("")
 async def list_policies(
@@ -176,7 +207,14 @@ async def put_policy(
         _emit_disables(session, ctx, extension.slug, disabled)
     if result.changed_keys:
         _emit_policy_changed(session, ctx, extension.slug, result.changed_keys)
+    affected = (
+        await _refresh_blocked_nodes(session, ctx.team.id, extension, blocked=result.policy.blocked)
+        if "blocked" in result.changed_keys
+        else []
+    )
     await session.commit()
+    for project_id in affected:
+        await publish_widget_graph_changed(request, project_id)
     await session.refresh(result.policy)
     return JSONResponse(
         status_code=201 if result.created else 200,
@@ -202,9 +240,16 @@ async def delete_policy(
     if extension is None or policy is None:
         raise APIError(404, "not_found", "No policy for this extension")
     reset_keys = changed_keys(policy_state(policy), NO_POLICY_STATE)
+    affected = (
+        await _refresh_blocked_nodes(session, ctx.team.id, extension, blocked=False)
+        if policy.blocked
+        else []
+    )
     await session.delete(policy)
     _emit_policy_changed(session, ctx, extension.slug, reset_keys)
     await session.commit()
+    for project_id in affected:
+        await publish_widget_graph_changed(request, project_id)
     return Response(status_code=204)
 
 

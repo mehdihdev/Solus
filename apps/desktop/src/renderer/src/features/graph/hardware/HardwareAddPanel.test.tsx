@@ -1,6 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen } from '@testing-library/react'
 import * as hardware from '../../../lib/api/hardware'
 import type { Entity } from '../../../lib/api/resources'
 import { HARDWARE_COPY } from './hardware.constants'
@@ -20,28 +19,6 @@ vi.mock('./DevicesFound', () => ({
   }): React.JSX.Element => (
     <div data-testid="devices-found">
       {`${projectId}:${mode}:${robots.length}:${entities === null ? 'null' : entities.length}`}
-    </div>
-  )
-}))
-vi.mock('../../sourcing/SourcingModal', () => ({
-  SourcingModal: ({
-    door,
-    projectId,
-    onSelected,
-    onClose
-  }: {
-    door: string
-    projectId: string
-    onSelected?: (entity: unknown) => void
-    onClose: () => void
-  }): React.JSX.Element => (
-    <div role="dialog" aria-label={`sourcing:${door}:${projectId}`}>
-      <button type="button" onClick={() => onSelected?.({ id: 'planned-1' })}>
-        pick
-      </button>
-      <button type="button" onClick={onClose}>
-        close sourcing
-      </button>
     </div>
   )
 }))
@@ -89,10 +66,17 @@ beforeEach(() => {
 it('renders the sections in order with no card grid, passing the contract props down', () => {
   renderPanel()
   const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
-  expect(headings).toEqual(['Devices found', 'Search', 'Describe something new', 'Sourced'])
+  expect(headings).toEqual([
+    'Devices found',
+    'Local configuration and calibration',
+    'Search',
+    'Describe something new'
+  ])
+  expect(screen.getByRole('button', { name: 'Choose local file' })).toBeVisible()
   expect(screen.getByTestId('devices-found')).toHaveTextContent('p1:Guide:1:1')
-  expect(screen.getByText(HARDWARE_COPY.intro.Guide)).toBeInTheDocument()
-  expect(screen.getByText(HARDWARE_COPY.search.Guide)).toBeInTheDocument()
+  expect(screen.queryByText(HARDWARE_COPY.intro.Guide)).not.toBeInTheDocument()
+  expect(screen.queryByText(HARDWARE_COPY.search.Guide)).not.toBeInTheDocument()
+  expect(screen.queryByText(/and stream/)).not.toBeInTheDocument()
   expect(screen.getByRole('searchbox', { name: 'Search parts and platforms' })).toBeEnabled()
   expect(screen.getByRole('textbox', { name: 'What is it?' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Unassigned parts' })).toHaveAttribute(
@@ -104,14 +88,13 @@ it('renders the sections in order with no card grid, passing the contract props 
   expect(screen.queryByRole('button', { name: 'Authored' })).not.toBeInTheDocument()
 })
 
-it('Sourced opens the sourcing panel on the Workspace door and reports the planned part', async () => {
+it('contains no sourcing card or modal entry point', () => {
   renderPanel()
-  await userEvent.click(screen.getByRole('button', { name: 'Find a part from suppliers' }))
-  const dialog = screen.getByRole('dialog', { name: 'sourcing:workspace:p1' })
-  await userEvent.click(within(dialog).getByRole('button', { name: 'pick' }))
-  expect(onCreated).toHaveBeenCalledWith({ id: 'planned-1' })
-  await userEvent.click(within(dialog).getByRole('button', { name: 'close sourcing' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Sourced' })).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', { name: 'Find a part from suppliers' })
+  ).not.toBeInTheDocument()
 })
 
 it('offline: one honest line, controls disabled, no device list and no reads', async () => {
@@ -120,10 +103,8 @@ it('offline: one honest line, controls disabled, no device list and no reads', a
   expect(screen.queryByTestId('devices-found')).not.toBeInTheDocument()
   expect(screen.getByRole('searchbox')).toBeDisabled()
   expect(screen.getByRole('textbox', { name: 'What is it?' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Find a part from suppliers' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Unassigned parts' })).toBeDisabled()
-  await userEvent.click(screen.getByRole('button', { name: 'Find a part from suppliers' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(hardware.listUnassignedParts).not.toHaveBeenCalled()
-  expect(screen.getByText(HARDWARE_COPY.intro.Expert)).toBeInTheDocument()
+  expect(screen.queryByText(HARDWARE_COPY.intro.Expert)).not.toBeInTheDocument()
 })

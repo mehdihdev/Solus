@@ -1,7 +1,7 @@
 """The proposal the propose route just built, kept briefly so the confirm that follows does
 not open the port and interrogate the same device again (docs/api/hardware.md §4).
 
-Keyed by (project, device_ref, repo_root): a project never sees another's entry. An entry is
+Keyed by (project, account, device_ref, evidence digest): actors never share entries. An entry is
 taken exactly once — a confirm consumes it whether or not it succeeds, so bound rows are never
 served from memory — and only while every accepted row is in it and it is younger than the
 TTL; anything else is a miss and the wire is asked, as before.
@@ -18,7 +18,7 @@ from solus_api.hardware.detect import ProposalOut
 
 MAX_ENTRIES = 64
 TTL_S = 60.0
-Key = tuple[uuid.UUID, str, str | None]
+Key = tuple[uuid.UUID, uuid.UUID, str, str]
 
 
 class ProposalCache:

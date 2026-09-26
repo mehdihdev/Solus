@@ -42,7 +42,7 @@ import {
   type AccountDomain
 } from './accountDomains'
 import { SimulationPanel } from './SimulationPanel'
-import { SimulationModelSetup } from './SimulationModelSetup'
+import { IsaacConnectionPanel } from './IsaacConnectionPanel'
 import type { MainScreen } from './shellStore'
 import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
 import { useBridgeStatus } from './useBridgeStatus'
@@ -405,7 +405,7 @@ function DomainPanel({
   if (domain === 'simulation')
     return (
       <>
-        {currentProject && <SimulationModelSetup projectId={currentProject.id} />}
+        <IsaacConnectionPanel projectId={currentProject ? currentProject.id : null} />
         <SimulationPanel currentProject={currentProject} excludeKinds={['isaac']} />
       </>
     )

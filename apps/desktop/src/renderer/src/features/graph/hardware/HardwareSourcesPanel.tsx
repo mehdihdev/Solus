@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { SolMode } from '../../../store/settingsStore'
 import { useHardwareGeneration } from './useHardwareGeneration'
+import { notifyProposalSourcesChanged } from './useProposalSources'
+import { Button } from '../../../components/ui/Button'
+import './hardware.css'
 
 type Sources = Window['solus']['hardware']['sources']
 type Picked = Extract<Awaited<ReturnType<Sources['pick']>>, { ok: true }>['value']
@@ -30,7 +33,21 @@ function failure(reason: string): string {
   }
 }
 
-function useLocalSourceList(projectId: string) {
+interface SourceListState {
+  generation: React.RefObject<number>
+  sources: Source[]
+  setSources: React.Dispatch<React.SetStateAction<Source[]>>
+  accountId: string | null
+  busy: boolean
+  setBusy: React.Dispatch<React.SetStateAction<boolean>>
+  error: string | null
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+  status: string | null
+  setStatus: React.Dispatch<React.SetStateAction<string | null>>
+  reloadSources: () => void
+}
+
+function useLocalSourceList(projectId: string): SourceListState {
   const { generation, authEpoch } = useHardwareGeneration(projectId)
   const [sources, setSources] = useState<Source[]>([])
   const [accountId, setAccountId] = useState<string | null>(null)
@@ -41,17 +58,8 @@ function useLocalSourceList(projectId: string) {
   useEffect(() => {
     let active = true
     const ticket = generation.current
-    setSources([])
-    setAccountId(null)
-    setError(null)
-    setStatus(null)
-    setBusy(true)
     const bridge = window.solus?.hardware?.sources
-    if (!bridge) {
-      setStatus(failure('unavailable'))
-      setBusy(false)
-      return
-    }
+    if (!bridge) return
     void bridge.list().then(
       (result) => {
         if (!active || ticket !== generation.current) return
@@ -78,17 +86,29 @@ function useLocalSourceList(projectId: string) {
     sources,
     setSources,
     accountId,
-    busy,
+    busy: window.solus?.hardware?.sources ? busy : false,
     setBusy,
     error,
     setError,
-    status,
+    status: window.solus?.hardware?.sources ? status : failure('unavailable'),
     setStatus,
-    setReload
+    reloadSources: () => {
+      setSources([])
+      setAccountId(null)
+      setError(null)
+      setStatus(null)
+      setBusy(true)
+      setReload((value) => value + 1)
+    }
   }
 }
 
-function useLocalSourceActions(projectId: string) {
+function useLocalSourceActions(projectId: string): Pick<
+  SourceListState,
+  'sources' | 'accountId' | 'busy' | 'error' | 'status' | 'reloadSources'
+> & {
+  act: (kind: 'pick' | 'recheck', ref?: string) => Promise<void>
+} {
   const {
     generation,
     sources,
@@ -100,7 +120,7 @@ function useLocalSourceActions(projectId: string) {
     setError,
     status,
     setStatus,
-    setReload
+    reloadSources
   } = useLocalSourceList(projectId)
   const receive = (
     result: Awaited<ReturnType<Sources['pick']>>,
@@ -111,6 +131,7 @@ function useLocalSourceActions(projectId: string) {
     } else if (result.value.projectId !== projectId || result.value.accountId !== accountId) {
       setError(failure('stale_scope'))
     } else {
+      notifyProposalSourcesChanged()
       const source = result.value.source
       setSources((previous) => [
         ...previous.filter((row) => row.sourceRef !== source.sourceRef),
@@ -141,19 +162,34 @@ function useLocalSourceActions(projectId: string) {
       if (ticket === generation.current) setBusy(false)
     }
   }
-  return { sources, accountId, busy, error, status, setReload, act }
+  return { sources, accountId, busy, error, status, reloadSources, act }
 }
 
-export function HardwareSourcesPanel({
-  projectId,
-  mode,
-  sourceRefs = EMPTY_REFS
-}: {
+interface HardwareSourcesProps {
   projectId: string
   mode: SolMode
+  onSelect?: (sourceRef: string) => void
+  onSourceChange?: () => void
+  title?: string
   sourceRefs?: readonly string[]
-}): React.JSX.Element {
-  const { sources, accountId, busy, error, status, setReload, act } =
+}
+
+export function HardwareSourcesPanel(props: HardwareSourcesProps): React.JSX.Element {
+  const { authEpoch } = useHardwareGeneration(props.projectId)
+  return (
+    <ScopedHardwareSourcesPanel key={JSON.stringify([props.projectId, authEpoch])} {...props} />
+  )
+}
+
+function ScopedHardwareSourcesPanel({
+  projectId,
+  mode,
+  onSelect,
+  onSourceChange,
+  title = 'Local calibration sources',
+  sourceRefs = EMPTY_REFS
+}: HardwareSourcesProps): React.JSX.Element {
+  const { sources, accountId, busy, error, status, reloadSources, act } =
     useLocalSourceActions(projectId)
   const missing = [
     ...new Set(
@@ -163,8 +199,8 @@ export function HardwareSourcesPanel({
     )
   ].filter((ref) => !sources.some((source) => source.sourceRef === ref))
   return (
-    <section aria-label="Local calibration sources" style={{ marginBlock: 16 }}>
-      <h3>Local calibration sources</h3>
+    <section aria-label={title} className="hardware-sources">
+      <h3>{title}</h3>
       <p>
         {mode === 'Guide'
           ? 'Choose files on this computer for your signed-in account. Listing a file does not verify its contents; use Verify before relying on it.'
@@ -176,41 +212,84 @@ export function HardwareSourcesPanel({
         {sources.map((source) => (
           <li key={source.sourceRef}>
             <span>{source.displayName}</span>{' '}
-            <button
+            {onSelect && (
+              <Button
+                size="sm"
+                kind="soft"
+                disabled={busy}
+                onClick={() => onSelect(`source:${source.sourceRef}`)}
+                aria-label={`Select ${source.displayName}`}
+              >
+                Select
+              </Button>
+            )}{' '}
+            <Button
+              size="sm"
+              kind="ghost"
               disabled={busy}
-              onClick={() => void act('recheck', source.sourceRef)}
+              onClick={() => {
+                onSourceChange?.()
+                void act('recheck', source.sourceRef)
+              }}
               aria-label={`Verify ${source.displayName}`}
             >
               Verify
-            </button>{' '}
-            <button
+            </Button>{' '}
+            <Button
+              size="sm"
+              kind="bare"
               disabled={busy}
-              onClick={() => void act('pick', source.sourceRef)}
+              onClick={() => {
+                onSourceChange?.()
+                void act('pick', source.sourceRef)
+              }}
               aria-label={`Relink ${source.displayName}`}
             >
               Relink
-            </button>
+            </Button>
           </li>
         ))}
         {missing.map((ref, index) => (
           <li key={ref}>
             Unlinked source {index + 1}{' '}
-            <button
+            <Button
+              size="sm"
+              kind="soft"
               disabled={busy || accountId === null}
-              onClick={() => void act('pick', ref)}
+              onClick={() => {
+                onSourceChange?.()
+                void act('pick', ref)
+              }}
               aria-label={`Relink source ${index + 1}`}
             >
               Relink
-            </button>
+            </Button>
           </li>
         ))}
       </ul>
-      <button disabled={busy || accountId === null} onClick={() => void act('pick')}>
+      <Button
+        size="sm"
+        kind="soft"
+        disabled={busy || accountId === null}
+        onClick={() => {
+          onSourceChange?.()
+          void act('pick')
+        }}
+      >
         Choose local file
-      </button>{' '}
-      <button disabled={busy} onClick={() => setReload((value) => value + 1)}>
+      </Button>{' '}
+      <Button
+        size="sm"
+        kind="bare"
+        disabled={busy}
+        onClick={() => {
+          onSourceChange?.()
+          notifyProposalSourcesChanged()
+          reloadSources()
+        }}
+      >
         Refresh sources
-      </button>
+      </Button>
     </section>
   )
 }

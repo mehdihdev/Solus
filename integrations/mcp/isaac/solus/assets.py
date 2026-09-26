@@ -7,13 +7,15 @@ import json
 import os
 import re
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 
 def verify_assets(root: Path, manifest: dict[str, str]) -> str:
     if not 1 <= len(manifest) <= 32:
         raise ValueError("asset count")
-    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root_fd = _open_root(root)
     total = 0
     try:
         for name, digest in sorted(manifest.items()):
@@ -31,7 +33,7 @@ def verify_assets(root: Path, manifest: dict[str, str]) -> str:
                     nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
                     os.close(parent)
                     parent = nxt
-                fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+                fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
                 try:
                     before = os.fstat(fd)
                     if not stat.S_ISREG(before.st_mode) or before.st_size > 20_000_000:
@@ -64,7 +66,7 @@ def copy_verified_assets(root: Path, manifest: dict[str, str], destination: Path
     """Copy through no-follow descriptors, then verify the private immutable input."""
     expected = verify_assets(root, manifest)
     destination.mkdir(mode=0o700, parents=False, exist_ok=False)
-    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root_fd = _open_root(root)
     try:
         for name, digest in manifest.items():
             parts = PurePosixPath(name).parts
@@ -76,7 +78,7 @@ def copy_verified_assets(root: Path, manifest: dict[str, str], destination: Path
                     )
                     os.close(parent)
                     parent = next_fd
-                fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+                fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
                 try:
                     info = os.fstat(fd)
                     if not stat.S_ISREG(info.st_mode) or info.st_size > 20_000_000:
@@ -116,3 +118,29 @@ def _hash_fd(fd: int, maximum_size: int) -> str:
             raise ValueError("asset grew during verification")
         calculated.update(chunk)
     return calculated.hexdigest()
+
+
+@contextmanager
+def model_asset_directory(workspace: Path, digest: str) -> Iterator[Path]:
+    """Resolve every workspace-relative ancestor without following user symlinks."""
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("invalid model digest")
+    fd = _open_root(workspace)
+    try:
+        for component in (".solus", "isaac", "models", digest):
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        yield Path(f"/proc/self/fd/{fd}/.")
+    except OSError as error:
+        raise ValueError("model assets missing: populate .solus/isaac/models/<sha256>") from error
+    finally:
+        os.close(fd)
+
+
+def _open_root(root: Path) -> int:
+    # Only internal worker/controller descriptors use this form; no public path input exists.
+    match = re.fullmatch(r"/proc/self/fd/([0-9]+)", str(root))
+    if match:
+        return os.dup(int(match[1]))
+    return os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

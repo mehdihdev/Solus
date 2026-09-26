@@ -7,7 +7,7 @@
 // rules from SOLUSDEV-152 still bind: no fabricated devices, signals, or
 // REAL/streaming labels.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { BenchScreen } from './BenchScreen'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useFocusStore } from '../workspace/focusStore'
@@ -85,6 +85,7 @@ function seedFocusedProject(): void {
 /** Route the mocked client by path: sessions, device-recent, entity telemetry. */
 function routeApi(options: { sessions?: BenchSession[] } = {}): void {
   requestMock.mockImplementation(async (path: string) => {
+    if (path.includes('/bench/telemetry-devices')) return { device_ids: [] } as never
     if (path.includes('/bench/sessions')) return (options.sessions ?? []) as never
     // The Connect-a-device dialog's inventory: an honest, empty machine.
     if (path.includes('/bench/sources')) {
@@ -140,27 +141,41 @@ describe('BenchScreen — empty states', () => {
   it('asks for a project when none is open, without touching the API', () => {
     render(<BenchScreen />)
     expect(screen.getByText('NO PROJECT OPEN')).toBeInTheDocument()
+    expect(screen.getByText('Live Bench watches connected hardware')).toBeInTheDocument()
     expect(requestMock).not.toHaveBeenCalled()
     expect(layoutGetMock).not.toHaveBeenCalled()
     expect(addWidgetButtons()).toHaveLength(0)
   })
 
-  it('with no focus and nothing streaming, offers Connect a device honestly', async () => {
+  it('with no focus and nothing streaming, offers Add hardware honestly', async () => {
     seedProject()
     const onNavigate = vi.fn()
-    render(<BenchScreen onNavigate={onNavigate} />)
+    const onAddHardware = vi.fn()
+    render(<BenchScreen onNavigate={onNavigate} onAddHardware={onAddHardware} />)
     // The session check ran and found nothing — the copy says so.
-    await waitFor(() =>
-      expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/sessions?status=active')
-    )
+    await waitFor(() => expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/sessions'))
     expect(await screen.findByText('NOTHING STREAMING')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Connect a device' }))
-    // The device dialog opens here (the Sources page is retired) — no navigation.
-    expect(screen.getByRole('dialog', { name: 'Connect a device' })).toBeInTheDocument()
-    expect(await screen.findByText('No serial devices detected.')).toBeInTheDocument()
+    expect(
+      screen.getByText('No camera stream available. Recorded video is time-aligned in Runs below.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'No LiDAR or depth stream available. Recorded point clouds appear in Runs below.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Add hardware' }))
+    expect(onAddHardware).toHaveBeenCalledOnce()
     expect(onNavigate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Manage connections' }))
+    expect(await screen.findByRole('dialog', { name: 'Connect a device' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     // The canvas is still there underneath: the default Live Bench slot, unfocused.
-    expect(await screen.findByText('Focus a part to watch its telemetry.')).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        'Connected hardware appears automatically. Select a part to narrow its signals.'
+      )
+    ).toBeInTheDocument()
   })
 
   it('contains no fabricated devices, signals, or REAL/streaming labels', () => {
@@ -184,12 +199,12 @@ describe('BenchScreen — device-keyed view (SOLUSDEV-72)', () => {
     expect(await screen.findByText('demo/rod')).toBeInTheDocument()
     await waitFor(() =>
       expect(requestMock).toHaveBeenCalledWith(
-        '/projects/p1/bench/device-recent?device_id=demo%2Frod&limit=60'
+        '/projects/p1/bench/device-recent?device_id=demo%2Frod&limit=512'
       )
     )
-    expect(await screen.findByText(/qvel: 1\.25/)).toBeInTheDocument()
-    // The device view takes the screen: no canvas slots beside it.
-    expect(slots()).toHaveLength(0)
+    expect(await screen.findByLabelText('qvel value')).toBeInTheDocument()
+    // Custom widgets remain available inline alongside the automatic signal panes.
+    expect(slots()).toHaveLength(1)
   })
 })
 
@@ -197,10 +212,14 @@ describe('BenchScreen — focused', () => {
   it('mounts the Live Bench widget scoped to the focused entity, in the default canvas slot', async () => {
     seedFocusedProject()
     render(<BenchScreen />)
-    await waitFor(() => expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/recent/e1'))
+    await waitFor(() =>
+      expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/recent/e1', {
+        signal: expect.any(AbortSignal)
+      })
+    )
     // No telemetry for the part → the widget's own honest empty state.
     expect(
-      await screen.findByText(/No telemetry yet for elbow motor — nothing is streaming\./)
+      await screen.findByText(/No telemetry yet for elbow motor in this selection\./)
     ).toBeInTheDocument()
     expect(slots().map((s) => s.dataset.ref)).toEqual(['builtin:livebench'])
     expect(screen.getByText('elbow motor')).toBeInTheDocument()
@@ -247,6 +266,15 @@ describe('BenchScreen — widget canvas (SOLUSDEV-235 / EXT-16)', () => {
     expect(await screen.findByText('Nothing on your bench.')).toBeInTheDocument()
     expect(slots()).toHaveLength(0)
     expect(await screen.findByText('NOTHING STREAMING')).toBeInTheDocument()
+    expect(
+      screen.getByText('No camera stream available. Recorded video is time-aligned in Runs below.')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'No LiDAR or depth stream available. Recorded point clouds appear in Runs below.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
   })
 
   it('a failed layout GET renders the default slot with the offline note', async () => {
@@ -269,4 +297,56 @@ describe('BenchScreen — widget canvas (SOLUSDEV-235 / EXT-16)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browse the Store' }))
     expect(onNavigate).toHaveBeenCalledWith('store')
   })
+})
+
+it('keeps device telemetry mounted and session discovery running when focus narrows', async () => {
+  seedProject()
+  routeApi({ sessions: [SESSION, { ...SESSION, id: 's2', device_ids: ['arm2'] }] })
+  const view = render(<BenchScreen />)
+  expect(await screen.findByText('demo/rod')).toBeInTheDocument()
+  act(() => seedFocusedProject())
+  await waitFor(() =>
+    expect(requestMock).toHaveBeenCalledWith(
+      '/projects/p1/bench/device-recent?device_id=arm2&device_id=demo%2Frod&limit=512&focus_entity_id=e1'
+    )
+  )
+  expect(screen.getByText('demo/rod')).toBeInTheDocument()
+  act(() => useFocusStore.getState().reset())
+  view.rerender(<BenchScreen />)
+  await waitFor(() =>
+    expect(requestMock).toHaveBeenCalledWith(
+      '/projects/p1/bench/device-recent?device_id=arm2&device_id=demo%2Frod&limit=512'
+    )
+  )
+})
+
+it('distinguishes starting and disconnected sessions from empty inventory', async () => {
+  seedProject()
+  routeApi({
+    sessions: [
+      { ...SESSION, status: 'starting', label: 'Starting arm', device_ids: [] },
+      { ...SESSION, id: 's2', link: 'disconnected', label: 'Disconnected arm', device_ids: [] }
+    ]
+  })
+  render(<BenchScreen />)
+  expect(await screen.findByText(/Starting arm.*starting/i)).toBeInTheDocument()
+  expect(screen.getByText(/Disconnected arm.*disconnected/i)).toBeInTheDocument()
+  expect(screen.queryByText('NOTHING STREAMING')).not.toBeInTheDocument()
+})
+
+it('opens the scene without requiring a focused entity or active device', async () => {
+  seedProject()
+  requestMock.mockResolvedValue([])
+  render(<BenchScreen />)
+  expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+  fireEvent.click(await screen.findByRole('button', { name: '+ Spawn' }))
+  expect(await screen.findByRole('region', { name: 'Robot scene' })).toBeInTheDocument()
+})
+
+it('opens runs independently of the streaming signal canvas', async () => {
+  seedProject()
+  requestMock.mockResolvedValue([])
+  render(<BenchScreen />)
+  expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: /Runs/ })).toBeInTheDocument()
 })

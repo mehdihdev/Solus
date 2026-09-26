@@ -129,6 +129,25 @@ async def disable_part_bindings(
     )
     for edge in rows:
         edge.attrs = {**edge.attrs, "enabled": False, "disabled_reason": "ownership_changed"}
+    from solus_api.hardware.topology import HOST_MARKER, MARKER, MEMBERSHIP, RELATION
+    from solus_api.models import utcnow
+
+    topology = await session.scalars(
+        select(GraphEdge).where(
+            GraphEdge.project_id == project_id,
+            GraphEdge.relation_type.in_((RELATION, MEMBERSHIP)),
+            GraphEdge.attrs["managed_by"].astext.in_((MARKER, HOST_MARKER)),
+            GraphEdge.origin == "manual",
+            GraphEdge.source_id.is_(None),
+            GraphEdge.deleted_at.is_(None),
+            or_(
+                GraphEdge.dst_id.in_(part_ids),
+                GraphEdge.attrs["robot_id"].astext.in_([str(i) for i in retired_owner_ids]),
+            ),
+        )
+    )
+    for edge in topology:
+        edge.deleted_at = utcnow()
     invalidate_after_commit(session, project_id)
 
 

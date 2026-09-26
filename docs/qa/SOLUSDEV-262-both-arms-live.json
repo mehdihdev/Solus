@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-09-14T19:13:08.730115+00:00",
+  "method": "read-only identification ping and calibration register read; no motion or flash",
+  "arms": [
+    {
+      "role_confirmed_by_user": "follower",
+      "serial": "5B42134331",
+      "path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42134331-if00",
+      "responses": [
+        {
+          "summary": "6 servos on a serial servo bus (ids 1\u20136, STS3215)",
+          "addresses": ["1", "2", "3", "4", "5", "6"],
+          "details": {
+            "calibration_signature": {
+              "1": {
+                "homing_offset": 1964
+              },
+              "2": {
+                "homing_offset": 508
+              },
+              "3": {
+                "homing_offset": 976
+              },
+              "4": {
+                "homing_offset": 1193
+              },
+              "5": {
+                "homing_offset": -1934
+              },
+              "6": {
+                "homing_offset": -589
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role_confirmed_by_user": "leader",
+      "serial": "5B42135040",
+      "path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42135040-if00",
+      "responses": [
+        {
+          "summary": "6 servos on a serial servo bus (ids 1\u20136, STS3215)",
+          "addresses": ["1", "2", "3", "4", "5", "6"],
+          "details": {
+            "calibration_signature": {
+              "1": {
+                "homing_offset": 1964
+              },
+              "2": {
+                "homing_offset": 508
+              },
+              "3": {
+                "homing_offset": 976
+              },
+              "4": {
+                "homing_offset": 1193
+              },
+              "5": {
+                "homing_offset": -1934
+              },
+              "6": {
+                "homing_offset": -589
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

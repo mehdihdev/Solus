@@ -14,6 +14,7 @@ import { Spinner } from '../../components/ui/Spinner'
 import { useSettingsStore } from '../../store/settingsStore'
 import { sendFeedback, type GuideStepView } from './guideApi'
 import { useGuide } from './useGuide'
+import { useNativeGuideHandoff } from './useNativeGuideHandoff'
 
 const PANEL: CSSProperties = {
   width: 340,
@@ -31,11 +32,17 @@ interface GuidePanelProps {
   guideId: string | null
   tool: string
   version: string
+  presentation?: 'browser' | 'native' | 'scriptable'
 }
 
-export function GuidePanel({ guideId, version }: GuidePanelProps): React.JSX.Element {
+export function GuidePanel({
+  guideId,
+  version,
+  presentation = 'browser'
+}: GuidePanelProps): React.JSX.Element {
   const solMode = useSettingsStore((s) => s.solMode)
   const { status, guide } = useGuide(guideId, version)
+  const overlay = useNativeGuideHandoff(guide, solMode === 'Expert')
 
   return (
     <aside style={PANEL} aria-label="Guide">
@@ -50,6 +57,12 @@ export function GuidePanel({ guideId, version }: GuidePanelProps): React.JSX.Ele
       )}
       {status === 'ready' && guide && (
         <>
+          {presentation === 'native' && (
+            <>
+              <Button onClick={() => void overlay.start()}>Show native overlay</Button>
+              {overlay.message && <p role="status">{overlay.message}</p>}
+            </>
+          )}
           <header style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <h2 style={{ margin: 0, fontSize: 15, color: 'var(--tx)' }}>{guide.title}</h2>
             <p style={{ margin: 0, fontSize: 12, color: 'var(--mut)', lineHeight: 1.4 }}>
@@ -67,7 +80,12 @@ export function GuidePanel({ guideId, version }: GuidePanelProps): React.JSX.Ele
             }}
           >
             {guide.steps.map((step) => (
-              <StepRow key={step.step_number} step={step} expert={solMode === 'Expert'} />
+              <StepRow
+                key={step.step_number}
+                step={step}
+                expert={solMode === 'Expert'}
+                scriptable={presentation === 'scriptable'}
+              />
             ))}
           </ol>
         </>
@@ -76,7 +94,15 @@ export function GuidePanel({ guideId, version }: GuidePanelProps): React.JSX.Ele
   )
 }
 
-function StepRow({ step, expert }: { step: GuideStepView; expert: boolean }): React.JSX.Element {
+function StepRow({
+  step,
+  expert,
+  scriptable
+}: {
+  step: GuideStepView
+  expert: boolean
+  scriptable: boolean
+}): React.JSX.Element {
   const note = expert ? step.note_expert : step.note_guide
   return (
     <li>
@@ -93,10 +119,20 @@ function StepRow({ step, expert }: { step: GuideStepView; expert: boolean }): Re
               </div>
             ) : (
               <span style={{ fontSize: 12, color: 'var(--warn)' }}>
-                This step isn&apos;t in the knowledge base yet.
+                This step isn&apos;t in the knowledge base yet. Not sure where that is in this
+                version.
               </span>
             )}
             <span style={{ fontSize: 12, color: 'var(--tx)', lineHeight: 1.4 }}>{note}</span>
+            {scriptable && (
+              <Button
+                kind="bare"
+                size="sm"
+                onClick={() => void navigator.clipboard?.writeText(note).catch(() => undefined)}
+              >
+                Copy instruction
+              </Button>
+            )}
             {step.available && <Invocation step={step} />}
             {step.available && step.entry_id && <StepFeedback entryId={step.entry_id} />}
           </div>

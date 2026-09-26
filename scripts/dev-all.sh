@@ -190,6 +190,13 @@ if grep -qE '^SOLUS_STRIPE_(PLAN_PRICES|WEBHOOK_SECRET)=..' .env 2>/dev/null; th
   fi
 fi
 
+# This full-stack launcher owns an ARQ consumer when Redis is configured.
+# Override legacy bare-dev .env defaults so long syncs survive API reloads in
+# that worker. An explicit shell override remains authoritative.
+if [ "$REDIS_MODE" != "disabled" ]; then
+  export SOLUS_SYNC_INLINE="${SOLUS_SYNC_INLINE-false}"
+fi
+
 echo "[dev:all] starting API on http://127.0.0.1:$API_PORT (docs at /api/v1/docs)…"
 # The signing secret is passed to the API process ONLY (least privilege) — the
 # desktop app and forwarder never see it.

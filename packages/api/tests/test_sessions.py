@@ -466,3 +466,30 @@ async def test_shutdown_waits_for_already_closing_session() -> None:
         release.set()
         await asyncio.gather(stop, shutdown)
     assert conn.closed
+
+
+async def test_display_roles_require_observed_device_and_isolate_projects() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    conn = FakeConn()
+    conn.device_facts = {"channel_roles": {"device": {"health": "diagnostic", "other": "bogus"}}}
+    record = await _start(manager, project, conn)
+    assert manager.channel_roles(project, "device") == {}
+    await conn.drive(_packet("device", 0, health=1))
+    assert manager.channel_roles(project, "device") == {"health": "diagnostic"}
+    assert manager.channel_roles(uuid.uuid4(), "device") == {}
+    assert manager.channel_roles(project, "other") == {}
+    await manager.stop(project, record.id)
+    assert manager.channel_roles(project, "device") == {}
+
+
+async def test_conflicting_session_channel_roles_remain_unknown() -> None:
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    for role in ("diagnostic", "primary"):
+        conn = FakeConn()
+        conn.device_facts = {"channel_roles": {"device": {"health": role}}}
+        await _start(manager, project, conn)
+        await conn.drive(_packet("device", 0, health=1))
+    assert manager.channel_roles(project, "device") == {}
+    await manager.aclose_all()

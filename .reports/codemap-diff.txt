@@ -1,7 +1,4 @@
-SOLUSDEV-261 2026-09-13
-Added docs/CODEMAPS/onshape.md; existing maps preserved.
-New internal modules: onshape_webhooks.py, onshape_read_cache.py.
-No new dependency or HTTP route; existing webhook route now has bounded event parsing.
-Updated authority docs: change-signal-spine.md, API.md, onshape-development.md.
-Historical Onshape setup remains relevant for grant setup; quota audit supersedes
-historical polling/limit assumptions. No repository-wide staleness audit claimed.
+2026-09-15 SOLUSDEV-262 UI phases: incremental workspace/livebench codemap update.
+Added navigation framing, local groups, proposals, one-view bench, inline hardware and Isaac status boundaries.
+No new external dependencies. New project-authorized Isaac status route; compatible standalone library import.
+Each existing codemap changes by less than 30%; existing architecture and historical mappings retained.

@@ -61,6 +61,12 @@ installs dependencies on startup. Run `make bootstrap` and `make mcp-forks` once
 after schema changes, back up existing data and run the Alembic command from Setup.
 Ctrl+C stops only this launch's application processes; Docker data and services remain available.
 The selected Node executable (including nvm Node ≥ 22) is pinned for API-side MCP tools.
+When Redis is configured, this launcher defaults remote source syncs to its background worker,
+overriding the legacy `.env` inline setting so long Onshape imports can survive API reloads.
+Local-folder, KiCad and Altium acquisition runs in API background tasks because their
+desktop bridge belongs to that process; these tasks are still interrupted by API reloads.
+An explicit shell `SOLUS_SYNC_INLINE` value takes precedence; Redis-disabled launches
+retain their existing configuration.
 
 Compose defaults to a volume scoped to this checkout's project name. To reuse a known existing
 local database, create the gitignored `docker-compose.local.yml` before starting:

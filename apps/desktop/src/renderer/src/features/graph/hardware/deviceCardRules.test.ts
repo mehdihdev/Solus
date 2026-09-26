@@ -231,7 +231,7 @@ describe('defaultAccepted / placementNearRail', () => {
   it('accepts every row, naming unnamed channels by address, actuators for a bus', () => {
     expect(defaultAccepted(proposal)).toEqual([
       { row_id: 'usb_serial:S1/1', function_name: 'joint_1', category: 'actuators' },
-      { row_id: 'usb_serial:S1/2', function_name: 'channel 2', category: 'actuators' }
+      { row_id: 'usb_serial:S1/2', function_name: null, category: 'actuators' }
     ])
   })
 

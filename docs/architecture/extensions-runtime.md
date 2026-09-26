@@ -552,3 +552,21 @@ tree a later ticket renders; SOL, checkers and fingerprinting never see that lay
    design refuses them with `blocked` for dev entries. If developers need to exercise them before
    publishing, the registry needs a "development install" concept (a per-user, per-project row
    flagged `dev`, never visible to teammates) — an API §2.17 addition to decide at the MR.
+
+## BOM catalog provisioning (SOLUSDEV-262 follow-up)
+
+The API distribution carries the committed first-party BOM release as package data. Before
+serving, a configured `SOLUS_FIRST_PARTY_PUBLISHER_ID` reconciles it through the existing staff
+publish gate, immutable version storage and automated review. That UUID must identify an existing
+active account in `SOLUS_STAFF_USER_IDS`; setup never creates or promotes an account. A process
+without a configured publisher only checks the retained catalog and bundle. A missing catalog is
+an actionable warning in development and a startup failure in shared environments, so a broken
+new deployment cannot silently replace a working Store.
+
+Provisioning is idempotent, serialized across processes, and uses the normal ArtifactStore.
+An existing immutable release with different bytes, foreign ownership, a withdrawal, rejection,
+or unavailable retained bytes fails visibly. It never reinstalls, updates or enables project
+installs, changes settings/grants/pins, or resurrects deliberately withdrawn releases. A new
+release requires a new version and users choose whether to update. Persistent artifact storage
+is required across API and review-worker restarts. No new public route or authorization bypass
+is introduced; `python -m solus_api.extensions.bom_catalog_setup` runs the same setup explicitly.

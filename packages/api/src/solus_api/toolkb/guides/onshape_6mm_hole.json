@@ -1,0 +1,29 @@
+{
+  "id": "onshape.partstudio.hole_6mm",
+  "tool": "onshape",
+  "version_range": ">=1.0 <2.0",
+  "title": "Add a 6 mm hole",
+  "summary": "Review the target, dimension a circle, and inspect the cut. Knowledge version 1.x is a repository compatibility convention, not an Onshape release.",
+  "steps": [
+    {
+      "control_id": "onshape.partstudio.feature_list",
+      "note_guide": "Choose the intended Part Studio and face. Check that the selected part and face are the ones you intend to modify.",
+      "note_expert": "Confirm the target Part Studio, part and face."
+    },
+    {
+      "control_id": "onshape.partstudio.feature_list",
+      "note_guide": "Create a sketch on the selected face and place a circle at the intended hole center. Constrain its diameter to 6 mm; diameter is twice the radius.",
+      "note_expert": "Constrain the sketch circle to diameter 6 mm."
+    },
+    {
+      "control_id": "onshape.partstudio.feature_list",
+      "note_guide": "Use a remove operation through the intended thickness and inspect its preview. Verify the affected bodies and depth before accepting it in Onshape.",
+      "note_expert": "Preview the remove operation; verify affected bodies and depth."
+    },
+    {
+      "control_id": "onshape.partstudio.feature_list",
+      "note_guide": "Inspect the feature list and measure the result. This walkthrough has not changed your model; you perform these actions yourself.",
+      "note_expert": "Inspect the feature and verify the 6 mm diameter. Guide made no changes."
+    }
+  ]
+}

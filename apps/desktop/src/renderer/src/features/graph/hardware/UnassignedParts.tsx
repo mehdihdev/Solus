@@ -13,7 +13,6 @@ import {
   listUnassignedParts,
   type RobotCategory
 } from '../../../lib/api/hardware'
-import { HardwareSourcesPanel } from './HardwareSourcesPanel'
 import { useHardwareGeneration } from './useHardwareGeneration'
 import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
@@ -244,7 +243,6 @@ export function UnassignedParts({
           {robots.length === 0 && <p style={BODY_STYLE}>{NO_ROBOT}</p>}
           <Group heading="Available parts" noun="unassigned parts" paged={sources} {...row} />
           {settledEmpty && <p style={BODY_STYLE}>{EMPTY}</p>}
-          <HardwareSourcesPanel projectId={projectId} mode={mode} />
         </>
       )}
     </section>

@@ -21,7 +21,7 @@ class BoardClass(enum.StrEnum):
 class Board:
     name: str
     kind: BoardClass
-    headline: str | None = None  # the plain-words card title when the exact name is too much
+    headline: str | None = None  # board title, or tentative bridge hint before a protocol answers
 
 
 #: Card copy for what a USB identity can honestly claim. These literals live ONLY here.
@@ -42,7 +42,10 @@ BOARD_TABLE: Final[dict[tuple[int, int], Board]] = {
     (0x2E8A, 0x0005): Board("Raspberry Pi Pico (RP2040, MicroPython)", BoardClass.MCU_BOARD),
     # USB-UART bridges — the chip is known; the MCU behind it is NOT
     (0x1A86, 0x55D3): Board("WCH CH343/CH9102 USB-serial bridge", BoardClass.USB_BRIDGE),
-    (0x1A86, 0x7523): Board("WCH CH340 USB-serial bridge", BoardClass.USB_BRIDGE),
+    # Common on Arduino-compatible boards, but this bridge cannot establish the board model.
+    (0x1A86, 0x7523): Board(
+        "WCH CH340 USB-serial bridge", BoardClass.USB_BRIDGE, "Possible Arduino connection"
+    ),
     (0x10C4, 0xEA60): Board("Silicon Labs CP210x USB-serial bridge", BoardClass.USB_BRIDGE),
     (0x0403, 0x6001): Board("FTDI FT232R USB-serial bridge", BoardClass.USB_BRIDGE),
     (0x0403, 0x6014): Board("FTDI FT232H USB-serial bridge", BoardClass.USB_BRIDGE),

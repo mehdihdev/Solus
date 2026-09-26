@@ -21,9 +21,7 @@ class Scene:
 
 
 def test_load_preview_has_complete_bindings_and_no_mutation(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "integrations.mcp.isaac.solus.actions.verify_assets", lambda *args: "a" * 64
-    )
+    monkeypatch.setattr(ActionEngine, "_copy_model", lambda *args: None)
     scene = Scene()
     engine = ActionEngine(scene, tmp_path, tmp_path)
     data = {
@@ -35,7 +33,10 @@ def test_load_preview_has_complete_bindings_and_no_mutation(tmp_path, monkeypatc
     }
     result = engine.dispatch("load_model", data)
     assert result["dry_run"]
-    assert len(result["preview"]) >= 18
+    assert all(
+        binding["entity_id"] in str(result["preview"])
+        for binding in data["resolved_model"]["links"] + data["resolved_model"]["joints"]
+    )
     assert scene.calls == []
 
 
@@ -75,9 +76,7 @@ def test_preview_refuses_missing_asset_closure(tmp_path):
 
 
 def test_partial_load_failure_invalidates_old_model(tmp_path, monkeypatch):
-    module = "integrations.mcp.isaac.solus.actions"
-    monkeypatch.setattr(module + ".verify_assets", lambda *args: "a" * 64)
-    monkeypatch.setattr(module + ".copy_verified_assets", lambda *args: "a" * 64)
+    monkeypatch.setattr(ActionEngine, "_copy_model", lambda *args: None)
 
     class PartialScene(Scene):
         def load(self, *args):
@@ -108,9 +107,7 @@ def test_partial_load_failure_invalidates_old_model(tmp_path, monkeypatch):
 def test_mutation_failure_retains_uncertain_outcome(tmp_path, monkeypatch):
     from integrations.mcp.isaac.solus.actions import MutationUnverifiedError
 
-    module = "integrations.mcp.isaac.solus.actions"
-    monkeypatch.setattr(module + ".verify_assets", lambda *args: "a" * 64)
-    monkeypatch.setattr(module + ".copy_verified_assets", lambda *args: "a" * 64)
+    monkeypatch.setattr(ActionEngine, "_copy_model", lambda *args: None)
 
     class FailedScene(Scene):
         def load(self, *args):
@@ -134,12 +131,12 @@ def test_mutation_failure_retains_uncertain_outcome(tmp_path, monkeypatch):
     assert error.value.result["reason"] == "mutation_unverified"
 
 
-def test_complete_six_joint_routine_preview_fits_card(tmp_path):
+def test_complete_joint_routine_preview_fits_card(tmp_path):
     from types import SimpleNamespace
 
     import numpy as np
 
-    from integrations.mcp.isaac.solus.models import LIMITS, Model
+    from integrations.mcp.isaac.solus.models import Model
     from integrations.mcp.isaac.tests.test_models import routine
 
     model = Model.model_validate(fixture())
@@ -150,12 +147,11 @@ def test_complete_six_joint_routine_preview_fits_card(tmp_path):
                 "loaded": True,
                 "positions_rad": {j.entity_id: 0.0 for j in model.joints},
                 "limits_rad": {
-                    j.entity_id: [float(np.float32(v)) for v in LIMITS[j.name]]
+                    j.entity_id: [float(np.float32(v)) for v in (j.lower_rad, j.upper_rad)]
                     for j in model.joints
                 },
                 "link_bindings": {x.entity_id: x.name for x in model.links},
                 "sensor_poses": {},
-                "bottle_position_m": [0.2, 0.0, 0.1],
             }
 
     engine = ActionEngine(LoadedScene(), tmp_path, tmp_path)
@@ -176,20 +172,18 @@ def test_complete_six_joint_routine_preview_fits_card(tmp_path):
     assert len(result["preview"]) <= 39  # Reserve the required cloud binding row.
     text = str(result["preview"])
     assert all(j.entity_id in text and j.name in text for j in model.joints)
-    assert all(phase in text for phase in ("approach", "close", "lift"))
-    assert "phase_settling_fraction" in text and "0.2" in text
-    assert "bottle_specific_contact" in text and "0.02" in text
+    assert all(f"waypoint_{index}_positions_rad" in text for index in range(1, 4))
+    assert "segment_settling_fraction" in text and "0.2" in text
+    assert "final_joint_error_rad" in text and "0.01" in text
 
 
 def test_unchanged_inventory_fingerprint_is_display_safe(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "integrations.mcp.isaac.solus.actions.verify_assets", lambda *args: "a" * 64
-    )
+    monkeypatch.setattr(ActionEngine, "_copy_model", lambda *args: None)
     scene = Scene()
     monkeypatch.setattr(
         scene,
         "status",
-        lambda: {"loaded": False, "link_bindings": {"id": "/so101/Geometry/base_link"}},
+        lambda: {"loaded": False, "link_bindings": {"id": "/robot/Geometry/base_link"}},
     )
     result = ActionEngine(scene, tmp_path, tmp_path).dispatch(
         "load_model",

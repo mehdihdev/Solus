@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,17 @@ OPERATIONS = frozenset(
     {"status", "load_model", "set_joint_limits", "set_sensor_pose", "run_routine", "stop"}
 )
 MAX_FRAME = 128 * 1024
-RUNTIME = Path("/home/beeboss/isaacsim/IsaacSim/_build/linux-aarch64/release")
+
+
+def configured_runtime() -> Path | None:
+    """Read machine launch configuration; never resolve relative project paths."""
+    value = os.environ.get("SOLUS_ISAAC_RUNTIME", "")
+    if not value or not Path(value).is_absolute():
+        return None
+    try:
+        return Path(value).resolve(strict=True)
+    except (OSError, ValueError):
+        return None
 
 
 def child_environment(private: Path) -> dict[str, str]:

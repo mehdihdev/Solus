@@ -9,6 +9,7 @@ import * as resources from '../../lib/api/resources'
 import { useSolSessionStore } from './solSessionStore'
 import { resetSolChatSessions } from './solChatStore'
 import { SolChat } from './SolChat'
+import userEvent from '@testing-library/user-event'
 import { regionToScreenshot, useSolWindowStore } from './solWindowStore'
 import { SOL_REGION } from './solWindow.fixtures'
 
@@ -741,3 +742,67 @@ function composerRoutingTests(): void {
     }
   })
 }
+
+describe('SOL review preference', () => {
+  it('does not let the switch misrepresent an already running turn', async () => {
+    streamSolMessage.mockImplementation(() => new Promise(() => undefined))
+    render(<SolChat projectId="p1" />)
+    sendMessage('update the wiring')
+    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeDisabled()
+  })
+  it('defaults to normal Build behavior', async () => {
+    streamSolMessage.mockResolvedValue(undefined)
+    render(<SolChat projectId="p1" />)
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
+    sendMessage('inspect the wiring')
+    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(1))
+    expect(streamSolMessage.mock.calls[0]?.[0].forceConfirmation).toBeUndefined()
+  })
+
+  it('supports keyboard choice, keeps it across turns and remounts, and can turn it off', async () => {
+    streamSolMessage.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    const view = render(<SolChat projectId="p1" />)
+    screen.getByRole('switch', { name: 'Confirm every change' }).focus()
+    await user.keyboard(' ')
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeChecked()
+    sendMessage('update the wiring')
+    await waitFor(() =>
+      expect(streamSolMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ forceConfirmation: true })
+      )
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled())
+    view.unmount()
+    render(<SolChat projectId="p1" />)
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeChecked()
+    sendMessage('update the code')
+    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(2))
+    expect(streamSolMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ forceConfirmation: true })
+    )
+    screen.getByRole('switch', { name: 'Confirm every change' }).focus()
+    await user.keyboard('{Enter}')
+    sendMessage('inspect again')
+    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(3))
+    expect(streamSolMessage.mock.calls[2]?.[0].forceConfirmation).toBeUndefined()
+  })
+
+  it('isolates projects and resets on a new conversation and account reset', async () => {
+    const user = userEvent.setup()
+    const view = render(<SolChat projectId="p1" />)
+    await user.click(screen.getByRole('switch', { name: 'Confirm every change' }))
+    view.rerender(<SolChat projectId="p2" />)
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
+    view.rerender(<SolChat projectId="p1" />)
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeChecked()
+    act(() => useSolSessionStore.getState().setConversation('p1', 'other'))
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
+    )
+    await user.click(screen.getByRole('switch', { name: 'Confirm every change' }))
+    act(() => resetSolChatSessions())
+    expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
+  })
+})

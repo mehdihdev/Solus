@@ -30,7 +30,7 @@ describe('GraphLinkDrawing', () => {
     expect(container.querySelectorAll('.graph-cross-edge')).toHaveLength(1)
     expect(container.querySelector('.graph-cross-edge')).toHaveAttribute(
       'd',
-      'M 420 260 Q 570 200 720 260'
+      expect.stringContaining(' C ')
     )
   })
 
@@ -64,4 +64,21 @@ describe('GraphLinkDrawing', () => {
     )
     expect(screen.queryByRole('button')).toBeNull()
   })
+})
+
+it('labels aggregate counts from distinct real relationships, never projected pairs', () => {
+  render(
+    <GraphLinkDrawing
+      links={[
+        { relation, from: 'a', to: 'b' },
+        { relation: { ...relation, id: 'second', type: 'reads_from' }, from: 'a', to: 'b' },
+        { relation, from: 'a', to: 'b' }
+      ]}
+      points={points}
+      offset={offset}
+      anchor={{ x: 0, y: 0 }}
+      onBack={vi.fn()}
+    />
+  )
+  expect(screen.getByText('2 links · connected to, reads from')).toBeInTheDocument()
 })

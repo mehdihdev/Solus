@@ -2,7 +2,7 @@
 // is centred on it; at the root (anchor = origin) nothing changes.
 import { describe, expect, it } from 'vitest'
 import type { Entity } from '../../../lib/api/resources'
-import { CARD_HEIGHT, CARD_WIDTH, layoutLevel, levelBounds, ORIGIN, STEP_X, STEP_Y } from './layout'
+import { CARD_HEIGHT, CARD_WIDTH, layoutLevel, levelBounds, ORIGIN } from './layout'
 
 const node = (id: string): Entity => ({
   id,
@@ -14,10 +14,27 @@ const node = (id: string): Entity => ({
 const anchor = { x: 320, y: 60 }
 
 describe('layoutLevel', () => {
-  it('packs the first unsaved node on the anchor and the next ones one step out from it', () => {
+  it('packs deterministic organic nonaligned defaults around the parent', () => {
     const points = layoutLevel([node('a'), node('b')], {}, anchor)
     expect(points.a).toEqual(anchor)
-    expect(points.b).toEqual({ x: anchor.x - STEP_X, y: anchor.y - STEP_Y })
+    expect(points.b.x).not.toBe(anchor.x)
+    expect(points.b.y).not.toBe(anchor.y)
+    expect(points.b).not.toEqual({ x: anchor.x - 296, y: anchor.y - 228 })
+    const nodes = Array.from({ length: 24 }, (_, i) => node(String(i)))
+    const packed = layoutLevel(nodes, {}, anchor)
+    expect(layoutLevel(nodes, {}, anchor)).toEqual(packed)
+    expect(new Set(Object.values(packed).map((p) => p.x)).size).toBe(24)
+    expect(new Set(Object.values(packed).map((p) => p.y)).size).toBe(24)
+    for (const [id, point] of Object.entries(packed)) {
+      for (const [otherId, other] of Object.entries(packed)) {
+        if (id !== otherId)
+          expect(
+            Math.abs(point.x - other.x) >= CARD_WIDTH + 24 ||
+              Math.abs(point.y - other.y) >= CARD_HEIGHT + 24
+          ).toBe(true)
+      }
+    }
+    expect(layoutLevel([...nodes, node('new')], packed, anchor)).toMatchObject(packed)
   })
 
   it('leaves a saved node where it is and packs the rest around the anchor', () => {
@@ -58,4 +75,17 @@ describe('levelBounds', () => {
       height: half.y * 2
     })
   })
+})
+
+it('packs new children inside the API coordinate boundary even at a dragged corner', () => {
+  const result = layoutLevel(
+    Array.from({ length: 24 }, (_, i) => node(String(i))),
+    {},
+    { x: 100000, y: 100000 }
+  )
+  expect(
+    Object.values(result).every(
+      (point) => Math.abs(point.x) <= 100000 && Math.abs(point.y) <= 100000
+    )
+  ).toBe(true)
 })

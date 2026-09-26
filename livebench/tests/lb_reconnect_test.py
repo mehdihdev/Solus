@@ -159,3 +159,109 @@ async def test_factory_runs_off_the_event_loop_thread() -> None:
 
     assert len(factory_threads) >= 2
     assert all(t != loop_thread for t in factory_threads)
+
+
+async def test_factory_failures_retry_with_capped_backoff_and_recover() -> None:
+    attempts = 0
+    naps: list[float] = []
+    recovered = Burst([packet(1)])
+
+    def factory() -> Burst:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 4:
+            raise OSError("device is still unplugged")
+        return recovered
+
+    async def nap(seconds: float) -> None:
+        naps.append(seconds)
+
+    source = ReconnectingSource(factory, backoff_start=0.5, backoff_cap=1, sleep=nap)
+    received = []
+    async for value in source:
+        received.append(value)
+        await source.aclose()
+    assert received == [packet(1)]
+    assert naps == [0.5, 1, 1, 1]
+    assert recovered.closed
+
+
+async def test_close_during_factory_discards_and_closes_late_source() -> None:
+    import threading
+
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    opened = Burst([packet(1)])
+
+    def factory() -> Burst:
+        loop.call_soon_threadsafe(started.set)
+        release.wait(timeout=2)
+        return opened
+
+    source = ReconnectingSource(factory)
+    iterator = source.__aiter__()
+    pending = asyncio.create_task(anext(iterator, None))
+    await asyncio.wait_for(started.wait(), 1)
+    try:
+        await source.aclose()
+    finally:
+        release.set()
+    assert await asyncio.wait_for(pending, 1) is None
+    assert opened.closed
+
+
+async def test_cancellation_during_factory_closes_late_source() -> None:
+    import threading
+
+    import pytest
+
+    started = asyncio.Event()
+    closed = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    class TrackedBurst(Burst):
+        async def aclose(self) -> None:
+            await super().aclose()
+            closed.set()
+
+    opened = TrackedBurst([packet(1)])
+
+    def factory() -> Burst:
+        loop.call_soon_threadsafe(started.set)
+        release.wait(timeout=2)
+        return opened
+
+    source = ReconnectingSource(factory)
+    pending = asyncio.create_task(anext(source.__aiter__()))
+    await asyncio.wait_for(started.wait(), 1)
+    pending.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    finally:
+        release.set()
+    await asyncio.wait_for(closed.wait(), 1)
+    assert opened.closed
+
+
+async def test_close_interrupts_backoff_without_another_open() -> None:
+    sleeping = asyncio.Event()
+    attempts = 0
+
+    def factory() -> Burst:
+        nonlocal attempts
+        attempts += 1
+        return Burst([])
+
+    async def nap(seconds: float) -> None:
+        sleeping.set()
+        await asyncio.sleep(30)
+
+    source = ReconnectingSource(factory, sleep=nap)
+    pending = asyncio.create_task(anext(source.__aiter__(), None))
+    await asyncio.wait_for(sleeping.wait(), 1)
+    await source.aclose()
+    assert await asyncio.wait_for(pending, 1) is None
+    assert attempts == 1

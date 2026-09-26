@@ -39,6 +39,7 @@ from solus_api.connectors.kicad_netlist import (
     build_components,
     build_nets,
     is_unset,
+    merge_pin_functions,
 )
 from solus_api.connectors.kicad_sexpr import Sexp, child, children, string_at
 
@@ -58,7 +59,6 @@ _UNREAD: Final = frozenset(
         "sheetpath",
         "tstamps",
         "tstamp",
-        "pinfunction",
         "pintype",
     }
 )
@@ -108,6 +108,10 @@ def _net_records(root: Sexp) -> Iterator[NetRecord]:
             name=_text(net, "name"),
             net_class=_text(net, "class"),
             nodes=tuple((_text(node, "ref"), _text(node, "pin")) for node in children(net, "node")),
+            pin_functions=merge_pin_functions(
+                (_text(node, "ref"), _text(node, "pin"), _text(node, "pinfunction"))
+                for node in children(net, "node")
+            ),
         )
 
 

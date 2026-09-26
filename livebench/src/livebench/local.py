@@ -435,13 +435,17 @@ def detect_devices() -> list[dict[str, Any]]:
 
 
 def propose_device(
-    device_ref: str, *, repo_root: str | None = None, budget_s: float = 0.5
+    device_ref: str,
+    *,
+    repo_root: str | None = None,
+    budget_s: float = 0.5,
+    repo_sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Interrogate one detected device safely and build its proposal; None when the device is
     not here. BLOCKING (ports are opened): callers run it off-loop."""
     from livebench.hardware import registries as hardware_registries
     from livebench.hardware.detection import enumerate_devices, interrogate_device, propose
-    from livebench.hardware.repo_config import match_configs, scan_repo
+    from livebench.hardware.repo_config import match_configs, parse_repo_sources, scan_repo
 
     device = next(
         (d for d in enumerate_devices(list_devices=list_devices) if d.device_ref == device_ref),
@@ -452,9 +456,13 @@ def propose_device(
     registries = hardware_registries.default_registries()
     interrogations = interrogate_device(device.identity, registries=registries, budget_s=budget_s)
     matches: list[Any] = []
-    if repo_root and interrogations:
+    if (repo_root or repo_sources) and interrogations:
         best = max(interrogations, key=lambda i: i.confidence)
-        configs = scan_repo(Path(repo_root), registries.repo_parsers)
+        configs = (
+            parse_repo_sources(repo_sources, registries.repo_parsers)
+            if repo_sources
+            else scan_repo(Path(repo_root or ""), registries.repo_parsers)
+        )
         matches = match_configs(best.bus_map, configs)
     return _proposal_wire(propose(device, interrogations, repo_matches=matches))
 
@@ -483,3 +491,17 @@ async def open_robot(config: Mapping[str, Any], *, project_id: UUID) -> "RobotCo
         if isinstance(cause, DeviceNotFoundError | AmbiguousDeviceError):
             raise cause from None
         raise
+
+
+def presence_provider() -> Any:
+    """Discover an installed presence implementation through the plugin boundary."""
+    from livebench.plugins import presence_provider as discover
+
+    return discover()
+
+
+def session_observers() -> Any:
+    """Fresh bounded statistics for one local session; no hardware side effects."""
+    from livebench.anomaly.session import SessionObservers
+
+    return SessionObservers()

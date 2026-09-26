@@ -35,6 +35,7 @@
     "react-router-dom": "7.18.0",
     "remark-gfm": "^4.0.1",
     "smol-toml": "1.8.0",
+    "three": "0.183.2",
     "yauzl": "3.4.0",
     "zustand": "5.0.14"
   },
@@ -52,6 +53,7 @@
     "@types/node": "22.19.20",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "@types/three": "0.183.1",
     "@types/yauzl": "3.4.0",
     "@vitejs/plugin-react": "5.1.1",
     "electron": "39.2.6",

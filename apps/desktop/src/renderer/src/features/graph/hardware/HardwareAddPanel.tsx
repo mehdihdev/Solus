@@ -1,18 +1,13 @@
-// The Hardware tab of the workspace Add panel (SOLUSDEV-250 P3,
-// docs/wireflows/hardware-onboarding.md): Devices found · Search · Describe something
-// new · Sourced, then the collapsed Unassigned parts. No card grid, no modals except the
-// sourcing panel (SOLUSDEV-246 ST5) behind one button. Offline → one honest line and
-// disabled controls; nothing is fabricated.
-import { useState, type ReactNode } from 'react'
-import { Button } from '../../../components/ui/Button'
+import './hardware.css'
+import { type ReactNode } from 'react'
 import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
-import { SourcingModal } from '../../sourcing/SourcingModal'
 import { DescribeNew } from './DescribeNew'
 import { DevicesFound } from './DevicesFound'
-import { HARDWARE_COPY } from './hardware.constants'
 import { HardwareSearch } from './HardwareSearch'
+import { useHardwareGeneration } from './useHardwareGeneration'
 import { UnassignedParts } from './UnassignedParts'
+import { HardwareSourcesPanel } from './HardwareSourcesPanel'
 
 export interface HardwareAddPanelProps {
   projectId: string
@@ -36,7 +31,7 @@ const HEADING_STYLE = {
   fontSize: 12.5,
   fontWeight: 600,
   color: 'var(--tx)',
-  margin: '14px 0 4px'
+  margin: '8px 0 4px'
 } as const
 
 function Section({ title, children }: { title: string; children: ReactNode }): React.JSX.Element {
@@ -56,14 +51,12 @@ export function HardwareAddPanel({
   entities,
   onCreated
 }: HardwareAddPanelProps): React.JSX.Element {
-  const [sourcing, setSourcing] = useState(false)
+  const { authEpoch } = useHardwareGeneration(projectId)
   const disabled = !online
   return (
-    <div className="hardware-add">
-      <p style={BODY_STYLE}>{HARDWARE_COPY.intro[mode]}</p>
+    <div className="hardware-add" key={`${projectId}:${authEpoch}`}>
       {disabled && <p style={BODY_STYLE}>{OFFLINE}</p>}
       <Section title="Devices found">
-        <p style={BODY_STYLE}>{HARDWARE_COPY.devices[mode]}</p>
         {online && (
           <DevicesFound
             projectId={projectId}
@@ -74,13 +67,20 @@ export function HardwareAddPanel({
           />
         )}
       </Section>
+      {online && (
+        <HardwareSourcesPanel
+          projectId={projectId}
+          mode={mode}
+          title="Local configuration and calibration"
+        />
+      )}
       <Section title="Search">
-        <p style={BODY_STYLE}>{HARDWARE_COPY.search[mode]}</p>
         <HardwareSearch
           projectId={projectId}
           robots={robots}
           onCreated={onCreated}
           disabled={disabled}
+          compact
         />
       </Section>
       <Section title="Describe something new">
@@ -90,22 +90,10 @@ export function HardwareAddPanel({
           robots={robots}
           onCreated={onCreated}
           disabled={disabled}
+          compact
         />
-      </Section>
-      <Section title="Sourced">
-        <Button size="sm" disabled={disabled} onClick={() => setSourcing(true)}>
-          Find a part from suppliers
-        </Button>
       </Section>
       <UnassignedParts projectId={projectId} mode={mode} robots={robots} disabled={disabled} />
-      {sourcing && (
-        <SourcingModal
-          projectId={projectId}
-          door="workspace"
-          onSelected={onCreated}
-          onClose={() => setSourcing(false)}
-        />
-      )}
     </div>
   )
 }

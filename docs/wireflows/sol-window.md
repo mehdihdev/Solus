@@ -87,3 +87,13 @@ Electron GlobalShortcuts portal when supported; missing portal/permission still
 degrades to the clickable path. The header has no mode selector; Settings and the
 composer retain their controls. An already-open SOL window follows main-window
 workspace selection changes.
+
+## SOLUSDEV-262 Guide tasks
+
+In Guide mode, offer a walkthrough picker alongside chat in the current SOL window. Choosing
+a trusted task loads its confidence-bearing steps into the existing GuidePanel. Scriptable
+surfaces display copyable commands without executing them; browser surfaces use the panel;
+native surfaces offer explicit overlay handoff with side-panel fallback. A missing control/version
+match remains uncertain, with no fabricated arrow. Existing explicit capture may provide the
+screenshot context for fallback. Switching mode/project/account/task dismisses prior guidance.
+Build keeps its normal chat/tool path and actual approval cards. No new modal is introduced.

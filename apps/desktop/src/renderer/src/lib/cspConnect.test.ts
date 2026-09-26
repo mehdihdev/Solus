@@ -65,7 +65,7 @@ describe('widenConnectSrc', () => {
   test('adds the API origin to connect-src', () => {
     const out = widenConnectSrc(CSP, 'http://127.0.0.1:8000')
     expect(out).toContain(
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co http://127.0.0.1:8000\""
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co http://127.0.0.1:8000 ws://127.0.0.1:8000\""
     )
   })
 
@@ -103,6 +103,35 @@ describe('widenConnectSrc', () => {
     expect(out).toContain('<!-- connect-src widened for Supabase Auth; add the API origin here -->')
     expect(out).toContain('http-equiv="Content-Security-Policy"')
     // Only the real directive gains the origin.
-    expect(out).toContain("connect-src 'self' https://*.supabase.co http://127.0.0.1:8000\"")
+    expect(out).toContain(
+      "connect-src 'self' https://*.supabase.co http://127.0.0.1:8000 ws://127.0.0.1:8000\""
+    )
   })
+})
+
+test('allows only the configured secure API and its exact socket origin', () => {
+  const html = "<meta content=\"default-src 'self'; connect-src 'self'; img-src 'self'\" />"
+  expect(widenConnectSrc(html, 'https://api.example.test:8443')).toBe(
+    "<meta content=\"default-src 'self'; connect-src 'self' https://api.example.test:8443 wss://api.example.test:8443; img-src 'self'\" />"
+  )
+})
+
+test('adds a missing socket origin even when REST is already allowed', () => {
+  const html = '<meta content="connect-src \'self\' http://localhost:8000" />'
+  expect(widenConnectSrc(html, 'http://localhost:8000')).toBe(
+    '<meta content="connect-src \'self\' http://localhost:8000 ws://localhost:8000" />'
+  )
+})
+
+test.each([
+  'file:///tmp/api',
+  'ftp://host.example',
+  'data:text/plain,x',
+  'ws://host.example',
+  'https://*.example.test'
+])('rejects non-HTTP API origin %s', (origin) => {
+  expect(apiOriginForCsp(origin)).toBeNull()
+  expect(widenConnectSrc('<meta content="connect-src \'self\'" />', origin)).toBe(
+    '<meta content="connect-src \'self\'" />'
+  )
 })

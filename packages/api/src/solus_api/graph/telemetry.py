@@ -16,7 +16,9 @@ construction. All reads are project-scoped.
 """
 
 import logging
+import time
 from collections import deque
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -38,6 +40,10 @@ from solus_api.graph.packet import (
 from solus_api.graph.resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
+
+OBSERVED_DEVICE_TTL_SECONDS = 15.0
+OBSERVED_DEVICE_CAP = 128
+OBSERVED_PROJECT_CAP = 256
 
 DEFAULT_SUMMARY_BUCKETS = 6  # sub-windows get_telemetry splits a window into (a progression)
 #: SOLUSDEV-72 device ring bounds — drop-new at the cap so a hostile stream can
@@ -81,12 +87,18 @@ class TelemetryPlumbing:
         buffer: TelemetryBuffer,
         resolver: EntityResolver,
         *,
+        clock: Callable[[], float] = time.monotonic,
         summary_buckets: int = DEFAULT_SUMMARY_BUCKETS,
         unresolved_device_cap: int = DEFAULT_UNRESOLVED_DEVICE_CAP,
         unresolved_samples_cap: int = DEFAULT_UNRESOLVED_SAMPLES_CAP,
     ) -> None:
         if summary_buckets <= 0:
             raise ValueError("summary_buckets must be positive")
+        self.capture_sink: Callable[[UUID, UUID | None, TelemetryPacket], None] | None = None
+        self._observed_entities: dict[tuple[UUID, str], UUID | None] = {}
+        self._next_observed_sweep = 0.0
+        self._clock = clock
+        self._observed_devices: dict[UUID, dict[str, float]] = {}
         self._buffer = buffer
         self._resolver = resolver
         self._buckets = summary_buckets
@@ -97,8 +109,47 @@ class TelemetryPlumbing:
         #: connected arm before RBT-05 reconciles it. Ephemeral, like the buffer.
         self._device_rings: dict[UUID, dict[str, dict[str, deque[RecentSample]]]] = {}
 
-    async def ingest(self, project_id: UUID, packet: TelemetryPacket) -> IngestResult:
+    def _expire_observed_devices(self, now: float) -> None:
+        for project_id, devices in list(self._observed_devices.items()):
+            for device_id, last_seen in list(devices.items()):
+                if now - last_seen >= OBSERVED_DEVICE_TTL_SECONDS:
+                    del devices[device_id]
+                    self._observed_entities.pop((project_id, device_id), None)
+            if not devices:
+                del self._observed_devices[project_id]
+
+    def observed_device_ids(self, project_id: UUID) -> list[str]:
+        """Recent arrival evidence only; this never opens or owns a device."""
+        self._expire_observed_devices(self._clock())
+        return sorted(self._observed_devices.get(project_id, {}))
+
+    def _observe_device(self, project_id: UUID, device_id: str) -> None:
+        now = self._clock()
+        if now >= self._next_observed_sweep:
+            self._expire_observed_devices(now)
+            self._next_observed_sweep = now + 1.0
+        devices = self._observed_devices.get(project_id)
+        if devices is None:
+            if len(self._observed_devices) >= OBSERVED_PROJECT_CAP:
+                return
+            devices = self._observed_devices[project_id] = {}
+        if device_id in devices or len(devices) < OBSERVED_DEVICE_CAP:
+            devices[device_id] = now
+
+    async def ingest(
+        self, project_id: UUID, packet: TelemetryPacket, *, session_id: UUID | None = None
+    ) -> IngestResult:
+        if self.capture_sink is not None:
+            try:
+                self.capture_sink(project_id, session_id, packet)
+            except Exception as exc:
+                logger.warning(
+                    "run capture sink failed: project=%s error=%s", project_id, type(exc).__name__
+                )
         entity_id = await self._resolver.resolve(project_id, packet.device_id)
+        self._observe_device(project_id, packet.device_id)
+        if packet.device_id in self._observed_devices.get(project_id, {}):
+            self._observed_entities[(project_id, packet.device_id)] = entity_id
         if entity_id is None:
             self._buffer_unresolved(project_id, packet)
             return IngestResult(entity_id=None, accepted=0, signals=[])
@@ -109,7 +160,14 @@ class TelemetryPlumbing:
         if devices is not None:
             devices.pop(packet.device_id, None)
         for signal, value in packet.values.items():
-            await self._buffer.append(project_id, entity_id, signal, packet.timestamp, value)
+            await self._buffer.append(
+                project_id,
+                entity_id,
+                signal,
+                packet.timestamp,
+                value,
+                unit=packet.units.get(signal),
+            )
         return IngestResult(
             entity_id=entity_id, accepted=len(packet.values), signals=sorted(packet.values)
         )
@@ -132,20 +190,54 @@ class TelemetryPlumbing:
                 if len(ring) >= DEFAULT_UNRESOLVED_SIGNALS_PER_DEVICE:
                     continue  # drop-new: bounded signal-name space per device
                 samples = ring[signal] = deque(maxlen=self._device_samples_cap)
-            samples.append(RecentSample(timestamp=packet.timestamp, value=value))
+            samples.append(
+                RecentSample(timestamp=packet.timestamp, value=value, unit=packet.units.get(signal))
+            )
+
+    def observed_entity_ids(self, project_id: UUID, device_ids: list[str]) -> set[UUID]:
+        self._expire_observed_devices(self._clock())
+        return {
+            entity
+            for device_id in device_ids[:64]
+            if (entity := self._observed_entities.get((project_id, device_id))) is not None
+        }
+
+    async def snapshot_device(self, project_id: UUID, device_id: str) -> DeviceRecentView:
+        """Memory-only latest ingest resolution; callers authorize visible resolved entities."""
+        entity_id = self._observed_entities.get((project_id, device_id))
+        if entity_id is not None:
+            names = (await self._buffer.signal_names(project_id, entity_id))[:64]
+            recent = await self.get_recent_values(project_id, entity_id, signals=names, limit=512)
+            return DeviceRecentView(
+                device_id=device_id, resolved_entity_id=entity_id, signals=recent.signals
+            )
+        ring = self._device_rings.get(project_id, {}).get(device_id, {})
+        return DeviceRecentView(
+            device_id=device_id,
+            resolved_entity_id=None,
+            signals=[
+                SignalSeries(signal=name, points=list(samples)[-512:])
+                for name, samples in sorted(ring.items())
+            ],
+        )
 
     async def get_device_recent(
         self, project_id: UUID, device_id: str, *, limit: int | None = None
     ) -> DeviceRecentView:
-        """Recent values for one device, entity or not (SOLUSDEV-72). Resolved
-        devices report their entity id and an empty series — the entity feed is
-        the home for that data; the ring only holds the unreconciled stream."""
+        """Read the unresolved ring or the resolved entity's project-scoped feed."""
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
         entity_id = await self._resolver.resolve(project_id, device_id)
+        if entity_id is not None:
+            recent = await self.get_recent_values(project_id, entity_id, limit=limit)
+            return DeviceRecentView(
+                device_id=device_id, resolved_entity_id=entity_id, signals=recent.signals
+            )
         ring = self._device_rings.get(project_id, {}).get(device_id, {})
         series = [
             SignalSeries(
                 signal=name,
-                points=list(samples)[-limit:] if limit is not None else list(samples),
+                points=[] if limit == 0 else list(samples)[-limit:] if limit else list(samples),
             )
             for name, samples in sorted(ring.items())
         ]

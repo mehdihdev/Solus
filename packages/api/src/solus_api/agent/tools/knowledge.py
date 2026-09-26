@@ -45,6 +45,7 @@ TOOL_CONTROLS: Final[dict[str, tuple[ToolFamily, str]]] = {
     "code.git_push": (ToolFamily.CODE, "code.git.push"),
     "code.arduino_prepare": (ToolFamily.CODE, "code.arduino.core_install"),
     "code.arduino_compile": (ToolFamily.CODE, "code.arduino.compile"),
+    "code.arduino_upload": (ToolFamily.CODE, "code.arduino.upload"),
     "kicad.set_symbol_property": (ToolFamily.KICAD, "kicad.eeschema.edit_symbol_properties"),
     "kicad.add_symbol": (ToolFamily.KICAD, "kicad.eeschema.interactive_drawing.place_symbol"),
     "kicad.add_wire": (

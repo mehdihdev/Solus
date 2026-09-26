@@ -38,7 +38,7 @@ into the anchor shows that account's documents, and its sidebar lists them (sele
 reveal) with "Add another" opening Add › Integrations. Manual robots appear around `.solus`.
 New nodes pack beside their parent. No opaque id is shown as an account username. Real cards are draggable;
 their positions are shared by the project and remain after reload. Client-only account anchor
-positions are session-local and never sent as graph UUIDs to layout or shared Focus. Saving/error/conflict
+positions persist locally per account/project and are never sent as graph UUIDs to layout or shared Focus. Saving/error/conflict
 status is visible. Retry after a conflict saves only the user's moved nodes onto
 the latest layout; it does not discard teammate positions silently.
 
@@ -53,6 +53,16 @@ additional siblings. Cross-domain links use distinct dashed styling, projected
 onto visible ancestor cards; outside-level connections remain discoverable.
 
 ## `.solus`
+
+### September 15 graph presentation amendment
+
+The UI brief governs card presentation: rounded domain-bordered cards on a dark dot-grid,
+monospaced names, actual type labels and metadata, and two-column child previews with actual
+descendant counts. Unbound/proposal states use dashed borders only when supported by evidence.
+Default placement is deterministic organic packing with non-aligned offsets, preserving every
+saved point. Curved links display actual aggregated relationship counts at their midpoint;
+cross-domain links are accented and dashed. Real pending proposals float beside their candidate
+and expose evidence plus existing accept/decline controls. No fabricated proposals or metadata.
 
 Enter `.solus` to see five section nodes: Hardware configs, Project details,
 Error logging, Documentation, Code environment. Right-click any section gives
@@ -72,8 +82,8 @@ deleted selection. No automatic error-filing capability is implied.
 ## Add
 
 Top-left **Add** opens a panel with **Integrations** and **Hardware** tabs.
-**Hardware** is four sections in reading order — Devices found · Search · Describe
-something new · Sourced — then a collapsed **Unassigned parts** disclosure; no card grid,
+**Hardware** is three sections in reading order — Devices found · Search · Describe
+something new — then a collapsed **Unassigned parts** disclosure; no card grid,
 preserving file/connector parts and the private-source subsection (`hardware-onboarding.md`). Offline it shows one
 honest line and disables every control.
 Integrations lists the accounts connected in Home and cached document/repo
@@ -91,18 +101,19 @@ usable. No provider call occurs on graph selection, zoom or layout changes.
 
 A robot comes to exist three ways, all in Add › Hardware (`hardware-onboarding.md`): a
 detected device's one-question card (Add saves it and schedules optional connection), a library
-platform (Search › Add as new robot), or **Describe something new** with no robot yet —
-the explicitly described new robot is created. A name saves context; connection and actual
+platform (Search › Add as new robot), or explicit robot creation elsewhere in the workspace.
+**Describe something new** creates a part, including an unassigned part when no robot exists.
+A name saves context; connection and actual
 streaming require separate verified configuration and packet evidence. Standalone parts are
 supported by the v2 API without requiring robot creation.
 Detected devices not yet bound also dock as **pending cards at the canvas edge**, the
 same cards Add › Hardware › Devices found shows, so a device plugged in mid-session is
 visible without opening Add; adding or dismissing one clears it in both places.
-**Sourced** (STORE ST5, `sourcing.md`) is one button, _Find a part from suppliers_, opening
-the same sourcing panel the BOM uses, defaulting to _From CAD_ so SOL derives the torque
-from one of the project's assemblies; the selected candidate enters the chosen robot
-category as a PLANNED part and the robot view reloads. Disabled while the project is
-offline. A robot's name is editable inline in the robot's sidebar, where rename, delete,
+Supplier results (STORE ST5, `sourcing.md`) appear inline under the same Search input.
+An explicit metered supplier search uses the existing engine; typing alone never spends credits.
+The existing supplier selection endpoint creates a planned part. Details expand inline and no
+library, supplier or preview modal remains in Hardware. Existing BOM sourcing is independent.
+These controls are disabled offline. A robot's name is editable inline in the robot's sidebar, where rename, delete,
 unassigned parts, pending suggestions and connection status live. Multiple robots coexist
 with independent names and containment.
 Enter a robot to see Sensors, Actuators / motors, Controllers, End effectors,

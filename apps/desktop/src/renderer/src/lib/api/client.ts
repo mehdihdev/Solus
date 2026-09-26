@@ -22,6 +22,8 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** Optimistic concurrency version for graph mutations. */
   ifMatch?: number
+  /** Stable identity for explicitly replay-safe writes. */
+  idempotencyKey?: string
 }
 
 /** Join a base URL and a path without double slashes. Pure + testable. */
@@ -123,6 +125,15 @@ function rateLimitedLocally(): Sent {
 
 const isRead = (req: RequestOptions): boolean => (req.method ?? 'GET') === 'GET'
 
+function requestHeaders(req: RequestOptions, token: string | null): Record<string, string> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (req.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (token) headers.Authorization = `Bearer ${token}`
+  if (req.ifMatch !== undefined) headers['If-Match'] = String(req.ifMatch)
+  if (req.idempotencyKey !== undefined) headers['Idempotency-Key'] = req.idempotencyKey
+  return headers
+}
+
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
   const now = options.now ?? Date.now
@@ -141,10 +152,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   let readsPaused: { token: string | null; untilMs: number } = { token: null, untilMs: 0 }
 
   async function transmit(path: string, req: RequestOptions, token: string | null): Promise<Sent> {
-    const headers: Record<string, string> = { Accept: 'application/json' }
-    if (req.body !== undefined) headers['Content-Type'] = 'application/json'
-    if (token) headers.Authorization = `Bearer ${token}`
-    if (req.ifMatch !== undefined) headers['If-Match'] = String(req.ifMatch)
+    const headers = requestHeaders(req, token)
 
     const res = await fetchImpl(joinUrl(options.baseUrl, path), {
       method: req.method ?? 'GET',

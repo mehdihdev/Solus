@@ -18,8 +18,8 @@ export type ProtocolBinding = components['schemas']['ProtocolBinding']
 export type BusMapEntry = components['schemas']['BusMapEntry']
 export type LifecycleState = components['schemas']['LifecycleState']
 export type RobotCategory = PartIn['category']
-export type ProposeIn = components['schemas']['ProposeIn']
-export type ConfirmIn = components['schemas']['ConfirmIn']
+export type ProposeIn = components['schemas']['ProposeIn'] & { source_refs?: string[] }
+export type ConfirmIn = components['schemas']['ConfirmIn'] & { source_refs?: string[] }
 export type ConfirmTarget = ConfirmIn['target']
 export type AcceptedRow = components['schemas']['AcceptedRow']
 
@@ -320,7 +320,8 @@ export interface PlatformImportOut {
 }
 
 export interface PartImportIn {
-  robot_id: string
+  robot_id?: string
+  name?: string
   /** Defaults server-side to the definition's category. */
   category?: RobotCategory | null
 }
@@ -516,10 +517,15 @@ export function importLibraryPart(
   projectId: string,
   definitionId: string,
   input: PartImportIn,
-  client: ApiClient = api
+  client: ApiClient = api,
+  operationId?: string
 ): Promise<PartImportOut> {
   return client.request<PartImportOut>(
     `${libraryPath(projectId)}/parts/${encodeURIComponent(definitionId)}/import`,
-    { method: 'POST', body: input }
+    {
+      method: 'POST',
+      body: input,
+      ...(operationId ? { idempotencyKey: operationId } : {})
+    }
   )
 }

@@ -1,0 +1,19 @@
+{
+  "kind": "synthetic QA graph fixture, not a real CAD import",
+  "project_id": "01a0a21d-dbc2-70d6-b4e9-d658ee82a9ce",
+  "robot_id": "01a0a225-c6f4-7606-a985-a761bec9a92e",
+  "parts": {
+    "QA known end effector": "01a0a225-c708-7206-aefc-1bf5e54371bd",
+    "QA CAD accept": "01a0a225-c709-7ea2-9907-3bfccf7d03ab",
+    "QA CAD decline": "01a0a225-c70a-731a-acd4-e92af7cb4e01",
+    "QA CAD manual": "01a0a225-c70b-74e3-905f-ebbff315592b"
+  },
+  "ui_checks": {
+    "decline_and_rescan": true,
+    "accept_existing_part": true,
+    "manual_attach_structure": true,
+    "end_effector_count_after": 2,
+    "structure_count_after": 1,
+    "declined_part_remains_unassigned": true
+  }
+}

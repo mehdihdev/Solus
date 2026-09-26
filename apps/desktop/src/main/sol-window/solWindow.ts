@@ -1,3 +1,4 @@
+import type { ToolWindowRef } from '@solus/shared-types'
 // SOLUSDEV-252 S3: the SOL window manager (docs/architecture/sol-window.md §2,
 // wireflow §A/§B) — replaces the SOLX-02 detach/attach registry. ONE
 // resizable, geometry-remembering, optionally always-on-top BrowserWindow at
@@ -245,6 +246,8 @@ export interface SolIpcDeps {
   windows: Pick<SolWindowManager, 'open' | 'setAlwaysOnTop' | 'markReady'>
   settings: Pick<SolSettings, 'setMode' | 'setScreenIntelligence' | 'setHotkeys'>
   state(): SolState
+  guideTarget?(): Promise<ToolWindowRef | null>
+  guideScope?(): number | null
 }
 
 /** Wire the five invokes (channel constants only — see the ratchet). Every
@@ -263,6 +266,14 @@ export function registerSolIpcHandlers(
       return deps.state()
     }
   const c = SOL_WINDOW_CHANNELS
+  const guideScopeMatches = (scope: number): boolean =>
+    deps.guideScope?.() === scope && deps.state().actionMode === 'guide'
+  ipc.handle(c.guideTarget, async (event) => {
+    const scope = deps.guideScope?.()
+    if (!isAllowedSender(event) || scope == null || deps.state().actionMode !== 'guide') return null
+    const target = await deps.guideTarget?.().catch(() => null)
+    return isAllowedSender(event) && guideScopeMatches(scope) ? (target ?? null) : null
+  })
   ipc.handle(
     c.getState,
     gated((_arg, event) => deps.windows.markReady(event.sender))

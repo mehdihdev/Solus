@@ -7,6 +7,8 @@ export interface RecentSampleOut {
 }
 
 export interface SignalSeriesOut {
+  /** Stable pair identity when a focused robot spans multiple devices. */
+  readonly key?: string
   readonly signal: string
   readonly points: readonly RecentSampleOut[]
 }
@@ -33,6 +35,7 @@ const STALE_MS = 15_000
 export function streamState(latestIso: string | null, nowMs: number): StreamState {
   if (latestIso === null) return 'no-stream'
   const age = nowMs - Date.parse(latestIso)
+  if (!Number.isFinite(age) || age < 0) return 'no-stream'
   if (age <= LIVE_MS) return 'live'
   if (age <= STALE_MS) return 'stale'
   return 'no-stream'
@@ -52,15 +55,18 @@ export function latestOf(series: readonly SignalSeriesOut[]): string | null {
 export function chartSegments(
   points: readonly RecentSampleOut[],
   width: number,
-  height: number
+  height: number,
+  domain?: { tMin: number; tMax: number; vMin: number; vMax: number }
 ): string[] {
   if (points.length < 2) return []
   const times = points.map((p) => Date.parse(p.timestamp))
   const values = points.map((p) => p.value)
-  const tMin = times[0]
-  const tMax = times[times.length - 1]
-  const vMin = Math.min(...values)
-  const vMax = Math.max(...values)
+  const { tMin, tMax, vMin, vMax } = domain ?? {
+    tMin: times[0],
+    tMax: times[times.length - 1],
+    vMin: Math.min(...values),
+    vMax: Math.max(...values)
+  }
   const tSpan = Math.max(tMax - tMin, 1)
   const vSpan = Math.max(vMax - vMin, 1e-9)
   const deltas = times.slice(1).map((t, i) => t - times[i])
@@ -80,4 +86,27 @@ export function chartSegments(
   })
   if (current.length > 1) segments.push(current.join(' '))
   return segments
+}
+
+/** Match the main signal pane's eight-second window. Retain a wholly stale feed
+ * so its timestamps still explain STALE/NO STREAM rather than inventing emptiness. */
+export function currentSeries(
+  series: readonly SignalSeriesOut[],
+  nowMs: number
+): readonly SignalSeriesOut[] {
+  const past = series.flatMap((one) => {
+    const points = one.points.filter((point) => {
+      const age = nowMs - Date.parse(point.timestamp)
+      return Number.isFinite(age) && age >= 0
+    })
+    return points.length ? [{ ...one, points }] : []
+  })
+  const current = past.flatMap((one) => {
+    const points = one.points.filter((point) => {
+      const age = nowMs - Date.parse(point.timestamp)
+      return age >= 0 && age <= 8000
+    })
+    return points.length ? [{ ...one, points }] : []
+  })
+  return current.length ? current : past
 }

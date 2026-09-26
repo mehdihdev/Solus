@@ -293,7 +293,7 @@ or prove every geometrical difference distinguishable. No new route or entity
 kind is introduced.
 
 Existing sources upgrade without a CAD edit: successful Onshape sync cursors carry
-`projection_version: "cad-geometry-v2"`. After normal document selection and
+`projection_version: "cad-geometry-v3"`. After normal document selection and
 microversion checks, an older or missing marker triggers one reingestion of a
 nonempty tracked selection. Unreachable/quota-limited probes retain their existing
 refusal policy. Only verified `revision-v2-*` payload entries can be reused and are parsed by
@@ -332,7 +332,7 @@ retrying. Positive immutable empty-geometry proof remains required for an empty
 export and is covered by the same bracket.
 
 The `revision-v2-*` payload namespace excludes older potentially misassociated
-entries. `cad-geometry-v2` triggers one repair ingestion for existing nonempty
+entries. `cad-geometry-v3` triggers one repair ingestion for existing nonempty
 tracked sources even without a CAD edit; only successful ingestion persists it.
 This costs two additional revision GETs per cold export, including empty exports;
 verified warm exports need no bracket calls. Existing element/record/byte bounds,

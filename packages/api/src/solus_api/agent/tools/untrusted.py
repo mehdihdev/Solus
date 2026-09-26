@@ -132,16 +132,49 @@ def safe_relative_display_path(value: object) -> str | None:
     parts = value.split("/")
     if not 2 <= len(parts) <= 32:
         return None
+    # Human-readable KiCad basenames can exceed the token length threshold.
+    # Only a final lowercase word-separated filename gets this call-bound
+    # display exception; opaque or secret-named components remain masked.
     if any(
         part in {"", ".", ".."}
         or part.strip() != part
         or re.fullmatch(r"[A-Za-z0-9_. -]+", part) is None
         or _SECRET_KEY.search(part)
-        or _looks_entropic(part)
-        for part in parts
+        or (
+            _looks_entropic(part)
+            and not (
+                index == len(parts) - 1
+                and re.fullmatch(r"[a-z]{1,16}(?:_[a-z]{1,16}){2,8}\.kicad_(?:sch|pro|pcb)", part)
+            )
+        )
+        for index, part in enumerate(parts)
     ):
         return None
     return value
+
+
+def call_display_paths(tool_name: object, args: object) -> frozenset[str]:
+    """Exact path arguments for known capabilities; never grants file access."""
+    if not isinstance(args, dict) or not isinstance(tool_name, str):
+        return frozenset()
+    if tool_name in {"machine.read_file", "machine.write_file"}:
+        key = "path"
+    elif tool_name in {
+        "kicad.create_schematic",
+        "kicad.get_schematic_geometry",
+        "kicad.add_symbol",
+        "kicad.add_wire",
+        "kicad.add_net_label",
+        "kicad.mark_no_connect",
+        "kicad.check_erc",
+        "kicad.analyze_schematic_connections",
+        "kicad.set_symbol_property",
+    }:
+        key = "schematic_path"
+    else:
+        return frozenset()
+    path = safe_relative_display_path(args.get(key))
+    return frozenset({path}) if path is not None else frozenset()
 
 
 def redact_value(value: Any, *, allowed_paths: frozenset[str] = frozenset()) -> Any:
@@ -201,7 +234,7 @@ def _trim(token: str) -> str:
     return token[start:end]
 
 
-def redact_text(text: str) -> str:
+def redact_text(text: str, *, allowed_paths: frozenset[str] = frozenset()) -> str:
     """Scalar redaction for untrusted free text (SEC-M3): secret-shaped
     `key=value`/`key: value` assignments and entropic tokens are masked before
     the text can reach model context or persistence.
@@ -214,6 +247,13 @@ def redact_text(text: str) -> str:
     masked = _SECRET_ASSIGNMENT.sub(lambda m: m.group(1) + REDACTED, masked)
     parts = _WHITESPACE_SPLIT.split(masked)
     return "".join(
-        REDACTED if part and not part.isspace() and _looks_entropic(_trim(part)) else part
+        REDACTED
+        if part
+        and not part.isspace()
+        and _looks_entropic(_trim(part))
+        and not (
+            _trim(part) in allowed_paths and safe_relative_display_path(_trim(part)) is not None
+        )
+        else part
         for part in parts
     )

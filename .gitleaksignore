@@ -63,3 +63,20 @@ deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:ge
 deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:github-pat:77
 deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:github-pat:95
 deaa93eea4571c37de0a5a79e85411fcaf85553e:packages/api/tests/test_untrusted.py:github-pat:97
+
+# SOLUSDEV-262: reviewed historical false positives. Exact findings only.
+# Two presence_topology comparisons use a telemetry channel name. The other
+# ten findings at de1eddd8 are identical to previously reviewed token-count
+# expressions, graph entity identifiers, and synthetic redaction fixtures.
+16398ec601411c2a6847591c9afe0a394fc17c48:packages/api/src/solus_api/hardware/presence_topology.py:generic-api-key:73
+acb3fc60dd5e61660459af953f6d6c502602340a:packages/api/src/solus_api/hardware/presence_topology.py:generic-api-key:73
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:docs/qa/PHASE0_SOLUSDEV-260_API_RESULTS.md:generic-api-key:308
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/src/solus_api/agent/layers.py:generic-api-key:128
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_error_filing.py:curl-auth-header:165
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_error_filing.py:github-pat:165
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_error_filing.py:github-pat:183
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:curl-auth-header:95
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:generic-api-key:72
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:github-pat:77
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:github-pat:95
+de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:github-pat:97

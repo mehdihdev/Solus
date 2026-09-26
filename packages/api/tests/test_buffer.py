@@ -4,6 +4,7 @@ Proves the buffer is bounded (no unbounded growth under backpressure), project-i
 and that the in-memory and Redis backends behave identically for the read shape.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -166,3 +167,26 @@ async def test_redis_buffer_sets_ttl_to_avoid_stale_growth() -> None:
     project, entity = uuid.uuid4(), uuid.uuid4()
     await buf.append(project, entity, "rpm", _T0, 1.0)
     assert fake.expiries  # every key gets a TTL so idle feeds expire
+
+
+@pytest.mark.parametrize("redis", [False, True])
+async def test_buffers_preserve_units_per_sample_without_converting(redis: bool) -> None:
+    buf = RedisTelemetryBuffer(_FakeRedis()) if redis else InMemoryTelemetryBuffer()
+    project, entity = uuid.uuid4(), uuid.uuid4()
+    for value, unit in [(1.0, "rad"), (90.0, "deg"), (4095.0, None)]:
+        await buf.append(project, entity, "position", _T0, value, unit=unit)
+    samples = await buf.recent(project, entity, "position")
+    assert [(s.value, s.unit) for s in samples] == [(1.0, "rad"), (90.0, "deg"), (4095.0, None)]
+    assert await buf.recent(uuid.uuid4(), entity, "position") == []
+
+
+async def test_redis_reads_legacy_samples_without_units() -> None:
+    fake = _FakeRedis()
+    buf = RedisTelemetryBuffer(fake)
+    project, entity = uuid.uuid4(), uuid.uuid4()
+    await fake.rpush(
+        f"solus:telem:v:{project}:{entity}:position",
+        json.dumps({"t": _T0.isoformat(), "v": 3.0}),
+    )
+    samples = await buf.recent(project, entity, "position")
+    assert samples[0].value == 3.0 and samples[0].unit is None

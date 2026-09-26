@@ -146,7 +146,7 @@ it('without a robot it lists the parts but offers no target', async () => {
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
 })
 
-it('preserves skipped parts and offers private local sources in the active flow', async () => {
+it('preserves skipped parts without duplicating the Add panel local sources', async () => {
   vi.mocked(hardware.attachParts).mockResolvedValueOnce({
     attached: [],
     skipped: ['e1'],
@@ -158,5 +158,7 @@ it('preserves skipped parts and offers private local sources in the active flow'
   await userEvent.click(row.getByRole('button', { name: 'Add' }))
   expect(await row.findByRole('alert')).toHaveTextContent('was not attached')
   expect(screen.getByRole('listitem', { name: 'Bracket' })).toBeInTheDocument()
-  expect(screen.getByRole('region', { name: 'Local calibration sources' })).toBeInTheDocument()
+  expect(
+    screen.queryByRole('region', { name: 'Local calibration sources' })
+  ).not.toBeInTheDocument()
 })

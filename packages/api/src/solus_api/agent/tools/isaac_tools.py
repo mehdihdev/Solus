@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.tools.isaac_models import (
-    LIMITS,
     PUBLIC_MODELS,
     JointLimits,
     Load,
@@ -45,13 +44,13 @@ _DESCRIPTIONS = {
     "status": "Read this project’s owned Isaac session and scene state.",
     "start": "Start one owned headless Isaac session; no scene is loaded implicitly.",
     "stop": "Stop the exact owned Isaac session.",
-    "load_model": "Load the graph-bound pinned SO-101 model and bottle into the owned scene.",
+    "load_model": "Load the explicit graph-bound model asset into the owned scene.",
     "set_joint_limits": "Set the simulated limits of one graph-bound joint in radians.",
     "set_sensor_pose": (
         "Set one graph-bound contact sensor pose in parent-link metres and wxyz quaternion."
     ),
     "run_routine": (
-        "Run the bounded grasp_bottle routine with all six graph-bound joint ranges and waypoints."
+        "Run a bounded joint trajectory with the selected model’s explicit ranges and waypoints."
     ),
 }
 
@@ -103,14 +102,14 @@ class _Graph:
 
 
 def _routine(parsed: Routine, graph: _Graph) -> dict[str, Any]:
-    names = {j.entity_id: j.name for j in graph.model.joints}
+    joints = {j.entity_id: j for j in graph.model.joints}
     ranges = {j.joint_entity_id: (j.lower, j.upper) for j in parsed.joints}
-    if set(ranges) != set(names):
+    if set(ranges) != set(joints):
         raise _refuse("The routine must use exactly the loaded model joints.")
     for identity, (low, high) in ranges.items():
-        hard_low, hard_high = LIMITS[names[identity]]
+        hard_low, hard_high = joints[identity].lower_rad, joints[identity].upper_rad
         if not hard_low <= low < high <= hard_high:
-            raise _refuse("Routine range exceeds pinned model limits.")
+            raise _refuse("Routine range exceeds selected model limits.")
     if any(
         not ranges[p.joint_entity_id][0] <= p.position_rad <= ranges[p.joint_entity_id][1]
         for w in parsed.waypoints
@@ -130,9 +129,9 @@ def _target(parsed: Strict, graph: _Graph) -> dict[str, Any]:
         joint = next((j for j in graph.model.joints if j.entity_id == parsed.joint_entity_id), None)
         if joint is None:
             raise _refuse("The selected joint is not bound to the loaded model.")
-        low, high = LIMITS[joint.name]
+        low, high = joint.lower_rad, joint.upper_rad
         if not low <= parsed.lower < parsed.upper <= high:
-            raise _refuse("Joint limits exceed the pinned model limits.")
+            raise _refuse("Joint limits exceed the selected model limits.")
         native.update(
             {"entity_id": parsed.joint_entity_id, "lower": parsed.lower, "upper": parsed.upper}
         )
@@ -180,8 +179,16 @@ class _Resolver:
                 raise ToolException(
                     "The bound simulation model is unavailable.", code=ToolErrorCode.NOT_FOUND
                 )
+            definition = (
+                root.attrs.get("simulation_model") if isinstance(root.attrs, dict) else None
+            )
+            if isinstance(definition, dict) and definition.get("schema_version") == 1:
+                raise _refuse(
+                    "Legacy simulation model: explicitly reimport a version 2 model with asset "
+                    "manifest, joint topology and limits; existing graph data was not changed."
+                )
             try:
-                model = SimulationModel.model_validate(root.attrs.get("simulation_model"))
+                model = SimulationModel.model_validate(definition)
             except (ValidationError, AttributeError):
                 raise _refuse("The graph simulation model is invalid or unsupported.") from None
             if identity in model.entity_ids():

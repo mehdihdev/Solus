@@ -15,6 +15,7 @@ GATED_TOOLS: frozenset[str] = frozenset(
         "git_push",
         "arduino_prepare",
         "arduino_compile",
+        "arduino_upload",
     }
 )
 TOOL_ROSTER: frozenset[str] = READ_TOOLS | GATED_TOOLS

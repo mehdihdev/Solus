@@ -165,9 +165,9 @@ async def test_resolved_devices_read_through_with_entity_id_not_the_ring() -> No
     plumbing = _plumbing_with(project, entity, "motor0")
     await plumbing.ingest(project, _packet("motor0", 0.0, a=1.0))
     view = await plumbing.get_device_recent(project, "motor0")
-    # The entity buffer is the home for resolved data; the view points there.
+    # The device view reads the entity buffer after resolution.
     assert view.resolved_entity_id == entity
-    assert view.signals == []
+    assert [p.value for p in view.signals[0].points] == [1.0]
 
 
 async def test_device_ring_caps_distinct_devices_drop_new() -> None:
@@ -217,4 +217,4 @@ async def test_device_ring_clears_when_the_device_resolves() -> None:
 
     view = await plumbing.get_device_recent(project, "serial:arm")
     assert view.resolved_entity_id == entity
-    assert view.signals == []  # the entity feed is the home now; no stale ring
+    assert [p.value for p in view.signals[0].points] == [2.0]  # no stale pre-link sample

@@ -347,6 +347,9 @@ async def put_config(
         if entity_id == robot.id:
             owner_entry = entry
     assert owner_entry is not None
+    from solus_api.hardware.topology import sync_topology
+
+    await sync_topology(session, project_id, robot.id)
     return owner_entry
 
 

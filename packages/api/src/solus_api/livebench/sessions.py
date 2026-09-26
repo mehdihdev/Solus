@@ -78,6 +78,10 @@ def load_local() -> ModuleType | None:
     return importlib.import_module("livebench.local")
 
 
+class SessionObserver(Protocol):
+    def add(self, packet: TelemetryPacket) -> list[dict[str, Any]]: ...
+
+
 class TappableConnection(Protocol):
     """The LiveConnection surface a session drives, plus the packet tap
     (structurally `PacketStreamLiveConnection` — no livebench import needed)."""
@@ -193,8 +197,12 @@ class SessionManager:
         max_active_per_project: int = DEFAULT_MAX_ACTIVE_PER_PROJECT,
         ended_kept: int = DEFAULT_ENDED_KEPT,
         device_ids_kept: int = DEFAULT_DEVICE_IDS_KEPT,
+        observer_factory: Callable[[], SessionObserver] | None = None,
+        event_sink: Callable[[UUID, dict[str, Any]], None] | None = None,
     ) -> None:
         self._plumbing = plumbing
+        self._observer_factory = observer_factory
+        self._event_sink = event_sink
         self._cap = max_active_per_project
         self._device_ids_kept = device_ids_kept
         self._active: dict[UUID, dict[UUID, _Session]] = {}
@@ -268,14 +276,49 @@ class SessionManager:
         )
         return session.out(device_ids_kept=self._device_ids_kept)
 
+    def channel_roles(self, project_id: UUID, device_id: str) -> dict[str, str]:
+        """Read exact plugin evidence only for a device observed in this active project session."""
+        candidates: list[dict[str, str]] = []
+        for session in self._active.get(project_id, {}).values():
+            if session.conn is None or device_id not in session.device_ids:
+                continue
+            facts = getattr(session.conn, "device_facts", None)
+            roles = facts.get("channel_roles") if isinstance(facts, dict) else None
+            declared = roles.get(device_id) if isinstance(roles, dict) else None
+            candidates.append(
+                {
+                    name: role
+                    for name, role in declared.items()
+                    if isinstance(name, str) and role in ("primary", "diagnostic")
+                }
+                if isinstance(declared, dict)
+                else {}
+            )
+        if not candidates:
+            return {}
+        return {
+            name: role
+            for name, role in candidates[0].items()
+            if all(other.get(name) == role for other in candidates[1:])
+        }
+
     def _tap_for(self, session: _Session) -> Callable[[TelemetryPacket], Awaitable[None]]:
         # Closes over the ctx-derived project id — never packet content (§7).
         project_id = session.project_id
+        observer = self._observer_factory() if self._observer_factory else None
 
         async def tap(packet: TelemetryPacket) -> None:
+            nonlocal observer
             if len(session.device_ids) < self._device_ids_kept:
                 session.device_ids.setdefault(packet.device_id)
-            result = await self._plumbing.ingest(project_id, packet)
+            result = await self._plumbing.ingest(project_id, packet, session_id=session.id)
+            if observer is not None and self._event_sink is not None:
+                try:
+                    for event in observer.add(packet)[:128]:
+                        self._event_sink(project_id, event)
+                except Exception:
+                    observer = None
+                    logger.warning("session observer unavailable: session=%s", session.id)
             if result.entity_id is None:
                 session.unresolved += 1
             else:

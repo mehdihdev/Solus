@@ -43,7 +43,8 @@ export interface SolChat {
     actionMode: SolActionMode,
     mentions?: readonly string[],
     thinkHarder?: boolean,
-    screenshot?: SolScreenshot
+    screenshot?: SolScreenshot,
+    options?: { forceConfirmation?: boolean }
   ) => Promise<boolean>
   /** Switch to another owned conversation (cancels any live turn first). */
   selectConversation: (conversationId: string) => void
@@ -71,9 +72,9 @@ export function useSolChat(projectId: string | null): SolChat {
   // S2-A: callbacks keyed on the project only, so memoised rows downstream
   // (onDecide) do not re-render on every store tick of a streaming turn.
   const send = useCallback<SolChat['send']>(
-    (content, actionMode, mentions, thinkHarder, screenshot) =>
+    (content, actionMode, mentions, thinkHarder, screenshot, options) =>
       projectId
-        ? sendMessage(projectId, content, actionMode, mentions, thinkHarder, screenshot)
+        ? sendMessage(projectId, content, actionMode, mentions, thinkHarder, screenshot, options)
         : Promise.resolve(false),
     [projectId]
   )

@@ -152,11 +152,11 @@ def test_follower_class_pairs_with_its_real_calibration(repo: Path, calibration_
     )
     assert follower.params == {
         "lerobot_name": "so_follower",
-        "note": "lerobot toggles this with use_degrees",
+        "note": "Normalization depends on a runtime condition; mode is unresolved.",
     }
     assert [(p.name, p.address, p.model) for p in follower.parts] == SO_PARTS
     pan = follower.parts[0]
-    assert pan.calibration_mode is CalibrationMode.DEGREES  # physical units win over the toggle
+    assert pan.calibration_mode is None  # runtime use_degrees is not known from this source
     assert pan.calibration == SHOULDER_PAN_CALIBRATION
     assert pan.calibration_source == follower.calibration_source
     assert follower.parts[5].calibration_mode is CalibrationMode.RANGE_0_100
@@ -175,6 +175,38 @@ def test_leader_yields_one_match_per_calibration_file(repo: Path, calibration_ro
     assert no_id.calibration_source == str(calibration_root / "teleoperators/so_leader/None.json")
     assert (bee.parts[5].calibration or {})["range_min"] == 2032
     assert (no_id.parts[5].calibration or {})["range_min"] == 2037
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100",
+        "MotorNormMode.RANGE_M100_100 if config.normalized else MotorNormMode.DEGREES",
+        "MotorNormMode.RANGE_0_100 if config.positive else MotorNormMode.RANGE_M100_100",
+        "unknown_mode if config.custom else MotorNormMode.DEGREES",
+        "MotorNormMode.DEGREES if config.standard else choose_mode()",
+        "choose_mode()",
+        "config.norm_mode",
+    ],
+)
+def test_unresolved_runtime_modes_preserve_parts_without_inventing_units(
+    tmp_path: Path, expression: str
+) -> None:
+    source = _lerobot_source("RuntimeArm", "Robot", "runtime_arm").replace(
+        "MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100",
+        expression,
+    )
+    path = _lerobot_file(tmp_path, "src/arm.py", source)
+    match = _scan_lerobot(tmp_path, tmp_path / "absent_calibration")[0]
+
+    assert [(part.name, part.address, part.model) for part in match.parts] == SO_PARTS
+    assert match.source == str(path)
+    assert all(part.calibration_mode is None for part in match.parts[:5])
+    assert match.parts[5].calibration_mode is CalibrationMode.RANGE_0_100
+    if " if " in expression:
+        assert match.params["note"] == (
+            "Normalization depends on a runtime condition; mode is unresolved."
+        )
 
 
 def test_skips_examples_tests_docs_and_a_class_without_calibration_is_one_bare_match(
@@ -284,3 +316,32 @@ def test_real_lerobot_clone_yields_the_users_so101_pair() -> None:
     assert follower.source == str(REAL_CLONE / "src/lerobot/robots/so_follower/so_follower.py")
     assert [(p.name, p.address, p.model) for p in follower.parts] == SO_PARTS
     assert follower.parts[0].calibration == SHOULDER_PAN_CALIBRATION
+
+
+def test_authorized_bytes_never_read_calibration_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> object:
+        pytest.fail("byte parser must not read external calibration")
+
+    monkeypatch.setattr(Path, "glob", forbidden)
+    parser = LerobotConfigParser()
+    matches = parser.extract_bytes(KOCH.encode(), suffix=".py", source_ref="source:fixture")
+    assert matches
+    assert all(match.source == "source:fixture" for match in matches)
+    assert all(match.calibration_source is None for match in matches)
+    assert all(part.calibration is None for match in matches for part in match.parts)
+    assert all(match.port_hint is None for match in matches)
+
+
+def test_unverified_normalization_cannot_label_raw_packets_as_degrees() -> None:
+    from livebench.hardware.repo_config import RepoParserRegistry, parse_repo_sources
+    from livebench.plugins.feetech.feetech_driver import _FeetechJoint
+
+    registry = RepoParserRegistry()
+    registry.register(LerobotConfigParser)
+    [match] = parse_repo_sources(
+        [{"source_ref": "source:fixture", "suffix": ".py", "content": KOCH.encode()}], registry
+    )
+    for part in match.parts:
+        joint = _FeetechJoint(int(part.address), part.name, 4096, 2047, part.calibration_mode, None)
+        assert joint.position(2187) == (2187.0, "tick")
+    assert match.params["declared_calibration_modes"]

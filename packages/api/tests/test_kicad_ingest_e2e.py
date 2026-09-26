@@ -229,17 +229,22 @@ async def test_real_fixture_lands_expected_component_and_net_entities(
 
     relations = await _relation_snapshot(sessionmaker_fixture, project_id, entities)
 
-    def _edge(net: str, pins: list[str]) -> dict[str, Any]:
-        return {"type": CONNECTED_TO, "attrs": {"net": net, "pins": pins}}
+    def _edge(
+        net: str, pins: list[str], pin_functions: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        attrs: dict[str, Any] = {"net": net, "pins": pins}
+        if pin_functions is not None:
+            attrs["pin_functions"] = pin_functions
+        return {"type": CONNECTED_TO, "attrs": attrs}
 
     # SDA: R1 pin 2, U1 pin 18, U2 pin 24 (solus_sample.net.xml net code="8").
     assert relations[("R1", "net:SDA")] == _edge("SDA", ["2"])
-    assert relations[("U1", "net:SDA")] == _edge("SDA", ["18"])
-    assert relations[("U2", "net:SDA")] == _edge("SDA", ["24"])
+    assert relations[("U1", "net:SDA")] == _edge("SDA", ["18"], {"18": "PA10"})
+    assert relations[("U2", "net:SDA")] == _edge("SDA", ["24"], {"24": "SDA"})
     # SCL: R2 pin 2, U1 pin 17, U2 pin 23 (net code="7").
     assert relations[("R2", "net:SCL")] == _edge("SCL", ["2"])
-    assert relations[("U1", "net:SCL")] == _edge("SCL", ["17"])
-    assert relations[("U2", "net:SCL")] == _edge("SCL", ["23"])
+    assert relations[("U1", "net:SCL")] == _edge("SCL", ["17"], {"17": "PA9"})
+    assert relations[("U2", "net:SCL")] == _edge("SCL", ["23"], {"23": "SCL"})
 
 
 # -------------------------------------- 1b: cross-format invariant (SOLUSDEV-252)

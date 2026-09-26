@@ -482,8 +482,9 @@ async def enqueue_sync(
 ) -> uuid.UUID:
     """Record the job + activity, commit, dispatch (ADR-005), set Location.
 
-    `inline_only` (SOLUSDEV-249): a `local` source is scanned over the bridge,
-    which lives in THIS process — never hand it to ARQ."""
+    Bridge-backed local/KiCad/Altium acquisition lives in THIS process, so it
+    runs as an API background task rather than being handed to ARQ. The explicit
+    `inline_only` flag also preserves callers with other process-local work."""
     job = Job(
         project_id=ctx.project.id,
         team_id=ctx.team.id,
@@ -520,7 +521,8 @@ async def enqueue_sync(
         source.id,
         job_id,
         acting_user_id=ctx.user.id,
-        inline_only=inline_only,
+        inline_only=inline_only
+        or source.type in {SourceType.LOCAL, SourceType.KICAD, SourceType.ALTIUM},
     )
     response.headers["Location"] = f"/api/v1/jobs/{job_id}"
     return job_id
@@ -763,6 +765,7 @@ async def _run_inline(
         source_id=source_id,
         job_id=job_id,
         acting_user_id=acting_user_id,
+        artifact_store=getattr(app.state, "artifact_store", None),
         store=getattr(app.state, "integration_store", None),
         hub=getattr(app.state, "graph_hub", None),
     )

@@ -1348,6 +1348,8 @@ export interface BenchSimulator {
  *  UI must render verbatim — a `usb_bridge` board class means the MCU behind
  *  the bridge is unknown, and the UI must never guess a board for it. */
 export interface BenchDevice {
+  /** Definition-provided connection hint; does not establish MCU identity. */
+  headline?: string | null
   device_path: string
   by_id_path: string | null
   serial_number: string | null
@@ -1505,9 +1507,12 @@ export function stopBenchSession(
 export interface BenchSignalPoint {
   timestamp: string
   value: number
+  unit?: string | null
 }
 
 export interface BenchSignalSeries {
+  /** Optional exact channel role declared by the active local driver. */
+  display_role?: 'primary' | 'diagnostic' | null
   signal: string
   points: BenchSignalPoint[]
 }
@@ -1525,12 +1530,13 @@ export interface BenchDeviceRecent {
 export function getBenchDeviceRecent(
   projectId: string,
   deviceIds: readonly string[],
-  options: { limit?: number } = {},
+  options: { limit?: number; focusEntityId?: string } = {},
   client: ApiClient = api
 ): Promise<BenchDeviceRecent[]> {
   const params = new URLSearchParams()
   for (const deviceId of deviceIds) params.append('device_id', deviceId)
   if (options.limit) params.set('limit', String(options.limit))
+  if (options.focusEntityId) params.set('focus_entity_id', options.focusEntityId)
   return client
     .request<{
       devices: BenchDeviceRecent[]

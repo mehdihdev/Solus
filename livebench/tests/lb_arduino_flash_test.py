@@ -13,6 +13,7 @@ def test_upload_argv_is_a_pinned_argument_list() -> None:
     assert runner.upload_argv(Path("/tmp/sketch.hex")) == [
         "/usr/bin/arduino-cli",
         "upload",
+        "--verify",
         "--fqbn",
         "x:y:z",
         "-p",

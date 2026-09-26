@@ -118,3 +118,77 @@ libs/solus-telemetry/
 ├── micropython/            single-file module, copy to the board
 └── arduino/                Arduino library (library.properties, src/, examples/, extras/host/)
 ```
+
+## Existing Python control loops
+
+Use `import solus_telemetry as solus` (the `solus` module name is already used by several tool
+integrations). Explicitly configure the completed read/write methods and numeric dictionary keys:
+
+```python
+import solus_telemetry as solus
+
+config = solus.MirrorConfig(
+    device_id="ethernet:127.0.0.1", port=14550,
+    methods=(solus.MethodAdapter("get_observation", {"shoulder.position": "shoulder.pos"}),),
+    units={"shoulder.position": "deg"},
+)
+handle = solus.mirror(robot, config=config)
+# Your existing loop continues unchanged. Stop mirroring with handle.close().
+```
+
+The default mirror sink sends UDP datagrams, but Solus does not currently wire a UDP
+receiver into Live Bench. That default alone is not an end-to-end integration. Use the
+authenticated HTTP publisher below for an existing controller loop.
+The shim observes completed method calls; it never starts the robot or reads it again. Only
+configured numeric dictionary fields are copied. Queue overflow or sink failure drops mirror
+samples and increments counters rather than blocking control. No socket opens on import.
+Source insertion uses the existing reviewed local-file diff; linking a repository alone grants
+no permission to alter a control loop.
+
+
+## Publish completed observations to Live Bench over HTTP
+
+The controller remains the sole owner of the serial ports. Copy its already-read values:
+
+```python
+import os
+from solus_telemetry import HttpPublisher
+
+publisher = HttpPublisher(
+    os.environ["SOLUS_API_URL"],       # e.g. http://127.0.0.1:8000
+    os.environ["SOLUS_PROJECT_ID"],
+    os.environ["SOLUS_ACCESS_TOKEN"],  # existing authenticated bearer access token
+)
+try:
+    # Inside your existing loop, AFTER its successful hardware read:
+    # observation = robot.get_observation()
+    publisher.submit(
+        "usb:YOUR_BOARD_SERIAL/1",     # exact accepted graph part external_ref
+        {"shoulder_pan.position": observation["shoulder_pan.pos"]},
+        {"shoulder_pan.position": "deg"},  # must match the calibration's units
+    )
+finally:
+    publisher.close()
+    print(publisher.counters)
+```
+
+Configure graph device/part identities in the same project first: HTTP success does not
+mean an unknown device resolved. `accepted`, `unresolved`, and `rejected` counters report
+the server's actual result. `submitted` counts valid samples offered to the queue;
+`dropped` includes overflow, expiry, failed batches, and close; `invalid` counts malformed
+samples; `errors` counts failed HTTP batches. A queued sample is not proof of delivery.
+
+The publisher never opens serial or reads a robot. Submission copies bounded values in
+memory; a daemon sends at most one batch per second by default (500 packets and 1 MiB
+maximum). Queued samples older than two seconds are discarded. Network errors, expired
+authentication, and rate limits drop that batch without retry; obtain a fresh access token
+and create a new publisher when necessary. Close discards pending samples and waits up
+to 0.25 seconds by default, returning false if an HTTP call is still finishing. For a final
+counter snapshot, use `close(timeout=3)` with the default two-second transport timeout.
+This best-effort stream is not a durable recording or a safety/control channel.
+
+Only HTTPS origins or literal loopback HTTP origins are accepted. Credentials, paths,
+queries, and fragments in the origin are rejected. The transport does not follow redirects
+or use environment proxies. No network activity occurs at import. Disconnect Solus's direct
+serial session before starting the external controller; this publisher does not stop an
+existing reader or arbitrate the serial bus.

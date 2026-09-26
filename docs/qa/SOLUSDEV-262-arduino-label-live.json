@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-09-14T18:57:36.866654+00:00",
+  "method": "enumeration only; no port opened",
+  "devices": [
+    {
+      "device_ref": "usb:port-3-1.2.3",
+      "headline": "Possible Arduino connection",
+      "board": "WCH CH340 USB-serial bridge",
+      "mcu_known": false,
+      "identity_basis": "port_position",
+      "vid": 6790,
+      "pid": 29987
+    },
+    {
+      "device_ref": "usb:5B42134331",
+      "headline": "something on USB",
+      "board": "WCH CH343/CH9102 USB-serial bridge",
+      "mcu_known": false,
+      "identity_basis": "serial",
+      "vid": 6790,
+      "pid": 21971
+    }
+  ]
+}

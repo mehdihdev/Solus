@@ -13,7 +13,7 @@ from test_isaac_tools import SESSION, graph, tools
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from integrations.mcp.isaac.solus.actions import ActionEngine
-from integrations.mcp.isaac.solus.models import LIMITS, Model
+from integrations.mcp.isaac.solus.models import Model
 from integrations.mcp.isaac.solus.server import wire_result
 
 
@@ -35,7 +35,8 @@ async def test_actual_native_routine_survives_transport_and_cloud_binding(db, en
                 "loaded": True,
                 "positions_rad": {j.entity_id: 0.001234567890123 for j in model.joints},
                 "limits_rad": {
-                    j.entity_id: [float32(v) for v in LIMITS[j.name]] for j in model.joints
+                    j.entity_id: [float32(v) for v in (j.lower_rad, j.upper_rad)]
+                    for j in model.joints
                 },
                 "link_bindings": {x.entity_id: "/World/" + x.name for x in model.links},
                 "sensor_poses": {
@@ -44,7 +45,6 @@ async def test_actual_native_routine_survives_transport_and_cloud_binding(db, en
                         "orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
                     }
                 },
-                "bottle_position_m": [0.25, 0.2, 0.075],
             }
 
     action = ActionEngine(Scene(), tmp_path, tmp_path)
@@ -71,20 +71,23 @@ async def test_actual_native_routine_survives_transport_and_cloud_binding(db, en
     native["isaac.run_routine"].invoke = native_preview
     args = {
         "session_id": SESSION,
-        "routine": "grasp_bottle",
+        "routine": "joint_trajectory",
         "duration_s": 30,
         "joints": [
-            {"joint_entity_id": j.entity_id, "lower": LIMITS[j.name][0], "upper": LIMITS[j.name][1]}
+            {
+                "joint_entity_id": j.entity_id,
+                "lower": (j.lower_rad, j.upper_rad)[0],
+                "upper": (j.lower_rad, j.upper_rad)[1],
+            }
             for j in model.joints
         ],
         "waypoints": [
             {
-                "phase": phase,
                 "positions": [
                     {"joint_entity_id": j.entity_id, "position_rad": 0.05} for j in model.joints
                 ],
             }
-            for phase in ("approach", "close", "lift")
+            for _ in range(3)
         ],
     }
     rows = await tool.preview(args)
@@ -99,9 +102,6 @@ async def test_actual_native_routine_survives_transport_and_cloud_binding(db, en
     assert str(root.id) in rows[-1]["after"]
     text = str(rows)
     assert all(j.entity_id in text and j.name in text for j in model.joints)
-    assert all(
-        key in text
-        for key in ("duration_s", "physics_steps", "maximum_target_speed_rad_s", "grasp_criteria")
-    )
+    assert all(key in text for key in ("duration_s", "physics_steps", "maximum_target_speed_rad_s"))
     assert action.generation == 0
     assert not any(name == "run_routine" for name, _ in calls)

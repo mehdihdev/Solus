@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .runtime import MAX_FRAME, RUNTIME, child_environment
+from .runtime import MAX_FRAME, child_environment, configured_runtime
 
 
 class Controller:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace.resolve(strict=True)
+        self._runtime = configured_runtime()
         self.process: subprocess.Popen[bytes] | None = None
         self.session: str | None = None
         self.closed = False
@@ -34,18 +35,28 @@ class Controller:
         self.private: tempfile.TemporaryDirectory[str] | None = None
         self.log_tail = bytearray()
 
+    @property
+    def runtime(self) -> Path:
+        if self._runtime is None:
+            raise ValueError("runtime unavailable")
+        return self._runtime
+
     def probe(self) -> dict[str, Any]:
+        if self._runtime is None:
+            return {
+                "available": False,
+                "platform": platform.system(),
+                "architecture": platform.machine(),
+                "runtime_fingerprint": None,
+            }
         paths = [
-            RUNTIME / "python.sh",
-            RUNTIME / "setup_python_env.sh",
-            RUNTIME / "VERSION",
-            RUNTIME / "kit/python/bin/python3",
+            self.runtime / "python.sh",
+            self.runtime / "setup_python_env.sh",
+            self.runtime / "VERSION",
+            self.runtime / "kit/python/bin/python3",
+            self.runtime / "apps/isaacsim.exp.base.python.kit",
         ]
-        available = (
-            platform.system() == "Linux"
-            and platform.machine() == "aarch64"
-            and all(p.is_file() for p in paths)
-        )
+        available = platform.system() == "Linux" and all(p.is_file() for p in paths)
         digest = hashlib.sha256()
         if available:
             for path in paths:
@@ -86,7 +97,11 @@ class Controller:
                             "before": "stopped",
                             "after": "Start one owned headless Isaac session; no model loaded",
                         },
-                        {"label": "Runtime", "before": None, "after": str(RUNTIME / "python.sh")},
+                        {
+                            "label": "Runtime",
+                            "before": None,
+                            "after": str(self.runtime / "python.sh"),
+                        },
                         {
                             "label": "Owned entrypoint",
                             "before": None,
@@ -151,12 +166,13 @@ class Controller:
                 self.sequence = 0
                 worker = Path(__file__).with_name("worker.py").resolve()
                 argv = [
-                    str(RUNTIME / "python.sh"),
+                    str(self.runtime / "python.sh"),
                     str(worker),
                     str(request_read),
                     str(reply_write),
                     self.session,
                     str(workspace_fd),
+                    str(self.runtime),
                     "--/app/extensions/registryEnabled=false",
                     "--/telemetry/enableNVDF=false",
                     "--/telemetry/enableSentry=false",

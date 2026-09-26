@@ -9,18 +9,22 @@ parser that raises is skipped.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import stat
 import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar, Final, Protocol
 
 from solus_api.hardware.config import BusMapEntry, CalibrationMode
+
+from livebench.recognition.firmware import decode_extraction_source
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +234,13 @@ class GenericStructuredParser:
 
     parser_id: ClassVar[str] = "generic-structured"
 
+    def extract_bytes(
+        self, source: bytes, *, suffix: str, source_ref: str
+    ) -> list[RepoConfigMatch]:
+        if suffix not in _STRUCTURED_SUFFIXES:
+            return []
+        return extract_repo_config_bytes(source, suffix=suffix, source_ref=source_ref)
+
     def scan(self, root: Path, files: list[Path]) -> list[RepoConfigMatch]:
         matches: list[RepoConfigMatch] = []
         for path in files:
@@ -284,3 +295,205 @@ def match_configs(
         if compatible:
             matched.append(config)
     return matched
+
+
+def _yaml_bytes_document(text: str) -> Any:
+    import yaml
+
+    depth = events = 0
+    for event in yaml.parse(text):
+        events += 1
+        if isinstance(event, yaml.events.CollectionStartEvent):
+            depth += 1
+        elif isinstance(event, yaml.events.CollectionEndEvent):
+            depth -= 1
+        if (
+            events > 4096
+            or depth > 32
+            or isinstance(event, yaml.events.AliasEvent)
+            or getattr(event, "anchor", None)
+        ):
+            raise ValueError("YAML aliases, anchors or excessive structure are not supported")
+    return _unique_yaml_document(text)
+
+
+def _unique_pairs(pairs: list[tuple[Any, Any]]) -> dict[Any, Any]:
+    result: dict[Any, Any] = {}
+    for key, value in pairs:
+        try:
+            if key in result:
+                raise ValueError("duplicate configuration mapping key")
+            result[key] = value
+        except TypeError as exc:
+            raise ValueError("unsupported configuration mapping key") from exc
+    return result
+
+
+def _unique_yaml_document(text: str) -> Any:
+    import yaml
+
+    loader: Any = yaml.SafeLoader(text)
+    try:
+        root = loader.get_single_node()
+        nodes = [root] if root is not None else []
+        while nodes:
+            node = nodes.pop()
+            if isinstance(node, yaml.nodes.MappingNode):
+                _unique_pairs(
+                    [(loader.construct_object(key, deep=True), None) for key, _ in node.value]
+                )
+                nodes.extend(child for pair in node.value for child in pair)
+            elif isinstance(node, yaml.nodes.SequenceNode):
+                nodes.extend(node.value)
+        return loader.construct_document(root) if root is not None else None
+    finally:
+        loader.dispose()
+
+
+def _check_document_budget(document: Any) -> None:
+    stack = [(document, 0)]
+    remaining = 4096
+    while stack:
+        value, depth = stack.pop()
+        remaining -= 1
+        if depth > 32 or remaining < 0:
+            raise ValueError("configuration structure exceeds extraction budget")
+        if isinstance(value, dict):
+            if len(value) * 2 > remaining - len(stack):
+                raise ValueError("configuration object exceeds extraction budget")
+            stack.extend((item, depth + 1) for pair in value.items() for item in pair)
+        elif isinstance(value, list):
+            if len(value) > remaining - len(stack):
+                raise ValueError("configuration array exceeds extraction budget")
+            stack.extend((item, depth + 1) for item in value)
+        else:
+            _check_config_scalar(value)
+
+
+def _check_config_scalar(value: Any) -> None:
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        raise ValueError("configuration supports only JSON-compatible scalars")
+    if isinstance(value, str) and len(value) > 512:
+        raise ValueError("configuration token exceeds extraction budget")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("configuration scalars must be finite")
+
+
+def _decode_config_document(text: str, suffix: str) -> Any:
+    import yaml
+
+    try:
+        if suffix == ".json":
+            return json.loads(text, object_pairs_hook=_unique_pairs)
+        if suffix == ".toml":
+            return tomllib.loads(text)
+        return _yaml_bytes_document(text)
+    except (ValueError, RecursionError, yaml.YAMLError) as exc:
+        raise ValueError("malformed or over-budget configuration") from exc
+
+
+def _check_address_scalar(value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError("declared addresses must be strings or finite numbers")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("declared addresses must be finite")
+    if isinstance(value, int) and value.bit_length() > 1701:
+        raise ValueError("declared address exceeds field bounds")
+    if not 1 <= len(str(value)) <= 512:
+        raise ValueError("declared address exceeds field bounds")
+
+
+def _check_address_aliases(spec: Mapping[str, Any]) -> None:
+    addresses = [spec[key] for key in _ADDRESS_KEYS if key in spec]
+    for address in addresses:
+        _check_address_scalar(address)
+    if len({str(address) for address in addresses}) > 1:
+        raise ValueError("contradictory address aliases")
+
+
+def _byte_config_parts(document: Mapping[str, Any]) -> list[RepoPartDecl]:
+    """Visit every supported section; duplicate names are ambiguous, never silently overwritten."""
+    parts: list[RepoPartDecl] = []
+    names: set[str] = set()
+    declared = 0
+    for key in _PART_KEYS:
+        section = document.get(key)
+        if not isinstance(section, (Mapping, list)):
+            continue
+        declared += len(section)
+        if declared > MAX_PARTS_PER_CONFIG:
+            raise ValueError("declared parts exceed extraction budget")
+        specs = section.values() if isinstance(section, Mapping) else section
+        for spec in specs:
+            if isinstance(spec, Mapping):
+                _check_address_aliases(spec)
+        for part in _parts_of({key: section}):
+            if part.name in names:
+                raise ValueError("ambiguous duplicate part name")
+            names.add(part.name)
+            parts.append(part)
+    return parts
+
+
+def extract_repo_config_bytes(
+    source: bytes, *, suffix: str, source_ref: str
+) -> list[RepoConfigMatch]:
+    """Review supplied structured bytes with opaque provenance; never expose local path hints."""
+    text = decode_extraction_source(source, source_ref)
+    if not isinstance(suffix, str) or suffix not in _STRUCTURED_SUFFIXES:
+        raise ValueError("unsupported configuration suffix")
+    document = _decode_config_document(text, suffix)
+    if not isinstance(document, Mapping):
+        raise ValueError("configuration must be an object")
+    _check_document_budget(document)
+    parts = _byte_config_parts(document)
+    if not parts:
+        return []
+    return [
+        RepoConfigMatch(
+            config_id=source_ref,
+            parser_id=GenericStructuredParser.parser_id,
+            label=source_ref,
+            source=source_ref,
+            protocol_hint=_string(document, "protocol", "driver", "driver_id"),
+            parts=parts,
+        )
+    ]
+
+
+def parse_repo_sources(
+    sources: Sequence[Mapping[str, Any]], registry: RepoParserRegistry
+) -> list[RepoConfigMatch]:
+    """Private byte capability: selected files only, with content-bound portable IDs."""
+    matches: list[RepoConfigMatch] = []
+    for source in sources:
+        content, ref, suffix = source["content"], source["source_ref"], source["suffix"]
+        decode_extraction_source(content, ref)
+        for parser in registry.all():
+            extract = getattr(parser, "extract_bytes", None)
+            if not callable(extract):
+                continue
+            parsed = extract(content, suffix=suffix, source_ref=ref)
+            for match in parsed:
+                identity = hashlib.sha256(
+                    content + f"\0{ref}\0{parser.parser_id}\0{match.config_id}".encode()
+                ).hexdigest()
+                declared = {
+                    part.address: part.calibration_mode.value
+                    for part in match.parts
+                    if part.calibration_mode is not None
+                }
+                # Source declarations do not establish this physical device's calibration.
+                # Keep modes as evidence, never as units for uncalibrated position packets.
+                parts = [replace(part, calibration_mode=None) for part in match.parts]
+                params = (
+                    {**match.params, "declared_calibration_modes": declared}
+                    if declared
+                    else match.params
+                )
+                matches.append(
+                    replace(
+                        match, config_id=f"repo:{identity}", source=ref, parts=parts, params=params
+                    )
+                )
+    return sorted(matches, key=lambda match: (match.source, match.config_id))

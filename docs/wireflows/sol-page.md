@@ -62,6 +62,12 @@ chat surface (`OrbChat`) and stream protocol unchanged.
   top up to keep going." (and the top-up card lights); 429 → "Too many SOL
   turns right now — give it a few seconds."
 
+SOLUSDEV-262 demo review: the composer includes **Confirm every change**. This
+per-conversation preference sends the existing `force_confirmation` flag and
+defaults off. It persists across pane navigation, resets for a new conversation
+or account, and is disabled while a turn streams because that turn already
+captured its policy. It does not approve any pending action.
+
 SOLUSDEV-261 approval-card polish preserves the CTR-03 flow: a clear review heading,
 always-visible action summary, responsive labeled Before/After values with exact
 case and whitespace, and expandable tool/approval identifiers. Missing and empty

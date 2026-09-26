@@ -73,3 +73,8 @@ tools:
     files_errors: true
     timeout_seconds: 150
     reason: compiles a verified workspace snapshot offline in an isolated job and publishes immutable artifacts after a complete preview
+  - name: arduino_upload
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 150
+    reason: uploads one immutable application build to an explicitly identified USB device after complete human approval, with verification and no automatic retry

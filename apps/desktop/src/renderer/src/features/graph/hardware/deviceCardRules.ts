@@ -116,7 +116,7 @@ export function defaultAccepted(proposal: ProposalOut): AcceptedRow[] {
   const category = proposal.stream ? 'sensors' : 'actuators'
   return proposal.rows.map((row) => ({
     row_id: row.id,
-    function_name: row.proposed_function ?? `channel ${row.address}`,
+    function_name: row.proposed_function ?? null,
     category
   }))
 }
@@ -132,4 +132,15 @@ export function conflictText(error: string, robots: readonly Entity[]): string {
 /** Where a robot confirmed from the canvas-edge rail lands: near the rail, clear of the origin. */
 export function placementNearRail(): Point {
   return { x: 2 * STEP_X, y: -STEP_Y }
+}
+
+/** Explicit transport evidence is sufficient to save a connection, never a protocol. */
+export function connectionOnly(proposal: ProposalOut | null): boolean {
+  return (
+    proposal?.identity?.kind === 'usb_serial' &&
+    proposal.driver_id === null &&
+    proposal.rows.length === 0 &&
+    Object.keys(proposal.params).length === 0 &&
+    !proposal.stream
+  )
 }

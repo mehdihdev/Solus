@@ -180,20 +180,20 @@ it('lets the user pick among several robots', async () => {
   })
 })
 
-it('with no robot, a part becomes the first part of a new robot named by the user', async () => {
+it('adds a named standalone library part without inventing a robot', async () => {
   renderSearch([])
   const servoRow = within(await screen.findByRole('listitem', { name: 'Demo bus servo' }))
-  await userEvent.type(servoRow.getByRole('textbox', { name: 'New robot name' }), 'Bench')
-  await userEvent.click(servoRow.getByRole('button', { name: 'Add to a new robot' }))
-  expect(robotsApi.createPhysicalRobot).toHaveBeenCalledExactlyOnceWith('p1', undefined, 'Bench')
-  await waitFor(() =>
-    expect(hardware.importLibraryPart).toHaveBeenCalledWith('p1', 'demo-servo', {
-      robot_id: 'robot-named'
-    })
+  await userEvent.type(servoRow.getByRole('textbox', { name: 'Part name' }), 'Wrist servo')
+  await userEvent.click(servoRow.getByRole('button', { name: 'Add part' }))
+  expect(hardware.importLibraryPart).toHaveBeenCalledWith(
+    'p1',
+    'demo-servo',
+    { name: 'Wrist servo' },
+    undefined,
+    expect.any(String)
   )
-  await waitFor(() =>
-    expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'robot-named' }))
-  )
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith(partEntity))
+  expect(robotsApi.createPhysicalRobot).not.toHaveBeenCalled()
 })
 
 it('opens a details disclosure that lazily reads the definition and lists its specs', async () => {
@@ -212,10 +212,29 @@ it('opens a details disclosure that lazily reads the definition and lists its sp
   ).toBeInTheDocument()
 })
 
-it('disables every control while offline', async () => {
+it('keeps search inert while offline', () => {
   renderSearch([robot], true)
   expect(screen.getByRole('searchbox')).toBeDisabled()
-  await screen.findByRole('listitem', { name: 'Demo bus servo' })
-  expect(screen.getByRole('button', { name: 'Add to Rover' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Add Demo arm as new robot' })).toBeDisabled()
+  expect(hardware.searchLibrary).not.toHaveBeenCalled()
+  expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+})
+
+it('starts a new operation after successful same-name adds but reuses an uncertain attempt', async () => {
+  renderSearch([])
+  const servoRow = within(await screen.findByRole('listitem', { name: 'Demo bus servo' }))
+  await userEvent.type(servoRow.getByRole('textbox', { name: 'Part name' }), 'Wrist servo')
+  await userEvent.click(servoRow.getByRole('button', { name: 'Add part' }))
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1))
+  await userEvent.click(servoRow.getByRole('button', { name: 'Add part' }))
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(2))
+  const first = vi.mocked(hardware.importLibraryPart).mock.calls[0][4]
+  const second = vi.mocked(hardware.importLibraryPart).mock.calls[1][4]
+  expect(second).not.toBe(first)
+  vi.mocked(hardware.importLibraryPart).mockRejectedValueOnce(new Error('Response lost'))
+  await userEvent.click(servoRow.getByRole('button', { name: 'Add part' }))
+  await screen.findByRole('alert')
+  const uncertain = vi.mocked(hardware.importLibraryPart).mock.calls[2][4]
+  await userEvent.click(servoRow.getByRole('button', { name: 'Add part' }))
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(3))
+  expect(vi.mocked(hardware.importLibraryPart).mock.calls[3][4]).toBe(uncertain)
 })

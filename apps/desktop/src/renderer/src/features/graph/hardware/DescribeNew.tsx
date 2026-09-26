@@ -1,7 +1,7 @@
 // Describe something new (SOLUSDEV-250 P3, docs/wireflows/hardware-onboarding.md Flow 5):
 // one field. The category is guessed from the name and said to be a guess; specs come
-// later. With no robot yet, the described thing IS the robot — a name is enough (ADR-012).
-import { useState } from 'react'
+// later. With no robot yet, this creates a standalone part; ownership can be assigned later.
+import { useRef, useState } from 'react'
 import { Button } from '../../../components/ui/Button'
 import { Mono } from '../../../components/ui/Mono'
 import { Spinner } from '../../../components/ui/Spinner'
@@ -11,7 +11,7 @@ import {
   createHardwarePart,
   type RobotCategory
 } from '../../../lib/api/hardware'
-import { createPhysicalRobot } from '../../../lib/api/physicalRobots'
+import { createUnassignedPart } from './createUnassignedPart'
 import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
 import { categoryFromName } from './categoryFromName'
@@ -25,6 +25,7 @@ export interface DescribeNewProps {
   robots: readonly Entity[]
   onCreated: (entity: Entity) => void
   disabled: boolean
+  compact?: boolean
 }
 
 const NAME_MAX = 512
@@ -38,7 +39,7 @@ const CATEGORY_OPTIONS = ROBOT_CATEGORIES.map((id) => ({
   value: id,
   label: ROBOT_CATEGORY_LABELS[id]
 }))
-const IS_ROBOT = 'No robot yet — this becomes the robot.'
+const IS_ROBOT = 'This part stays unassigned until you choose a robot.'
 
 interface Draft {
   name: string
@@ -62,6 +63,7 @@ function useDraft(
   disabled: boolean
 ): Draft {
   const [name, setName] = useState('')
+  const operation = useRef<{ payload: string; id: string } | null>(null)
   const [chosen, setChosen] = useState<RobotCategory | null>(null)
   const [robotChoice, setRobotChoice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -79,13 +81,23 @@ function useDraft(
           specs: {},
           lifecycle: 'planned'
         }).then((out) => out.entity)
-      : createPhysicalRobot(projectId, undefined, trimmed)
+      : createUnassignedPart(
+          projectId,
+          trimmed,
+          category,
+          operation.current?.id ?? crypto.randomUUID()
+        )
   const submit = (): void => {
+    if (!canAdd) return
+    const payload = JSON.stringify([projectId, trimmed, category, robotId])
+    if (operation.current?.payload !== payload)
+      operation.current = { payload, id: crypto.randomUUID() }
     setBusy(true)
     setError(null)
     create()
       .then((created) => {
         onCreated(created)
+        operation.current = null
         setName('')
         setChosen(null)
       })
@@ -113,7 +125,8 @@ export function DescribeNew({
   mode,
   robots,
   onCreated,
-  disabled
+  disabled,
+  compact = false
 }: DescribeNewProps): React.JSX.Element {
   const draft = useDraft(projectId, robots, onCreated, disabled)
   return (
@@ -129,27 +142,29 @@ export function DescribeNew({
           style={FIELD_CONTROL_STYLE}
         />
       </label>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-        <LabeledSelect
-          label="Category"
-          value={draft.category}
-          onChange={draft.setCategory}
-          disabled={disabled}
-          options={CATEGORY_OPTIONS}
-        />
-        {draft.guessed && <Mono style={{ paddingBottom: 12 }}>guessed</Mono>}
-        {draft.robotId && (
+      <CategoryControls compact={compact}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
           <LabeledSelect
-            label="Part of"
-            value={draft.robotId}
-            onChange={draft.setRobot}
+            label="Category"
+            value={draft.category}
+            onChange={draft.setCategory}
             disabled={disabled}
-            options={robots.map((robot) => ({ value: robot.id, label: robot.name }))}
+            options={CATEGORY_OPTIONS}
           />
-        )}
-      </div>
+          {draft.guessed && <Mono style={{ paddingBottom: 12 }}>guessed</Mono>}
+          {draft.robotId && (
+            <LabeledSelect
+              label="Part of"
+              value={draft.robotId}
+              onChange={draft.setRobot}
+              disabled={disabled}
+              options={robots.map((robot) => ({ value: robot.id, label: robot.name }))}
+            />
+          )}
+        </div>
+        <p style={BODY_STYLE}>{HARDWARE_COPY.describe[mode]}</p>
+      </CategoryControls>
       {!draft.robotId && draft.trimmed && <p style={BODY_STYLE}>{IS_ROBOT}</p>}
-      <p style={BODY_STYLE}>{HARDWARE_COPY.describe[mode]}</p>
       {draft.error && (
         <p role="alert" style={{ ...BODY_STYLE, color: 'var(--err)' }}>
           {draft.error}
@@ -161,5 +176,22 @@ export function DescribeNew({
         </Button>
       </div>
     </div>
+  )
+}
+
+function CategoryControls({
+  compact,
+  children
+}: {
+  compact: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  return compact ? (
+    <details>
+      <summary>Category and placement (suggested)</summary>
+      {children}
+    </details>
+  ) : (
+    <>{children}</>
   )
 }

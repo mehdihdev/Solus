@@ -29,7 +29,7 @@ seed-secrets`. Start the API **and** the ARQ worker (publish review is an ARQ jo
    see the completion report's "slug collision" note).
 4. Publish the first-party BOM bundle as STAFF and wait for approval:
    ```bash
-   cd packages/shared-types/fixtures/extension-bundles/bom && zip -r /tmp/bom-0.1.0.zip . -x '.*'
+   cd packages/api/src/solus_api/extensions/bundled/bom && zip -r /tmp/bom-0.1.0.zip . -x '.*'
    curl -X POST $API/extensions/publish -H "Authorization: Bearer $STAFF" -H "Idempotency-Key: bom-1" -F "bundle=@/tmp/bom-0.1.0.zip;type=application/zip"
    curl $API/extensions/bom/versions/0.1.0/review -H "Authorization: Bearer $STAFF"   # until "approved"
    ```

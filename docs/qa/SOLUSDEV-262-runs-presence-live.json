@@ -1,0 +1,59 @@
+{
+  "recorded_at": "2026-09-14T22:36:47.883427+00:00",
+  "method": "Authenticated running UI, actual USB read-only sessions and local compiler",
+  "arms": {
+    "leader": {
+      "serial": "5B42135040",
+      "port": "/dev/ttyACM0",
+      "run_name": "Leader read-only baseline 262",
+      "packets": 1860,
+      "dropped": 0,
+      "playback_end_ms": 10347
+    },
+    "follower": {
+      "serial": "5B42134331",
+      "port": "/dev/ttyACM1",
+      "run_name": "Follower read-only baseline 262",
+      "packets": 2715,
+      "dropped": 0,
+      "playback_end_ms": 90989
+    }
+  },
+  "both_streamed_without_focus": true,
+  "both_sessions_stopped": true,
+  "motion_commands": 0,
+  "uno": {
+    "port": "/dev/ttyUSB0",
+    "vid_pid": "1a86:7523",
+    "serial": null,
+    "location": "3-1.2.3",
+    "saved_connection_name": "Uno",
+    "acceptance_started_session": false,
+    "profile_explicit": "uno_avr",
+    "probe_prepared_in_app": true,
+    "source_sha256": "864c648d1e1fd77c9e31accc7366c1eb435ba69f5881e73016cb487563503ef7",
+    "binary_sha256": "b1f4e5fb409caf25f6dca271960c780cb9a0d187d0f5e22f095e8d1a2163be97",
+    "confirmation_request_status": 402,
+    "confirmation_request_result": "Solus budget gate; no confirmation created and no flash",
+    "flashes": 0,
+    "typed_empty_wiring_reviewed_and_accepted_in_app": true,
+    "accepted_empty_topology_compiled_in_app": true,
+    "accepted_empty_source_sha256": "16fd00853c275818a39df8c1fee8c4b31d23a6269b152f891db7d575503b3387",
+    "accepted_empty_binary_sha256": "a9dd6fd85bfa3ad74be24526e95733bd09f9988b28d0a0cab57c4405d7fdd7cf",
+    "empty_declaration_is_not_physical_empty_wiring_proof": true
+  },
+  "restart_playback_verified": true,
+  "signal_rename_reconnect_verified": true,
+  "signal_label_restored": true,
+  "scene": {
+    "fixture_models": [
+      "solus262-jointless-fixture.urdf",
+      "solus262-hinge-fixture.urdf"
+    ],
+    "not_actual_arm_geometry": true,
+    "jointless_explanation_verified": true,
+    "hinge_translation_x_m": 0.3,
+    "jointless_translation_x_m": 0,
+    "no_joint_mapping_invented": true
+  }
+}

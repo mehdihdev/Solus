@@ -16,6 +16,7 @@ from threading import Event, Lock
 from typing import Any
 
 from .arduino_toolchain import ArduinoError
+from .progress import OUTPUT_CALLBACK, LineOutput
 
 HARD_OUTPUT_BYTES = 1024 * 1024
 TAIL_BYTES = 16 * 1024
@@ -53,6 +54,8 @@ def sandbox_argv(
     packages: Path | None = None,
     writable_fd: int | None = None,
     packages_fd: int | None = None,
+    device_fd: int | None = None,
+    upload: bool = False,
     preview: bool = False,
 ) -> tuple[str, ...]:
     try:
@@ -112,6 +115,13 @@ def sandbox_argv(
             raise ArduinoError("toolchain_unavailable")
         package_source = "<verified-packages-fd>" if preview else str(packages_fd)
         command.extend(["--ro-bind-fd", package_source, str(writable / "data/packages")])
+    if upload:
+        if not preview and (device_fd is None or not stat.S_ISCHR(os.fstat(device_fd).st_mode)):
+            raise ArduinoError("device_unavailable")
+        source = "<held-device-fd>" if preview else str(device_fd)
+        command.extend(["--dev-bind", f"/proc/self/fd/{source}", "/dev/solus-upload"])
+    elif device_fd is not None:
+        raise ArduinoError("invalid_arguments")
     command.extend(["--chdir", str(writable), "--", *argv])
     return tuple(command)
 
@@ -152,6 +162,16 @@ def sealed_cli(cli: Path) -> int:
             raise
 
 
+def _device_descriptor(source: str, destination: str) -> int:
+    prefix = "/proc/self/fd/"
+    if not source.startswith(prefix) or not source[len(prefix) :].isdecimal():
+        raise ArduinoError("device_unavailable")
+    descriptor = int(source[len(prefix) :])
+    if not stat.S_ISCHR(os.fstat(descriptor).st_mode) or destination != "/dev/solus-upload":
+        raise ArduinoError("device_unavailable")
+    return descriptor
+
+
 def _sandbox_descriptors(argv: list[str]) -> tuple[tuple[int, ...], list[int]]:
     """Allocate independent read positions for sealed byte inputs; never share offsets."""
     if not argv or argv[0] != str(BWRAP):
@@ -160,6 +180,9 @@ def _sandbox_descriptors(argv: list[str]) -> tuple[tuple[int, ...], list[int]]:
     copies: list[int] = []
     try:
         for index, argument in enumerate(argv[:-1]):
+            if argument == "--dev-bind":
+                descriptors.add(_device_descriptor(argv[index + 1], argv[index + 2]))
+                continue
             if argument not in {"--bind-fd", "--ro-bind-fd", "--ro-bind-data"}:
                 continue
             value = argv[index + 1]
@@ -269,6 +292,7 @@ def _wait_closed_pipes(
 def _drain(
     selector: selectors.BaseSelector, tails: list[bytearray], counts: list[int], deadline: float
 ) -> tuple[str | None, bool]:
+    output = LineOutput(OUTPUT_CALLBACK.get())
     while selector.get_map():
         if cancelled():
             return "cancelled", False
@@ -281,10 +305,12 @@ def _drain(
                 selector.unregister(key.fileobj)
                 continue
             index = int(key.data)
+            output.feed("stdout" if index == 0 else "stderr", chunk)
             counts[index] += len(chunk)
             tails[index].extend(chunk)
             if counts[index] > HARD_OUTPUT_BYTES:
                 return "resource_limit", False
+    output.finish()
     return None, False
 
 

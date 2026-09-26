@@ -638,3 +638,16 @@ function tokenFailureAndCancellationTests(nextFrame: () => Promise<void>): void 
     expect(session.items.some((m) => m.content.includes('stale'))).toBe(false)
   })
 }
+
+it('forwards forced confirmation without granting ordinary Build autoapproval', async () => {
+  useSolSessionStore.getState().setConversation('p1', 'c1')
+  streamSolMessage.mockImplementation(async ({ onEvent }) => onEvent(messageEvent('ok')))
+  await act(async () => {
+    await sendMessage('p1', 'Review this file', 'do', [], false, undefined, {
+      forceConfirmation: true
+    })
+  })
+  expect(streamSolMessage).toHaveBeenCalledWith(
+    expect.objectContaining({ forceConfirmation: true, actionMode: 'do' })
+  )
+})

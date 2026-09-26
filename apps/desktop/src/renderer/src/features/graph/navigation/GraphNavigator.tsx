@@ -4,18 +4,28 @@ import type { Point } from '../../../lib/api/workspace'
 import { GraphCard } from './GraphCard'
 import { GraphLinkDrawing, GraphLinkList } from './GraphLinks'
 import { HelpPopover } from './HelpPopover'
-import type { NavigationStep } from './graphIndex'
+import { buildNavigationIndex, type NavigationStep } from './graphIndex'
 import { MAX_VISIBLE_NODES, useGraphNavigation, type NavigationModel } from './useGraphNavigation'
 import './navigation.css'
+import { useAuthStore } from '../../../store/authStore'
+import { useWorkspaceSessionGeneration } from '../workspaceSession'
+import { useGroupPositions } from './useGroupPositions'
+import { GraphSuggestions } from './GraphSuggestions'
+import { GraphZoomControls } from './GraphZoomControls'
 
 export { MAX_VISIBLE_NODES } from './useGraphNavigation'
 
 export interface GraphNavigatorProps {
+  persistDefaults?: boolean
+  onSuggestionsChanged?: () => void
   projectId: string
   entities: Entity[]
   relations: Relation[]
   positions: Record<string, Point>
   focusedId: string | null
+  /** A graph projection scoped by the root entered; identities remain graph IDs. */
+  scopeGraph?: (rootId: string | null) => { entities: Entity[]; relations: Relation[] }
+  scopeRootIds?: readonly string[]
   onSelect: (entity: Entity, path: readonly NavigationStep[]) => void
   onMove: (entityId: string, point: Point) => void
   onContextMenu?: (event: React.MouseEvent, entity: Entity) => void
@@ -28,15 +38,27 @@ export interface GraphNavigatorProps {
 
 /** Project key resets transient navigation/drag state before another tenant can render. */
 export function GraphNavigator(props: GraphNavigatorProps): React.JSX.Element {
-  return <Navigator key={props.projectId} {...props} />
+  const generation = useWorkspaceSessionGeneration()
+  return <PositionedNavigator key={`${props.projectId}:${generation}`} {...props} />
+}
+
+function PositionedNavigator(props: GraphNavigatorProps): React.JSX.Element {
+  const email = useAuthStore((state) => state.user?.email)
+  const layout = useGroupPositions(props.projectId, email, props.positions, props.onMove)
+  return (
+    <>
+      <Navigator {...props} positions={layout.positions} onMove={layout.move} />
+      {layout.error && <p role="alert">{layout.error}</p>}
+    </>
+  )
 }
 
 function NavigationViewport({
   model,
-  props
-}: {
+  scopeRootIds,
+  ...props
+}: GraphNavigatorProps & {
   model: NavigationModel
-  props: GraphNavigatorProps
 }): React.JSX.Element {
   const {
     bounds,
@@ -53,6 +75,31 @@ function NavigationViewport({
     back,
     preview
   } = model
+  const { scopeGraph, projectId } = props
+  const previews = useMemo(
+    () =>
+      new Map(
+        visible.map(({ id }) => {
+          const scoped = scopeRootIds?.includes(id) ? scopeGraph?.(id) : undefined
+          const childIndex = scoped
+            ? buildNavigationIndex(
+                scoped.entities.filter(
+                  (entity) => !entity.project_id || entity.project_id === projectId
+                ),
+                scoped.relations
+              )
+            : index
+          return [
+            id,
+            (childIndex.children.get(id) ?? []).map((entity) => ({
+              entity,
+              childCount: childIndex.children.get(entity.id)?.length ?? 0
+            }))
+          ]
+        })
+      ),
+    [index, visible, scopeRootIds, scopeGraph, projectId]
+  )
   const offset = useMemo(() => ({ x: bounds.left, y: bounds.top }), [bounds.left, bounds.top])
   return (
     <div className="graph-viewport" ref={viewportRef}>
@@ -71,6 +118,7 @@ function NavigationViewport({
       >
         <GraphLinkDrawing
           links={links}
+          index={index}
           points={points}
           offset={offset}
           anchor={location.origin}
@@ -84,7 +132,9 @@ function NavigationViewport({
             point={points[entity.id]}
             offset={offset}
             focused={props.focusedId === entity.id}
-            childCount={index.children.get(entity.id)?.length ?? 0}
+            childCount={previews.get(entity.id)?.length ?? 0}
+            onRevealChild={scopeRootIds?.includes(entity.id) ? model.revealEntity : undefined}
+            childPreviews={previews.get(entity.id)}
             onSelect={select}
             onEnter={enter}
             onBack={back}
@@ -94,6 +144,15 @@ function NavigationViewport({
             renderContent={props.renderContent}
           />
         ))}
+        {props.onSuggestionsChanged && (
+          <GraphSuggestions
+            projectId={props.projectId}
+            visible={visible}
+            points={points}
+            offset={offset}
+            onChanged={props.onSuggestionsChanged}
+          />
+        )}
         {visible.length === 0 && <p className="graph-empty-level">No nodes in this level.</p>}
       </div>
     </div>
@@ -134,6 +193,7 @@ function NavigationPagination({ model }: { model: NavigationModel }): React.JSX.
 function Navigator(props: GraphNavigatorProps): React.JSX.Element {
   const model = useGraphNavigation(props)
   useReveal(props.reveal, model)
+  useDefaultPositions(props, model)
   return (
     <section
       ref={model.rootRef}
@@ -143,7 +203,8 @@ function Navigator(props: GraphNavigatorProps): React.JSX.Element {
       aria-label="Project graph navigator"
     >
       <div className="graph-viewport-frame">
-        <NavigationViewport model={model} props={props} />
+        <NavigationViewport {...props} model={model} />
+        <GraphZoomControls viewportRef={model.viewportRef} />
         <div className="graph-corner graph-corner-left">{props.toolbar}</div>
         <div className="graph-corner graph-corner-right">
           <HelpPopover trail={model.trail} onOverview={() => model.go(null)} />
@@ -165,9 +226,22 @@ function useReveal(reveal: GraphNavigatorProps['reveal'], model: NavigationModel
   const handled = useRef<number | null>(null)
   useEffect(() => {
     if (!reveal || handled.current === reveal.sequence) return
-    const entity = model.index.entities.get(reveal.entityId)
-    if (!entity) return
-    handled.current = reveal.sequence
-    model.showLinked(entity)
+    if (model.revealEntity(reveal.entityId)) handled.current = reveal.sequence
   }, [reveal, model])
+}
+
+/** Persist only missing defaults once; dragging never triggers a rearrange. */
+function useDefaultPositions(
+  { persistDefaults, positions, onMove }: GraphNavigatorProps,
+  { visible, points }: NavigationModel
+): void {
+  const sent = useRef(new Set<string>())
+  useEffect(() => {
+    if (!persistDefaults) return
+    for (const entity of visible) {
+      if (positions[entity.id] || sent.current.has(entity.id)) continue
+      sent.current.add(entity.id)
+      onMove(entity.id, points[entity.id])
+    }
+  }, [persistDefaults, positions, onMove, visible, points])
 }

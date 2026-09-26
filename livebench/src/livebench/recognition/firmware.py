@@ -25,6 +25,7 @@ could leak through (proven by `lb_firmware_test.py::TestTenancyBoundary`).
 """
 
 import logging
+import math
 import os
 import re
 from collections.abc import Iterator
@@ -54,7 +55,9 @@ _NOTE: Final = (
     "to the physical build; the user confirms (RBT-03), never this layer"
 )
 
-FindingKind = Literal["attach_call", "pin_constant", "motor_constant"]
+FindingKind = Literal[
+    "attach_call", "pin_constant", "motor_constant", "bus_begin", "analog_read", "library_include"
+]
 
 _CPP_LANGUAGE: Final = Language(tree_sitter_cpp.language())
 _PY_LANGUAGE: Final = Language(tree_sitter_python.language())
@@ -69,6 +72,8 @@ __all__ = [
     "PY_LANGUAGE",
     "FirmwareFinding",
     "extract_firmware_findings",
+    "extract_firmware_bytes",
+    "decode_extraction_source",
     "node_text",
 ]
 
@@ -85,6 +90,7 @@ class FirmwareFinding:
     pin: int | None = None
     value: float | None = None
     name_hint: str | None = None
+    pin_ref: str | None = None  # exact source argument, including unresolved symbols
 
     @property
     def evidence(self) -> ModalityMatch:
@@ -199,37 +205,57 @@ def _cpp_constant(node: Node, file: str, line: int) -> FirmwareFinding | None:
     return None
 
 
+def _cpp_call(node: Node, file: str, line: int) -> FirmwareFinding | None:
+    function = node.child_by_field_name("function")
+    if function is None:
+        return None
+    kind: FindingKind
+    if function.type == "identifier" and _text(function) == "analogRead":
+        kind, target = "analog_read", "analogRead"
+    elif function.type == "field_expression":
+        target = _text(function.child_by_field_name("argument"))
+        method = _text(function.child_by_field_name("field"))
+        if method in _ATTACH_METHODS and target:
+            kind = "attach_call"
+        elif method == "begin" and target in {"Wire", "Wire1", "Wire2"}:
+            kind = "bus_begin"
+        else:
+            return None
+    else:
+        return None
+    arg = _first_argument(node)
+    return FirmwareFinding(
+        name=target,
+        kind=kind,
+        file=file,
+        line=line,
+        language="cpp",
+        pin=(
+            _int_or_none(_text(arg))
+            if arg is not None and arg.type == "number_literal" and kind != "bus_begin"
+            else None
+        ),
+        pin_ref=_text(arg) or None if kind != "bus_begin" else None,
+        name_hint=_name_hint(target) if kind == "attach_call" else None,
+    )
+
+
 def _cpp_findings(root: Node, file: str) -> Iterator[FirmwareFinding]:
     for node in _walk(root):
         line = node.start_point[0] + 1
+        finding = None
         if node.type == "call_expression":
-            function = node.child_by_field_name("function")
-            if function is None or function.type != "field_expression":
-                continue
-            if _text(function.child_by_field_name("field")) not in _ATTACH_METHODS:
-                continue
-            target = _text(function.child_by_field_name("argument"))
-            if not target:
-                continue
-            arg = _first_argument(node)
-            pin = (
-                _int_or_none(_text(arg))
-                if arg is not None and arg.type == "number_literal"
-                else None
-            )
-            yield FirmwareFinding(
-                name=target,
-                kind="attach_call",
-                file=file,
-                line=line,
-                language="cpp",
-                pin=pin,
-                name_hint=_name_hint(target),
-            )
+            finding = _cpp_call(node, file, line)
         elif node.type in ("preproc_def", "init_declarator"):
             finding = _cpp_constant(node, file, line)
-            if finding:
-                yield finding
+        elif node.type == "preproc_include":
+            path = _text(node.child_by_field_name("path")).strip('<>"')
+            if path:
+                finding = FirmwareFinding(
+                    name=path, kind="library_include", file=file, line=line, language="cpp"
+                )
+        if finding:
+            yield finding
 
 
 def _py_call_name(call: Node) -> str:
@@ -334,4 +360,49 @@ def extract_firmware_findings(root: Path) -> list[FirmwareFinding]:
         rel = path.relative_to(root).as_posix()
         extractor = _cpp_findings if language == "cpp" else _py_findings
         findings.extend(extractor(tree.root_node, rel))
+    return findings
+
+
+MAX_EXTRACTION_BYTES: Final = 256 * 1024
+MAX_EXTRACTION_FINDINGS: Final = 256
+_OPAQUE_SOURCE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,511}")
+
+
+def decode_extraction_source(source: bytes, source_ref: str) -> str:
+    """Shared single-file boundary: strict UTF-8 and an opaque, never native, source token."""
+    if not isinstance(source, bytes) or len(source) > MAX_EXTRACTION_BYTES:
+        raise ValueError("source exceeds the byte parser budget")
+    if not isinstance(source_ref, str) or _OPAQUE_SOURCE.fullmatch(source_ref) is None:
+        raise ValueError("source reference must be an opaque token of at most 512 characters")
+    try:
+        return source.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("source must be valid UTF-8") from exc
+
+
+def _bounded_finding(finding: FirmwareFinding) -> None:
+    for value in (finding.name, finding.file, finding.pin_ref, finding.name_hint):
+        if value is not None and len(value) > 512:
+            raise ValueError("firmware finding exceeds field bounds")
+    if finding.value is not None and not math.isfinite(finding.value):
+        raise ValueError("nonfinite firmware constant")
+
+
+def extract_firmware_bytes(source: bytes, *, suffix: str, source_ref: str) -> list[FirmwareFinding]:
+    """Parse supplied bytes only: invalid input raises, valid empty source returns []."""
+    text = decode_extraction_source(source, source_ref)
+    language = _language_of(suffix) if isinstance(suffix, str) else None
+    if language is None:
+        raise ValueError("unsupported firmware suffix")
+    parser = Parser(_CPP_LANGUAGE if language == "cpp" else _PY_LANGUAGE)
+    tree = parser.parse(text.encode("utf-8"))
+    if tree.root_node.has_error:
+        raise ValueError("malformed firmware syntax")
+    extractor = _cpp_findings if language == "cpp" else _py_findings
+    findings: list[FirmwareFinding] = []
+    for finding in extractor(tree.root_node, source_ref):
+        _bounded_finding(finding)
+        if len(findings) >= MAX_EXTRACTION_FINDINGS:
+            raise ValueError("firmware extraction exceeds finding budget")
+        findings.append(finding)
     return findings

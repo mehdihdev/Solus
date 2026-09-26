@@ -109,10 +109,8 @@ export const HARDWARE_COPY: Record<
   Record<SolMode, string>
 > = {
   intro: {
-    Guide:
-      'Everything here becomes part of a Physical Robot. A name is enough for a robot to exist ' +
-      'and stream — the rest can follow.',
-    Expert: 'Add hardware to a Physical Robot. A name is enough.'
+    Guide: 'Add hardware. Parts can stay unassigned.',
+    Expert: 'Devices, parts and platforms.'
   },
   devices: {
     Guide:
@@ -121,9 +119,7 @@ export const HARDWARE_COPY: Record<
     Expert: 'Devices on this machine, named to the level known. Nothing written before Add.'
   },
   search: {
-    Guide:
-      'Curated parts and platforms. A platform becomes a new robot; a part lands under a robot ' +
-      'in its default category.',
+    Guide: 'Search parts and platforms. Parts can stay unassigned; platforms create robots.',
     Expert: 'Library parts and platforms.'
   },
   describe: {

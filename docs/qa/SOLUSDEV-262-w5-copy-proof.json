@@ -1,0 +1,45 @@
+{
+  "date": "2026-09-14",
+  "database_proof": {
+    "kind": "actual_restored_database_copy_service_exercise",
+    "source_database": "solus_262_rehearsal_reviewed",
+    "isolated_copy": "solus_262_w5_copy_20260914",
+    "migration_revision": "a26200000001",
+    "live_database_modified": false,
+    "device_evidence": "Recorded six-servo STS3215 observation from SOLUSDEV-262-both-arms-live.json; replayed into production reconciliation and binding services",
+    "hardware_io": false,
+    "ui_or_http_acceptance": false,
+    "current_workspace_follower": {
+      "robot_id": "01a07916-3ce6-796d-8e96-69c3f5ed121b",
+      "accepted_parts": 1,
+      "wire_addresses": 6,
+      "red": "Removing the CONFIG identity prevented a suggestion because the old matcher required equal bus-map sizes",
+      "green": "Retained exact accepted part identity proposed its unique existing robot; acceptance rebound that robot",
+      "same_robot_and_part_ids": true,
+      "robot_count_before": 3,
+      "robot_count_after": 3
+    },
+    "fully_mapped_saved_follower": {
+      "robot_id": "01a077f3-236d-723d-9b9b-4d56e4f41577",
+      "accepted_parts": 6,
+      "same_robot_and_part_ids": true,
+      "robot_count_before": 2,
+      "robot_count_after": 2
+    }
+  },
+  "fixture_proof": {
+    "file": "packages/api/tests/test_w5_copy_proof.py",
+    "partial_and_complete_config_calibration_preserved": true,
+    "invalid_retained_device_address_owner_or_missing_wire_row_refused": true,
+    "cad_decline_memory": "A seeded explicit CAD part-number suggestion was rejected through HTTP; identical evidence was not reproposed",
+    "cad_manual_attachment": "Connector-owned gripper attached through existing HTTP parts/attach endpoint; repeating the attachment did not duplicate the part",
+    "cad_automatic_suggestion_generation": "Not covered by this proof; separate graph-grounded CAD implementation follows",
+    "repeat_binding_removal_creates_new_suggestion_preserving_accepted_journal": true
+  },
+  "verification": {
+    "detection_suggestions_and_w5_tests": 76,
+    "repeat_cycle_w5_tests": 7,
+    "ruff": "passed",
+    "mypy_detect": "passed"
+  }
+}

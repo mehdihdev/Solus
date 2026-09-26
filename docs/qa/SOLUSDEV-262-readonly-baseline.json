@@ -1,0 +1,411 @@
+{
+  "captured_at": "2026-09-14T12:49:52.555089+00:00",
+  "enumeration": [
+    {
+      "transport": "usb_serial",
+      "device_ref": "usb:5B42134331",
+      "identity": {
+        "kind": "usb_serial",
+        "binding": "5B42134331",
+        "vid": 6790,
+        "pid": 21971,
+        "last_seen_path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42134331-if00"
+      },
+      "level": "transport",
+      "board": "WCH CH343/CH9102 USB-serial bridge",
+      "board_class": "usb_bridge",
+      "mcu_known": false,
+      "confidence": 0.3,
+      "evidence": [
+        {
+          "modality": "bus_enumeration",
+          "source_ref": {
+            "graph_entity_id": null,
+            "source_connector": "usb",
+            "external_ref": "/dev/ttyACM0/1a86:55d3"
+          },
+          "confidence": 0.3,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "usb_vid_pid",
+            "value": "1a86:55d3",
+            "note": "WCH CH343/CH9102 USB-serial bridge: the bridge chip is identified, but the MCU behind it is unknown \u2014 a bridge carries no identity for what it fronts"
+          }
+        }
+      ],
+      "ambiguous": false,
+      "last_seen_path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42134331-if00",
+      "vid": 6790,
+      "pid": 21971,
+      "headline": "something on USB",
+      "identity_basis": "serial"
+    }
+  ],
+  "operations": ["PING", "READ"],
+  "samples": [
+    {
+      "timestamp": "2026-09-14T12:49:52.872278+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "1",
+      "raw_registers": {
+        "Present_Position": 1905,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.873748+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "2",
+      "raw_registers": {
+        "Present_Position": 822,
+        "Present_Load": 0,
+        "Present_Temperature": 24
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.875170+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "3",
+      "raw_registers": {
+        "Present_Position": 3087,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.876302+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "4",
+      "raw_registers": {
+        "Present_Position": 2861,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.877595+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "5",
+      "raw_registers": {
+        "Present_Position": 1969,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.878741+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "6",
+      "raw_registers": {
+        "Present_Position": 2047,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.980568+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "1",
+      "raw_registers": {
+        "Present_Position": 1905,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.982069+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "2",
+      "raw_registers": {
+        "Present_Position": 822,
+        "Present_Load": 0,
+        "Present_Temperature": 24
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.983512+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "3",
+      "raw_registers": {
+        "Present_Position": 3087,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.984830+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "4",
+      "raw_registers": {
+        "Present_Position": 2861,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.986317+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "5",
+      "raw_registers": {
+        "Present_Position": 1969,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:52.987824+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "6",
+      "raw_registers": {
+        "Present_Position": 2047,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.089724+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "1",
+      "raw_registers": {
+        "Present_Position": 1905,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.091327+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "2",
+      "raw_registers": {
+        "Present_Position": 822,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.092834+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "3",
+      "raw_registers": {
+        "Present_Position": 3087,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.094438+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "4",
+      "raw_registers": {
+        "Present_Position": 2861,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.096145+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "5",
+      "raw_registers": {
+        "Present_Position": 1969,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.097619+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "6",
+      "raw_registers": {
+        "Present_Position": 2047,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.199878+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "1",
+      "raw_registers": {
+        "Present_Position": 1905,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.201662+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "2",
+      "raw_registers": {
+        "Present_Position": 822,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.203158+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "3",
+      "raw_registers": {
+        "Present_Position": 3087,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.204606+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "4",
+      "raw_registers": {
+        "Present_Position": 2861,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.206276+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "5",
+      "raw_registers": {
+        "Present_Position": 1969,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.208120+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "6",
+      "raw_registers": {
+        "Present_Position": 2047,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.311170+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "1",
+      "raw_registers": {
+        "Present_Position": 1905,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.312886+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "2",
+      "raw_registers": {
+        "Present_Position": 822,
+        "Present_Load": 0,
+        "Present_Temperature": 24
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.314227+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "3",
+      "raw_registers": {
+        "Present_Position": 3087,
+        "Present_Load": 0,
+        "Present_Temperature": 25
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.315265+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "4",
+      "raw_registers": {
+        "Present_Position": 2861,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.316692+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "5",
+      "raw_registers": {
+        "Present_Position": 1969,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    },
+    {
+      "timestamp": "2026-09-14T12:49:53.318262+00:00",
+      "device_ref": "usb:5B42134331",
+      "address": "6",
+      "raw_registers": {
+        "Present_Position": 2047,
+        "Present_Load": 0,
+        "Present_Temperature": 28
+      }
+    }
+  ],
+  "probe": {
+    "summary": "6 servos on a serial servo bus (ids 1\u20136, STS3215)",
+    "confidence": 0.92,
+    "bus_map": [
+      {
+        "protocol": "feetech-sts",
+        "address": "1",
+        "part_entity_id": null,
+        "model": "STS3215"
+      },
+      {
+        "protocol": "feetech-sts",
+        "address": "2",
+        "part_entity_id": null,
+        "model": "STS3215"
+      },
+      {
+        "protocol": "feetech-sts",
+        "address": "3",
+        "part_entity_id": null,
+        "model": "STS3215"
+      },
+      {
+        "protocol": "feetech-sts",
+        "address": "4",
+        "part_entity_id": null,
+        "model": "STS3215"
+      },
+      {
+        "protocol": "feetech-sts",
+        "address": "5",
+        "part_entity_id": null,
+        "model": "STS3215"
+      },
+      {
+        "protocol": "feetech-sts",
+        "address": "6",
+        "part_entity_id": null,
+        "model": "STS3215"
+      }
+    ],
+    "details": {
+      "calibration_signature": {
+        "1": {
+          "homing_offset": 1964
+        },
+        "2": {
+          "homing_offset": 508
+        },
+        "3": {
+          "homing_offset": 976
+        },
+        "4": {
+          "homing_offset": 1193
+        },
+        "5": {
+          "homing_offset": -1934
+        },
+        "6": {
+          "homing_offset": -589
+        }
+      }
+    }
+  }
+}

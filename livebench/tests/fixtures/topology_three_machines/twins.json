@@ -1,0 +1,17 @@
+{
+  "fixture_kind": "synthetic extraction twins; not captured from live hardware",
+  "recording_references": ["mavlink_px4_quadrotor.json", "can_odrive_base.json", "serial_arduino_rover.json"],
+  "onboard": {
+    "mavlink": {"vendor": [{"bus": "udp:fixture", "protocol": "mavlink", "address": "1:1", "entity_ref": "heartbeat:fixture", "device": "autopilot candidate"}]},
+    "can": {"vendor": [{"bus": "can0", "protocol": "can", "address": "1", "entity_ref": "node:fixture"}]},
+    "linux_ros2": {"ros2_nodes": ["/controller"], "ros2_topics": ["/joint_states"], "tty": [{"path": "/dev/ttyUSB0"}], "usb": [{"bus": "001", "address": "004", "vid": "1a86", "pid": "7523", "description": "USB serial bridge"}]}
+  },
+  "config": {"config_id": "serial-fixture", "parser_id": "synthetic", "label": "serial board fixture", "source": "fixture-config.json", "protocol_hint": "serial-floats", "port_hint": "/dev/ttyUSB0", "parts": [{"name": "left", "address": "1", "model": null}, {"name": "right", "address": "2", "model": null}]},
+  "project_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "00000000-0000-4000-8000-000000000002",
+  "entities": [
+    {"id": "00000000-0000-4000-8000-000000000003", "project_id": "00000000-0000-4000-8000-000000000001", "source_id": "00000000-0000-4000-8000-000000000002", "type": "component", "domain": "electrical", "name": "U1", "source_key": "U1", "properties": {}},
+    {"id": "00000000-0000-4000-8000-000000000004", "project_id": "00000000-0000-4000-8000-000000000001", "source_id": "00000000-0000-4000-8000-000000000002", "type": "net", "domain": "electrical", "name": "GND", "source_key": "net:GND", "properties": {}}
+  ],
+  "relations": [{"id": "00000000-0000-4000-8000-000000000005", "project_id": "00000000-0000-4000-8000-000000000001", "source_id": "00000000-0000-4000-8000-000000000002", "type": "connected_to", "from_entity_id": "00000000-0000-4000-8000-000000000003", "to_entity_id": "00000000-0000-4000-8000-000000000004", "properties": {"net": "GND", "pins": ["1", "2", "EP"]}}]
+}

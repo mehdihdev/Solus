@@ -3,7 +3,7 @@
 // a request (a metered job) and poll it until it settles, select a candidate
 // (→ a PLANNED part in the graph), read and save the project's rules. Every
 // failure is a message on the state, never a thrown promise.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useLayoutEffect, useState } from 'react'
 import { ApiError } from '../../lib/api/envelope.types'
 import type { Entity } from '../../lib/api/resources'
 import {
@@ -20,6 +20,10 @@ import {
   type TorqueApi,
   type TorqueInput
 } from '../../lib/api/resources.sourcing'
+import {
+  useWorkspaceSessionGeneration,
+  workspaceSessionGeneration
+} from '../graph/workspaceSession'
 import { preferencesForTurn } from '../preferences/preferencesStore'
 
 export type SourcingPhase = 'requirement' | 'searching' | 'candidates' | 'failed' | 'selected'
@@ -92,6 +96,7 @@ async function pollRequest(
 ): Promise<void> {
   for (let i = 0; i < MAX_POLLS && sinks.alive(); i += 1) {
     await sleep(pollMs)
+    if (!sinks.alive()) return
     const latest = await getSourcingRequest(projectId, requestId).catch(() => null)
     if (!latest || !sinks.alive()) continue
     sinks.onRequest(latest)
@@ -114,31 +119,43 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
   const [selected, setSelected] = useState<Entity | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const alive = useRef(true)
-  useEffect(() => {
-    alive.current = true
+  const generation = useWorkspaceSessionGeneration()
+  const lease = useMemo(() => ({ live: true, projectId, generation }), [projectId, generation])
+  const current = useCallback(
+    () => lease.live && workspaceSessionGeneration() === generation,
+    [lease, generation]
+  )
+  useLayoutEffect(() => {
+    lease.live = true
+    setPhase('requirement')
+    setRules(null)
+    setTorque(null)
+    setRequest(null)
+    setSelected(null)
+    setError(null)
+    setBusy(false)
     return () => {
-      alive.current = false
+      lease.live = false
     }
-  }, [])
+  }, [lease])
 
   useEffect(() => {
     let cancelled = false
     getSourcingRules(projectId).then(
       (loaded) => {
-        if (!cancelled) setRules(loaded)
+        if (!cancelled && current()) setRules(loaded)
       },
       () => undefined
     )
     return () => {
       cancelled = true
     }
-  }, [projectId])
+  }, [projectId, current])
 
   const { derive, submit } = useRequestActions({
     projectId,
     pollMs,
-    alive,
+    current,
     setBusy,
     setError,
     setTorque,
@@ -149,7 +166,7 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
 
   const select = useCallback(
     async (candidateId: string, extra: Omit<SelectInput, 'candidate_id'> = {}): Promise<void> => {
-      if (!request) return
+      if (!request || !current()) return
       setBusy(true)
       setError(null)
       try {
@@ -157,19 +174,20 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
           candidate_id: candidateId,
           ...extra
         })
+        if (!current()) return
         setRequest(outcome.request)
         setSelected(outcome.entity)
         setPhase('selected')
       } catch (err) {
-        setError(messageOf(err))
+        if (current()) setError(messageOf(err))
       } finally {
-        if (alive.current) setBusy(false)
+        if (current()) setBusy(false)
       }
     },
-    [projectId, request]
+    [projectId, request, current]
   )
 
-  const saveRules = useSaveSourcingRules(projectId, setError, setRules)
+  const saveRules = useSaveSourcingRules(projectId, current, setError, setRules)
 
   const reset = useCallback((): void => {
     setPhase('requirement')
@@ -188,7 +206,7 @@ export function useSourcing(projectId: string, options: SourcingOptions = {}): S
 interface RequestActionsContext {
   projectId: string
   pollMs: number
-  alive: React.RefObject<boolean>
+  current: () => boolean
   setBusy: (busy: boolean) => void
   setError: (error: string | null) => void
   setTorque: (torque: TorqueApi) => void
@@ -200,7 +218,7 @@ interface RequestActionsContext {
 function useRequestActions({
   projectId,
   pollMs,
-  alive,
+  current,
   setBusy,
   setError,
   setTorque,
@@ -210,21 +228,24 @@ function useRequestActions({
 }: RequestActionsContext): Pick<SourcingActions, 'derive' | 'submit'> {
   const derive = useCallback(
     async (input: TorqueInput): Promise<void> => {
+      if (!current()) return
       setBusy(true)
       setError(null)
       try {
-        setTorque(await deriveTorque(projectId, input))
+        const derived = await deriveTorque(projectId, input)
+        if (current()) setTorque(derived)
       } catch (err) {
-        setError(messageOf(err))
+        if (current()) setError(messageOf(err))
       } finally {
-        if (alive.current) setBusy(false)
+        if (current()) setBusy(false)
       }
     },
-    [projectId, alive, setBusy, setError, setTorque]
+    [projectId, current, setBusy, setError, setTorque]
   )
 
   const submit = useCallback(
     async (input: SourcingRequestInput): Promise<void> => {
+      if (!current()) return
       setBusy(true)
       setError(null)
       setSelected(null)
@@ -232,16 +253,18 @@ function useRequestActions({
         const preferences = preferenceSections(
           (await preferencesForTurn()) as Record<string, unknown> | null
         )
+        if (!current()) return
         const created = await createSourcingRequest(projectId, {
           ...input,
           ...(preferences ? { preferences } : {})
         })
+        if (!current()) return
         setRequest(created.request)
         if (created.request.torque) setTorque(created.request.torque)
         setPhase('searching')
         // The poll outlives this call: the panel shows "searching" until the job settles.
         void pollRequest(projectId, created.request.id, pollMs, {
-          alive: () => alive.current,
+          alive: current,
           onRequest: setRequest,
           onSettled: (settled) => {
             setPhase(settled.phase)
@@ -249,13 +272,14 @@ function useRequestActions({
           }
         })
       } catch (err) {
+        if (!current()) return
         setPhase('requirement')
         setError(messageOf(err))
       } finally {
-        if (alive.current) setBusy(false)
+        if (current()) setBusy(false)
       }
     },
-    [pollMs, projectId, alive, setBusy, setError, setSelected, setRequest, setTorque, setPhase]
+    [pollMs, projectId, current, setBusy, setError, setSelected, setRequest, setTorque, setPhase]
   )
 
   return { derive, submit }
@@ -263,20 +287,24 @@ function useRequestActions({
 
 function useSaveSourcingRules(
   projectId: string,
+  current: () => boolean,
   setError: (error: string | null) => void,
   setRules: (rules: SourcingRulesApi) => void
 ): SourcingActions['saveRules'] {
   return useCallback(
     async (next: SourcingRulesApi): Promise<boolean> => {
+      if (!current()) return false
       setError(null)
       try {
-        setRules(await putSourcingRules(projectId, next))
+        const saved = await putSourcingRules(projectId, next)
+        if (!current()) return false
+        setRules(saved)
         return true
       } catch (err) {
-        setError(messageOf(err))
+        if (current()) setError(messageOf(err))
         return false
       }
     },
-    [projectId, setError, setRules]
+    [projectId, current, setError, setRules]
   )
 }

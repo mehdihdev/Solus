@@ -2,7 +2,7 @@
 // the curated library. Rows are flat — a platform adds as a new robot, a part adds to a
 // robot in its default category — and a Details disclosure lazily reads the definition so
 // nothing is hidden. Definitions are the backend's claims, rendered as-is.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../../components/ui/Button'
 import { Spinner } from '../../../components/ui/Spinner'
 import {
@@ -14,11 +14,11 @@ import {
   type LibraryHit,
   type LibraryPartDefinition
 } from '../../../lib/api/hardware'
-import { createPhysicalRobot } from '../../../lib/api/physicalRobots'
 import type { Entity } from '../../../lib/api/resources'
 import { MODAL_INPUT_STYLE } from '../../workspace/modals'
 import { hardwareErrorText } from './detected'
 import { FIELD_CONTROL_STYLE, FIELD_LABEL_STYLE } from './hardware.constants'
+import { InlineSupplierResults } from './InlineSupplierResults'
 import { LabeledSelect } from './LabeledSelect'
 
 export interface HardwareSearchProps {
@@ -26,6 +26,7 @@ export interface HardwareSearchProps {
   robots: readonly Entity[]
   onCreated: (entity: Entity) => void
   disabled: boolean
+  compact?: boolean
 }
 
 type Read<T> =
@@ -64,10 +65,11 @@ function settle<T>(promise: Promise<T>, isLive: () => boolean, set: (read: Read<
 
 /** Debounced lexical search; the empty query (the seed) fires at once. A result is tagged
  *  with the query it answers, so "loading" is derived, never set. */
-function useSearch(projectId: string, query: string): Read<LibraryHit[]> {
+function useSearch(projectId: string, query: string, enabled = true): Read<LibraryHit[]> {
   const [result, setResult] = useState<{ query: string; read: Read<LibraryHit[]> } | null>(null)
   useEffect(() => {
     let live = true
+    if (!enabled) return
     const timer = setTimeout(
       () =>
         settle(
@@ -81,7 +83,8 @@ function useSearch(projectId: string, query: string): Read<LibraryHit[]> {
       live = false
       clearTimeout(timer)
     }
-  }, [projectId, query])
+  }, [projectId, query, enabled])
+  if (!enabled) return { phase: 'ready', value: [] }
   return result?.query === query ? result.read : { phase: 'loading' }
 }
 
@@ -224,18 +227,24 @@ function PartAction({
 }): React.JSX.Element {
   const [chosen, setChosen] = useState<string | null>(null)
   const [name, setName] = useState('')
+  const operation = useRef<{ name: string; id: string } | null>(null)
   const robotId = chosen ?? robots[0]?.id ?? null
   const robotName = robots.find((robot) => robot.id === robotId)?.name
   const { busy, outcome, submit } = useAction(async () => {
-    // ponytail: no robot yet → the part's robot is created here, named by the user; the
-    // session's default-named create() cannot carry a name.
-    const created = robotId
-      ? null
-      : await createPhysicalRobot(projectId, undefined, name.trim() || undefined)
-    const out = await importLibraryPart(projectId, hit.id, {
-      robot_id: created?.id ?? robotId ?? ''
-    })
-    onCreated(created ?? out.entity)
+    if (!robotId && !name.trim()) throw new Error('Name this part before adding it.')
+    if (operation.current?.name !== name.trim())
+      operation.current = { name: name.trim(), id: crypto.randomUUID() }
+    const out = robotId
+      ? await importLibraryPart(projectId, hit.id, { robot_id: robotId })
+      : await importLibraryPart(
+          projectId,
+          hit.id,
+          { name: name.trim() },
+          undefined,
+          operation.current.id
+        )
+    operation.current = null
+    onCreated(out.entity)
     return `Added ${out.entity.name}.`
   })
   return (
@@ -250,12 +259,12 @@ function PartAction({
             options={robots.map((robot) => ({ value: robot.id, label: robot.name }))}
           />
         ) : (
-          <NameField label="New robot name" value={name} placeholder="Robot" onChange={setName} />
+          <NameField label="Part name" value={name} placeholder={hit.name} onChange={setName} />
         )}
         <AddButton
           busy={busy}
-          disabled={disabled}
-          label={robotName ? `Add to ${robotName}` : 'Add to a new robot'}
+          disabled={disabled || (!robotId && !name.trim())}
+          label={robotName ? `Add to ${robotName}` : 'Add part'}
           onClick={submit}
         />
       </div>
@@ -365,7 +374,9 @@ function SearchRow({
 
 export function HardwareSearch(props: HardwareSearchProps): React.JSX.Element {
   const [query, setQuery] = useState('')
-  const hits = useSearch(props.projectId, query)
+  const [limit, setLimit] = useState(3)
+  const active = !props.disabled && (!props.compact || !!query.trim())
+  const hits = useSearch(props.projectId, query, active)
   return (
     <div>
       <input
@@ -374,22 +385,61 @@ export function HardwareSearch(props: HardwareSearchProps): React.JSX.Element {
         placeholder={PLACEHOLDER}
         value={query}
         disabled={props.disabled}
-        onChange={(event) => setQuery(event.target.value)}
+        onChange={(event) => {
+          setQuery(event.target.value)
+          setLimit(3)
+        }}
         style={{ ...FIELD_CONTROL_STYLE, marginTop: 0 }}
       />
-      {hits.phase === 'loading' && <p role="status">Searching the library…</p>}
-      {hits.phase === 'error' && <p role="alert">{hits.message}</p>}
-      {hits.phase === 'ready' && hits.value.length === 0 && <p style={BODY_STYLE}>{NO_MATCH}</p>}
-      {hits.phase === 'ready' && hits.value.length > 0 && (
-        <ul
-          aria-label="Library results"
-          style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}
-        >
-          {hits.value.map((hit) => (
-            <SearchRow key={`${hit.kind}:${hit.id}`} hit={hit} {...props} />
-          ))}
-        </ul>
+      <SearchResults
+        hits={hits}
+        props={props}
+        active={active}
+        limit={limit}
+        onMore={() => setLimit(limit + 3)}
+      />
+      {props.compact && query.trim() && (
+        <InlineSupplierResults
+          key={`${props.projectId}:${query.trim()}`}
+          projectId={props.projectId}
+          query={query}
+          disabled={props.disabled}
+          onCreated={props.onCreated}
+        />
       )}
     </div>
+  )
+}
+
+function SearchResults({
+  hits,
+  props,
+  active,
+  limit,
+  onMore
+}: {
+  hits: Read<LibraryHit[]>
+  props: HardwareSearchProps
+  active: boolean
+  limit: number
+  onMore: () => void
+}): React.JSX.Element {
+  if (!active) return <></>
+  if (hits.phase === 'loading') return <p role="status">Searching the library…</p>
+  if (hits.phase === 'error') return <p role="alert">{hits.message}</p>
+  if (hits.value.length === 0) return <p style={BODY_STYLE}>{NO_MATCH}</p>
+  return (
+    <>
+      <ul aria-label="Library results" style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
+        {hits.value.slice(0, props.compact ? limit : undefined).map((hit) => (
+          <SearchRow key={`${hit.kind}:${hit.id}`} hit={hit} {...props} />
+        ))}
+      </ul>
+      {props.compact && hits.phase === 'ready' && hits.value.length > limit && (
+        <Button size="sm" kind="bare" onClick={onMore}>
+          More results
+        </Button>
+      )}
+    </>
   )
 }

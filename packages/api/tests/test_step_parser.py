@@ -292,3 +292,27 @@ def test_null_geometry_is_a_typed_parser_failure():
 
     with pytest.raises(ConnectorError, match="geometry could not be measured"):
         _shape_geometry(TopoDS_Shape())
+
+
+@requires_occt
+def test_every_occurrence_preserves_full_rigid_transform(bracket_text: str) -> None:
+    nodes = parse_step(bracket_text).nodes
+    for node in nodes:
+        transform = node.properties["parent_transform"]
+        assert transform["length_unit"] == "mm"
+        matrix = transform["matrix"]
+        assert len(matrix) == 16
+        assert matrix[12:] == [0, 0, 0, 1]
+        if node.placement is not None:
+            assert [matrix[3], matrix[7], matrix[11]] == list(node.placement)
+
+
+@requires_occt
+def test_rotated_step_occurrence_retains_rotation_not_only_translation(bracket_text: str) -> None:
+    rotated = bracket_text.replace(
+        "#389 = DIRECTION('',(1.,0.,-0.));", "#389 = DIRECTION('',(0.,1.,0.));"
+    )
+    assert rotated != bracket_text
+    nodes = {node.key: node for node in parse_step(rotated).nodes}
+    matrix = nodes["Bracket/PegPair/Peg[0]"].properties["parent_transform"]["matrix"]
+    assert matrix == pytest.approx([0, -1, 0, 5, 1, 0, 0, 8, 0, 0, 1, 5, 0, 0, 0, 1])

@@ -1,4 +1,25 @@
-# Isaac security review — 2026-09-12
+# Isaac security review — generic model cleanup, 2026-09-24
+
+The current change replaces the pinned model with explicit graph-bound v2 models.
+Native assets are UTF-8 declarative URDF plus manifested STL, copied privately
+through no-follow descriptors. Every workspace-relative directory is opened from
+an owned descriptor. FIFO leaves are opened nonblocking and rejected by regular
+file validation. Unknown XML tags/attributes, nested structures, duplicate
+singleton elements, DTD/entity/processing declarations, nonfinite values, URLs,
+unmanifested meshes and graph/topology/limit mismatch are refused before import.
+
+Independent security review found an encoding-based DTD bypass and blocking FIFO
+open. Both are fixed with regression coverage: strict UTF-8 and NUL validation,
+a deny-doctype parser target, and nonblocking leaf opens. Re-review passed 54
+security/runtime/boundary tests with no remaining blocking scoped findings.
+One localized S314 justification documents guarded stdlib XML parsing; no external
+parser dependency is assumed inside the user's vendor Python runtime.
+
+Generic trajectories report tracking only. No physical hardware or successful
+object manipulation is inferred. Approval scope and ownership isolation remain.
+Live generic vendor execution and human release signatures remain outstanding.
+
+## Historical review evidence (2026-09-12; earlier fixed model)
 
 Scope: Solus-authored controller, private JSON-pipe worker, fixed tool schemas,
 pinned SO-101 asset closure, native scene adapter, and six centrally gated writes.

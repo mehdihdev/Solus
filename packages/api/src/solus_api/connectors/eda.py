@@ -88,6 +88,7 @@ class Node:
 
     designator: str
     pin: str
+    pin_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +234,7 @@ def _map_nets(
         # Group this net's nodes by component so a part gets one edge to the net
         # carrying all its pins (order-preserving), not one colliding edge per pin.
         pins_by_designator: dict[str, list[str]] = {}
+        functions: dict[str, dict[str, set[str]]] = {}
         for node in net.nodes:
             if node.designator not in components:
                 recorder.record(
@@ -243,16 +245,29 @@ def _map_nets(
             pins = pins_by_designator.setdefault(node.designator, [])
             if node.pin not in pins:
                 pins.append(node.pin)
+            if node.pin_function:
+                functions.setdefault(node.designator, {}).setdefault(node.pin, set()).add(
+                    node.pin_function
+                )
         relations.extend(
             RelationOut(
                 from_key=designator,
                 to_key=net_key,
                 type=CONNECTED_TO,
-                properties={"net": net.name, "pins": pins},
+                properties={
+                    "net": net.name,
+                    "pins": pins,
+                    **_pin_functions(functions.get(designator, {})),
+                },
             )
             for designator, pins in pins_by_designator.items()
         )
     return nets, relations
+
+
+def _pin_functions(functions: dict[str, set[str]]) -> dict[str, Any]:
+    known = {pin: next(iter(names)) for pin, names in functions.items() if len(names) == 1}
+    return {"pin_functions": known} if known else {}
 
 
 # --------------------------------------------------------- family connector

@@ -202,8 +202,9 @@ describe('confirm / accept', () => {
     })
     expect(hardware.confirmDetected).toHaveBeenCalledExactlyOnceWith('p1', 'usb_serial:A', {
       target: { kind: 'new', name: 'Bench arm' },
-      accepted: [{ row_id: 'usb_serial:A/1', function_name: 'channel 1', category: 'actuators' }],
+      accepted: [{ row_id: 'usb_serial:A/1', function_name: null, category: 'actuators' }],
       repo_config_id: 'c1',
+      connection_only: false,
       start_session: true,
       window_seconds: 1
     })
@@ -230,6 +231,7 @@ describe('confirm / accept', () => {
     expect(hardware.confirmDetected).toHaveBeenCalledWith('p1', 'usb_serial:A', {
       target: { kind: 'existing', robot_id: 'robot-1' },
       accepted: expect.any(Array),
+      connection_only: false,
       start_session: true,
       window_seconds: 1
     })
@@ -495,3 +497,114 @@ function registerConfirmationRecoveryTests(confirmed: hardware.ConfirmOut): void
     expect(second.result.current.cards).toEqual([])
   })
 }
+
+it('saves a silent MCU connection with no rows and no session request', async () => {
+  vi.mocked(hardware.proposeDetected).mockResolvedValue({
+    ...proposalFor('usb_serial:A', null),
+    rows: [],
+    identity: { kind: 'usb_serial', binding: 'A' }
+  })
+  vi.mocked(hardware.confirmDetected).mockResolvedValue({
+    robot,
+    part_ids: [],
+    config_entry_id: 'c',
+    session_id: null,
+    session_error: null
+  })
+  const { result } = mount([device('usb_serial:A')])
+  await act(async () => {})
+  await act(async () => {
+    await result.current.confirm('usb_serial:A', { target: { kind: 'new', name: 'Uno' } })
+  })
+  expect(hardware.confirmDetected).toHaveBeenCalledWith('p1', 'usb_serial:A', {
+    target: { kind: 'new', name: 'Uno' },
+    accepted: [],
+    connection_only: true,
+    start_session: false,
+    window_seconds: 1
+  })
+})
+
+it('waits for the authorized source list and carries its refs through explicit confirmation', async () => {
+  const original = window.solus
+  const sourceRef = '00000000-0000-0000-0000-000000000001'
+  const list = vi.fn().mockResolvedValue({
+    ok: true,
+    value: {
+      projectId: 'p1',
+      accountId: 'a1',
+      sources: [{ sourceRef, contentSha256: 'a'.repeat(64), displayName: 'motors.py' }]
+    }
+  })
+  Object.defineProperty(window, 'solus', {
+    configurable: true,
+    value: { hardware: { sources: { list } } }
+  })
+  try {
+    const { result, unmount } = mount([device('usb:A')])
+    expect(hardware.proposeDetected).not.toHaveBeenCalled()
+    await act(async () => {})
+    expect(hardware.proposeDetected).toHaveBeenCalledWith('p1', 'usb:A', {
+      source_refs: [`source:${sourceRef}`]
+    })
+    await act(async () => {
+      await result.current.confirm('usb:A', { target: { kind: 'new', name: 'Arm' } })
+    })
+    expect(hardware.confirmDetected).toHaveBeenCalledWith(
+      'p1',
+      'usb:A',
+      expect.objectContaining({ source_refs: [`source:${sourceRef}`] })
+    )
+    unmount()
+  } finally {
+    Object.defineProperty(window, 'solus', { configurable: true, value: original })
+  }
+})
+
+it('opens a second native device list without resetting the existing proposal', async () => {
+  const original = window.solus
+  const sourceRef = '00000000-0000-0000-0000-000000000001'
+  const listed = {
+    ok: true,
+    value: {
+      projectId: 'p1',
+      accountId: 'a1',
+      sources: [{ sourceRef, contentSha256: 'a'.repeat(64), displayName: 'leader.json' }]
+    }
+  }
+  const list = vi
+    .fn()
+    .mockResolvedValueOnce(listed)
+    .mockReturnValue(new Promise(() => {}))
+  Object.defineProperty(window, 'solus', {
+    configurable: true,
+    value: { hardware: { sources: { list } } }
+  })
+  let first: Mounted | undefined
+  let second: Mounted | undefined
+  try {
+    const devices = [device('usb:A')]
+    let renders = 0
+    const observedMount = (): Mounted =>
+      renderHook(
+        ({ list, graph }: { list: hardware.DetectedDeviceOut[]; graph: Entity[] | null }) => {
+          if (++renders > 40) throw new Error('Native device lists entered a render loop')
+          return useDeviceProposals('p1', list, graph)
+        },
+        { initialProps: { list: devices, graph: [] as Entity[] | null } }
+      )
+    first = observedMount()
+    await act(async () => {})
+    expect(first.result.current.cards[0]?.status).toBe('proposed')
+    second = observedMount()
+    expect(second.result.current.cards[0]?.status).toBe('proposed')
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(hardware.proposeDetected).toHaveBeenCalledTimes(1)
+    act(() => first?.result.current.dismiss('usb:A'))
+    expect(second.result.current.cards).toEqual([])
+  } finally {
+    second?.unmount()
+    first?.unmount()
+    Object.defineProperty(window, 'solus', { configurable: true, value: original })
+  }
+})

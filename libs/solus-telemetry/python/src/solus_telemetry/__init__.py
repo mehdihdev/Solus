@@ -132,3 +132,12 @@ __all__ = [
     "Emitter",
     "format_line",
 ]
+
+# Load after format_line: the mirror uses the same validated encoder as Emitter.
+from .mirror import MethodAdapter, MirrorConfig, MirrorCounters, MirrorHandle, mirror  # noqa: E402
+
+__all__ += ["MethodAdapter", "MirrorConfig", "MirrorCounters", "MirrorHandle", "mirror"]
+
+from .http import HttpCounters, HttpPublisher  # noqa: E402
+
+__all__ += ["HttpCounters", "HttpPublisher"]

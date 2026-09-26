@@ -16,6 +16,8 @@ import {
   type NavigationIndex,
   type ProjectedLink
 } from './graphIndex'
+import { revealScope } from './revealScope'
+import { frameSmallOverview } from './viewportFraming'
 import { layoutLevel, levelBounds, ORIGIN, type LevelBounds } from './layout'
 
 export const MAX_VISIBLE_NODES = 24
@@ -57,6 +59,7 @@ export interface NavigationModel {
   go: (entity: Entity | null) => void
   setPage: (page: number) => void
   showLinked: (entity: Entity) => void
+  revealEntity: (entityId: string) => boolean
   preview: (entityId: string, point: Point) => void
 }
 
@@ -98,7 +101,8 @@ function useWheelNavigation(
   index: NavigationIndex,
   parent: Entity | undefined,
   enter: (entity: Entity) => boolean,
-  back: () => boolean
+  back: () => boolean,
+  scopeRootIds?: readonly string[]
 ): void {
   const readyAt = useRef(0)
   useEffect(() => {
@@ -107,7 +111,8 @@ function useWheelNavigation(
     const navigate = (event: WheelEvent): (() => boolean) | null => {
       if (event.deltaY > 0) return parent ? back : null
       const entity = hoveredEntity(event, index)
-      if (!entity || !index.children.get(entity.id)?.length) return null
+      if (!entity || (!index.children.get(entity.id)?.length && !scopeRootIds?.includes(entity.id)))
+        return null
       return () => enter(entity)
     }
     const wheel = (event: WheelEvent): void => {
@@ -121,7 +126,7 @@ function useWheelNavigation(
     }
     root.addEventListener('wheel', wheel, { passive: false })
     return () => root.removeEventListener('wheel', wheel)
-  }, [ref, index, parent, enter, back])
+  }, [ref, index, parent, enter, back, scopeRootIds])
 }
 
 function useViewportFocus(
@@ -134,34 +139,17 @@ function useViewportFocus(
     if (!viewport) return
     const stage = viewport.firstElementChild
     if (!(stage instanceof HTMLElement)) return
-    // The device rail reserves a right padding; centre in the content box, not under the rail.
-    const railPad = parseFloat(getComputedStyle(viewport).paddingRight) || 0
-    viewport.scrollLeft = Math.max(0, (stage.scrollWidth - viewport.clientWidth + railPad) / 2)
-    viewport.scrollTop = Math.max(0, (stage.scrollHeight - viewport.clientHeight) / 2)
-    const anchor = location.screenAnchor
-    if (anchor) {
-      // The viewport is the stage's positioned parent; offsets exclude its animated scale.
-      const rect = viewport.getBoundingClientRect()
-      const left = rect.left + viewport.clientLeft + stage.offsetLeft - viewport.scrollLeft
-      const top = rect.top + viewport.clientTop + stage.offsetTop - viewport.scrollTop
-      stage.style.setProperty('--graph-origin-x', `${anchor.x - left}px`)
-      stage.style.setProperty('--graph-origin-y', `${anchor.y - top}px`)
-    }
-    const revealed = location.revealedId ? findCard(stage, location.revealedId) : undefined
-    if (revealed) {
-      // Offset geometry is stable while the stage's zoom transform is animating.
-      viewport.scrollLeft = Math.max(
-        0,
-        stage.offsetLeft + revealed.offsetLeft + revealed.offsetWidth / 2 - viewport.clientWidth / 2
-      )
-      viewport.scrollTop = Math.max(
-        0,
-        stage.offsetTop + revealed.offsetTop + revealed.offsetHeight / 2 - viewport.clientHeight / 2
-      )
-    }
+    stage.style.removeProperty('zoom')
+    stage.style.margin = ''
+    const revealed = positionViewport(viewport, stage, location)
+    if (location.parentId === null && !revealed) frameSmallOverview(viewport, stage)
     ;(revealed ?? stage)
       .querySelector<HTMLButtonElement>('.graph-node-select')
       ?.focus({ preventScroll: true })
+    if (location.parentId !== null || revealed || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => frameSmallOverview(viewport, stage))
+    observer.observe(viewport)
+    return () => observer.disconnect()
   }, [ref, key, location])
 }
 
@@ -183,8 +171,14 @@ function atLevel(parentId: string | null, page = 0): Location {
 }
 
 function useNavigationLevel(props: GraphNavigatorProps) {
-  const { entities, relations, projectId, positions } = props
-  const index = useScopedIndex(entities, relations, projectId)
+  const { entities, relations, projectId, positions, scopeGraph } = props
+  const [scopeRootId, setScopeRootId] = useState<string | null>(null)
+  const activeScopeRoot = props.scopeRootIds?.includes(scopeRootId ?? '') ? scopeRootId : null
+  const scopedGraph = useMemo(
+    () => scopeGraph?.(activeScopeRoot) ?? { entities, relations },
+    [scopeGraph, activeScopeRoot, entities, relations]
+  )
+  const index = useScopedIndex(scopedGraph.entities, scopedGraph.relations, projectId)
   const [location, setLocation] = useState<Location>(() => atLevel(null))
   const parent = index.entities.get(location.parentId ?? '')
   const level = childrenOf(index, parent?.id ?? null)
@@ -202,6 +196,7 @@ function useNavigationLevel(props: GraphNavigatorProps) {
     index,
     location,
     setLocation,
+    setScopeRootId,
     parent,
     level,
     page,
@@ -220,6 +215,7 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
     index,
     location,
     setLocation,
+    setScopeRootId,
     parent,
     level,
     page,
@@ -236,16 +232,20 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
   )
   const go = useCallback(
     (entity: Entity | null): void => {
+      if (!entity) setScopeRootId(null)
+      if (entity && props.scopeRootIds?.includes(entity.id)) setScopeRootId(entity.id)
       if (entity) onSelect(entity, index.pathTo(entity.id))
       // Up or across, a level packs around its parent's saved point, as entering it would.
       const origin = entity ? layoutLevel([entity], positions)[entity.id] : ORIGIN
       setLocation({ ...atLevel(entity?.id ?? null), origin })
     },
-    [index, onSelect, positions, setLocation]
+    [index, onSelect, positions, setLocation, setScopeRootId, props.scopeRootIds]
   )
   const enter = useCallback(
     (entity: Entity): boolean => {
-      if (!index.children.get(entity.id)?.length) return false
+      const isScopeRoot = props.scopeRootIds?.includes(entity.id)
+      if (!index.children.get(entity.id)?.length && !isScopeRoot) return false
+      if (isScopeRoot) setScopeRootId(entity.id)
       onSelect(entity, index.pathTo(entity.id))
       setLocation({
         ...atLevel(entity.id),
@@ -255,7 +255,7 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
       })
       return true
     },
-    [index, geometry.points, onSelect, rootRef, setLocation]
+    [index, geometry.points, onSelect, rootRef, setLocation, setScopeRootId, props.scopeRootIds]
   )
   const back = useCallback((): boolean => {
     if (!parent) return false
@@ -265,8 +265,12 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
   }, [index, parent, go])
   const showLinked = linkedEntityNavigation(index, positions, setLocation, onSelect)
   const key = `${parent?.id ?? 'root'}:${page}`
-  useWheelNavigation(rootRef, index, parent, enter, back)
-  useViewportFocus(viewportRef, key, location)
+  useWheelNavigation(rootRef, index, parent, enter, back, props.scopeRootIds)
+  useViewportFocus(
+    viewportRef,
+    `${key}:${JSON.stringify(visible.map((entity) => entity.id))}`,
+    location
+  )
   return {
     index,
     parent,
@@ -285,6 +289,14 @@ export function useGraphNavigation(props: GraphNavigatorProps): NavigationModel 
     back,
     go,
     showLinked,
+    revealEntity: (entityId) => {
+      const target = revealScope(props, index, entityId)
+      const entity = target?.index.entities.get(entityId)
+      if (!target || !entity) return false
+      if (target.rootId) setScopeRootId(target.rootId)
+      linkedEntityNavigation(target.index, positions, setLocation, onSelect)(entity)
+      return true
+    },
     setPage: (nextPage) => setLocation({ ...location, page: nextPage, revealedId: null })
   }
 }
@@ -338,4 +350,37 @@ function linkedEntityNavigation(
     setLocation({ ...atLevel(ancestorId, Math.max(0, targetPage)), origin, revealedId: entity.id })
     onSelect(entity, index.pathTo(entity.id))
   }
+}
+
+function positionViewport(
+  viewport: HTMLElement,
+  stage: HTMLElement,
+  location: Location
+): HTMLElement | undefined {
+  // The device rail reserves a right padding; centre in the content box, not under the rail.
+  const railPad = parseFloat(getComputedStyle(viewport).paddingRight) || 0
+  viewport.scrollLeft = Math.max(0, (stage.scrollWidth - viewport.clientWidth + railPad) / 2)
+  viewport.scrollTop = Math.max(0, (stage.scrollHeight - viewport.clientHeight) / 2)
+  const anchor = location.screenAnchor
+  if (anchor) {
+    // The viewport is the stage's positioned parent; offsets exclude its animated scale.
+    const rect = viewport.getBoundingClientRect()
+    const left = rect.left + viewport.clientLeft + stage.offsetLeft - viewport.scrollLeft
+    const top = rect.top + viewport.clientTop + stage.offsetTop - viewport.scrollTop
+    stage.style.setProperty('--graph-origin-x', `${anchor.x - left}px`)
+    stage.style.setProperty('--graph-origin-y', `${anchor.y - top}px`)
+  }
+  const revealed = location.revealedId ? findCard(stage, location.revealedId) : undefined
+  if (revealed) {
+    // Offset geometry is stable while the stage's zoom transform is animating.
+    viewport.scrollLeft = Math.max(
+      0,
+      stage.offsetLeft + revealed.offsetLeft + revealed.offsetWidth / 2 - viewport.clientWidth / 2
+    )
+    viewport.scrollTop = Math.max(
+      0,
+      stage.offsetTop + revealed.offsetTop + revealed.offsetHeight / 2 - viewport.clientHeight / 2
+    )
+  }
+  return revealed
 }

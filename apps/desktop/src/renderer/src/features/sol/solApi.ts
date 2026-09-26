@@ -143,6 +143,8 @@ export interface StreamSolMessageInput {
   /** S1-W3: the composer's "Think harder" — one routing tier up for this turn.
    *  Sent only when on, so the default body shape is unchanged. */
   thinkHarder?: boolean
+  /** Enforce central confirmation even for routine Build writes. */
+  forceConfirmation?: boolean
   /**
    * Graph entity ids the user pointed at with `@`. Sent alongside the text
    * rather than encoded in it, so the composer's `trim()` and any later edit to
@@ -182,6 +184,7 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
       content: input.content,
       action_mode: input.actionMode,
       mentions: input.mentions ?? [],
+      ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
       ...(input.thinkHarder ? { think_harder: true } : {}),
       ...(input.preferences ? { preferences: input.preferences } : {}),
       ...(input.screenshot ? { screenshot: input.screenshot } : {})
@@ -219,6 +222,8 @@ export async function streamSolMessage(input: StreamSolMessageInput): Promise<vo
 }
 
 export interface ArtifactTransport {
+  maxBytes?: number
+  signal?: AbortSignal
   fetchImpl?: typeof fetch
   getToken?: () => Promise<string | null>
   baseUrl?: string
@@ -238,9 +243,11 @@ export async function fetchArtifactBlob(
   const path = `/projects/${encodeURIComponent(projectId)}/artifacts/${encodeURIComponent(artifactId)}/content`
   const res = await (transport.fetchImpl ?? globalThis.fetch)(
     joinUrl(transport.baseUrl ?? DEFAULT_BASE_URL, path),
-    { headers }
+    { headers, signal: transport.signal }
   )
-  if (res.ok) return res.blob()
+  if (res.ok) {
+    return boundedArtifactBlob(res, transport.maxBytes)
+  }
   let body: unknown = null
   try {
     body = JSON.parse(await res.text())
@@ -248,4 +255,34 @@ export async function fetchArtifactBlob(
     body = null
   }
   return unwrapEnvelope<Blob>(res.status, body)
+}
+
+async function boundedArtifactBlob(res: Response, limit?: number): Promise<Blob> {
+  if (limit === undefined) return res.blob()
+  await validateArtifactBound(res, limit)
+  if (!res.body) throw new Error('Artifact content is unavailable')
+  const reader = res.body.getReader()
+  const chunks: Uint8Array<ArrayBuffer>[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > limit) throw new Error('Artifact exceeds bound')
+      chunks.push(new Uint8Array(value))
+    }
+    return new Blob(chunks, { type: res.headers.get('content-type')?.split(';')[0] ?? '' })
+  } finally {
+    await reader.cancel()
+    reader.releaseLock()
+  }
+}
+
+async function validateArtifactBound(res: Response, limit: number): Promise<void> {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid artifact bound')
+  if (Number(res.headers.get('content-length')) > limit) {
+    await res.body?.cancel()
+    throw new Error('Artifact exceeds bound')
+  }
 }

@@ -2,6 +2,9 @@
 // node types and rendering stay independent of provider synchronization.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FocusStep } from '@solus/shared-types'
+import { WidgetRegistrationContent } from './WidgetRegistrationContent'
+import { useWidgetRegistrations } from './useWidgetRegistrations'
+import { isWidgetRegistration, widgetRegistrationProjection } from './widgetRegistrationProjection'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
@@ -29,7 +32,7 @@ import { useWorkspaceGraph, type GraphSummary } from './useWorkspaceGraph'
 import { useOptimisticGraph } from './useOptimisticGraph'
 import { mergeOptimistic } from './graphCache'
 import { useWorkspaceLayout } from './useWorkspaceLayout'
-import { GraphNavigator } from './navigation/GraphNavigator'
+import { RobotTopologyGraph } from './robots/RobotTopologyGraph'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { toSharedFocus } from '../workspace/useSharedFocus'
 
@@ -190,6 +193,7 @@ interface GraphBodyProps {
   toolbar: React.ReactNode
   reveal?: { entityId: string; sequence: number }
   overlay?: React.ReactNode
+  onSuggestionsChanged?: () => void
 }
 
 function WorkspaceGraphBody({
@@ -205,7 +209,8 @@ function WorkspaceGraphBody({
   renderContent,
   toolbar,
   reveal,
-  overlay
+  overlay,
+  onSuggestionsChanged
 }: GraphBodyProps): React.JSX.Element {
   if (summary.status === 'loading') return <LoadingOverlay />
   const canRender =
@@ -220,10 +225,12 @@ function WorkspaceGraphBody({
     )
   if (layout.status === 'loading') return <LoadingOverlay />
   return (
-    <GraphNavigator
+    <RobotTopologyGraph
       projectId={projectId}
       entities={graph.entities}
       relations={graph.relations}
+      persistDefaults={layout.status === 'ready' || layout.status === 'saving'}
+      onSuggestionsChanged={onSuggestionsChanged}
       positions={layout.positions}
       focusedId={focusedId}
       reveal={reveal}
@@ -262,10 +269,17 @@ function GraphCounts({
   )
 }
 
-export function WorkspaceScreen(): React.JSX.Element {
+export interface WorkspaceScreenProps {
+  openAddRequest?: { tab: 'hardware'; sequence: number }
+  onAddRequestConsumed?: (sequence: number) => void
+  onOpenBench?: () => void
+  onOpenWidget?: (slug: string) => void
+}
+
+export function WorkspaceScreen(props: WorkspaceScreenProps = {}): React.JSX.Element {
   const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
   const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
-  return <ProjectWorkspace key={`${identity}:${projectId ?? ''}`} />
+  return <ProjectWorkspace key={`${identity}:${projectId ?? ''}`} {...props} />
 }
 
 function useWorkspaceReveal(entities: readonly Entity[], onGraphChanged: () => void) {
@@ -394,10 +408,10 @@ function useWorkspaceSnapshot() {
     [summary.entities, summary.relations, optimistic.entities]
   )
   // Presentation only: anchors are concatenated upstream of the unmodified index.
-  const merged = useMemo(
-    () => withAccountAnchors(base.entities, base.relations, summary.sources),
-    [base, summary.sources]
-  )
+  const merged = useMemo(() => {
+    const registered = widgetRegistrationProjection(projectId ?? '', base.entities, base.relations)
+    return withAccountAnchors(registered.entities, registered.relations, summary.sources)
+  }, [base, summary.sources, projectId])
   const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
   // Looked up, not stored: an anchor that vanishes with its source deselects itself.
   const selectedAnchor = merged.entities.find((entity) => entity.id === selectedAnchorId) ?? null
@@ -418,7 +432,7 @@ function useWorkspaceSnapshot() {
   const select = useWorkspaceSelection(projectId, setSelectedAnchorId)
   const [addRequest, setAddRequest] = useState<AddRequest>()
   const onOpenAdd = useCallback(
-    (tab: 'service') =>
+    (tab: 'service' | 'hardware') =>
       setAddRequest((previous) => ({ tab, sequence: (previous?.sequence ?? 0) + 1 })),
     []
   )
@@ -447,7 +461,7 @@ function useWorkspaceSnapshot() {
   }
 }
 
-function useProjectWorkspace() {
+function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
   const {
     summary,
     projectId,
@@ -466,7 +480,21 @@ function useProjectWorkspace() {
     onOpenAdd,
     onGraphChanged
   } = useWorkspaceSnapshot()
+  const handledAddSequence = useRef<number | null>(null)
+  const { openAddRequest, onAddRequestConsumed } = callbacks
+  useEffect(() => {
+    if (!openAddRequest || handledAddSequence.current === openAddRequest.sequence) return
+    handledAddSequence.current = openAddRequest.sequence
+    onOpenAdd(openAddRequest.tab)
+    onAddRequestConsumed?.(openAddRequest.sequence)
+  }, [openAddRequest, onAddRequestConsumed, onOpenAdd])
   const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph, onDevices)
+  const registrations = useWidgetRegistrations(
+    projectId,
+    summary.status === 'ready',
+    summary.entities,
+    onGraphChanged
+  )
   // The reveal follows the authoritative snapshot: an entity is navigated to and
   // selected once, at its real level (an optimistic part has no parent yet).
   const { reveal, onReveal, onServiceSelected } = useWorkspaceReveal(
@@ -496,7 +524,8 @@ function useProjectWorkspace() {
     nodes,
     projectId,
     onServiceSelected,
-    addRequest
+    addRequest,
+    callbacks
   )
   return {
     nodes,
@@ -514,14 +543,16 @@ function useProjectWorkspace() {
     renderContent,
     toolbar,
     liveError,
+    registrations,
     base,
     robots,
     onReveal,
-    onOpenAdd
+    onOpenAdd,
+    onGraphChanged
   }
 }
 
-function ProjectWorkspace(): React.JSX.Element {
+function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
   const {
     nodes,
     summary,
@@ -538,11 +569,13 @@ function ProjectWorkspace(): React.JSX.Element {
     renderContent,
     toolbar,
     liveError,
+    registrations,
     base,
     robots,
     onReveal,
-    onOpenAdd
-  } = useProjectWorkspace()
+    onOpenAdd,
+    onGraphChanged
+  } = useProjectWorkspace(callbacks)
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
       {nodes.overlays}
@@ -566,11 +599,13 @@ function ProjectWorkspace(): React.JSX.Element {
           copy={copy}
           onSelect={select}
           onMove={onMove}
+          onSuggestionsChanged={onGraphChanged}
           onContextMenu={nodes.onContextMenu}
           renderContent={renderContent}
           toolbar={toolbar}
         />
         <GraphCounts summary={summary} layout={layout} liveError={liveError} />
+        <WidgetInitialization registrations={registrations} />
       </div>
       <NodeSidebar
         projectId={projectId}
@@ -579,6 +614,27 @@ function ProjectWorkspace(): React.JSX.Element {
         nodes={nodes}
         account={{ entities: merged.entities, relations: merged.relations, onReveal, onOpenAdd }}
       />
+    </div>
+  )
+}
+
+function WidgetInitialization({
+  registrations
+}: {
+  registrations: ReturnType<typeof useWidgetRegistrations>
+}): React.JSX.Element | null {
+  const mode = useSettingsStore((state) => state.solMode)
+  if (registrations.status !== 'error' && registrations.status !== 'forbidden') return null
+  return (
+    <div role="status" style={{ padding: '6px 12px', fontSize: 12 }}>
+      {registrations.status === 'forbidden'
+        ? 'A project member must initialize widgets.'
+        : mode === 'Guide'
+          ? 'Could not initialize workspace widgets. Retry to make Live Bench available here.'
+          : 'Widget initialization failed.'}{' '}
+      <button type="button" onClick={registrations.retry}>
+        Retry widget initialization
+      </button>
     </div>
   )
 }
@@ -602,14 +658,24 @@ function useWorkspaceContent(
   nodes: ReturnType<typeof useSolusNodes>,
   projectId: string | null,
   onServiceSelected: ReturnType<typeof useWorkspaceReveal>['onServiceSelected'],
-  addRequest: AddRequest | undefined
+  addRequest: AddRequest | undefined,
+  { onOpenBench, onOpenWidget }: WorkspaceScreenProps
 ) {
+  const mode = useSettingsStore((state) => state.solMode)
   const robotContent = robots.renderContent
   const solusContent = nodes.renderContent
   // Stable per snapshot: the memoised cards re-render only when what they show changed.
   const renderContent = useCallback(
     (entity: Entity): React.ReactNode =>
-      entity.type === 'integration_account' ? (
+      projectId && isWidgetRegistration(entity, projectId) ? (
+        <WidgetRegistrationContent
+          entity={entity}
+          projectId={projectId}
+          mode={mode}
+          onOpenBench={onOpenBench}
+          onOpenWidget={onOpenWidget}
+        />
+      ) : entity.type === 'integration_account' ? (
         <AccountNodeContent
           entity={entity}
           count={accountDocuments(entity.id, merged.entities, merged.relations).length}
@@ -619,7 +685,7 @@ function useWorkspaceContent(
       ) : (
         solusContent(entity)
       ),
-    [merged, robotContent, solusContent]
+    [merged, robotContent, solusContent, projectId, mode, onOpenBench, onOpenWidget]
   )
   const toolbar = useMemo(
     () => (

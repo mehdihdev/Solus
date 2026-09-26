@@ -711,3 +711,31 @@ async def test_new_routes_are_cross_tenant_404(
         headers=bob_headers,
     )
     assert resp.status_code == 404
+
+
+async def test_device_recent_only_labels_declared_session_channels(
+    client: AsyncClient, alice_headers: dict[str, str], fake_local: FakeLocal
+) -> None:
+    project_id = await _member_project(client, alice_headers)
+    started = await client.post(
+        f"/api/v1/projects/{project_id}/bench/sessions",
+        json={"mode": "sim", "config": {"provider": "mujoco"}},
+        headers=alice_headers,
+    )
+    assert started.status_code == 201
+    conn = fake_local.conns[0]
+    conn.device_facts = {"channel_roles": {"a": {"health": "diagnostic"}}}
+    from solus_api.graph.codec import from_wire
+
+    await conn.tap(from_wire(wire_packet("a", 0, {"health": 1, "unknown": 2})))
+    await conn.tap(from_wire(wire_packet("b", 0, {"health": 3})))
+    response = await client.get(
+        f"/api/v1/projects/{project_id}/bench/device-recent",
+        params={"device_id": ["a", "b"]},
+        headers=alice_headers,
+    )
+    assert response.status_code == 200
+    a, b = response.json()["data"]["devices"]
+    assert a["signals"][0]["display_role"] == "diagnostic"
+    assert "display_role" not in a["signals"][1]
+    assert "display_role" not in b["signals"][0]

@@ -135,8 +135,16 @@ def open_robot_connection(
     routes = part_routes(config)
     if routes:
         source = PartRoutingSource(source, routes)
+    channel_roles: dict[str, dict[str, str]] = {}
+    for name, role in drivers.channel_roles(config).items():
+        key = routes.get(name) or routes.get(name.split(".", 1)[0], identity.device_ref)
+        channel_roles.setdefault(key, {})[name] = role
     return RobotConnection(
         _observed(source, observers, on_event),
         project_id=project_id,
-        device_facts={"device_ref": identity.device_ref, "driver_id": protocol.driver_id},
+        device_facts={
+            "device_ref": identity.device_ref,
+            "driver_id": protocol.driver_id,
+            **({"channel_roles": channel_roles} if channel_roles else {}),
+        },
     )

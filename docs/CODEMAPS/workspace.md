@@ -1,5 +1,7 @@
 # Workspace navigation
 
+<!-- Updated: 2026-09-15 | SOLUSDEV-262 incremental boundaries -->
+
 Updated for SOLUSDEV-242 Phases 1–4. Authority: `docs/architecture/workspace-navigation.md`.
 
 | Boundary         | Implementation                                                 | Responsibility                                                   |
@@ -11,6 +13,9 @@ Updated for SOLUSDEV-242 Phases 1–4. Authority: `docs/architecture/workspace-n
 | Index            | `features/graph/navigation/graphIndex.ts`                      | Deterministic forest; cycles/multiple parents; projected links   |
 | Geometry         | `features/graph/navigation/layout.ts`                          | Visible-level positions and stable origin                        |
 | Interaction      | `features/graph/navigation/useGraphNavigation.ts`              | Wheel, zoom, paths and draft drag coordinates                    |
+| Overview framing | `features/graph/navigation/viewportFraming.ts`, `GraphZoomControls.tsx` | Fit/100% presentation; world coordinates remain intact |
+| Presentation groups | `features/graph/navigation/useGroupPositions.ts` | Local account/project group positions, never graph UUID writes |
+| Proposals | `features/graph/navigation/GraphSuggestions.tsx` | Existing authorized proposals, floating evidence and explicit decisions |
 | Persistence      | `features/graph/useWorkspaceLayout.ts`                         | Captured-identity write queue, pruning, conflict retry           |
 | Focus            | `features/workspace/focusStore.ts`, `useSharedFocus.ts`        | Real entity selection and ancestry to Live Bench/widgets         |
 | HTTP client      | `lib/api/workspace.ts`                                         | Relation pagination and typed layout API                         |
@@ -41,3 +46,14 @@ No provider or sync dependency exists in the navigator. Physical robots follow i
 | Graph validator | `routers/projects.py`, `features/graph/graphCache.ts` | Graph modification timestamp catches manual renames |
 | I1 | `routers/connections.py`, `services/connections.py`, `connectors/integration_cache.py` | Cache-only miss contract, exact account reuse, shared version payloads |
 | Sync gates | `connectors/runtime.py`, `worker.py`, `httpcache.py` | Fail-closed probes, owned renewable flights and bounded accepted jobs |
+
+| Brain graph | `features/graph/robots/RobotTopologyGraph.tsx`, `HostAttachmentCard.tsx` | Reviewed host/USB nesting, robot-scoped projections, category filters |
+| Local evidence | `features/graph/robots/ExtractionReviewCard.tsx`, `hardware/topology_proposals.py` | Native single-file grants → read-only, digest-bound extraction review |
+| Evidence parsers | `hardware/topology_evidence.py`, `hardware/topology_observations.py`; Live Bench `hardware/topology_extractors.py` | Bounded immutable firmware/config/onboard/schematic candidates |
+| Widget roots | `features/graph/widgetRegistrationProjection.ts`, `useWidgetRegistrations.ts` | Real persisted roots, one-time legacy reconciliation, postcommit graph refresh |
+| Bench sessions | `features/bench/BenchScreen.tsx`, `SavedRobotConnections.tsx` | No-focus discovery, accepted-config connection and explicit disconnected state |
+| Bench focus | `livebench/focus_scope.py`, `features/bench/DeviceBenchView.tsx` | Source-current robot/host reachability; bounded device batches and permanent scope epochs |
+
+The completed wiring, firmware diff, CAD review, retained run and provisioned deployment
+boundaries are mapped in [Hardware and Live Bench](livebench.md). Native source grants remain
+separate from LOCAL workspace write capabilities; all hardware/file writes retain central review.

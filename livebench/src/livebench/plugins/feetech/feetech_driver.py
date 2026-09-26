@@ -252,6 +252,24 @@ class FeetechStsDriver:
             seq=self._seqs.setdefault(device_id, itertools.count()),
         )
 
+    def channel_roles(self, config: HardwareConfig) -> dict[str, str]:
+        params = FeetechParams.model_validate(
+            {
+                key: value
+                for key, value in (config.protocol.params if config.protocol else {}).items()
+                if key in FeetechParams.model_fields
+            }
+        )
+        roles: dict[str, str] = {}
+        for entry in config.bus_map:
+            if entry.protocol != self.driver_id:
+                continue
+            joint = _joint(_servo_id(entry), entry, self._part(config, entry), params)
+            roles[f"{joint.prefix}.position"] = "primary"
+            roles[f"{joint.prefix}.load"] = "diagnostic"
+            roles[f"{joint.prefix}.temperature"] = "diagnostic"
+        return roles
+
     @staticmethod
     def _part(config: HardwareConfig, entry: BusMapEntry | None) -> PartConfig | None:
         if entry is None or entry.part_entity_id is None:

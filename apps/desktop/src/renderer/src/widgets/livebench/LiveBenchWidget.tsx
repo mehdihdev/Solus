@@ -11,9 +11,15 @@
 // (SOLUSDEV-152's rule).
 import { useEffect, useState } from 'react'
 import type { WidgetProps, WidgetRenderState } from '@solus/shared-types'
-import { api } from '../../lib/api/client'
+import { focusedTelemetry } from './focusedTelemetry'
+import { useBenchRealtimeData, type BenchRealtimeData } from '../../features/bench/BenchRealtime'
+import {
+  useWorkspaceSessionGeneration,
+  workspaceSessionGeneration
+} from '../../features/graph/workspaceSession'
 import {
   chartSegments,
+  currentSeries,
   latestOf,
   streamState,
   type ObserverEventOut,
@@ -21,7 +27,7 @@ import {
   type StreamState
 } from './telemetry'
 
-const POLL_MS = 1000
+const POLL_MS = 2500
 const CHART_SIGNALS_MAX = 4
 
 const STATE_LABEL: Record<StreamState, string> = {
@@ -40,15 +46,21 @@ function focusKeyOf(focus: WidgetProps['focus']): string | null {
   return focus ? `${focus.entity.projectId}/${focus.entity.entityId}` : null
 }
 
-export function LiveBenchWidget({ focus, onStateChange }: WidgetProps): React.JSX.Element {
+function useWidgetData(focus: WidgetProps['focus']): {
+  displayData: BenchData | null
+  state: WidgetRenderState
+} {
+  const realtime = useBenchRealtimeData(focus?.entity.projectId ?? '')
+  const streaming = isFocusedStream(realtime, focus)
+  const generation = useWorkspaceSessionGeneration()
   const [data, setData] = useState<BenchData | null>(null)
   const [failed, setFailed] = useState(false)
-  const [lastFocusKey, setLastFocusKey] = useState<string | null>(focusKeyOf(focus))
+  const [lastFocusKey, setLastFocusKey] = useState<string>(`${generation}:${focusKeyOf(focus)}`)
 
   // Render-time adjustment (the documented "state depends on props" pattern):
   // a focus switch discards the previous part's data before the next paint,
   // without a cascading setState-in-effect.
-  const focusKey = focusKeyOf(focus)
+  const focusKey = `${generation}:${focusKeyOf(focus)}`
   if (focusKey !== lastFocusKey) {
     setLastFocusKey(focusKey)
     setData(null)
@@ -56,22 +68,25 @@ export function LiveBenchWidget({ focus, onStateChange }: WidgetProps): React.JS
   }
 
   useEffect(() => {
-    if (focus === null) return
+    if (focus === null || streaming || realtime?.blocked) return
     const { projectId, entityId } = focus.entity
     let live = true
+    let inFlight = false
+    const controller = new AbortController()
 
     async function poll(): Promise<void> {
+      if (inFlight) return
+      inFlight = true
       try {
-        const [recent, events] = await Promise.all([
-          api.request<RecentValuesOut>(`/projects/${projectId}/bench/recent/${entityId}`),
-          api.request<ObserverEventOut[]>(`/projects/${projectId}/bench/events?limit=50`)
-        ])
-        if (!live) return
+        const { recent, events } = await focusedTelemetry(projectId, entityId, controller.signal)
+        if (!live || workspaceSessionGeneration() !== generation) return
         setData({ recent, events, fetchedAtMs: Date.now() })
         setFailed(false)
       } catch {
-        if (!live) return
+        if (!live || workspaceSessionGeneration() !== generation) return
         setFailed(true)
+      } finally {
+        inFlight = false
       }
     }
 
@@ -79,12 +94,54 @@ export function LiveBenchWidget({ focus, onStateChange }: WidgetProps): React.JS
     const interval = setInterval(() => void poll(), POLL_MS)
     return () => {
       live = false
+      controller.abort()
       clearInterval(interval)
     }
-  }, [focus])
+  }, [focus, generation, streaming, realtime?.blocked])
 
-  const state: WidgetRenderState =
-    focus === null ? 'empty' : failed ? 'error' : data === null ? 'loading' : 'ready'
+  const displayData = streaming ? streamData(realtime, focus) : data
+  const state = widgetState(
+    focus,
+    Boolean(realtime?.blocked || (failed && !streaming)),
+    displayData
+  )
+  return { displayData, state }
+}
+function isFocusedStream(realtime: BenchRealtimeData | null, focus: WidgetProps['focus']): boolean {
+  return !!realtime?.ready && realtime.focusId === focus?.entity.entityId
+}
+function streamData(
+  realtime: BenchRealtimeData | null,
+  focus: WidgetProps['focus']
+): BenchData | null {
+  const streamed = realtime?.focused ?? null
+  if (streamed === null) return null
+  return {
+    recent: {
+      entity_id: focus?.entity.entityId ?? '',
+      signals: streamed.flatMap((device) =>
+        device.signals.map((series) => ({
+          ...series,
+          key: JSON.stringify([device.device_id, series.signal]),
+          signal: `${device.device_id} · ${series.signal}`
+        }))
+      )
+    },
+    events: realtime?.events ?? [],
+    fetchedAtMs: realtime?.clock ?? 0
+  }
+}
+function widgetState(
+  focus: WidgetProps['focus'],
+  failed: boolean,
+  data: BenchData | null
+): WidgetRenderState {
+  if (focus === null) return 'empty'
+  if (failed) return 'error'
+  return data === null ? 'loading' : 'ready'
+}
+export function LiveBenchWidget({ focus, onStateChange }: WidgetProps): React.JSX.Element {
+  const { displayData, state } = useWidgetData(focus)
 
   useEffect(() => {
     // Block body on purpose: the callback's return value must never become a
@@ -93,22 +150,26 @@ export function LiveBenchWidget({ focus, onStateChange }: WidgetProps): React.JS
   }, [state, onStateChange])
 
   if (focus === null) {
-    return <Note role="status">Focus a part to watch its telemetry.</Note>
+    return (
+      <Note role="status">
+        Connected hardware appears automatically. Select a part to narrow its signals.
+      </Note>
+    )
   }
   if (state === 'error') {
     return <Note role="alert">Bench telemetry is unavailable for this part.</Note>
   }
-  if (data === null) {
+  if (displayData === null) {
     return <Note role="status">Connecting to the bench…</Note>
   }
-  if (data.recent.signals.length === 0) {
+  if (displayData.recent.signals.length === 0) {
     return (
       <Note role="status">
-        No telemetry yet for {focus.label ?? 'this part'} — nothing is streaming.
+        No telemetry yet for {focus.label ?? 'this part'} in this selection.
       </Note>
     )
   }
-  return <BenchReadyView data={data} />
+  return <BenchReadyView data={displayData} />
 }
 
 function Note({
@@ -126,8 +187,13 @@ function Note({
 }
 
 function BenchReadyView({ data }: { data: BenchData }): React.JSX.Element {
-  const connection = streamState(latestOf(data.recent.signals), data.fetchedAtMs)
-  const charted = data.recent.signals.slice(0, CHART_SIGNALS_MAX)
+  const signals = currentSeries(data.recent.signals, data.fetchedAtMs)
+  const connection = streamState(latestOf(signals), data.fetchedAtMs)
+  const charted = signals.slice(0, CHART_SIGNALS_MAX)
+  const keys = new Set(signals.map((series) => series.key))
+  const events = data.events.filter((event) =>
+    keys.has(JSON.stringify([event.device_id, event.signal]))
+  )
 
   return (
     <div data-testid="livebench-widget">
@@ -135,10 +201,10 @@ function BenchReadyView({ data }: { data: BenchData }): React.JSX.Element {
         {STATE_LABEL[connection]}
       </p>
       <ul data-testid="signal-tiles">
-        {data.recent.signals.map((series) => {
+        {signals.map((series) => {
           const last = series.points[series.points.length - 1]
           return (
-            <li key={series.signal} className="font-mono">
+            <li key={series.key ?? series.signal} className="font-mono">
               {series.signal}: {last ? last.value : '—'}
             </li>
           )
@@ -146,7 +212,7 @@ function BenchReadyView({ data }: { data: BenchData }): React.JSX.Element {
       </ul>
       {charted.map((series) => (
         <svg
-          key={series.signal}
+          key={series.key ?? series.signal}
           data-testid={`chart-${series.signal}`}
           viewBox="0 0 240 48"
           role="img"
@@ -158,9 +224,9 @@ function BenchReadyView({ data }: { data: BenchData }): React.JSX.Element {
           ))}
         </svg>
       ))}
-      {data.events.length > 0 && (
+      {events.length > 0 && (
         <ul data-testid="anomaly-markers">
-          {data.events.map((event, i) => (
+          {events.map((event, i) => (
             <li key={`${event.at}-${i}`} role="note" style={{ color: 'var(--mut)' }}>
               ⚠ {event.kind}: {event.signal} on {event.device_id}
               {event.value !== null ? ` = ${event.value}` : ''}

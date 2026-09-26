@@ -97,7 +97,7 @@ describe('BenchCanvasHost', () => {
     expect(screen.getByRole('heading', { name: 'Live Bench' })).toBeInTheDocument()
     expect(screen.getByText('FOCUSED')).toBeInTheDocument()
     expect(screen.getByText('elbow motor')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Connect a device' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add hardware' })).toBeNull()
   })
 
   it('stays focused even while sessions report streaming devices', () => {
@@ -107,20 +107,19 @@ describe('BenchCanvasHost', () => {
     expect(screen.queryByText('NOTHING STREAMING')).toBeNull()
   })
 
-  it('offers Connect a device only once nothing is known to be streaming — as a dialog here', () => {
+  it('offers Add hardware only once the inventory is confirmed empty', () => {
     sources('ready')
     const onNavigate = mount({ sessions: [] })
     expect(screen.getByText('NOTHING STREAMING')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Connect a device' }))
-    expect(screen.getByRole('dialog', { name: 'Connect a device' })).toBeInTheDocument()
-    expect(onNavigate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Add hardware' }))
+    expect(onNavigate).toHaveBeenCalledWith('workspace')
   })
 
   it('says only that no part is focused while sessions are unknown', () => {
     sources('ready')
     mount({ sessions: null })
     expect(screen.getByText('NO PART FOCUSED')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Connect a device' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add hardware' })).toBeNull()
   })
 
   it('hands the picker the connected source KINDS (github → code, kicad → eda), unknown types dropped', () => {

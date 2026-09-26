@@ -126,3 +126,25 @@ it('the structural slice accepts the real ipcRenderer shape', () => {
   const create: (ipc: IpcRenderer) => SolBridge = createSolBridge
   expect(create).toBe(createSolBridge)
 })
+
+it('validates native target geometry and uses an argument-free trusted discovery channel', async () => {
+  const target = {
+    tool: 'kicad',
+    windowTitle: 'Board',
+    displayId: '1',
+    bounds: { x: 0, y: 0, width: 800, height: 600 }
+  }
+  const invoke = vi.fn().mockResolvedValue(target)
+  const bridge = createSolBridge({ ...fakeIpc().ipc, invoke })
+  expect(await bridge.getGuideTarget?.()).toEqual(target)
+  expect(invoke).toHaveBeenCalledWith(SOL_WINDOW_CHANNELS.guideTarget)
+  for (const raw of [
+    null,
+    { ...target, tool: 'arbitrary' },
+    { ...target, bounds: { ...target.bounds, width: -1 } },
+    { ...target, bounds: { ...target.bounds, x: NaN } }
+  ]) {
+    invoke.mockResolvedValue(raw)
+    expect(await bridge.getGuideTarget?.()).toBeNull()
+  }
+})

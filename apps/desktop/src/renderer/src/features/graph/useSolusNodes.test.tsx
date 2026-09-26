@@ -406,6 +406,7 @@ describe('pending file import scope', () => {
         })
       )
       const { unmount } = render(<SolusNodesHarness />)
+      await waitFor(() => expect(screen.getAllByRole('button', { name: 'Add a note' })[0]).toBeEnabled())
       fireEvent.contextMenu(await screen.findByText('Documentation'))
       await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
       await userEvent.upload(

@@ -54,6 +54,7 @@ from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.graph.live import LiveHub
 from solus_api.models import Job, JobStatus, Source, SourceStatus, SyncTrigger, ensure_utc, utcnow
 from solus_api.services.connections import account_ref_for, onshape_application_for
+from solus_api.storage import ArtifactStore
 
 if TYPE_CHECKING:
     from solus_api.core.config import Settings
@@ -150,6 +151,7 @@ async def execute_source_sync(
     hub: Any | None = None,
     defer_on_busy: bool = False,
     webhook_callback_base: str | None = None,
+    artifact_store: ArtifactStore | None = None,
 ) -> uuid.UUID | None:
     """Resolve the source's connector and run one sync. Returns the Sync id (or
     None if the source vanished before the run started).
@@ -209,7 +211,7 @@ async def execute_source_sync(
             sessionmaker, source_id, project_id, job_id, defer_on_busy=defer_on_busy
         ):
             return None
-        return await _run(
+        return await _run_with_scene(
             connector,
             source_id,
             sessionmaker,
@@ -219,6 +221,7 @@ async def execute_source_sync(
             resolved_acting_user_id,
             force,
             hub,
+            artifact_store,
         )
 
     if store is None:
@@ -355,6 +358,44 @@ async def _fail_accepted_job(
             job.status = JobStatus.FAILED
             job.error = dict(error)
             await session.commit()
+
+
+async def _run_with_scene(
+    connector: Any,
+    source_id: uuid.UUID,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    secret_store: SecretStore,
+    trigger: SyncTrigger,
+    job_id: uuid.UUID | None,
+    resolved_acting_user_id: uuid.UUID | None,
+    force: bool,
+    hub: Any | None,
+    artifact_store: ArtifactStore | None,
+) -> uuid.UUID | None:
+    from solus_api.connectors.onshape import OnshapeConnector
+    from solus_api.livebench.scene.cad_refresh import complete, prepare
+
+    plan = None
+    if isinstance(connector, OnshapeConnector):
+        async with sessionmaker() as session:
+            plan = await prepare(session, source_id)
+        connector.scene_export_observer = (
+            plan.capture.observe if plan.models or plan.imports else None
+        )
+    result = await _run(
+        connector,
+        source_id,
+        sessionmaker,
+        secret_store,
+        trigger,
+        job_id,
+        resolved_acting_user_id,
+        force or (plan.force if plan else False),
+        hub,
+    )
+    if plan is not None:
+        await complete(sessionmaker, artifact_store, plan, result, hub)
+    return result
 
 
 async def _run(
@@ -676,6 +717,7 @@ async def sync_source(
             store=ctx.get("integration_store"),
             hub=ctx.get("graph_hub"),
             defer_on_busy=True,
+            artifact_store=ctx.get("artifact_store"),
             webhook_callback_base=(
                 ctx["settings"].public_api_base_url if "settings" in ctx else None
             ),

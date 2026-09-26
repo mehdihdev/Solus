@@ -34,6 +34,7 @@ from __future__ import annotations
 import math
 import tempfile
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -255,7 +256,9 @@ def _shape_geometry(shape: Any) -> dict[str, Any]:
         raise ConnectorError("step_unreadable", "The STEP geometry could not be measured") from exc
 
 
-def parse_step(text: str) -> CadModel:
+def parse_step(
+    text: str, *, shape_visitor: Callable[[str, Any, bool], None] | None = None
+) -> CadModel:
     """Parse STEP text into the shared CAD IR, preserving the assembly tree.
 
     Raises `ConnectorError('step_reader_unavailable')` when the optional OCCT
@@ -287,6 +290,7 @@ def parse_step(text: str) -> CadModel:
             f"export exceeds the {MAX_CAD_EXPORT_BYTES // (1024 * 1024)} MiB parse limit",
         )
 
+    visitor = shape_visitor or _ignore_shape
     nodes: list[CadNode] = []
     budget = _Budget()
 
@@ -307,9 +311,11 @@ def parse_step(text: str) -> CadModel:
             key: str,
             placement: tuple[float, float, float] | None,
             depth: int,
+            transform: Any,
         ) -> None:
             if not budget.take():
                 return
+            visitor(key, shape_tool.GetShape_s(label), bool(shape_tool.IsAssembly_s(label)))
             nodes.append(
                 CadNode(
                     key=key,
@@ -317,7 +323,16 @@ def parse_step(text: str) -> CadModel:
                     is_assembly=bool(shape_tool.IsAssembly_s(label)),
                     parent_key=parent_key,
                     placement=placement,
-                    properties={"geometry": _shape_geometry(shape_tool.GetShape_s(label))},
+                    properties={
+                        "geometry": _shape_geometry(shape_tool.GetShape_s(label)),
+                        "parent_transform": {
+                            "length_unit": "mm",
+                            "matrix": [
+                                transform.Value(r, c) for r in range(1, 4) for c in range(1, 5)
+                            ]
+                            + [0, 0, 0, 1],
+                        },
+                    },
                 )
             )
             if depth >= MAX_ASSEMBLY_DEPTH:
@@ -327,24 +342,28 @@ def parse_step(text: str) -> CadModel:
             components = label_seq_cls()
             shape_tool.GetComponents_s(label, components)
 
-            resolved: list[tuple[Any, str, tuple[float, float, float]]] = []
+            resolved: list[tuple[Any, str, tuple[float, float, float], Any]] = []
             for index in range(1, components.Length() + 1):
                 component = components.Value(index)
                 referred = label_cls()
                 if not shape_tool.GetReferredShape_s(component, referred):
                     continue
-                translation = shape_tool.GetLocation_s(component).Transformation().TranslationPart()
+                component_transform = shape_tool.GetLocation_s(component).Transformation()
+                translation = component_transform.TranslationPart()
                 resolved.append(
                     (
                         referred,
                         _safe_path_segment(_label_name(referred, name_attr_cls)),
                         (translation.X(), translation.Y(), translation.Z()),
+                        component_transform,
                     )
                 )
 
-            child_keys = _ordinal_keys(f"{key}/", [name for _, name, _ in resolved])
-            for (referred, _, child_placement), child_key in zip(resolved, child_keys, strict=True):
-                walk(referred, key, child_key, child_placement, depth + 1)
+            child_keys = _ordinal_keys(f"{key}/", [item[1] for item in resolved])
+            for (referred, _, child_placement, child_transform), child_key in zip(
+                resolved, child_keys, strict=True
+            ):
+                walk(referred, key, child_key, child_placement, depth + 1, child_transform)
 
         roots = label_seq_cls()
         shape_tool.GetFreeShapes(roots)
@@ -356,6 +375,17 @@ def parse_step(text: str) -> CadModel:
             "", [_safe_path_segment(_label_name(lbl, name_attr_cls)) for lbl in root_labels]
         )
         for root_label, root_key in zip(root_labels, root_keys, strict=True):
-            walk(root_label, None, root_key, None, 0)
+            walk(
+                root_label,
+                None,
+                root_key,
+                None,
+                0,
+                shape_tool.GetLocation_s(root_label).Transformation(),
+            )
 
     return CadModel(nodes=tuple(nodes), warnings=tuple(budget.warnings()))
+
+
+def _ignore_shape(key: str, shape: Any, is_assembly: bool) -> None:
+    """Default visitor keeps the normal metadata-only sync unchanged."""

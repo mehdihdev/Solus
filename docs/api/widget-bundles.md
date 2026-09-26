@@ -238,7 +238,7 @@ SOLUSDEV-242 added accept only manual Physical Robot roots and answer `409 confl
 
 ## 11. The BOM widget (STORE ST4)
 
-The first-party bundle `bom` (`packages/shared-types/fixtures/extension-bundles/bom/`, capability
+The first-party bundle `bom` (`packages/api/src/solus_api/extensions/bundled/bom/`, capability
 `packages/api/src/solus_api/widgets/bom/`) — every part in the robot, raw materials and anything
 purchased — as **one view over canonical parts**. Requires an EDA or CAD source. Its page is
 rendered **in-repo** by the desktop (`features/bom/`, registered in
@@ -300,3 +300,33 @@ install-write budget through the guard. Every query is project-scoped; team B se
   `bom.item_removed { row_key_kind }` · `bom.exported { rows }`.
 - Uninstall soft-deletes every `ext:bom:item` (items AND overlays) through the §5 sweep; design
   rows, canonical parts and links are untouched.
+
+### SOLUSDEV-262 — graph registration freshness
+
+After successful committed install, version update, enable/disable, uninstall, reconcile or
+team block changes to widget registrations, publish the existing project-scoped `graph.changed`
+notification. Never publish before commit or on a refused/rolled-back write. Use truthful graph
+change counts (zero is valid for an invalidation when exact change counts are unavailable),
+no manifest content or credentials. Existing workspace subscribers refresh registrations;
+no periodic full-graph polling is introduced.
+### SOLUSDEV-262 legacy workspace initialization
+
+When Workspace finishes reading a project graph without its persisted `solus:live_bench`
+registration, its client may invoke the existing `POST widgets/graph/reconcile` once for that
+account/project visit, then refresh graph data. Reads remain pure; the member floor and existing
+write budget still govern reconciliation. A failed/refused initialization exposes a retry state,
+does not retry on every graph event, and never invents local widget entities. Account/project
+changes invalidate pending completions. Existing install lifecycle events maintain registrations
+after initialization; no repeated full-graph polling is added.
+
+### BOM distribution and persistent Store availability
+
+The API wheel ships the existing BOM manifest/assets; application setup publishes that exact
+release using a configured staff publisher and the existing validation/review lifecycle.
+`SOLUS_FIRST_PARTY_PUBLISHER_ID` selects the authorized publisher; `SOLUS_STAFF_USER_IDS` must
+include it. No implicit staff account or verified badge is created. Startup checks the approved
+catalog entry and retained bundle even when no publisher is configured. Shared environments
+refuse to start with a missing/broken BOM listing; development logs the explicit setup action.
+This does not alter catalog/install routes, explicit version updates, per-project settings,
+team policy, EDA/CAD requirements, or intentional version withdrawal. See the extension
+architecture's provisioning section for conflict and restart behavior.

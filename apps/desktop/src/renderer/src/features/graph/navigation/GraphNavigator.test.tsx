@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Entity, Relation } from '../../../lib/api/resources'
 import { GraphNavigator, type GraphNavigatorProps } from './GraphNavigator'
-import { STEP_X, STEP_Y } from './layout'
+import { CARD_WIDTH, layoutLevel } from './layout'
 
 const node = (id: string, type = 'part'): Entity => ({
   id,
@@ -72,15 +72,21 @@ describe('GraphNavigator anchor-relative packing', () => {
     expect(card('b')).toHaveAttribute('data-y', '5')
     // The frame is centred on the anchor, so the chip sits at the frame's half-width.
     expect(screen.getByRole('button', { name: 'Back to root' }).style.left).toBe(
-      `${315 + 224 / 2 + 80}px`
+      `${315 + CARD_WIDTH / 2 + 80}px`
     )
   })
 
   it('spirals the second unsaved child one step out from the entered card', () => {
     mount({ ...tree, positions: { root: { x: 320, y: 60 } } })
     fireEvent.doubleClick(selectButton('root'))
-    expect(card('b')).toHaveAttribute('data-x', String(320 - STEP_X))
-    expect(card('b')).toHaveAttribute('data-y', String(60 - STEP_Y))
+    expect(card('b')).toHaveAttribute(
+      'data-x',
+      String(layoutLevel(tree.entities.slice(1), {}, { x: 320, y: 60 }).b.x)
+    )
+    expect(card('b')).toHaveAttribute(
+      'data-y',
+      String(layoutLevel(tree.entities.slice(1), {}, { x: 320, y: 60 }).b.y)
+    )
   })
 
   it('packs a revealed sibling level around its saved parent', () => {
@@ -135,6 +141,9 @@ describe('GraphNavigator interactions and isolation', () => {
     })
     fireEvent.doubleClick(selectButton('root'))
     expect(screen.getByText('connected_to')).toBeInTheDocument()
+    const details = screen.getByText(/cross-link.*real endpoints/).closest('details')!
+    expect(details).not.toHaveAttribute('open')
+    fireEvent.click(details.querySelector('summary')!)
     fireEvent.click(screen.getByRole('button', { name: 'Show linked controller' }))
     expect(depth()).toBe('0')
     expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[2], [])
@@ -469,3 +478,62 @@ function registerNavigationBoundariesTests(): void {
     ).not.toBeNull()
   })
 }
+
+it('renders real immediate child previews with their real child counts', () => {
+  mount()
+  const root = card('root')
+  expect(within(root).getByRole('button', { name: 'Open assembly' })).toBeInTheDocument()
+  expect(within(root).getByText('1 inside — keep zooming')).toBeInTheDocument()
+  expect(within(root).queryByRole('button', { name: 'Open part' })).toBeNull()
+  fireEvent.click(within(root).getByRole('button', { name: 'Open assembly' }))
+  expect(depth()).toBe('2')
+})
+
+it('persists missing defaults once and leaves saved points untouched on an import', () => {
+  const entities = [node('a'), node('b')]
+  const onMove = vi.fn()
+  const { props, rerender } = mount({
+    entities,
+    relations: [],
+    positions: { a: { x: 18, y: 32 } },
+    persistDefaults: true,
+    onMove
+  })
+  expect(onMove).toHaveBeenCalledTimes(1)
+  expect(onMove.mock.calls[0][0]).toBe('b')
+  const b = onMove.mock.calls[0][1] as { x: number; y: number }
+  rerender(
+    <GraphNavigator
+      {...props}
+      positions={{ a: { x: 18, y: 32 }, b }}
+      entities={[...entities, node('c')]}
+    />
+  )
+  expect(onMove).toHaveBeenCalledTimes(2)
+  expect(onMove.mock.calls[1][0]).toBe('c')
+  expect(card('a')).toHaveAttribute('data-x', '18')
+  expect(card('b')).toHaveAttribute('data-x', String(b.x))
+})
+
+it('previews actual scoped robot roots without inventing an inside count', () => {
+  const robot = node('robot', 'physical_robot')
+  const first = node('brain-one', 'hardware_brain')
+  const second = node('brain-two', 'hardware_brain')
+  mount({
+    entities: [robot],
+    relations: [],
+    scopeRootIds: ['robot'],
+    scopeGraph: (rootId) =>
+      rootId
+        ? {
+            entities: [robot, first, second],
+            relations: [edge('robot', first.id), edge('robot', second.id)]
+          }
+        : { entities: [robot], relations: [] }
+  })
+  expect(within(card('robot')).getByRole('button', { name: 'Open brain-one' })).toBeInTheDocument()
+  expect(within(card('robot')).getByText(/2 inside/)).toBeInTheDocument()
+  fireEvent.click(within(card('robot')).getByRole('button', { name: 'Open brain-one' }))
+  expect(card('brain-one')).toBeInTheDocument()
+  expect(depth()).toBe('1')
+})

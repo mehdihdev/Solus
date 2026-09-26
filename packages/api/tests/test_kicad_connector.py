@@ -66,7 +66,7 @@ async def test_sync_maps_components_nets_and_connectivity() -> None:
     assert vcc == {"U1", "C1"}
     edge = next(r for r in result.relations if r.to_key == "net:VCC" and r.from_key == "U1")
     assert edge.type == "connected_to"
-    assert edge.properties == {"net": "VCC", "pins": ["8"]}
+    assert edge.properties == {"net": "VCC", "pins": ["8"], "pin_functions": {"8": "V+"}}
 
 
 async def test_sync_carries_the_fingerprint_channels() -> None:

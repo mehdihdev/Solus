@@ -1,3 +1,4 @@
+import type { ToolWindowRef } from '@solus/shared-types'
 // SOLUSDEV-252 S3: the renderer end of the SOL window surface, exposed as
 // window.solus.sol (docs/architecture/sol-window.md §2). A pure factory over an
 // injected ipcRenderer so the validate-before-deliver behaviour is testable;
@@ -15,6 +16,7 @@ export interface SolBridgeIpc {
 }
 
 export interface SolBridge {
+  getGuideTarget?(): Promise<ToolWindowRef | null>
   getState(): Promise<SolState | null>
   setMode(mode: SolActionMode): Promise<SolState | null>
   setScreenIntelligence(on: boolean): Promise<SolState | null>
@@ -61,6 +63,19 @@ export function isSolRegion(raw: unknown): raw is SolRegionPayload {
   )
 }
 
+function isGuideTarget(raw: unknown): raw is ToolWindowRef {
+  if (
+    !isRecord(raw) ||
+    raw.tool !== 'kicad' ||
+    typeof raw.windowTitle !== 'string' ||
+    raw.windowTitle.length > 256 ||
+    !(raw.displayId === null || typeof raw.displayId === 'string') ||
+    !isRecord(raw.bounds)
+  )
+    return false
+  return validGuideBounds(raw.bounds)
+}
+
 export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
   const call = (channel: string, ...args: unknown[]): Promise<SolState | null> =>
     ipc.invoke(channel, ...args).then((raw) => (isSolState(raw) ? raw : null))
@@ -79,6 +94,8 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
   }
   const c = SOL_WINDOW_CHANNELS
   return {
+    getGuideTarget: () =>
+      ipc.invoke(c.guideTarget).then((raw) => (isGuideTarget(raw) ? raw : null)),
     getState: () => call(c.getState),
     setMode: (mode) => call(c.setMode, mode),
     setScreenIntelligence: (on) => call(c.setScreenIntelligence, on),
@@ -88,4 +105,16 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler)
   }
+}
+
+function validGuideBounds(b: Record<string, unknown>): boolean {
+  return (
+    [b.x, b.y, b.width, b.height].every(Number.isSafeInteger) &&
+    typeof b.width === 'number' &&
+    typeof b.height === 'number' &&
+    b.width > 0 &&
+    b.height > 0 &&
+    b.width <= 16384 &&
+    b.height <= 16384
+  )
 }

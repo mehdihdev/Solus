@@ -313,7 +313,8 @@ def _line_interrogation() -> Interrogation:
         (0x2341, 0xBEEF, "none", "an Arduino"),
         (0x1A86, 0x7523, "line", "Arduino-class board on USB"),
         (0x1A86, 0x7523, "bus", "something on USB"),  # a servo bus says nothing about its bridge
-        (0x1A86, 0x7523, "none", "something on USB"),
+        (0x1A86, 0x7523, "none", "Possible Arduino connection"),
+        (0x1A86, 0x55D3, "none", "something on USB"),
         (0xDEAD, 0xBEEF, "line", "Arduino-class board on USB"),
         (0xDEAD, 0xBEEF, "bus", "something on USB"),
         (0xDEAD, 0xBEEF, "none", "something on USB"),
@@ -327,8 +328,26 @@ def test_headline_for_names_what_the_wire_can_honestly_claim(
 
 
 def test_enumerate_sets_the_headline_without_a_stream() -> None:
-    assert _device(0x1A86, 0x7523).headline == "something on USB"
+    assert _device(0x1A86, 0x7523).headline == "Possible Arduino connection"
     assert _device(0x303A, 0x1001).headline == "an ESP32"
+
+
+def test_connection_hint_preserves_bridge_identity_and_unknown_firmware() -> None:
+    identity = identify_port(
+        device="/dev/ttyUSB3", vid=0x1A86, pid=0x7523, serial=None, location="3-1.2"
+    )
+    device = enumerate_devices(list_devices=lambda: list_devices(identities=[identity]))[0]
+    proposal = propose(device, [], repo_matches=[])
+    assert device.headline == proposal.headline == "Possible Arduino connection"
+    assert device.board == "WCH CH340 USB-serial bridge"
+    assert device.board_class == "usb_bridge" and device.mcu_known is False
+    assert device.level == proposal.level == "transport"
+    assert device.confidence == identity.evidence.confidence
+    assert device.evidence == [identity.evidence]
+    assert device.identity_basis == "port_position"
+    assert device.device_ref == "usb:port-3-1.2"
+    assert proposal.driver_id is None and proposal.rows == []
+    assert "no protocol recognised" in proposal.summary
 
 
 def test_tone_follows_confidence_and_repo_agreement() -> None:

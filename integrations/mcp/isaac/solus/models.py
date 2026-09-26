@@ -1,32 +1,16 @@
-"""Strict graph bindings and bounded, deterministic SO-101 trajectories."""
+"""Strict graph bindings and bounded, generic joint trajectories."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
+from pathlib import PurePosixPath
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
-
-LINKS = (
-    "base_link",
-    "shoulder_link",
-    "upper_arm_link",
-    "lower_arm_link",
-    "wrist_link",
-    "gripper_link",
-    "gripper_frame_link",
-    "moving_jaw_so101_v1_link",
-)
-LIMITS = {
-    "shoulder_pan": (-1.91986, 1.91986),
-    "shoulder_lift": (-1.74533, 1.74533),
-    "elbow_flex": (-1.69, 1.69),
-    "wrist_flex": (-1.65806, 1.65806),
-    "wrist_roll": (-2.74385, 2.84121),
-    "gripper": (-0.174533, 1.74533),
-}
 
 
 def finite(value: object) -> float:
@@ -59,7 +43,7 @@ class Strict(BaseModel):
 
 class Binding(Strict):
     entity_id: EntityId
-    name: str
+    name: Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")]
 
 
 class Sensor(Strict):
@@ -77,39 +61,99 @@ class Sensor(Strict):
         return self
 
 
-class Bottle(Strict):
-    entity_id: EntityId
-    translation_m: Vec3
-    radius_m: Annotated[Number, Field(ge=0.01, le=0.1)]
-    height_m: Annotated[Number, Field(ge=0.03, le=0.4)]
-    mass_kg: Annotated[Number, Field(ge=0.01, le=2)]
+def safe_path(value: str) -> bool:
+    parts = PurePosixPath(value).parts
+    return (
+        bool(parts)
+        and str(PurePosixPath(value)) == value
+        and not value.startswith("/")
+        and all(
+            part not in (".", "..") and re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts
+        )
+    )
+
+
+class Asset(Strict):
+    urdf_path: Annotated[str, Field(min_length=1, max_length=256)]
+    files: Annotated[dict[str, str], Field(min_length=1, max_length=32)]
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+    @model_validator(mode="after")
+    def closure(self) -> Self:
+        if (
+            not safe_path(self.urdf_path)
+            or not self.urdf_path.endswith(".urdf")
+            or self.urdf_path not in self.files
+        ):
+            raise ValueError("manifested relative URDF required")
+        if any(
+            not safe_path(path) or len(path) > 256 or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            for path, digest in self.files.items()
+        ):
+            raise ValueError("invalid asset manifest")
+        if any(path != self.urdf_path and not path.endswith(".stl") for path in self.files):
+            raise ValueError("only URDF and STL assets supported")
+        digest = hashlib.sha256(
+            json.dumps(self.files, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if digest != self.sha256:
+            raise ValueError("asset manifest digest mismatch")
+        return self
+
+
+class Joint(Binding):
+    parent_link_entity_id: EntityId
+    child_link_entity_id: EntityId
+    lower_rad: Annotated[Number, Field(ge=-100, le=100)]
+    upper_rad: Annotated[Number, Field(ge=-100, le=100)]
 
 
 class Model(Strict):
-    schema_version: Annotated[Literal[1], BeforeValidator(actual_integer)]
-    asset: Literal["so101_new_calib_v1"]
-    asset_sha256: str
-    links: Annotated[list[Binding], Field(min_length=8, max_length=8)]
-    joints: Annotated[list[Binding], Field(min_length=6, max_length=6)]
-    sensors: Annotated[list[Sensor], Field(min_length=1, max_length=4)]
-    bottle: Bottle
+    schema_version: Annotated[Literal[2], BeforeValidator(actual_integer)]
+    asset: Asset
+    links: Annotated[list[Binding], Field(min_length=2, max_length=32)]
+    joints: Annotated[list[Joint], Field(min_length=1, max_length=16)]
+    sensors: Annotated[list[Sensor], Field(max_length=4)] = Field(default_factory=list)
+
+    def entity_ids(self) -> list[str]:
+        return (
+            [item.entity_id for item in self.links]
+            + [item.entity_id for item in self.joints]
+            + [item.entity_id for item in self.sensors]
+        )
 
     @model_validator(mode="after")
     def bindings(self) -> Self:
-        if not re.fullmatch("[0-9a-f]{64}", self.asset_sha256):
-            raise ValueError("asset digest required")
-        if {x.name for x in self.links} != set(LINKS) or {x.name for x in self.joints} != set(
-            LIMITS
-        ):
-            raise ValueError("exact SO-101 binding set required")
-        ids = [x.entity_id for x in self.links + self.joints]
-        ids += [x.entity_id for x in self.sensors] + [self.bottle.entity_id]
+        ids = self.entity_ids()
+        links = {link.entity_id for link in self.links}
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate entity binding")
-        if any(
-            s.parent_link_entity_id not in {x.entity_id for x in self.links} for s in self.sensors
-        ):
+        if len({link.name for link in self.links}) != len(self.links) or len(
+            {joint.name for joint in self.joints}
+        ) != len(self.joints):
+            raise ValueError("duplicate binding name")
+        if any(sensor.parent_link_entity_id not in links for sensor in self.sensors):
             raise ValueError("sensor parent outside model")
+        children: set[str] = set()
+        parents: dict[str, str] = {}
+        for joint in self.joints:
+            if (
+                not joint.lower_rad < joint.upper_rad
+                or joint.parent_link_entity_id not in links
+                or joint.child_link_entity_id not in links
+            ):
+                raise ValueError("invalid joint limits or link binding")
+            if joint.child_link_entity_id in children:
+                raise ValueError("multiple parents")
+            children.add(joint.child_link_entity_id)
+            parents[joint.child_link_entity_id] = joint.parent_link_entity_id
+        for child in parents:
+            seen: set[str] = set()
+            while child in parents:
+                if child in seen:
+                    raise ValueError("cyclic joint topology")
+                seen.add(child)
+                child = parents[child]
         return self
 
 
@@ -125,22 +169,34 @@ class Position(Strict):
 
 
 class Waypoint(Strict):
-    phase: Literal["approach", "close", "lift"]
-    positions: Annotated[list[Position], Field(min_length=6, max_length=6)]
+    positions: Annotated[list[Position], Field(min_length=1, max_length=16)]
 
 
 class Routine(Strict):
-    routine: Literal["grasp_bottle"]
+    routine: Literal["joint_trajectory"]
     duration_s: Annotated[Number, Field(ge=1, le=30)]
-    joints: Annotated[list[Range], Field(min_length=6, max_length=6)]
-    waypoints: Annotated[list[Waypoint], Field(min_length=3, max_length=3)]
+    joints: Annotated[list[Range], Field(min_length=1, max_length=16)]
+    waypoints: Annotated[list[Waypoint], Field(min_length=1, max_length=16)]
+
+    @model_validator(mode="after")
+    def exact_targets(self) -> Self:
+        ids = {joint.joint_entity_id for joint in self.joints}
+        if len(ids) != len(self.joints) or any(joint.lower >= joint.upper for joint in self.joints):
+            raise ValueError("distinct ordered joint ranges required")
+        for waypoint in self.waypoints:
+            targets = {position.joint_entity_id for position in waypoint.positions}
+            if targets != ids or len(targets) != len(waypoint.positions):
+                raise ValueError("exact waypoint joint set required")
+        return self
 
 
 def _check_ranges(
-    names: dict[str, str], ranges: dict[str, tuple[float, float]], observed: dict[str, float]
+    limits: dict[str, tuple[float, float]],
+    ranges: dict[str, tuple[float, float]],
+    observed: dict[str, float],
 ) -> None:
     for identity, (lower, upper) in ranges.items():
-        hard_lower, hard_upper = LIMITS[names[identity]]
+        hard_lower, hard_upper = limits[identity]
         if not hard_lower <= lower < upper <= hard_upper:
             raise ValueError("range exceeds model limits")
         if not math.isfinite(observed[identity]) or not lower <= observed[identity] <= upper:
@@ -155,9 +211,9 @@ def plan_routine(
     ranges = {r.joint_entity_id: (r.lower, r.upper) for r in routine.joints}
     if set(ranges) != set(names) or set(observed) != set(names):
         raise ValueError("exact joint set required")
-    _check_ranges(names, ranges, observed)
-    if [w.phase for w in routine.waypoints] != ["approach", "close", "lift"]:
-        raise ValueError("ordered approach/close/lift phases required")
+    if len(ranges) != len(routine.joints):
+        raise ValueError("duplicate joint range")
+    _check_ranges({j.entity_id: (j.lower_rad, j.upper_rad) for j in model.joints}, ranges, observed)
     count = int(routine.duration_s * 60)
     if not 60 <= count <= 1800:
         raise ValueError("step limit")
@@ -165,9 +221,10 @@ def plan_routine(
     previous = dict(observed)
     for index, waypoint in enumerate(routine.waypoints):
         final = {p.joint_entity_id: p.position_rad for p in waypoint.positions}
-        if set(final) != set(names):
+        if set(final) != set(names) or len(final) != len(waypoint.positions):
             raise ValueError("exact waypoint joint set required")
-        steps = (count * (index + 1) // 3) - (count * index // 3)
+        segments = len(routine.waypoints)
+        steps = (count * (index + 1) // segments) - (count * index // segments)
         moving_steps = steps - steps // 5
         for identity, value in final.items():
             lower, upper = ranges[identity]

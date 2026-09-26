@@ -6,6 +6,7 @@ import {
 } from '../../../lib/api/hardware'
 import type { Entity } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
+import { PartLinkSuggestions } from './PartLinkSuggestions'
 import { LabeledSelect } from '../hardware/LabeledSelect'
 import type { RobotSession, RobotView } from './robotSession'
 
@@ -19,6 +20,7 @@ interface OrphanProps {
   mode: SolMode
   /** When set, every part gets "Attach to <robot>" under the category it last had. */
   onAttach?: OrphanAttach
+  linkReview?: { robots: readonly Entity[]; onChanged: () => void }
 }
 const CATEGORY_OPTIONS = ROBOT_CATEGORIES.map((value) => ({
   value,
@@ -51,7 +53,13 @@ function AttachRow({
     </span>
   )
 }
-export function RobotOrphans({ session, state, mode, onAttach }: OrphanProps): ReactNode {
+export function RobotOrphans({
+  session,
+  state,
+  mode,
+  onAttach,
+  linkReview
+}: OrphanProps): ReactNode {
   if (!state.loading && !state.readError && state.parts.length === 0) return null
   return (
     <section className="robot-orphans" aria-label="Unassigned robot parts">
@@ -83,6 +91,15 @@ export function RobotOrphans({ session, state, mode, onAttach }: OrphanProps): R
               {part.name}
             </button>
             {onAttach && <AttachRow part={part} onAttach={onAttach} />}
+            {onAttach && linkReview && (
+              <PartLinkSuggestions
+                projectId={session.projectId}
+                partId={part.id}
+                robots={linkReview.robots}
+                mode={mode}
+                onChanged={linkReview.onChanged}
+              />
+            )}
           </li>
         ))}
       </ul>

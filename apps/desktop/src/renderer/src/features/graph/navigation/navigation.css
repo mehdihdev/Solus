@@ -512,3 +512,222 @@
   font-size: 11px;
   color: var(--mut);
 }
+
+/* Cards retain world-space coordinates; only their content is arranged in columns. */
+.graph-node {
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--graph-domain, var(--bd)) 45%, var(--bd));
+  border-top-width: 1px;
+  box-shadow: 0 12px 30px #0003;
+}
+.graph-node[data-domain='code'] {
+  --graph-domain: var(--sw);
+}
+.graph-node[data-domain='electrical'] {
+  --graph-domain: var(--ee);
+}
+.graph-node[data-domain='mechanical'] {
+  --graph-domain: var(--me);
+}
+.graph-node[data-domain='runtime'],
+.graph-node[data-domain='project'] {
+  --graph-domain: var(--rt);
+}
+.graph-node[data-unbound='true'] {
+  border-style: dashed;
+}
+.graph-node-select {
+  flex: none;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  overflow: hidden;
+}
+.graph-node-select strong {
+  font: 12px var(--font-mono);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.graph-node-select > span {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 8px;
+  max-width: 94px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.graph-domain-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--graph-domain, var(--mut));
+  flex-shrink: 0;
+}
+.graph-child-previews {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 2px 12px 8px;
+  overflow: auto;
+  min-height: 0;
+}
+.graph-child-previews button {
+  border: 1px solid var(--bd);
+  background: var(--sur2);
+  border-radius: 6px;
+  padding: 6px;
+  text-align: left;
+  min-width: 0;
+}
+.graph-child-previews strong {
+  display: block;
+  font: 9px var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.graph-child-previews .graph-domain-dot {
+  margin-right: 4px;
+}
+.graph-child-previews span {
+  display: block;
+  font: 8px var(--font-mono);
+  color: var(--mut);
+  margin-top: 4px;
+}
+.graph-node-metadata {
+  margin-top: auto;
+  padding: 5px 12px;
+  color: var(--mut);
+  font: 9px var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.graph-node-content {
+  flex-shrink: 0;
+}
+.graph-cross-edge {
+  stroke: var(--mut);
+  stroke-dasharray: none;
+  opacity: 0.5;
+}
+.graph-cross-domain-edge {
+  stroke: var(--acc);
+  stroke-dasharray: 5 5;
+  opacity: 0.8;
+}
+.graph-edge-label {
+  font: 10px var(--font-mono);
+  fill: var(--mut);
+  stroke: var(--bg);
+  stroke-width: 5px;
+  paint-order: stroke;
+  stroke-linejoin: round;
+}
+.graph-suggestion {
+  position: absolute;
+  z-index: 3;
+  width: 230px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px dashed var(--acc);
+  background: var(--sur);
+  border-radius: 10px;
+  font: 10px var(--font-mono);
+  box-shadow: 0 8px 22px #0003;
+}
+.graph-suggestion small,
+.graph-suggestion strong,
+.graph-suggestion > span {
+  display: block;
+  margin-bottom: 5px;
+  overflow-wrap: anywhere;
+}
+.graph-suggestion small {
+  color: var(--acc);
+  text-transform: uppercase;
+}
+.graph-suggestion pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.graph-suggestion button,
+.graph-suggestion-error button {
+  padding: 5px 7px;
+  border: 1px solid var(--bd);
+  background: var(--sur2);
+  border-radius: 4px;
+  margin: 6px 4px 0 0;
+}
+.graph-suggestion-error {
+  position: absolute;
+  left: 16px;
+  bottom: 8px;
+  font-size: 11px;
+  color: var(--mut);
+}
+.graph-node-heading {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  padding: 0;
+}
+.graph-node-select {
+  padding: 14px 34px 10px 12px;
+}
+.graph-child-previews {
+  flex: none;
+  grid-auto-rows: 42px;
+  overflow: visible;
+}
+.graph-child-previews button {
+  padding: 5px;
+}
+.graph-node-metadata {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+[role='group'][aria-label='Hardware categories'] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bd);
+  background: var(--sur);
+}
+[role='group'][aria-label='Hardware categories'] button {
+  border: 1px solid var(--bd);
+  border-radius: 5px;
+  padding: 5px 9px;
+  font: 10px var(--font-mono);
+  color: var(--mut);
+  background: var(--sur2);
+}
+[role='group'][aria-label='Hardware categories'] button[aria-pressed='true'] {
+  color: var(--acc);
+  border-color: var(--acc);
+}
+.graph-zoom-controls {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 25;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+  background: var(--sur);
+}
+.graph-zoom-controls button {
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  padding: 5px 9px;
+  background: var(--sur2);
+  font: 11px var(--font-mono);
+}

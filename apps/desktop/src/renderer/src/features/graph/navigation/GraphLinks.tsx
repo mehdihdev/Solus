@@ -18,7 +18,7 @@ export function GraphLinkList({ index, links, onShow }: LinksProps): React.JSX.E
   const page = Math.min(requestedPage, Math.max(0, Math.ceil(links.length / LINK_PAGE_SIZE) - 1))
   if (links.length === 0) return null
   return (
-    <details className="graph-links-list" open>
+    <details className="graph-links-list">
       <summary>
         {links.length} cross-link{links.length === 1 ? '' : 's'} · real endpoints
       </summary>
@@ -76,6 +76,7 @@ export function GraphLinkList({ index, links, onShow }: LinksProps): React.JSX.E
 
 interface LinkDrawingProps {
   links: readonly ProjectedLink[]
+  index?: NavigationIndex
   points: Readonly<Record<string, Point>>
   offset: Point
   /** The level's anchor: the parent's point, where the parent chip sits. */
@@ -86,6 +87,7 @@ interface LinkDrawingProps {
 
 export function GraphLinkDrawing({
   links,
+  index,
   points,
   offset,
   anchor,
@@ -93,30 +95,60 @@ export function GraphLinkDrawing({
   onBack
 }: LinkDrawingProps): React.JSX.Element {
   const local = (id: string): Point => ({ x: points[id].x - offset.x, y: points[id].y - offset.y })
+  const grouped = new Map<string, ProjectedLink[]>()
   const seen = new Set<string>()
-  const unique = links.filter((link) => {
-    if (link.from === null || link.to === null) return false
-    const key = [link.from, link.to].sort().join(':')
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  for (const link of links) {
+    if (
+      !link.from ||
+      !link.to ||
+      !points[link.from] ||
+      !points[link.to] ||
+      seen.has(link.relation.id)
+    )
+      continue
+    seen.add(link.relation.id)
+    const key = JSON.stringify([link.from, link.to].sort())
+    grouped.set(key, [...(grouped.get(key) ?? []), link])
+  }
+  const unique = [...grouped.values()]
   return (
     <>
-      <svg className="graph-link-drawing" aria-hidden="true">
-        {unique.slice(0, MAX_DRAWN_LINKS).map(({ relation, from, to }) => {
+      <svg className="graph-link-drawing" role="img" aria-label="Graph relationships">
+        {unique.slice(0, MAX_DRAWN_LINKS).map((group) => {
+          const { relation, from, to } = group[0]
           const a = local(from!)
           const b = local(to!)
+          const x = (a.x + b.x) / 2
+          const y = (a.y + b.y) / 2 - 90
+          const self = from === to
+          const crossDomain = group.some(({ relation: edge }) => {
+            const source = index?.entities.get(edge.from_entity_id)?.domain
+            const target = index?.entities.get(edge.to_entity_id)?.domain
+            return source !== undefined && target !== undefined && source !== target
+          })
+          const types = [
+            ...new Set(group.map((link) => link.relation.type.replaceAll('_', ' ')))
+          ].sort()
+          const label = `${group.length} link${group.length === 1 ? '' : 's'} · ${types.join(', ')}`
           return (
-            <path
-              key={relation.id}
-              className="graph-cross-edge"
-              d={
-                from === to
-                  ? `M ${a.x} ${a.y} c 170 -150 170 150 0 0`
-                  : `M ${a.x} ${a.y} Q ${(a.x + b.x) / 2} ${(a.y + b.y) / 2 - 60} ${b.x} ${b.y}`
-              }
-            />
+            <g key={relation.id}>
+              <path
+                className={`graph-cross-edge${crossDomain ? ' graph-cross-domain-edge' : ''}`}
+                d={
+                  self
+                    ? `M ${a.x} ${a.y} c 260 -220 260 220 0 0`
+                    : `M ${a.x} ${a.y} C ${x} ${a.y - 120} ${x} ${b.y - 120} ${b.x} ${b.y}`
+                }
+              />
+              <text
+                className="graph-edge-label"
+                x={self ? a.x + 195 : x}
+                y={self ? a.y : y}
+                textAnchor="middle"
+              >
+                {label}
+              </text>
+            </g>
           )
         })}
       </svg>

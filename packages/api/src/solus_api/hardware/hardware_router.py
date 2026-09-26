@@ -11,15 +11,19 @@ import uuid
 from time import perf_counter
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
-from solus_api.deps import ProjectCtx, SessionDep, require_role
+from solus_api.deps import BridgeSessionsDep, ProjectCtx, RequireVerified, SessionDep, require_role
 from solus_api.graph.live import graph_changed_frame
+from solus_api.hardware.companion_deployment import (
+    PrepareCompanionDeployment,
+    get_companion_deployment_service,
+)
 from solus_api.hardware.config import EntityHardwareConfig, HardwareConfig, LifecycleState, Scalar
 from solus_api.hardware.connections import connection_state
 from solus_api.hardware.detect import (
@@ -34,11 +38,23 @@ from solus_api.hardware.detect import (
     reconcile_device,
     validated_repo_root,
 )
+from solus_api.hardware.host_topology import (
+    HostAttachment,
+    HostConfirm,
+    HostProposalEnvelope,
+    HostTopologyService,
+    LocalHostProvider,
+    host_provider,
+)
 from solus_api.hardware.links import decide_suggestion, list_suggestions, serialize_suggestion
 from solus_api.hardware.local_runtime import open_local_hardware, prepare_local_hardware
+from solus_api.hardware.local_sources import LocalHardwareSources
 from solus_api.hardware.operations import HardwareEntityCreate, ReviewedHardwareOperations
 from solus_api.hardware.ownership import assign_parent, current_parent
+from solus_api.hardware.presence import PreparePresence, PresenceService
+from solus_api.hardware.presence_topology import AcceptWiring, WiringRequest, WiringService
 from solus_api.hardware.proposal_cache import PROPOSALS
+from solus_api.hardware.repo_evidence import read_repo_evidence
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import (
     MAX_ATTACH,
@@ -53,6 +69,18 @@ from solus_api.hardware.store import (
     read_entity_config,
     robot_root,
     unassigned_parts_stmt,
+)
+from solus_api.hardware.topology import RobotTopologyEnvelope
+from solus_api.hardware.topology_acceptance import (
+    ExtractionAcceptanceEnvelope,
+    ExtractionConfirm,
+    TopologyAcceptanceService,
+)
+from solus_api.hardware.topology_proposals import (
+    ExtractionProposalEnvelope,
+    ExtractionRequest,
+    TopologyProposalService,
+    proposal_sources,
 )
 from solus_api.livebench.bench_router import get_bench_local, get_session_manager
 from solus_api.models import GraphEntity, HardwareSuggestion, Role, SuggestionStatus, utcnow
@@ -158,6 +186,10 @@ async def replace_entity_config(
         expected_version=int(if_match),
         created_by=ctx.user.id,
     )
+    if subject.kind == "physical_robot":
+        from solus_api.hardware.topology import sync_topology
+
+        await sync_topology(session, ctx.project.id, subject.id)
     _emit_hardware_event(
         ctx,
         session,
@@ -296,6 +328,150 @@ def _config_view(entry_id: uuid.UUID | None, config: HardwareConfig) -> dict[str
         "robot_entity_id": config.robot_entity_id,
         "config": config.model_dump(mode="json"),
     }
+
+
+@router.get("/robots/{robot_id}/topology", response_model=RobotTopologyEnvelope)
+async def get_topology(robot_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep) -> dict[str, Any]:
+    from solus_api.hardware.topology import read_topology
+
+    return envelope(
+        (await read_topology(session, ctx.project.id, robot_id)).model_dump(mode="json")
+    )
+
+
+@router.post(
+    "/robots/{robot_id}/topology/extraction/propose", response_model=ExtractionProposalEnvelope
+)
+async def propose_topology_extraction(
+    robot_id: uuid.UUID,
+    body: ExtractionRequest,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+    sources: Annotated[LocalHardwareSources, Depends(proposal_sources)],
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    proposal = await TopologyProposalService(session, ctx.project.id, ctx.user.id, sources).propose(
+        robot_id, body
+    )
+    return envelope(proposal.model_dump(mode="json"))
+
+
+@router.post(
+    "/robots/{robot_id}/topology/extraction/confirm", response_model=ExtractionAcceptanceEnvelope
+)
+async def confirm_topology_extraction(
+    robot_id: uuid.UUID,
+    body: ExtractionConfirm,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+    sources: Annotated[LocalHardwareSources, Depends(proposal_sources)],
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    result, replayed = await TopologyAcceptanceService(
+        session, ctx.project.id, ctx.user.id, sources
+    ).confirm(robot_id, body)
+    # Proposal freshness expires loaded ORM state; refresh request identities before event use.
+    await session.refresh(ctx.project)
+    await session.refresh(ctx.team)
+    await session.refresh(ctx.user)
+    if not replayed:
+        _emit_hardware_event(
+            ctx,
+            session,
+            "hardware.extraction_confirmed",
+            {
+                "robot_id": str(robot_id),
+                "brain_id": str(body.brain_id),
+                "count": len(result.entity_ids),
+            },
+        )
+    await session.commit()
+    if not replayed:
+        await request.app.state.graph_hub.publish(
+            ctx.project.id,
+            graph_changed_frame(
+                project_id=ctx.project.id,
+                source_id=None,
+                sync_id=None,
+                counts=GraphChangeCounts(
+                    entities_created=result.created, relations_created=len(result.entity_ids)
+                ),
+                at=utcnow().isoformat(),
+            ),
+        )
+    return envelope(result.model_dump(mode="json"))
+
+
+@router.post("/robots/{robot_id}/topology/host/propose", response_model=HostProposalEnvelope)
+async def propose_host_topology(
+    robot_id: uuid.UUID,
+    body: HostAttachment,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    sessions: BridgeSessionsDep,
+    _verified: RequireVerified,
+    provider: Annotated[LocalHostProvider, Depends(host_provider)],
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    proposal = await HostTopologyService(
+        session,
+        project_id=ctx.project.id,
+        team_id=ctx.team.id,
+        user_id=ctx.user.id,
+        sessions=sessions,
+        provider=provider,
+    ).propose(robot_id, body)
+    return envelope(proposal.model_dump(mode="json"))
+
+
+@router.post("/robots/{robot_id}/topology/host/confirm", response_model=RobotTopologyEnvelope)
+async def confirm_host_topology(
+    robot_id: uuid.UUID,
+    body: HostConfirm,
+    idempotency_key: OperationKey,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    sessions: BridgeSessionsDep,
+    _verified: RequireVerified,
+    provider: Annotated[LocalHostProvider, Depends(host_provider)],
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    result, replayed = await HostTopologyService(
+        session,
+        project_id=ctx.project.id,
+        team_id=ctx.team.id,
+        user_id=ctx.user.id,
+        sessions=sessions,
+        provider=provider,
+    ).confirm(robot_id, body, idempotency_key)
+    if not replayed:
+        _emit_hardware_event(
+            ctx,
+            session,
+            "hardware.topology_confirmed",
+            {
+                "robot_id": str(robot_id),
+                "endpoint_id": str(body.endpoint_id),
+                "local_source_id": str(body.local_source_id),
+            },
+        )
+    await session.commit()
+    if not replayed:
+        await request.app.state.graph_hub.publish(
+            ctx.project.id,
+            graph_changed_frame(
+                project_id=ctx.project.id,
+                source_id=None,
+                sync_id=None,
+                counts=GraphChangeCounts(entities_updated=1),
+                at=utcnow().isoformat(),
+            ),
+        )
+    return envelope(result.model_dump(mode="json"))
 
 
 @router.get("/robots/{robot_id}/config")
@@ -477,10 +653,18 @@ async def propose_detected(
     local = _local_runner(request)
     options = body or ProposeIn()
     repo_root = validated_repo_root(options.repo_root)
+    evidence = await read_repo_evidence(local, ctx.project.id, ctx.user.id, options.source_refs)
     fresh = await propose_via_local(
-        local, device_ref, repo_root=repo_root, budget_s=options.budget_s
+        local,
+        device_ref,
+        repo_root=repo_root,
+        budget_s=options.budget_s,
+        repo_sources=evidence.sources,
     )
-    PROPOSALS.put((ctx.project.id, device_ref, repo_root), fresh)
+    current = await read_repo_evidence(local, ctx.project.id, ctx.user.id, options.source_refs)
+    if current.digest != evidence.digest:
+        raise APIError(409, "source_changed", "The source changed during review. Propose again.")
+    PROPOSALS.put(evidence.key(ctx.project.id, ctx.user.id, device_ref), fresh)
     proposal = exclude_bound(fresh, await bound_repo_config_ids(session, ctx.project.id))
     suggestions = await reconcile_device(session, ctx.project.id, proposal)
     proposal = proposal.model_copy(
@@ -508,10 +692,13 @@ async def confirm_detected(
     local = _local_runner(request)
     started = perf_counter()
     repo_root = validated_repo_root(body.repo_root)
-    # The propose that just ran (≤ 60 s, same rows) is the wire's own answer; reuse it.
+    evidence = await read_repo_evidence(local, ctx.project.id, ctx.user.id, body.source_refs)
+    # Source-backed confirmation must refer to this actor's still-current reviewed snapshot.
     cached = PROPOSALS.take(
-        (ctx.project.id, device_ref, repo_root), [a.row_id for a in body.accepted]
+        evidence.key(ctx.project.id, ctx.user.id, device_ref), [a.row_id for a in body.accepted]
     )
+    if body.source_refs and cached is None:
+        raise APIError(409, "proposal_changed", "Source review expired or changed. Propose again.")
     if cached is not None:
         devices = detected_devices_wire(await asyncio.to_thread(local.detect_devices))
         if not any(device["device_ref"] == device_ref for device in devices):
@@ -522,14 +709,32 @@ async def confirm_detected(
         else await propose_via_local(local, device_ref, repo_root=repo_root, budget_s=0.5),
         await bound_repo_config_ids(session, ctx.project.id),
     )
+    if body.connection_only:
+        devices = detected_devices_wire(await asyncio.to_thread(local.detect_devices))
+        matching = [device for device in devices if device["device_ref"] == device_ref]
+        expected = proposal.identity.model_dump(mode="json") if proposal.identity else None
+        if (
+            len(matching) != 1
+            or matching[0].get("ambiguous")
+            or expected is None
+            or not isinstance(matching[0].get("identity"), dict)
+            or any(
+                matching[0]["identity"].get(key) != expected.get(key)
+                for key in ("kind", "binding", "vid", "pid")
+            )
+        ):
+            raise APIError(
+                409, "device_changed", "Device identity changed; review the connection again"
+            )
+    start_session = body.start_session and not body.connection_only
     runtime_id = (
-        await request.app.state.hardware_connections.ensure_owner() if body.start_session else None
+        await request.app.state.hardware_connections.ensure_owner() if start_session else None
     )
     proposed_at = perf_counter()
     result = await confirm_proposal(
         session, project_id=ctx.project.id, proposal=proposal, body=body, created_by=ctx.user.id
     )
-    attempt_id = uuid.uuid4() if body.start_session else None
+    attempt_id = uuid.uuid4() if start_session else None
     if attempt_id is not None:
         result.robot.attrs = {
             **result.robot.attrs,
@@ -643,6 +848,21 @@ async def _start_robot_session(
     return record.id, None
 
 
+@router.post("/parts/{part_id}/suggestions")
+async def propose_part_suggestions(
+    part_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep, _verified: RequireVerified
+) -> dict[str, Any]:
+    from solus_api.hardware.cad_suggestions import propose_cad_suggestions
+
+    require_role(ctx, Role.MEMBER)
+    rows = await propose_cad_suggestions(session, ctx.project.id, part_id, ctx.user.id)
+    _emit_hardware_event(
+        ctx, session, "hardware.part_links_proposed", {"part_id": str(part_id), "count": len(rows)}
+    )
+    await session.commit()
+    return envelope([serialize_suggestion(row) for row in rows])
+
+
 @router.get("/suggestions")
 async def get_suggestions(
     ctx: ProjectCtx,
@@ -654,6 +874,9 @@ async def get_suggestions(
     except ValueError:
         raise APIError(422, "validation_error", "Unknown suggestion status") from None
     rows = await list_suggestions(session, ctx.project.id, status=parsed)
+    from solus_api.hardware.cad_suggestions import filter_visible_cad_suggestions
+
+    rows = await filter_visible_cad_suggestions(session, ctx.project.id, ctx.user.id, rows)
     return envelope([serialize_suggestion(row) for row in rows])
 
 
@@ -683,9 +906,28 @@ async def _decide(
         "session_error": None,
         "bind_error": None,
     }
+    attached_count = 0
     if accept and row.subject_kind == "device":
         binding.update(await _bind_accepted_device(request, ctx, session, row))
+    elif accept and row.subject_kind == "part":
+        from solus_api.hardware.cad_suggestions import accept_cad_suggestion, is_cad_suggestion
+
+        if is_cad_suggestion(row):
+            outcome = await accept_cad_suggestion(session, ctx.project.id, row, ctx.user.id)
+            attached_count = outcome.pop("attached_count", 0)
+            binding.update(outcome)
     await session.commit()
+    if attached_count:
+        await request.app.state.graph_hub.publish(
+            ctx.project.id,
+            graph_changed_frame(
+                project_id=ctx.project.id,
+                source_id=None,
+                sync_id=None,
+                counts=GraphChangeCounts(relations_created=attached_count),
+                at=utcnow().isoformat(),
+            ),
+        )
     return envelope({**serialize_suggestion(row), **binding})
 
 
@@ -720,7 +962,11 @@ async def _bind_accepted_device(
 
 @router.post("/suggestions/{suggestion_id}/accept")
 async def accept_suggestion(
-    suggestion_id: uuid.UUID, request: Request, ctx: ProjectCtx, session: SessionDep
+    suggestion_id: uuid.UUID,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
 ) -> dict[str, Any]:
     return await _decide(request, ctx, session, suggestion_id, accept=True, reason=None)
 
@@ -735,3 +981,130 @@ async def reject_suggestion(
 ) -> dict[str, Any]:
     reason = body.reason if body is not None else None
     return await _decide(request, ctx, session, suggestion_id, accept=False, reason=reason)
+
+
+@router.get("/presence/profiles")
+async def presence_profiles(
+    request: Request, ctx: ProjectCtx, session: SessionDep, _verified: RequireVerified
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    service = PresenceService(
+        session,
+        ctx.project.id,
+        ctx.user.id,
+        request.app.state.artifact_store,
+        getattr(request.app.state, "presence_provider", None),
+    )
+    return envelope(service.profiles())
+
+
+@router.post("/companion-deployments/prepare", status_code=201)
+async def prepare_companion_deployment(
+    body: PrepareCompanionDeployment,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    service = get_companion_deployment_service(request, session, ctx.project.id, ctx.user.id)
+    result = await service.prepare(body)
+    await session.commit()
+    return envelope(result)
+
+
+@router.post("/robots/{robot_id}/brains/{brain_id}/presence/prepare", status_code=201)
+async def prepare_presence(
+    robot_id: uuid.UUID,
+    brain_id: uuid.UUID,
+    body: PreparePresence,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    service = PresenceService(
+        session,
+        ctx.project.id,
+        ctx.user.id,
+        request.app.state.artifact_store,
+        getattr(request.app.state, "presence_provider", None),
+    )
+    result = await service.prepare(robot_id, brain_id, body)
+    await session.refresh(ctx.user)
+    await session.refresh(ctx.project)
+    await session.refresh(ctx.team)
+    _emit_hardware_event(
+        ctx,
+        session,
+        "hardware.presence_prepared",
+        {
+            "plan_id": result["plan_id"],
+            "robot_id": str(robot_id),
+            "brain_id": str(brain_id),
+            "source_sha256": result["source_sha256"],
+            "binary_sha256": result["binary_sha256"],
+        },
+    )
+    await session.commit()
+    return envelope(result)
+
+
+@router.post("/robots/{robot_id}/brains/{brain_id}/presence/wiring/propose", status_code=201)
+async def propose_presence_wiring(
+    robot_id: uuid.UUID,
+    brain_id: uuid.UUID,
+    body: WiringRequest,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    service = PresenceService(
+        session,
+        ctx.project.id,
+        ctx.user.id,
+        request.app.state.artifact_store,
+        getattr(request.app.state, "presence_provider", None),
+    )
+    result = await WiringService(service).propose(robot_id, brain_id, body)
+    _emit_hardware_event(
+        ctx,
+        session,
+        "hardware.wiring_proposed",
+        {"proposal_id": result["proposal_id"], "robot_id": str(robot_id)},
+    )
+    await session.commit()
+    return envelope(result)
+
+
+@router.post("/robots/{robot_id}/brains/{brain_id}/presence/wiring/{proposal_id}/accept")
+async def accept_presence_wiring(
+    robot_id: uuid.UUID,
+    brain_id: uuid.UUID,
+    proposal_id: uuid.UUID,
+    body: AcceptWiring,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+) -> dict[str, Any]:
+    require_role(ctx, Role.MEMBER)
+    service = PresenceService(
+        session,
+        ctx.project.id,
+        ctx.user.id,
+        request.app.state.artifact_store,
+        getattr(request.app.state, "presence_provider", None),
+    )
+    result = await WiringService(service).accept(robot_id, brain_id, proposal_id, body.digest)
+    _emit_hardware_event(
+        ctx,
+        session,
+        "hardware.wiring_accepted",
+        {"proposal_id": str(proposal_id), "robot_id": str(robot_id)},
+    )
+    await session.commit()
+    return envelope(result)

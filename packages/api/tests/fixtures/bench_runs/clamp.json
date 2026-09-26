@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "robot_id": "00000000-0000-4000-8000-000000000001",
+  "started_at": "2026-09-14T00:00:00+00:00",
+  "parts": [
+    {
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "name": "Synthetic actuator",
+      "device_id": "fixture/actuator",
+      "current_signal": "current",
+      "position_signal": "position",
+      "command_signal": "command",
+      "stall_current_a": 2,
+      "position_min": -90,
+      "position_max": 45,
+      "position_unit": "deg",
+      "code_site": "fixture_control.py:12",
+      "cad_revision": "synthetic-m1"
+    }
+  ],
+  "packets": [
+    {
+      "device_id": "fixture/actuator",
+      "timestamp": "2026-09-14T00:00:00+00:00",
+      "values": {
+        "position": 45,
+        "command": 100,
+        "current": 2.1
+      },
+      "units": {
+        "position": "deg",
+        "command": "deg",
+        "current": "A"
+      }
+    },
+    {
+      "device_id": "fixture/actuator",
+      "timestamp": "2026-09-14T00:00:01+00:00",
+      "values": {
+        "position": 45,
+        "command": 100,
+        "current": 2.1
+      },
+      "units": {
+        "position": "deg",
+        "command": "deg",
+        "current": "A"
+      }
+    },
+    {
+      "device_id": "fixture/actuator",
+      "timestamp": "2026-09-14T00:00:02+00:00",
+      "values": {
+        "position": 45,
+        "command": 100,
+        "current": 2.1
+      },
+      "units": {
+        "position": "deg",
+        "command": "deg",
+        "current": "A"
+      }
+    }
+  ],
+  "sensors": [],
+  "snapshots": []
+}

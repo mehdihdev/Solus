@@ -9,14 +9,21 @@ import { useAuthStore } from '../../../store/authStore'
 import { useWorkspaceStore } from '../../../store/workspaceStore'
 import { useSettingsStore } from '../../../store/settingsStore'
 import { usePhysicalRobots } from './usePhysicalRobots'
+import { createUnassignedPart } from '../hardware/createUnassignedPart'
+
+vi.mock('../hardware/createUnassignedPart', () => ({ createUnassignedPart: vi.fn() }))
 
 vi.mock('../hardware/DevicesFound', () => ({
   DevicesFound: (): React.JSX.Element => <div data-testid="devices-found" />
 }))
-vi.mock('../../sourcing/SourcingModal', () => ({
-  SourcingModal: ({ door, projectId }: { door: string; projectId: string }): React.JSX.Element => (
-    <div role="dialog" aria-label={`sourcing:${door}:${projectId}`} />
-  )
+vi.mock('../hardware/InlineSupplierResults', () => ({
+  InlineSupplierResults: ({
+    query,
+    disabled
+  }: {
+    query: string
+    disabled: boolean
+  }): React.JSX.Element => <button disabled={disabled}>Search suppliers for {query}</button>
 }))
 vi.mock('../../../lib/api/physicalRobots', () => ({
   createPhysicalRobot: vi.fn(),
@@ -117,6 +124,7 @@ beforeEach(() => {
   vi.mocked(hardwareApi.getHardwareConfig).mockRejectedValue(new Error('none'))
   vi.mocked(resources.listBenchSessions).mockResolvedValue([])
   vi.mocked(api.createPhysicalRobot).mockResolvedValue(robot)
+  vi.mocked(createUnassignedPart).mockResolvedValue({ ...part, name: 'Wrist IMU' })
   vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
     entity: { ...part, id: 'part-new', name: 'Wrist IMU', origin: 'manual', source_id: null },
     config_entry_id: 'entry-1'
@@ -169,7 +177,7 @@ it.each(['project', 'account'])(
   'never publishes a write after an A → B → A %s switch',
   async (boundary) => {
     const pending = deferred<Entity>()
-    vi.mocked(api.createPhysicalRobot).mockReturnValue(pending.promise)
+    vi.mocked(createUnassignedPart).mockReturnValue(pending.promise)
     render(<Harness entities={[]} />)
     await userEvent.click(await describe())
     act(() => {
@@ -207,7 +215,13 @@ it('allows authenticated hardware creation with a stale onboarding linked flag',
   render(<Harness entities={[]} />)
   expect(screen.getByRole('textbox', { name: 'What is it?' })).toBeEnabled()
   await userEvent.click(await describe())
-  expect(api.createPhysicalRobot).toHaveBeenCalledWith('p1', undefined, 'Wrist IMU')
+  expect(createUnassignedPart).toHaveBeenCalledWith(
+    'p1',
+    'Wrist IMU',
+    'sensors',
+    expect.any(String)
+  )
+  expect(api.createPhysicalRobot).not.toHaveBeenCalled()
   await waitFor(() => expect(changed).toHaveBeenCalledOnce())
 })
 
@@ -237,10 +251,10 @@ it.each([
 })
 
 it('keeps creation failures visible without publishing success', async () => {
-  vi.mocked(api.createPhysicalRobot).mockRejectedValue(new Error('Cannot create robot'))
+  vi.mocked(createUnassignedPart).mockRejectedValue(new Error('Cannot create part'))
   render(<Harness entities={[]} />)
   await userEvent.click(await describe())
-  expect(await screen.findByRole('alert')).toHaveTextContent('Cannot create robot')
+  expect(await screen.findByRole('alert')).toHaveTextContent('Cannot create part')
   expect(changed).not.toHaveBeenCalled()
   expect(reveal).not.toHaveBeenCalled()
   expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
@@ -249,7 +263,7 @@ it('keeps creation failures visible without publishing success', async () => {
 
 it('does not revive a pending write after unmounting', async () => {
   const pending = deferred<Entity>()
-  vi.mocked(api.createPhysicalRobot).mockReturnValue(pending.promise)
+  vi.mocked(createUnassignedPart).mockReturnValue(pending.promise)
   const view = render(<Harness entities={[]} />)
   await userEvent.click(await describe())
   view.unmount()
@@ -294,17 +308,20 @@ it('mounts the robot sidebar for a selected robot and never a modal', () => {
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
 
-it('Sourced opens the same sourcing panel as the BOM, on the Workspace door', async () => {
+it('forwards the shared search query to inline suppliers without a modal', async () => {
   render(<Harness entities={[]} />)
-  await userEvent.click(screen.getByRole('button', { name: 'Find a part from suppliers' }))
-  expect(screen.getByRole('dialog', { name: 'sourcing:workspace:p1' })).toBeInTheDocument()
+  await userEvent.type(
+    screen.getByRole('searchbox', { name: 'Search parts and platforms' }),
+    'sensor'
+  )
+  expect(screen.getByRole('button', { name: 'Search suppliers for sensor' })).toBeEnabled()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
 
 it('cannot source a part while the project is offline', async () => {
   useAuthStore.setState({ status: 'unauthenticated', user: null })
   render(<Harness entities={[]} />)
-  const sourced = screen.getByRole('button', { name: 'Find a part from suppliers' })
-  expect(sourced).toBeDisabled()
-  await userEvent.click(sourced)
+  expect(screen.getByRole('searchbox', { name: 'Search parts and platforms' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: /Search suppliers/ })).not.toBeInTheDocument()
   expect(screen.queryByRole('dialog')).toBeNull()
 })

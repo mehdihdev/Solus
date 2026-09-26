@@ -223,13 +223,14 @@ function registerWith(allowed: () => boolean): {
 }
 
 describe('IPC registration', () => {
-  it('registers the six invokes on the shared constants and returns the state', () => {
+  it('registers the seven invokes on the shared constants and returns the state', () => {
     const { handlers, calls } = registerWith(() => true)
     const c = SOL_WINDOW_CHANNELS
     expect([...handlers.keys()].sort()).toEqual(
       [
         c.open,
         c.getState,
+        c.guideTarget,
         c.setMode,
         c.setScreenIntelligence,
         c.setAlwaysOnTop,
@@ -248,10 +249,10 @@ describe('IPC registration', () => {
     expect(calls).toEqual(['ready', 'open', 'mode:do', 'si:true', 'aot:false', 'hk:false'])
   })
 
-  it('a foreign sender gets null and no action', () => {
+  it('a foreign sender gets null and no action', async () => {
     const { handlers, calls } = registerWith(() => false)
     for (const channel of Object.values(SOL_WINDOW_CHANNELS)) {
-      expect(handlers.get(channel)?.(EVENT, 'do') ?? null).toBeNull()
+      expect((await handlers.get(channel)?.(EVENT, 'do')) ?? null).toBeNull()
     }
     expect(calls).toEqual([])
   })
@@ -457,3 +458,37 @@ function registerWindowRegionReadinessTests(): void {
     expect(m.isSender(h.windows[0].handle.webContents)).toBe(false)
   })
 }
+
+it('native lookup rejects late mode/scope changes and never queries for foreign senders', async () => {
+  let generation = 1
+  let mode: 'guide' | 'do' = 'guide'
+  let finish!: (value: null) => void
+  const lookup = vi.fn(
+    () =>
+      new Promise<null>((resolve) => {
+        finish = resolve
+      })
+  )
+  const handlers = new Map<string, (event: IpcMainInvokeEvent) => unknown>()
+  registerSolIpcHandlers(
+    { handle: (channel, fn) => void handlers.set(channel, fn) },
+    {
+      windows: { open: vi.fn(), setAlwaysOnTop: vi.fn(), markReady: vi.fn() },
+      settings: { setMode: vi.fn(), setScreenIntelligence: vi.fn(), setHotkeys: vi.fn() },
+      state: () => ({ ...STATE, actionMode: mode }),
+      guideScope: () => generation,
+      guideTarget: lookup
+    },
+    (event) => event === EVENT
+  )
+  const handler = handlers.get(SOL_WINDOW_CHANNELS.guideTarget)!
+  expect(await handler({} as IpcMainInvokeEvent)).toBeNull()
+  expect(lookup).not.toHaveBeenCalled()
+  const pending = handler(EVENT)
+  generation += 2 // project A → B → A
+  finish(null)
+  expect(await pending).toBeNull()
+  mode = 'do'
+  expect(await handler(EVENT)).toBeNull()
+  expect(lookup).toHaveBeenCalledTimes(1)
+})

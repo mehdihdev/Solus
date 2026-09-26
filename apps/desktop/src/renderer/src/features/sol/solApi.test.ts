@@ -326,3 +326,44 @@ function messageRequestAuthorizationTests(WIRE: string): void {
     ).rejects.toMatchObject({ status: 429 })
   })
 }
+
+it('cancels artifact streams before buffering beyond the requested bound', async () => {
+  const cancel = vi.fn()
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(5))
+      },
+      cancel
+    })
+  )
+  await expect(
+    fetchArtifactBlob('p', 'a', {
+      fetchImpl: vi.fn(async () => response),
+      getToken: async () => null,
+      maxBytes: 4
+    })
+  ).rejects.toThrow(/bound/)
+  expect(cancel).toHaveBeenCalled()
+})
+
+it('sends explicit force_confirmation only for confirmation-required turns', async () => {
+  const fetchImpl = vi.fn(async () => sseResponse(''))
+  const base = {
+    projectId: 'p1',
+    conversationId: 'c1',
+    content: 'Review a file',
+    actionMode: 'do' as const,
+    onEvent: vi.fn(),
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+    getToken: async () => null,
+    baseUrl: 'http://api.test/api/v1'
+  }
+  await streamSolMessage({ ...base, forceConfirmation: true })
+  await streamSolMessage(base)
+  const bodies = fetchImpl.mock.calls.map(
+    (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as object
+  )
+  expect(bodies[0]).toMatchObject({ action_mode: 'do', force_confirmation: true })
+  expect(bodies[1]).not.toHaveProperty('force_confirmation')
+})

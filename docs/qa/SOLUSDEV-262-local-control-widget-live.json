@@ -1,0 +1,93 @@
+{
+  "checked_at_utc": "2026-09-14T20:31:00Z",
+  "project_id": "01a074e0-3bb4-7317-ba53-7b653bb1f6a8",
+  "surface": "authenticated local app browser preview",
+  "checks": {
+    "legacy_widget_reconcile": {
+      "result": "pass",
+      "http_status": 200
+    },
+    "persisted_live_bench_root": {
+      "result": "pass",
+      "observed_controls": [
+        "Move Live Bench",
+        "Select Live Bench",
+        "Open Live Bench"
+      ]
+    },
+    "root_opens_live_bench": {
+      "result": "pass",
+      "observed_heading": "Live Bench",
+      "observed_state": "NOTHING STREAMING"
+    },
+    "local_host_software_card": {
+      "result": "pass",
+      "selection_policy": "matching companion and authorized LOCAL source; remote repositories are references",
+      "browser_native_bridge_missing": "review disabled; desktop required"
+    },
+    "accepted_live_host_attachment": {
+      "result": "not_run",
+      "reason": "control software local folder not supplied"
+    },
+    "both_arm_streams": {
+      "result": "pass",
+      "path": "Manage connections > Saved robots > Connect",
+      "mode": "read-only Feetech polling from accepted config",
+      "follower": {
+        "serial": "5B42134331",
+        "port": "/dev/ttyACM1",
+        "ingested_at_observation": 764,
+        "devices": [
+          "usb:5B42134331/6"
+        ],
+        "signals": [
+          "Shoulder.position",
+          "Shoulder.load",
+          "Shoulder.temperature"
+        ],
+        "limitation": "existing config maps one saved Shoulder part; does not prove six accepted parts"
+      },
+      "leader": {
+        "serial": "5B42135040",
+        "port": "/dev/ttyACM0",
+        "ingested_at_observation": 2634,
+        "devices": [
+          "usb:5B42135040/1",
+          "usb:5B42135040/2",
+          "usb:5B42135040/3",
+          "usb:5B42135040/4",
+          "usb:5B42135040/5",
+          "usb:5B42135040/6"
+        ],
+        "signals_per_device": [
+          "position",
+          "load",
+          "temperature"
+        ]
+      },
+      "ui_state": "both streaming without focused part",
+      "cleanup": "Stop clicked for both sessions"
+    },
+    "stopped_session_panes": {
+      "result": "pass",
+      "observed_status": "disconnected (session ended) on both saved robot sessions"
+    },
+    "local_file_review_card": {
+      "result": "pass",
+      "observed_at_utc": "2026-09-14T20:49:00Z",
+      "surface": "browser preview",
+      "native_authority": "unavailable, correctly disabled",
+      "controls": [
+        "Local evidence files",
+        "Evidence type",
+        "Review file evidence"
+      ],
+      "live_file_extraction": "not run; needs selected local control file"
+    }
+  },
+  "hardware_actions": {
+    "flash": false,
+    "motion": false,
+    "session_started": true
+  }
+}

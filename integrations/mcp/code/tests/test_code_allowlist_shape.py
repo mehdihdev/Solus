@@ -1,6 +1,6 @@
-"""SOLUSDEV-250 — `allowlist.yaml` is the complete fourteen-tool draft, validates
+"""SOLUSDEV-250 — `allowlist.yaml` is the complete fifteen-tool draft, validates
 against the cloud-side `ServerAllowlist`, survives the ingress gate, gates
-exactly the eight acting tools with reasons, and agrees with the roster."""
+exactly the nine acting tools with reasons, and agrees with the roster."""
 
 import logging
 
@@ -30,6 +30,7 @@ EXPECTED_GATED = frozenset(
         "git_push",
         "arduino_prepare",
         "arduino_compile",
+        "arduino_upload",
     }
 )
 

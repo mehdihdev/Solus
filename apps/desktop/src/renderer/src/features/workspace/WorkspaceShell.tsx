@@ -5,7 +5,7 @@
 // separator, pinned ones first — EXT-14 as amended by SOLUSDEV-246 STORE ST3).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
 // shows live API data or honest empty states, never fabricated robot data.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
@@ -15,6 +15,7 @@ import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceS
 import { WorkspaceScreen } from '../graph/WorkspaceScreen'
 import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
+import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
 import { SolScreen } from '../sol/SolScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
@@ -234,6 +235,7 @@ export function WorkspaceShell(): React.JSX.Element {
             openProject={nav.openProject}
             navigate={go}
             openStoreDetail={nav.openStoreDetail}
+            openExtensionPage={nav.openExtensionPage}
             goBack={() => go(useShellStore.getState().lastMain)}
           />
         </div>
@@ -305,7 +307,6 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 
 /** Screens that take no props, keyed by name (keeps ScreenView's branching low). */
 const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
-  workspace: WorkspaceScreen,
   store: StoreScreen,
   sol: SolScreen,
   billing: BillingScreen,
@@ -369,6 +370,7 @@ function ScreenView({
   openProject,
   navigate,
   openStoreDetail,
+  openExtensionPage,
   goBack
 }: {
   route: ShellRoute
@@ -377,15 +379,43 @@ function ScreenView({
   openProject: (project: WorkspaceProject) => void
   navigate: (screen: MainScreen) => void
   openStoreDetail: (slug: string) => void
+  openExtensionPage: (slug: string) => void
   goBack: () => void
 }): React.JSX.Element | null {
+  const generation = useWorkspaceSessionGeneration()
+  const sequence = useRef(0)
+  const [pendingAdd, setPendingAdd] = useState<{ generation: number; sequence: number } | null>(
+    null
+  )
+  const requestAddHardware = (): void => {
+    if (!project) return
+    setPendingAdd({ generation, sequence: ++sequence.current })
+    navigate('workspace')
+  }
   const screen = ((): React.JSX.Element | null => {
     switch (route.name) {
       case 'home':
         return <HomeScreen onOpenProject={openProject} onNavigate={navigate} />
+      case 'workspace':
+        return (
+          <WorkspaceScreen
+            onOpenBench={() => navigate('bench')}
+            onOpenWidget={openExtensionPage}
+            openAddRequest={
+              pendingAdd?.generation === generation
+                ? { tab: 'hardware', sequence: pendingAdd.sequence }
+                : undefined
+            }
+            onAddRequestConsumed={(consumed) =>
+              setPendingAdd((current) =>
+                current?.generation === generation && current.sequence === consumed ? null : current
+              )
+            }
+          />
+        )
       case 'bench':
-        // Bench needs navigation for its "Connect a device" path (SOLUSDEV-72).
-        return <BenchScreen onNavigate={navigate} />
+        // Add Hardware opens the existing Workspace onboarding flow.
+        return <BenchScreen onNavigate={navigate} onAddHardware={requestAddHardware} />
       case 'alert':
         return <AlertScreen onBack={goBack} />
       case 'ext-page':

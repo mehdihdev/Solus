@@ -6,6 +6,8 @@
   overflow-y: auto;
   border-left: 1px solid var(--bd);
   background: var(--sur);
+  font: 12px/1.5 var(--font-ui);
+  color: var(--tx);
 }
 .node-sidebar-body {
   padding: 16px;
@@ -93,4 +95,62 @@
   display: flex;
   gap: 8px;
   margin-top: 6px;
+}
+
+.node-sidebar :is(input, select, textarea) {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  color: var(--tx);
+  background: var(--bg);
+  border: 1px solid var(--bd);
+  border-radius: 3px;
+  padding: 8px 10px;
+  font: 12px/1.5 var(--font-ui);
+}
+.node-sidebar textarea {
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+}
+.node-sidebar label {
+  display: block;
+  color: var(--mut);
+  font-size: 11px;
+  margin: 10px 0 6px;
+}
+.node-sidebar button:not(.node-sidebar-link) {
+  color: var(--tx);
+  background: var(--sur2);
+  border: 1px solid var(--bd);
+  border-radius: 3px;
+  padding: 6px 10px;
+  font: 12px var(--font-ui);
+  cursor: pointer;
+}
+.node-sidebar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.node-sidebar :is(button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.node-sidebar details {
+  border-top: 1px solid var(--bd);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.node-sidebar summary {
+  cursor: pointer;
+  color: var(--mut);
+  font-size: 12px;
+}
+.node-sidebar pre {
+  padding: 12px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--bg);
+  overflow: auto;
+  font: 11px/1.6 var(--font-mono);
 }

@@ -14,13 +14,13 @@ import asyncio
 import uuid
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from solus_api.core.errors import APIError
-from solus_api.fingerprint.contract import ModalityMatch
+from solus_api.fingerprint.contract import MatchState, Modality, ModalityMatch, SourceRef
 from solus_api.hardware.config import (
     BusMapEntry,
     CalibrationMode,
@@ -34,12 +34,15 @@ from solus_api.hardware.config import (
     unit_for_mode,
 )
 from solus_api.hardware.links import (
+    LinkSuggestion,
+    LinkTier,
     PartObservation,
     RobotCandidate,
     list_suggestions,
     persist_suggestions,
     suggest_links,
 )
+from solus_api.hardware.repo_evidence import SourceRefs
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import (
     PART_KIND,
@@ -181,6 +184,7 @@ class ProposalOut(_Wire):
 
 class ProposeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    source_refs: SourceRefs = Field(default_factory=list)
     repo_root: str | None = Field(default=None, min_length=1, max_length=MAX_REPO_ROOT_CHARS)
     budget_s: float = Field(default=0.5, ge=0.05, le=5.0)
 
@@ -210,11 +214,24 @@ class ExistingRobotTarget(BaseModel):
 class ConfirmIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: Annotated[NewRobotTarget | ExistingRobotTarget, Field(discriminator="kind")]
-    accepted: list[AcceptedRow] = Field(min_length=1, max_length=MAX_ACCEPTED_ROWS)
+    accepted: list[AcceptedRow] = Field(max_length=MAX_ACCEPTED_ROWS)
+    connection_only: StrictBool = False
     repo_config_id: str | None = Field(default=None, max_length=256)
+    source_refs: SourceRefs = Field(default_factory=list)
     repo_root: str | None = Field(default=None, min_length=1, max_length=MAX_REPO_ROOT_CHARS)
     start_session: bool = True
     window_seconds: float = Field(default=1.0, gt=0, le=86400)
+
+    @model_validator(mode="after")
+    def validate_acceptance(self) -> ConfirmIn:
+        if self.connection_only:
+            if self.accepted or self.repo_config_id is not None:
+                raise ValueError(
+                    "Connection-only acceptance cannot include parts or repo configuration"
+                )
+        elif not self.accepted:
+            raise ValueError("Accept at least one proposed part")
+        return self
 
 
 def validated_repo_root(raw: str | None) -> str | None:
@@ -234,16 +251,26 @@ def detected_devices_wire(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def propose_via_local(
-    local: Any, device_ref: str, *, repo_root: str | None, budget_s: float
+    local: Any,
+    device_ref: str,
+    *,
+    repo_root: str | None,
+    budget_s: float,
+    repo_sources: list[dict[str, Any]] | None = None,
 ) -> ProposalOut:
     """Run the local runtime's interrogation off-loop and re-validate its proposal."""
+    options: dict[str, Any] = {"repo_root": repo_root, "budget_s": budget_s}
+    if repo_sources:
+        options["repo_sources"] = repo_sources
     try:
         raw = await asyncio.wait_for(
-            asyncio.to_thread(
-                local.propose_device, device_ref, repo_root=repo_root, budget_s=budget_s
-            ),
+            asyncio.to_thread(local.propose_device, device_ref, **options),
             PROPOSE_TIMEOUT_S,
         )
+    except ValueError as exc:
+        raise APIError(
+            422, "invalid_source", "The selected source could not be parsed. Review its contents."
+        ) from exc
     except TimeoutError as exc:
         # The worker thread cannot be cancelled and finishes on its own; the request just
         # stops waiting for it.
@@ -409,6 +436,89 @@ async def robot_candidates(session: AsyncSession, project_id: uuid.UUID) -> list
     return candidates
 
 
+async def _retained_owner(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    proposal: ProposalOut,
+    candidates: list[RobotCandidate],
+) -> tuple[bool, list[LinkSuggestion]]:
+    """Exact accepted part identity survives removing the robot's USB binding.
+
+    A shared/corrupt ownership claim fails closed rather than falling back to model overlap.
+    """
+    if proposal.identity is None or proposal.identity.device_ref != proposal.device_ref:
+        return False, []
+    if not any(match.modality is Modality.BUS_ENUMERATION for match in proposal.evidence):
+        return False, []
+    fresh = {row.id: row for row in proposal.rows}
+    parts = list(
+        await session.scalars(
+            select(GraphEntity).where(
+                GraphEntity.project_id == project_id,
+                GraphEntity.kind == PART_KIND,
+                GraphEntity.deleted_at.is_(None),
+                GraphEntity.external_ref.in_(fresh),
+            )
+        )
+    )
+    if not parts:
+        return False, []
+    eligible = {str(candidate.robot_entity_id): candidate for candidate in candidates}
+    owners: set[str] = set()
+    evidence: list[ModalityMatch] = []
+    for part in parts:
+        if part.external_ref is None:
+            return True, []
+        row = fresh[part.external_ref]
+        if row.id != part_ref(proposal.device_ref, row.address):
+            return True, []
+        owner = part.attrs.get("robot_id")
+        if not isinstance(owner, str):
+            return True, []
+        candidate = eligible.get(owner)
+        if (
+            candidate is None
+            or candidate.config.identity is not None
+            or part.attrs.get("device_ref") != proposal.device_ref
+            or part.attrs.get("address") != row.address
+            or str(part.id) not in candidate.config.parts
+            or not any(
+                entry.part_entity_id == part.id
+                and entry.address == row.address
+                and entry.protocol == proposal.driver_id
+                for entry in candidate.config.bus_map
+            )
+        ):
+            return True, []
+        owners.add(owner)
+        evidence.append(
+            ModalityMatch(
+                modality=Modality.BUS_ENUMERATION,
+                source_ref=SourceRef(graph_entity_id=part.id, external_ref=part.external_ref),
+                confidence=0.8,
+                state=MatchState.MATCHED,
+                evidence={
+                    "matched_on": "retained_part_binding",
+                    "device_ref": proposal.device_ref,
+                    "address": row.address,
+                },
+            )
+        )
+    if len(owners) != 1:
+        return True, []
+    return True, [
+        LinkSuggestion(
+            subject_ref=proposal.device_ref,
+            subject_kind="device",
+            candidate_robot_id=uuid.UUID(next(iter(owners))),
+            confidence=0.8,
+            tier=LinkTier.HIGH,
+            evidence=evidence,
+            reason="Previously accepted part identities match this device and one saved robot",
+        )
+    ]
+
+
 async def reconcile_device(
     session: AsyncSession, project_id: uuid.UUID, proposal: ProposalOut
 ) -> list[HardwareSuggestion]:
@@ -416,6 +526,7 @@ async def reconcile_device(
     the suggestions (precision over recall: nothing links until the user accepts)."""
     if proposal.driver_id is None or not proposal.rows:
         return []
+    await lock_project(session, project_id)
     observation = PartObservation(
         subject_ref=proposal.device_ref,
         subject_kind="device",
@@ -433,7 +544,9 @@ async def reconcile_device(
         for c in await robot_candidates(session, project_id)
         if c.config.identity is None or c.config.identity.device_ref != proposal.device_ref
     ]
-    suggestions = suggest_links(observation, candidates)
+    retained, suggestions = await _retained_owner(session, project_id, proposal, candidates)
+    if not retained:
+        suggestions = suggest_links(observation, candidates)
     await persist_suggestions(session, project_id, suggestions)
     pending = await list_suggestions(session, project_id, status=SuggestionStatus.PENDING)
     return [row for row in pending if row.subject_ref == proposal.device_ref]
@@ -566,6 +679,98 @@ def _check_saved_connection(saved: HardwareConfig, additions: HardwareConfig) ->
         )
 
 
+def accepted_part_name(
+    robot_name: str,
+    address: str,
+    category: str,
+    accepted: str | None,
+    proposed: str | None,
+    repo: str | None,
+) -> str:
+    """Preserve evidence names; bus addresses make unnamed motor labels stable."""
+    return (
+        accepted
+        or proposed
+        or repo
+        or (f"{robot_name}-Motor-{address}" if category == "actuators" else f"address {address}")
+    )
+
+
+async def _confirm_connection(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    proposal: ProposalOut,
+    body: ConfirmIn,
+    created_by: uuid.UUID,
+) -> ConfirmResult:
+    identity = proposal.identity
+    if (
+        identity is None
+        or identity.kind.value != "usb_serial"
+        or identity.device_ref != proposal.device_ref
+        or proposal.driver_id is not None
+        or proposal.rows
+        or proposal.params
+        or proposal.stream is not None
+    ):
+        raise APIError(422, "validation_error", "Only an unidentified USB connection is eligible")
+    await lock_project(session, project_id)
+    candidates = await robot_candidates(session, project_id)
+    owner = next(
+        (
+            c
+            for c in candidates
+            if c.config.identity is not None
+            and c.config.identity.identity_key() == identity.identity_key()
+        ),
+        None,
+    )
+    if owner is not None:
+        if body.target.kind == "existing" and body.target.robot_id != owner.robot_entity_id:
+            raise APIError(
+                409, "conflict", f"Connection already belongs to robot {owner.robot_entity_id}"
+            )
+        robot = await robot_root(session, project_id, owner.robot_entity_id)
+        saved = owner.config
+        created = False
+    elif body.target.kind == "existing":
+        robot = await robot_root(session, project_id, body.target.robot_id)
+        saved = await resolve_runtime_config(session, project_id, robot.id)
+        created = False
+    else:
+        robot = await PhysicalRobotService(session).create(project_id, body.target.name)
+        saved = None
+        created = True
+    config = merge_layers(
+        robot.id,
+        [
+            ConfigLayer(
+                by=FieldProvenance.DETECTED, document={"identity": identity.model_dump(mode="json")}
+            )
+        ],
+    )
+    if saved is not None:
+        if saved.identity is not None and (
+            saved.identity.vid != identity.vid or saved.identity.pid != identity.pid
+        ):
+            raise APIError(
+                409, "proposal_changed", "Saved USB identity differs; review configuration"
+            )
+        if saved.protocol is not None or saved.bus_map or saved.parts:
+            raise APIError(
+                409, "conflict", "Connection-only acceptance cannot replace configured hardware"
+            )
+        config = _merge_confirmation(saved, config)
+    entry = await put_config(session, project_id, robot, config, created_by=created_by)
+    return ConfirmResult(
+        robot=robot,
+        part_ids=[],
+        config=config,
+        document=dict(entry.payload or {}),
+        created_robot=created,
+    )
+
+
 async def confirm_proposal(
     session: AsyncSession,
     *,
@@ -575,6 +780,8 @@ async def confirm_proposal(
     created_by: uuid.UUID,
 ) -> ConfirmResult:
     """Graph + config writes for a confirmation. Flushes; the caller owns the commit."""
+    if body.connection_only:
+        return await _confirm_connection(session, project_id, proposal, body, created_by)
     if proposal.identity is None or proposal.driver_id is None:
         raise APIError(422, "validation_error", "this device has no protocol to confirm yet")
     rows = {row.id: row for row in proposal.rows}
@@ -606,7 +813,14 @@ async def confirm_proposal(
     for accepted in body.accepted:
         row = rows[accepted.row_id]
         repo_part = repo_parts.get(row.address)
-        name = accepted.function_name or row.proposed_function or f"address {row.address}"
+        name = accepted_part_name(
+            robot.name,
+            row.address,
+            accepted.category,
+            accepted.function_name,
+            row.proposed_function,
+            repo_part.name if repo_part else None,
+        )
         part = await attach_part(
             session,
             project_id,

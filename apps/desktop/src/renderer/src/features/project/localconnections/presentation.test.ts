@@ -69,6 +69,14 @@ function bridge(overrides: Partial<BridgeStatus> = {}): BridgeStatus {
 }
 
 describe('deviceTitle', () => {
+  it('preserves a tentative connection headline supplied by recognition', () => {
+    expect(
+      deviceTitle({
+        ...device({ board_class: 'usb_bridge', mcu_known: false }),
+        headline: 'Possible Arduino connection'
+      })
+    ).toBe('Possible Arduino connection')
+  })
   it('shows the claimed board name', () => {
     expect(deviceTitle(device())).toBe('Arduino Uno R3')
   })

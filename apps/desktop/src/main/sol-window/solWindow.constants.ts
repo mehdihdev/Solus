@@ -6,6 +6,7 @@
 export const SOL_WINDOW_CHANNELS = {
   open: 'sol:open',
   getState: 'sol:get-state',
+  guideTarget: 'sol:guide-target',
   setMode: 'sol:set-mode',
   setScreenIntelligence: 'sol:set-screen-intelligence',
   setAlwaysOnTop: 'sol:set-always-on-top',

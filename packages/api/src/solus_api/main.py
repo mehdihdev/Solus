@@ -38,6 +38,7 @@ from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
 from solus_api.core.startup_checks import report_provider_refs
 from solus_api.corpus import router as corpus_router
+from solus_api.extensions.bom_catalog_setup import prepare_catalog
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
@@ -45,8 +46,11 @@ from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.hardware import hardware_router, library_router
 from solus_api.hardware.connections import HardwareConnections
 from solus_api.hardware.device_watch import DeviceWatcher, watcher_wanted
-from solus_api.livebench.bench_router import BenchEventRing
+from solus_api.livebench.bench_router import BenchEventRing, ObserverEventIn
 from solus_api.livebench.bench_router import router as bench_router
+from solus_api.livebench.runs.capture import RunCaptureManager
+from solus_api.livebench.runs.router import router as bench_runs_router
+from solus_api.livebench.scene.router import router as bench_scene_router
 from solus_api.livebench.sessions import SessionManager, load_local
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
@@ -232,6 +236,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         configure_logging()
         if resolved_settings.auto_create_tables:
             await create_all_tables(resolved_engine)
+        await prepare_catalog(
+            served.state.sessionmaker, served.state.artifact_store, resolved_settings
+        )
         # SOLUSDEV-252: name the missing provider refs at boot (never fatal).
         try:
             await report_provider_refs(served.state.secret_store, resolved_settings)
@@ -244,6 +251,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # release resources. ExitStack still closes later resources if one fails.
             cleanup.push_async_callback(served.state.graph_hub.stop)
             cleanup.push_async_callback(served.state.bench_sessions.aclose_all)
+            cleanup.push_async_callback(served.state.bench_runs.aclose)
             cleanup.push_async_callback(served.state.hardware_connections.aclose)
             if served.state.device_watch is not None:
                 cleanup.push_async_callback(served.state.device_watch.stop)
@@ -352,8 +360,20 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # connections. `bench_local` is the OPTIONAL runtime import of
     # livebench.local (never a declared dependency): on a server without
     # livebench it is None and every local source reports honestly unavailable.
-    app.state.bench_sessions = SessionManager(app.state.telemetry_plumbing)
     app.state.bench_local = load_local()
+    app.state.bench_sessions = SessionManager(
+        app.state.telemetry_plumbing,
+        observer_factory=getattr(app.state.bench_local, "session_observers", None),
+        event_sink=lambda project_id, event: app.state.bench_events.append(
+            project_id, ObserverEventIn.model_validate(event)
+        ),
+    )
+    provider_factory = getattr(app.state.bench_local, "presence_provider", None)
+    app.state.presence_provider = (
+        provider_factory()
+        if resolved_settings.app_env == "dev" and callable(provider_factory)
+        else None
+    )
     app.state.hardware_connections = HardwareConnections(
         sessions=app.state.sessionmaker,
         manager=app.state.bench_sessions,
@@ -387,6 +407,10 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # Artifacts (SOLUSDEV-100 T4c): byte-storage backend (S3 prod / local dev)
     # + the §4.5 upload-route budgets (separate from the global rate limiter).
     app.state.artifact_store = build_artifact_store(resolved_settings)
+    app.state.bench_runs = RunCaptureManager(
+        app.state.sessionmaker, app.state.artifact_store, app.state.bench_sessions
+    )
+    app.state.telemetry_plumbing.capture_sink = app.state.bench_runs.ingest
     # SOLUSDEV-167: per-source webhook delivery budget, in DAYS. One delivery
     # schedules a sync whose probe loops per tracked document, so a per-minute
     # window could authorise hundreds of upstream calls a minute against an
@@ -460,8 +484,16 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(workspace_layout.router)
     app.include_router(entities.router)
     app.include_router(simulation_models.router)
+    from solus_api.routers import isaac_connection
+
+    app.include_router(isaac_connection.router)
     app.include_router(sol.router)
+    from solus_api.livebench.stream import router as bench_stream_router
+
+    app.include_router(bench_stream_router)
     app.include_router(bench_router)
+    app.include_router(bench_runs_router)
+    app.include_router(bench_scene_router)
     app.include_router(bridge.router)
     app.include_router(orchestration.router)
     app.include_router(panel.router)

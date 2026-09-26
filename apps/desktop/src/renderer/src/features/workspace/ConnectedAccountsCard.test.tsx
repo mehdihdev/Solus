@@ -746,6 +746,15 @@ function accountDomainNavigationTests(GITHUB: CatalogEntry, FUSION: CatalogEntry
     expect(screen.getAllByRole('tab')).toHaveLength(4) // the tabs remain
     expect(screen.queryByRole('button', { name: /connect|attach|revoke/i })).toBeNull()
   })
+
+  it('offers application status monitoring without an automatic model setup', async () => {
+    mockAccounts()
+    render(<ConnectedAccountsCard currentProject={ROVER} />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Simulation' }))
+    expect(screen.getByRole('region', { name: 'Isaac application connection' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect status monitoring' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add.*model|import/i })).toBeNull()
+  })
 }
 
 function accountDomainClassificationTests(): void {

@@ -58,3 +58,6 @@ corpus-ingest: ## SOLUSDEV-241 CORPUS C2: apply the shipped corpus to $(SOLUS_DA
 
 corpus-eval: ## SOLUSDEV-241 CORPUS C2: retrieval eval with per-domain scores (keyless full-text path)
 	cd packages/api && uv run --no-sync pytest tests/corpus/test_corpus_eval.py -q -s
+
+store-setup: ## publish/check shipped first-party Store releases using configured staff authority
+	cd packages/api && uv run --no-sync python -m solus_api.extensions.bom_catalog_setup

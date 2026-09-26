@@ -90,3 +90,12 @@ local reader; `repo_root` in a remote request is not permission to open arbitrar
 [local-state.md](../contracts/local-state.md), [hardware routes](../api/hardware.md) and
 [hardware architecture](hardware-onboarding.md). Local I/O never moves to cloud ARQ or the
 companion MCP telemetry channel as an incidental scheduling fix.
+
+## External host telemetry (SOLUSDEV-262)
+
+An external controller may own the serial connection and POST copies of completed observations
+through the same authenticated ingest route as the direct simulator adapter. It creates no Solus
+serial session. The bounded recent-device discovery route lets the UI merge these feeds with
+active session identities. Device discovery is project-scoped, based on server receipt time and
+expires when publishing stops. Packet resolution, units and unresolved state retain their existing
+meaning. This adds no control channel or authentication bypass.

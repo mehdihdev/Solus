@@ -1,0 +1,111 @@
+{
+  "timestamp": "2026-09-14T18:40:16.441019+00:00",
+  "devices": [
+    {
+      "transport": "usb_serial",
+      "device_ref": "usb:port-3-1.2.3",
+      "identity": {
+        "kind": "usb_serial",
+        "binding": "port-3-1.2.3",
+        "vid": 6790,
+        "pid": 29987,
+        "last_seen_path": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+      },
+      "level": "transport",
+      "board": "WCH CH340 USB-serial bridge",
+      "board_class": "usb_bridge",
+      "mcu_known": false,
+      "confidence": 0.3,
+      "evidence": [
+        {
+          "modality": "bus_enumeration",
+          "source_ref": {
+            "graph_entity_id": null,
+            "source_connector": "usb",
+            "external_ref": "/dev/ttyUSB0/1a86:7523"
+          },
+          "confidence": 0.3,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "usb_vid_pid",
+            "value": "1a86:7523",
+            "note": "WCH CH340 USB-serial bridge: the bridge chip is identified, but the MCU behind it is unknown \u2014 a bridge carries no identity for what it fronts"
+          }
+        }
+      ],
+      "ambiguous": false,
+      "last_seen_path": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+      "vid": 6790,
+      "pid": 29987,
+      "headline": "something on USB",
+      "identity_basis": "port_position"
+    },
+    {
+      "transport": "usb_serial",
+      "device_ref": "usb:5B42135040",
+      "identity": {
+        "kind": "usb_serial",
+        "binding": "5B42135040",
+        "vid": 6790,
+        "pid": 21971,
+        "last_seen_path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42135040-if00"
+      },
+      "level": "transport",
+      "board": "WCH CH343/CH9102 USB-serial bridge",
+      "board_class": "usb_bridge",
+      "mcu_known": false,
+      "confidence": 0.3,
+      "evidence": [
+        {
+          "modality": "bus_enumeration",
+          "source_ref": {
+            "graph_entity_id": null,
+            "source_connector": "usb",
+            "external_ref": "/dev/ttyACM1/1a86:55d3"
+          },
+          "confidence": 0.3,
+          "state": "low_confidence",
+          "evidence": {
+            "matched_on": "usb_vid_pid",
+            "value": "1a86:55d3",
+            "note": "WCH CH343/CH9102 USB-serial bridge: the bridge chip is identified, but the MCU behind it is unknown \u2014 a bridge carries no identity for what it fronts"
+          }
+        }
+      ],
+      "ambiguous": false,
+      "last_seen_path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42135040-if00",
+      "vid": 6790,
+      "pid": 21971,
+      "headline": "something on USB",
+      "identity_basis": "serial"
+    }
+  ],
+  "probes": [
+    {
+      "device_ref": "usb:5B42135040",
+      "summary": "6 servos on a serial servo bus (ids 1\u20136, STS3215)",
+      "details": {
+        "calibration_signature": {
+          "1": {
+            "homing_offset": 1964
+          },
+          "2": {
+            "homing_offset": 508
+          },
+          "3": {
+            "homing_offset": 976
+          },
+          "4": {
+            "homing_offset": 1193
+          },
+          "5": {
+            "homing_offset": -1934
+          },
+          "6": {
+            "homing_offset": -589
+          }
+        }
+      }
+    }
+  ]
+}

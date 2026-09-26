@@ -1,23 +1,22 @@
 import type { Entity } from '../../../lib/api/resources'
 import type { Point } from '../../../lib/api/workspace'
 
-export const CARD_WIDTH = 224
-export const CARD_HEIGHT = 164
+export const CARD_WIDTH = 280
+export const CARD_HEIGHT = 250
 export const STEP_X = CARD_WIDTH + 72
 export const STEP_Y = CARD_HEIGHT + 64
 export const ORIGIN: Point = { x: 0, y: 0 }
 
+/** Golden-angle candidates avoid rows/columns without a time-dependent force solver. */
 function* cells(anchor: Point): Generator<Point> {
-  const at = (x: number, y: number): Point => ({
-    x: anchor.x + x * STEP_X,
-    y: anchor.y + y * STEP_Y
-  })
-  yield at(0, 0)
-  for (let ring = 1; ; ring++) {
-    for (let x = -ring; x <= ring; x++) yield at(x, -ring)
-    for (let y = -ring + 1; y <= ring; y++) yield at(ring, y)
-    for (let x = ring - 1; x >= -ring; x--) yield at(x, ring)
-    for (let y = ring - 1; y > -ring; y--) yield at(-ring, y)
+  yield anchor
+  const angle = Math.PI * (3 - Math.sqrt(5))
+  for (let step = 1; ; step++) {
+    const radius = Math.sqrt(step) * 0.8
+    yield {
+      x: anchor.x + Math.round(Math.cos(step * angle) * radius * STEP_X),
+      y: anchor.y + Math.round(Math.sin(step * angle) * radius * STEP_Y)
+    }
   }
 }
 
@@ -54,6 +53,7 @@ export function layoutLevel(
       const next = available.next()
       if (next.done) break
       const point = next.value
+      if (!valid(point)) continue
       if (
         Object.values(points).some(
           (other) =>

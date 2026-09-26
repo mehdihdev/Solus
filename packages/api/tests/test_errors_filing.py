@@ -21,6 +21,7 @@ def test_i3_actions_opt_into_the_single_error_recorder() -> None:
         "git_push",
         "arduino_prepare",
         "arduino_compile",
+        "arduino_upload",
     }
     assert all(tool.get("files_errors") is True for tool in actions)
 

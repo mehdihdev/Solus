@@ -116,12 +116,13 @@ class TelemetryPacket(BaseModel):
 
 
 class RecentSample(BaseModel):
-    """A single buffered (timestamp, value) point for one signal."""
+    """One buffered reading with its original unit, if the producer supplied one."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     timestamp: datetime
     value: float
+    unit: str | None = Field(default=None, min_length=1, max_length=MAX_UNIT_LEN)
 
 
 class SignalSeries(BaseModel):
@@ -143,9 +144,7 @@ class RecentValuesView(BaseModel):
 
 
 class DeviceRecentView(BaseModel):
-    """Recent values keyed by DEVICE, for streams with no graph entity yet
-    (SOLUSDEV-72). `resolved_entity_id` non-None says the device does resolve —
-    the entity feed (`RecentValuesView`) is the home for that data."""
+    """Recent values keyed by device, reading its entity feed after graph resolution."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

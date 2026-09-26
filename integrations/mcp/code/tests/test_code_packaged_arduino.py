@@ -22,7 +22,7 @@ async def test_packaged_arduino_transport(tmp_path: Path) -> None:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()
-                assert len(listed.tools) == 14
+                assert len(listed.tools) == 15
                 for args in ({"unknown": True}, {"dry_run": "true"}):
                     result = await session.call_tool("arduino_prepare", args)
                     assert result.isError

@@ -92,14 +92,21 @@ def _refuse(
 class BuildExecutionPolicy:
     """One turn's authorizations; consuming before await prevents parallel replay."""
 
-    def __init__(self, registry: ToolRegistry, mode: ActionMode) -> None:
+    def __init__(
+        self, registry: ToolRegistry, mode: ActionMode, *, force_confirmation: bool = False
+    ) -> None:
         self.registry = registry
         self.mode = mode
+        self._force_confirmation = force_confirmation
         self._consumed: set[str] = set()
         self._consumed_ids: set[str] = set()
         self.executed_calls: set[str] = set()
 
     async def prepare(self, call: ToolCall) -> bool | ToolResult:
+        # Review-only requests retain the normal central confirmation gate,
+        # including for tools otherwise eligible for automatic Build execution.
+        if self._force_confirmation:
+            return False
         tool = next(
             (tool for tool in self.registry.tools() if tool.descriptor.name == call.tool), None
         )

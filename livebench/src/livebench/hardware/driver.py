@@ -62,6 +62,22 @@ class DriverRegistry:
         params = {k: v for k, v in protocol.params.items() if k not in TRANSPORT_ONLY_PARAM_KEYS}
         return driver.params_model.model_validate(params)
 
+    def channel_roles(self, config: HardwareConfig) -> dict[str, str]:
+        """Optional plugin presentation evidence; undeclared channels stay unclassified."""
+        if config.protocol is None:
+            return {}
+        declaration = getattr(self.get(config.protocol.driver_id), "channel_roles", None)
+        if not callable(declaration):
+            return {}
+        roles = declaration(config)
+        if not isinstance(roles, dict) or len(roles) > 4096:
+            return {}
+        return {
+            name: role
+            for name, role in roles.items()
+            if isinstance(name, str) and 0 < len(name) <= 128 and role in ("primary", "diagnostic")
+        }
+
     def open_source(self, config: HardwareConfig, channel: Channel) -> PacketSource:
         params = self.validate_params(config.protocol)
         assert config.protocol is not None  # validate_params refused None

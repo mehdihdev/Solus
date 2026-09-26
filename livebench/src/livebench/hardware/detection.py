@@ -97,10 +97,8 @@ class DetectedDevice:
 def headline_for(device: DetectedDevice, best: Interrogation | None) -> str:
     """Plain words for what the USB identity (plus a stream, if one answered) can claim."""
     board = BOARD_TABLE.get((device.vid or -1, device.pid or -1))
-    if board is not None and board.headline:
-        return board.headline
     if board is not None and board.kind is BoardClass.MCU_BOARD:
-        return board.name
+        return board.headline or board.name
     family = VENDOR_FAMILY_TABLE.get(device.vid or -1)
     if family:
         return family
@@ -109,6 +107,8 @@ def headline_for(device: DetectedDevice, best: Interrogation | None) -> str:
     # what fronts it, so its plugin summary — not a board guess — is the claim.
     if best is not None and best.details.get("framing"):
         return BRIDGE_STREAM_HEADLINE
+    if best is None and board is not None and board.headline:
+        return board.headline
     return UNKNOWN_HEADLINE
 
 

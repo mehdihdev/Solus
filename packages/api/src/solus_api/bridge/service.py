@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from solus_api.agent.command_output import current_output
 from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import ToolException
-from solus_api.agent.tools.untrusted import safe_relative_display_path
+from solus_api.agent.tools.untrusted import call_display_paths
 from solus_api.bridge.frames import (
     ArtifactChunkData,
     ToolOutputData,
@@ -69,10 +69,9 @@ async def dispatch(
             loop = asyncio.get_running_loop()
             future: asyncio.Future[ToolResult] = loop.create_future()
             session.inflight[call.call_id] = future
-            if tool_name == "machine.write_file":
-                path = safe_relative_display_path(call.args.get("path"))
-                if path is not None:
-                    session.write_paths[call.call_id] = path
+            paths = call_display_paths(tool_name, call.args)
+            if paths:
+                session.write_paths[call.call_id] = next(iter(paths))
             sink = current_output.get()
             if tool_name in {"code.run", "code.test"} and sink is not None:
                 session.output_sinks[call.call_id] = sink

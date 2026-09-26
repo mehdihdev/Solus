@@ -5,14 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import Field
 
 from .artifacts import RevisionStore
-from .assets import copy_verified_assets, verify_assets
-from .models import LIMITS, EntityId, Model, Number, Quat, Routine, Strict, Vec3, plan_routine
+from .assets import copy_verified_assets, model_asset_directory
+from .models import EntityId, Model, Number, Quat, Routine, Strict, Vec3, plan_routine
+from .urdf import validate_urdf
 
 
 class MutationUnverifiedError(ValueError):
@@ -200,12 +202,8 @@ class ActionEngine:
     def _execute(self, action: State) -> dict[str, Any]:
         result: dict[str, Any]
         if isinstance(action, Load):
-            manifest = json.loads(Path(__file__).with_name("so101_manifest.json").read_text())
-            digest = verify_assets(self.asset_dir, manifest)
-            if digest != action.resolved_model.asset_sha256:
-                raise ValueError("asset digest mismatch")
             copied = self.private_dir / ("assets-" + str(self.generation))
-            copy_verified_assets(self.asset_dir, manifest, copied)
+            self._copy_model(action.resolved_model, copied)
             result = self.scene.load(
                 action.resolved_model,
                 copied,
@@ -237,7 +235,7 @@ class ActionEngine:
             )
             if (
                 match is None
-                or not LIMITS[match.name][0] <= action.lower < action.upper <= LIMITS[match.name][1]
+                or not match.lower_rad <= action.lower < action.upper <= match.upper_rad
             ):
                 raise ValueError("invalid joint limits")
         elif isinstance(action, Pose):
@@ -261,11 +259,17 @@ class ActionEngine:
                 if bound.lower < lower - 1e-6 or bound.upper > upper + 1e-6:
                     raise ValueError("range exceeds simulated limits")
 
+    def _copy_model(self, model: Model, destination: Path) -> None:
+        with model_asset_directory(self.asset_dir, model.asset.sha256) as source:
+            digest = copy_verified_assets(source, model.asset.files, destination)
+        if digest != model.asset.sha256:
+            raise ValueError("asset digest mismatch")
+        validate_urdf(model, destination)
+
     def _verify_load(self, action: State) -> None:
         if isinstance(action, Load):
-            manifest = json.loads(Path(__file__).with_name("so101_manifest.json").read_text())
-            if verify_assets(self.asset_dir, manifest) != action.resolved_model.asset_sha256:
-                raise ValueError("asset digest mismatch")
+            with tempfile.TemporaryDirectory(dir=self.private_dir) as temporary:
+                self._copy_model(action.resolved_model, Path(temporary) / "assets")
 
     def _routine_rows(self, action: Run) -> list[dict[str, Any]]:
         if self.model is None:
@@ -281,12 +285,9 @@ class ActionEngine:
                     "physics_steps": int(action.routine_spec.duration_s * 60),
                     "maximum_target_speed_rad_s": 0.25,
                 },
-                "grasp_criteria": {
-                    "phase_settling_fraction": 0.2,
-                    "bottle_specific_contact": True,
-                    "minimum_lift_m": 0.02,
+                "tracking_criteria": {
+                    "segment_settling_fraction": 0.2,
                     "final_joint_error_rad": 0.01,
-                    "bottle_contact_and_lift_entire_final_hold": True,
                 },
                 "stop_behavior": "Stop stepping on cancellation or timeout; no automatic replay",
             }
@@ -306,13 +307,13 @@ class ActionEngine:
                     }
                 )
             )
-        for waypoint in action.routine_spec.waypoints:
+        for index, waypoint in enumerate(action.routine_spec.waypoints):
             if any(position.joint_entity_id not in names for position in waypoint.positions):
                 raise ValueError("joint unavailable")
             rows.extend(
                 _rows(
                     {
-                        waypoint.phase + "_positions_rad": {
+                        f"waypoint_{index + 1}_positions_rad": {
                             names[position.joint_entity_id]: position.position_rad
                             for position in waypoint.positions
                         }

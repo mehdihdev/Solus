@@ -8,18 +8,19 @@ import { boundedPoint, CARD_HEIGHT, CARD_WIDTH } from './layout'
 const DRAG_THRESHOLD = 4
 /** Presses here never start a body drag: editors, embedded content, the ⠿ handle. */
 const NO_BODY_DRAG =
-  'input, textarea, select, [contenteditable], .graph-node-content, .graph-node-drag'
+  'input, textarea, select, [contenteditable], .graph-node-content, .graph-node-drag, .graph-child-previews'
 
 interface DragStart {
   pointer: number
   client: Point
   original: Point
+  scale: number
 }
 
 function dragPoint(start: DragStart, event: PointerEvent): Point {
   return boundedPoint({
-    x: start.original.x + event.clientX - start.client.x,
-    y: start.original.y + event.clientY - start.client.y
+    x: start.original.x + (event.clientX - start.client.x) / start.scale,
+    y: start.original.y + (event.clientY - start.client.y) / start.scale
   })
 }
 
@@ -56,7 +57,13 @@ function useBodyDrag(
         start.current = {
           pointer: event.pointerId,
           client: { x: event.clientX, y: event.clientY },
-          original: point
+          original: point,
+          scale:
+            Number(
+              event.currentTarget
+                .closest<HTMLElement>('.graph-level')
+                ?.style.getPropertyValue('zoom')
+            ) || 1
         }
       },
       onPointerMove: (event) => {
@@ -103,6 +110,8 @@ interface GraphCardProps {
   offset: Point
   focused: boolean
   childCount: number
+  onRevealChild?: (id: string) => void
+  childPreviews?: readonly { entity: Entity; childCount: number }[]
   onSelect: (entity: Entity) => void
   onEnter: (entity: Entity) => void
   onBack: () => void
@@ -140,6 +149,7 @@ export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.J
       data-testid={`graph-node-${entity.id}`}
       data-node-id={entity.id}
       data-domain={entity.domain}
+      data-unbound={cardUnbound(entity)}
       data-x={point.x}
       data-y={point.y}
       style={{
@@ -152,7 +162,6 @@ export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.J
       {...body.handlers}
     >
       <div className="graph-node-heading">
-        <span className="graph-node-domain">{entity.domain}</span>
         <NodeDrag entity={entity} point={point} onPreview={onPreview} onMove={onMove} />
       </div>
       <button
@@ -165,10 +174,40 @@ export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.J
         onDoubleClick={unlessDragged(onEnter)}
         onKeyDown={(event) => navigateCardKey(event, onEnter, onBack)}
       >
-        <strong>{entity.name}</strong>
-        <span>{entity.type.replaceAll('_', ' ')}</span>
+        <strong>
+          <i className="graph-domain-dot" aria-hidden="true" />
+          {entity.name}
+        </strong>
+        <span>{cardType(entity)}</span>
       </button>
+      {(props.childPreviews?.length ?? 0) > 0 && (
+        <div className="graph-child-previews">
+          {props.childPreviews?.slice(0, 4).map(({ entity: child, childCount: inside }) => (
+            <button
+              type="button"
+              key={child.id}
+              aria-label={`Open ${child.name}`}
+              onClick={unlessDragged(() => {
+                if (props.onRevealChild) props.onRevealChild(child.id)
+                else {
+                  props.onSelect(child)
+                  props.onEnter(child)
+                }
+              })}
+            >
+              <strong>
+                <i className="graph-domain-dot" aria-hidden="true" />
+                {child.name}
+              </strong>
+              <span>
+                {inside} inside{inside > 0 ? ' — keep zooming' : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {content != null && <div className="graph-node-content">{content}</div>}
+      <div className="graph-node-metadata">{cardMetadata(entity)}</div>
       <div className="graph-node-footer">
         {childCount > 0 ? (
           <button
@@ -212,7 +251,13 @@ function NodeDrag({
         drag.current = {
           pointer: event.pointerId,
           client: { x: event.clientX, y: event.clientY },
-          original: point
+          original: point,
+          scale:
+            Number(
+              event.currentTarget
+                .closest<HTMLElement>('.graph-level')
+                ?.style.getPropertyValue('zoom')
+            ) || 1
         }
       }}
       onPointerMove={(event) => {
@@ -263,4 +308,20 @@ function navigateCardKey(
     event.preventDefault()
     onBack()
   }
+}
+
+function cardUnbound(entity: Entity): boolean | undefined {
+  return (
+    entity.properties?.binding_status === 'unbound' ||
+    entity.properties?.status === 'pending' ||
+    undefined
+  )
+}
+function cardType(entity: Entity): string {
+  return entity.type === 'solus_config' ? 'root + project' : entity.type.replaceAll('_', ' ')
+}
+function cardMetadata(entity: Entity): string {
+  return [entity.properties?.provider, entity.domain]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .join(' · ')
 }

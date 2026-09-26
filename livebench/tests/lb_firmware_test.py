@@ -171,3 +171,51 @@ class TestPathTraversal:
         findings = extract_firmware_findings(repo)
 
         assert findings == []
+
+
+def test_bus_analog_and_include_ast_findings_preserve_intent_only() -> None:
+    root = Path(__file__).parent / "fixtures" / "topology_firmware"
+    findings = extract_firmware_findings(root)
+    assert {f.name for f in findings if f.kind == "library_include"} == {"Wire.h", "Servo.h"}
+    buses = [f for f in findings if f.kind == "bus_begin"]
+    assert len(buses) == 1 and buses[0].name == "Wire"
+    analog = [f for f in findings if f.kind == "analog_read"]
+    assert {f.pin_ref for f in analog} == {"A0", "2"}
+    assert {f.pin for f in analog} == {None, 2}
+    attach = next(f for f in findings if f.kind == "attach_call")
+    assert attach.pin is None and attach.pin_ref == "ELBOW_PIN"
+
+
+def test_firmware_bytes_are_pure_and_source_is_opaque(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livebench.recognition.firmware import extract_firmware_bytes
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("bytes parser attempted I/O")
+
+    monkeypatch.setattr(Path, "read_bytes", refuse)
+    monkeypatch.setattr(Path, "read_text", refuse)
+    monkeypatch.setattr("subprocess.run", refuse)
+    found = extract_firmware_bytes(ARDUINO_SKETCH.encode(), suffix=".ino", source_ref="review:abc")
+    assert found and all(f.file == "review:abc" for f in found)
+    assert next(f for f in found if f.name == "servo_elbow").pin == 9
+    assert extract_firmware_bytes(b"// empty\n", suffix=".ino", source_ref="review:abc") == []
+
+
+@pytest.mark.parametrize(
+    "source,suffix,ref",
+    [
+        (b"x" * (256 * 1024 + 1), ".ino", "review:abc"),
+        (bytes([255]), ".ino", "review:abc"),
+        (b"void { ???", ".ino", "review:abc"),
+        (b"", ".exe", "review:abc"),
+        (b"", ".ino", "/home/private/sketch.ino"),
+        (b"", ".ino", "x" * 513),
+        (b"void setup(){" + b"s.attach(1);" * 257 + b"}", ".ino", "review:abc"),
+    ],
+    ids=lambda value: f"bytes-{len(value)}" if isinstance(value, bytes) else str(value)[:40],
+)
+def test_firmware_bytes_refuse_invalid_inputs(source: bytes, suffix: str, ref: str) -> None:
+    from livebench.recognition.firmware import extract_firmware_bytes
+
+    with pytest.raises(ValueError):
+        extract_firmware_bytes(source, suffix=suffix, source_ref=ref)

@@ -254,3 +254,39 @@ async def test_polling_never_leaves_two_requests_outstanding() -> None:
     await _packets(_open(channel, _arm()), 2)
     # Every request drained the input first (flush count ≥ send count): one in flight, ever.
     assert channel.flushes >= len(channel.sent)
+
+
+def test_driver_declares_exact_channel_presentation_roles() -> None:
+    registry = DriverRegistry()
+    registry.register(FeetechStsDriver)
+    roles = registry.channel_roles(_arm())
+    assert roles == {
+        f"{prefix}.{quantity}": role
+        for prefix in ("shoulder_pan", "gripper", "addr_3")
+        for quantity, role in (
+            ("position", "primary"),
+            ("load", "diagnostic"),
+            ("temperature", "diagnostic"),
+        )
+    }
+
+
+def test_channel_roles_follow_the_same_part_routes_as_packets() -> None:
+    from livebench.hardware.channel import TransportRegistry
+    from livebench.hardware.connection import open_robot_connection
+
+    transports = TransportRegistry()
+    transports.register(TransportKind.USB_SERIAL, lambda binding, params: FeetechFakeChannel({}))
+    drivers = DriverRegistry()
+    drivers.register(FeetechStsDriver)
+    connection = open_robot_connection(
+        _arm(), project_id=None, transports=transports, drivers=drivers
+    )
+    roles = connection.device_facts["channel_roles"]
+    assert roles["usb:5B42134331/1"] == {
+        "shoulder_pan.position": "primary",
+        "shoulder_pan.load": "diagnostic",
+        "shoulder_pan.temperature": "diagnostic",
+    }
+    assert "gripper.load" not in roles["usb:5B42134331/1"]
+    assert roles["usb:5B42134331"]["addr_3.load"] == "diagnostic"

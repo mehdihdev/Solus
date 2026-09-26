@@ -44,3 +44,17 @@ def load_all(registries: Registries, *, modules: Sequence[str] = PLUGIN_MODULES)
         module.register(registries)  # AttributeError here is a packaging bug, not a runtime one
         loaded.append(name)
     return loaded
+
+
+def presence_provider() -> object | None:
+    """Discover the provider-owned local compiler without request-supplied paths."""
+    import shutil
+    from pathlib import Path
+
+    from livebench.plugins.arduino.presence_provider import LocalPresenceProvider
+
+    binary = shutil.which("arduino-cli")
+    if binary is None:
+        return None
+    library = Path(__file__).resolve().parents[4] / "libs/solus-telemetry/arduino"
+    return LocalPresenceProvider(binary=str(Path(binary).resolve()), library=library)
