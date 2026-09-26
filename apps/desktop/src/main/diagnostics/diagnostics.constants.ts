@@ -53,14 +53,19 @@ export const REPORT_LIMITS = {
   componentStack: 4_000
 } as const
 
-/** One caught renderer error, as the renderer sends it (untrusted in main). */
-export interface RendererErrorReport {
-  origin: RendererErrorOrigin
+/** One error from any origin, before scrubbing. */
+export interface DiagnosticInput {
+  origin: ErrorOrigin
   surface: ErrorSurface
   name: string
   message: string
   stack?: string
   componentStack?: string
+}
+
+/** One caught renderer error, as the renderer sends it (untrusted in main). */
+export interface RendererErrorReport extends DiagnosticInput {
+  origin: RendererErrorOrigin
 }
 
 /** Main's answer: the fingerprint, whether this is its first sighting this

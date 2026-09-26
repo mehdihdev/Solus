@@ -2,7 +2,7 @@
 // or sent to Sentry (docs/architecture/desktop-error-handling.md §Privacy).
 // Pure: text in, text out. Order matters — whole-token patterns run before the
 // URL rule so a token inside a query string is redacted either way.
-import { REPORT_LIMITS, type RendererErrorReport } from './diagnostics.constants'
+import { REPORT_LIMITS, type DiagnosticInput } from './diagnostics.constants'
 
 const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, '[jwt]'],
@@ -31,11 +31,10 @@ export function scrubText(text: string, homeDir: string): string {
 const clip = (s: string, max: number): string => (s.length > max ? s.slice(0, max) : s)
 
 /** A new report with every free-text field scrubbed and bounded. */
-export function scrubReport(report: RendererErrorReport, homeDir: string): RendererErrorReport {
+export function scrubReport<T extends DiagnosticInput>(report: T, homeDir: string): T {
   const text = (s: string, max: number): string => clip(scrubText(s, homeDir), max)
   return {
-    origin: report.origin,
-    surface: report.surface,
+    ...report,
     name: text(report.name, REPORT_LIMITS.name),
     message: text(report.message, REPORT_LIMITS.message),
     ...(report.stack === undefined ? {} : { stack: text(report.stack, REPORT_LIMITS.stack) }),
