@@ -598,9 +598,8 @@ function teamSettingsAndNotificationsTests(): void {
   })
 
   it('fetches team detail, activity, and notifications', async () => {
-    const { getTeamDetail, listNotifications, markNotificationRead, updateTeam } = await import(
-      './resources'
-    )
+    const { getTeamDetail, listNotifications, markNotificationRead, updateTeam } =
+      await import('./resources')
     const { client, calls } = stubClient([])
     await getTeamDetail('t1', client)
     await listNotifications(client)

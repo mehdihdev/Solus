@@ -4,9 +4,10 @@
 import type { OAuthBridge } from '../features/auth/githubOAuth'
 import type { ExtensionsBridge } from '../../../preload/index'
 import type { SolBridge } from '../../../preload/solBridge'
+import type { DiagnosticsBridge } from '../../../preload/diagnosticsBridge'
 import type { EngineeringPreferences } from '@solus/shared-types'
 
-export type { ExtensionsBridge, SolBridge }
+export type { DiagnosticsBridge, ExtensionsBridge, SolBridge }
 
 /** Preload's `solus.bridge` namespace: relays the Supabase access token to the
  *  local companion (SOLUSDEV-154 / BRG-04). Null token means signout. */
@@ -67,6 +68,7 @@ interface SolusWindow {
     extensions?: ExtensionsBridge
     hosted?: HostedBridge
     sol?: SolBridge
+    diagnostics?: DiagnosticsBridge
   }
 }
 
@@ -112,4 +114,10 @@ export function getDesktopPreferencesBridge(): PreferencesBridge | null {
  *  always-on-top, open, and the state/region pushes. Null outside Electron. */
 export function getDesktopSolBridge(): SolBridge | null {
   return (window as unknown as SolusWindow).solus?.sol ?? null
+}
+
+/** Error reporting to main (SOLUSDEV-311): validated, scrubbed and logged
+ *  there, then sent to Sentry when configured. Null outside Electron. */
+export function getDesktopDiagnosticsBridge(): DiagnosticsBridge | null {
+  return (window as unknown as SolusWindow).solus?.diagnostics ?? null
 }
