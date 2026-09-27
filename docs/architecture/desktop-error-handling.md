@@ -80,6 +80,10 @@ desktop bridge exists (Empty beats invented).
 - Main: one full log entry and one Sentry event per fingerprint per session; repeats log one
   line with a count; 200 log entries and 50 Sentry events per session; at most 1,000
   fingerprints remembered (past that, new errors count as repeats).
+- `diag:report`: per-sender token bucket (burst 50, 20/s refill); the scrubber is linear-time
+  on long input, so no report can stall main.
+- Sentry keeps **no offline queue** and flushes nothing at startup (consent is unknown then);
+  a report that fails to send is dropped.
 - Renderer: `client.error` at most 10 per minute; best-effort, never retried.
 - Log file: 1 MB, one rotation (`solus-errors.log.1`).
 - `diag:report` admits only Solus app windows from their top frame (renderer URL match, never
