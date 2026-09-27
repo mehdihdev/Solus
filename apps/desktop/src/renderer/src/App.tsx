@@ -13,6 +13,7 @@ function App(): React.JSX.Element {
   const bootstrap = useAuthStore((s) => s.bootstrap)
   const teardown = useAuthStore((s) => s.teardown)
   const status = useAuthStore((s) => s.status)
+  const account = useAuthStore((s) => s.user?.email ?? null)
 
   // Re-skin whenever theme settings change (ADR-008 / prototype theme.js).
   useEffect(() => {
@@ -34,7 +35,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     if (status === 'authenticated') void appErrorReporter.reportPendingCrash()
     void errorConsent.onAuthStatus(status)
-  }, [status])
+    // account too: a direct account switch never passes through signed-out.
+  }, [status, account])
 
   return (
     <HashRouter>

@@ -36,6 +36,10 @@ export function createConsentSync(deps: ConsentSyncDeps): ConsentSync {
         // Unknown consent stays closed.
       }
     },
-    onConsentChanged: (consent) => send(consent)
+    onConsentChanged: (consent) => {
+      // A saved choice outranks any sign-in fetch still in flight.
+      generation += 1
+      send(consent)
+    }
   }
 }

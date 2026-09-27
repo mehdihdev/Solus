@@ -57,6 +57,15 @@ describe('createErrorLog', () => {
     expect(out.split('\n').filter((line) => line.startsWith('[solus:error]'))).toHaveLength(1)
   })
 
+  it('strips C1 controls and bidi overrides from the console line', () => {
+    const deps = fakeDeps()
+    createErrorLog({ path: '/logs/e.log', maxBytes: 10_000, deps }).write({
+      ...ENTRY,
+      message: 'a\u009b31mb\u202ec\u2066d'
+    })
+    expect(deps.out[0]).toContain('abcd')
+  })
+
   it('rotates to .1 when the next line would exceed the cap', () => {
     const deps = fakeDeps()
     const log = createErrorLog({ path: '/logs/e.log', maxBytes: 300, deps })

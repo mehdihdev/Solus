@@ -4,16 +4,23 @@
 // URLs (so a query string goes whole), then credential-named values, then paths.
 import { REPORT_LIMITS, type DiagnosticInput } from './diagnostics.constants'
 
-/** Keys whose value is a credential wherever it appears (`key=v`, `"key":"v"`, `key: 'v'`).
- *  Not `code` — `code=ECONNREFUSED` is the diagnostic, not a secret. */
+/** Keys whose value is a credential wherever it appears (`key=v`, `"key":"v"`,
+ *  `key: 'v'`, `key%3Dv`). Not `code` — `code=ECONNREFUSED` is the diagnostic. */
 const SECRET_KEYS =
-  'refresh_token|access_token|id_token|client_secret|password|passwd|secret|api[_-]?key|apikey'
+  'refresh_token|access_token|id_token|client_secret|password|passwd|secret|api[_-]?key|apikey|token'
 
+/** A URL query value runs to whitespace/quote, but stops before a stack
+ *  frame's trailing `:line:col` so dev (Vite `?v=`) frames keep their position. */
+const QUERY = String.raw`[^\s'"]*?(?=(?::\d+){1,2}\)?(?:[\s'"]|$)|[\s'"]|$)`
+
+// Every pattern starts at a literal or behind a lookbehind boundary and bounds
+// its runs, so scrubbing stays linear on long unbroken input (a stack can be
+// 32 KB before the final cut) — main must never stall on a report.
 const RULES: ReadonlyArray<readonly [RegExp, string]> = [
-  // Tokens — also partial (a JWT cut mid-payload) and glued to a word (`x_eyJ…`).
-  [/eyJ[\w-]{4,}(?:\.[\w-]*){0,2}/g, '[jwt]'],
-  [/\b(Bearer)\s+[^\s'"]+/gi, '$1 [redacted]'],
-  [/\b(Basic)\s+[A-Za-z0-9+/=]{8,}/g, '$1 [redacted]'],
+  // Tokens — also partial (a JWT cut mid-payload) and glued after `_`.
+  [/(?<![A-Za-z0-9])eyJ[\w-]{4,}(?:\.[\w-]*){0,2}/g, '[jwt]'],
+  [/\b(Bearer)\s+[^\s'"]+/g, '$1 [redacted]'],
+  [/(\bAuthorization["']?\s*[:=]\s*["']?(?:Basic|Token|token))\s+[^\s'"]+/gi, '$1 [redacted]'],
   [/\b(?:sk|pk|rk)_(?:live|test)_\w+/g, '[secret]'],
   [/\bwhsec_\w+/g, '[secret]'],
   [/\bsb_(?:secret|publishable)_[\w-]+/g, '[secret]'],
@@ -21,15 +28,31 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bgl(?:pat|dt|rt|oas|ptt|soat|cbt|imt)-[\w-]{20,}/g, '[secret]'],
   [/\bsk-(?:ant|proj)-[\w-]{10,}/g, '[secret]'],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[secret]'],
-  [/[\w.+-]+(?:@|%40)[\w-]+(?:\.[\w-]+)+/g, '[email]'],
+  // Emails (also `%40`); the TLD must be letters, so `pkg@18.3.1` is left alone.
+  [
+    /(?<![\w.+-])[\w.+-]{1,256}(?:@|%40)[\w-]{1,253}(?:\.[\w-]{1,63}){0,8}\.[A-Za-z]{2,24}(?![\w-])/g,
+    '[email]'
+  ],
   // URLs: query strings, then a second `#` after a hash route (or a `#` that is
   // not a route) — absolute first, then schemeless/relative.
-  [/(\b[a-z][\w+.-]*:\/\/[^\s?'"]*)\?[^\s'"]*/gi, '$1?[redacted]'],
-  [/(\b[a-z][\w+.-]*:\/\/[^\s#'"]*(?:#\/[^\s#'"]*)?)#(?!\/)[^\s'"]+/gi, '$1#[redacted]'],
-  [/(^|[\s('"=])(\/[^\s?#'"]*)\?[^\s'"]*/g, '$1$2?[redacted]'],
-  [/(#\/[^\s#'"]*)#(?!\/)[^\s'"]+/g, '$1#[redacted]'],
+  [
+    new RegExp(String.raw`(\b[a-z][\w+.-]{0,31}:\/\/[^\s?'"]{0,2048})\?${QUERY}`, 'gi'),
+    '$1?[redacted]'
+  ],
+  [
+    /(\b[a-z][\w+.-]{0,31}:\/\/[^\s#'"]{0,2048}(?:#\/[^\s#'"]{0,2048})?)#(?!\/)[^\s'"]+/gi,
+    '$1#[redacted]'
+  ],
+  [new RegExp(String.raw`(^|[\s('"=])(\/[^\s?#'"(]{0,2048})\?${QUERY}`, 'g'), '$1$2?[redacted]'],
+  [/(#\/[^\s#'"]{0,2048})#(?!\/)[^\s'"]+/g, '$1#[redacted]'],
   // Credential-named values, after the URL rules so a query is redacted whole.
-  [new RegExp(`(["']?(?:${SECRET_KEYS})["']?\\s*[:=]\\s*["']?)[^\\s"'&,}]+`, 'gi'), '$1[redacted]'],
+  [
+    new RegExp(
+      String.raw`((?<![A-Za-z0-9])["']?(?:${SECRET_KEYS})["']?\s*(?:[:=]|%3D)\s*["']?)(?!\[)[^\s"'&,}]+`,
+      'gi'
+    ),
+    '$1[redacted]'
+  ],
   // Home directories, plain, percent-encoded and JSON-escaped.
   [/\/Users\/[^/\s'"]+/g, '~'],
   [/\/home\/[^/\s'"]+/g, '~'],

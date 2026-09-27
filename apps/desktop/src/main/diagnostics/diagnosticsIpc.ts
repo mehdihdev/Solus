@@ -26,6 +26,27 @@ export interface DiagnosticsIpcDeps {
   isMainSender: (event: IpcEventLike) => boolean
   /** The sender window's own surface, from its URL ('root' = the main window). */
   surfaceOf: (event: IpcEventLike) => ErrorSurface
+  now?: () => number
+}
+
+/** Per-sender token bucket on diag:report: a looping window cannot keep
+ *  main busy (re-verification N1). Windows are few, so the map stays tiny. */
+export const REPORT_BURST = 50
+export const REPORT_REFILL_PER_SECOND = 20
+
+function createReportLimiter(now: () => number): (sender: unknown) => boolean {
+  const buckets = new Map<unknown, { tokens: number; at: number }>()
+  return (sender) => {
+    const t = now()
+    const prev = buckets.get(sender) ?? { tokens: REPORT_BURST, at: t }
+    const refilled = Math.min(
+      REPORT_BURST,
+      prev.tokens + ((t - prev.at) / 1_000) * REPORT_REFILL_PER_SECOND
+    )
+    const allowed = refilled >= 1
+    buckets.set(sender, { tokens: allowed ? refilled - 1 : refilled, at: t })
+    return allowed
+  }
 }
 
 export interface DiagnosticsIpc {
@@ -59,9 +80,10 @@ export function surfaceForUrl(url: string): ErrorSurface {
 }
 
 export function createDiagnosticsIpc(deps: DiagnosticsIpcDeps): DiagnosticsIpc {
+  const withinBudget = createReportLimiter(deps.now ?? Date.now)
   return {
     report: (event, raw) => {
-      if (!deps.isAppSender(event)) return null
+      if (!deps.isAppSender(event) || !withinBudget(event.sender)) return null
       const report = parseRendererReport(raw)
       if (!report) return null
       // A secondary window cannot label its errors as another surface's.

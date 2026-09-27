@@ -35,6 +35,7 @@ interface SentryEventLike {
 interface SentryInitOptions {
   dsn: string
   ipcNamespace: string
+  transportOptions: { flushAtStartup: false; shouldStore: () => false }
   release: string
   environment: string
   sendDefaultPii: false
@@ -126,6 +127,9 @@ export async function loadSentrySink(options: SentrySinkOptions): Promise<Sentry
   sentry.init({
     dsn,
     ipcNamespace,
+    // No offline queue: a queued report would be flushed at the next startup,
+    // before that session's consent is known (re-verification N2).
+    transportOptions: { flushAtStartup: false, shouldStore: () => false },
     release: options.release,
     environment: options.environment,
     sendDefaultPii: false,

@@ -89,6 +89,42 @@ describe('scrubText — formats the first pass missed (security review H3)', () 
   })
 })
 
+describe('scrubText — re-verification (N1 perf, N4 precision)', () => {
+  it.each([
+    ['a long unbroken word', 'a'.repeat(32_000)],
+    ['a long run of "(/"', '(/'.repeat(16_000)],
+    ['a long run of dots', '.'.repeat(32_000)]
+  ])('scrubs %s in linear time', (_label, input) => {
+    const start = performance.now()
+    scrubText(input, HOME)
+    expect(performance.now() - start).toBeLessThan(50)
+  })
+
+  it.each([
+    ['prose mentioning Basic auth', 'Basic authentication failed'],
+    ['a flag named like a secret', 'isSecret=true'],
+    ['an identifier containing eyJ', 'keyJournalEntry not found'],
+    ['a scoped package version', 'at react-dom@18.3.1/cjs/react-dom.js'],
+    ['a code', 'code=ECONNREFUSED']
+  ])('leaves %s alone', (_label, input) => {
+    expect(scrubText(input, HOME)).toBe(input)
+  })
+
+  it('keeps line:col of a dev (Vite) frame while dropping its query', () => {
+    expect(scrubText('at f (http://localhost:5173/x.js?v=abc123:12:3)', HOME)).toBe(
+      'at f (http://localhost:5173/x.js?[redacted]:12:3)'
+    )
+  })
+
+  it.each([
+    ['a JSON token key', '{"token":"abc123def"}', '{"token":"[redacted]"}'],
+    ['a token auth scheme', 'Authorization: token abc123def', 'Authorization: token [redacted]'],
+    ['an encoded key-value', 'x?y=1 refresh_token%3Dabc123', 'x?y=1 refresh_token%3D[redacted]']
+  ])('redacts %s', (_label, input, expected) => {
+    expect(scrubText(input, HOME)).toBe(expected)
+  })
+})
+
 describe('scrubReport', () => {
   it('scrubs and truncates every free-text field, keeping the closed fields', () => {
     const out = scrubReport(

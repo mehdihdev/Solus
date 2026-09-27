@@ -52,6 +52,16 @@ describe('createConsentSync', () => {
     expect(setConsent).not.toHaveBeenCalledWith(true)
   })
 
+  it('a sign-in fetch landing after a saved Settings change cannot undo it', async () => {
+    let resolve: (v: boolean) => void = () => undefined
+    const { sync, setConsent } = setup(() => new Promise<boolean>((r) => (resolve = r)))
+    const signIn = sync.onAuthStatus('authenticated')
+    sync.onConsentChanged(false)
+    resolve(true)
+    await signIn
+    expect(setConsent.mock.calls).toEqual([[false]])
+  })
+
   it('forwards a saved change from Settings', () => {
     const { sync, setConsent } = setup()
     sync.onConsentChanged(false)

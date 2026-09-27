@@ -533,7 +533,9 @@ if (!app.requestSingleInstanceLock()) {
 
     diagnostics.registerIpc({
       isAppSender: isAppWindowSender,
-      isMainSender: (event) => isFromWindow(event.sender, mainWindow)
+      isMainSender: (event) =>
+        isFromWindow(event.sender, mainWindow) &&
+        event.senderFrame === mainWindow?.webContents.mainFrame
     })
 
     registerProjectFolderHandlers()

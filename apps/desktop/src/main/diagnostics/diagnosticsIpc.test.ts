@@ -3,7 +3,12 @@
 // (the Stripe checkout window, a navigated-away page). `diag:take-crash-marker`
 // admits only the main renderer: it is the one that emits the data event.
 import { describe, it, expect, vi } from 'vitest'
-import { createDiagnosticsIpc, isAppRendererUrl, surfaceForUrl } from './diagnosticsIpc'
+import {
+  createDiagnosticsIpc,
+  isAppRendererUrl,
+  surfaceForUrl,
+  REPORT_BURST
+} from './diagnosticsIpc'
 
 const DEV = 'http://localhost:5173'
 const PROD = 'file:///Applications/Solus.app/Contents/Resources/app.asar/out/renderer/index.html'
@@ -85,6 +90,15 @@ describe('createDiagnosticsIpc', () => {
     const { ipc, report } = setup()
     ipc.report({ sender: 'ext' }, { ...REPORT, surface: 'workspace' })
     expect(report).toHaveBeenCalledWith({ ...REPORT, surface: 'ext_window' })
+  })
+
+  it('rate-limits reports per sender (a looping window cannot monopolise main)', () => {
+    const { ipc, report } = setup()
+    for (let i = 0; i < 200; i++) ipc.report({ sender: 'app' }, REPORT)
+    expect(report.mock.calls.length).toBeLessThanOrEqual(REPORT_BURST)
+    ipc.report({ sender: 'ext' }, REPORT)
+    expect(report.mock.calls.length).toBeLessThanOrEqual(REPORT_BURST + 1)
+    expect(report.mock.calls.at(-1)?.[0]).toMatchObject({ surface: 'ext_window' })
   })
 
   it('hands the crash marker only to the main renderer', () => {

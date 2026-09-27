@@ -35,9 +35,10 @@ export const ERROR_LOG_FILENAME = 'solus-errors.log'
 export const ERROR_LOG_MAX_BYTES = 1_000_000
 
 // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‪-‮⁦-⁩]/g
 
-/** One console line: control characters (ANSI escapes included) stripped. */
+/** One console line: C0/C1 controls (ANSI escapes included) and bidi
+ *  overrides stripped. */
 const oneLine = (s: string): string => s.replace(/[\r\n]+/g, ' ').replace(CONTROL, '')
 
 /** A multi-line block, every line indented — a renderer cannot forge a

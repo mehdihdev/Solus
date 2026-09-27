@@ -84,6 +84,18 @@ describe('loadSentrySink', () => {
     expect(ns(a)).not.toBe(ns(b))
   })
 
+  it('keeps no offline queue and never flushes one at startup (consent is unknown then)', async () => {
+    const sentry = fakeSentry()
+    await loadSentrySink({ ...BASE, dsn: 'https://k@o/1', load: async () => sentry })
+    const t = (
+      sentry.initOptions() as unknown as {
+        transportOptions: { flushAtStartup: boolean; shouldStore: () => boolean }
+      }
+    ).transportOptions
+    expect(t.flushAtStartup).toBe(false)
+    expect(t.shouldStore()).toBe(false)
+  })
+
   it('keeps only allowlisted integrations', async () => {
     const sentry = fakeSentry()
     await loadSentrySink({ ...BASE, dsn: 'https://k@o/1', load: async () => sentry })
