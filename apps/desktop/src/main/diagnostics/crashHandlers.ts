@@ -72,8 +72,9 @@ function reportAndMark(deps: CrashHandlerDeps, input: DiagnosticInput): void {
 }
 
 async function stopAfterCrash(deps: CrashHandlerDeps): Promise<void> {
-  const relaunch = !deps.isDev && deps.marker.mayRelaunch(deps.now())
-  if (relaunch) deps.marker.markRelaunch(deps.now())
+  // Relaunch only once the guard is on disk: an unsaved guard cannot stop a loop.
+  const relaunch =
+    !deps.isDev && deps.marker.mayRelaunch(deps.now()) && deps.marker.markRelaunch(deps.now())
   await deps.diagnostics.flush(FLUSH_TIMEOUT_MS).catch(() => undefined)
   if (relaunch) deps.app.relaunch()
   else if (!deps.isDev) deps.showErrorBox(CRASH_DIALOG.title, CRASH_DIALOG.body)

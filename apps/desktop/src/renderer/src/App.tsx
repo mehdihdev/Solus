@@ -4,7 +4,7 @@ import { AppRoutes } from './routes/AppRoutes'
 import { applyTheme } from './theme/applyTheme'
 import { useSettingsStore } from './store/settingsStore'
 import { useAuthStore } from './store/authStore'
-import { appErrorReporter } from './lib/errors/appErrorReporter'
+import { appErrorReporter, errorConsent } from './lib/errors/appErrorReporter'
 
 function App(): React.JSX.Element {
   const theme = useSettingsStore((s) => s.theme)
@@ -29,8 +29,11 @@ function App(): React.JSX.Element {
   // SOLUSDEV-311: a prior session's main/renderer crash becomes one client.error
   // event once signed in (the event route needs the user's token). Main hands
   // the marker only to the main window, so the other windows get nothing.
+  // Sentry is gated on the user's data-collection consent: main learns it here
+  // (and is closed again on sign-out).
   useEffect(() => {
     if (status === 'authenticated') void appErrorReporter.reportPendingCrash()
+    void errorConsent.onAuthStatus(status)
   }, [status])
 
   return (

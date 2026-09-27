@@ -5,6 +5,11 @@
 // minidumps — raw memory can hold tokens — no local variables, console/net/
 // fetch capture, screenshots, sessions, or the SDK's own uncaught handlers,
 // which crashHandlers.ts owns), and beforeSend re-scrubs as defence in depth.
+// The SDK also registers renderer-facing `ipcMain` channels with no sender
+// check; the preload exposes raw ipcRenderer, so any window could feed Sentry
+// directly. They are torn down right after init (security review H1) and the
+// namespace is random per launch. Main-side capture never uses them.
+import { randomUUID } from 'node:crypto'
 import { scrubText } from './scrub'
 import type { DiagnosticInput } from './diagnostics.constants'
 import type { SentrySink } from './diagnostics'
@@ -29,6 +34,7 @@ interface SentryEventLike {
 
 interface SentryInitOptions {
   dsn: string
+  ipcNamespace: string
   release: string
   environment: string
   sendDefaultPii: false
@@ -55,8 +61,24 @@ export const KEPT_INTEGRATIONS: ReadonlySet<string> = new Set([
   'NormalizePaths'
 ])
 
+/** The slice of ipcMain used to tear the SDK's renderer channels down. */
+export interface SentryIpcTeardown {
+  removeAllListeners: (channel: string) => void
+  removeHandler: (channel: string) => void
+}
+
+/** Channels @sentry/electron's Classic IPC mode registers (`<ns>.<channel>`). */
+const SDK_LISTENER_CHANNELS = ['start', 'scope', 'envelope', 'structured-log', 'metric', 'status']
+const SDK_HANDLER_CHANNELS = ['feedback']
+
+function closeSdkIpc(ipc: SentryIpcTeardown, namespace: string): void {
+  SDK_LISTENER_CHANNELS.forEach((ch) => ipc.removeAllListeners(`${namespace}.${ch}`))
+  SDK_HANDLER_CHANNELS.forEach((ch) => ipc.removeHandler(`${namespace}.${ch}`))
+}
+
 export interface SentrySinkOptions {
   dsn: string | undefined
+  ipc: SentryIpcTeardown
   environment: string
   release: string
   homeDir: string
@@ -100,8 +122,10 @@ export async function loadSentrySink(options: SentrySinkOptions): Promise<Sentry
   } catch {
     return null
   }
+  const ipcNamespace = `sentry-ipc-${randomUUID()}`
   sentry.init({
     dsn,
+    ipcNamespace,
     release: options.release,
     environment: options.environment,
     sendDefaultPii: false,
@@ -111,6 +135,7 @@ export async function loadSentrySink(options: SentrySinkOptions): Promise<Sentry
     beforeBreadcrumb: () => null,
     beforeSend: (event: SentryEventLike) => scrubEvent(event, options.homeDir)
   })
+  closeSdkIpc(options.ipc, ipcNamespace)
   return {
     capture: (report) =>
       sentry.captureException(toError(report), {

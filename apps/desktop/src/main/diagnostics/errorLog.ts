@@ -1,8 +1,9 @@
 // SOLUSDEV-311: the local error log — stdout for the dev terminal, plus a
 // size-capped JSON-lines file under app.getPath('logs') so a packaged build
 // leaves evidence. One rotation (`.1`) bounds disk use at ~2× maxBytes.
-// Entries arrive already scrubbed. Never throws: a failing disk must not turn
-// one error into a crash loop.
+// Entries arrive already scrubbed; the console line is also neutralised
+// (control characters, forged lines) — the file is JSON-encoded. Never
+// throws: a failing disk must not turn one error into a crash loop.
 import { appendFileSync, renameSync, statSync } from 'node:fs'
 import type { ErrorOrigin, ErrorSurface } from './diagnostics.constants'
 
@@ -33,10 +34,27 @@ export interface ErrorLog {
 export const ERROR_LOG_FILENAME = 'solus-errors.log'
 export const ERROR_LOG_MAX_BYTES = 1_000_000
 
+// eslint-disable-next-line no-control-regex -- stripping control characters is the point
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g
+
+/** One console line: control characters (ANSI escapes included) stripped. */
+const oneLine = (s: string): string => s.replace(/[\r\n]+/g, ' ').replace(CONTROL, '')
+
+/** A multi-line block, every line indented — a renderer cannot forge a
+ *  top-level `[solus:error]` line through its stack. */
+const indented = (s: string): string =>
+  s
+    .split(/\r?\n/)
+    .map((line) => `  ${line.replace(CONTROL, '')}`)
+    .join('\n')
+
 function consoleLines(entry: ErrorLogEntry): string {
-  const head = `[solus:error] ${entry.origin} ${entry.surface} ${entry.name}: ${entry.message} (${entry.fingerprint})`
+  const head = oneLine(
+    `[solus:error] ${entry.origin} ${entry.surface} ${entry.name}: ${entry.message} (${entry.fingerprint})`
+  )
   if (entry.repeat !== undefined) return `${head} ×${entry.repeat}`
-  return [head, entry.stack, entry.componentStack].filter(Boolean).join('\n')
+  const blocks = [entry.stack, entry.componentStack].filter((b): b is string => Boolean(b))
+  return [head, ...blocks.map(indented)].join('\n')
 }
 
 export function createErrorLog(options: {

@@ -301,12 +301,16 @@ function rendererBase(): string {
 }
 
 /** Diagnostics admit any Solus app window (main, SOL, overlay, extension host —
- *  one bundle), never the checkout window or a page that navigated away. */
-function isAppWindowSender(sender: unknown): boolean {
-  const contents = sender as Electron.WebContents
+ *  one bundle) from its top frame, never the checkout window, a subframe, or a
+ *  page that navigated away. */
+function isAppWindowSender(event: { sender: unknown; senderFrame?: unknown }): boolean {
+  const contents = event.sender as Electron.WebContents
   const win = BrowserWindow.fromWebContents(contents)
   return (
-    win !== null && !isCheckoutWindow(win) && isAppRendererUrl(contents.getURL(), rendererBase())
+    win !== null &&
+    !isCheckoutWindow(win) &&
+    event.senderFrame === contents.mainFrame &&
+    isAppRendererUrl(contents.getURL(), rendererBase())
   )
 }
 
@@ -529,7 +533,7 @@ if (!app.requestSingleInstanceLock()) {
 
     diagnostics.registerIpc({
       isAppSender: isAppWindowSender,
-      isMainSender: (sender) => isFromWindow(sender, mainWindow)
+      isMainSender: (event) => isFromWindow(event.sender, mainWindow)
     })
 
     registerProjectFolderHandlers()

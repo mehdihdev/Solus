@@ -50,6 +50,14 @@ describe('createDiagnosticsBridge', () => {
     await expect(bridgeAnswering(new Error('no handler')).report(REPORT)).resolves.toBeNull()
   })
 
+  it('sends consent on its channel and answers whether main took it', async () => {
+    const calls: unknown[][] = []
+    expect(await bridgeAnswering(true, calls).setConsent(true)).toBe(true)
+    expect(calls[0]).toEqual([DIAG_CHANNELS.setConsent, true])
+    expect(await bridgeAnswering('yes').setConsent(false)).toBe(false)
+    expect(await bridgeAnswering(new Error('x')).setConsent(true)).toBe(false)
+  })
+
   it('takes the crash marker and validates it', async () => {
     const calls: unknown[][] = []
     expect(await bridgeAnswering(CRASH, calls).takeCrashMarker()).toEqual(CRASH)

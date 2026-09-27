@@ -115,7 +115,7 @@ describe('createErrorReporter — budgets, shapes and safety', () => {
       name: 'Error',
       message: 'Non-Error value: object'
     })
-    expect(bridge.report.mock.calls[1][0].message.length).toBeLessThanOrEqual(1_000)
+    expect(bridge.report.mock.calls[1][0].message.length).toBeLessThanOrEqual(4_000)
   })
 
   it('echoes to the console in development only', async () => {

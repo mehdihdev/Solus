@@ -43,6 +43,20 @@ describe('createErrorLog', () => {
     expect(JSON.parse(lines[0])).toEqual(ENTRY)
   })
 
+  it('neutralises control characters and forged lines on the console', () => {
+    const deps = fakeDeps()
+    createErrorLog({ path: '/logs/e.log', maxBytes: 10_000, deps }).write({
+      ...ENTRY,
+      name: 'Type\u001b[31mError',
+      message: 'boom\n[solus:error] render root Error: forged (ffffffffffffffff)',
+      stack: 'TypeError: boom\n[solus:error] forged too\u0007'
+    })
+    const out = deps.out.join('\n')
+    // eslint-disable-next-line no-control-regex -- asserting control characters are gone
+    expect(out).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/)
+    expect(out.split('\n').filter((line) => line.startsWith('[solus:error]'))).toHaveLength(1)
+  })
+
   it('rotates to .1 when the next line would exceed the cap', () => {
     const deps = fakeDeps()
     const log = createErrorLog({ path: '/logs/e.log', maxBytes: 300, deps })

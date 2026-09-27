@@ -62,6 +62,17 @@ describe('createCrashMarker', () => {
     expect(m.mayRelaunch(0)).toBe(true)
   })
 
+  it('markRelaunch reports whether the guard was persisted', () => {
+    expect(marker(fakeFs()).markRelaunch(1)).toBe(true)
+    const readOnly = createCrashMarker({
+      read: () => null,
+      write: () => {
+        throw new Error('EROFS')
+      }
+    })
+    expect(readOnly.markRelaunch(1)).toBe(false)
+  })
+
   it('never throws when the disk fails', () => {
     const m = createCrashMarker({
       read: () => {

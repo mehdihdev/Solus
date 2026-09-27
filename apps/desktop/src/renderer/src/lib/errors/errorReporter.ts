@@ -5,7 +5,7 @@
 // the message or stack. Dev builds also echo to the console so nothing is
 // swallowed while developing. Never throws.
 import {
-  REPORT_LIMITS,
+  REPORT_INPUT_LIMITS,
   errorNameCategory,
   type ErrorOrigin,
   type ErrorSurface,
@@ -47,9 +47,9 @@ function toReport(error: unknown, context: ReportContext): RendererErrorReport {
   if (error instanceof Error) {
     return {
       ...base,
-      name: clip(error.name || 'Error', REPORT_LIMITS.name),
-      message: clip(error.message, REPORT_LIMITS.message),
-      ...(error.stack ? { stack: clip(error.stack, REPORT_LIMITS.stack) } : {}),
+      name: clip(error.name || 'Error', REPORT_INPUT_LIMITS.name),
+      message: clip(error.message, REPORT_INPUT_LIMITS.message),
+      ...(error.stack ? { stack: clip(error.stack, REPORT_INPUT_LIMITS.stack) } : {}),
       ...componentStack
     }
   }
@@ -57,7 +57,7 @@ function toReport(error: unknown, context: ReportContext): RendererErrorReport {
   return {
     ...base,
     name: 'Error',
-    message: clip(message, REPORT_LIMITS.message),
+    message: clip(message, REPORT_INPUT_LIMITS.message),
     ...componentStack
   }
 }

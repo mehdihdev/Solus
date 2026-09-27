@@ -14,7 +14,10 @@ const REPORT: RendererErrorReport = {
   stack: 'TypeError: boom\n    at BenchScreen (/Users/ada/x.js:1:1)'
 }
 
-function setup(sessionCap = 50): {
+function setup(
+  sessionCap = 50,
+  limits: { sentryCap?: number; maxFingerprints?: number } = {}
+): {
   diagnostics: ReturnType<typeof createDiagnostics>
   logged: ErrorLogEntry[]
   sentry: { capture: ReturnType<typeof vi.fn>; flush: ReturnType<typeof vi.fn> }
@@ -26,9 +29,11 @@ function setup(sessionCap = 50): {
     appVersion: '1.0.0',
     log: { write: (e) => logged.push(e) },
     now: () => new Date('2026-09-26T10:00:00Z'),
-    sessionCap
+    sessionCap,
+    ...limits
   })
   diagnostics.setSentry(sentry)
+  diagnostics.setConsent(true)
   return { diagnostics, logged, sentry }
 }
 
@@ -71,6 +76,55 @@ describe('createDiagnostics', () => {
     for (let i = 0; i < 10; i++) diagnostics.report({ ...REPORT, name: `E${i}` })
     expect(logged).toHaveLength(4)
     expect(logged[3].message).toContain('session report cap reached')
+  })
+
+  it('scrubs before it truncates: a token straddling the limit never leaks a fragment', () => {
+    const { diagnostics, logged } = setup()
+    const jwt = [
+      'eyJ' + 'hbGciOiJIUzI1NiJ9',
+      'eyJ' + 'zdWIiOiIxMjM0NTY3ODkwIn0',
+      'sig_abc-123'
+    ].join('.')
+    diagnostics.report({ ...REPORT, message: `${'x'.repeat(995)} ${jwt}` })
+    expect(logged[0].message).not.toContain('eyJ')
+    expect(logged[0].message.length).toBeLessThanOrEqual(1_000)
+  })
+})
+
+describe('createDiagnostics — consent and bounds', () => {
+  it('sends nothing to Sentry without data-collection consent (the default)', () => {
+    const logged: ErrorLogEntry[] = []
+    const sentry = { capture: vi.fn(), flush: vi.fn(async () => undefined) }
+    const d = createDiagnostics({
+      homeDir: '',
+      appVersion: '1.0.0',
+      log: { write: (e) => logged.push(e) }
+    })
+    d.setSentry(sentry)
+    d.report(REPORT)
+    expect(sentry.capture).not.toHaveBeenCalled()
+    expect(logged).toHaveLength(1)
+    d.setConsent(true)
+    d.report({ ...REPORT, name: 'RangeError' })
+    expect(sentry.capture).toHaveBeenCalledTimes(1)
+    d.setConsent(false)
+    d.report({ ...REPORT, name: 'SyntaxError' })
+    expect(sentry.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('caps Sentry sends per session even when every error is new', () => {
+    const { diagnostics, sentry } = setup(1_000, { sentryCap: 5 })
+    for (let i = 0; i < 20; i++) diagnostics.report({ ...REPORT, name: `E${'x'.repeat(i)}` })
+    expect(sentry.capture).toHaveBeenCalledTimes(5)
+  })
+
+  it('bounds the fingerprint map: past it, new errors count as repeats (no event, no Sentry)', () => {
+    const { diagnostics, sentry } = setup(1_000, { maxFingerprints: 3 })
+    const acks = Array.from({ length: 5 }, (_, i) =>
+      diagnostics.report({ ...REPORT, name: `N${'y'.repeat(i)}` })
+    )
+    expect(acks.map((a) => a.first)).toEqual([true, true, true, false, false])
+    expect(sentry.capture).toHaveBeenCalledTimes(3)
   })
 
   it('still logs when Sentry is not configured', () => {

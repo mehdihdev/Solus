@@ -19,6 +19,9 @@ export interface DiagnosticsBridgeIpc {
 export interface DiagnosticsBridge {
   report(report: RendererErrorReport): Promise<ReportAck | null>
   takeCrashMarker(): Promise<PendingCrash | null>
+  /** Tell main the user's data-collection consent (gates Sentry). Main
+   *  accepts it from the main window only; answers whether it did. */
+  setConsent(consent: boolean): Promise<boolean>
 }
 
 const FINGERPRINT = /^[0-9a-f]{16}$/
@@ -42,6 +45,8 @@ const isPendingCrash = (v: unknown): v is PendingCrash =>
   FINGERPRINT.test(v.fingerprint) &&
   typeof v.appVersion === 'string'
 
+const isTrue = (v: unknown): v is true => v === true
+
 async function safeInvoke<T>(
   ipc: DiagnosticsBridgeIpc,
   guard: (v: unknown) => v is T,
@@ -59,6 +64,8 @@ async function safeInvoke<T>(
 export function createDiagnosticsBridge(ipc: DiagnosticsBridgeIpc): DiagnosticsBridge {
   return {
     report: (report) => safeInvoke(ipc, isAck, DIAG_CHANNELS.report, report),
-    takeCrashMarker: () => safeInvoke(ipc, isPendingCrash, DIAG_CHANNELS.takeCrashMarker)
+    takeCrashMarker: () => safeInvoke(ipc, isPendingCrash, DIAG_CHANNELS.takeCrashMarker),
+    setConsent: async (consent) =>
+      (await safeInvoke(ipc, isTrue, DIAG_CHANNELS.setConsent, consent)) === true
   }
 }

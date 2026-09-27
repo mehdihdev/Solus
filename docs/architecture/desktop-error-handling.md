@@ -50,34 +50,52 @@ desktop bridge exists (Empty beats invented).
 
 ## Privacy
 
-- `scrub.ts` runs on every report before it is logged or sent: JWTs, bearer tokens, Stripe /
-  Supabase / GitHub / GitLab keys, emails, URL query strings and non-route fragments, and
-  user home paths (`/Users/*`, `/home/*`, `C:\Users\*`) are redacted. Fields are length-bounded.
-  "Copy details" uses the same scrubber.
+- `scrub.ts` runs on every report before it is logged or sent — **before** any final
+  truncation, so a token cut at a length limit cannot slip past as a fragment (transport
+  limits are 4× the final ones). It redacts: JWTs (including partial ones), `Bearer` / `Basic`
+  credentials, Stripe (`sk_`/`pk_`/`rk_`/`whsec_`), Supabase (`sb_secret_`/`sb_publishable_`),
+  GitHub (`gh*_`, `github_pat_`), GitLab (`glpat-`, `gldt-`, `glrt-`, …), `sk-ant-`/`sk-proj-`
+  and AWS access keys; credential-named values (`refresh_token`, `password`, `api_key`, …);
+  emails (also `%40`); absolute **and relative** URL query strings and non-route fragments; and
+  home paths (`/Users/*`, `/home/*`, `/root`, `C:\Users\*`, percent-encoded and JSON-escaped).
+  "Copy details" uses the same scrubber. The console line additionally strips control
+  characters and indents stacks, so a renderer cannot forge log lines.
+- **Sentry is consent-gated** (human decision): main sends nothing until the main window tells
+  it the signed-in user has data-collection consent (`diag:set-consent`, after sign-in and on
+  every Settings change; `false` on sign-out). It starts closed, so errors before sign-in — and
+  early-boot main crashes — stay local.
 - Sentry runs **in main only** (the renderer CSP is unchanged), loaded lazily and only with a
   DSN: `sendDefaultPii: false`, breadcrumbs dropped, integrations allowlisted
   (`ElectronContext`, `EventFilters`, `FunctionToString`, `LinkedErrors`, `NormalizePaths`) —
   no minidumps (raw memory can hold tokens), local variables, console/net capture, screenshots
-  or sessions. `beforeSend` strips `user`/`request`/`server_name` and re-scrubs.
+  or sessions. `beforeSend` strips `user`/`request`/`server_name` and re-scrubs. The SDK's own
+  renderer-facing `ipcMain` channels (which check no sender, and the preload exposes raw
+  `ipcRenderer`) are **removed right after init**, under a per-launch random namespace — no
+  window can feed Sentry except through `diag:report`.
 - The `client.error` event carries only closed categories and a hash — never the message or
   stack (API.md §2.13). Consent-gated server-side like every client event.
 
 ## Bounds
 
 - Main: one full log entry and one Sentry event per fingerprint per session; repeats log one
-  line with a count; 200 log entries per session, then silence.
+  line with a count; 200 log entries and 50 Sentry events per session; at most 1,000
+  fingerprints remembered (past that, new errors count as repeats).
 - Renderer: `client.error` at most 10 per minute; best-effort, never retried.
 - Log file: 1 MB, one rotation (`solus-errors.log.1`).
-- `diag:report` admits only Solus app windows (renderer URL match, never the checkout window);
-  `diag:take-crash-marker` only the main window.
+- `diag:report` admits only Solus app windows from their top frame (renderer URL match, never
+  the checkout window); a secondary window's own surface overrides the one it claims.
+  `diag:take-crash-marker` and `diag:set-consent` admit only the main window.
+- Relaunch loop guard fails closed: if the relaunch time cannot be saved (read-only or full
+  disk) Solus shows the dialog and quits instead of relaunching. The marker is written
+  atomically (temp + rename).
 
 ## Configuration
 
-| Key                            | Where                                                                 | Meaning                                                             |
-| ------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `MAIN_VITE_SENTRY_DSN`         | root `.env` (via `.env.mega`) — inlined into the main bundle at build | Sentry DSN; absent = no Sentry                                      |
-| `SENTRY_DSN`                   | process env at runtime                                                | overrides the above (dev convenience)                               |
-| `MAIN_VITE_SENTRY_ENVIRONMENT` | root `.env`                                                           | environment tag; default `development` / `production` by build mode |
+| Key                            | Where                                                                 | Meaning                                                                 |
+| ------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `MAIN_VITE_SENTRY_DSN`         | root `.env` (via `.env.mega`) — inlined into the main bundle at build | Sentry DSN; absent = no Sentry                                          |
+| `SENTRY_DSN`                   | process env at runtime                                                | overrides the above in **development only** (a packaged app ignores it) |
+| `MAIN_VITE_SENTRY_ENVIRONMENT` | root `.env`                                                           | environment tag; default `development` / `production` by build mode     |
 
 Files: log in `app.getPath('logs')` (macOS `~/Library/Logs/<app>/solus-errors.log`); crash
 marker in `app.getPath('userData')/solus-crash.json` (mode 0600).

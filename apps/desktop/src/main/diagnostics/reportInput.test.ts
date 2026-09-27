@@ -35,9 +35,9 @@ describe('parseRendererReport', () => {
     expect(parseRendererReport(raw)).toBeNull()
   })
 
-  it('truncates oversize fields instead of refusing them', () => {
+  it('bounds oversize fields at the transport limits (final limits apply after scrubbing)', () => {
     const out = parseRendererReport({ ...VALID, name: 'N'.repeat(500), stack: 's'.repeat(50_000) })
-    expect(out?.name).toHaveLength(64)
-    expect(out?.stack).toHaveLength(8_000)
+    expect(out?.name).toHaveLength(256)
+    expect(out?.stack).toHaveLength(32_000)
   })
 })

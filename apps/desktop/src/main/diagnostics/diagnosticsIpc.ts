@@ -10,16 +10,28 @@ import type {
   ReportAck
 } from './diagnostics.constants'
 
+/** The slice of an IpcMainInvokeEvent the gates read. */
+export interface IpcEventLike {
+  sender: unknown
+  senderFrame?: unknown
+}
+
 export interface DiagnosticsIpcDeps {
-  diagnostics: { report: (input: DiagnosticInput) => ReportAck }
+  diagnostics: {
+    report: (input: DiagnosticInput) => ReportAck
+    setConsent: (consent: boolean) => void
+  }
   marker: { take: () => PendingCrash | null }
-  isAppSender: (sender: unknown) => boolean
-  isMainSender: (sender: unknown) => boolean
+  isAppSender: (event: IpcEventLike) => boolean
+  isMainSender: (event: IpcEventLike) => boolean
+  /** The sender window's own surface, from its URL ('root' = the main window). */
+  surfaceOf: (event: IpcEventLike) => ErrorSurface
 }
 
 export interface DiagnosticsIpc {
-  report: (sender: unknown, raw: unknown) => ReportAck | null
-  takeCrashMarker: (sender: unknown) => PendingCrash | null
+  report: (event: IpcEventLike, raw: unknown) => ReportAck | null
+  takeCrashMarker: (event: IpcEventLike) => PendingCrash | null
+  setConsent: (event: IpcEventLike, raw: unknown) => boolean
 }
 
 /** True when `url` is the app renderer at `rendererBase` (dev origin or the
@@ -48,11 +60,19 @@ export function surfaceForUrl(url: string): ErrorSurface {
 
 export function createDiagnosticsIpc(deps: DiagnosticsIpcDeps): DiagnosticsIpc {
   return {
-    report: (sender, raw) => {
-      if (!deps.isAppSender(sender)) return null
+    report: (event, raw) => {
+      if (!deps.isAppSender(event)) return null
       const report = parseRendererReport(raw)
-      return report ? deps.diagnostics.report(report) : null
+      if (!report) return null
+      // A secondary window cannot label its errors as another surface's.
+      const own = deps.surfaceOf(event)
+      return deps.diagnostics.report(own === 'root' ? report : { ...report, surface: own })
     },
-    takeCrashMarker: (sender) => (deps.isMainSender(sender) ? deps.marker.take() : null)
+    takeCrashMarker: (event) => (deps.isMainSender(event) ? deps.marker.take() : null),
+    setConsent: (event, raw) => {
+      if (!deps.isMainSender(event) || typeof raw !== 'boolean') return false
+      deps.diagnostics.setConsent(raw)
+      return true
+    }
   }
 }

@@ -35,10 +35,13 @@ describe('surfaceForUrl', () => {
   })
 })
 
+type Event = { sender: string }
+
 function setup(): {
   ipc: ReturnType<typeof createDiagnosticsIpc>
   report: ReturnType<typeof vi.fn>
   take: ReturnType<typeof vi.fn>
+  setConsent: ReturnType<typeof vi.fn>
 } {
   const report = vi.fn(() => ({
     fingerprint: '0123456789abcdef',
@@ -46,13 +49,15 @@ function setup(): {
     appVersion: '1.0.0'
   }))
   const take = vi.fn(() => null)
+  const setConsent = vi.fn()
   const ipc = createDiagnosticsIpc({
-    diagnostics: { report },
+    diagnostics: { report, setConsent },
     marker: { take },
-    isAppSender: (sender) => sender === 'app' || sender === 'main',
-    isMainSender: (sender) => sender === 'main'
+    isAppSender: (e) => ['app', 'main', 'ext'].includes((e as Event).sender),
+    isMainSender: (e) => (e as Event).sender === 'main',
+    surfaceOf: (e) => ((e as Event).sender === 'ext' ? 'ext_window' : 'root')
   })
-  return { ipc, report, take }
+  return { ipc, report, take, setConsent }
 }
 
 const REPORT = { origin: 'render', surface: 'bench', name: 'TypeError', message: 'boom' }
@@ -60,27 +65,42 @@ const REPORT = { origin: 'render', surface: 'bench', name: 'TypeError', message:
 describe('createDiagnosticsIpc', () => {
   it('reports a valid payload from an app window and returns the ack', () => {
     const { ipc, report } = setup()
-    expect(ipc.report('app', REPORT)).toMatchObject({ first: true })
+    expect(ipc.report({ sender: 'app' }, REPORT)).toMatchObject({ first: true })
     expect(report).toHaveBeenCalledWith(REPORT)
   })
 
   it('refuses a foreign sender without reporting', () => {
     const { ipc, report } = setup()
-    expect(ipc.report('checkout', REPORT)).toBeNull()
+    expect(ipc.report({ sender: 'checkout' }, REPORT)).toBeNull()
     expect(report).not.toHaveBeenCalled()
   })
 
   it('refuses a malformed payload without reporting', () => {
     const { ipc, report } = setup()
-    expect(ipc.report('app', { ...REPORT, origin: 'main_process' })).toBeNull()
+    expect(ipc.report({ sender: 'app' }, { ...REPORT, origin: 'main_process' })).toBeNull()
     expect(report).not.toHaveBeenCalled()
+  })
+
+  it("a window's own surface wins over the one the renderer claims", () => {
+    const { ipc, report } = setup()
+    ipc.report({ sender: 'ext' }, { ...REPORT, surface: 'workspace' })
+    expect(report).toHaveBeenCalledWith({ ...REPORT, surface: 'ext_window' })
   })
 
   it('hands the crash marker only to the main renderer', () => {
     const { ipc, take } = setup()
-    expect(ipc.takeCrashMarker('app')).toBeNull()
+    expect(ipc.takeCrashMarker({ sender: 'app' })).toBeNull()
     expect(take).not.toHaveBeenCalled()
-    ipc.takeCrashMarker('main')
+    ipc.takeCrashMarker({ sender: 'main' })
     expect(take).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes consent only from the main renderer, and only a boolean', () => {
+    const { ipc, setConsent } = setup()
+    expect(ipc.setConsent({ sender: 'app' }, true)).toBe(false)
+    expect(ipc.setConsent({ sender: 'main' }, 'yes')).toBe(false)
+    expect(setConsent).not.toHaveBeenCalled()
+    expect(ipc.setConsent({ sender: 'main' }, true)).toBe(true)
+    expect(setConsent).toHaveBeenCalledWith(true)
   })
 })

@@ -6,15 +6,15 @@ import { join } from 'node:path'
 import { createCrashMarker, fileCrashMarkerIo, CRASH_MARKER_FILENAME } from './crashMarker'
 import { installCrashHandlers, type CrashHandlerDeps } from './crashHandlers'
 import { createDiagnostics } from './diagnostics'
-import { createDiagnosticsIpc, surfaceForUrl } from './diagnosticsIpc'
-import { DIAG_CHANNELS } from './diagnostics.constants'
+import { createDiagnosticsIpc, surfaceForUrl, type IpcEventLike } from './diagnosticsIpc'
+import { DIAG_CHANNELS, type ErrorSurface } from './diagnostics.constants'
 import {
   createErrorLog,
   realErrorLogDeps,
   ERROR_LOG_FILENAME,
   ERROR_LOG_MAX_BYTES
 } from './errorLog'
-import type { loadSentrySink } from './sentrySink'
+import type { loadSentrySink, SentryIpcTeardown } from './sentrySink'
 
 export interface SentryConfig {
   dsn: string | undefined
@@ -27,11 +27,8 @@ export interface BootDeps {
     getVersion: () => string
   }
   proc: CrashHandlerDeps['proc']
-  ipcMain: {
-    handle: (
-      channel: string,
-      fn: (event: { sender: unknown }, ...args: unknown[]) => unknown
-    ) => void
+  ipcMain: SentryIpcTeardown & {
+    handle: (channel: string, fn: (event: IpcEventLike, ...args: unknown[]) => unknown) => void
   }
   showErrorBox: (title: string, body: string) => void
   homeDir: string
@@ -42,22 +39,25 @@ export interface BootDeps {
 }
 
 export interface SenderGates {
-  isAppSender: (sender: unknown) => boolean
-  isMainSender: (sender: unknown) => boolean
+  isAppSender: (event: IpcEventLike) => boolean
+  isMainSender: (event: IpcEventLike) => boolean
 }
 
 export interface BootedDiagnostics {
   registerIpc: (gates: SenderGates) => void
 }
 
-/** The DSN from the runtime env (`SENTRY_DSN`) or the build-time root `.env`
- *  (`MAIN_VITE_SENTRY_DSN`, inlined so packaged builds have it). */
+/** The DSN from the build-time root `.env` (`MAIN_VITE_SENTRY_DSN`, inlined so
+ *  packaged builds have it); a runtime `SENTRY_DSN` overrides it in development
+ *  only — in a packaged app whoever controls the launch env must not be able
+ *  to redirect error reports. */
 export function resolveSentryConfig(
   runtime: { readonly [key: string]: string | undefined; readonly SENTRY_DSN?: string },
   build: { readonly MAIN_VITE_SENTRY_DSN?: string; readonly MAIN_VITE_SENTRY_ENVIRONMENT?: string },
   isDev: boolean
 ): SentryConfig {
-  const dsn = runtime.SENTRY_DSN?.trim() || build.MAIN_VITE_SENTRY_DSN?.trim() || undefined
+  const runtimeDsn = isDev ? runtime.SENTRY_DSN?.trim() : undefined
+  const dsn = runtimeDsn || build.MAIN_VITE_SENTRY_DSN?.trim() || undefined
   const environment =
     build.MAIN_VITE_SENTRY_ENVIRONMENT?.trim() || (isDev ? 'development' : 'production')
   return { dsn, environment }
@@ -96,15 +96,20 @@ export function bootDiagnostics(deps: BootDeps): BootedDiagnostics {
     surfaceFor: (contents) => surfaceForUrl(urlOf(contents))
   })
   void deps
-    .loadSentry({ ...deps.sentry, release: `solus-desktop@${appVersion}`, homeDir: deps.homeDir })
+    .loadSentry({
+      ...deps.sentry,
+      ipc: deps.ipcMain,
+      release: `solus-desktop@${appVersion}`,
+      homeDir: deps.homeDir
+    })
     .then((sink) => diagnostics.setSentry(sink))
   return {
     registerIpc: (gates) => {
-      const ipc = createDiagnosticsIpc({ diagnostics, marker, ...gates })
-      deps.ipcMain.handle(DIAG_CHANNELS.report, (event, raw) => ipc.report(event.sender, raw))
-      deps.ipcMain.handle(DIAG_CHANNELS.takeCrashMarker, (event) =>
-        ipc.takeCrashMarker(event.sender)
-      )
+      const surfaceOf = (event: IpcEventLike): ErrorSurface => surfaceForUrl(urlOf(event.sender))
+      const ipc = createDiagnosticsIpc({ diagnostics, marker, surfaceOf, ...gates })
+      deps.ipcMain.handle(DIAG_CHANNELS.report, (event, raw) => ipc.report(event, raw))
+      deps.ipcMain.handle(DIAG_CHANNELS.takeCrashMarker, (event) => ipc.takeCrashMarker(event))
+      deps.ipcMain.handle(DIAG_CHANNELS.setConsent, (event, raw) => ipc.setConsent(event, raw))
     }
   }
 }

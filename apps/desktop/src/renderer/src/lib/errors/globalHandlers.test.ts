@@ -42,7 +42,15 @@ describe('installGlobalErrorHandlers', () => {
   it('stops reporting once uninstalled', () => {
     const report = vi.fn()
     installGlobalErrorHandlers(window, { report }, () => 'root')()
-    window.dispatchEvent(new ErrorEvent('error', { error: new Error('x') }))
+    // With our handler gone nothing else claims the event, and the test runner
+    // would count it as an uncaught error: cancel it here, as a page would.
+    const cancel = (event: Event): void => event.preventDefault()
+    window.addEventListener('error', cancel)
+    try {
+      window.dispatchEvent(new ErrorEvent('error', { error: new Error('x'), cancelable: true }))
+    } finally {
+      window.removeEventListener('error', cancel)
+    }
     expect(report).not.toHaveBeenCalled()
   })
 })

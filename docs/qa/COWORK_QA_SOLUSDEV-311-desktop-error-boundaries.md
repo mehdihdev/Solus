@@ -78,6 +78,8 @@ and save. Remove that line again when a step says so, and **always before you fi
 ## F. Sentry (only if a DSN is configured)
 
 Set `MAIN_VITE_SENTRY_DSN=<dsn>` in `.env.mega`, `pnpm env:sync`, restart `dev:desktop`.
+Sentry only receives errors from a signed-in user who has **data-collection consent on**
+(Settings → privacy / data collection toggle).
 
 | #   | Step                         | Expected                                                                                                                                         | P/F |
 | --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --- |

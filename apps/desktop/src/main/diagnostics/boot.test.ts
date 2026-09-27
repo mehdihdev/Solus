@@ -22,7 +22,11 @@ function fakeDeps(): BootDeps & {
       exit: vi.fn()
     },
     proc: { on: (event) => void procEvents.push(event) },
-    ipcMain: { handle: (channel, fn) => void handlers.set(channel, fn) },
+    ipcMain: {
+      handle: (channel, fn) => void handlers.set(channel, fn),
+      removeAllListeners: vi.fn(),
+      removeHandler: vi.fn()
+    },
     showErrorBox: vi.fn(),
     homeDir: '/Users/ada',
     isDev: true,
@@ -57,8 +61,8 @@ describe('bootDiagnostics', () => {
   it('registers both channels behind the injected sender gates', () => {
     const deps = fakeDeps()
     bootDiagnostics(deps).registerIpc({
-      isAppSender: (s) => s === 'app',
-      isMainSender: () => false
+      isAppSender: (e) => e.sender === 'app',
+      isMainSender: (e) => e.sender === 'main'
     })
     const report = deps.handlers.get(DIAG_CHANNELS.report)!
     expect(report({ sender: 'other' }, {})).toBeNull()
@@ -68,16 +72,20 @@ describe('bootDiagnostics', () => {
         { origin: 'render', surface: 'bench', name: 'TypeError', message: 'boom' }
       )
     ).toMatchObject({ first: true, appVersion: '1.2.3' })
+    expect(deps.handlers.get(DIAG_CHANNELS.setConsent)!({ sender: 'main' }, true)).toBe(true)
+    expect(deps.handlers.get(DIAG_CHANNELS.setConsent)!({ sender: 'app' }, true)).toBe(false)
     expect(deps.handlers.get(DIAG_CHANNELS.takeCrashMarker)!({ sender: 'app' })).toBeNull()
+    expect(deps.handlers.get(DIAG_CHANNELS.setConsent)!({ sender: 'main' }, true)).toBe(true)
   })
 })
 
 describe('resolveSentryConfig', () => {
-  it('prefers a runtime SENTRY_DSN over the build-time MAIN_VITE_SENTRY_DSN', () => {
-    expect(resolveSentryConfig({ SENTRY_DSN: 'a' }, { MAIN_VITE_SENTRY_DSN: 'b' }, false).dsn).toBe(
-      'a'
-    )
-    expect(resolveSentryConfig({}, { MAIN_VITE_SENTRY_DSN: 'b' }, false).dsn).toBe('b')
+  it('a runtime SENTRY_DSN overrides the build-time one in development only', () => {
+    const both = [{ SENTRY_DSN: 'a' }, { MAIN_VITE_SENTRY_DSN: 'b' }] as const
+    expect(resolveSentryConfig(...both, true).dsn).toBe('a')
+    // Packaged: whoever controls the launch env must not redirect reports.
+    expect(resolveSentryConfig(...both, false).dsn).toBe('b')
+    expect(resolveSentryConfig({ SENTRY_DSN: 'a' }, {}, false).dsn).toBeUndefined()
     expect(resolveSentryConfig({}, {}, false).dsn).toBeUndefined()
   })
 

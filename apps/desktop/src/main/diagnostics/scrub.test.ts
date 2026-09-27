@@ -49,6 +49,46 @@ describe('scrubText', () => {
   })
 })
 
+describe('scrubText — formats the first pass missed (security review H3)', () => {
+  it.each([
+    [
+      'a truncated two-segment JWT',
+      `token=${fake('eyJ', 'hbGciOiJI')}.${fake('eyJ', 'zdWIiOiIx')}`,
+      'token=[jwt]'
+    ],
+    ['a JWT glued to a word', `x_${fake('eyJ', 'hbGc.eyJzdWIi.sig')}`, 'x_[jwt]'],
+    ['a GitHub fine-grained PAT', `${fake('github_' + 'pat_')} used`, '[secret] used'],
+    ['a GitLab deploy token', `${fake('gl' + 'dt-')} used`, '[secret] used'],
+    ['a GitLab runner token', `${fake('gl' + 'rt-')} used`, '[secret] used'],
+    ['a Stripe webhook secret', `${fake('wh' + 'sec_')} bad`, '[secret] bad'],
+    ['an Anthropic key', `${fake('sk-' + 'ant-')} bad`, '[secret] bad'],
+    ['an OpenAI project key', `${fake('sk-' + 'proj-')} bad`, '[secret] bad'],
+    ['an AWS access key id', `key ${'AK' + 'IA'}ABCDEFGHIJKLMNOP`, 'key [secret]'],
+    ['a Basic auth header', 'Authorization: Basic dXNlcjpwYXNz', 'Authorization: Basic [redacted]'],
+    ['a Supabase key with a hyphen', `${fake('sb_' + 'secret_', 'abc-def_ghi')} x`, '[secret] x'],
+    [
+      'a relative URL query',
+      'GET /api/v1/projects?access_token=abc123 failed',
+      'GET /api/v1/projects?[redacted] failed'
+    ],
+    ['a schemeless hash fragment', 'at #/login#access_token=zz', 'at #/login#[redacted]'],
+    ['a JSON refresh token', '{"refresh_token":"f9Xk2LmQpR7s"}', '{"refresh_token":"[redacted]"}'],
+    ['a password assignment', 'password=hunter2 rejected', 'password=[redacted] rejected'],
+    ['an api key assignment', "api_key: 'k-123'", "api_key: '[redacted]'"],
+    ['a percent-encoded email', 'user=john%40example.com', 'user=[email]'],
+    ['a percent-encoded home path', 'file=%2FUsers%2Fjdoe%2Fx.step', 'file=~%2Fx.step'],
+    ['a JSON-escaped Windows home', '"C:\\\\Users\\\\jdoe\\\\x"', '"~\\\\x"'],
+    ['the root home', 'open /root/.ssh/id', 'open ~/.ssh/id']
+  ])('redacts %s', (_label, input, expected) => {
+    expect(scrubText(input, HOME)).toBe(expected)
+  })
+
+  it('keeps diagnostic codes that are not secrets', () => {
+    const msg = 'connect ECONNREFUSED 127.0.0.1:8000 (code=ECONNREFUSED, status 503)'
+    expect(scrubText(msg, HOME)).toBe(msg)
+  })
+})
+
 describe('scrubReport', () => {
   it('scrubs and truncates every free-text field, keeping the closed fields', () => {
     const out = scrubReport(

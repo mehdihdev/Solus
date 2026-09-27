@@ -3,7 +3,7 @@
 // it can emit the `client.error` event (main never holds the user token);
 // `lastRelaunchAt` is the relaunch loop guard. Read defensively: anything that
 // is not exactly the expected shape reads as empty. Never throws.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import {
   CRASH_ORIGINS,
   ERROR_NAMES,
@@ -30,7 +30,9 @@ export interface CrashMarker {
   record: (crash: PendingCrash) => void
   take: () => PendingCrash | null
   mayRelaunch: (nowMs: number) => boolean
-  markRelaunch: (nowMs: number) => void
+  /** Persist the relaunch time; false when it could not be saved (the caller
+   *  must then NOT relaunch — an unsaved guard cannot stop a loop). */
+  markRelaunch: (nowMs: number) => boolean
 }
 
 const EMPTY: MarkerState = { pending: null, lastRelaunchAt: null }
@@ -70,18 +72,21 @@ export function createCrashMarker(io: CrashMarkerIo): CrashMarker {
       return EMPTY
     }
   }
-  const save = (state: MarkerState): void => {
+  const save = (state: MarkerState): boolean => {
     try {
       io.write(JSON.stringify(state))
+      return true
     } catch {
-      // Best-effort: losing the marker only loses one event / one loop guard.
+      // Losing the marker loses one event; markRelaunch reports it so the
+      // loop guard fails closed.
+      return false
     }
   }
   return {
-    record: (crash) => save({ ...load(), pending: crash }),
+    record: (crash) => void save({ ...load(), pending: crash }),
     take: () => {
       const state = load()
-      if (state.pending) save({ ...state, pending: null })
+      if (state.pending) void save({ ...state, pending: null })
       return state.pending
     },
     mayRelaunch: (nowMs) => {
@@ -101,6 +106,11 @@ export function fileCrashMarkerIo(path: string): CrashMarkerIo {
         return null
       }
     },
-    write: (text) => writeFileSync(path, text, { encoding: 'utf8', mode: 0o600 })
+    // Temp + rename: a crash mid-write never leaves a half file behind.
+    write: (text) => {
+      const temp = `${path}.tmp`
+      writeFileSync(temp, text, { encoding: 'utf8', mode: 0o600 })
+      renameSync(temp, path)
+    }
   }
 }

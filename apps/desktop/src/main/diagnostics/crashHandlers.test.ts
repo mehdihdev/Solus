@@ -34,7 +34,7 @@ function setup(overrides: Partial<CrashHandlerDeps> = {}): {
     marker: {
       record: (c) => void recorded.push(c),
       mayRelaunch: vi.fn(() => true),
-      markRelaunch: vi.fn()
+      markRelaunch: vi.fn(() => true)
     },
     showErrorBox: vi.fn(),
     now: () => 1_000,
@@ -87,7 +87,7 @@ describe('installCrashHandlers', () => {
 
   it('quits with a plain-language dialog instead of relaunching twice in the window', async () => {
     const s = setup({
-      marker: { record: vi.fn(), mayRelaunch: () => false, markRelaunch: vi.fn() }
+      marker: { record: vi.fn(), mayRelaunch: () => false, markRelaunch: vi.fn(() => true) }
     })
     s.emitProcess('uncaughtException', new Error('again'))
     await s.settle()
@@ -96,6 +96,17 @@ describe('installCrashHandlers', () => {
       'Solus stopped',
       expect.stringContaining('restart Solus')
     )
+    expect(s.deps.app.exit).toHaveBeenCalledWith(1)
+  })
+
+  it('fails closed when the loop guard cannot be saved (read-only / full disk)', async () => {
+    const s = setup({
+      marker: { record: vi.fn(), mayRelaunch: () => true, markRelaunch: vi.fn(() => false) }
+    })
+    s.emitProcess('uncaughtException', new Error('boom'))
+    await s.settle()
+    expect(s.deps.app.relaunch).not.toHaveBeenCalled()
+    expect(s.deps.showErrorBox).toHaveBeenCalled()
     expect(s.deps.app.exit).toHaveBeenCalledWith(1)
   })
 

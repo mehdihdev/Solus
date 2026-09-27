@@ -20,7 +20,19 @@ function fakeSentry(): SentryModule & { initOptions: () => Init } {
   }
 }
 
-const BASE = { environment: 'development', release: 'solus-desktop@1.0.0', homeDir: '/Users/ada' }
+function fakeIpc(): {
+  removeAllListeners: ReturnType<typeof vi.fn>
+  removeHandler: ReturnType<typeof vi.fn>
+} {
+  return { removeAllListeners: vi.fn(), removeHandler: vi.fn() }
+}
+
+const BASE = {
+  environment: 'development',
+  release: 'solus-desktop@1.0.0',
+  homeDir: '/Users/ada',
+  ipc: fakeIpc()
+}
 
 describe('loadSentrySink', () => {
   it('returns null and never loads the SDK when no DSN is configured', async () => {
@@ -47,6 +59,29 @@ describe('loadSentrySink', () => {
       release: 'solus-desktop@1.0.0'
     })
     expect(o.beforeBreadcrumb()).toBeNull()
+  })
+
+  it("tears down the SDK's own renderer IPC channels (no renderer may feed Sentry directly)", async () => {
+    const sentry = fakeSentry()
+    const ipc = fakeIpc()
+    await loadSentrySink({ ...BASE, ipc, dsn: 'https://k@o/1', load: async () => sentry })
+    const ns = (sentry.initOptions() as unknown as { ipcNamespace: string }).ipcNamespace
+    expect(ns).toMatch(/^sentry-ipc-[0-9a-f-]{36}$/)
+    const removed = ipc.removeAllListeners.mock.calls.map(([channel]) => channel)
+    for (const ch of ['start', 'scope', 'envelope', 'structured-log', 'metric', 'status']) {
+      expect(removed).toContain(`${ns}.${ch}`)
+    }
+    expect(ipc.removeHandler).toHaveBeenCalledWith(`${ns}.feedback`)
+  })
+
+  it('uses a fresh IPC namespace per launch', async () => {
+    const a = fakeSentry()
+    const b = fakeSentry()
+    await loadSentrySink({ ...BASE, dsn: 'https://k@o/1', load: async () => a })
+    await loadSentrySink({ ...BASE, dsn: 'https://k@o/1', load: async () => b })
+    const ns = (s: ReturnType<typeof fakeSentry>): string =>
+      (s.initOptions() as unknown as { ipcNamespace: string }).ipcNamespace
+    expect(ns(a)).not.toBe(ns(b))
   })
 
   it('keeps only allowlisted integrations', async () => {

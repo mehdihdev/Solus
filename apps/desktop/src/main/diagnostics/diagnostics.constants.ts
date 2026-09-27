@@ -7,7 +7,10 @@ export const DIAG_CHANNELS = {
   /** renderer → main: one caught renderer error (validated, scrubbed in main). */
   report: 'diag:report',
   /** renderer → main: read-and-clear the prior session's crash marker. */
-  takeCrashMarker: 'diag:take-crash-marker'
+  takeCrashMarker: 'diag:take-crash-marker',
+  /** main renderer → main: the signed-in user's data-collection consent,
+   *  which gates Sentry (false on sign-out). */
+  setConsent: 'diag:set-consent'
 } as const
 
 export const RENDERER_ORIGINS = ['render', 'window_error', 'unhandled_rejection'] as const
@@ -45,12 +48,22 @@ export const ERROR_NAMES = [
 ] as const
 export type ErrorNameCategory = (typeof ERROR_NAMES)[number]
 
-/** Bounds on what a renderer may hand main; longer fields are truncated. */
+/** Final bounds, applied AFTER scrubbing (a token cut first could slip past
+ *  the scrubber as a fragment). */
 export const REPORT_LIMITS = {
   name: 64,
   message: 1_000,
   stack: 8_000,
   componentStack: 4_000
+} as const
+
+/** Transport bounds on what a renderer may hand main — generous (4×), so the
+ *  final cut still happens after scrubbing; they only stop a flood. */
+export const REPORT_INPUT_LIMITS = {
+  name: REPORT_LIMITS.name * 4,
+  message: REPORT_LIMITS.message * 4,
+  stack: REPORT_LIMITS.stack * 4,
+  componentStack: REPORT_LIMITS.componentStack * 4
 } as const
 
 /** One error from any origin, before scrubbing. */

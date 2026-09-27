@@ -16,6 +16,7 @@ import {
   type Subscription,
   type UserSettings
 } from '../../lib/api/resources'
+import { errorConsent } from '../../lib/errors/appErrorReporter'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 import { useSettingsStore, type SolMode } from '../../store/settingsStore'
@@ -165,6 +166,8 @@ function useSetConsent(
       setError('consent', null)
       try {
         await updateConsent(next)
+        // SOLUSDEV-311: the Sentry gate in main follows the saved choice.
+        errorConsent.onConsentChanged(next)
         return true
       } catch (error) {
         setConsentState(previous)

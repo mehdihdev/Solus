@@ -1,9 +1,10 @@
 // SOLUSDEV-311: validate a `diag:report` payload. Any app window's renderer can
 // send one, so it is untrusted: wrong shapes or extra keys are refused (null),
-// oversize text is truncated rather than refused so a real error still lands.
+// oversize text is bounded (transport limits) rather than refused so a real
+// error still lands; the final cut happens after scrubbing.
 import {
   ERROR_SURFACES,
-  REPORT_LIMITS,
+  REPORT_INPUT_LIMITS,
   RENDERER_ORIGINS,
   isOneOf,
   type RendererErrorReport
@@ -39,11 +40,11 @@ export function parseRendererReport(raw: unknown): RendererErrorReport | null {
   return {
     origin,
     surface,
-    name: clip(name, REPORT_LIMITS.name),
-    message: clip(message, REPORT_LIMITS.message),
-    ...(typeof stack === 'string' ? { stack: clip(stack, REPORT_LIMITS.stack) } : {}),
+    name: clip(name, REPORT_INPUT_LIMITS.name),
+    message: clip(message, REPORT_INPUT_LIMITS.message),
+    ...(typeof stack === 'string' ? { stack: clip(stack, REPORT_INPUT_LIMITS.stack) } : {}),
     ...(typeof componentStack === 'string'
-      ? { componentStack: clip(componentStack, REPORT_LIMITS.componentStack) }
+      ? { componentStack: clip(componentStack, REPORT_INPUT_LIMITS.componentStack) }
       : {})
   }
 }

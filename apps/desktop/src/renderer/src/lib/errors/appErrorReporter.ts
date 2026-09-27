@@ -2,6 +2,8 @@
 // typed events client and the open project. Tests build their own with
 // createErrorReporter; this module only wires.
 import { postDataEvents } from '../api/resources.extensions'
+import { getSettings } from '../api/resources'
+import { createConsentSync } from './errorConsent'
 import { getDesktopDiagnosticsBridge } from '../desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
@@ -28,3 +30,9 @@ export function currentErrorSurface(): ErrorSurface {
     ? useShellStore.getState().lastMain
     : 'root'
 }
+
+/** Main's Sentry gate, kept in step with the user's data-collection consent. */
+export const errorConsent = createConsentSync({
+  bridge: getDesktopDiagnosticsBridge,
+  fetchConsent: () => getSettings().then((s) => s.data_collection_consent)
+})
