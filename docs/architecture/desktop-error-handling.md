@@ -95,11 +95,11 @@ desktop bridge exists (Empty beats invented).
 
 ## Configuration
 
-| Key                            | Where                                                                 | Meaning                                                                 |
-| ------------------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `MAIN_VITE_SENTRY_DSN`         | root `.env` (via `.env.mega`) — inlined into the main bundle at build | Sentry DSN; absent = no Sentry                                          |
-| `SENTRY_DSN`                   | process env at runtime                                                | overrides the above in **development only** (a packaged app ignores it) |
-| `MAIN_VITE_SENTRY_ENVIRONMENT` | root `.env`                                                           | environment tag; default `development` / `production` by build mode     |
+| Key                            | Where                                                    | Meaning                                                                 |
+| ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `MAIN_VITE_SENTRY_DSN`         | repo-root `.env` — inlined into the main bundle at build | Sentry DSN; absent = no Sentry                                          |
+| `SENTRY_DSN`                   | process env at runtime                                   | overrides the above in **development only** (a packaged app ignores it) |
+| `MAIN_VITE_SENTRY_ENVIRONMENT` | root `.env`                                              | environment tag; default `development` / `production` by build mode     |
 
 Files: log in `app.getPath('logs')` (macOS `~/Library/Logs/<app>/solus-errors.log`); crash
 marker in `app.getPath('userData')/solus-crash.json` (mode 0600).
