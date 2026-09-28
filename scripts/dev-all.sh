@@ -143,17 +143,28 @@ pids=()
 #
 # `set -m` above makes each job its own process group whose id equals the job
 # pid, so the negative-pid form reaches the whole tree. TERM first, then a
-# bounded wait — an unresponsive child gets KILL rather than an orphan.
+# bounded wait (~8 s, for every group) — an unresponsive child gets KILL
+# rather than an orphan.
 cleanup() {
-  trap - INT TERM EXIT   # idempotent: EXIT would otherwise re-enter after INT
+  # Ignore (not merely reset) further interrupts: pnpm SIGTERMs this script
+  # right after Ctrl+C, and people press Ctrl+C twice. Dying here mid-cleanup
+  # orphaned whatever had not stopped yet (SOLUSDEV-311). KILL below still
+  # bounds the whole shutdown.
+  trap '' INT TERM
+  trap - EXIT
   # Nothing started yet — an early exit (missing .env, busy port) lands here
   # too, and under `set -u` an empty array would abort with "pids[0]: unbound".
   [ "${#pids[@]}" -eq 0 ] && return 0
   echo
   echo "[dev:all] shutting down…"
   for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true; done
-  for _ in $(seq 1 10); do
-    kill -0 "${pids[0]}" 2>/dev/null || break
+  # Wait for EVERY service, not just the first: the API stops in milliseconds,
+  # while Electron needs a few seconds to stop the companion (SIGTERM, 3 s
+  # grace). Killing it early left the companion running on its own.
+  for _ in $(seq 1 16); do
+    alive=""
+    for pid in "${pids[@]}"; do kill -0 -- "-$pid" 2>/dev/null && alive=1; done
+    [ -z "$alive" ] && break
     sleep 0.5
   done
   for pid in "${pids[@]}"; do kill -KILL -- "-$pid" 2>/dev/null || true; done

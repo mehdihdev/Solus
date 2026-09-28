@@ -416,7 +416,9 @@ async def test_schema_check_never_mutates_and_always_disposes(
     connection.execute.assert_not_called()
 
 
-def _long_running_launcher(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
+def _long_running_launcher(
+    tmp_path: Path, desktop: str | None = None
+) -> tuple[Path, dict[str, str], Path]:
     """A launcher sandbox whose API, worker and desktop keep running (like a
     real session) and record their pids, so a test can interrupt it."""
     root = Path(__file__).resolve().parents[3]
@@ -441,9 +443,9 @@ def _long_running_launcher(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
             "*) exit 0;; esac"
         ),
         "docker": "exit 0",
-        "pnpm": f'echo pnpm >> "$COMMAND_LOG"; {service}',
+        "pnpm": f'echo pnpm >> "$COMMAND_LOG"; {desktop or service}',
         "lsof": "exit 1",
-        "seq": "echo 1 2",
+        # No `seq` stub: cleanup's bounded wait is a `seq` loop and must run in full.
     }.items():
         path = binaries / name
         path.write_text(f"#!/bin/sh\n{body}\n")
@@ -536,3 +538,56 @@ def test_ctrl_c_in_a_terminal_stops_the_whole_stack(tmp_path: Path) -> None:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(service, 9)
         os.close(fd)
+
+
+# A desktop that needs time to quit (Electron stopping the companion: SIGTERM,
+# then a 3 s grace) and one that ignores SIGTERM altogether.
+_SLOW_DESKTOP = (
+    'trap \'sleep 2; echo "clean $$" >> "$COMMAND_LOG"; exit 0\' TERM; '
+    'echo "service $$" >> "$COMMAND_LOG"; while :; do sleep 0.2; done'
+)
+_STUBBORN_DESKTOP = (
+    'trap \'\' TERM; echo "service $$" >> "$COMMAND_LOG"; while :; do sleep 0.2; done'
+)
+
+
+def _interrupt_and_wait(tmp_path: Path, desktop: str, repeat: bool) -> tuple[Path, list[int]]:
+    script, env, log = _long_running_launcher(tmp_path, desktop)
+    proc, fd = _launch_in_terminal(script, env)
+    try:
+        started = _wait_until(lambda: len(_service_pids(log)) == 3, 15, fd)
+        assert started, "services never started"
+        _wait_until(lambda: False, 1.5, fd)
+        os.write(fd, b"\x03")
+        if repeat:  # pnpm SIGTERMs its child; impatient users press Ctrl+C again
+            _wait_until(lambda: False, 0.3, fd)
+            with contextlib.suppress(ProcessLookupError):
+                proc.send_signal(15)
+            os.write(fd, b"\x03")
+        assert _wait_until(lambda: proc.poll() is not None, 15, fd), "launcher never exited"
+        services = _service_pids(log)
+        _wait_until(lambda: not any(_alive(p) for p in services), 3, fd)
+        return log, services
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        for service in _service_pids(log):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(service, 9)
+        os.close(fd)
+
+
+def test_ctrl_c_lets_every_service_finish_a_graceful_stop(tmp_path: Path) -> None:
+    """Cleanup waits for ALL services, not just the first (the API stops in
+    milliseconds): SIGKILLing Electron mid-quit orphaned the companion."""
+    log, services = _interrupt_and_wait(tmp_path, _SLOW_DESKTOP, repeat=False)
+    assert not any(_alive(p) for p in services)
+    assert "clean " in log.read_text(), "desktop was killed before it could stop cleanly"
+
+
+def test_repeated_interrupts_cannot_abort_cleanup(tmp_path: Path) -> None:
+    """A second SIGINT/SIGTERM during cleanup (pnpm forwards one) must not kill
+    the launcher mid-cleanup: a service that ignores SIGTERM is still reaped."""
+    _log, services = _interrupt_and_wait(tmp_path, _STUBBORN_DESKTOP, repeat=True)
+    assert not any(_alive(p) for p in services), "a service was orphaned"
