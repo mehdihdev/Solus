@@ -8,9 +8,14 @@
 // global script, so never add a top-level import/export here).
 //
 // Only what main actually reads: `companion.ts` needs the API base to tell the
-// companion which origin to dial back to.
+// companion which origin to dial back to; diagnostics needs the Sentry keys.
 interface ImportMetaEnv {
   /** Solus REST API base URL. Blank/absent falls back to the loopback default
    *  via `resolveApiBaseUrl` — never treat '' as a usable base. */
   readonly VITE_API_BASE_URL?: string
+  /** SOLUSDEV-311: Sentry DSN for the main-only error sink. Absent = no Sentry
+   *  (errors still go to stdout + solus-errors.log). SENTRY_DSN at runtime wins. */
+  readonly MAIN_VITE_SENTRY_DSN?: string
+  /** Sentry environment tag; defaults to development/production by build mode. */
+  readonly MAIN_VITE_SENTRY_ENVIRONMENT?: string
 }

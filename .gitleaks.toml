@@ -37,6 +37,15 @@ regexes = [
   # artifact id, never a credential (the constant is named STORAGE_REF now, but
   # the literal remains in history and re-surfaces on every graft boundary).
   '''0d7a5e2a-1c1a-4a6d-9d0e-2b6a5f9c1a10''',
+  # SOLUSDEV-311: a made-up refresh token in the error scrubber's regression
+  # table (apps/desktop/src/main/diagnostics/scrub.test.ts). The fixture is now
+  # assembled at runtime, but the literal remains in history (commit 1504c486).
+  '''f9Xk2LmQpR7s''',
+  # A telemetry key comparison in hardware/presence_topology.py (on main since
+  # 6b7faa19): generic-api-key reads `key == "probe.i2c.responding"` as a key
+  # assignment. It is a probe signal name, never a credential. Surfaced by the
+  # full-history scan a policy change triggers.
+  '''key == "probe\.i2c\.responding"''',
 ]
 
 # You can also pin the exact findings by fingerprint (most surgical):

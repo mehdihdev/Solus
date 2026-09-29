@@ -3,10 +3,13 @@
 #   Postgres/Redis (docker) → FastAPI + ARQ worker → Electron desktop app.
 # Ctrl+C tears all of them down.
 set -uo pipefail
-# Job control, deliberately, in a non-interactive script: it puts every
-# background job in its own process group, which is what lets cleanup() kill a
-# whole tree instead of just the subshell in front of it. See cleanup().
-set -m
+# Job control, deliberately, but ONLY while a service is being launched (see
+# `set -m` / `set +m` around each `&`): it puts every background job in its own
+# process group, which is what lets cleanup() kill a whole tree instead of just
+# the subshell in front of it. It must be OFF the rest of the time: with job
+# control on, bash also gives each FOREGROUND command (the watch loop's `sleep`,
+# the readiness probe) its own group and hands it the terminal, so Ctrl+C
+# killed that `sleep` and the launcher ran on (SOLUSDEV-311).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -140,22 +143,37 @@ pids=()
 #
 # `set -m` above makes each job its own process group whose id equals the job
 # pid, so the negative-pid form reaches the whole tree. TERM first, then a
-# bounded wait — an unresponsive child gets KILL rather than an orphan.
+# bounded wait (~8 s, for every group) — an unresponsive child gets KILL
+# rather than an orphan.
 cleanup() {
-  trap - INT TERM EXIT   # idempotent: EXIT would otherwise re-enter after INT
+  # Ignore (not merely reset) further interrupts: pnpm SIGTERMs this script
+  # right after Ctrl+C, and people press Ctrl+C twice. Dying here mid-cleanup
+  # orphaned whatever had not stopped yet (SOLUSDEV-311). KILL below still
+  # bounds the whole shutdown.
+  trap '' INT TERM
+  trap - EXIT
   # Nothing started yet — an early exit (missing .env, busy port) lands here
   # too, and under `set -u` an empty array would abort with "pids[0]: unbound".
   [ "${#pids[@]}" -eq 0 ] && return 0
   echo
   echo "[dev:all] shutting down…"
   for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true; done
-  for _ in $(seq 1 10); do
-    kill -0 "${pids[0]}" 2>/dev/null || break
+  # Wait for EVERY service, not just the first: the API stops in milliseconds,
+  # while Electron needs a few seconds to stop the companion (SIGTERM, 3 s
+  # grace). Killing it early left the companion running on its own.
+  for _ in $(seq 1 16); do
+    alive=""
+    for pid in "${pids[@]}"; do kill -0 -- "-$pid" 2>/dev/null && alive=1; done
+    [ -z "$alive" ] && break
     sleep 0.5
   done
   for pid in "${pids[@]}"; do kill -KILL -- "-$pid" 2>/dev/null || true; done
 }
-trap cleanup INT TERM EXIT
+# An interrupt ends the launch after cleanup — it must not fall back into the
+# watch loop (which would then report a misleading "stopped" and exit 1).
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap cleanup EXIT
 
 # Stripe webhooks can't reach localhost on their own — without the forwarder a
 # completed Checkout never flips the local plan/credits. Self-contained: the
@@ -200,6 +218,7 @@ fi
 echo "[dev:all] starting API on http://127.0.0.1:$API_PORT (docs at /api/v1/docs)…"
 # The signing secret is passed to the API process ONLY (least privilege) — the
 # desktop app and forwarder never see it.
+set -m
 if [ -n "${STRIPE_DEV_SECRET:-}" ]; then
   (cd packages/api && SOLUS_STRIPE_WEBHOOK_SECRET="$STRIPE_DEV_SECRET" uv run --no-sync uvicorn --factory solus_api.main:create_app --host 127.0.0.1 --port "$API_PORT" --reload) &
 else
@@ -207,6 +226,7 @@ else
 fi
 pids+=($!)
 API_PID=$!
+set +m
 API_READY=""
 for _ in $(seq 1 60); do
   if ! kill -0 "$API_PID" 2>/dev/null; then break; fi
@@ -227,8 +247,10 @@ fi
 WORKER_PID=""
 if [ "$REDIS_MODE" != "disabled" ]; then
   echo "[dev:all] starting background job worker…"
+  set -m
   (cd packages/api && uv run --no-sync arq solus_api.worker_main.WorkerSettings </dev/null) &
   WORKER_PID=$!
+  set +m
   pids+=("$WORKER_PID")
 fi
 
@@ -253,14 +275,18 @@ for lock in integrations/mcp/*/requirements.lock.txt; do
 done
 
 echo "[dev:all] starting desktop app…"
+set -m
 pnpm --filter @solus/desktop dev &
 pids+=($!)
 DESKTOP_PID=$!
+set +m
 
 if [ -n "$STRIPE_FORWARD" ]; then
   echo "[dev:all] starting Stripe webhook forwarder (stripe listen)…"
+  set -m
   stripe listen --forward-to "http://127.0.0.1:$API_PORT/api/v1/webhooks/stripe" &
   pids+=($!)
+  set +m
 fi
 
 # Only primary services determine stack lifetime. An optional forwarder exit

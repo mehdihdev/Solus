@@ -58,7 +58,11 @@ it.each([
 
 it('relinks a shared opaque reference using only its bare UUID', async () => {
   render(<HardwareSourcesPanel projectId={PROJECT} mode="Guide" sourceRefs={[`source:${REF}`]} />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Relink source 1' }))
+  // The button renders disabled while the initial list() load is in flight; a
+  // click then is a no-op. Wait until it is live — a slow CI runner lost the race.
+  const relink = await screen.findByRole('button', { name: 'Relink source 1' })
+  await waitFor(() => expect(relink).toBeEnabled(), { timeout: 5_000 })
+  fireEvent.click(relink)
   await waitFor(() => expect(pick).toHaveBeenCalledWith({ sourceRef: REF }))
   expect(await screen.findByText('calibration.json')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Verify calibration.json' }))

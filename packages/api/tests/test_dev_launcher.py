@@ -1,10 +1,17 @@
 """The launcher resolves only this checkout's app ports without executing env text."""
 
+import contextlib
+import fcntl
 import importlib.util
 import os
+import pty
+import select
 import shutil
 import socket
 import subprocess
+import termios
+import time
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -407,3 +414,180 @@ async def test_schema_check_never_mutates_and_always_disposes(
     engine.dispose.assert_awaited_once()
     assert connection.run_sync.await_count == 2
     connection.execute.assert_not_called()
+
+
+def _long_running_launcher(
+    tmp_path: Path, desktop: str | None = None
+) -> tuple[Path, dict[str, str], Path]:
+    """A launcher sandbox whose API, worker and desktop keep running (like a
+    real session) and record their pids, so a test can interrupt it."""
+    root = Path(__file__).resolve().parents[3]
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copyfile(root / "scripts/dev-all.sh", scripts / "dev-all.sh")
+    (tmp_path / "packages/api").mkdir(parents=True)
+    (tmp_path / ".env").write_text("VITE_SUPABASE_URL=https://example.invalid\n")
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    log = tmp_path / "commands"
+    service = 'echo "service $$" >> "$COMMAND_LOG"; exec /bin/sleep 60'
+    for name, body in {
+        "node": 'case "$*" in *process.execPath*) echo "$NODE_PATH";; *) exit 0;; esac',
+        "uv": (
+            'case "$*" in '
+            "*dev_ports.py*--check-port*) exit 0;; "
+            '*dev_ports.py*) echo "8123 5210 compose";; '
+            "*--redis-mode*) echo compose;; "
+            "*--ready*) exit 0;; "
+            f"*uvicorn*|*arq*) {service};; "
+            "*) exit 0;; esac"
+        ),
+        "docker": "exit 0",
+        "pnpm": f'echo pnpm >> "$COMMAND_LOG"; {desktop or service}',
+        "lsof": "exit 1",
+        # No `seq` stub: cleanup's bounded wait is a `seq` loop and must run in full.
+    }.items():
+        path = binaries / name
+        path.write_text(f"#!/bin/sh\n{body}\n")
+        path.chmod(0o700)
+    env = {
+        **os.environ,
+        "PATH": f"{binaries}:/usr/bin:/bin",
+        "NODE_PATH": str(binaries / "node"),
+        "SOLUS_NODE_BIN": str(binaries / "node"),
+        "COMMAND_LOG": str(log),
+    }
+    return scripts / "dev-all.sh", env, log
+
+
+def _drain(fd: int) -> None:
+    """Read whatever the launcher printed, without ever blocking."""
+    while select.select([fd], [], [], 0)[0]:
+        try:
+            if not os.read(fd, 65536):
+                return
+        except OSError:
+            return
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _wait_until(condition: Callable[[], bool], seconds: float, fd: int) -> bool:
+    """Poll `condition` while keeping the PTY drained (a full PTY blocks the child)."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        _drain(fd)
+        if condition():
+            return True
+        time.sleep(0.1)
+    return condition()
+
+
+def _service_pids(log: Path) -> list[int]:
+    lines = log.read_text().splitlines() if log.exists() else []
+    return [int(line.split()[1]) for line in lines if line.startswith("service ")]
+
+
+def _launch_in_terminal(script: Path, env: dict[str, str]) -> tuple[subprocess.Popen[bytes], int]:
+    """Start the launcher with a fresh PTY as its controlling terminal."""
+    fd, tty = pty.openpty()
+
+    def attach_terminal() -> None:
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    proc = subprocess.Popen(  # noqa: S603 — fixed argv, sandboxed PATH
+        ["/bin/bash", str(script)],
+        stdin=tty,
+        stdout=tty,
+        stderr=tty,
+        env=env,
+        start_new_session=True,
+        preexec_fn=attach_terminal,  # noqa: PLW1509 — a TTY needs it; nothing else runs here
+    )
+    os.close(tty)
+    return proc, fd
+
+
+def test_ctrl_c_in_a_terminal_stops_the_whole_stack(tmp_path: Path) -> None:
+    """Ctrl+C is delivered to the terminal's FOREGROUND process group. Job
+    control must not hand that group to the watch loop's own `sleep`/probe,
+    or the keystroke kills a sleep and the launcher runs on (SOLUSDEV-311)."""
+    script, env, log = _long_running_launcher(tmp_path)
+    proc, fd = _launch_in_terminal(script, env)
+    try:
+        started = _wait_until(lambda: log.exists() and "pnpm" in log.read_text(), 15, fd)
+        assert started, "desktop never started"
+        _wait_until(lambda: False, 1.5, fd)  # settle into the watch loop
+        os.write(fd, b"\x03")
+        assert _wait_until(lambda: proc.poll() is not None, 10, fd), "Ctrl+C did not stop it"
+        services = _service_pids(log)
+        assert len(services) == 3
+        stopped = _wait_until(lambda: not any(_alive(p) for p in services), 5, fd)
+        assert stopped, "a service outlived Ctrl+C"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        for service in _service_pids(log):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(service, 9)
+        os.close(fd)
+
+
+# A desktop that needs time to quit (Electron stopping the companion: SIGTERM,
+# then a 3 s grace) and one that ignores SIGTERM altogether.
+_SLOW_DESKTOP = (
+    'trap \'sleep 2; echo "clean $$" >> "$COMMAND_LOG"; exit 0\' TERM; '
+    'echo "service $$" >> "$COMMAND_LOG"; while :; do sleep 0.2; done'
+)
+_STUBBORN_DESKTOP = (
+    'trap \'\' TERM; echo "service $$" >> "$COMMAND_LOG"; while :; do sleep 0.2; done'
+)
+
+
+def _interrupt_and_wait(tmp_path: Path, desktop: str, repeat: bool) -> tuple[Path, list[int]]:
+    script, env, log = _long_running_launcher(tmp_path, desktop)
+    proc, fd = _launch_in_terminal(script, env)
+    try:
+        started = _wait_until(lambda: len(_service_pids(log)) == 3, 15, fd)
+        assert started, "services never started"
+        _wait_until(lambda: False, 1.5, fd)
+        os.write(fd, b"\x03")
+        if repeat:  # pnpm SIGTERMs its child; impatient users press Ctrl+C again
+            _wait_until(lambda: False, 0.3, fd)
+            with contextlib.suppress(ProcessLookupError):
+                proc.send_signal(15)
+            os.write(fd, b"\x03")
+        assert _wait_until(lambda: proc.poll() is not None, 15, fd), "launcher never exited"
+        services = _service_pids(log)
+        _wait_until(lambda: not any(_alive(p) for p in services), 3, fd)
+        return log, services
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        for service in _service_pids(log):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(service, 9)
+        os.close(fd)
+
+
+def test_ctrl_c_lets_every_service_finish_a_graceful_stop(tmp_path: Path) -> None:
+    """Cleanup waits for ALL services, not just the first (the API stops in
+    milliseconds): SIGKILLing Electron mid-quit orphaned the companion."""
+    log, services = _interrupt_and_wait(tmp_path, _SLOW_DESKTOP, repeat=False)
+    assert not any(_alive(p) for p in services)
+    assert "clean " in log.read_text(), "desktop was killed before it could stop cleanly"
+
+
+def test_repeated_interrupts_cannot_abort_cleanup(tmp_path: Path) -> None:
+    """A second SIGINT/SIGTERM during cleanup (pnpm forwards one) must not kill
+    the launcher mid-cleanup: a service that ignores SIGTERM is still reaped."""
+    _log, services = _interrupt_and_wait(tmp_path, _STUBBORN_DESKTOP, repeat=True)
+    assert not any(_alive(p) for p in services), "a service was orphaned"

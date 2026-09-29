@@ -257,6 +257,158 @@ async def test_project_switched_drops_unresolvable_ids_to_null(
     assert foreign_inside.payload["from_project_id"] is None
 
 
+def _client_error(**over: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "event_type": "client.error",
+        "payload": {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789abcdef",
+            "app_version": "1.2.3",
+        },
+    }
+    event.update(over)
+    return event
+
+
+async def test_client_error_is_a_typed_client_event(client: AsyncClient, db: AsyncSession) -> None:
+    """SOLUSDEV-311: the desktop reports WHERE and WHAT KIND of error a
+    boundary/global handler caught (or a prior-session crash reported on next
+    launch) — never the message or stack, which stay in the local log/Sentry."""
+    alice_id = await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    event = _client_error(project_id=project["id"])
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    rows = list(
+        (await db.scalars(select(DataEvent).where(DataEvent.event_type == "client.error"))).all()
+    )
+    assert len(rows) == 1
+    assert str(rows[0].user_id) == alice_id
+    assert str(rows[0].project_id) == project["id"]
+    assert rows[0].payload == {
+        "origin": "render",
+        "surface": "workspace",
+        "error_name": "TypeError",
+        "fingerprint": "0123456789abcdef",
+        "app_version": "1.2.3",
+    }
+
+
+async def test_client_error_without_consent_nothing_is_stored(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    resp = await client.post("/api/v1/events", json={"events": [_client_error()]}, headers=headers)
+    assert resp.status_code == 202
+    rows = list(
+        (await db.scalars(select(DataEvent).where(DataEvent.event_type == "client.error"))).all()
+    )
+    assert rows == []
+
+
+async def test_client_error_drops_a_foreign_project_id(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    alice_headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, alice_headers)
+    project = await _project(client, alice_headers)
+    bob_id = await _consented_user(client, db, BOB)
+    resp = await client.post(
+        "/api/v1/events",
+        json={"events": [_client_error(project_id=project["id"])]},
+        headers=bearer(BOB["sub"], BOB["email"]),
+    )
+    assert resp.status_code == 202
+    rows = list(
+        (await db.scalars(select(DataEvent).where(DataEvent.event_type == "client.error"))).all()
+    )
+    assert len(rows) == 1
+    assert str(rows[0].user_id) == bob_id and rows[0].project_id is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # unknown key
+        {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789abcdef",
+            "app_version": "1.2.3",
+            "message": "boom",
+        },
+        # bad origin enum
+        {
+            "origin": "network",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789abcdef",
+            "app_version": "1.2.3",
+        },
+        # bad surface enum
+        {
+            "origin": "render",
+            "surface": "somewhere",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789abcdef",
+            "app_version": "1.2.3",
+        },
+        # bad error_name enum
+        {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "CustomError",
+            "fingerprint": "0123456789abcdef",
+            "app_version": "1.2.3",
+        },
+        # fingerprint too short
+        {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123abc",
+            "app_version": "1.2.3",
+        },
+        # fingerprint uppercase (not [0-9a-f])
+        {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789ABCDEF",
+            "app_version": "1.2.3",
+        },
+        # bad app_version pattern
+        {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789abcdef",
+            "app_version": "v1.2.3",
+        },
+        # missing field
+        {
+            "origin": "render",
+            "surface": "workspace",
+            "error_name": "TypeError",
+            "fingerprint": "0123456789abcdef",
+        },
+    ],
+)
+async def test_client_error_payload_is_strictly_typed(
+    client: AsyncClient, payload: dict[str, Any]
+) -> None:
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    event = _client_error(payload=payload)
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 422, (payload, resp.text)
+
+
 async def test_store_suggested_is_a_typed_client_event(
     client: AsyncClient, db: AsyncSession
 ) -> None:

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { createOrbOverlayBridge } from './orbOverlayBridge'
 import { createSolBridge } from './solBridge'
+import { createDiagnosticsBridge } from './diagnosticsBridge'
 import { EXT_CHANNELS } from '../main/extensions/extensions.constants'
 import type {
   ExtDevLoadResult,
@@ -169,6 +170,8 @@ const solus = {
   platform: process.platform,
   orbOverlay: createOrbOverlayBridge(ipcRenderer),
   sol: createSolBridge(ipcRenderer),
+  // SOLUSDEV-311: error reporting to main (validated, scrubbed and logged there).
+  diagnostics: createDiagnosticsBridge(ipcRenderer),
   // Extensions (SOLUSDEV-235 / ADR-035, EXT-05): the machine-local bundle cache,
   // developer mode, the window host, and the network egress proxy. The main
   // process re-validates every argument; nothing here holds a credential.

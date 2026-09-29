@@ -54,6 +54,9 @@ CLIENT_EVENT_TYPES = frozenset(
         # SOLUSDEV-246 (STORE ST3): the desktop suggested a widget in context after a
         # source kind connected.
         "store.suggested",
+        # SOLUSDEV-311: a desktop error caught by a boundary or global handler, or a
+        # prior-session main/renderer crash reported on the next launch.
+        "client.error",
     }
 )
 MAX_EVENTS_PER_BATCH = 50
@@ -87,12 +90,47 @@ class StoreSuggestedPayload(BaseModel):
     candidates: Annotated[int, Field(ge=1, le=500)]
 
 
+class ClientErrorPayload(BaseModel):
+    """`client.error` (SOLUSDEV-311): WHERE and WHAT KIND, never the message or
+    stack — those stay in the local log / Sentry. Every field is closed or patterned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    origin: Literal[
+        "render", "window_error", "unhandled_rejection", "main_process", "renderer_gone"
+    ]
+    surface: Literal[
+        "root",
+        "home",
+        "workspace",
+        "bench",
+        "sol",
+        "store",
+        "billing",
+        "settings",
+        "alert",
+        "extension",
+        "sol_window",
+        "overlay",
+        "ext_window",
+        "main",
+    ]
+    error_name: Literal[
+        "Error", "TypeError", "ReferenceError", "RangeError", "SyntaxError", "ApiError", "other"
+    ]
+    fingerprint: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
+    app_version: Annotated[
+        str, StringConstraints(pattern=r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]{1,32})?$")
+    ]
+
+
 #: Per-event payload schemas. A client event WITH a schema is validated against
 #: it (unknown keys, bad enums and malformed ids reject); the data-collection
 #: store never accepts free-form strings under a Solus-authored event name.
 PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
     "project.switched": ProjectSwitchedPayload,
     "store.suggested": StoreSuggestedPayload,
+    "client.error": ClientErrorPayload,
 }
 
 

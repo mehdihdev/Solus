@@ -79,6 +79,26 @@ import {
 } from './extensions/extensionWindow'
 import { createExtensionsIpc, registerExtensionsIpc } from './extensions/extensionsIpc'
 import { realNetProxyDeps } from './extensions/netProxy'
+import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { pathToFileURL } from 'node:url'
+import { bootDiagnostics, resolveSentryConfig } from './diagnostics/boot'
+import { isAppRendererUrl } from './diagnostics/diagnosticsIpc'
+import { loadSentrySink } from './diagnostics/sentrySink'
+
+// SOLUSDEV-311: error reporting first — crash handlers are live before
+// anything below can throw (docs/architecture/desktop-error-handling.md).
+const diagnostics = bootDiagnostics({
+  app,
+  proc: process,
+  ipcMain,
+  showErrorBox: (title, body) => dialog.showErrorBox(title, body),
+  homeDir: homedir(),
+  isDev: is.dev,
+  ensureDir: (path) => mkdirSync(path, { recursive: true }),
+  loadSentry: loadSentrySink,
+  sentry: resolveSentryConfig(process.env, import.meta.env, is.dev)
+})
 
 enableShortcutPortal(
   app.commandLine,
@@ -272,6 +292,26 @@ function registerExtensionHandlers(): void {
  *  `senderGate.ts`, where it can be tested. */
 function isMainRendererSender(event: Electron.IpcMainInvokeEvent): boolean {
   return isFromWindow(event.sender, mainWindow)
+}
+
+/** The Solus renderer's own URL base: the dev server, or the packaged index.html. */
+function rendererBase(): string {
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+  return is.dev && devUrl ? devUrl : pathToFileURL(join(__dirname, '../renderer/index.html')).href
+}
+
+/** Diagnostics admit any Solus app window (main, SOL, overlay, extension host —
+ *  one bundle) from its top frame, never the checkout window, a subframe, or a
+ *  page that navigated away. */
+function isAppWindowSender(event: { sender: unknown; senderFrame?: unknown }): boolean {
+  const contents = event.sender as Electron.WebContents
+  const win = BrowserWindow.fromWebContents(contents)
+  return (
+    win !== null &&
+    !isCheckoutWindow(win) &&
+    event.senderFrame === contents.mainFrame &&
+    isAppRendererUrl(contents.getURL(), rendererBase())
+  )
 }
 
 /** The SOL channels admit the main renderer OR the SOL window's own renderer
@@ -489,6 +529,13 @@ if (!app.requestSingleInstanceLock()) {
       // Never wire dev shortcuts (F12 devtools) onto windows showing remote
       // content (the Stripe checkout window) — app windows only.
       if (!isCheckoutWindow(window)) optimizer.watchWindowShortcuts(window)
+    })
+
+    diagnostics.registerIpc({
+      isAppSender: isAppWindowSender,
+      isMainSender: (event) =>
+        isFromWindow(event.sender, mainWindow) &&
+        event.senderFrame === mainWindow?.webContents.mainFrame
     })
 
     registerProjectFolderHandlers()

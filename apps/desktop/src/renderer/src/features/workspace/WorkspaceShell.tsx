@@ -36,6 +36,8 @@ import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChr
 import { TitleBar } from './TitleBar'
 import { MenuBar } from './MenuBar'
 import { useShellStore, routeKey, type MainScreen, type ShellRoute } from './shellStore'
+import { ErrorBoundary } from '../../components/errors/ErrorBoundary'
+import { surfaceForRoute } from '../../components/errors/errorCopy'
 import { useFocusStore } from './focusStore'
 import { switchWorkspaceProject } from './projectSwitch'
 import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
@@ -444,7 +446,12 @@ function ScreenView({
       className="screen-in"
       style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}
     >
-      {screen}
+      {/* SOLUSDEV-311: a broken screen shows a fallback; the rail and every
+          other screen keep working. Keyed with the wrapper, so navigating away
+          and back also starts the screen fresh. */}
+      <ErrorBoundary surface={surfaceForRoute(route)} scope="panel">
+        {screen}
+      </ErrorBoundary>
     </div>
   )
 }
