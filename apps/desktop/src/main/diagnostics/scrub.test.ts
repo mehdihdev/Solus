@@ -72,7 +72,11 @@ describe('scrubText — formats the first pass missed (security review H3)', () 
       'GET /api/v1/projects?[redacted] failed'
     ],
     ['a schemeless hash fragment', 'at #/login#access_token=zz', 'at #/login#[redacted]'],
-    ['a JSON refresh token', '{"refresh_token":"f9Xk2LmQpR7s"}', '{"refresh_token":"[redacted]"}'],
+    [
+      'a JSON refresh token',
+      `{"refresh_token":"${fake('rt', 'Q7')}"}`,
+      '{"refresh_token":"[redacted]"}'
+    ],
     ['a password assignment', 'password=hunter2 rejected', 'password=[redacted] rejected'],
     ['an api key assignment', "api_key: 'k-123'", "api_key: '[redacted]'"],
     ['a percent-encoded email', 'user=john%40example.com', 'user=[email]'],
