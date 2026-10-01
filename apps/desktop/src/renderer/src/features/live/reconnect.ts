@@ -5,12 +5,16 @@
 
 export const RECONNECT_BASE_MS = 1_000
 export const RECONNECT_CAP_MS = 30_000
+/** How long a stream must stay up after `ready` before the backoff is forgiven. */
+export const STABLE_AFTER_READY_MS = 10_000
 
 /** `await-token`: 401 — retrying with the same token is pointless; the owning
  *  hook restarts when authStore hands it a fresh one. `stop`: 403/404. */
 export type FailureAction = 'retry' | 'await-token' | 'stop'
 export type StreamPhase = 'connecting' | 'live' | 'reconnecting'
 export type StreamOutcome = 'aborted' | 'stopped' | 'unauthorized'
+/** What an event handler may ask for: end for good, or reopen right now. */
+export type EventVerdict = 'stop' | 'reconnect-now' | void
 
 /** A uniformly random wait in [0, min(cap, base * 2^attempt)). */
 export function backoffDelayMs(attempt: number, random: () => number = Math.random): number {
@@ -65,11 +69,13 @@ async function nextOrAbort<T>(
   }
 }
 
+type ConsumeResult = StreamOutcome | 'reconnect-now' | null
+
 /** Drain one connection. Returns a final outcome, or null when it simply ended. */
 async function consume<T>(
   options: ReconnectingStreamOptions<T>,
   onHealthy: () => void
-): Promise<StreamOutcome | null> {
+): Promise<ConsumeResult> {
   const iterator = options.open(options.signal)[Symbol.asyncIterator]()
   try {
     for (;;) {
@@ -80,7 +86,9 @@ async function consume<T>(
         onHealthy()
         options.onPhase('live')
       }
-      if (options.onEvent(step.value) === 'stop') return 'stopped'
+      const verdict = options.onEvent(step.value)
+      if (verdict === 'stop') return 'stopped'
+      if (verdict === 'reconnect-now') return 'reconnect-now'
     }
   } finally {
     void Promise.resolve(iterator.return?.()).catch(() => undefined)
@@ -89,10 +97,14 @@ async function consume<T>(
 
 export interface ReconnectingStreamOptions<T> {
   open: (signal: AbortSignal) => AsyncIterable<T>
-  /** The event that proves the stream is healthy; it resets the backoff. */
+  /** The event that proves the stream is healthy; the backoff resets once the
+   *  stream has also stayed up for STABLE_AFTER_READY_MS. */
   isReady: (event: T) => boolean
-  /** Return `'stop'` to end the loop for good (e.g. access revoked). */
-  onEvent: (event: T) => 'stop' | void
+  /** Return `'stop'` to end the loop for good, or `'reconnect-now'` to drop this
+   *  connection and reopen immediately (the backoff does not grow). */
+  onEvent: (event: T) => EventVerdict
+  /** Called when a connection has stayed up for the stable period after ready. */
+  onStable?: () => void
   onPhase: (phase: StreamPhase) => void
   signal: AbortSignal
   random?: () => number
@@ -105,15 +117,24 @@ export async function runReconnectingStream<T>(
   const { signal, random } = options
   let attempt = 0
   let first = true
+  let stableTimer: ReturnType<typeof setTimeout> | undefined
+  const markHealthy = (): void => {
+    clearTimeout(stableTimer)
+    stableTimer = setTimeout(() => {
+      attempt = 0
+      options.onStable?.()
+    }, STABLE_AFTER_READY_MS)
+  }
   while (!signal.aborted) {
     options.onPhase(first ? 'connecting' : 'reconnecting')
     first = false
     try {
-      const verdict = await consume(options, () => {
-        attempt = 0
-      })
+      const verdict = await consume(options, markHealthy)
+      clearTimeout(stableTimer)
+      if (verdict === 'reconnect-now') continue
       if (verdict) return verdict
     } catch (cause) {
+      clearTimeout(stableTimer)
       if (signal.aborted) return 'aborted'
       const action = classifyStreamFailure(cause)
       if (action === 'stop') return 'stopped'

@@ -1,7 +1,7 @@
 // Real notifications for the shell bell (API.md §2.1): unread badge + mark-read.
 // Degrades to `offline` (dev bypass / unreachable API) so the shell can show
 // its honest sign-in popover instead.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   listNotificationsPage,
   markAllNotificationsRead,
@@ -9,6 +9,7 @@ import {
   type NotificationApi
 } from '../../lib/api/resources'
 import type { ApiMeta } from '../../lib/api/envelope.types'
+import { mergeFirstPage } from '../live/mergeActivity'
 import { liveKeys, useLiveRevision } from '../../store/liveRevisionStore'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
@@ -25,11 +26,11 @@ export interface NotificationsData {
   refresh: () => Promise<void>
 }
 
-function useNotificationRefresh(load: () => Promise<void>): void {
+function useNotificationRefresh(load: (merge?: boolean) => Promise<void>): void {
   // A `notification.created` live hint (ADR-037) bumps this revision.
   const revision = useLiveRevision(liveKeys.notifications)
   useEffect(() => {
-    void load()
+    void load(true)
   }, [load, revision])
 
   // The billing flow dispatches this after a checkout completes so the bell
@@ -38,7 +39,7 @@ function useNotificationRefresh(load: () => Promise<void>): void {
   // billing/useBillingData.NOTIFICATIONS_REFRESH_EVENT to avoid a cross-feature
   // import cycle.
   useEffect(() => {
-    const onRefresh = (): void => void load()
+    const onRefresh = (): void => void load(true)
     window.addEventListener('solus:notifications-refresh', onRefresh)
     return () => window.removeEventListener('solus:notifications-refresh', onRefresh)
   }, [load])
@@ -54,21 +55,36 @@ export function useNotifications(): NotificationsData {
   const [items, setItems] = useState<NotificationApi[]>([])
   const [meta, setMeta] = useState<ApiMeta>({})
 
-  const load = useCallback(async (): Promise<void> => {
-    if (!fetchEnabled) {
-      setStatus('offline')
-      return
-    }
-    try {
-      const page = await listNotificationsPage()
-      setItems(page.data)
-      setMeta(page.meta)
-      setStatus('ready')
-    } catch {
-      // A failed refresh must not blank a bell that is already populated.
-      setStatus((current) => (current === 'ready' ? 'ready' : 'offline'))
-    }
-  }, [fetchEnabled])
+  // Latest loaded rows, so a live refresh can merge into them without making
+  // `load` (and the effects keyed on it) depend on the list itself.
+  const loaded = useRef({ items, meta })
+  useEffect(() => {
+    loaded.current = { items, meta }
+  })
+
+  // `merge`: fold the fresh first page onto the loaded rows (live hints), keeping
+  // "load more" progress. Plain loads (mount, reconcile) replace the list.
+  const load = useCallback(
+    async (merge = false): Promise<void> => {
+      if (!fetchEnabled) {
+        setStatus('offline')
+        return
+      }
+      try {
+        const page = await listNotificationsPage()
+        const next = merge
+          ? mergeFirstPage(loaded.current, page)
+          : { items: page.data, meta: page.meta }
+        setItems(next.items)
+        setMeta(next.meta)
+        setStatus('ready')
+      } catch {
+        // A failed refresh must not blank a bell that is already populated.
+        setStatus((current) => (current === 'ready' ? 'ready' : 'offline'))
+      }
+    },
+    [fetchEnabled]
+  )
 
   // Append the next cursor page. No-op when there's nothing more; keeps the
   // current page on failure so the bell never regresses to empty.
@@ -116,6 +132,6 @@ export function useNotifications(): NotificationsData {
     markRead,
     markAllRead,
     loadMore,
-    refresh: load
+    refresh: () => load()
   }
 }

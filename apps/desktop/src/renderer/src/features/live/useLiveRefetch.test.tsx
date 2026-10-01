@@ -49,16 +49,40 @@ it('does not fire when the watched keys themselves change (a different team)', (
   expect(refetch).toHaveBeenCalledTimes(1)
 })
 
-it('is inert when disabled or keyless, and calls the latest callback', () => {
+it('is inert while disabled, and calls the latest callback', () => {
   const first = vi.fn()
   const second = vi.fn()
   const view = renderHook(({ cb, enabled }) => useLiveRefetch(['a', null], cb, enabled), {
     initialProps: { cb: first, enabled: false }
   })
-  bump('a')
   expect(first).not.toHaveBeenCalled()
   view.rerender({ cb: second, enabled: true })
+  expect(second).not.toHaveBeenCalled()
   bump('a')
   expect(first).not.toHaveBeenCalled()
   expect(second).toHaveBeenCalledTimes(1)
+})
+
+it('refetches once on enable when the revision moved while disabled', () => {
+  const refetch = vi.fn()
+  const view = renderHook(({ enabled }) => useLiveRefetch(['a'], refetch, enabled), {
+    initialProps: { enabled: false }
+  })
+  bump('a')
+  bump('a')
+  expect(refetch).not.toHaveBeenCalled()
+  view.rerender({ enabled: true })
+  expect(refetch).toHaveBeenCalledTimes(1)
+  view.rerender({ enabled: false })
+  view.rerender({ enabled: true })
+  expect(refetch).toHaveBeenCalledTimes(1)
+})
+
+it('does not refetch on enable when nothing moved while disabled', () => {
+  const refetch = vi.fn()
+  const view = renderHook(({ enabled }) => useLiveRefetch(['a'], refetch, enabled), {
+    initialProps: { enabled: false }
+  })
+  view.rerender({ enabled: true })
+  expect(refetch).not.toHaveBeenCalled()
 })

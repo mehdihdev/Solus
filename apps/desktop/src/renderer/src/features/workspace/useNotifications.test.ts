@@ -164,6 +164,42 @@ describe('useNotifications — live refresh (ADR-037)', () => {
     expect(result.current.status).toBe('ready')
   })
 
+  it('keeps "load more" progress: merges the fresh first page on top and keeps the cursor', async () => {
+    const older: resources.NotificationApi = { ...NOTIFS[0], id: 'n3' }
+    const fresh: resources.NotificationApi = { ...NOTIFS[0], id: 'n0' }
+    vi.mocked(resources.listNotificationsPage)
+      .mockResolvedValueOnce({ data: NOTIFS, meta: { has_next: true, next_cursor: 'c2' } })
+      .mockResolvedValueOnce({ data: [older], meta: { has_next: false } })
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+    await act(async () => {
+      await result.current.loadMore()
+    })
+    expect(result.current.items.map((n) => n.id)).toEqual(['n1', 'n2', 'n3'])
+    vi.mocked(resources.listNotificationsPage).mockResolvedValue({
+      data: [fresh, ...NOTIFS],
+      meta: { has_next: true, next_cursor: 'c-fresh' }
+    })
+    await bumpLive(liveKeys.notifications)
+    await waitFor(() =>
+      expect(result.current.items.map((n) => n.id)).toEqual(['n0', 'n1', 'n2', 'n3'])
+    )
+    expect(result.current.hasMore).toBe(false)
+  })
+
+  it('replaces the list when the fresh page does not overlap what is loaded', async () => {
+    const fresh = ['x1', 'x2'].map((id) => ({ ...NOTIFS[0], id }))
+    const { result } = renderHook(() => useNotifications())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.listNotificationsPage).mockResolvedValue({
+      data: fresh,
+      meta: { has_next: true, next_cursor: 'cx' }
+    })
+    await bumpLive(liveKeys.notifications)
+    await waitFor(() => expect(result.current.items.map((n) => n.id)).toEqual(['x1', 'x2']))
+    expect(result.current.hasMore).toBe(true)
+  })
+
   it('ignores unrelated keys and still honours the DOM refresh event', async () => {
     const { result } = renderHook(() => useNotifications())
     await waitFor(() => expect(result.current.status).toBe('ready'))

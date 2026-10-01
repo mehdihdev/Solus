@@ -1,11 +1,11 @@
 import { useWorkspaceSessionGeneration, workspaceSessionGeneration } from './workspaceSession'
 import { useEffect, useState } from 'react'
-import { apiBaseUrl } from '../../lib/api/client'
+import { apiBaseUrl, apiToken } from '../../lib/api/client'
 import type { DetectedDeviceOut } from '../../lib/api/hardware'
 import { streamProjectEvents, type ProjectEvent } from '../../lib/api/projectEvents'
 import { useAuthStore } from '../../store/authStore'
 import { liveKeys, useLiveRevisionStore } from '../../store/liveRevisionStore'
-import { runReconnectingStream } from '../live/reconnect'
+import { runReconnectingStream, type EventVerdict } from '../live/reconnect'
 import { markSafely } from '../../lib/perf/marks'
 
 const UNAVAILABLE = 'Live updates unavailable. Check project access.'
@@ -70,12 +70,21 @@ export function useWorkspaceEvents(
         `${auth.status}:${auth.user?.email ?? ''}` === identity
       )
     }
-    const receive = (event: ProjectEvent): 'stop' | void => {
+    // The server also sends `access.revoked` when only the JWT expired, so a
+    // revoke is verified once with the CURRENT token before it is believed: a
+    // refused reconnect (403/404) is the real answer. `verifyUsed` bounds this to
+    // one immediate reconnect until the stream has stayed up.
+    let verifyUsed = false
+    let verifying = false
+    const receive = (event: ProjectEvent): EventVerdict => {
       if (!current()) return 'stop'
       if (typeof event === 'object' && event.type === 'access.revoked') {
-        setError(UNAVAILABLE)
-        return 'stop'
+        if (verifyUsed) return
+        verifyUsed = true
+        verifying = true
+        return 'reconnect-now'
       }
+      if (event === 'ready') verifying = false
       setError(null)
       if (event === 'ready') onReady?.()
       else if (event === 'graph.changed') onChanged()
@@ -87,16 +96,22 @@ export function useWorkspaceEvents(
     void runReconnectingStream<ProjectEvent>({
       signal: controller.signal,
       open: (signal) =>
-        streamProjectEvents({ projectId, baseUrl: apiBaseUrl, getToken: () => token, signal }),
+        streamProjectEvents({ projectId, baseUrl: apiBaseUrl, getToken: apiToken, signal }),
       isReady: (event) => event === 'ready',
       onEvent: receive,
+      onStable: () => {
+        verifyUsed = false
+      },
       onPhase: (phase) => {
         if (!current()) return
         if (phase === 'reconnecting') setError(RECONNECTING)
         else if (phase === 'connecting') setError(null)
       }
     }).then((outcome) => {
-      if (outcome !== 'aborted' && current()) setError(UNAVAILABLE)
+      if (outcome === 'aborted' || !current()) return
+      // A 401 during revoke verification means the token is stale, not that
+      // access is gone: wait quietly for the refreshed token (effect restarts).
+      setError(outcome === 'unauthorized' && verifying ? null : UNAVAILABLE)
     })
     return () => controller.abort()
   }, [projectId, identity, token, onChanged, onReady, onDevices, generation, scope])

@@ -1,19 +1,19 @@
-// Fold a freshly fetched first page of the activity feed into what the user has
-// already scrolled through, so a live refresh never loses "load more" progress.
+// Fold a freshly fetched first page of a newest-first feed (activity,
+// notifications) into what the user has already scrolled through, so a live
+// refresh never loses "load more" progress.
 // Pure. The feed is newest-first with an opaque cursor that points just past the
 // OLDEST loaded item, so that cursor stays valid as newer rows arrive on top.
 import type { ApiMeta } from '../../lib/api/envelope.types'
-import type { ActivityApi } from '../../lib/api/resources'
 
-export interface ActivityFeed {
-  items: readonly ActivityApi[]
+export interface Feed<T extends { id: string }> {
+  items: readonly T[]
   meta: ApiMeta
 }
 
-export function mergeActivityRefresh(
-  previous: ActivityFeed,
-  fresh: { data: readonly ActivityApi[]; meta: ApiMeta }
-): { items: ActivityApi[]; meta: ApiMeta } {
+export function mergeFirstPage<T extends { id: string }>(
+  previous: Feed<T>,
+  fresh: { data: readonly T[]; meta: ApiMeta }
+): { items: T[]; meta: ApiMeta } {
   const replace = { items: [...fresh.data], meta: fresh.meta }
   const freshIds = new Set(fresh.data.map((item) => item.id))
   const overlaps = previous.items.some((item) => freshIds.has(item.id))
@@ -29,3 +29,5 @@ export function mergeActivityRefresh(
     }
   }
 }
+
+export const mergeActivityRefresh = mergeFirstPage

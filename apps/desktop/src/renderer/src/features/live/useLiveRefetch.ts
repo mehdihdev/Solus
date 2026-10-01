@@ -24,10 +24,18 @@ export function useLiveRefetch(
   useEffect(() => {
     latest.current = refetch
   })
-  const seen = useRef({ identity, sum })
+  // `handled` is the revision sum the caller's data already reflects. It only
+  // advances while enabled, so a bump that arrived while disabled still refetches
+  // once on enable (e.g. a member promoted to admin whose invites bumped earlier).
+  const seen = useRef({ identity, handled: sum })
   useEffect(() => {
     const previous = seen.current
-    seen.current = { identity, sum }
-    if (previous.identity === identity && previous.sum !== sum && enabled) latest.current()
+    if (previous.identity !== identity) {
+      seen.current = { identity, handled: sum }
+      return
+    }
+    if (!enabled) return
+    seen.current = { identity, handled: sum }
+    if (previous.handled !== sum) latest.current()
   }, [identity, sum, enabled])
 }

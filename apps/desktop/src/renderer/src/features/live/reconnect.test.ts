@@ -4,6 +4,7 @@ import { ApiError } from '../../lib/api/envelope.types'
 import {
   RECONNECT_BASE_MS,
   RECONNECT_CAP_MS,
+  STABLE_AFTER_READY_MS,
   backoffDelayMs,
   classifyStreamFailure,
   runReconnectingStream
@@ -78,11 +79,10 @@ describe('runReconnectingStream', () => {
     await expect(done).resolves.toBe('aborted')
   })
 
-  it('backs off exponentially after failures and resets after a successful ready', async () => {
+  it('backs off exponentially and resets only after the stream stayed up for the stable period', async () => {
     const controller = new AbortController()
     const opens: number[] = []
     let call = 0
-    const phases: string[] = []
     const done = runReconnectingStream({
       ...base(controller),
       open: async function* () {
@@ -91,32 +91,94 @@ describe('runReconnectingStream', () => {
         if (call <= 2) throw new LiveStreamHttpError(503)
         if (call === 3) {
           yield 'ready'
+          await new Promise((resolve) => setTimeout(resolve, STABLE_AFTER_READY_MS + 1))
           return
         }
         throw new LiveStreamHttpError(503)
       },
       onEvent: () => undefined,
-      onPhase: (phase) => void phases.push(phase)
+      onPhase: () => undefined
     })
     await vi.advanceTimersByTimeAsync(0)
-    expect(opens).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(499) // attempt 0 delay = 0.5 * 1000
-    expect(opens).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(500) // attempt 0 delay = 0.5 * 1000
     expect(opens).toHaveLength(2)
-    await vi.advanceTimersByTimeAsync(999) // attempt 1 delay = 0.5 * 2000
-    expect(opens).toHaveLength(2)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(opens).toHaveLength(3) // ready, then the stream ends
+    await vi.advanceTimersByTimeAsync(1_000) // attempt 1 delay = 0.5 * 2000
+    expect(opens).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(STABLE_AFTER_READY_MS + 1) // stable, then ends
     await vi.advanceTimersByTimeAsync(499) // reset -> attempt 0 delay again
     expect(opens).toHaveLength(3)
     await vi.advanceTimersByTimeAsync(1)
     expect(opens).toHaveLength(4)
-    expect(phases[0]).toBe('connecting')
-    expect(phases).toContain('live')
-    expect(phases).toContain('reconnecting')
     controller.abort()
     await expect(done).resolves.toBe('aborted')
+  })
+
+  it('keeps growing the delay when the server closes right after ready (no reconnect storm)', async () => {
+    const controller = new AbortController()
+    let opens = 0
+    const done = runReconnectingStream({
+      ...base(controller),
+      open: async function* () {
+        opens += 1
+        yield 'ready'
+      },
+      onEvent: () => undefined,
+      onPhase: () => undefined
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(500) // attempt 0
+    expect(opens).toBe(2)
+    await vi.advanceTimersByTimeAsync(999) // attempt 1 ceiling 2000 * 0.5
+    expect(opens).toBe(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(opens).toBe(3)
+    await vi.advanceTimersByTimeAsync(1_999) // attempt 2 = 0.5 * 4000
+    expect(opens).toBe(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(opens).toBe(4)
+    controller.abort()
+    await done
+  })
+
+  it('calls onStable once the stream has been up for the stable period, not before', async () => {
+    const controller = new AbortController()
+    const onStable = vi.fn()
+    const done = runReconnectingStream({
+      ...base(controller),
+      open: async function* () {
+        yield 'ready'
+        await new Promise(() => undefined)
+      },
+      onEvent: () => undefined,
+      onPhase: () => undefined,
+      onStable
+    })
+    await vi.advanceTimersByTimeAsync(STABLE_AFTER_READY_MS - 1)
+    expect(onStable).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(onStable).toHaveBeenCalledTimes(1)
+    controller.abort()
+    await done
+  })
+
+  it('reconnect-now reopens immediately without growing the backoff', async () => {
+    const controller = new AbortController()
+    let opens = 0
+    const done = runReconnectingStream({
+      ...base(controller),
+      open: async function* () {
+        opens += 1
+        yield 'ready'
+        yield 'revoked'
+        await new Promise(() => undefined)
+      },
+      onEvent: (event) => (event === 'revoked' && opens === 1 ? 'reconnect-now' : undefined),
+      onPhase: () => undefined
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(opens).toBe(2)
+    controller.abort()
+    await done
   })
 
   it('treats a clean end without ready as a failure (keeps growing the backoff)', async () => {

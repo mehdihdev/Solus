@@ -416,6 +416,22 @@ describe('useHomeTeam — live refresh (ADR-037)', () => {
     }
   )
 
+  it('loads invites once a member is promoted to admin after an invites hint arrived as member', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'member' })
+    vi.mocked(resources.listInvites).mockResolvedValue([])
+    const { result } = await ready()
+    expect(result.current.invites).toHaveLength(0)
+    // membership.changed bumps invites while the role is still `member`.
+    await bumpLive(liveKeys.teamInvites('t1'))
+    const before = calls().invites
+    vi.mocked(resources.listInvites).mockResolvedValue([{ ...INVITE, token: undefined }])
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    await bumpLive(liveKeys.team('t1'))
+    await waitFor(() => expect(result.current.myRole).toBe('admin'))
+    await waitFor(() => expect(result.current.invites).toHaveLength(1))
+    expect(calls().invites).toBe(before + 1)
+  })
+
   it('teamActivity(id) refreshes the first page', async () => {
     const { result } = await ready()
     const newer = { ...FEED.data[0], id: 'a0' }
