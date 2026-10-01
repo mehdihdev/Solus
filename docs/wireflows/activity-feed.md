@@ -58,3 +58,10 @@ Closing unmounts immediately (no exit choreography).
 - Feed of exactly 6 or fewer: no view-all button.
 - `meta.total` missing (older server): the client falls back to the loaded
   row count, so the button count never fabricates.
+
+## Live refresh — SOLUSDEV-312
+
+Both surfaces refresh their first page quietly when the account event stream
+(`GET /users/me/events`) reports `team.activity` for the team, and on every
+stream `ready` (connect/reconnect). No toast, no motion beyond the existing row
+insertion; "Load more" state is preserved and never silently truncated.

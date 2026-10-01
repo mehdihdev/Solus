@@ -195,3 +195,13 @@ The control states that selection affects only the current user. Other providers
 show revision controls only when their capability is supported. ForgeTS is a named
 local root; dependency packages are nested in presentation. Saved local working-copy
 content is clearly distinguished from remote commit content in SOL results.
+
+## Live layout and sources — SOLUSDEV-312
+
+A teammate's layout save arrives as `layout.changed`. With no unsaved moves the
+canvas reloads the newer layout silently; with unsaved moves it takes the
+existing conflict path up front (latest layout loaded, the user's pending moves
+kept) so the next save does not 409. Teammate positions are never discarded.
+Source status and sync completion arrive as `sources.changed`; the fixed poll
+drops to a 60 s safety net. `access.revoked` stops the stream and shows the
+existing "Live updates unavailable" state.

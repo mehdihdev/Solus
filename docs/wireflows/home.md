@@ -414,3 +414,12 @@ stays open. Reported as the `team.switched` data event.
 
 - The separate Team screen (`MainScreen 'team'`, its rail item and menu entry)
   and Settings → Members: both consolidated into Home above.
+
+## Live refresh — SOLUSDEV-312
+
+Home's team layer (members, invites for admins, projects grid, activity) and the
+team switcher refresh quietly from the account event stream: `team.*` hints
+refetch the affected list, `membership.changed`/`access.revoked` refetch `me`
+and the team list (a team you were removed from disappears; one you joined
+appears). There is no new visible UI and no toast; a dropped stream reconnects
+with backoff and revalidates everything on `ready`.

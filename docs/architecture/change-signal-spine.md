@@ -324,3 +324,27 @@ reads and mandatory write readbacks remain immediate. Exports started before a
 hold still rely on revision bracketing and may fail; this is not transactional
 isolation against concurrent editors. Generation acknowledgments never clear
 later changes. No new public route, database column or tool authority is added.
+
+## Live channels beyond the graph — SOLUSDEV-312 (ADR-037)
+
+The fan-out half of the spine now carries more than `graph.changed`. `LiveHub`
+routes on three channel kinds — `project:{id}`, `team:{id}`, `user:{id}` — over
+Redis `solus:live:{kind}:{id}` (the relay still accepts legacy
+`solus:graph:{project_id}` during rollout).
+
+```
+REST mutation / worker job ─► ORM flush ─► live_publisher derives hints from
+  changed rows (Activity, Notification, Team, Membership, ProjectMembership,
+  Invite, Project, Source, WorkspaceLayout, Job) ─► queued on the session
+  ─► after_commit ─► hub.publish_to(channel) ─► Redis ─► every API process
+  ─► SSE: /projects/{id}/events (project channel)
+          /users/me/events      (user channel + every team channel)
+```
+
+Properties carried over unchanged from the graph path: hints never deltas,
+committed-only, structural routing, drop-on-full, newline frames dropped. New:
+streams re-verify access every 30 s and immediately on a revocation hint, and
+`/readyz` reports `live_fanout = redis | local_only`. Connector sync status
+changes reach clients as `sources.changed` / `job.updated` without any new
+producer code — they are derived from the same `Source`/`Job` row writes the
+worker already commits. The contract is `docs/contracts/live-events.md`.

@@ -54,3 +54,9 @@ menu row is the brand. Home remains the first rail item.
   variant. The rail's active item and the page heading identify the screen;
   `data-screen-label` on the screen container is kept for tests.
 - Brand logo in the rail (SOLUSDEV-233) — superseded by this design.
+
+## Live refresh — SOLUSDEV-312
+
+The notifications bell refetches when the account event stream reports
+`notification.created`, so the unread badge updates without a remount. Quiet
+refresh only — no toast.
