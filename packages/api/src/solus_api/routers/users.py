@@ -27,6 +27,13 @@ from solus_api.deps import (
     SettingsDep,
     SupabaseAdminDep,
 )
+from solus_api.graph.live_publisher import (
+    queue_account_removed,
+    queue_member_removed,
+    queue_project_removed,
+    queue_source_removed,
+    queue_team_removed,
+)
 from solus_api.models import (
     AccountConnection,
     Activity,
@@ -149,6 +156,16 @@ async def delete_projects_cascade(
         return
     rows = (await session.scalars(select(Source).where(Source.project_id.in_(project_ids)))).all()
     sources = [(row.id, row.secret_ref) for row in rows]
+    # Bulk deletes below bypass ORM events, so the live hints are queued by hand
+    # (ADR-037 §3) — published only if the caller's transaction commits.
+    for owed in rows:
+        queue_source_removed(session, project_id=owed.project_id, source_id=owed.id)
+    for project_id, team_id in (
+        await session.execute(
+            select(Project.id, Project.team_id).where(Project.id.in_(project_ids))
+        )
+    ).all():
+        queue_project_removed(session, team_id=team_id, project_id=project_id)
     if secret_store is not None:
         # Families retired by a move but not yet swept go with the rows
         # (SOLUSDEV-242) — after this, nothing could derive them.
@@ -188,6 +205,15 @@ async def delete_team_cascade(
         (await session.scalars(select(Project.id).where(Project.team_id == team_id))).all()
     )
     await delete_projects_cascade(session, project_ids, secret_store)
+    for member_id in (
+        await session.scalars(
+            select(Membership.user_id).where(
+                Membership.team_id == team_id, Membership.deleted_at.is_(None)
+            )
+        )
+    ).all():
+        queue_member_removed(session, team_id=team_id, user_id=member_id)
+    queue_team_removed(session, team_id=team_id)
     await session.execute(delete(Activity).where(Activity.team_id == team_id))
     await session.execute(delete(Invite).where(Invite.team_id == team_id))
     await session.execute(delete(Membership).where(Membership.team_id == team_id))
@@ -254,6 +280,7 @@ async def delete_me(
                     Membership.team_id == team.id, Membership.user_id == user.id
                 )
             )
+            queue_member_removed(session, team_id=team.id, user_id=user.id)
     await _forfeit_credits(session, user)
     # SOLUSDEV-241: the account-scoped grants are the USER's, not any team's, so
     # no team cascade reaches them. REVOKE each one before the row goes: the
@@ -274,6 +301,7 @@ async def delete_me(
     await session.execute(delete(Notification).where(Notification.user_id == user.id))
     supabase_user_id = user.supabase_user_id
     await session.execute(delete(User).where(User.id == user.id))
+    queue_account_removed(session, user_id=user.id)
     await session.commit()
     # Best-effort remote revoke AFTER the local commit: kills the Supabase session /
     # auth user. A failure here is logged, not fatal — the tombstone already blocks

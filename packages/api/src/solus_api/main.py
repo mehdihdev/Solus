@@ -41,6 +41,7 @@ from solus_api.corpus import router as corpus_router
 from solus_api.extensions.bom_catalog_setup import prepare_catalog
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
+from solus_api.graph.live_access import StreamLimiter
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.hardware import hardware_router, library_router
@@ -307,7 +308,17 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # — one channel per project — so a frame's channel, never its body, decides
     # who receives it.
     app.state.graph_hub = LiveHub(app.state.redis)
-    app.state.sessionmaker = build_sessionmaker(resolved_engine, settings=resolved_settings)
+    # SOLUSDEV-312 (ADR-037): the hub rides every session so committed team/project changes
+    # publish themselves (graph/live_publisher.py), and the SSE routes share one stream cap.
+    app.state.sessionmaker = build_sessionmaker(
+        resolved_engine, settings=resolved_settings, hub=app.state.graph_hub
+    )
+    app.state.live_stream_limiter = StreamLimiter()
+    if app.state.graph_hub.fanout_mode == "local_only":
+        logging.getLogger("solus.main").warning(
+            "live fan-out is process-local (no SOLUS_REDIS_URL): teammates connected to a "
+            "different API process will not receive live updates"
+        )
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     # T4b (MCP-04): the EDA family also gets a bridge export acquirer factory
     # here (the API process HAS a bridge session registry, unlike the ARQ
@@ -501,6 +512,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(corpus_router.router)
     app.include_router(webhooks.router)
     app.include_router(live.router)
+    app.include_router(live.account_router)
     # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,
     # storage, layout, policy sub-routers mount onto it as the EXT tasks land).
     app.include_router(extensions.router)

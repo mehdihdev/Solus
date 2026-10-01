@@ -42,6 +42,9 @@ async def readyz(request: Request) -> JSONResponse:
         "database": "ok",
         "redis": queue_state,
         "queue": queue_state,
+        # ADR-037 §4: `local_only` means live updates reach this process's streams alone.
+        # Informational — it never changes the status code (a single API task is valid).
+        "live_fanout": request.app.state.graph_hub.fanout_mode,
     }
     try:
         maker: async_sessionmaker[AsyncSession] = request.app.state.sessionmaker

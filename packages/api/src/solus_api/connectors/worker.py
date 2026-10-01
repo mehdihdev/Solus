@@ -826,7 +826,17 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
 
     settings = Settings()  # type: ignore[call-arg]
     engine = build_engine(settings.database_url)
-    sessionmaker = build_sessionmaker(engine, settings=settings)
+    # The fan-out hub comes first: the sessionmaker carries it so worker COMMITS (syncs, job
+    # status) publish live change hints through it (ADR-037 §3).
+    # Without this the ARQ path — which IS the production path whenever Redis is configured,
+    # because _dispatch_sync enqueues rather than running inline — published nothing at all,
+    # so live propagation worked only in dev's sync_inline mode and in tests calling
+    # execute_source_sync directly. Publish-only here: the API tasks hold the subscribers.
+    redis = ctx.get("redis")
+    hub = LiveHub(redis)
+    await hub.start()
+    ctx["graph_hub"] = hub
+    sessionmaker = build_sessionmaker(engine, settings=settings, hub=hub)
     ctx["settings"] = settings
     ctx["engine"] = engine
     ctx["sessionmaker"] = sessionmaker
@@ -839,7 +849,6 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     # actually run away — so it must share the API's cache and single-flight
     # store, not silently degrade to an uncoalesced one. `ctx["redis"]` is arq's
     # own ArqRedis, a redis.asyncio.Redis subclass, so no second connection.
-    redis = ctx.get("redis")
     ctx["integration_store"] = RedisCacheStore(redis) if redis is not None else InMemoryCacheStore()
     # SOLUSDEV-241: and the read cache over it, handed to the scoped connectors
     # so the sweep's probes REFRESH the signals a human's sync then reads.
@@ -847,14 +856,6 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     ctx["registry"] = build_registry(settings, redis=redis, cache=ctx["integration_cache"])
     ctx["secret_store"] = build_secret_store(settings, sessionmaker)
     ctx["artifact_store"] = build_artifact_store(settings)
-    # And the fan-out hub. Without this the ARQ path — which IS the production
-    # path whenever Redis is configured, because _dispatch_sync enqueues rather
-    # than running inline — published nothing at all, so live propagation worked
-    # only in dev's sync_inline mode and in tests calling execute_source_sync
-    # directly. Publish-only here: the API tasks hold the subscribers.
-    hub = LiveHub(redis)
-    await hub.start()
-    ctx["graph_hub"] = hub
 
 
 async def _on_shutdown(ctx: dict[str, Any]) -> None:

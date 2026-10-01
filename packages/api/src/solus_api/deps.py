@@ -32,6 +32,7 @@ from solus_api.core.config import Settings
 from solus_api.core.db import get_session
 from solus_api.core.errors import APIError
 from solus_api.core.security import TokenClaims, decode_token
+from solus_api.graph.live_access import LiveAccessVerifier
 from solus_api.models import (
     ROLE_RANK,
     DeletedAccount,
@@ -185,6 +186,34 @@ def get_current_claims(
 
 
 ClaimsDep = Annotated[TokenClaims, Depends(get_current_claims)]
+
+
+def get_bearer_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> str:
+    """The raw bearer credential, for long-lived streams that must RE-verify it while open
+    (ADR-037 §5). Never log it or return it."""
+    if credentials is None:
+        raise APIError(401, "unauthorized", "Missing bearer token")
+    return credentials.credentials
+
+
+def get_live_verifier(
+    request: Request,
+    token: Annotated[str, Depends(get_bearer_token)],
+    settings: SettingsDep,
+    jwks_client: JwksClientDep,
+) -> LiveAccessVerifier:
+    """Re-verification handle for one open live stream (graph/live_access.py)."""
+    return LiveAccessVerifier(
+        sessionmaker=request.app.state.sessionmaker,
+        settings=settings,
+        jwks_client=jwks_client,
+        token=token,
+    )
+
+
+LiveVerifierDep = Annotated[LiveAccessVerifier, Depends(get_live_verifier)]
 
 
 async def get_current_user(claims: ClaimsDep, session: SessionDep, settings: SettingsDep) -> User:
