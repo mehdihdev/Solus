@@ -32,6 +32,7 @@ import { HomeScreen } from './HomeScreen'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
 import { useNotifications } from './useNotifications'
+import { useAccountEvents } from '../live/useAccountEvents'
 import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { TitleBar } from './TitleBar'
 import { MenuBar } from './MenuBar'
@@ -172,6 +173,8 @@ export function WorkspaceShell(): React.JSX.Element {
   const { route, notifOpen, setNotifOpen, go } = nav
   const me = useMe()
   const notifs = useNotifications()
+  // The one live account channel (ADR-037): quiet hints that refresh the data above.
+  useAccountEvents()
   const online = notifs.status === 'ready'
   const rail = useExtensionRail()
   const name = route.name

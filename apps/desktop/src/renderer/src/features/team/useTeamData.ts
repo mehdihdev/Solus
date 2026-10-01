@@ -17,6 +17,8 @@ import { classifyFetchError } from '../../lib/api/errors'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { resolveTeamId } from '../workspace/activeTeam'
 import { switchWorkspaceTeam } from '../workspace/teamSwitch'
+import { liveKeys } from '../../store/liveRevisionStore'
+import { useLiveRefetch } from '../live/useLiveRefetch'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 export type TeamDataStatus = 'loading' | 'ready' | 'offline' | 'gone'
@@ -47,32 +49,48 @@ export function useTeamData(): TeamData {
   const [team, setTeam] = useState<TeamDetail | null>(null)
   const [teams, setTeams] = useState<TeamSummary[]>([])
 
-  const load = useCallback(async (): Promise<void> => {
-    if (!fetchEnabled) {
-      setStatus('offline')
-      return
-    }
-    try {
-      const me = await getMe().catch(() => null)
-      setTeams(me?.teams ?? [])
-      const id = resolveTeamId(me, storedTeamId)
-      if (!id) {
+  // `quiet` (live refresh, ADR-037): a failed refetch keeps the team on screen.
+  const load = useCallback(
+    async (options?: { quiet?: boolean }): Promise<void> => {
+      if (!fetchEnabled) {
         setStatus('offline')
         return
       }
-      const detail = await getTeamDetail(id)
-      setTeamId(id)
-      setTeam(detail)
-      setStatus('ready')
-    } catch (error: unknown) {
-      // A 404 means the team is gone — not "the backend is down" (errors.ts).
-      setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
-    }
-  }, [fetchEnabled, storedTeamId])
+      try {
+        const me = await getMe().catch(() => null)
+        setTeams(me?.teams ?? [])
+        const id = resolveTeamId(me, storedTeamId)
+        if (!id) {
+          setStatus('offline')
+          return
+        }
+        const detail = await getTeamDetail(id)
+        setTeamId(id)
+        setTeam(detail)
+        setStatus('ready')
+      } catch (error: unknown) {
+        // A 404 means the team is gone — not "the backend is down" (errors.ts).
+        const verdict = classifyFetchError(error) === 'gone' ? 'gone' : 'offline'
+        setStatus((current) =>
+          options?.quiet === true && verdict === 'offline' && current === 'ready'
+            ? 'ready'
+            : verdict
+        )
+      }
+    },
+    [fetchEnabled, storedTeamId]
+  )
 
   useEffect(() => {
     void load()
   }, [load])
+
+  const liveTeamId = teamId ?? storedTeamId
+  useLiveRefetch(
+    [liveTeamId ? liveKeys.team(liveTeamId) : null, liveKeys.teams],
+    () => void load({ quiet: true }),
+    fetchEnabled
+  )
 
   const run = async (action: () => Promise<unknown>): Promise<boolean> => {
     try {

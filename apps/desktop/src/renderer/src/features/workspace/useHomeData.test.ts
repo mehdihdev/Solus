@@ -8,6 +8,8 @@ import * as resources from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useFocusStore } from './focusStore'
 import { forgetWorkspaceGraph } from '../graph/useWorkspaceGraph'
+import { liveKeys, resetLiveRevisions } from '../../store/liveRevisionStore'
+import { bumpLive } from '../live/testBump'
 
 vi.mock('../graph/useWorkspaceGraph', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../graph/useWorkspaceGraph')>()),
@@ -85,6 +87,7 @@ const ACTIVITY: resources.ActivityApi[] = [
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetLiveRevisions()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true, teamId: 't1' })
   vi.mocked(resources.getMe).mockResolvedValue(ME)
@@ -399,3 +402,72 @@ function homeProjectMutationsTests(): void {
     expect(await result.current.actions.archiveProject('p1')).toBe(false)
   })
 }
+
+describe('useHomeData — live refresh (ADR-037)', () => {
+  it('teamProjects(id) reloads the grid without a loading flash', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.listProjects).mockResolvedValue([
+      PROJECT,
+      { ...PROJECT, id: 'p2', name: 'Arm' }
+    ])
+    const seen: string[] = []
+    const stop = setInterval(() => seen.push(result.current.status), 5)
+    await bumpLive(liveKeys.teamProjects('t1'))
+    clearInterval(stop)
+    await waitFor(() => expect(result.current.projects).toHaveLength(2))
+    expect(seen).not.toContain('loading')
+    expect(resources.listProjects).toHaveBeenCalledTimes(2)
+  })
+
+  it('teamActivity(id) refreshes the per-project activity', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(liveKeys.teamActivity('t1'))
+    await waitFor(() => expect(resources.listActivityPage).toHaveBeenCalledTimes(2))
+  })
+
+  it('teams revalidates the selector list', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, teams: [PERSONAL] })
+    await bumpLive(liveKeys.teams)
+    await waitFor(() => expect(result.current.teams).toHaveLength(1))
+  })
+
+  it('one burst touching projects and activity causes a single reload', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(liveKeys.teamProjects('t1'), liveKeys.teamActivity('t1'))
+    await waitFor(() => expect(resources.listProjects).toHaveBeenCalledTimes(2))
+    expect(resources.getMe).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores hints for other teams and unrelated keys', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(
+      liveKeys.teamProjects('t2'),
+      liveKeys.teamActivity('t2'),
+      liveKeys.teamMembers('t1'),
+      liveKeys.notifications
+    )
+    expect(resources.listProjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not reload while offline', async () => {
+    useWorkspaceStore.setState({ linked: false })
+    const { result } = renderHook(() => useHomeData())
+    await bumpLive(liveKeys.teamProjects('t1'))
+    expect(result.current.status).toBe('offline')
+    expect(resources.getMe).not.toHaveBeenCalled()
+  })
+
+  it('keeps the grid when a live reload fails', async () => {
+    const { result } = renderHook(() => useHomeData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.listProjects).mockRejectedValue(new Error('blip'))
+    await bumpLive(liveKeys.teamProjects('t1'))
+    expect(result.current.projects).toHaveLength(1)
+  })
+})

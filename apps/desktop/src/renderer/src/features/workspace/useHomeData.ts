@@ -34,6 +34,8 @@ import {
   HOME_ACTIVITY_FETCH_LIMIT,
   type ActivityByProject
 } from './projectActivity'
+import { liveKeys } from '../../store/liveRevisionStore'
+import { useLiveRefetch } from '../live/useLiveRefetch'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 /** `gone`: the server answered that the active team no longer exists (deleted,
@@ -130,40 +132,62 @@ export function useHomeData(): HomeData {
   const loadSeq = useRef(0)
   const loadedTeamId = useRef<string | null>(null)
 
-  const load = useCallback(async (): Promise<void> => {
-    const seq = ++loadSeq.current
-    if (!fetchEnabled) {
-      setStatus('offline')
-      return
-    }
-    // A different team than the one on screen: clear the grid rather than show
-    // the previous team's projects under the new team's name while it loads.
-    if (loadedTeamId.current !== null && loadedTeamId.current !== storedTeamId) {
-      setProjects([])
-      setActivityByProject({})
-      setStatus('loading')
-    }
-    try {
-      const snap = await fetchHome(storedTeamId)
-      if (seq !== loadSeq.current) return
-      setMe(snap.me)
-      setTeam(snap.team)
-      setProjects(snap.projects)
-      setActivityByProject(snap.activityByProject)
-      setStatus('ready')
-      loadedTeamId.current = storedTeamId
-    } catch (error: unknown) {
-      if (seq !== loadSeq.current) return
-      // A 404 for the stored team is "gone" (deleted, or I was removed) — the
-      // backend is answering; telling the user to restart it is the failure
-      // errors.ts exists to prevent. The next load re-resolves to the personal team.
-      setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
-    }
-  }, [fetchEnabled, storedTeamId])
+  // `quiet` (live refresh, ADR-037): a failed reload keeps the grid on screen.
+  const load = useCallback(
+    async (options?: { quiet?: boolean }): Promise<void> => {
+      const seq = ++loadSeq.current
+      if (!fetchEnabled) {
+        setStatus('offline')
+        return
+      }
+      // A different team than the one on screen: clear the grid rather than show
+      // the previous team's projects under the new team's name while it loads.
+      if (loadedTeamId.current !== null && loadedTeamId.current !== storedTeamId) {
+        setProjects([])
+        setActivityByProject({})
+        setStatus('loading')
+      }
+      try {
+        const snap = await fetchHome(storedTeamId)
+        if (seq !== loadSeq.current) return
+        setMe(snap.me)
+        setTeam(snap.team)
+        setProjects(snap.projects)
+        setActivityByProject(snap.activityByProject)
+        setStatus('ready')
+        loadedTeamId.current = storedTeamId
+      } catch (error: unknown) {
+        if (seq !== loadSeq.current) return
+        // A 404 for the stored team is "gone" (deleted, or I was removed) — the
+        // backend is answering; telling the user to restart it is the failure
+        // errors.ts exists to prevent. The next load re-resolves to the personal team.
+        const verdict = classifyFetchError(error) === 'gone' ? 'gone' : 'offline'
+        setStatus((current) =>
+          options?.quiet === true && verdict === 'offline' && current === 'ready'
+            ? 'ready'
+            : verdict
+        )
+      }
+    },
+    [fetchEnabled, storedTeamId]
+  )
 
   useEffect(() => {
     void load()
   }, [load])
+
+  // ADR-037 hints: projects, the team feed and the team list all come from one
+  // snapshot, so a burst touching several of them is ONE reload.
+  const liveTeamId = team?.team_id ?? storedTeamId
+  useLiveRefetch(
+    [
+      liveTeamId ? liveKeys.teamProjects(liveTeamId) : null,
+      liveTeamId ? liveKeys.teamActivity(liveTeamId) : null,
+      liveKeys.teams
+    ],
+    () => void load({ quiet: true }),
+    fetchEnabled
+  )
 
   // Run a mutation, refresh the home snapshot, and report success as a boolean.
   const runAction = useCallback(

@@ -42,7 +42,10 @@ import {
   type TeamRole,
   type TeamSummary
 } from '../../lib/api/resources'
+import { liveKeys } from '../../store/liveRevisionStore'
 import { EMAIL_PATTERN } from '../team/MembersPanel'
+import { mergeActivityRefresh } from '../live/mergeActivity'
+import { useLiveRefetch } from '../live/useLiveRefetch'
 import { switchWorkspaceTeam } from './teamSwitch'
 
 /** `idle`: no active team. `gone`: the team no longer exists (not an outage). */
@@ -175,6 +178,14 @@ export function useHomeTeam(
   }, [load])
 
   useSubscriptionLimits(me?.id, setLimits)
+  useLiveTeamRefresh({
+    teamId,
+    role: detail?.role ?? null,
+    loadSeq,
+    teamIdRef,
+    feed: { activity, meta },
+    writers: { setDetail, setMembers, setInvites, setActivity, setMeta }
+  })
 
   const refreshMembers = useCallback(async () => {
     if (!teamId) return
@@ -396,6 +407,65 @@ async function loadHomeTeam(
     if (seq !== loadSeq.current) return
     setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
   }
+}
+
+interface LiveTeamRefresh {
+  teamId: string | null
+  role: TeamRole | null
+  loadSeq: RefObject<number>
+  teamIdRef: RefObject<string | null>
+  feed: { activity: ActivityApi[]; meta: ApiMeta }
+  writers: Pick<
+    HomeTeamStateWriters,
+    'setDetail' | 'setMembers' | 'setInvites' | 'setActivity' | 'setMeta'
+  >
+}
+
+/** Only admins and owners may list invites; a hint must not make anyone else try. */
+const canListInvites = (role: TeamRole | null): boolean => role === 'owner' || role === 'admin'
+
+/** ADR-037: each live hint refetches ONLY the slice it names, quietly (no
+ *  loading flash). A reply is dropped when the team changed or a full load
+ *  started meanwhile, so a slow answer never lands on the wrong team. */
+function useLiveTeamRefresh(context: LiveTeamRefresh): void {
+  const { teamId, role, loadSeq, teamIdRef, writers } = context
+  const feedRef = useRef(context.feed)
+  feedRef.current = context.feed
+  const refresh = async <T>(
+    fetch: (id: string) => Promise<T>,
+    apply: (value: T) => void
+  ): Promise<void> => {
+    if (!teamId) return
+    const seq = loadSeq.current
+    try {
+      const value = await fetch(teamId)
+      if (teamIdRef.current === teamId && loadSeq.current === seq) apply(value)
+    } catch {
+      /* keep what is on screen; the next hint or a reload recovers */
+    }
+  }
+  const useWatch = (key: (id: string) => string, run: () => Promise<void>, enabled = true): void =>
+    useLiveRefetch([teamId ? key(teamId) : null], () => void run(), enabled && teamId !== null)
+  useWatch(liveKeys.team, () => refresh(getTeamDetail, writers.setDetail))
+  useWatch(liveKeys.teamMembers, () => refresh(listMembers, writers.setMembers))
+  useWatch(
+    liveKeys.teamInvites,
+    () => refresh(invitesOrNone, writers.setInvites),
+    canListInvites(role)
+  )
+  useWatch(liveKeys.teamActivity, () =>
+    refresh(
+      (id) => listActivityPage(id),
+      (page) => {
+        const merged = mergeActivityRefresh(
+          { items: feedRef.current.activity, meta: feedRef.current.meta },
+          page
+        )
+        writers.setActivity(merged.items)
+        writers.setMeta(merged.meta)
+      }
+    )
+  )
 }
 
 function useSubscriptionLimits(

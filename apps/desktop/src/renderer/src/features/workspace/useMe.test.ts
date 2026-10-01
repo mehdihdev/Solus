@@ -5,6 +5,8 @@ import { useMe, displayName } from './useMe'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
 import * as resources from '../../lib/api/resources'
+import { liveKeys, resetLiveRevisions } from '../../store/liveRevisionStore'
+import { bumpLive } from '../live/testBump'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -22,6 +24,7 @@ const ME: resources.Me = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetLiveRevisions()
   useWorkspaceStore.getState().reset()
   useAuthStore.setState({ user: { email: 'fallback@solus.local' }, status: 'authenticated' })
 })
@@ -74,5 +77,47 @@ describe('useMe', () => {
     const { result } = renderHook(() => useMe())
     await waitFor(() => expect(result.current.status).toBe('offline'))
     expect(result.current.email).toBe('fallback@solus.local')
+  })
+})
+
+describe('useMe — live refresh (ADR-037)', () => {
+  it('refetches the profile when the me revision bumps, without flashing loading', async () => {
+    useWorkspaceStore.setState({ linked: true })
+    vi.mocked(resources.getMe).mockResolvedValue(ME)
+    const { result } = renderHook(() => useMe())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, name: 'Maya K.' })
+    await bumpLive(liveKeys.me)
+    await waitFor(() => expect(result.current.name).toBe('Maya K.'))
+    expect(resources.getMe).toHaveBeenCalledTimes(2)
+    expect(result.current.status).toBe('ready')
+  })
+
+  it('ignores bumps for other keys', async () => {
+    useWorkspaceStore.setState({ linked: true })
+    vi.mocked(resources.getMe).mockResolvedValue(ME)
+    const { result } = renderHook(() => useMe())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(liveKeys.notifications, liveKeys.team('t1'))
+    expect(resources.getMe).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the loaded profile when a live refresh fails', async () => {
+    useWorkspaceStore.setState({ linked: true })
+    vi.mocked(resources.getMe).mockResolvedValueOnce(ME).mockRejectedValueOnce(new Error('blip'))
+    const { result } = renderHook(() => useMe())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(liveKeys.me)
+    expect(resources.getMe).toHaveBeenCalledTimes(2)
+    expect(result.current.status).toBe('ready')
+    expect(result.current.name).toBe('Maya Krishnan')
+  })
+
+  it('does not fetch on a bump while offline', async () => {
+    useAuthStore.setState({ user: { email: 'x@y.z' }, status: 'unauthenticated' })
+    const { result } = renderHook(() => useMe())
+    await bumpLive(liveKeys.me)
+    expect(result.current.status).toBe('offline')
+    expect(resources.getMe).not.toHaveBeenCalled()
   })
 })

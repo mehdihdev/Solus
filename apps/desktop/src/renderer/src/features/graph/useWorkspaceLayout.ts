@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api/envelope.types'
 import { apiBaseUrl, createApiClient, type ApiClient } from '../../lib/api/client'
 import { useAuthStore } from '../../store/authStore'
+import { liveKeys, useLiveRevisionStore } from '../../store/liveRevisionStore'
+import { useLiveRefetch } from '../live/useLiveRefetch'
 import {
   getWorkspaceLayout,
   saveWorkspaceLayout,
@@ -50,6 +52,9 @@ class LayoutSession {
   private status: Status = 'loading'
   private error: string | null = null
   private client: ApiClient
+  /** Newest remote layout version a live hint has named (ADR-037). */
+  private seenVersion = 0
+  private reconciling = false
 
   constructor(
     private projectId: string,
@@ -113,9 +118,45 @@ class LayoutSession {
       if (!this.attached || !sameIdentity(this.identity)) return
       this.accept(layout)
       this.show('ready')
+      void this.reconcile()
     } catch {
       this.show('error', 'Could not load saved positions. Retry to enable dragging.')
     }
+  }
+
+  /** A live `layout.changed` named this version. Never throws; never drops moves. */
+  observeRemoteVersion(version: number): void {
+    this.seenVersion = Math.max(this.seenVersion, version)
+    void this.reconcile()
+  }
+
+  /**
+   * Catch up with a teammate's newer layout. Unsaved moves stay layered over the
+   * fresh positions (and the fresh version becomes ours), so the next save is
+   * based on the latest version and does not 409. A save in flight owns the
+   * version, so it defers us: its own 409 path, or the re-check after it
+   * settles, covers a teammate who got there first.
+   */
+  private async reconcile(): Promise<void> {
+    if (this.reconciling || this.busy || !this.layout || !this.canPublish()) return
+    if (this.seenVersion <= this.layout.version) return
+    this.reconciling = true
+    const target = this.seenVersion
+    try {
+      const latest = await getWorkspaceLayout(this.projectId, this.client)
+      if (!this.canPublish() || !this.layout) return
+      if (!this.busy && latest.version > this.layout.version) this.accept(latest)
+      this.show(this.status, this.error)
+    } catch {
+      /* Keep what is on screen; the next hint retries. */
+    } finally {
+      this.reconciling = false
+    }
+    if (this.seenVersion > target) void this.reconcile()
+  }
+
+  private canPublish(): boolean {
+    return this.attached && sameIdentity(this.identity)
   }
 
   move(entityId: string, point: Point): void {
@@ -164,6 +205,7 @@ class LayoutSession {
     } finally {
       this.busy = false
     }
+    void this.reconcile()
     if (saved) {
       this.show(Object.keys(this.pending).length ? 'saving' : 'ready')
       await this.flush()
@@ -211,6 +253,16 @@ export function useWorkspaceLayout(
       session.current = null
     }
   }, [projectId, enabled, identity])
+  useLiveRefetch(
+    [projectId ? liveKeys.projectLayout(projectId) : null],
+    () => {
+      const version = projectId
+        ? useLiveRevisionStore.getState().layoutVersions[projectId]
+        : undefined
+      if (version !== undefined) session.current?.observeRemoteVersion(version)
+    },
+    enabled && projectId !== null
+  )
   const move = useCallback((id: string, point: Point) => {
     session.current?.move(id, point)
   }, [])

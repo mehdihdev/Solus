@@ -1,9 +1,25 @@
 // Authenticated, project-scoped invalidation hints from the existing Solus SSE
 // endpoint. This typed transport never calls a provider or requests a sync.
-import { joinUrl } from './client'
-import { ApiError } from './envelope.types'
+import type {
+  AccessRevoked,
+  JobStatusName,
+  JobUpdated,
+  LayoutChanged,
+  ProjectUpdated,
+  SourcesChanged
+} from '@solus/shared-types'
+import { JOB_STATUSES } from '@solus/shared-types'
 import type { DetectedDeviceOut, DetectedLevel } from './hardware'
-import { parseSseBuffer } from './solStream'
+import { streamSse } from './liveStream'
+import {
+  isNonNegativeInt,
+  isNullableString,
+  isString,
+  literal,
+  matchesShape,
+  type Shape
+} from './liveStreamGuards'
+import type { SolEvent } from './solStream'
 
 interface ProjectEventOptions {
   projectId: string
@@ -16,13 +32,16 @@ export type ProjectEvent =
   | 'ready'
   | 'graph.changed'
   | { type: 'hardware.devices_changed'; devices: DetectedDeviceOut[] }
+  | { type: 'layout.changed'; version: number }
+  | { type: 'sources.changed' }
+  | { type: 'project.updated' }
+  | { type: 'job.updated'; jobId: string; status: JobStatusName }
+  | { type: 'access.revoked' }
 
 const MAX_DEVICES = 64
 const LEVELS: readonly DetectedLevel[] = ['transport', 'board', 'protocol', 'platform']
 
 type Check = (value: unknown) => boolean
-const isString: Check = (value) => typeof value === 'string'
-const isNullableString: Check = (value) => value === null || typeof value === 'string'
 const isBoolean: Check = (value) => typeof value === 'boolean'
 /** One check per wire field — the shape `DetectedDeviceOut` promises, nothing narrower. */
 const DEVICE_FIELDS: Record<string, Check> = {
@@ -50,53 +69,86 @@ export function toDetectedDevices(value: unknown): DetectedDeviceOut[] | null {
   if (!Array.isArray(value) || value.length > MAX_DEVICES) return null
   return value.every(isDetectedDevice) ? value : null
 }
-async function openProjectStream(
-  options: ProjectEventOptions
-): Promise<ReadableStream<Uint8Array>> {
-  const token = await options.getToken()
-  options.signal?.throwIfAborted()
-  const response = await (options.fetchImpl ?? fetch)(
-    joinUrl(options.baseUrl, `/projects/${options.projectId}/events`),
-    {
-      method: 'GET',
-      headers: {
-        Accept: 'text/event-stream',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
-      signal: options.signal
-    }
-  )
-  if (!response.ok || !response.body)
-    throw new ApiError(response.status, 'project_stream_failed', 'Live updates disconnected.')
-  return response.body
+
+const isJobStatus = (value: unknown): boolean => JOB_STATUSES.includes(value as JobStatusName)
+const SHAPES = {
+  'layout.changed': {
+    type: literal('layout.changed'),
+    project_id: isString,
+    version: isNonNegativeInt,
+    at: isString
+  } satisfies Shape<LayoutChanged>,
+  'sources.changed': {
+    type: literal('sources.changed'),
+    project_id: isString,
+    source_id: isNullableString,
+    at: isString
+  } satisfies Shape<SourcesChanged>,
+  'project.updated': {
+    type: literal('project.updated'),
+    project_id: isString,
+    team_id: isString,
+    at: isString
+  } satisfies Shape<ProjectUpdated>,
+  'job.updated': {
+    type: literal('job.updated'),
+    project_id: isString,
+    job_id: isString,
+    status: isJobStatus,
+    at: isString
+  } satisfies Shape<JobUpdated>,
+  'access.revoked': {
+    type: literal('access.revoked'),
+    user_id: isNullableString,
+    team_id: isNullableString,
+    project_id: isNullableString,
+    at: isString
+  } satisfies Shape<AccessRevoked>
 }
 
-export async function* streamProjectEvents(
-  options: ProjectEventOptions
-): AsyncGenerator<ProjectEvent> {
-  const body = await openProjectStream(options)
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parsed = parseSseBuffer(buffer)
-      buffer = parsed.rest
-      if (buffer.length > 65_536) throw new Error('Project event frame is too large.')
-      for (const event of parsed.events) {
-        if (event.data.project_id !== options.projectId) continue
-        if (event.type === 'ready' || event.type === 'graph.changed') yield event.type
-        else if (event.type === 'hardware.devices_changed') {
-          const devices = toDetectedDevices(event.data.devices)
-          if (devices) yield { type: event.type, devices }
-        }
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined)
-    reader.releaseLock()
+/** A revoke names at least one id; on a project stream it is for us unless it
+ *  names a DIFFERENT project (a team-level revoke leaves project_id null). */
+function isRevokeForProject(data: Record<string, unknown>, projectId: string): boolean {
+  const ids = [data.user_id, data.team_id, data.project_id]
+  return (
+    ids.some((id) => id !== null) && (data.project_id === null || data.project_id === projectId)
+  )
+}
+
+function decodeScoped(event: SolEvent, projectId: string): ProjectEvent | null {
+  const { type, data } = event
+  if (!(type in SHAPES) || !matchesShape(data, SHAPES[type as keyof typeof SHAPES])) return null
+  if (type === 'access.revoked') return isRevokeForProject(data, projectId) ? { type } : null
+  if (data.project_id !== projectId) return null
+  switch (type) {
+    case 'layout.changed':
+      return { type, version: data.version as number }
+    case 'job.updated':
+      return { type, jobId: data.job_id as string, status: data.status as JobStatusName }
+    default:
+      return { type } as ProjectEvent
   }
+}
+
+function decodeProjectEvent(event: SolEvent, projectId: string): ProjectEvent | null {
+  if (event.type === 'ready' || event.type === 'graph.changed') {
+    return event.data.project_id === projectId ? event.type : null
+  }
+  if (event.type === 'hardware.devices_changed') {
+    if (event.data.project_id !== projectId) return null
+    const devices = toDetectedDevices(event.data.devices)
+    return devices ? { type: event.type, devices } : null
+  }
+  return decodeScoped(event, projectId)
+}
+
+export function streamProjectEvents(options: ProjectEventOptions): AsyncGenerator<ProjectEvent> {
+  return streamSse({
+    path: `/projects/${options.projectId}/events`,
+    baseUrl: options.baseUrl,
+    getToken: options.getToken,
+    signal: options.signal,
+    fetchImpl: options.fetchImpl,
+    decode: (event) => decodeProjectEvent(event, options.projectId)
+  })
 }

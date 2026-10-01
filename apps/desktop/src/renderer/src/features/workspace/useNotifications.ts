@@ -9,6 +9,7 @@ import {
   type NotificationApi
 } from '../../lib/api/resources'
 import type { ApiMeta } from '../../lib/api/envelope.types'
+import { liveKeys, useLiveRevision } from '../../store/liveRevisionStore'
 import { useWorkspaceFetchEnabled } from './workspaceOnline'
 
 export type NotificationsStatus = 'loading' | 'ready' | 'offline'
@@ -25,9 +26,11 @@ export interface NotificationsData {
 }
 
 function useNotificationRefresh(load: () => Promise<void>): void {
+  // A `notification.created` live hint (ADR-037) bumps this revision.
+  const revision = useLiveRevision(liveKeys.notifications)
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, revision])
 
   // The billing flow dispatches this after a checkout completes so the bell
   // shows the webhook's payment notification without a remount (SOLUSDEV-114).
@@ -62,7 +65,8 @@ export function useNotifications(): NotificationsData {
       setMeta(page.meta)
       setStatus('ready')
     } catch {
-      setStatus('offline')
+      // A failed refresh must not blank a bell that is already populated.
+      setStatus((current) => (current === 'ready' ? 'ready' : 'offline'))
     }
   }, [fetchEnabled])
 

@@ -3,14 +3,27 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { streamProjectEvents } from '../../lib/api/projectEvents'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useAuthStore } from '../../store/authStore'
+import {
+  LIVE_COALESCE_MS,
+  liveKeys,
+  resetLiveRevisions,
+  useLiveRevisionStore
+} from '../../store/liveRevisionStore'
+import { LiveStreamHttpError } from '../../lib/api/liveStream'
 import { useWorkspaceEvents } from './useWorkspaceEvents'
 vi.mock('../../lib/api/projectEvents', () => ({ streamProjectEvents: vi.fn() }))
 beforeEach(() => {
   vi.useFakeTimers()
   vi.clearAllMocks()
+  resetLiveRevisions()
+  vi.spyOn(Math, 'random').mockReturnValue(0.99)
   useAuthStore.setState({ status: 'authenticated', accessToken: 'test-session' })
 })
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.mocked(Math.random).mockRestore()
+  resetLiveRevisions()
+  vi.useRealTimers()
+})
 it('validates on every ready, invalidates only on graph.changed, and aborts on unmount', async () => {
   vi.mocked(streamProjectEvents).mockImplementation(async function* () {
     yield 'ready'
@@ -23,7 +36,7 @@ it('validates on every ready, invalidates only on graph.changed, and aborts on u
   expect(ready).toHaveBeenCalledOnce()
   expect(changed).toHaveBeenCalledTimes(1)
   expect(streamProjectEvents).toHaveBeenCalledTimes(1)
-  await act(() => vi.advanceTimersByTimeAsync(5_000))
+  await act(() => vi.advanceTimersByTimeAsync(1_000))
   // The reconnect's `ready` is a validation, never a page walk.
   expect(ready).toHaveBeenCalledTimes(2)
   expect(changed).toHaveBeenCalledTimes(2)
@@ -95,4 +108,85 @@ it('routes a device frame to onDevices only — never to the graph catch-all', a
   expect(changed).not.toHaveBeenCalled()
   expect(onDevices).toHaveBeenNthCalledWith(1, devices)
   expect(onDevices).toHaveBeenNthCalledWith(2, [])
+})
+
+const noop = vi.fn()
+const revisions = (): Readonly<Record<string, number>> => useLiveRevisionStore.getState().revisions
+const flush = async (): Promise<void> => {
+  await act(() => vi.advanceTimersByTimeAsync(LIVE_COALESCE_MS))
+}
+
+it('maps project frames to live revisions and records the layout version', async () => {
+  vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+    yield 'ready'
+    yield { type: 'layout.changed', version: 7 }
+    yield { type: 'sources.changed' }
+    yield { type: 'project.updated' }
+    yield { type: 'job.updated', jobId: 'j', status: 'running' as const }
+    await new Promise(() => undefined)
+  })
+  const changed = vi.fn()
+  renderHook(() => useWorkspaceEvents('p1', changed))
+  await act(async () => {})
+  await flush()
+  expect(revisions()).toEqual({
+    [liveKeys.projectLayout('p1')]: 1,
+    [liveKeys.projectSources('p1')]: 1,
+    [liveKeys.projectDetail('p1')]: 1,
+    [liveKeys.projectJobs('p1')]: 1
+  })
+  expect(useLiveRevisionStore.getState().layoutVersions).toEqual({ p1: 7 })
+  expect(changed).not.toHaveBeenCalled()
+})
+
+it('stops and shows the unavailable state on access.revoked, without reconnecting', async () => {
+  vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+    yield 'ready'
+    yield { type: 'access.revoked' }
+  })
+  const view = renderHook(() => useWorkspaceEvents('p1', noop))
+  await act(async () => {})
+  await act(() => vi.advanceTimersByTimeAsync(120_000))
+  expect(streamProjectEvents).toHaveBeenCalledTimes(1)
+  expect(view.result.current).toBe('Live updates unavailable. Check project access.')
+})
+
+it('backs off with jitter after a dropped stream and shows the reconnecting state', async () => {
+  vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+    throw new LiveStreamHttpError(503)
+    yield 'ready'
+  })
+  const view = renderHook(() => useWorkspaceEvents('p1', noop))
+  await act(async () => {})
+  expect(view.result.current).toBe('Live updates disconnected. Reconnecting…')
+  await act(() => vi.advanceTimersByTimeAsync(989))
+  expect(streamProjectEvents).toHaveBeenCalledTimes(1)
+  await act(() => vi.advanceTimersByTimeAsync(1))
+  expect(streamProjectEvents).toHaveBeenCalledTimes(2)
+  // Second failure: ceiling doubles (2 s * 0.99), not a fixed 5 s retry.
+  await act(() => vi.advanceTimersByTimeAsync(1_979))
+  expect(streamProjectEvents).toHaveBeenCalledTimes(2)
+  await act(() => vi.advanceTimersByTimeAsync(1))
+  expect(streamProjectEvents).toHaveBeenCalledTimes(3)
+})
+
+it('stops permanently on 401 and 404, and on 401 resumes after a token change', async () => {
+  for (const status of [401, 404]) {
+    vi.mocked(streamProjectEvents).mockClear()
+    vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+      throw new LiveStreamHttpError(status)
+      yield 'ready'
+    })
+    const view = renderHook(() => useWorkspaceEvents('p1', noop))
+    await act(async () => {})
+    await act(() => vi.advanceTimersByTimeAsync(120_000))
+    expect(streamProjectEvents).toHaveBeenCalledTimes(1)
+    expect(view.result.current).toBe('Live updates unavailable. Check project access.')
+    if (status === 401) {
+      act(() => useAuthStore.setState({ accessToken: 'refreshed' }))
+      await act(async () => {})
+      expect(streamProjectEvents).toHaveBeenCalledTimes(2)
+    }
+    view.unmount()
+  }
 })

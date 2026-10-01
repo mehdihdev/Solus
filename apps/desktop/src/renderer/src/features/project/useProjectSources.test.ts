@@ -7,6 +7,8 @@ import { useProjectSources, SOURCES_POLL_MS } from './useProjectSources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
 import { useInterval } from '../../lib/useInterval'
+import { liveKeys, resetLiveRevisions } from '../../store/liveRevisionStore'
+import { bumpLive } from '../live/testBump'
 
 vi.mock('../../lib/useInterval', () => ({ useInterval: vi.fn() }))
 
@@ -29,6 +31,7 @@ const SOURCE = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetLiveRevisions()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover MK2' } })
 })
@@ -101,6 +104,8 @@ describe('useProjectSources — live refresh', () => {
     // api only — the connector never talks to the provider on this timer.
     const [, ms, enabled] = vi.mocked(useInterval).mock.calls.at(-1)!
     expect(ms).toBe(SOURCES_POLL_MS)
+    // Live hints carry freshness now; the timer is only a safety net (ADR-037).
+    expect(SOURCES_POLL_MS).toBe(60_000)
     expect(enabled).toBe(true)
   })
 
@@ -150,5 +155,33 @@ describe('useProjectSources — project switch mid-flight (SOLUSDEV-242)', () =>
       await Promise.resolve()
     })
     expect(result.current.sources).toEqual([])
+  })
+})
+
+describe('useProjectSources — live hints (ADR-037)', () => {
+  it('re-lists when the project sources revision bumps', async () => {
+    vi.mocked(resources.listSources).mockResolvedValue([SOURCE])
+    const { result } = renderHook(() => useProjectSources())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const next = { ...SOURCE, status: 'syncing' } as resources.Source
+    vi.mocked(resources.listSources).mockResolvedValue([next])
+    await bumpLive(liveKeys.projectSources('p1'))
+    await waitFor(() => expect(result.current.sources).toEqual([next]))
+    expect(resources.listSources).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores another project and unrelated keys', async () => {
+    vi.mocked(resources.listSources).mockResolvedValue([SOURCE])
+    const { result } = renderHook(() => useProjectSources())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(liveKeys.projectSources('p2'), liveKeys.projectLayout('p1'), liveKeys.me)
+    expect(resources.listSources).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not list when there is no project', async () => {
+    useWorkspaceStore.setState({ project: null })
+    renderHook(() => useProjectSources())
+    await bumpLive(liveKeys.projectSources('p1'))
+    expect(resources.listSources).not.toHaveBeenCalled()
   })
 })

@@ -8,6 +8,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useInterval } from '../../lib/useInterval'
 import { disconnectSource, listSources, triggerSync, type Source } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { liveKeys } from '../../store/liveRevisionStore'
+import { useLiveRefetch } from '../live/useLiveRefetch'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 /** How often the list re-reads itself so status, entity counts and last-synced
@@ -15,8 +17,9 @@ import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
  *  connector talk to the provider. The real syncing is the worker's per-minute
  *  `scheduled_change_detection` cron, which only does work when the upstream
  *  actually changed; polling a rate-capped CAD API every 10s would not survive
- *  contact with Onshape. Matches BRIDGE_POLL_MS. */
-export const SOURCES_POLL_MS = 10_000
+ *  contact with Onshape. Live `sources.changed` hints (ADR-037) now carry the
+ *  freshness, so this is a 60 s safety net for a missed frame. */
+export const SOURCES_POLL_MS = 60_000
 
 export type ProjectSourcesStatus = 'loading' | 'ready' | 'offline'
 
@@ -69,6 +72,13 @@ export function useProjectSources(): ProjectSourcesData {
   useEffect(() => {
     void load()
   }, [load])
+
+  // `sources.changed` hints (ADR-037) carry freshness; the timer is a safety net.
+  useLiveRefetch(
+    [projectId ? liveKeys.projectSources(projectId) : null],
+    () => void load(),
+    fetchEnabled && projectId !== null
+  )
 
   // Keep the page live. A refresh that fails leaves the previous list on screen
   // rather than blanking it — see `load`'s offline branch, which only fires for
