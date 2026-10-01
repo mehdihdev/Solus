@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import timedelta
 from typing import Any
 
 import pytest
 from solus_api.core.db import build_sessionmaker
+from solus_api.graph import live_publisher
 from solus_api.graph.live import HUB_INFO_KEY, Channel
 from solus_api.graph.live_publisher import drain_pending_publishes, install, queue_frame
 from solus_api.models import (
@@ -725,3 +727,39 @@ async def test_many_changes_in_one_transaction_stay_bounded(
         await commit_then_drain(s)
 
     assert hub.seen() == [("team", "team.activity")]
+
+
+class HangingHub:
+    """publish_to never returns: a black-holed Redis behind an unbounded hub."""
+
+    def __init__(self) -> None:
+        self.started = 0
+
+    async def publish_to(self, target: Channel, frame: dict[str, Any]) -> None:
+        self.started += 1
+        await asyncio.Event().wait()
+
+
+async def test_pending_publish_tasks_are_capped_and_the_overflow_is_dropped_with_a_warning(
+    engine: AsyncEngine,
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(live_publisher, "_MAX_PENDING_PUBLISHES", 3)
+    hanging = HangingHub()
+    maker = build_sessionmaker(engine, hub=hanging)  # type: ignore[arg-type]
+    baseline = len(live_publisher._pending)
+    try:
+        for _ in range(10):
+            async with maker() as s:
+                s.add(Activity(team_id=world.team.id, type="burst"))
+                await s.commit()  # every commit still succeeds
+            await asyncio.sleep(0)
+        assert len(live_publisher._pending) <= baseline + 3
+        assert hanging.started <= 3
+        assert any("pending" in r.message for r in caplog.records)
+    finally:
+        for task in list(live_publisher._pending):
+            task.cancel()
+        await drain_pending_publishes()

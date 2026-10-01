@@ -11,6 +11,7 @@ Nothing here provisions: an unknown user is "revoked", never created.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections import Counter
@@ -69,7 +70,8 @@ class LiveAccessVerifier:
 
     async def _user(self, session: AsyncSession, user_id: uuid.UUID) -> User | None:
         """The still-live user this token belongs to, or None."""
-        claims = self._claims()
+        # Off the loop: PyJWKClient can do a blocking JWKS fetch.
+        claims = await asyncio.to_thread(self._claims)
         if claims is None:
             return None
         user = await session.scalar(select(User).where(User.supabase_user_id == claims.sub))

@@ -42,6 +42,7 @@ from fastapi.responses import StreamingResponse
 from solus_contracts.live_events import (
     ACCOUNT_EVENT_TYPES,
     KEEPALIVE_SECONDS,
+    PROJECT_EVENT_TYPES,
     REVERIFY_SECONDS,
     AccessRevoked,
     AccountStreamReady,
@@ -51,7 +52,7 @@ from starlette.background import BackgroundTask
 
 from solus_api.core.errors import APIError
 from solus_api.deps import CurrentUser, LiveVerifierDep, ProjectCtx, SessionDep
-from solus_api.graph.live import Channel, LiveHub, Subscription
+from solus_api.graph.live import Channel, LiveHub, QueueItem, ResyncMarker, Subscription
 from solus_api.graph.live_access import (
     LiveAccessVerifier,
     StreamLimiter,
@@ -101,6 +102,15 @@ def _frame_event_type(payload: str) -> str:
     return _frame_type(payload) or "graph.changed"
 
 
+def _project_event_type(payload: str) -> str | None:
+    """The SSE event name for a project-channel frame, or None to drop it. A typed frame must
+    be a project event; an untyped/malformed one stays a legacy `graph.changed`."""
+    kind = _frame_type(payload)
+    if kind is None:
+        return "graph.changed"
+    return kind if kind in PROJECT_EVENT_TYPES else None
+
+
 def _sse(event: str, data: str) -> str:
     return f"event: {event}\ndata: {data}\n\n"
 
@@ -115,7 +125,7 @@ def _revoked_frame(*, user_id: uuid.UUID | None, project_id: uuid.UUID | None = 
     return _sse("access.revoked", frame.model_dump_json())
 
 
-async def _wait(subscription: Subscription, reverify_at: float) -> tuple[Channel, str] | _Tick:
+async def _wait(subscription: Subscription, reverify_at: float) -> QueueItem | _Tick:
     """The next frame, or the tick (keepalive / reverification) that came due first."""
     remaining = reverify_at - time.monotonic()
     if remaining <= 0:
@@ -185,23 +195,29 @@ async def _project_frames(
             yield ": keepalive\n\n"
             continue
         recheck = item == "reverify"
-        if not isinstance(item, str):
+        resync = isinstance(item, ResyncMarker)
+        if isinstance(item, tuple):
             target, payload = item
+            if target not in subscription.channels:  # queued before a resubscribe removed it
+                continue
             if target.kind == "project":
-                yield _sse(_frame_event_type(payload), payload)
+                kind = _project_event_type(payload)
+                if kind is None:
+                    continue
+                yield _sse(kind, payload)
                 frame = _frame_dict(payload) or {}
-                recheck = frame.get("type") == "access.revoked" and frame.get("project_id") == str(
-                    project_id
-                )
+                recheck = kind == "access.revoked" and frame.get("project_id") == str(project_id)
             else:  # the user channel is a trigger only: its frames are never forwarded here
                 recheck = _frame_type(payload) in _REVERIFY_TRIGGERS
-        if not recheck:
+        if not (recheck or resync):
             continue
         reverify_at = time.monotonic() + REVERIFY_SECONDS
         if not await verifier.project_access(project_id, user_id):
             reason.append("access_revoked")
             yield _revoked_frame(user_id=user_id, project_id=project_id)
             return
+        if resync:  # hints may have been lost: the client revalidates everything
+            yield _sse("ready", ProjectStreamReady(project_id=project_id).model_dump_json())
 
 
 @router.get("/events")
@@ -261,6 +277,17 @@ async def project_events(
     return _stream_response(stream(), close)
 
 
+def _account_hint(
+    subscription: Subscription, target: Channel, payload: str
+) -> tuple[str | None, bool]:
+    """(SSE chunk to forward or None, whether to re-verify) for one account-stream frame."""
+    if target not in subscription.channels:  # queued before a resubscribe removed it
+        return None, False
+    kind = _frame_type(payload)
+    chunk = _sse(kind, payload) if kind in ACCOUNT_EVENT_TYPES else None  # else dropped
+    return chunk, kind in _REVERIFY_TRIGGERS
+
+
 async def _account_frames(
     hub: LiveHub,
     subscription: Subscription,
@@ -282,13 +309,12 @@ async def _account_frames(
             yield ": keepalive\n\n"
             continue
         recheck = item == "reverify"
-        if not isinstance(item, str):
-            _target, payload = item
-            kind = _frame_type(payload)
-            if kind in ACCOUNT_EVENT_TYPES:  # anything else on this stream is dropped
-                yield _sse(kind, payload)
-            recheck = kind in _REVERIFY_TRIGGERS
-        if not recheck:
+        resync = isinstance(item, ResyncMarker)
+        if isinstance(item, tuple):
+            chunk, recheck = _account_hint(subscription, *item)
+            if chunk is not None:
+                yield chunk
+        if not (recheck or resync):
             continue
         reverify_at = time.monotonic() + REVERIFY_SECONDS
         current = await verifier.account_teams(user_id)
@@ -296,9 +322,11 @@ async def _account_frames(
             reason.append("access_revoked")
             yield _revoked_frame(user_id=user_id)
             return
-        if current != team_ids:
+        changed = current != team_ids
+        if changed:
             team_ids = current
             hub.resubscribe(subscription, account_channels(user_id, team_ids))
+        if changed or resync:
             yield ready()  # the client revalidates everything it holds
 
 

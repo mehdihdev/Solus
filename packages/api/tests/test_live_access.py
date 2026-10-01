@@ -165,3 +165,31 @@ async def test_verifier_denies_a_non_member_a_deleted_project_and_a_deleted_team
     team_row.deleted_at = utcnow()
     await db.commit()
     assert await _verifier(app, _token(alice_headers)).project_access(pid, alice) is False
+
+
+async def test_token_decoding_runs_off_the_event_loop(
+    app: FastAPI,
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PyJWKClient can block on a JWKS fetch, so the decode must not run on the loop."""
+    import threading
+
+    from solus_api.graph import live_access
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = live_access.decode_token
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(live_access, "decode_token", spy)
+    user = await me(client, alice_headers)
+
+    teams = await _verifier(app, _token(alice_headers)).account_teams(uuid.UUID(user["id"]))
+
+    assert teams is not None
+    assert seen and all(t != loop_thread for t in seen)

@@ -85,6 +85,10 @@ _MAX_QUEUED_FRAMES = 1_000
 #: differing only in these coalesce, the later one winning.
 _STATE_FIELDS = frozenset({"at", "status", "version"})
 
+#: In-flight publish tasks. A hub whose publish hangs (a black-holed Redis) would otherwise
+#: let one task per commit pile up without bound; past this the frames are dropped.
+_MAX_PENDING_PUBLISHES = 1_000
+
 _pending: set[asyncio.Task[None]] = set()
 _installed = False
 
@@ -420,6 +424,13 @@ def _on_after_commit(session: Session) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug("no running loop; dropping %d live frame(s)", len(queue))
+        return
+    if len(_pending) >= _MAX_PENDING_PUBLISHES:
+        logger.warning(
+            "too many pending live publishes (%d); dropping %d frame(s)",
+            len(_pending),
+            len(queue),
+        )
         return
     task = loop.create_task(_publish_all(hub, list(queue.values())))
     _pending.add(task)  # a strong reference: an unreferenced task can be garbage collected

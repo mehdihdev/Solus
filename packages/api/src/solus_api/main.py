@@ -208,6 +208,10 @@ def _scrub_sentry_event(event: Any, _hint: Any) -> Any:
     return event
 
 
+#: Bounds Redis connection setup so a black-holed host cannot hang a request or the relay.
+_REDIS_CONNECT_TIMEOUT_SECONDS = 5.0
+
+
 def create_app(settings: Settings | None = None, engine: AsyncEngine | None = None) -> FastAPI:
     # Settings' required fields (the JWT secret) come from the environment at
     # runtime; mypy can't see env-driven init, hence the targeted ignore.
@@ -281,7 +285,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.redis = (
         # redis.asyncio ships no stubs for from_url; the gate only needs the
         # five sorted-set commands its RedisLike protocol declares.
-        redis_asyncio.from_url(resolved_settings.redis_url)  # type: ignore[no-untyped-call]
+        # `socket_connect_timeout` bounds only connection setup; a `socket_timeout` would
+        # also break the relay's blocking pubsub `listen()`.
+        redis_asyncio.from_url(  # type: ignore[no-untyped-call]
+            resolved_settings.redis_url, socket_connect_timeout=_REDIS_CONNECT_TIMEOUT_SECONDS
+        )
         if resolved_settings.redis_url
         else None
     )

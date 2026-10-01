@@ -66,6 +66,26 @@ HUB_INFO_KEY = "solus.live_hub"
 #: frame is a hint — the next one it does receive triggers the same refetch.
 _QUEUE_DEPTH = 32
 
+#: A Redis publish that has not returned by now is treated as failed (and delivered locally).
+#: Bound here rather than with a client `socket_timeout`, which would also break the
+#: relay's blocking pubsub `listen()`.
+_PUBLISH_TIMEOUT_SECONDS = 2.0
+
+#: Relay reconnect backoff: doubles from the minimum to the cap.
+_RELAY_BACKOFF_MIN_SECONDS = 1.0
+_RELAY_BACKOFF_MAX_SECONDS = 30.0
+
+
+class ResyncMarker:
+    """Internal queue item: the relay was down, so hints may have been lost. Streams turn it
+    into a fresh `ready` (clients revalidate everything). Never serialized to a client."""
+
+    __slots__ = ()
+
+
+RESYNC = ResyncMarker()
+QueueItem = tuple["Channel", str] | ResyncMarker
+
 
 class Channel(NamedTuple):
     """One routing scope (ADR-037 §1). Structural: delivery is decided by this, never by a
@@ -120,14 +140,15 @@ def channel(project_id: uuid.UUID) -> str:
 
 
 class Subscription:
-    """One consumer's live set of channels. `queue` yields `(Channel, payload)`."""
+    """One consumer's live set of channels. `queue` yields `(Channel, payload)` — or the
+    internal `RESYNC` marker after a relay outage."""
 
     __slots__ = ("channels", "closed", "queue")
 
     def __init__(self, channels: frozenset[Channel]) -> None:
         self.channels = channels
         self.closed = False
-        self.queue: asyncio.Queue[tuple[Channel, str]] = asyncio.Queue(maxsize=_QUEUE_DEPTH)
+        self.queue: asyncio.Queue[QueueItem] = asyncio.Queue(maxsize=_QUEUE_DEPTH)
 
 
 def graph_changed_frame(
@@ -258,10 +279,12 @@ class LiveHub:
         payload = json.dumps(frame, separators=(",", ":"))
         if self._redis is not None:
             try:
-                await self._redis.publish(target.name, payload)
+                await asyncio.wait_for(
+                    self._redis.publish(target.name, payload), timeout=_PUBLISH_TIMEOUT_SECONDS
+                )
                 return
             except Exception:  # noqa: BLE001 — never fail a request or sync on fan-out
-                logger.warning("redis publish failed; delivering locally instead")
+                logger.warning("redis publish failed or timed out; delivering locally instead")
         self._deliver(target, payload)
 
     async def publish(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
@@ -285,8 +308,8 @@ class LiveHub:
         # pattern would inherit the hole. Drop rather than sanitise: a frame we
         # cannot vouch for is a frame worth losing, and the next one triggers the
         # same refetch.
-        if "\n" in payload:
-            logger.warning("dropping a live frame containing a newline")
+        if "\n" in payload or "\r" in payload:
+            logger.warning("dropping a live frame containing a line break")
             return
         # Iterate SNAPSHOTS: a subscriber that disconnects mid-fan-out mutates
         # the sets, and a slow one must not stall its neighbours.
@@ -319,29 +342,63 @@ class LiveHub:
             await self._reader
         self._reader = None
 
+    def _notify_resync(self) -> None:
+        """Tell every local subscription to revalidate. A full queue is drained first: its
+        frames are hints the revalidation supersedes, and the marker must not be lost."""
+        for subscription in {s for members in self._subscriptions.values() for s in members}:
+            queue = subscription.queue
+            while queue.full():
+                queue.get_nowait()
+            queue.put_nowait(RESYNC)
+
     async def _relay(self) -> None:
         redis = self._redis
         if redis is None:  # unreachable: `start` guards it. Narrows for mypy.
             return
-        pubsub = redis.pubsub()
-        try:
-            await pubsub.psubscribe(_LIVE_PATTERN, _LEGACY_PATTERN)
-            async for message in pubsub.listen():
-                if message.get("type") != "pmessage":
-                    continue
-                raw_channel = message.get("channel")
-                if isinstance(raw_channel, bytes):
-                    raw_channel = raw_channel.decode()
-                data = message.get("data")
-                if isinstance(data, bytes):
-                    data = data.decode()
-                target = parse_channel(str(raw_channel))
-                if target is not None and isinstance(data, str):
-                    self._deliver(target, data)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 — a dead relay must not kill the app
-            logger.exception("live relay stopped")
-        finally:
-            with contextlib.suppress(Exception):
-                await pubsub.close()
+        backoff = _RELAY_BACKOFF_MIN_SECONDS
+        recovering = False
+        while True:
+            pubsub = redis.pubsub()
+            try:
+                await pubsub.psubscribe(_LIVE_PATTERN, _LEGACY_PATTERN)
+                backoff = _RELAY_BACKOFF_MIN_SECONDS
+                if recovering:
+                    recovering = False
+                    self._notify_resync()
+                async for message in pubsub.listen():
+                    self._relay_message(message)
+                raise ConnectionError("pubsub stream ended")
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — a dead relay must not kill the app
+                recovering = True
+                logger.warning("live relay failed; retrying in %.1fs", backoff, exc_info=True)
+            finally:
+                with contextlib.suppress(Exception):
+                    await pubsub.close()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _RELAY_BACKOFF_MAX_SECONDS)
+
+    def _relay_message(self, message: dict[str, Any]) -> None:
+        if message.get("type") != "pmessage":
+            return
+        raw_channel = message.get("channel")
+        if isinstance(raw_channel, bytes):
+            raw_channel = raw_channel.decode()
+        data = message.get("data")
+        if isinstance(data, bytes):
+            data = data.decode()
+        target = parse_channel(str(raw_channel))
+        if target is None or not isinstance(data, str):
+            return
+        if not _is_json_object(data):
+            logger.warning("dropping a relayed live frame that is not a JSON object")
+            return
+        self._deliver(target, data)
+
+
+def _is_json_object(payload: str) -> bool:
+    try:
+        return isinstance(json.loads(payload), dict)
+    except ValueError:
+        return False

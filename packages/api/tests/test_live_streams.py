@@ -18,13 +18,19 @@ from conftest import ALICE, BOB, add_member, bearer, create_project, create_team
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.core.config import Settings
-from solus_api.graph.live import Channel
+from solus_api.graph import live_publisher
+from solus_api.graph.live import Channel, LiveHub
+from solus_api.graph.live_access import LiveAccessVerifier
 from solus_api.main import create_app
 from solus_api.models import (
+    Job,
+    JobKind,
     Membership,
     Notification,
     NotificationType,
     ProjectMembership,
+    Source,
+    SourceType,
     utcnow,
 )
 from solus_api.routers import live as live_routes
@@ -741,3 +747,255 @@ def test_startup_warns_that_fanout_is_process_local_without_redis(
         r.levelno == logging.WARNING and "live fan-out is process-local" in r.getMessage()
         for r in caplog.records
     )
+
+
+# --------------------------------------------------- Phase 4 fixes (SOLUSDEV-312)
+
+
+async def test_frames_queued_before_a_revoke_never_reach_the_removed_member(
+    open_stream: OpenStream,
+    app: FastAPI,
+    client: AsyncClient,
+    alice_headers: Any,
+    bob_headers: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A team frame queued while re-verification is in flight is dropped at dequeue once
+    the resubscribe has removed the team channel."""
+    team, _project, _alice, bob = await team_with_member(client, alice_headers, bob_headers)
+    stream = await open_stream(ACCOUNT, bob_headers)
+    original = LiveAccessVerifier.account_teams
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(self: LiveAccessVerifier, user_id: uuid.UUID) -> Any:
+        entered.set()
+        await release.wait()
+        return await original(self, user_id)
+
+    monkeypatch.setattr(LiveAccessVerifier, "account_teams", slow)
+    resp = await client.delete(
+        f"/api/v1/teams/{team['id']}/members/{bob['id']}", headers=alice_headers
+    )
+    assert resp.status_code == 204
+    await asyncio.wait_for(entered.wait(), TIMEOUT)  # re-verification is now in flight
+
+    hub = app.state.graph_hub
+    await hub.publish_to(
+        Channel.team(uuid.UUID(team["id"])),
+        {"type": "team.updated", "team_id": team["id"], "at": "t"},
+    )
+    release.set()
+    await stream.until("ready")  # the resubscribe without the team has happened
+    await hub.publish_to(
+        Channel.user(uuid.UUID(bob["id"])),
+        {"type": "notification.created", "user_id": bob["id"], "at": "t"},
+    )
+
+    seen: list[Event] = []
+    while True:
+        event = await stream.next()
+        seen.append(event)
+        if event[0] == "notification.created":
+            break
+    assert all(name != "team.updated" for name, _ in seen), seen
+
+
+class _AlwaysAllow:
+    async def project_access(self, project_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        return True
+
+    async def account_teams(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        return []
+
+
+async def _drain_one(frames: Any) -> str:
+    return await asyncio.wait_for(frames.__anext__(), TIMEOUT)
+
+
+async def test_project_stream_skips_frames_for_channels_no_longer_subscribed() -> None:
+    hub = LiveHub()
+    project, user, removed = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    subscription = hub.subscribe_channels([Channel.project(project), Channel.user(user)])
+    frames = live_routes._project_frames(subscription, _AlwaysAllow(), project, user, [])  # type: ignore[arg-type]
+    assert "event: ready" in await _drain_one(frames)
+
+    subscription.queue.put_nowait((Channel.project(removed), '{"type":"graph.changed"}'))
+    subscription.queue.put_nowait((Channel.project(project), '{"type":"layout.changed"}'))
+
+    out = await _drain_one(frames)
+    assert "layout.changed" in out and str(removed) not in out
+    await frames.aclose()
+
+
+async def test_project_stream_forwards_only_project_event_types() -> None:
+    hub = LiveHub()
+    project, user = uuid.uuid4(), uuid.uuid4()
+    subscription = hub.subscribe_channels([Channel.project(project), Channel.user(user)])
+    frames = live_routes._project_frames(subscription, _AlwaysAllow(), project, user, [])  # type: ignore[arg-type]
+    await _drain_one(frames)
+
+    for payload in (
+        '{"type":"team.updated","team_id":"x"}',  # a typed frame the contract says is not ours
+        '{"type":"notification.created"}',
+        '{"type":"graph.changed","project_id":"p"}',
+    ):
+        subscription.queue.put_nowait((Channel.project(project), payload))
+
+    out = await _drain_one(frames)
+    assert out.startswith("event: graph.changed\n") and "team.updated" not in out
+    await frames.aclose()
+
+
+async def test_project_stream_keeps_forwarding_an_untyped_legacy_frame_as_graph_changed() -> None:
+    hub = LiveHub()
+    project, user = uuid.uuid4(), uuid.uuid4()
+    subscription = hub.subscribe_channels([Channel.project(project), Channel.user(user)])
+    frames = live_routes._project_frames(subscription, _AlwaysAllow(), project, user, [])  # type: ignore[arg-type]
+    await _drain_one(frames)
+
+    subscription.queue.put_nowait((Channel.project(project), '{"counts":1}'))
+
+    assert (await _drain_one(frames)).startswith("event: graph.changed\n")
+    await frames.aclose()
+
+
+async def test_project_stream_sends_a_fresh_ready_on_resync_and_never_serializes_the_marker() -> (
+    None
+):
+    hub = LiveHub()
+    project, user = uuid.uuid4(), uuid.uuid4()
+    subscription = hub.subscribe_channels([Channel.project(project), Channel.user(user)])
+    frames = live_routes._project_frames(subscription, _AlwaysAllow(), project, user, [])  # type: ignore[arg-type]
+    await _drain_one(frames)
+
+    hub._notify_resync()
+
+    out = await _drain_one(frames)
+    assert out.startswith("event: ready\n") and str(project) in out
+    assert "Resync" not in out and "object at" not in out
+    await frames.aclose()
+
+
+async def test_account_stream_sends_a_fresh_ready_with_current_teams_on_resync(
+    open_stream: OpenStream, app: FastAPI, client: AsyncClient, alice_headers: Any
+) -> None:
+    team = await create_team(client, alice_headers)
+    stream = await open_stream(ACCOUNT, alice_headers)
+
+    app.state.graph_hub._notify_resync()
+
+    ready = await stream.until("ready")
+    assert team["id"] in ready["team_ids"]
+
+
+async def test_a_project_stream_ends_at_resync_when_access_was_lost_without_a_hint(
+    open_stream: OpenStream,
+    app: FastAPI,
+    client: AsyncClient,
+    alice_headers: Any,
+    bob_headers: Any,
+    engine: AsyncEngine,
+) -> None:
+    _team, project, _alice, bob = await team_with_member(client, alice_headers, bob_headers)
+    stream = await open_stream(project_path(project["id"]), bob_headers)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as s:  # a bulk UPDATE raises no hint: the stream cannot know
+        await s.execute(
+            update(Membership)
+            .where(Membership.user_id == uuid.UUID(bob["id"]))
+            .values(deleted_at=utcnow())
+        )
+        await s.execute(  # team members are seeded with project shares (ADR-025)
+            update(ProjectMembership)
+            .where(ProjectMembership.user_id == uuid.UUID(bob["id"]))
+            .values(deleted_at=utcnow())
+        )
+        await s.commit()
+
+    app.state.graph_hub._notify_resync()
+
+    assert (await stream.until("access.revoked"))["project_id"] == project["id"]
+    assert await stream.ended()
+
+
+async def test_a_project_stream_never_receives_another_projects_frames(
+    open_stream: OpenStream,
+    app: FastAPI,
+    client: AsyncClient,
+    alice_headers: Any,
+    bob_headers: Any,
+) -> None:
+    team_a = await create_team(client, alice_headers, "A")
+    project_a = await create_project(client, alice_headers, team_a["id"])
+    team_b = await create_team(client, bob_headers, "B")
+    project_b = await create_project(client, bob_headers, team_b["id"])
+    stream = await open_stream(project_path(project_b["id"]), bob_headers)
+    pa = uuid.UUID(project_a["id"])
+
+    await client.put(
+        f"/api/v1/projects/{project_a['id']}/workspace-layout",
+        json={"version": 0, "positions": {}},
+        headers=alice_headers,
+    )
+    await client.patch(
+        f"/api/v1/projects/{project_a['id']}", json={"name": "PA2"}, headers=alice_headers
+    )
+    maker: async_sessionmaker[AsyncSession] = app.state.sessionmaker
+    async with maker() as s:  # the app's sessionmaker carries the hub: these publish
+        s.add(Source(project_id=pa, team_id=pa_team(team_a), type=SourceType.GITHUB, name="s"))
+        s.add(Job(project_id=pa, team_id=pa_team(team_a), kind=next(iter(JobKind))))
+        await s.commit()
+    await live_publisher.drain_pending_publishes()
+    await client.patch(
+        f"/api/v1/projects/{project_b['id']}", json={"name": "Sentinel"}, headers=bob_headers
+    )
+
+    seen: list[Event] = []
+    while True:
+        event = await stream.next()
+        seen.append(event)
+        if event[0] == "project.updated" and event[1]["project_id"] == project_b["id"]:
+            break
+    assert project_a["id"] not in json.dumps(seen), "project A's frames reached project B's stream"
+    assert team_a["id"] not in json.dumps(seen)
+
+
+def pa_team(team: dict[str, Any]) -> uuid.UUID:
+    return uuid.UUID(team["id"])
+
+
+async def test_a_share_only_user_gets_no_team_frames_from_the_shared_projects_team(
+    open_stream: OpenStream,
+    app: FastAPI,
+    client: AsyncClient,
+    alice_headers: Any,
+    bob_headers: Any,
+    engine: AsyncEngine,
+) -> None:
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    bob = await me(client, bob_headers)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as s:
+        s.add(ProjectMembership(project_id=uuid.UUID(project["id"]), user_id=uuid.UUID(bob["id"])))
+        await s.commit()
+
+    stream = await open_stream(ACCOUNT, bob_headers)
+
+    assert team["id"] not in stream.ready_data["team_ids"]
+    await create_project(client, alice_headers, team["id"])  # team noise
+    await client.patch(
+        f"/api/v1/teams/{team['id']}", json={"name": "Renamed"}, headers=alice_headers
+    )
+    await app.state.graph_hub.publish_to(
+        Channel.user(uuid.UUID(bob["id"])),
+        {"type": "notification.created", "user_id": bob["id"], "at": "t"},
+    )
+
+    seen: list[Event] = []
+    while True:
+        event = await stream.next()
+        seen.append(event)
+        if event[0] == "notification.created":
+            break
+    assert team["id"] not in json.dumps(seen), "a share-only user received team frames"

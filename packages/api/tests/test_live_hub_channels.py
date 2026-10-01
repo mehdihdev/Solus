@@ -8,7 +8,9 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from solus_api.graph.live import Channel, LiveHub, parse_channel
+import pytest
+from solus_api.graph import live as live_module
+from solus_api.graph.live import Channel, LiveHub, ResyncMarker, parse_channel
 from solus_contracts.live_events import channel_name
 
 FRAME: dict[str, Any] = {"type": "team.updated", "at": "2026-09-30T00:00:00+00:00"}
@@ -317,3 +319,170 @@ async def test_the_relay_subscribes_both_patterns_and_delivers_by_parsed_channel
     finally:
         await hub.stop()
     assert redis.pubsub_obj.closed
+
+
+# --------------------------------------------------- Phase 4 fixes (SOLUSDEV-312)
+
+
+class _HangingRedis:
+    """A Redis whose publish never returns (a black-holed connection)."""
+
+    async def publish(self, name: str, payload: str) -> None:
+        await asyncio.Event().wait()
+
+
+async def test_a_hanging_redis_publish_is_bounded_and_falls_back_to_local_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(live_module, "_PUBLISH_TIMEOUT_SECONDS", 0.05)
+    hub = LiveHub(_HangingRedis())
+    scope = uuid.uuid4()
+    sub = hub.subscribe_channels([Channel.team(scope)])
+
+    await asyncio.wait_for(hub.publish_to(Channel.team(scope), FRAME), timeout=2)
+
+    assert sub.queue.get_nowait()[0] == Channel.team(scope)
+
+
+async def test_a_carriage_return_bearing_payload_is_dropped() -> None:
+    hub = LiveHub()
+    scope = uuid.uuid4()
+    sub = hub.subscribe_channels([Channel.team(scope)])
+
+    hub._deliver(Channel.team(scope), '{"type":"team.updated"}\revent: forged')
+
+    assert sub.queue.empty()
+
+
+async def test_the_relay_drops_payloads_that_are_not_json_objects() -> None:
+    team = uuid.uuid4()
+    messages = [
+        _pmessage(channel_name("team", team), "not json"),
+        _pmessage(channel_name("team", team), "[1,2]"),
+        _pmessage(channel_name("team", team), '"a string"'),
+        _pmessage(channel_name("team", team), json.dumps(FRAME)),
+    ]
+    hub = LiveHub(_RelayRedis(messages))
+    sub = hub.subscribe_channels([Channel.team(team)])
+
+    await hub.start()
+    try:
+        _channel, payload = await asyncio.wait_for(sub.queue.get(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert json.loads(payload) == FRAME
+        assert sub.queue.empty(), "a non-object payload was delivered"
+    finally:
+        await hub.stop()
+
+
+class _FlakyRedis:
+    """pubsub() hands out one scripted connection per call; a script is a list of
+    messages, or an exception to raise from psubscribe / from listen."""
+
+    def __init__(self, scripts: list[Any]) -> None:
+        self.scripts = scripts
+        self.connections = 0
+
+    def pubsub(self) -> Any:
+        script = self.scripts[min(self.connections, len(self.scripts) - 1)]
+        self.connections += 1
+        return _ScriptedPubSub(script)
+
+
+class _ScriptedPubSub(_PubSub):
+    def __init__(self, script: Any) -> None:
+        super().__init__([] if isinstance(script, Exception) else script)
+        self.script = script
+
+    async def psubscribe(self, *patterns: str) -> None:
+        if isinstance(self.script, ConnectionError):
+            raise self.script
+        await super().psubscribe(*patterns)
+
+
+class _ListenFails(_PubSub):
+    async def listen(self) -> AsyncIterator[dict[str, Any]]:
+        raise ConnectionError("connection reset")
+        yield {}  # pragma: no cover
+
+
+async def test_the_relay_recovers_from_a_failure_and_tells_subscribers_to_resync(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(live_module, "_RELAY_BACKOFF_MIN_SECONDS", 0.01)
+    team = uuid.uuid4()
+    after = _pmessage(channel_name("team", team), json.dumps(FRAME))
+    redis = _FlakyRedis([ConnectionError("down"), ConnectionError("still down"), [after]])
+    hub = LiveHub(redis)
+    sub = hub.subscribe_channels([Channel.team(team)])
+
+    await hub.start()
+    try:
+        first = await asyncio.wait_for(sub.queue.get(), timeout=2)
+        second = await asyncio.wait_for(sub.queue.get(), timeout=2)
+    finally:
+        await hub.stop()
+
+    assert isinstance(first, ResyncMarker), "resync must precede post-recovery frames"
+    assert second[0] == Channel.team(team)
+    assert redis.connections == 3
+    assert any("relay" in r.message for r in caplog.records)
+
+
+async def test_the_relay_resubscribes_after_listen_dies_mid_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(live_module, "_RELAY_BACKOFF_MIN_SECONDS", 0.01)
+    team = uuid.uuid4()
+    healthy = _PubSub([_pmessage(channel_name("team", team), json.dumps(FRAME))])
+    broken = _ListenFails([])
+    handed_out = [broken, healthy]
+
+    class _Redis2:
+        def pubsub(self) -> Any:
+            return handed_out.pop(0)
+
+    hub = LiveHub(_Redis2())
+    sub = hub.subscribe_channels([Channel.team(team)])
+
+    await hub.start()
+    try:
+        first = await asyncio.wait_for(sub.queue.get(), timeout=2)
+        second = await asyncio.wait_for(sub.queue.get(), timeout=2)
+    finally:
+        await hub.stop()
+
+    assert isinstance(first, ResyncMarker)
+    assert second[0] == Channel.team(team)
+    assert broken.closed, "a failed connection must be closed before reconnecting"
+
+
+async def test_a_full_queue_still_receives_the_resync_marker() -> None:
+    hub = LiveHub()
+    team = uuid.uuid4()
+    sub = hub.subscribe_channels([Channel.team(team)])
+    for _ in range(40):
+        await hub.publish_to(Channel.team(team), FRAME)
+    assert sub.queue.full()
+
+    hub._notify_resync()
+
+    items = []
+    while not sub.queue.empty():
+        items.append(sub.queue.get_nowait())
+    assert any(isinstance(i, ResyncMarker) for i in items)
+
+
+async def test_a_healthy_first_connect_sends_no_resync() -> None:
+    team = uuid.uuid4()
+    redis = _RelayRedis([_pmessage(channel_name("team", team), json.dumps(FRAME))])
+    hub = LiveHub(redis)
+    sub = hub.subscribe_channels([Channel.team(team)])
+
+    await hub.start()
+    try:
+        item = await asyncio.wait_for(sub.queue.get(), timeout=1)
+    finally:
+        await hub.stop()
+
+    assert not isinstance(item, ResyncMarker)
