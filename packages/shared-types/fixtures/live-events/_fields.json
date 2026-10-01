@@ -1,0 +1,102 @@
+{
+  "AccessRevoked": [
+    "at",
+    "project_id",
+    "team_id",
+    "type",
+    "user_id"
+  ],
+  "AccountStreamReady": [
+    "team_ids",
+    "user_id"
+  ],
+  "GraphChangeCounts": [
+    "entities_created",
+    "entities_deleted",
+    "entities_updated",
+    "relations_created",
+    "relations_deleted"
+  ],
+  "GraphChanged": [
+    "at",
+    "counts",
+    "project_id",
+    "source_id",
+    "sync_id",
+    "type"
+  ],
+  "HardwareDevicesChanged": [
+    "at",
+    "devices",
+    "project_id",
+    "type"
+  ],
+  "JobUpdated": [
+    "at",
+    "job_id",
+    "project_id",
+    "status",
+    "type"
+  ],
+  "LayoutChanged": [
+    "at",
+    "project_id",
+    "type",
+    "version"
+  ],
+  "MembershipChanged": [
+    "at",
+    "project_id",
+    "team_id",
+    "type",
+    "user_id"
+  ],
+  "NotificationCreated": [
+    "at",
+    "type",
+    "user_id"
+  ],
+  "ProjectStreamReady": [
+    "project_id"
+  ],
+  "ProjectUpdated": [
+    "at",
+    "project_id",
+    "team_id",
+    "type"
+  ],
+  "SourcesChanged": [
+    "at",
+    "project_id",
+    "source_id",
+    "type"
+  ],
+  "TeamActivity": [
+    "actor_id",
+    "at",
+    "project_id",
+    "team_id",
+    "type"
+  ],
+  "TeamInvitesChanged": [
+    "at",
+    "team_id",
+    "type"
+  ],
+  "TeamMembersChanged": [
+    "at",
+    "team_id",
+    "type"
+  ],
+  "TeamProjectsChanged": [
+    "at",
+    "project_id",
+    "team_id",
+    "type"
+  ],
+  "TeamUpdated": [
+    "at",
+    "team_id",
+    "type"
+  ]
+}

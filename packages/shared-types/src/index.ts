@@ -232,3 +232,32 @@ export {
   type WidgetView,
   type WindowView,
 } from "./extension-manifest";
+
+// SOLUSDEV-312 (ADR-037) — live change-hint frames. docs/contracts/live-events.md
+export {
+  ACCOUNT_EVENT_TYPES,
+  JOB_STATUSES,
+  KEEPALIVE_SECONDS,
+  PROJECT_EVENT_TYPES,
+  REVERIFY_SECONDS,
+  type AccessRevoked,
+  type AccountFrame,
+  type AccountStreamReady,
+  type GraphChangeCounts,
+  type GraphChanged,
+  type HardwareDevicesChanged,
+  type JobStatusName,
+  type JobUpdated,
+  type LayoutChanged,
+  type MembershipChanged,
+  type NotificationCreated,
+  type ProjectFrame,
+  type ProjectStreamReady,
+  type ProjectUpdated,
+  type SourcesChanged,
+  type TeamActivity,
+  type TeamInvitesChanged,
+  type TeamMembersChanged,
+  type TeamProjectsChanged,
+  type TeamUpdated,
+} from "./live-events";
