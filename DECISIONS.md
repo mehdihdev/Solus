@@ -1000,3 +1000,38 @@ rotation or reconnect on the same application in the same bucket. Changing the
 OAuth application must not inherit the previous application's exhaustion flag.
 This separates observed accounting contexts; it does not assert that the provider
 has granted a new allowance. Provider refusals remain authoritative.
+
+## ADR-037: Live channels — project, team and user change hints
+
+**Status:** Accepted (2026-09-30, SOLUSDEV-312; approved in-chat against the concrete text below).
+
+**Context:** SOLUSDEV-167 built a project-scoped SSE stream carrying
+`graph.changed` hints via LiveHub (Redis pub/sub). Team state (members,
+invites, projects, notifications, activity) and workspace layout are
+pull-only, so teammates never see each other's changes. Feature area 10
+requires cross-member change notifications.
+
+**Decision:**
+
+1. Three channel kinds: `project:{id}`, `team:{id}`, `user:{id}`. Routing is
+   structural — derived server-side from the committed row's scope,
+   never from client input or frame bodies.
+2. Frames are invalidation HINTS (ids, counts, versions), never deltas
+   or content: no names, emails, invite tokens or CAD data. Clients
+   refetch via existing REST routes.
+3. Publish only after commit: frames queue on the DB session and flush
+   in an `after_commit` hook; rollback discards them. A publish failure
+   never fails the request.
+4. Redis pub/sub (`solus:live:{kind}:{id}`) is the cross-process bus.
+   Without Redis, delivery is process-local and `/health` reports
+   `live_fanout=local_only`. Multi-instance deploys require Redis.
+5. Transport stays SSE + Bearer. `/projects/{id}/events` gains event
+   types; new `GET /users/me/events` carries the user channel plus every
+   team they belong to. Streams re-verify access at most every 30s and
+   immediately on `access.revoked`, closing when access ends.
+6. No replay: a `ready` frame on (re)connect tells clients to
+   revalidate everything.
+7. Presence and CRDT co-editing stay deferred (API.md §7.2.4; ADR-004).
+
+**Consequences:** one more long-lived connection per desktop; staging
+needs Redis before running more than one API task.
