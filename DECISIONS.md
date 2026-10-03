@@ -1080,3 +1080,30 @@ need a live cross-tab verification.
 the Onshape App Store; until then `onshape_app_distribution=private`, pool =
 owner (`onshape_quota_pool=owner`, with a `user` override kept for
 verification), annual allowance 2,500, quiet period 90 s.
+
+## ADR-038 amendment: fairness, latch, read-out and purge records
+
+**Status:** Accepted (2026-10-02, SOLUSDEV-312; approved in-chat against the concrete text below).
+
+1. **No per-tenant sub-limit.** The owner pool is shared without a per-account
+   or per-team cap. ACCEPTED RISK, decided by the humans as an explicit
+   exception to CLAUDE.md §7's starvation rule: one tenant's usage can push
+   every tenant into the degraded band or exhaust the pool. Mitigations:
+   account-first latching (2), per-call labels for attribution, and App Store
+   publication, which removes the annual limit.
+2. **402 latch:** an Onshape 402 latches only the calling account for 24 h. The
+   owner pool latches only after 2 or more distinct accounts observe a 402
+   within 24 h.
+3. **Read-out:** a team sees its own account's usage and per-label breakdown
+   plus the pool's status band (ok, degraded, exhausted). Pool-wide totals and
+   breakdown are staff-only.
+4. **Revocation purge:** deletion of durable CAD is recorded in
+   `cad_purge_requests` (non-tenant table; holds only
+   `sha256(provider:account_ref)`, joining the ADR-027 opaque-id exceptions) in
+   the same transaction as the revocation, then run inline, by an ARQ cron and
+   at startup, with backoff, twice (the second pass catches in-flight syncs),
+   until the prefix is empty. A 1 h tombstone blocks new durable writes for a
+   revoked account.
+5. **Durable scope:** only STEP exports and immutable reads over 256 KiB are
+   stored durably; replaced objects are deleted. Writes always resolve the
+   target workspace live.
