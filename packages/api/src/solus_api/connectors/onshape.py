@@ -33,9 +33,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import logging
 import random
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -147,6 +149,19 @@ _LEGACY_KEYS = ("document_id", "workspace_id", "element_id")
 _ASSEMBLIES = "assemblies"
 EXPORTABLE_COLLECTIONS: dict[str, str] = {"ASSEMBLY": _ASSEMBLIES, "PARTSTUDIO": "partstudios"}
 
+#: ADR-038 §3 — the in-document elements an export may depend on. A Part Studio
+#: derives from other Part Studios and Variable Studios; an assembly additionally
+#: instantiates other assemblies. Drawings, blobs and app elements never feed an
+#: export, so editing one must not invalidate it.
+_STUDIO_TYPES = frozenset({"PARTSTUDIO", "VARIABLESTUDIO"})
+_ASSEMBLY_TYPE = "ASSEMBLY"
+_TRACKED_TYPES = _STUDIO_TYPES | {_ASSEMBLY_TYPE}
+#: Export-key fingerprint used when the listing carries no usable per-element
+#: microversion: the key then degrades to document granularity (the old, safe one).
+_DOCUMENT_KEYED = "doc"
+#: How long a probe's observation may be handed to the plan of the SAME sync.
+_OBSERVATION_TTL_SECONDS = 120.0
+
 #: Bounds on an account-level sync. Onshape rate-caps a private OAuth app, and
 #: each element costs a translation job — so both the selection and the expanded
 #: element set are bounded rather than "whatever the account holds".
@@ -248,6 +263,11 @@ class _Target:
     #: "partstudios". Only Part Studios support the optional parts metadata
     #: enrichment; both collections share STEP parsing and graph projection.
     collection: str = _ASSEMBLIES
+    #: ADR-038 §3 export-cache identity: this element's own microversion and a
+    #: fingerprint of the in-document elements it may depend on. None when the
+    #: listing did not carry them (the export is then keyed by the document).
+    revision: str | None = None
+    fingerprint: str | None = None
 
     @property
     def scope(self) -> str:
@@ -277,6 +297,17 @@ class _DocumentPlan:
     workspace_id: str | None
     microversion: str
     targets: list[_Target]
+
+
+def _fingerprint(domain: str, elements: list[tuple[str, str]]) -> str | None:
+    """sha256 over the sorted `(element_id, microversion)` pairs an export may depend
+    on, or None when any pair lacks a microversion (the caller then keys by document)."""
+    if any(not micro for _, micro in elements):
+        return None
+    digest = hashlib.sha256(domain.encode())
+    for element_id, micro in sorted(elements):
+        digest.update(f"\n{element_id}:{micro}".encode())
+    return digest.hexdigest()
 
 
 def _text(value: Any) -> str:
@@ -477,6 +508,13 @@ class OnshapeConnector(OAuthConnector):
         self._cache = cache if account_ref else None
         self._account_ref = account_ref or ""
         self._signal_max_age = signal_max_age_seconds
+        #: ADR-038 §3: the latest element listing per document (version, rows), handed
+        #: from `_elements_at` to `_plan` so one listing serves both the target
+        #: list and the export keys.
+        self._listings: dict[str, tuple[str, list[tuple[str, str, str]]]] = {}
+        #: ADR-038 §5c: what this sync's change probe already learned per document —
+        #: `(workspace_id, microversion, observed_at)` — consumed once by `_plan`.
+        self._observed: dict[str, tuple[str, str, float]] = {}
 
     # ----------------------------------------------------------- oauth
 
@@ -574,7 +612,10 @@ class OnshapeConnector(OAuthConnector):
                 if current != stored.get(document_id):
                     return True
 
-        return bool(document_ids) and ctx.cursor.get("projection_version") != PROJECTION_VERSION
+        changed = bool(document_ids) and ctx.cursor.get("projection_version") != PROJECTION_VERSION
+        if not changed:
+            self._observed.clear()  # nothing follows this probe; leave no stale evidence
+        return changed
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
         """Ingest every tracked document. One source now spans many documents, so
@@ -656,8 +697,17 @@ class OnshapeConnector(OAuthConnector):
         version: str,
     ) -> tuple[list[Any], list[Any]]:
         """One element → graph records, namespaced to its document."""
+        # ADR-038 §3: keyed by the ELEMENT's microversion + a dependency fingerprint,
+        # so an edit elsewhere in the document does not re-export this tab. The
+        # bracketing inside `_geometry_export` still proves the bytes match `version`.
         export = await self._cached(
-            self._payload_key("export", target.document_id, version, target.element_id),
+            self._payload_key(
+                "export",
+                target.document_id,
+                target.revision or version,
+                target.element_id,
+                target.fingerprint or _DOCUMENT_KEYED,
+            ),
             lambda: self._geometry_export(client, target, version),
         )
         if export is None:
@@ -757,7 +807,7 @@ class OnshapeConnector(OAuthConnector):
 
     def _payload_key(self, kind: str, document_id: str, version: str, *parts: str) -> str:
         return IntegrationCache.payload_key(
-            self.provider, self._account_ref, document_id, version, f"revision-v2-{kind}", *parts
+            self.provider, self._account_ref, document_id, version, f"revision-v3-{kind}", *parts
         )
 
     async def _cached[T](self, key: str, fetch: Callable[[], Awaitable[T]]) -> T:
@@ -823,8 +873,13 @@ class OnshapeConnector(OAuthConnector):
         """
         legacy = self._legacy_target(ctx)
         if legacy is not None:
-            microversion = await self._current_microversion(
-                client, legacy.document_id, legacy.workspace_id
+            observed = self._take_observed(legacy.document_id)
+            microversion = (
+                observed[1]
+                if observed is not None
+                else await self._current_microversion(
+                    client, legacy.document_id, legacy.workspace_id
+                )
             )
             return [_DocumentPlan(legacy.document_id, legacy.workspace_id, microversion, [legacy])]
 
@@ -832,7 +887,12 @@ class OnshapeConnector(OAuthConnector):
         seen = 0
         for document_id in self._selected_document_ids(ctx):
             try:
-                workspace_id, microversion = await self._locate(client, ctx, document_id)
+                # ADR-038 §5c: the change probe of THIS sync already asked; the
+                # webhook posture trusts no recorded signal and would pay twice.
+                located = self._take_observed(document_id) or await self._locate(
+                    client, ctx, document_id
+                )
+                workspace_id, microversion = located
                 elements = await self._elements_at(client, document_id, workspace_id, microversion)
             except ConnectorError as exc:
                 if exc.code != "not_found":
@@ -843,6 +903,7 @@ class OnshapeConnector(OAuthConnector):
                 plans.append(_DocumentPlan(document_id, None, _GONE, []))
                 continue
             targets: list[_Target] = []
+            revisions = self._export_revisions(document_id, microversion)
             for element_id, collection in elements:
                 seen += 1
                 if seen > self._max_elements:
@@ -866,6 +927,8 @@ class OnshapeConnector(OAuthConnector):
                         workspace_id=workspace_id,
                         element_id=str(element_id),
                         collection=str(collection),
+                        revision=revisions.get(str(element_id), (None, None))[0],
+                        fingerprint=revisions.get(str(element_id), (None, None))[1],
                     )
                 )
             plans.append(_DocumentPlan(document_id, workspace_id, microversion, targets))
@@ -877,12 +940,53 @@ class OnshapeConnector(OAuthConnector):
         """The exportable elements at one version — cached by it."""
         self._validate_revision(version)
 
-        async def fetch() -> list[tuple[str, str]]:
+        async def fetch() -> list[tuple[str, str, str]]:
             return await self._exportable_elements(client, document_id, version)
 
-        rows = await self._cached(self._payload_key("elements", document_id, version), fetch)
-        # A cached list comes back as JSON lists; the plan wants pairs.
-        return [(str(element_id), str(collection)) for element_id, collection in rows]
+        cached = await self._cached(self._payload_key("elements", document_id, version), fetch)
+        # A cached list comes back as JSON lists; keep only well-formed rows.
+        rows = [
+            (str(row[0]), str(row[1]), str(row[2]))
+            for row in cached
+            if isinstance(row, list | tuple) and len(row) == 3
+        ]
+        self._listings[document_id] = (version, rows)
+        return [
+            (element_id, EXPORTABLE_COLLECTIONS[kind])
+            for element_id, kind, _ in rows
+            if kind in EXPORTABLE_COLLECTIONS
+        ]
+
+    def _export_revisions(self, document_id: str, version: str) -> dict[str, tuple[str, str]]:
+        """`element_id -> (element microversion, dependency fingerprint)` from the
+        listing `_elements_at` just read (ADR-038 §3).
+
+        A Part Studio's fingerprint covers every Part/Variable Studio in the
+        document; an assembly's adds every assembly. An element — or any element
+        its fingerprint covers — without a usable microversion is simply absent,
+        so its export falls back to document-level keys rather than trusting
+        data Onshape did not give us."""
+        held = self._listings.pop(document_id, None)
+        if held is None or held[0] != version:
+            return {}
+        rows = held[1]
+        studios = [(i, m) for i, kind, m in rows if kind in _STUDIO_TYPES]
+        assemblies = [(i, m) for i, kind, m in rows if kind == _ASSEMBLY_TYPE]
+        studio_print = _fingerprint("ps", studios)
+        assembly_print = _fingerprint("as", [*studios, *assemblies])
+        revisions: dict[str, tuple[str, str]] = {}
+        for element_id, kind, micro in rows:
+            print_ = studio_print if kind == "PARTSTUDIO" else assembly_print
+            if kind in EXPORTABLE_COLLECTIONS and micro and print_:
+                revisions[element_id] = (micro, print_)
+        return revisions
+
+    def _take_observed(self, document_id: str) -> tuple[str, str] | None:
+        """This sync's own probe result for `document_id`, once, if still young."""
+        held = self._observed.pop(document_id, None)
+        if held is None or time.monotonic() - held[2] > _OBSERVATION_TTL_SECONDS:
+            return None
+        return held[0], held[1]
 
     async def _locate(
         self, client: httpx.AsyncClient, ctx: SyncContext, document_id: str
@@ -954,11 +1058,12 @@ class OnshapeConnector(OAuthConnector):
         cursor. SOLUSDEV-241: costs ZERO when a trusted signal is recorded.
         """
         try:
-            _workspace_id, microversion = await self._locate(client, ctx, document_id)
+            workspace_id, microversion = await self._locate(client, ctx, document_id)
         except ConnectorError as exc:
             if exc.code != "not_found":
                 raise
             return _GONE
+        self._observed[document_id] = (workspace_id, microversion, time.monotonic())
         return microversion
 
     def _known_workspace(self, ctx: SyncContext, document_id: str) -> str | None:
@@ -982,8 +1087,13 @@ class OnshapeConnector(OAuthConnector):
 
     async def _exportable_elements(
         self, client: httpx.AsyncClient, document_id: str, version: str
-    ) -> list[tuple[str, str]]:
-        """Every exportable element as `(element_id, collection)`.
+    ) -> list[tuple[str, str, str]]:
+        """Every export-relevant element as `(element_id, elementType, microversion)`.
+
+        Exportable ones (Part Studios, assemblies) become targets; Variable
+        Studios ride along only to fingerprint what an export depends on. The
+        microversion is Onshape's per-element `microversionId` ("" when the
+        listing omits or mangles it).
 
         Onshape's `elementType` filter is SINGLE-VALUED, so asking for both
         families would cost a second request per document against an annual
@@ -996,14 +1106,18 @@ class OnshapeConnector(OAuthConnector):
             f"/api/v6/documents/d/{document_id}/m/{version}/elements",
             what="document elements",
         )
-        elements: list[tuple[str, str]] = []
+        elements: list[tuple[str, str, str]] = []
         for element in body if isinstance(body, list) else []:
             if not isinstance(element, dict):
                 continue
-            collection = EXPORTABLE_COLLECTIONS.get(str(element.get("elementType", "")))
+            kind = str(element.get("elementType", ""))
             raw = element.get("id", "")
-            if collection and isinstance(raw, str) and _ID_RE.fullmatch(raw):
-                elements.append((raw, collection))
+            if kind not in _TRACKED_TYPES or not isinstance(raw, str) or not _ID_RE.fullmatch(raw):
+                continue
+            micro = element.get("microversionId", "")
+            elements.append(
+                (raw, kind, micro if isinstance(micro, str) and _ID_RE.fullmatch(micro) else "")
+            )
         return elements
 
     def validate_selection(self, ids: list[str]) -> None:

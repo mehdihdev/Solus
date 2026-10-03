@@ -40,9 +40,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from solus_api.connectors.httpcache import CacheStore, release_flight, run_in_flight, single_flight
+from solus_api.storage.cad_store import CadStore, account_prefix, validate_cad_key
 
 logger = logging.getLogger("solus.connectors.integration_cache")
 
@@ -68,6 +69,12 @@ DEFAULT_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 #: down) can spend at most one walk per window per ACCOUNT, however many
 #: principals share the grant.
 DEFAULT_LISTING_REFRESH_COOLDOWN_SECONDS = 60
+#: A durable payload's Redis entry is only an index to an immutable object, so it
+#: outlives the 30-day payload TTL (ADR-038 §1); revocation, not expiry, ends it.
+_DURABLE_INDEX_TTL_SECONDS = 365 * 24 * 3600
+#: Key kinds that stay in Redis however a durable store is configured.
+_REDIS_ONLY_KINDS = frozenset({"listing", "signal", "__keys"})
+_DURABLE_FIELD = "durable"
 
 
 def _describe(key: str) -> str:
@@ -104,7 +111,7 @@ class IntegrationCache:
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
         listing_refresh_cooldown_seconds: int = DEFAULT_LISTING_REFRESH_COOLDOWN_SECONDS,
         clock: Callable[[], float] = time.time,
-        durable_store: Any | None = None,
+        durable_store: CadStore | None = None,
     ) -> None:
         self._store = store
         #: ADR-038 §1 durable, revision-keyed CAD derivative store (None = Redis only).
@@ -152,16 +159,46 @@ class IntegrationCache:
         if raw is None:
             return None
         try:
-            return json.loads(raw)
+            value = json.loads(raw)
         except ValueError:
             logger.warning("integration cache held malformed JSON at %s; dropping", _describe(key))
+            await self.invalidate(key)
+            return None
+        if self._durable is not None and isinstance(value, dict) and _DURABLE_FIELD in value:
+            return await self._read_durable(key, value[_DURABLE_FIELD])
+        return value
+
+    async def _read_durable(self, key: str, index: Any) -> Any | None:
+        """The payload an index entry points at, or None (a miss) when the index
+        is malformed, names another account's object, or the object is absent,
+        unreadable or fails its sha256 check."""
+        scope = _scope_of(key)
+        object_key = index.get("object_key") if isinstance(index, dict) else None
+        digest = index.get("sha256") if isinstance(index, dict) else None
+        if scope is None or self._durable is None or not isinstance(digest, str):
+            await self.invalidate(key)
+            return None
+        try:
+            if not isinstance(object_key, str):
+                raise ValueError("index names no object")
+            validate_cad_key(object_key)
+            if not object_key.startswith(account_prefix(scope)):
+                raise ValueError("object belongs to another account")
+            data = await self._durable.get(object_key)
+            if data is None or hashlib.sha256(data).hexdigest() != digest:
+                raise ValueError("object missing or failed its integrity check")
+            return json.loads(data)
+        except Exception:  # noqa: BLE001 — a broken durable store is a miss, never an outage
+            logger.warning("durable CAD read missed for %s", _describe(key))
             await self.invalidate(key)
             return None
 
     async def put(self, key: str, value: Any, ttl_seconds: int) -> bool:
         """Store `value`. False when it was too large to keep — the caller
         still has the value; only the NEXT reader pays again."""
-        if _obviously_oversize(value, self._max_payload_bytes):
+        durable = self._durable if _is_payload_key(key) else None
+        limit = durable.max_object_bytes if durable is not None else self._max_payload_bytes
+        if _obviously_oversize(value, limit):
             # Decided BEFORE encoding: a 64 MiB STEP export must not be
             # JSON-encoded and re-encoded just to be thrown away.
             logger.info("integration cache skipped an oversize payload at %s", _describe(key))
@@ -171,13 +208,40 @@ class IntegrationCache:
         except (TypeError, ValueError):
             logger.warning("integration cache refused a non-JSON value at %s", _describe(key))
             return False
-        if len(encoded.encode("utf-8")) > self._max_payload_bytes:
+        body = encoded.encode("utf-8")
+        if len(body) > limit:
             logger.info("integration cache skipped an oversize payload at %s", _describe(key))
             return False
+        if durable is not None:
+            return await self._put_durable(durable, key, body, ttl_seconds)
         try:
             await self._store.set(key, encoded, ttl_seconds)
         except Exception:  # noqa: BLE001
             logger.warning("integration cache write failed for %s", _describe(key))
+            return False
+        await self._index(key)
+        return True
+
+    async def _put_durable(
+        self, durable: CadStore, key: str, body: bytes, ttl_seconds: int
+    ) -> bool:
+        """Write the payload ONCE to the durable store; Redis keeps the index."""
+        scope = _scope_of(key)
+        if scope is None:
+            return False
+        digest = hashlib.sha256(body).hexdigest()
+        try:
+            object_key = await durable.put(scope, body)
+            entry = {
+                _DURABLE_FIELD: {"object_key": object_key, "sha256": digest, "size": len(body)}
+            }
+            await self._store.set(
+                key,
+                json.dumps(entry, separators=(",", ":")),
+                max(ttl_seconds, _DURABLE_INDEX_TTL_SECONDS),
+            )
+        except Exception:  # noqa: BLE001 — a failed durable write is a miss, never a failed sync
+            logger.warning("durable CAD write failed for %s", _describe(key))
             return False
         await self._index(key)
         return True
@@ -205,6 +269,7 @@ class IntegrationCache:
         grant. Returns how many entries were removed."""
         account = self.account_key(provider, account_ref)
         index_key = account + _INDEX_SUFFIX
+        await self._delete_durable_account(provider, account_ref)
         try:
             raw = await self._store.get(index_key)
         except Exception:  # noqa: BLE001
@@ -215,6 +280,18 @@ class IntegrationCache:
             await self.invalidate(key)
         await self.invalidate(index_key)
         return len(keys)
+
+    async def _delete_durable_account(self, provider: str, account_ref: str) -> None:
+        """Revocation deletes the derived CAD itself, not only its index (ADR-038 §1)."""
+        if self._durable is None:
+            return
+        try:
+            await self._durable.delete_account(f"{provider}:{account_ref}")
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "durable CAD deletion failed for account %s; retry the revocation",
+                hashlib.sha256(f"{provider}:{account_ref}".encode()).hexdigest()[:12],
+            )
 
     async def invalidate(self, key: str) -> None:
         try:
@@ -351,6 +428,22 @@ def _account_of(key: str) -> str | None:
     if len(parts) < 4 or ":".join(parts[:2]) != _PREFIX:
         return None
     return ":".join(parts[:4])
+
+
+def _scope_of(key: str) -> str | None:
+    """`"<provider>:<account_ref>"` of a cache key — the durable store's account scope."""
+    account = _account_of(key)
+    if account is None:
+        return None
+    _, _, provider, account_ref = account.split(":")
+    return f"{unquote(provider)}:{unquote(account_ref)}"
+
+
+def _is_payload_key(key: str) -> bool:
+    """Payload keys are `...:{kind}:...` after the account; listings, signals and
+    the key index are small and stay in Redis."""
+    parts = key.split(":")
+    return _account_of(key) is not None and len(parts) > 4 and parts[4] not in _REDIS_ONLY_KINDS
 
 
 def _obviously_oversize(value: Any, limit: int) -> bool:

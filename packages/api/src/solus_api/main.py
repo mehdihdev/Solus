@@ -93,6 +93,7 @@ from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.supabase_admin import build_supabase_admin
 from solus_api.storage import build_artifact_store
+from solus_api.storage.cad_store import build_cad_store
 from solus_api.toolkb import router as toolkb
 
 
@@ -309,8 +310,17 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # SOLUSDEV-241: the read side of the spine — listings, change signals and
     # versioned payloads, keyed on the provider ACCOUNT so projects and
     # teammates on one grant share one fetch. Same store, same backend choice.
+    # ADR-038 §1: payloads (STEP exports, part metadata) are written once to the durable
+    # CAD store when one is configured; Redis then holds only the index.
+    app.state.cad_store = build_cad_store(resolved_settings)
+    logging.getLogger("solus.main").info(
+        "durable CAD store %s",
+        "enabled (%s)" % ("s3" if resolved_settings.cad_store_s3_bucket else "local")
+        if app.state.cad_store is not None
+        else "disabled (Redis-only payload cache, 8 MiB cap)",
+    )
     app.state.integration_cache = build_integration_cache(
-        resolved_settings, app.state.integration_store
+        resolved_settings, app.state.integration_store, durable=app.state.cad_store
     )
     # SOLUSDEV-167: project-scoped graph-change fan-out. Routing is structural
     # — one channel per project — so a frame's channel, never its body, decides

@@ -55,6 +55,7 @@ from solus_api.graph.live import LiveHub
 from solus_api.models import Job, JobStatus, Source, SourceStatus, SyncTrigger, ensure_utc, utcnow
 from solus_api.services.connections import account_ref_for, onshape_application_for
 from solus_api.storage import ArtifactStore
+from solus_api.storage.cad_store import build_cad_store
 
 if TYPE_CHECKING:
     from solus_api.core.config import Settings
@@ -852,7 +853,12 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     ctx["integration_store"] = RedisCacheStore(redis) if redis is not None else InMemoryCacheStore()
     # SOLUSDEV-241: and the read cache over it, handed to the scoped connectors
     # so the sweep's probes REFRESH the signals a human's sync then reads.
-    ctx["integration_cache"] = build_integration_cache(settings, ctx["integration_store"])
+    # ADR-038 §1: the same durable CAD store as the API, so a sweep's exports are reused.
+    ctx["cad_store"] = build_cad_store(settings)
+    logger.info("durable CAD store %s", "enabled" if ctx["cad_store"] is not None else "disabled")
+    ctx["integration_cache"] = build_integration_cache(
+        settings, ctx["integration_store"], durable=ctx["cad_store"]
+    )
     ctx["registry"] = build_registry(settings, redis=redis, cache=ctx["integration_cache"])
     ctx["secret_store"] = build_secret_store(settings, sessionmaker)
     ctx["artifact_store"] = build_artifact_store(settings)
