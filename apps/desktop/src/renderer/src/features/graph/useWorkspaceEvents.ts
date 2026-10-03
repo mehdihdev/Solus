@@ -35,6 +35,39 @@ function applyLiveHint(projectId: string, event: HintEvent): void {
   }
 }
 
+interface FrameHandlers {
+  onChanged: () => void
+  onReady?: () => void
+  onDevices?: (devices: DetectedDeviceOut[]) => void
+}
+
+/** Route one non-revoke frame to its handler (ADR-037). */
+function dispatchFrame(
+  projectId: string,
+  event: Exclude<ProjectEvent, { type: 'access.revoked' }>,
+  handlers: FrameHandlers
+): void {
+  if (event === 'ready') handlers.onReady?.()
+  else if (event === 'graph.changed') handlers.onChanged()
+  else if (event.type === 'hardware.devices_changed') {
+    markSafely('hw:frame_received')
+    handlers.onDevices?.(event.devices)
+  } else applyLiveHint(projectId, event)
+}
+
+function authIdentity(auth: { status: string; user?: { email?: string | null } | null }): string {
+  return `${auth.status}:${auth.user?.email ?? ''}`
+}
+
+function isRevoke(event: ProjectEvent): boolean {
+  return typeof event === 'object' && event.type === 'access.revoked'
+}
+
+/** A 401 during revoke verification means the token is stale, not that access is gone. */
+function outcomeError(outcome: string, verifying: boolean): string | null {
+  return outcome === 'unauthorized' && verifying ? null : UNAVAILABLE
+}
+
 /** Listen only to Solus's existing committed-graph event stream. `ready` (first
  * connect and every reconnect) runs the cheap validation in onReady; only
  * `graph.changed` runs onChanged. Layout/sources/project/job frames bump live
@@ -47,7 +80,7 @@ export function useWorkspaceEvents(
 ): string | null {
   const generation = useWorkspaceSessionGeneration()
   const token = useAuthStore((state) => state.accessToken)
-  const identity = useAuthStore((state) => `${state.status}:${state.user?.email ?? ''}`)
+  const identity = useAuthStore((state) => authIdentity(state))
   // The message belongs to the scope that raised it, so changing project, user
   // or token reads as "no error" without resetting state inside the effect.
   const scope = `${projectId ?? ''}|${identity}|${token ?? ''}|${generation}`
@@ -67,7 +100,7 @@ export function useWorkspaceEvents(
       return (
         workspaceSessionGeneration() === generation &&
         !controller.signal.aborted &&
-        `${auth.status}:${auth.user?.email ?? ''}` === identity
+        authIdentity(auth) === identity
       )
     }
     // The server also sends `access.revoked` when only the JWT expired, so a
@@ -78,7 +111,7 @@ export function useWorkspaceEvents(
     let verifying = false
     const receive = (event: ProjectEvent): EventVerdict => {
       if (!current()) return 'stop'
-      if (typeof event === 'object' && event.type === 'access.revoked') {
+      if (isRevoke(event)) {
         if (verifyUsed) return
         verifyUsed = true
         verifying = true
@@ -86,12 +119,11 @@ export function useWorkspaceEvents(
       }
       if (event === 'ready') verifying = false
       setError(null)
-      if (event === 'ready') onReady?.()
-      else if (event === 'graph.changed') onChanged()
-      else if (event.type === 'hardware.devices_changed') {
-        markSafely('hw:frame_received')
-        onDevices?.(event.devices)
-      } else applyLiveHint(projectId, event)
+      dispatchFrame(projectId, event as Exclude<ProjectEvent, { type: 'access.revoked' }>, {
+        onChanged,
+        onReady,
+        onDevices
+      })
     }
     void runReconnectingStream<ProjectEvent>({
       signal: controller.signal,
@@ -109,9 +141,8 @@ export function useWorkspaceEvents(
       }
     }).then((outcome) => {
       if (outcome === 'aborted' || !current()) return
-      // A 401 during revoke verification means the token is stale, not that
-      // access is gone: wait quietly for the refreshed token (effect restarts).
-      setError(outcome === 'unauthorized' && verifying ? null : UNAVAILABLE)
+      // Wait quietly for a refreshed token when the 401 came from verification.
+      setError(outcomeError(outcome, verifying))
     })
     return () => controller.abort()
   }, [projectId, identity, token, onChanged, onReady, onDevices, generation, scope])

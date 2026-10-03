@@ -119,6 +119,30 @@ async function fetchHome(storedTeamId: string | null): Promise<HomeSnapshot> {
   return { me, team, projects, activityByProject: groupActivityByProject(feed?.data ?? []) }
 }
 
+/** A quiet (live) reload that merely cannot reach the API keeps a shown grid. */
+function statusAfterFailure(error: unknown, quiet: boolean, current: HomeStatus): HomeStatus {
+  const verdict = classifyFetchError(error) === 'gone' ? 'gone' : 'offline'
+  return quiet && verdict === 'offline' && current === 'ready' ? 'ready' : verdict
+}
+
+/** ADR-037 hints: projects, the team feed and the team list all come from one
+ *  snapshot, so a burst touching several of them is ONE reload. */
+function useHomeLiveRefresh(
+  liveTeamId: string | null,
+  load: (options?: { quiet?: boolean }) => Promise<void>,
+  enabled: boolean
+): void {
+  useLiveRefetch(
+    [
+      liveTeamId ? liveKeys.teamProjects(liveTeamId) : null,
+      liveTeamId ? liveKeys.teamActivity(liveTeamId) : null,
+      liveKeys.teams
+    ],
+    () => void load({ quiet: true }),
+    enabled
+  )
+}
+
 export function useHomeData(): HomeData {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const storedTeamId = useWorkspaceStore((s) => s.teamId)
@@ -161,12 +185,7 @@ export function useHomeData(): HomeData {
         // A 404 for the stored team is "gone" (deleted, or I was removed) — the
         // backend is answering; telling the user to restart it is the failure
         // errors.ts exists to prevent. The next load re-resolves to the personal team.
-        const verdict = classifyFetchError(error) === 'gone' ? 'gone' : 'offline'
-        setStatus((current) =>
-          options?.quiet === true && verdict === 'offline' && current === 'ready'
-            ? 'ready'
-            : verdict
-        )
+        setStatus((current) => statusAfterFailure(error, options?.quiet === true, current))
       }
     },
     [fetchEnabled, storedTeamId]
@@ -176,18 +195,7 @@ export function useHomeData(): HomeData {
     void load()
   }, [load])
 
-  // ADR-037 hints: projects, the team feed and the team list all come from one
-  // snapshot, so a burst touching several of them is ONE reload.
-  const liveTeamId = team?.team_id ?? storedTeamId
-  useLiveRefetch(
-    [
-      liveTeamId ? liveKeys.teamProjects(liveTeamId) : null,
-      liveTeamId ? liveKeys.teamActivity(liveTeamId) : null,
-      liveKeys.teams
-    ],
-    () => void load({ quiet: true }),
-    fetchEnabled
-  )
+  useHomeLiveRefresh(team?.team_id ?? storedTeamId, load, fetchEnabled)
 
   // Run a mutation, refresh the home snapshot, and report success as a boolean.
   const runAction = useCallback(

@@ -62,6 +62,59 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+const MAPPING_CASES: Array<[string, AccountEvent, string[]]> = [
+  [
+    'team.updated',
+    { type: 'team.updated', team_id: T, at: AT },
+    [liveKeys.team(T), liveKeys.teams]
+  ],
+  [
+    'team.members_changed',
+    { type: 'team.members_changed', team_id: T, at: AT },
+    [liveKeys.teamMembers(T)]
+  ],
+  [
+    'team.invites_changed',
+    { type: 'team.invites_changed', team_id: T, at: AT },
+    [liveKeys.teamInvites(T)]
+  ],
+  [
+    'team.projects_changed without project',
+    { type: 'team.projects_changed', team_id: T, project_id: null, at: AT },
+    [liveKeys.teamProjects(T)]
+  ],
+  [
+    'team.projects_changed with project',
+    { type: 'team.projects_changed', team_id: T, project_id: P, at: AT },
+    [liveKeys.teamProjects(T), liveKeys.projectDetail(P)]
+  ],
+  [
+    'team.activity',
+    { type: 'team.activity', team_id: T, project_id: null, actor_id: 'x', at: AT },
+    [liveKeys.teamActivity(T)]
+  ],
+  [
+    'notification.created',
+    { type: 'notification.created', user_id: 'u', at: AT },
+    [liveKeys.notifications]
+  ],
+  [
+    'membership.changed',
+    { type: 'membership.changed', user_id: 'u', team_id: T, project_id: null, at: AT },
+    [liveKeys.me, liveKeys.teams, ...TEAM_KEYS(T)]
+  ],
+  [
+    'membership.changed without team',
+    { type: 'membership.changed', user_id: 'u', team_id: null, project_id: null, at: AT },
+    [liveKeys.me, liveKeys.teams]
+  ],
+  [
+    'access.revoked',
+    { type: 'access.revoked', user_id: 'u', team_id: T, project_id: P, at: AT },
+    [liveKeys.me, liveKeys.teams, liveKeys.projectDetail(P), ...TEAM_KEYS(T)]
+  ]
+]
+
 describe('useAccountEvents mapping', () => {
   it('ready revalidates every account-scoped key, including known team keys', async () => {
     // A team key the account has never been told about is still revalidated.
@@ -83,64 +136,15 @@ describe('useAccountEvents mapping', () => {
     expect(revisions()[liveKeys.team('unlisted')]).toBe(2)
   })
 
-  it.each<[string, AccountEvent, string[]]>([
-    [
-      'team.updated',
-      { type: 'team.updated', team_id: T, at: AT },
-      [liveKeys.team(T), liveKeys.teams]
-    ],
-    [
-      'team.members_changed',
-      { type: 'team.members_changed', team_id: T, at: AT },
-      [liveKeys.teamMembers(T)]
-    ],
-    [
-      'team.invites_changed',
-      { type: 'team.invites_changed', team_id: T, at: AT },
-      [liveKeys.teamInvites(T)]
-    ],
-    [
-      'team.projects_changed without project',
-      { type: 'team.projects_changed', team_id: T, project_id: null, at: AT },
-      [liveKeys.teamProjects(T)]
-    ],
-    [
-      'team.projects_changed with project',
-      { type: 'team.projects_changed', team_id: T, project_id: P, at: AT },
-      [liveKeys.teamProjects(T), liveKeys.projectDetail(P)]
-    ],
-    [
-      'team.activity',
-      { type: 'team.activity', team_id: T, project_id: null, actor_id: 'x', at: AT },
-      [liveKeys.teamActivity(T)]
-    ],
-    [
-      'notification.created',
-      { type: 'notification.created', user_id: 'u', at: AT },
-      [liveKeys.notifications]
-    ],
-    [
-      'membership.changed',
-      { type: 'membership.changed', user_id: 'u', team_id: T, project_id: null, at: AT },
-      [liveKeys.me, liveKeys.teams, ...TEAM_KEYS(T)]
-    ],
-    [
-      'membership.changed without team',
-      { type: 'membership.changed', user_id: 'u', team_id: null, project_id: null, at: AT },
-      [liveKeys.me, liveKeys.teams]
-    ],
-    [
-      'access.revoked',
-      { type: 'access.revoked', user_id: 'u', team_id: T, project_id: P, at: AT },
-      [liveKeys.me, liveKeys.teams, liveKeys.projectDetail(P), ...TEAM_KEYS(T)]
-    ]
-  ])('%s bumps exactly its keys', async (_name, event, expected) => {
+  it.each(MAPPING_CASES)('%s bumps exactly its keys', async (_name, event, expected) => {
     stream([event])
     renderHook(() => useAccountEvents())
     await settle()
     expect(bumped()).toEqual([...expected].sort())
   })
+})
 
+describe('useAccountEvents frame handling', () => {
   it('ready then a burst of frames coalesces into one increment per key', async () => {
     stream([
       ready,
@@ -207,7 +211,9 @@ describe('useAccountEvents lifecycle', () => {
     expect(streamAccountEvents).toHaveBeenCalledTimes(1)
     expect(useLiveRevisionStore.getState().accountStream).toBe('idle')
   })
+})
 
+describe('useAccountEvents session changes', () => {
   it('restarts the stream when the token changes', async () => {
     stream([])
     renderHook(() => useAccountEvents())
@@ -237,7 +243,9 @@ describe('useAccountEvents lifecycle', () => {
     expect(revisions()[liveKeys.notifications]).toBeUndefined()
     expect(streamAccountEvents).toHaveBeenCalledTimes(2)
   })
+})
 
+describe('useAccountEvents failure recovery', () => {
   it('reconnects with backoff after a server error and revalidates on the next ready', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.99)
     vi.mocked(streamAccountEvents).mockImplementationOnce(async function* () {

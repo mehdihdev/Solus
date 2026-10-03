@@ -31,7 +31,7 @@ async function collect(
   return out
 }
 
-describe('streamSse', () => {
+describe('streamSse decoding', () => {
   it('sends a Bearer GET and yields decoded frames across chunk boundaries', async () => {
     const fetchImpl = vi
       .fn()
@@ -72,7 +72,9 @@ describe('streamSse', () => {
       )
     expect(await collect(fetchImpl)).toEqual(['3'])
   })
+})
 
+describe('streamSse failures', () => {
   it('throws LiveStreamHttpError carrying the status on a non-2xx response', async () => {
     const error = await collect(
       vi.fn().mockResolvedValue(new Response(null, { status: 429 }))

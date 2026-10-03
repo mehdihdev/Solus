@@ -138,21 +138,29 @@ class LayoutSession {
    * settles, covers a teammate who got there first.
    */
   private async reconcile(): Promise<void> {
-    if (this.reconciling || this.busy || !this.layout || !this.canPublish()) return
-    if (this.seenVersion <= this.layout.version) return
+    if (!this.needsReconcile()) return
     this.reconciling = true
     const target = this.seenVersion
     try {
-      const latest = await getWorkspaceLayout(this.projectId, this.client)
-      if (!this.canPublish() || !this.layout) return
-      if (!this.busy && latest.version > this.layout.version) this.accept(latest)
-      this.show(this.status, this.error)
+      await this.applyLatest()
     } catch {
       /* Keep what is on screen; the next hint retries. */
     } finally {
       this.reconciling = false
     }
     if (this.seenVersion > target) void this.reconcile()
+  }
+
+  private needsReconcile(): boolean {
+    if (this.reconciling || this.busy || !this.layout || !this.canPublish()) return false
+    return this.seenVersion > this.layout.version
+  }
+
+  private async applyLatest(): Promise<void> {
+    const latest = await getWorkspaceLayout(this.projectId, this.client)
+    if (!this.canPublish() || !this.layout) return
+    if (!this.busy && latest.version > this.layout.version) this.accept(latest)
+    this.show(this.status, this.error)
   }
 
   private canPublish(): boolean {

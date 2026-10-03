@@ -1,7 +1,7 @@
 // Real notifications for the shell bell (API.md §2.1): unread badge + mark-read.
 // Degrades to `offline` (dev bypass / unreachable API) so the shell can show
 // its honest sign-in popover instead.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   listNotificationsPage,
   markAllNotificationsRead,
@@ -45,6 +45,50 @@ function useNotificationRefresh(load: (merge?: boolean) => Promise<void>): void 
   }, [load])
 }
 
+/** Cursor paging and optimistic mark-read, each reconciling from the server on failure. */
+function useNotificationActions(
+  meta: ApiMeta,
+  setItems: Dispatch<SetStateAction<NotificationApi[]>>,
+  setMeta: Dispatch<SetStateAction<ApiMeta>>,
+  load: () => Promise<void>
+): Pick<NotificationsData, 'loadMore' | 'markRead' | 'markAllRead'> {
+  // Append the next cursor page. No-op when there's nothing more; keeps the
+  // current page on failure so the bell never regresses to empty.
+  const loadMore = async (): Promise<void> => {
+    if (!meta.has_next || !meta.next_cursor) return
+    try {
+      const page = await listNotificationsPage(meta.next_cursor)
+      setItems((prev) => [...prev, ...page.data])
+      setMeta(page.meta)
+    } catch {
+      /* keep the current page */
+    }
+  }
+
+  const markRead = async (id: string): Promise<void> => {
+    const stamp = new Date().toISOString()
+    // Optimistic: reflect the read immediately, reconcile on failure.
+    setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read_at: n.read_at ?? stamp } : n)))
+    try {
+      await markNotificationRead(id)
+    } catch {
+      await load().catch(() => undefined)
+    }
+  }
+
+  const markAllRead = async (): Promise<void> => {
+    const stamp = new Date().toISOString()
+    // Optimistic: stamp every unread item, reconcile from the server on failure.
+    setItems((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: stamp })))
+    try {
+      await markAllNotificationsRead()
+    } catch {
+      await load().catch(() => undefined)
+    }
+  }
+  return { loadMore, markRead, markAllRead }
+}
+
 export function useNotifications(): NotificationsData {
   // An authenticated session always fetches; the persisted `linked` onboarding
   // flag only unlocks fetches for non-authenticated (dev-bypass) sessions. A
@@ -86,42 +130,8 @@ export function useNotifications(): NotificationsData {
     [fetchEnabled]
   )
 
-  // Append the next cursor page. No-op when there's nothing more; keeps the
-  // current page on failure so the bell never regresses to empty.
-  const loadMore = async (): Promise<void> => {
-    if (!meta.has_next || !meta.next_cursor) return
-    try {
-      const page = await listNotificationsPage(meta.next_cursor)
-      setItems((prev) => [...prev, ...page.data])
-      setMeta(page.meta)
-    } catch {
-      /* keep the current page */
-    }
-  }
-
   useNotificationRefresh(load)
-
-  const markRead = async (id: string): Promise<void> => {
-    const stamp = new Date().toISOString()
-    // Optimistic: reflect the read immediately, reconcile on failure.
-    setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read_at: n.read_at ?? stamp } : n)))
-    try {
-      await markNotificationRead(id)
-    } catch {
-      await load().catch(() => undefined)
-    }
-  }
-
-  const markAllRead = async (): Promise<void> => {
-    const stamp = new Date().toISOString()
-    // Optimistic: stamp every unread item, reconcile from the server on failure.
-    setItems((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: stamp })))
-    try {
-      await markAllNotificationsRead()
-    } catch {
-      await load().catch(() => undefined)
-    }
-  }
+  const { loadMore, markRead, markAllRead } = useNotificationActions(meta, setItems, setMeta, load)
 
   const unreadCount = items.filter((n) => !n.read_at).length
   return {

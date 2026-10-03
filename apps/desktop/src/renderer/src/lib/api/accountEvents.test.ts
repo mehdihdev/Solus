@@ -72,7 +72,9 @@ describe('streamAccountEvents', () => {
       accountAccessRevoked
     ])
   })
+})
 
+describe('streamAccountEvents validation', () => {
   it.each([
     ['ready without team_ids', 'ready', { user_id: 'u' }],
     ['ready with non-string team id', 'ready', { user_id: 'u', team_ids: [1] }],

@@ -54,7 +54,7 @@ describe('liveKeys', () => {
   })
 })
 
-describe('liveRevisionStore', () => {
+describe('liveRevisionStore bumping', () => {
   it('starts every key at revision 0', () => {
     expect(state().revisions).toEqual({})
     const view = renderHook(() => useLiveRevision(liveKeys.me))
@@ -99,7 +99,9 @@ describe('liveRevisionStore', () => {
     expect(before).toEqual(snapshot)
     expect(Object.isFrozen(before)).toBe(true)
   })
+})
 
+describe('liveRevisionStore bumpWhere and no-ops', () => {
   it('bumpWhere revalidates every known key matching the predicate, coalesced with bump', () => {
     state().bump([liveKeys.team('a'), liveKeys.team('b'), liveKeys.me])
     act(() => void vi.advanceTimersByTime(LIVE_COALESCE_MS))
@@ -126,7 +128,9 @@ describe('liveRevisionStore', () => {
     act(() => void vi.advanceTimersByTime(LIVE_COALESCE_MS))
     expect(listener).not.toHaveBeenCalled()
   })
+})
 
+describe('liveRevisionStore selectors and state', () => {
   it('the selector hook re-renders only for its own key', () => {
     let renders = 0
     const view = renderHook(() => {

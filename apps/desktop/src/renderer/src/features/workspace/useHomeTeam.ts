@@ -187,16 +187,12 @@ export function useHomeTeam(
     writers: { setDetail, setMembers, setInvites, setActivity, setMeta }
   })
 
-  const refreshMembers = useCallback(async () => {
-    if (!teamId) return
-    const rows = await listMembers(teamId)
-    if (teamIdRef.current === teamId) setMembers(rows)
-  }, [teamId])
-  const refreshInvites = useCallback(async () => {
-    if (!teamId) return
-    const rows = await invitesOrNone(teamId)
-    if (teamIdRef.current === teamId) setInvites(rows)
-  }, [teamId])
+  const { refreshMembers, refreshInvites } = useSliceRefreshers(
+    teamId,
+    teamIdRef,
+    setMembers,
+    setInvites
+  )
 
   const actions = createHomeTeamActions({
     teamId,
@@ -217,11 +213,46 @@ export function useHomeTeam(
     members,
     invites,
     activity,
+    ...deriveTeamView(detail, activity, meta, me, limits),
+    actions
+  }
+}
+
+/** Quiet refetchers for the roster and invites that drop a reply for a team the hook has left. */
+function useSliceRefreshers(
+  teamId: string | null,
+  teamIdRef: RefObject<string | null>,
+  setMembers: Dispatch<SetStateAction<TeamMemberApi[]>>,
+  setInvites: Dispatch<SetStateAction<InviteApi[]>>
+): { refreshMembers: () => Promise<void>; refreshInvites: () => Promise<void> } {
+  const refreshMembers = useCallback(async () => {
+    if (!teamId) return
+    const rows = await listMembers(teamId)
+    if (teamIdRef.current === teamId) setMembers(rows)
+  }, [teamId, teamIdRef, setMembers])
+  const refreshInvites = useCallback(async () => {
+    if (!teamId) return
+    const rows = await invitesOrNone(teamId)
+    if (teamIdRef.current === teamId) setInvites(rows)
+  }, [teamId, teamIdRef, setInvites])
+  return { refreshMembers, refreshInvites }
+}
+
+type DerivedTeamView = Pick<HomeTeam, 'activityTotal' | 'activityHasMore' | 'myRole' | 'teamLimit'>
+
+/** Fields computed from the loaded slices rather than stored. */
+function deriveTeamView(
+  detail: TeamDetail | null,
+  activity: ActivityApi[],
+  meta: ApiMeta,
+  me: Me | null,
+  limits: Record<string, number | null> | null
+): DerivedTeamView {
+  return {
     activityTotal: meta.total ?? activity.length,
     activityHasMore: meta.has_next ?? false,
     myRole: detail?.role ?? null,
-    teamLimit: me ? teamLimitPosition(me.teams, limits) : null,
-    actions
+    teamLimit: me ? teamLimitPosition(me.teams, limits) : null
   }
 }
 

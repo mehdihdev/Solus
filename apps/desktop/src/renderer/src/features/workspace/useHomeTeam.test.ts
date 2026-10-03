@@ -346,21 +346,19 @@ function homeTeamMembershipMutationsTests(): void {
   })
 }
 
-describe('useHomeTeam — live refresh (ADR-037)', () => {
-  async function ready(
-    team: resources.TeamSummary | null = TEAM
-  ): Promise<ReturnType<typeof mount>> {
-    const view = mount(team)
-    await waitFor(() => expect(view.result.current.status).toBe('ready'))
-    return view
-  }
-  const calls = (): Record<'detail' | 'members' | 'invites' | 'activity', number> => ({
-    detail: vi.mocked(resources.getTeamDetail).mock.calls.length,
-    members: vi.mocked(resources.listMembers).mock.calls.length,
-    invites: vi.mocked(resources.listInvites).mock.calls.length,
-    activity: vi.mocked(resources.listActivityPage).mock.calls.length
-  })
+async function ready(team: resources.TeamSummary | null = TEAM): Promise<ReturnType<typeof mount>> {
+  const view = mount(team)
+  await waitFor(() => expect(view.result.current.status).toBe('ready'))
+  return view
+}
+const calls = (): Record<'detail' | 'members' | 'invites' | 'activity', number> => ({
+  detail: vi.mocked(resources.getTeamDetail).mock.calls.length,
+  members: vi.mocked(resources.listMembers).mock.calls.length,
+  invites: vi.mocked(resources.listInvites).mock.calls.length,
+  activity: vi.mocked(resources.listActivityPage).mock.calls.length
+})
 
+describe('useHomeTeam — live refresh (ADR-037): slices', () => {
   it('team(id) refetches the detail only, silently', async () => {
     const { result } = await ready()
     const before = calls()
@@ -383,7 +381,9 @@ describe('useHomeTeam — live refresh (ADR-037)', () => {
     await waitFor(() => expect(result.current.members).toHaveLength(3))
     expect(calls()).toEqual({ ...before, members: before.members + 1 })
   })
+})
 
+describe('useHomeTeam — live refresh (ADR-037): invites', () => {
   it('teamInvites(id) refetches invites for an owner', async () => {
     const { result } = await ready()
     const before = calls()
@@ -431,7 +431,9 @@ describe('useHomeTeam — live refresh (ADR-037)', () => {
     await waitFor(() => expect(result.current.invites).toHaveLength(1))
     expect(calls().invites).toBe(before + 1)
   })
+})
 
+describe('useHomeTeam — live refresh (ADR-037): activity and scope', () => {
   it('teamActivity(id) refreshes the first page', async () => {
     const { result } = await ready()
     const newer = { ...FEED.data[0], id: 'a0' }
