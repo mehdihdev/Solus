@@ -348,3 +348,26 @@ streams re-verify access every 30 s and immediately on a revocation hint, and
 changes reach clients as `sources.changed` / `job.updated` without any new
 producer code — they are derived from the same `Source`/`Job` row writes the
 worker already commits. The contract is `docs/contracts/live-events.md`.
+
+
+## The Onshape mirror — ADR-038 (SOLUSDEV-312)
+
+- **Producers gain a quiet period.** Webhook, sweep-detected and recovery hints record
+  `last_hint_at`/`first_hint_at` and schedule `sync_source(quiet=True)` under the stable job id
+  `onshape-quiet:{source}` deferred by `onshape_quiet_period_seconds` (90 s); a run inside the
+  window re-defers (`Retry(defer=…)`), capped at 10 min per burst. User syncs are not delayed.
+  `sync_source` uses `keep_result=0` so a stable job id never swallows the next hint.
+- **Webhook-first, sweep as fallback.** Healthy subscriptions skip the hourly probe; a daily
+  subscription check is the only steady-state call. Registration happens on every dispatch path
+  whenever `public_api_base_url` is public HTTPS. Solus writes carry `X-Session-ID`.
+- **`translation.complete`** is recorded only when a pending marker exists under the source's
+  own account (scope from the Source row, never the payload) and short-circuits polling.
+- **One probe per sync.** `detect_changes` hands its observation to `sync._plan` (120 s) instead
+  of a second, trust-disabled probe. Change evidence remains mandatory.
+- **Export keys** are per element microversion + in-document dependency fingerprint, namespace
+  `revision-v3`; completed exports survive a `revision_changed` abort.
+- **Payloads are durable.** `IntegrationCache` writes payload kinds to the CAD store (write-once,
+  account-prefixed, sha-verified) and keeps only the index in Redis; listings and signals stay in
+  Redis. This supersedes "payloads in Redis, 8 MiB, 30 days" above when a CAD store is configured.
+- **Metering** is one pool per OAuth application (`onshape_quota_pool=owner`) with per-call labels;
+  `onshape_app_distribution=app_store` disables the annual degrade.

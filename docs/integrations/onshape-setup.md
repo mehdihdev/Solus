@@ -214,9 +214,12 @@ returns rows, and Solus deliberately does not use it — see the API-terms note 
 
 - Onshape's **free personal plan makes every document public and forbids commercial use**, and its
   API terms prohibit automated extraction from public documents. Team tenants need **paid seats**.
-- A **private (unpublished) OAuth app's calls still count against the API rate cap** exactly like
-  API keys — the exemption is a property of the _published_ app. Plan for App Store publication
-  before high-volume use.
+- A **private (unpublished) OAuth app's calls are charged to the app OWNER's annual pool** —
+  the company's pool if the app was registered in Company settings, that person's pool if under
+  My Account — exactly like API keys. Only an app **publicly listed in the Onshape App Store** is
+  exempt. Solus meters accordingly (ADR-038 §4): `SOLUS_ONSHAPE_QUOTA_POOL=owner` (default) keeps
+  ONE ledger per OAuth application; set `SOLUS_ONSHAPE_APP_DISTRIBUTION=app_store` once the app
+  is public to stop the annual-allowance degrade (rate limits and the 402 latch stay enforced).
 - **429 handling (SOLUSDEV-64):** the connector treats a 429 as an expected operating condition —
   every API call (and the externaldata download) retries up to 3 times, honoring `Retry-After`
   when it is a plain integer (capped at 30s; the header is untrusted) and falling back to
@@ -249,6 +252,14 @@ returns rows, and Solus deliberately does not use it — see the API-terms note 
   the fingerprint matcher seeds merges on. That is intended — recognising one physical part
   across representations is what the multimodal fingerprint is for — but it means Part Studio
   ingestion deliberately feeds the matcher duplicates.
+- **Per-element export keys (ADR-038 §3, SOLUSDEV-312).** Exports are now cached per element
+  microversion plus a fingerprint of the document's Part Studios and Variable Studios (assemblies
+  add every assembly element). Variables and in-document derived parts therefore invalidate
+  correctly; drawings and blobs never trigger exports. In-context features follow Onshape's
+  "update context" action, which edits the Part Studio itself. Still unproven live, and on the
+  QA list: that editing one tab advances only that element's microversion. **Out-of-document
+  derived/linked parts are not covered** by the fingerprint (they reference other documents'
+  versions). Original note, kept for history:
 - **Per-element microversions are real, cross-tab staleness is not proven.** `GET …/elements`
   returns a distinct `microversionId` per element (verified against a live tenant 2026-09-03:
   two elements in one document reported different values, so it is not the document's
@@ -256,3 +267,37 @@ returns rows, and Solus deliberately does not use it — see the API-terms note 
   when its geometry changes because ANOTHER tab changed — a variable, a derived part, an
   in-context feature. Any future export cache keyed on element microversion must either prove
   that case or invalidate on the document microversion instead.
+
+
+## 11. ADR-038 — the Onshape mirror (SOLUSDEV-312)
+
+| Setting (env) | Default | Meaning |
+|---|---|---|
+| `SOLUS_ONSHAPE_QUOTA_POOL` | `owner` | `owner` = one ledger per OAuth app (how Onshape bills a private app). `user` = per connected account (verification only). |
+| `SOLUS_ONSHAPE_APP_DISTRIBUTION` | `private` | `app_store` once publicly listed: no annual-allowance degrade. |
+| `SOLUS_ONSHAPE_ANNUAL_CALL_ALLOWANCE` | `2500` | The owner pool's yearly allowance (Free/Standard/EDU). Background work pauses at 70 %. |
+| `SOLUS_ONSHAPE_QUIET_PERIOD_SECONDS` | `90` | Wait after the last change hint before exporting (max 10 min per editing burst). "Sync now" is never delayed. |
+| `SOLUS_ONSHAPE_SESSION_ID` | `solus-api` | Sent as `X-Session-ID` on Solus writes and registered as the webhook `externalSessionId`. |
+| `SOLUS_PUBLIC_API_BASE_URL` | `http://localhost:8000` | Must be a **public HTTPS** URL for webhook registration; localhost never registers. |
+| `SOLUS_CAD_STORE_S3_BUCKET` / `SOLUS_CAD_STORE_LOCAL_ROOT` | unset | Durable, write-once CAD derivative store. Unset = Redis-only cache (8 MiB cap). |
+| `SOLUS_CAD_STORE_MAX_OBJECT_BYTES` | `268435456` | Per-object cap (256 MiB). |
+
+**Freshness.** Webhooks (`onshape.model.lifecycle.changed`, `onshape.model.translation.complete`,
+`onshape.model.lifecycle.createversion`; `collapseEvents=true`, `isTransient=false`) are registered
+on every sync path when the public base URL is HTTPS. Sources with a healthy subscription are not
+swept hourly; a daily `GET /api/v6/webhooks/{id}` checks the subscription and a 404 restores the
+hourly fallback. A completed translation's webhook short-circuits status polling (sparse fallback
+polls at 2/5/15/30 s). Failing recoveries back off from 1 min to 1 h.
+
+**Storage.** Exports, part metadata and meshes are written once to the CAD store under
+`cad/<sha256(provider:account)>/<uuid>` (SSE-encrypted on S3); Redis keeps a sha256-verified index.
+Revoking the Onshape connection deletes the account's objects.
+
+**SOL.** One current-microversion probe per document per turn; immutable reads cached; paged reads
+fetch once; writes keep live reads, `sourceMicroversion` and readback.
+
+**Metering read-out.** Sources and connections carry `quota.pool`, `quota.distribution`,
+`quota.by_label` (sync, sweep, webhook, recovery, agent_read, agent_write, picker, connect) and
+`quota.rate_limit_remaining`.
+
+**429s.** One retry per call honouring `Retry-After` up to 30 s (this section previously said 3).
