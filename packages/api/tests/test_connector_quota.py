@@ -24,6 +24,8 @@ class FakeRedis:
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.values[key] = value
+        if ex is not None:
+            self.expiries[key] = ex
 
     async def incr(self, key: str) -> int:
         nxt = int(self.values.get(key, 0)) + 1
@@ -259,6 +261,10 @@ def test_the_source_payload_carries_the_quota_block() -> None:
         "used": 1400,
         "allowance": 1800,
         "estimated": True,
+        "pool": "user",
+        "distribution": "private",
+        "by_label": {},
+        "rate_limit_remaining": None,
     }
 
 
@@ -316,6 +322,8 @@ def test_a_route_connector_is_metered_by_default() -> None:
         onshape_client_secret: str = "sec"
         onshape_annual_call_allowance: int = 1800
         integration_degrade_ratio: float = 0.7
+        onshape_quota_pool: str = "owner"
+        onshape_app_distribution: str = "private"
         integration_signal_ttl_seconds: int = 3600
         integration_signal_sweep_reuse_seconds: int = 300
 

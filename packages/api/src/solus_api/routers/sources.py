@@ -172,6 +172,16 @@ async def _quota_states(request: Request, sources: list[Source]) -> dict[uuid.UU
     return states
 
 
+def _source_row(source: Source, entity_count: int, state: Any | None) -> dict[str, Any]:
+    """`serialize_source` plus the ADR-038 additive quota read-out (pool,
+    distribution, by_label, rate_limit_remaining). Only the meter's aggregate
+    for the pool THIS source's connection uses — never another tenant's data."""
+    row = serialize_source(source, entity_count=entity_count, quota=state)
+    if state is not None:
+        row["quota"] = state.readout()
+    return row
+
+
 @router.get("")
 async def list_sources(
     request: Request,
@@ -191,10 +201,7 @@ async def list_sources(
     visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
     counts = await source_entity_counts(session, [s.id for s in visible])
     quotas = await _quota_states(request, visible)
-    out = [
-        serialize_source(s, entity_count=counts.get(s.id, 0), quota=quotas.get(s.id))
-        for s in visible
-    ]
+    out = [_source_row(s, counts.get(s.id, 0), quotas.get(s.id)) for s in visible]
     return envelope(out, meta=meta)
 
 

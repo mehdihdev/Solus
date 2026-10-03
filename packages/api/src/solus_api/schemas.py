@@ -359,12 +359,8 @@ def serialize_source(
         # `estimated` is always true and the UI must say so: we count only our
         # own calls from whenever the counter started, so this is a floor on our
         # spend and never a remaining balance (ADR-019 as amended).
-        data["quota"] = {
-            "status": quota.status,
-            "used": quota.used,
-            "allowance": quota.allowance,
-            "estimated": quota.estimated,
-        }
+        # ADR-038 §4 adds pool, distribution, by_label and rate_limit_remaining.
+        data["quota"] = quota.readout()
     return data
 
 
@@ -398,12 +394,8 @@ def serialize_connection(
         "updated_at": connection.updated_at,
     }
     if quota is not None:
-        data["quota"] = {
-            "status": quota.status,
-            "used": quota.used,
-            "allowance": quota.allowance,
-            "estimated": quota.estimated,
-        }
+        # ADR-038 §4 adds pool, distribution, by_label and rate_limit_remaining.
+        data["quota"] = quota.readout()
     return data
 
 

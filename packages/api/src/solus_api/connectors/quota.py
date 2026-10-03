@@ -25,8 +25,8 @@ logged, and it is why the API warns at startup when Redis is absent.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal, get_args
 from urllib.parse import quote
 
 logger = logging.getLogger("solus.connectors.quota")
@@ -50,6 +50,34 @@ _DEFERRABLE: frozenset[str] = frozenset({"scheduled", "agent"})
 CallLabel = Literal[
     "sync", "sweep", "webhook", "recovery", "agent_read", "agent_write", "picker", "connect"
 ]
+_CALL_LABELS: tuple[str, ...] = get_args(CallLabel)
+
+#: Whose annual pool a call is charged to, and how Onshape distributes the app.
+#: A PRIVATE app's successes bill the app OWNER (one pool for every Solus user);
+#: a public App Store app is exempt from the annual limit (ADR-038 §4).
+Pool = Literal["owner", "user"]
+Distribution = Literal["private", "app_store"]
+
+#: Purpose -> the label a call carries when its caller did not name one.
+_DEFAULT_LABEL: dict[str, CallLabel] = {
+    "user": "sync",
+    "scheduled": "sweep",
+    "agent": "agent_read",
+    "webhook": "webhook",
+}
+
+#: `X-Rate-Limit-Remaining` is a short-lived hint, not a ledger: stale quickly.
+_RATE_LIMIT_TTL_SECONDS = 120
+#: Warn when the provider says fewer than this many calls remain in its window.
+_RATE_LIMIT_WARN_BELOW = 10
+#: Anything above this is not a plausible per-window remaining count; ignore it.
+_RATE_LIMIT_MAX = 100_000
+_RETRY_AFTER_MAX_SECONDS = 3600.0
+
+
+def default_label(purpose: str) -> CallLabel:
+    """The label for a purpose when `ConnectorContext.label` is unset."""
+    return _DEFAULT_LABEL.get(purpose, "sync")
 
 
 class QuotaBlockedError(Exception):
@@ -74,6 +102,27 @@ class QuotaState:
     #: provider's year did, so this is a floor on our own spend and never a
     #: remaining balance. The UI must not present it as one.
     estimated: bool = True
+    #: ADR-038 §4 read-out. Additive; defaults describe a plain per-account meter.
+    pool: Pool = "user"
+    distribution: Distribution = "private"
+    #: Calls this year by `CallLabel` in the SAME pool. Aggregate only — never
+    #: per-account or per-team, so an owner pool reveals no other tenant.
+    by_label: dict[str, int] = field(default_factory=dict)
+    #: Latest `X-Rate-Limit-Remaining` seen for the pool, if recent.
+    rate_limit_remaining: int | None = None
+
+    def readout(self) -> dict[str, Any]:
+        """The additive API payload: every pre-ADR-038 field with its meaning."""
+        return {
+            "status": self.status,
+            "used": self.used,
+            "allowance": self.allowance,
+            "estimated": self.estimated,
+            "pool": self.pool,
+            "distribution": self.distribution,
+            "by_label": dict(self.by_label),
+            "rate_limit_remaining": self.rate_limit_remaining,
+        }
 
     @property
     def status(self) -> str:
@@ -90,13 +139,19 @@ def _latch_key(provider: str, account_ref: str) -> str:
     return f"{_KEY_PREFIX}:{provider}:acct:{_segment(account_ref)}:402"
 
 
+def _rate_limit_key(provider: str, account_ref: str) -> str:
+    return f"{_KEY_PREFIX}:{provider}:acct:{_segment(account_ref)}:rl"
+
+
 def _segment(value: str) -> str:
     """A provider-supplied id cannot contain the separator and shift a key."""
     return quote(value, safe="")
 
 
 class CallMeter:
-    """Counts and admits outbound calls for ONE provider account."""
+    """Counts and admits outbound calls for ONE ledger — a provider account, or
+    (owner pool) every account under one OAuth application. `account_ref` is the
+    ledger scope either way; the caller decides what it names."""
 
     def __init__(
         self,
@@ -108,6 +163,9 @@ class CallMeter:
         allowance: int,
         degrade_ratio: float,
         purpose: Purpose = "user",
+        pool: Pool = "user",
+        distribution: Distribution = "private",
+        label: CallLabel | None = None,
     ) -> None:
         self._redis = redis
         self._provider = provider
@@ -121,6 +179,9 @@ class CallMeter:
         self._allowance = allowance
         self._degrade_ratio = degrade_ratio
         self._purpose = purpose
+        self._pool = pool
+        self._distribution = distribution
+        self._label: CallLabel = label or default_label(purpose)
 
     async def admit(self) -> None:
         """Raise `QuotaBlockedError` if this call must not be made."""
@@ -139,6 +200,8 @@ class CallMeter:
             logger.warning("quota meter unavailable; admitting uncounted")
             return
         used = int(raw or 0)
+        if self._distribution == "app_store":
+            return  # public apps are exempt from the annual limit; only the latch bites
         if used >= self._allowance:
             raise QuotaBlockedError(
                 "quota_exhausted", "this account's configured API allowance is spent"
@@ -169,24 +232,96 @@ class CallMeter:
                 await redis.expire(key, _LEDGER_TTL_SECONDS)
         except Exception:  # noqa: BLE001 — accounting never fails the request
             logger.warning("could not record a provider call against the quota ledger")
+            return
+        await self._count_label(redis)
+
+    async def _count_label(self, redis: Any) -> None:
+        """Attribution only: its failure never costs the year count above."""
+        try:
+            key = self._label_key(self._label)
+            if await redis.incr(key) == 1:
+                await redis.expire(key, _LEDGER_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not record a call label")
+
+    async def observe_rate_limit(
+        self, remaining: int | None, retry_after: float | None = None
+    ) -> None:
+        """Remember the provider's latest `X-Rate-Limit-Remaining` for the pool.
+        Header values are untrusted: anything not a plausible count is ignored.
+        NEVER raises (ADR-024)."""
+        if (
+            isinstance(remaining, bool)
+            or not isinstance(remaining, int)
+            or not 0 <= remaining <= _RATE_LIMIT_MAX
+        ):
+            return
+        if remaining < _RATE_LIMIT_WARN_BELOW:
+            hint = retry_after if _plausible_retry_after(retry_after) else None
+            logger.warning(
+                "provider rate limit nearly spent provider=%s remaining=%d retry_after=%s",
+                self._provider,
+                remaining,
+                hint,
+            )
+        if self._redis is None:
+            return
+        try:
+            await self._redis.set(
+                _rate_limit_key(self._provider, self._account_ref),
+                str(remaining),
+                ex=_RATE_LIMIT_TTL_SECONDS,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("could not record the rate-limit observation")
 
     async def state(self) -> QuotaState:
         used, exhausted = 0, False
+        by_label: dict[str, int] = {}
+        remaining: int | None = None
         if self._redis is not None:
             try:
                 used = int(await self._redis.get(self._year_key()) or 0)
                 exhausted = bool(await self._redis.get(self._latch_key()))
+                by_label = await self._read_labels()
+                raw = await self._redis.get(_rate_limit_key(self._provider, self._account_ref))
+                remaining = int(raw) if raw is not None else None
             except Exception:  # noqa: BLE001
                 logger.warning("could not read the quota ledger")
+                used, exhausted, by_label, remaining = 0, False, {}, None
+        public = self._distribution == "app_store"
         return QuotaState(
             used=used,
             allowance=self._allowance,
-            degraded=used >= self._allowance * self._degrade_ratio,
-            exhausted=exhausted or used >= self._allowance,
+            degraded=not public and used >= self._allowance * self._degrade_ratio,
+            exhausted=exhausted or (not public and used >= self._allowance),
+            pool=self._pool,
+            distribution=self._distribution,
+            by_label=by_label,
+            rate_limit_remaining=remaining,
         )
+
+    async def _read_labels(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for label in _CALL_LABELS:
+            count = int(await self._redis.get(self._label_key(label)) or 0)  # type: ignore[union-attr]
+            if count:
+                counts[label] = count
+        return counts
+
+    def _label_key(self, label: str) -> str:
+        return f"{self._year_key()}:{label}"
 
     def _year_key(self) -> str:
         return _year_key(self._provider, self._account_ref, self._year)
 
     def _latch_key(self) -> str:
         return _latch_key(self._provider, self._account_ref)
+
+
+def _plausible_retry_after(value: float | None) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and 0 <= value <= _RETRY_AFTER_MAX_SECONDS
+    )

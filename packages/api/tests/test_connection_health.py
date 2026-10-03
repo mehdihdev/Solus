@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from conftest import BOB, me
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -36,9 +37,17 @@ from test_connections import (  # noqa: F401 — the autouse fixture must be in 
 )
 from test_connector_quota import FakeRedis
 
-ALLOWANCE = 1800  # settings.onshape_annual_call_allowance
+ALLOWANCE = 2500  # settings.onshape_annual_call_allowance (ADR-038: 2,500)
 LEDGER = f"solus:intq:onshape:acct:42:{datetime.now(UTC).year}"
 LATCH = "solus:intq:onshape:acct:42:402"
+
+
+@pytest.fixture(autouse=True)
+def _per_account_pool(app: FastAPI) -> None:
+    """These tests pin the per-account ledger (`user` pool); the default owner
+    pool's keys depend on the OAuth application and are covered in
+    test_onshape_pool.py."""
+    app.state.settings = app.state.settings.model_copy(update={"onshape_quota_pool": "user"})
 
 
 def _connection(status: ConnectionStatus = ConnectionStatus.CONNECTED) -> AccountConnection:
@@ -129,14 +138,18 @@ async def test_an_account_at_eighty_percent_is_flagged_and_recorded_once(
     assert row["health"] == "degraded"
     assert row["quota"] == {
         "status": "degraded",
-        "used": 1440,
+        "used": 2000,
         "allowance": ALLOWANCE,
         "estimated": True,
+        "pool": "user",
+        "distribution": "private",
+        "by_label": {},
+        "rate_limit_remaining": None,
     }
     [event] = await _events(db, "integration.quota_degraded")
     assert event.payload["provider"] == "onshape"
     assert event.payload["connection_id"] == connected["connection"]["id"]
-    assert event.payload["used"] == 1440 and event.payload["estimated"] is True
+    assert event.payload["used"] == 2000 and event.payload["estimated"] is True
 
     await _connections(client, alice_headers)
     single = await client.get(
