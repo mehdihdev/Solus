@@ -360,27 +360,42 @@ def _microversion(body: Any) -> str:
     return value
 
 
+async def _fetch_document_info(
+    connector: Any, client: httpx.AsyncClient, document_id: str
+) -> dict[str, Any]:
+    body = await connector.get_json(client, f"/api/v6/documents/{document_id}", what="document")
+    workspace = body.get("defaultWorkspace") if isinstance(body, dict) else None
+    raw = workspace.get("id", "") if isinstance(workspace, dict) else ""
+    if not isinstance(raw, str) or not ONSHAPE_ID_RE.fullmatch(raw):
+        raise ConnectorError("api_error", "Onshape returned no usable default workspace")
+    name = body.get("name") if isinstance(body, dict) else None
+    return {"name": name if isinstance(name, str) and name else None, "workspace": raw}
+
+
 async def document_info(
     scope: ReadScope, connector: Any, client: httpx.AsyncClient, document_id: str
 ) -> dict[str, Any]:
     """`{name, workspace}` from ONE `GET /documents/{d}`, shared by the whole turn."""
-
-    async def fetch() -> dict[str, Any]:
-        body = await connector.get_json(client, f"/api/v6/documents/{document_id}", what="document")
-        workspace = body.get("defaultWorkspace") if isinstance(body, dict) else None
-        raw = workspace.get("id", "") if isinstance(workspace, dict) else ""
-        if not isinstance(raw, str) or not ONSHAPE_ID_RE.fullmatch(raw):
-            raise ConnectorError("api_error", "Onshape returned no usable default workspace")
-        name = body.get("name") if isinstance(body, dict) else None
-        return {"name": name if isinstance(name, str) and name else None, "workspace": raw}
-
-    return await scope.memo.once((scope.account_ref, document_id, "doc"), fetch)
+    return await scope.memo.once(
+        (scope.account_ref, document_id, "doc"),
+        lambda: _fetch_document_info(connector, client, document_id),
+    )
 
 
 async def resolve_workspace(
     scope: ReadScope, connector: Any, client: httpx.AsyncClient, document_id: str
 ) -> str:
-    """The recorded workspace when there is one, else the document's default (once)."""
+    """The recorded workspace when there is one, else the document's default (once).
+
+    A WRITE never trusts either: the cursor hint is as old as the last sync and the memo
+    as old as an earlier read this turn, and the default workspace can change in between,
+    so a write resolves the current default live (one `GET /documents/{d}`)."""
+    if scope.is_write:
+        info = await _fetch_document_info(connector, client, document_id)
+        # Refresh the turn's document entry (the consent card names the document from it)
+        # without ever READING it back for the workspace.
+        scope.memo.remember((scope.account_ref, document_id, "doc"), info)
+        return str(info["workspace"])
     override = scope.memo.peek((scope.account_ref, document_id, "workspace-override"))
     if isinstance(override, str):
         return override

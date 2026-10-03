@@ -43,7 +43,7 @@ from typing import Any
 from urllib.parse import quote, unquote
 
 from solus_api.connectors.httpcache import CacheStore, release_flight, run_in_flight, single_flight
-from solus_api.storage.cad_store import CadStore, account_prefix, validate_cad_key
+from solus_api.storage.cad_store import CadStore, account_hash, account_prefix, validate_cad_key
 
 logger = logging.getLogger("solus.connectors.integration_cache")
 
@@ -72,9 +72,21 @@ DEFAULT_LISTING_REFRESH_COOLDOWN_SECONDS = 60
 #: A durable payload's Redis entry is only an index to an immutable object, so it
 #: outlives the 30-day payload TTL (ADR-038 §1); revocation, not expiry, ends it.
 _DURABLE_INDEX_TTL_SECONDS = 365 * 24 * 3600
-#: Key kinds that stay in Redis however a durable store is configured.
-_REDIS_ONLY_KINDS = frozenset({"listing", "signal", "__keys"})
 _DURABLE_FIELD = "durable"
+#: ONLY Onshape payloads that are expensive to recreate reach the durable store; every
+#: other provider and kind (listings, signals, element lists, part metadata, document
+#: trees) is cheap to refetch and stays in Redis under its normal TTL. Anything that
+#: lands in the durable store must be deleted on revocation, so the surface is kept small.
+_DURABLE_PROVIDER = "onshape"
+#: STEP exports: always durable (minutes of translation and quota to recreate).
+_DURABLE_ALWAYS_KINDS = frozenset({"revision-v3-export"})
+#: SOL immutable read payloads (donor geometry, mirrored reads): durable only when large.
+_DURABLE_SIZE_GATED_KINDS = frozenset({"immutable-read-v1", "sol-read-v1"})
+DURABLE_MIN_BYTES = 256 * 1024
+#: A tombstone outlives any in-flight sync (a sync is bounded well below this), so a
+#: write that lands after revocation cannot resurrect durable data.
+TOMBSTONE_TTL_SECONDS = 3600
+_TOMBSTONE_PREFIX = f"{_PREFIX}:__revoked"
 
 
 def _describe(key: str) -> str:
@@ -164,7 +176,11 @@ class IntegrationCache:
             logger.warning("integration cache held malformed JSON at %s; dropping", _describe(key))
             await self.invalidate(key)
             return None
-        if self._durable is not None and isinstance(value, dict) and _DURABLE_FIELD in value:
+        if isinstance(value, dict) and _DURABLE_FIELD in value:
+            if self._durable is None:
+                # A durable index is meaningless to a process that cannot read the
+                # store: a miss, never the index dict served as if it were the payload.
+                return None
             return await self._read_durable(key, value[_DURABLE_FIELD])
         return value
 
@@ -196,8 +212,8 @@ class IntegrationCache:
     async def put(self, key: str, value: Any, ttl_seconds: int) -> bool:
         """Store `value`. False when it was too large to keep — the caller
         still has the value; only the NEXT reader pays again."""
-        durable = self._durable if _is_payload_key(key) else None
-        limit = durable.max_object_bytes if durable is not None else self._max_payload_bytes
+        candidate = self._durable if _durable_candidate(key) else None
+        limit = candidate.max_object_bytes if candidate is not None else self._max_payload_bytes
         if _obviously_oversize(value, limit):
             # Decided BEFORE encoding: a 64 MiB STEP export must not be
             # JSON-encoded and re-encoded just to be thrown away.
@@ -209,11 +225,20 @@ class IntegrationCache:
             logger.warning("integration cache refused a non-JSON value at %s", _describe(key))
             return False
         body = encoded.encode("utf-8")
-        if len(body) > limit:
+        durable = candidate if candidate is not None and _durable_wanted(key, len(body)) else None
+        if len(body) > (limit if durable is not None else self._max_payload_bytes):
             logger.info("integration cache skipped an oversize payload at %s", _describe(key))
             return False
+        previous = await self._referenced_object(key)
         if durable is not None:
-            return await self._put_durable(durable, key, body, ttl_seconds)
+            stored = await self._put_durable(durable, key, body, ttl_seconds)
+        else:
+            stored = await self._put_redis(key, encoded, ttl_seconds)
+        if stored:
+            await self._delete_replaced(key, previous)
+        return stored
+
+    async def _put_redis(self, key: str, encoded: str, ttl_seconds: int) -> bool:
         try:
             await self._store.set(key, encoded, ttl_seconds)
         except Exception:  # noqa: BLE001
@@ -231,6 +256,11 @@ class IntegrationCache:
             return False
         digest = hashlib.sha256(body).hexdigest()
         try:
+            if await self._store.get(_tombstone_key(scope)) is not None:
+                # The account was revoked moments ago: an in-flight sync must not write
+                # an object the purge has already swept past.
+                logger.info("durable CAD write refused for a revoked account (%s)", _describe(key))
+                return False
             object_key = await durable.put(scope, body)
             entry = {
                 _DURABLE_FIELD: {"object_key": object_key, "sha256": digest, "size": len(body)}
@@ -245,6 +275,50 @@ class IntegrationCache:
             return False
         await self._index(key)
         return True
+
+    async def tombstone_account(self, provider: str, account_ref: str) -> bool:
+        """Refuse durable writes for this account for `TOMBSTONE_TTL_SECONDS`. Call it
+        BEFORE the purge is queued, so a sync that was already running cannot write an
+        object after the purge. Best-effort: False when Redis is unreachable (the
+        purge's delayed second pass is the backstop)."""
+        try:
+            await self._store.set(
+                _tombstone_key(f"{provider}:{account_ref}"), "1", TOMBSTONE_TTL_SECONDS
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("could not tombstone an account; relying on the delayed purge pass")
+            return False
+        return True
+
+    # ------------------------------------------------------------- reclamation
+
+    async def _referenced_object(self, key: str) -> str | None:
+        """The durable object an existing index entry at `key` points at, if it is one
+        of THIS account's. A forged index naming another account's object is ignored,
+        so reclamation can never delete across accounts."""
+        scope = _scope_of(key)
+        if self._durable is None or scope is None or not _durable_candidate(key):
+            return None
+        try:
+            raw = await self._store.get(key)
+            index = json.loads(raw)[_DURABLE_FIELD] if raw else None
+            object_key = index.get("object_key") if isinstance(index, dict) else None
+            if isinstance(object_key, str) and object_key.startswith(account_prefix(scope)):
+                return validate_cad_key(object_key)
+        except Exception:  # noqa: BLE001 — nothing to reclaim is not an error
+            return None
+        return None
+
+    async def _delete_replaced(self, key: str, previous: str | None) -> None:
+        if previous is None or self._durable is None:
+            return
+        current = await self._referenced_object(key)
+        if current == previous:
+            return
+        try:
+            await self._durable.delete(previous)
+        except Exception:  # noqa: BLE001 — best effort; the revocation purge sweeps the prefix
+            logger.warning("could not reclaim a replaced durable CAD object (%s)", _describe(key))
 
     async def _index(self, key: str) -> None:
         """Remember `key` under its account, so `invalidate_account` can find
@@ -263,13 +337,24 @@ class IntegrationCache:
         except Exception:  # noqa: BLE001
             logger.warning("integration cache could not index %s", _describe(key))
 
-    async def invalidate_account(self, provider: str, account_ref: str) -> int:
+    @property
+    def durable_store(self) -> CadStore | None:
+        return self._durable
+
+    async def invalidate_account(
+        self, provider: str, account_ref: str, *, delete_durable: bool = True
+    ) -> int:
         """Drop everything cached for one account — on revoke and on account
         deletion, so derived copies of a customer's CAD do not outlive the
-        grant. Returns how many entries were removed."""
+        grant. Returns how many entries were removed.
+
+        `delete_durable=False` leaves the durable OBJECTS to the caller's purge
+        record (`services/cad_purge.py`), which retries until they are gone; the
+        default deletes them inline, best-effort."""
         account = self.account_key(provider, account_ref)
         index_key = account + _INDEX_SUFFIX
-        await self._delete_durable_account(provider, account_ref)
+        if delete_durable:
+            await self._delete_durable_account(provider, account_ref)
         try:
             raw = await self._store.get(index_key)
         except Exception:  # noqa: BLE001
@@ -277,8 +362,8 @@ class IntegrationCache:
             return 0
         keys: list[str] = json.loads(raw) if raw else []
         for key in keys:
-            await self.invalidate(key)
-        await self.invalidate(index_key)
+            await self._delete_key(key)
+        await self._delete_key(index_key)
         return len(keys)
 
     async def _delete_durable_account(self, provider: str, account_ref: str) -> None:
@@ -294,6 +379,16 @@ class IntegrationCache:
             )
 
     async def invalidate(self, key: str) -> None:
+        """Drop one entry, and the durable object its index pointed at."""
+        referenced = await self._referenced_object(key)
+        await self._delete_key(key)
+        if referenced is not None and self._durable is not None:
+            try:
+                await self._durable.delete(referenced)
+            except Exception:  # noqa: BLE001 — best effort; the revocation purge sweeps the prefix
+                logger.warning("could not delete a durable CAD object for %s", _describe(key))
+
+    async def _delete_key(self, key: str) -> None:
         try:
             await self._store.delete(key)
         except Exception:  # noqa: BLE001
@@ -439,11 +534,22 @@ def _scope_of(key: str) -> str | None:
     return f"{unquote(provider)}:{unquote(account_ref)}"
 
 
-def _is_payload_key(key: str) -> bool:
-    """Payload keys are `...:{kind}:...` after the account; listings, signals and
-    the key index are small and stay in Redis."""
+def _durable_candidate(key: str) -> bool:
+    """Only Onshape payloads of an expensive kind may ever be durable."""
     parts = key.split(":")
-    return _account_of(key) is not None and len(parts) > 4 and parts[4] not in _REDIS_ONLY_KINDS
+    if _account_of(key) is None or len(parts) <= 4 or unquote(parts[2]) != _DURABLE_PROVIDER:
+        return False
+    return parts[4] in _DURABLE_ALWAYS_KINDS or parts[4] in _DURABLE_SIZE_GATED_KINDS
+
+
+def _durable_wanted(key: str, size: int) -> bool:
+    """STEP exports always; SOL immutable reads only above `DURABLE_MIN_BYTES`."""
+    kind = key.split(":")[4]
+    return kind in _DURABLE_ALWAYS_KINDS or size > DURABLE_MIN_BYTES
+
+
+def _tombstone_key(account_scope: str) -> str:
+    return f"{_TOMBSTONE_PREFIX}:{account_hash(account_scope)}"
 
 
 def _obviously_oversize(value: Any, limit: int) -> bool:

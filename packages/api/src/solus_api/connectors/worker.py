@@ -1105,6 +1105,18 @@ async def sweep_artifacts(ctx: dict[str, Any]) -> int:
         )
 
 
+async def purge_cad_accounts(ctx: dict[str, Any]) -> int:
+    """ARQ cron (every minute and at start): run the durable CAD purge records that are due.
+
+    Revocation queues a record in its own transaction; this is the retry-with-backoff
+    that guarantees the objects are eventually deleted (ADR-038 §1), and the delayed
+    second pass that catches a sync which was already running at revocation."""
+    from solus_api.services.cad_purge import run_due_cad_purges
+
+    async with ctx["sessionmaker"]() as session:
+        return await run_due_cad_purges(session, ctx.get("cad_store"))
+
+
 async def source_revision(
     ctx: dict[str, Any], source_id: str, user_id: str, generation: str
 ) -> None:
@@ -1220,6 +1232,8 @@ def build_worker_settings(settings: Settings) -> type:
             # SOLUSDEV-100 T4c built + tested sweep_expired_artifacts; this
             # registration was explicitly deferred to T4b.
             cron(sweep_artifacts, minute=None, run_at_startup=False),
+            # ADR-038 §1: retries the durable CAD purges revocation queued.
+            cron(purge_cad_accounts, minute=None, run_at_startup=True),
         ]
         on_startup = _on_startup
         on_shutdown = _on_shutdown

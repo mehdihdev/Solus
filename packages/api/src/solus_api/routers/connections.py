@@ -36,6 +36,7 @@ from solus_api.deps import (
 from solus_api.models import AccountConnection, ConnectionStatus, Project, User
 from solus_api.schemas import AdoptRequest, serialize_connection, serialize_legacy_connection
 from solus_api.services.activity import record_activity
+from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.connection_health import (
     account_quota,
     connection_health,
@@ -265,6 +266,9 @@ async def revoke(
         payload={"provider": connection.provider.value, "disconnected_sources": disconnected},
     )
     await session.commit()
+    # ADR-038 §1: the durable CAD behind the grant. The purge record committed with the
+    # revocation; this is the first attempt, and a failure never undoes the revoke.
+    await run_cad_purges_after_commit(session, cache.durable_store)
     return envelope({"id": connection_id, "disconnected_sources": disconnected})
 
 

@@ -1,6 +1,7 @@
 """§2.1 Users & settings — /users/me, /users/me/settings, account deletion."""
 
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -13,6 +14,7 @@ from solus_api.billing import credits, usage
 from solus_api.billing.development import is_development_unlimited
 from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.connectors.hosted_oauth import hosted_refs
+from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
@@ -74,10 +76,12 @@ from solus_api.schemas import (
     serialize_team_summary,
     serialize_user,
 )
+from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.connections import (
     delete_legacy_family_if_retired,
     is_connection_owned,
     revoke_connection,
+    schedule_legacy_grant_purge,
 )
 from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_team
@@ -144,10 +148,36 @@ async def _sole_owner_blockers(session: AsyncSession, user: User) -> list[uuid.U
     return blockers
 
 
+async def _delete_source_secrets(
+    secret_store: SecretStore, rows: Sequence[Source], refs: Sequence[str | None]
+) -> None:
+    """The credentials each torn-down source owns (never a connection's shared ones)."""
+    # Families retired by a move but not yet swept go with the rows
+    # (SOLUSDEV-242) — after this, nothing could derive them.
+    for owed in rows:
+        await delete_legacy_family_if_retired(secret_store, owed)
+    for ref in refs:
+        # SOLUSDEV-241: a connection-owned ref is the account's, shared by
+        # every project bound to it — the connection's own lifecycle deletes
+        # it (revoke / account deletion), never a project teardown.
+        if ref and not is_connection_owned(ref):
+            await secret_store.delete(ref)
+            # The OAuth refresh token has its own ref (SOLUS-CAD-01); without
+            # this, deleting an account would leave a live grant against the
+            # user's GitLab/Onshape data. `delete` no-ops when absent.
+            await secret_store.delete(refresh_secret_ref(ref))
+            # SOLUSDEV-168: hosted add-on grants hang off the same ref.
+            # Deleting an account must not leave a live FeatureScript
+            # OAuth2Write token against the user's Onshape documents.
+            for hosted_ref in hosted_refs(ref):
+                await secret_store.delete(hosted_ref)
+
+
 async def delete_projects_cascade(
     session: AsyncSession,
     project_ids: list[uuid.UUID],
     secret_store: SecretStore | None = None,
+    cache: IntegrationCache | None = None,
 ) -> None:
     """Remove projects and everything hanging off them — jobs plus the graph
     tables (sources/entities/relations/syncs, SOLUSDEV-103) and their stored
@@ -156,6 +186,12 @@ async def delete_projects_cascade(
         return
     rows = (await session.scalars(select(Source).where(Source.project_id.in_(project_ids)))).all()
     sources = [(row.id, row.secret_ref) for row in rows]
+    if cache is not None:
+        # ADR-038 §1: legacy per-source grants die with their rows, and so must the CAD
+        # derived through them (the caller runs the purge after its commit).
+        await schedule_legacy_grant_purge(
+            session, cache, rows, deleting_ids={row.id for row in rows}
+        )
     # Bulk deletes below bypass ORM events, so the live hints are queued by hand
     # (ADR-037 §3) — published only if the caller's transaction commits.
     for owed in rows:
@@ -167,25 +203,7 @@ async def delete_projects_cascade(
     ).all():
         queue_project_removed(session, team_id=team_id, project_id=project_id)
     if secret_store is not None:
-        # Families retired by a move but not yet swept go with the rows
-        # (SOLUSDEV-242) — after this, nothing could derive them.
-        for owed in rows:
-            await delete_legacy_family_if_retired(secret_store, owed)
-        for _sid, ref in sources:
-            # SOLUSDEV-241: a connection-owned ref is the account's, shared by
-            # every project bound to it — the connection's own lifecycle deletes
-            # it (revoke / account deletion), never a project teardown.
-            if ref and not is_connection_owned(ref):
-                await secret_store.delete(ref)
-                # The OAuth refresh token has its own ref (SOLUS-CAD-01); without
-                # this, deleting an account would leave a live grant against the
-                # user's GitLab/Onshape data. `delete` no-ops when absent.
-                await secret_store.delete(refresh_secret_ref(ref))
-                # SOLUSDEV-168: hosted add-on grants hang off the same ref.
-                # Deleting an account must not leave a live FeatureScript
-                # OAuth2Write token against the user's Onshape documents.
-                for hosted_ref in hosted_refs(ref):
-                    await secret_store.delete(hosted_ref)
+        await _delete_source_secrets(secret_store, rows, [ref for _sid, ref in sources])
     source_ids = [sid for sid, _ref in sources]
     if source_ids:
         await session.execute(delete(OAuthState).where(OAuthState.source_id.in_(source_ids)))
@@ -198,13 +216,16 @@ async def delete_projects_cascade(
 
 
 async def delete_team_cascade(
-    session: AsyncSession, team_id: uuid.UUID, secret_store: SecretStore | None = None
+    session: AsyncSession,
+    team_id: uuid.UUID,
+    secret_store: SecretStore | None = None,
+    cache: IntegrationCache | None = None,
 ) -> None:
     """Explicit cascade (portable across PG/SQLite FK enforcement)."""
     project_ids = list(
         (await session.scalars(select(Project.id).where(Project.team_id == team_id))).all()
     )
-    await delete_projects_cascade(session, project_ids, secret_store)
+    await delete_projects_cascade(session, project_ids, secret_store, cache)
     for member_id in (
         await session.scalars(
             select(Membership.user_id).where(
@@ -264,7 +285,7 @@ async def delete_me(
     for team, _membership in await _team_memberships(session, user):
         members = await _live_members(session, team.id)
         if len(members) == 1:
-            await delete_team_cascade(session, team.id, secret_store)
+            await delete_team_cascade(session, team.id, secret_store, cache)
         else:
             # Let the remaining members know a teammate left before we drop the row.
             await notify_team(
@@ -303,6 +324,9 @@ async def delete_me(
     await session.execute(delete(User).where(User.id == user.id))
     queue_account_removed(session, user_id=user.id)
     await session.commit()
+    # ADR-038 §1: purge the durable CAD of every grant this deletion ended (best-effort
+    # here; the committed purge records are retried by the worker / next request).
+    await run_cad_purges_after_commit(session, cache.durable_store)
     # Best-effort remote revoke AFTER the local commit: kills the Supabase session /
     # auth user. A failure here is logged, not fatal — the tombstone already blocks
     # re-provision and local data is gone.

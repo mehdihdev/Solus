@@ -512,7 +512,9 @@ async def test_a_write_preview_names_the_document_without_a_lookup(
     second = await tool.preview(args)  # type: ignore[attr-defined]
 
     assert first[0] == second[0] == {"label": "document", "before": None, "after": "Rover chassis"}
-    assert provider.document.call_count == 0
+    # The document NAME came from the listing, but the workspace is resolved live for a
+    # write (one GET /documents/{d} per preview): the old `== 0` pinned the stale-hint bug.
+    assert provider.document.call_count == 2
     assert provider.probe.call_count == 0, "previews are live reads, never the mirror"
     assert provider.live_variables.call_count == 2
 
@@ -525,6 +527,9 @@ async def test_a_write_preview_uses_the_graph_name_when_there_is_no_listing(
 
     project_id, ref, source_id = await _seed(maker)
     provider = Provider(respx.mock)
+    # The write's live workspace lookup now also reads the document, so for the graph name to
+    # be the fallback under test Onshape's answer must carry no name of its own.
+    provider.document.respond(200, json={"id": "d1", "defaultWorkspace": {"id": "w1"}})
     async with maker() as db:
         db.add(
             GraphEntity(
@@ -546,7 +551,8 @@ async def test_a_write_preview_uses_the_graph_name_when_there_is_no_listing(
     )
 
     assert rows[0]["after"] == "Graph named chassis"
-    assert provider.document.call_count == 0
+    # One live default-workspace lookup for the write preview (was 0: the pinned bug).
+    assert provider.document.call_count == 1
 
 
 @respx.mock
@@ -722,8 +728,9 @@ async def test_a_two_write_build_turn_spends_only_the_live_reads_and_posts(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:
     """Per write: park preview + decide preview (one live read each), then the
-    pre-write read, the POST and the readback. No document lookup, no name
-    lookup, no probe. (Before ADR-038: 10 per write, 20 for the turn.)"""
+    pre-write read, the POST and the readback. A write resolves its workspace live,
+    so each of those three tool calls spends one `GET /documents/{d}`; no name lookup,
+    no probe. (Before ADR-038: 10 per write, 20 for the turn.)"""
     project_id, ref, _ = await _seed(maker)
     harness = Harness()
     await harness.cache.fetch(
@@ -756,8 +763,10 @@ async def test_a_two_write_build_turn_spends_only_the_live_reads_and_posts(
         result = await registry.invoke(ToolCall(tool="onshape.set_variable", args=args))
         assert result.ok is True, result.error
 
-    assert document.call_count == 0 and probe.call_count == 0
-    assert len(respx.calls) == 10
+    # 3 live workspace lookups per write (two previews + the invocation): was 0, which
+    # let a write target a stale cursor workspace.
+    assert document.call_count == 6 and probe.call_count == 0
+    assert len(respx.calls) == 16
 
 
 @respx.mock
@@ -796,3 +805,67 @@ async def test_assembly_feature_pages_fetch_the_definition_and_tree_once(
         assert result.ok is True, result.error
 
     assert definition.call_count == health.call_count == 1
+
+
+# ------------------------------------------- writes resolve the workspace live
+
+
+def _info_with_workspace(workspace: str) -> dict[str, Any]:
+    return {**WORKSPACE_INFO, "defaultWorkspace": {"id": workspace}}
+
+
+@respx.mock
+async def test_a_write_targets_the_live_default_workspace_not_the_cursor_hint(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The default workspace changed after the last sync: the cursor still says w1.
+    A write must act on what Onshape says NOW, never on the recorded hint."""
+    project_id, ref, _ = await _seed(maker)
+    respx.get(f"{API}/documents/d1").respond(200, json=_info_with_workspace("wlive0000001"))
+    live_get = respx.get(f"{API}/variables/d/d1/w/wlive0000001/e/e1/variables").respond(
+        200, json=VARIABLES
+    )
+    stale_get = respx.get(f"{API}/variables/d/d1/w/w1/e/e1/variables").respond(200, json=VARIABLES)
+    stale_post = respx.post(f"{API}/variables/d/d1/w/w1/e/e1/variables").respond(204)
+    live_post = respx.post(f"{API}/variables/d/d1/w/wlive0000001/e/e1/variables").respond(204)
+    registry = await _turn(maker, project_id, ref, Harness())
+    args = {"document_id": "d1", "element_id": "e1", "name": "width", "expression": "150 mm"}
+    tool = next(t for t in registry.tools() if t.descriptor.name == "onshape.set_variable")
+
+    await tool.preview(args)  # type: ignore[attr-defined]
+    await registry.invoke(ToolCall(tool="onshape.set_variable", args=args))
+
+    assert stale_get.call_count == 0 and stale_post.call_count == 0
+    assert live_get.call_count >= 1 and live_post.call_count == 1
+
+
+@respx.mock
+async def test_a_write_ignores_a_memoised_workspace_override_from_an_earlier_read(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A read that healed a stale hint memoises an override for the turn; a write in the same
+    turn still asks Onshape rather than trusting that memo."""
+    from solus_api.connectors.onshape_ops import workspace_for
+    from solus_api.connectors.onshape_read_cache import (
+        ReadScope,
+        TurnReadMemo,
+        bind_read_scope,
+    )
+
+    document = respx.get(f"{API}/documents/d1").respond(
+        200, json=_info_with_workspace("wnow00000001")
+    )
+    memo = TurnReadMemo()
+    memo.remember(("acct-A", "d1", "workspace-override"), "wmemo0000001")
+    scope = ReadScope(memo=memo, account_ref="acct-A", workspaces={"d1": "w1"}, is_write=True)
+    connector = OnshapeConnector(client_id="c", client_secret="s")
+
+    async with httpx.AsyncClient(base_url=ONSHAPE_API_BASE) as client:
+        with bind_read_scope(scope):
+            resolved = await workspace_for(connector, client, {"document_id": "d1"})
+        with bind_read_scope(ReadScope(memo, "acct-A", {"d1": "w1"}, is_write=False)):
+            read_resolved = await workspace_for(connector, client, {"document_id": "d1"})
+
+    assert resolved == "wnow00000001"
+    assert document.call_count == 1
+    assert read_resolved == "wmemo0000001"  # reads keep the override: unchanged behaviour

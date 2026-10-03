@@ -130,9 +130,10 @@ async def workspace_for(
     Making a model carry a workspace id it never saw is a needless failure mode —
     every read here is against the default workspace unless told otherwise.
 
-    Inside a tool call the default is the workspace the last sync recorded on the
+    Inside a READ tool call the default is the workspace the last sync recorded on the
     source cursor, and only when there is none is `GET /documents/{d}` made, once
-    per document per turn (ADR-038 section 5). Called bare, it asks Onshape.
+    per document per turn (ADR-038 section 5). A WRITE always asks Onshape for the
+    current default, ignoring the cursor and the turn memo. Called bare, it asks Onshape.
     """
     if args.get("workspace_id") is not None:
         return validated_id(args, "workspace_id")

@@ -564,6 +564,29 @@ class DeletedAccount(UuidPkMixin, Base):
     )
 
 
+class CadPurgeRequest(UuidPkMixin, Base):
+    """A durable "delete this account's CAD objects" obligation (ADR-038 §1).
+
+    Written in the SAME transaction as the revocation / account deletion / legacy
+    source disconnect that creates the duty, so the duty exists if and only if the
+    grant is gone. It holds ONLY `sha256("<provider>:<account_ref>")` — never an id,
+    token, name or email. `services/cad_purge.py` runs it (inline after commit, then
+    the ARQ cron and API startup) until the account's prefix lists empty, twice: a
+    second pass after a delay catches a sync that was already in flight."""
+
+    __tablename__ = "cad_purge_requests"
+
+    account_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    passes_remaining: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 class ProcessedStripeEvent(UuidPkMixin, Base):
     """Dedupe log for Stripe webhook events (SOLUSDEV-83). A `stripe_event_id` is
     recorded once; a duplicate delivery is a no-op. Never deleted (audit)."""

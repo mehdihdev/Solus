@@ -31,6 +31,12 @@ class _BrokenStore:
     async def delete_account(self, account_scope: str) -> int:
         raise OSError("unreachable")
 
+    async def delete_account_hash(self, digest: str) -> int:
+        raise OSError("unreachable")
+
+    async def delete(self, object_key: str) -> None:
+        raise OSError("unreachable")
+
 
 def _setup(
     tmp_path: Path, max_bytes: int = 64 * MIB

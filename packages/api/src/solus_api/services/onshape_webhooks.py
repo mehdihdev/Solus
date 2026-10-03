@@ -33,14 +33,27 @@ EVENTS = [
     TRANSLATION_COMPLETE_EVENT,
     "onshape.model.lifecycle.createversion",
 ]
-#: Events that can change the ACCOUNT's document listing (rename, create, delete). A model
-#: edit never does, so it must not cost the next picker open a full re-walk.
-LISTING_EVENT_PREFIX = "onshape.document."
 #: How often a healthy subscription is confirmed to still exist (one cheap call each).
 SUBSCRIPTION_CHECK_INTERVAL = timedelta(days=1)
 #: Recovery re-enqueue backoff for a dirty source whose syncs keep failing.
 RECOVERY_BACKOFF_BASE_SECONDS = 60
 RECOVERY_BACKOFF_MAX_SECONDS = 3600
+
+
+def events_digest(events: list[str]) -> str:
+    """Order-independent fingerprint of an event list, stored with the subscription."""
+    return hashlib.sha256("\n".join(sorted(events)).encode()).hexdigest()
+
+
+def registration_current(state: dict[str, Any], session_id: str) -> bool:
+    """Whether the stored subscription was made with TODAY's events and session id.
+
+    A state written before these were recorded has neither, so it is never current and is
+    migrated once (DELETE + POST) the next time registration runs."""
+    return (
+        state.get("events_digest") == events_digest(EVENTS)
+        and state.get("session_id") == session_id
+    )
 
 
 def state_for(source: Source) -> dict[str, Any]:
@@ -290,9 +303,11 @@ async def register_onshape_webhooks(
         await session.commit()
         return state
     documents = tracked_document_ids(source.config)
+    session_id = external_session_id or onshape_session_id()
     if (
         set(state.get("subscriptions", {})) == set(documents)
         and state.get("status") == "registered"
+        and registration_current(state, session_id)
     ):
         return state
     if _registration_in_progress(state):
@@ -315,7 +330,6 @@ async def register_onshape_webhooks(
     )
     save_state(source, state)
     await session.commit()
-    session_id = external_session_id or onshape_session_id()
     if not await _register_documents(
         session, source, connector, client, callback_base, documents, token, digest, session_id
     ):
@@ -326,7 +340,13 @@ async def register_onshape_webhooks(
         session, source
     ):
         return state
-    state.update(status="registered", reason=None, health_checked_at=utcnow().isoformat())
+    state.update(
+        status="registered",
+        reason=None,
+        health_checked_at=utcnow().isoformat(),
+        events_digest=events_digest(EVENTS),
+        session_id=session_id,
+    )
     save_state(source, state)
     await session.commit()
     return state

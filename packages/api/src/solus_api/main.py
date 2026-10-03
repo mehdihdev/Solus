@@ -91,6 +91,7 @@ from solus_api.routers import (
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
+from solus_api.services.cad_purge import run_startup_cad_purges
 from solus_api.services.supabase_admin import build_supabase_admin
 from solus_api.storage import build_artifact_store
 from solus_api.storage.cad_store import build_cad_store
@@ -250,6 +251,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             await report_provider_refs(served.state.secret_store, resolved_settings)
         except Exception:
             logging.getLogger("solus.main").exception("provider ref check failed")
+        # ADR-038 §1: purges that were due while no process ran (also the only retry in
+        # inline mode, together with the next revoke-related request).
+        await run_startup_cad_purges(
+            served.state.sessionmaker, served.state.integration_cache.durable_store
+        )
         # SOLUSDEV-167: begin relaying cross-process graph frames. No-op without
         # Redis, in which case the hub still fans out within this process.
         async with AsyncExitStack() as cleanup:
@@ -448,6 +454,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # the real ceiling is budget x instances — a shared Redis counter is the
     # upgrade, and the quota meter is the backstop underneath either way.
     app.state.webhook_limiter = FixedWindowLimiter(window_seconds=86_400)
+    # Per-source cap on deliveries of any kind (pings, translation.complete, hints) so
+    # non-scheduling traffic is bounded too; see WEBHOOK_INGEST_PER_MINUTE.
+    app.state.webhook_ingest_limiter = FixedWindowLimiter(window_seconds=60)
     app.state.artifact_upload_request_limiter = FixedWindowLimiter(window_seconds=60)
     app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
 

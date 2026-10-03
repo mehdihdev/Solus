@@ -9,6 +9,7 @@ from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     CurrentUser,
+    IntegrationCacheDep,
     RequireVerified,
     SecretStoreDep,
     SessionDep,
@@ -19,6 +20,7 @@ from solus_api.models import Membership, Role, Team, TeamKind
 from solus_api.routers.users import delete_team_cascade
 from solus_api.schemas import TeamCreate, TeamUpdate, serialize_team_detail
 from solus_api.services.activity import record_activity
+from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_create_team
 
@@ -112,6 +114,7 @@ async def delete_team(
     ctx: TeamCtx,
     session: SessionDep,
     secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
     confirm: Annotated[bool, Query()] = False,
 ) -> Response:
     require_role(ctx, Role.OWNER)
@@ -120,6 +123,7 @@ async def delete_team(
     if ctx.team.kind == TeamKind.PERSONAL:
         raise APIError(409, "personal_team_undeletable", "Personal teams cannot be deleted")
     emit_event(session, user=ctx.user, event_type="team.deleted", team_id=ctx.team.id)
-    await delete_team_cascade(session, ctx.team.id, secret_store)
+    await delete_team_cascade(session, ctx.team.id, secret_store, cache)
     await session.commit()
+    await run_cad_purges_after_commit(session, cache.durable_store)
     return Response(status_code=204)

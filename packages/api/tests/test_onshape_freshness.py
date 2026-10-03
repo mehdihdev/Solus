@@ -655,9 +655,12 @@ async def test_model_edits_do_not_wipe_the_account_listing(
     assert await cache.get(key) == {"items": []}
 
 
-async def test_a_document_lifecycle_event_still_refreshes_the_listing(
+async def test_no_onshape_event_wipes_the_listing_even_a_document_lifecycle_one(
     client: AsyncClient, maker: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Document events are not subscribed (EVENTS is model-only), so no Onshape delivery can
+    ever change the listing; the old `onshape.document.*` wipe branch was unreachable in
+    production and is gone. A spoofed or stray document event must not wipe it either."""
     monkeypatch.setattr("solus_api.routers.webhooks._probe_source", AsyncMock())
     source, _, token = await _seed(maker, register=True, account="acct-1")
     cache: IntegrationCache = client._transport.app.state.integration_cache  # type: ignore[attr-defined]
@@ -674,7 +677,8 @@ async def test_a_document_lifecycle_event_still_refreshes_the_listing(
         == 204
     )
 
-    assert await cache.get(key) is None
+    assert await cache.get(key) == {"items": []}
+    assert not any(event.startswith("onshape.document.") for event in hooks.EVENTS)
 
 
 # ------------------------------------------------------------ 7. metering hooks

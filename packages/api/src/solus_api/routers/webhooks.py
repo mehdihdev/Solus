@@ -48,7 +48,6 @@ from solus_api.models import Source, SourceStatus
 from solus_api.services.connections import account_ref_for, invalidate_listing
 from solus_api.services.onshape_webhooks import (
     DEFAULT_QUIET_SECONDS,
-    LISTING_EVENT_PREFIX,
     TRANSLATION_COMPLETE_EVENT,
     claim_schedule,
     hint_state,
@@ -78,6 +77,12 @@ MAX_WEBHOOK_BYTES = 64 * 1024
 #: day is meaningless for this provider. A real change that arrives while the
 #: budget is spent is not lost: the sweep picks it up.
 WEBHOOK_DELIVERIES_PER_DAY = 24
+
+#: Onshape deliveries of ANY kind a source may cause state work for, per minute. Separate
+#: from (and far looser than) the scheduling budget above, which still counts only the
+#: deliveries that schedule a sync. Generous: a busy document plus our own exports is a
+#: handful a minute; this only stops a flood against one valid URL.
+WEBHOOK_INGEST_PER_MINUTE = 120
 
 
 def _require_bounded_length(request: Request) -> None:
@@ -128,8 +133,6 @@ class _Hint:
     """What an accepted Onshape delivery asks of us."""
 
     schedule: bool
-    #: True only for events that can change the account's document listing.
-    listing_relevant: bool = False
 
 
 _NO_HINT = _Hint(schedule=False)
@@ -220,10 +223,7 @@ async def _accept_onshape_hint(
     save_state(source, state)
     await session.commit()
 
-    return _Hint(
-        schedule=should_enqueue,
-        listing_relevant=event is not None and event.startswith(LISTING_EVENT_PREFIX),
-    )
+    return _Hint(schedule=should_enqueue)
 
 
 @router.post("/{provider}/{source_id}/{token}", status_code=204)
@@ -268,8 +268,13 @@ async def provider_webhook(
         logger.info("webhook rejected provider=%.32r source=%s", provider, source_id)
         raise APIError(404, "not_found", "Unknown webhook endpoint")
 
-    listing_relevant = True  # other providers keep their existing behaviour
     if provider == "onshape":
+        # Bound the work an AUTHENTICATED source can cause before any of it (row lock,
+        # commit, Redis write) is done, for deliveries that will not schedule a sync too.
+        ingest = getattr(request.app.state, "webhook_ingest_limiter", None)
+        if ingest is not None and ingest.bump(str(source_id)) > WEBHOOK_INGEST_PER_MINUTE:
+            logger.warning("webhook ingest budget spent source=%s", source_id)
+            return Response(status_code=204)
         hint = await _accept_onshape_hint(
             session,
             source,
@@ -279,7 +284,6 @@ async def provider_webhook(
         )
         if not hint.schedule:
             return Response(status_code=204)
-        listing_relevant = hint.listing_relevant
 
     # Rate-limit every AUTHORIZED delivery, before deciding what to do with it.
     # Ordering matters: a storm against a source that is mid-sync or errored must
@@ -306,11 +310,12 @@ async def provider_webhook(
         return Response(status_code=204)
 
     logger.info("webhook accepted provider=%s source=%s", provider, source_id)
-    # SOLUSDEV-241: a document lifecycle event is a signal that can move the ACCOUNT's
-    # cached listing (a rename, a new document) without a user spending quota. A model
-    # edit cannot, so it no longer costs the next picker open a full re-walk.
+    # SOLUSDEV-241: other providers' deliveries can move the ACCOUNT's cached listing
+    # without a user spending quota. Onshape's cannot: only model events are subscribed
+    # (`EVENTS`), and a model edit never changes the document listing, so an Onshape
+    # delivery no longer costs the next picker open a full re-walk.
     cache = getattr(request.app.state, "integration_cache", None)
-    if cache is not None and listing_relevant:
+    if cache is not None and provider != "onshape":
         await invalidate_listing(cache, provider=provider, account_ref=account_ref_for(source))
     background.add_task(_probe_source, request.app, source_id)
     return Response(status_code=204)

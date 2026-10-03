@@ -75,10 +75,30 @@ async def test_an_assembly_edit_leaves_part_studio_exports_valid() -> None:
     assert before["as1"] != after["as1"]
 
 
-async def test_drawings_and_blobs_never_invalidate_an_export() -> None:
+async def test_drawings_never_invalidate_an_export() -> None:
     before = await _revisions(BASE)
-    for element_id in ("dr1", "bl1"):
-        assert await _revisions(_with(BASE, element_id, "changed")) == before
+    assert await _revisions(_with(BASE, "dr1", "changed")) == before
+
+
+async def test_a_blob_edit_invalidates_part_studios_and_assemblies() -> None:
+    """Blobs (imported geometry, fonts, ...) can be consumed by Part Studios and assemblies,
+    so a changed blob must not be served a stale export. (This replaces the old assertion
+    that blobs never invalidate an export, which pinned the stale-export gap.)"""
+    before, after = await _revisions(BASE), await _revisions(_with(BASE, "bl1", "bl1v1"))
+    assert all(before[e][1] != after[e][1] for e in ("ps1", "ps2", "as1"))
+    assert before["ps1"][0] == after["ps1"][0]  # each element's OWN microversion is unchanged
+
+
+async def test_a_feature_studio_edit_invalidates_part_studios_and_assemblies() -> None:
+    listing = [*BASE, _el("fs1", "FEATURESTUDIO", "fs1v0")]
+    before = await _revisions(listing)
+    after = await _revisions(_with(listing, "fs1", "fs1v1"))
+    assert set(before) == {"ps1", "ps2", "as1"}  # a Feature Studio is a dependency, not a target
+    assert all(before[e][1] != after[e][1] for e in ("ps1", "ps2", "as1"))
+
+
+async def test_a_blob_without_a_microversion_degrades_to_document_keys() -> None:
+    assert await _revisions([_el("ps1", "PARTSTUDIO", "m"), _el("bl1", "BLOB")]) == {}
 
 
 async def test_the_fingerprint_does_not_depend_on_listing_order() -> None:

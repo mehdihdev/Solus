@@ -60,6 +60,7 @@ from solus_api.schemas import (
     serialize_sync,
 )
 from solus_api.services.activity import record_activity
+from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.connections import (
     account_ref_for,
     bind_to_account,
@@ -69,6 +70,7 @@ from solus_api.services.connections import (
     onshape_application_for,
     owned_connection,
     reusable_source,
+    schedule_legacy_grant_purge,
     sweep_after_commit,
 )
 from solus_api.services.events import emit_event
@@ -374,6 +376,7 @@ async def disconnect_source(
     ctx: ProjectCtx,
     session: SessionDep,
     secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
     retain_entities: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
@@ -398,6 +401,9 @@ async def disconnect_source(
         # enabled on their account; our ability to act as them does not.
         for hosted_ref in hosted_refs(source.secret_ref):
             await secret_store.delete(hosted_ref)
+        # ADR-038 §1: the grant is gone, so the CAD derived through it goes too — unless a
+        # live connection or another live source still shares that account's cache.
+        await schedule_legacy_grant_purge(session, cache, [source], deleting_ids=[source.id])
     if retain_entities:
         # Orphan the graph data into manual, user-owned entities rather than
         # removing it with the source.
@@ -427,6 +433,7 @@ async def disconnect_source(
     )
     await session.delete(source)
     await session.commit()
+    await run_cad_purges_after_commit(session, cache.durable_store)
     return envelope({"id": source_id, "retained_entities": retain_entities})
 
 

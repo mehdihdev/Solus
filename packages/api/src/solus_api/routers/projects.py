@@ -10,7 +10,14 @@ from sqlalchemy import func, or_, select
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
-from solus_api.deps import ProjectCtx, SecretStoreDep, SessionDep, TeamCtx, require_role
+from solus_api.deps import (
+    IntegrationCacheDep,
+    ProjectCtx,
+    SecretStoreDep,
+    SessionDep,
+    TeamCtx,
+    require_role,
+)
 from solus_api.graph.read_scope import current_scope, resolve_scopes
 from solus_api.models import (
     GraphEdge,
@@ -32,6 +39,7 @@ from solus_api.schemas import (
     serialize_source,
 )
 from solus_api.services.activity import record_activity
+from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.events import emit_event
 from solus_api.services.limits import check_can_create_project
 from solus_api.services.notifications import notify_team
@@ -289,6 +297,7 @@ async def delete_project(
     ctx: ProjectCtx,
     session: SessionDep,
     secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
     confirm: Annotated[bool, Query()] = False,
 ) -> Response:
     require_role(ctx, Role.OWNER)  # ADR-025: only an OWNER can delete a project
@@ -309,6 +318,7 @@ async def delete_project(
         project_id=ctx.project.id,
     )
     # Full graph cleanup (incl. stored credentials) — the project row goes too.
-    await delete_projects_cascade(session, [ctx.project.id], secret_store)
+    await delete_projects_cascade(session, [ctx.project.id], secret_store, cache)
     await session.commit()
+    await run_cad_purges_after_commit(session, cache.durable_store)
     return Response(status_code=204)

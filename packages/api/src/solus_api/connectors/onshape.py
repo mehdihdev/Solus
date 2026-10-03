@@ -198,10 +198,11 @@ _ASSEMBLIES = "assemblies"
 EXPORTABLE_COLLECTIONS: dict[str, str] = {"ASSEMBLY": _ASSEMBLIES, "PARTSTUDIO": "partstudios"}
 
 #: ADR-038 §3 — the in-document elements an export may depend on. A Part Studio
-#: derives from other Part Studios and Variable Studios; an assembly additionally
-#: instantiates other assemblies. Drawings, blobs and app elements never feed an
-#: export, so editing one must not invalidate it.
-_STUDIO_TYPES = frozenset({"PARTSTUDIO", "VARIABLESTUDIO"})
+#: derives from other Part Studios, Variable Studios, Feature Studios (custom features)
+#: and blobs (imported geometry can be consumed by a Part Studio or an assembly); an
+#: assembly additionally instantiates other assemblies. Drawings and app elements never
+#: feed an export, so editing one must not invalidate it.
+_STUDIO_TYPES = frozenset({"PARTSTUDIO", "VARIABLESTUDIO", "FEATURESTUDIO", "BLOB"})
 _ASSEMBLY_TYPE = "ASSEMBLY"
 _TRACKED_TYPES = _STUDIO_TYPES | {_ASSEMBLY_TYPE}
 #: Export-key fingerprint used when the listing carries no usable per-element
@@ -1015,8 +1016,8 @@ class OnshapeConnector(OAuthConnector):
         """`element_id -> (element microversion, dependency fingerprint)` from the
         listing `_elements_at` just read (ADR-038 §3).
 
-        A Part Studio's fingerprint covers every Part/Variable Studio in the
-        document; an assembly's adds every assembly. An element — or any element
+        A Part Studio's fingerprint covers every Part/Variable/Feature Studio and blob in
+        the document; an assembly's adds every assembly. An element — or any element
         its fingerprint covers — without a usable microversion is simply absent,
         so its export falls back to document-level keys rather than trusting
         data Onshape did not give us."""
@@ -1430,7 +1431,10 @@ class OnshapeConnector(OAuthConnector):
         """Wait for the webhook's completion record (a free local read per tick). A record
         costs ONE confirming status read, never trusted for the result id; with no record,
         Onshape is asked only on the sparse backoff as a fallback for a lost delivery."""
-        assert self._cache is not None
+        if self._cache is None:
+            raise ConnectorError(
+                "unavailable", "Onshape translation completion needs the integration cache"
+            )
         done_key = translation_done_key(self._account_ref, request_id)
         gaps = iter(_WEBHOOK_POLL_GAPS)
         next_poll = next(gaps)
@@ -1572,7 +1576,8 @@ class OnshapeConnector(OAuthConnector):
         `ConnectorError` so no caller has to learn a second exception type — and
         both codes are in NO_SIGNAL_CODES, so a refusal reads as "could not ask"
         rather than "it changed" and never buys a full re-sync."""
-        assert self._meter is not None
+        if self._meter is None:
+            raise ConnectorError("unavailable", "Onshape call metering is not configured")
         try:
             await self._meter.admit()
         except QuotaBlockedError as exc:

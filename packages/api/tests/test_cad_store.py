@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 from botocore.exceptions import ClientError
+from pydantic import ValidationError
 from solus_api.core.config import Settings
 from solus_api.storage.cad_store import (
+    CadDeleteError,
     CadObjectTooLargeError,
     CadStore,
     InvalidCadKeyError,
@@ -49,7 +51,20 @@ class _FakeS3Client:
         if Key not in self.objects:
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         data = self.objects[Key]
-        return {"Body": type("B", (), {"read": staticmethod(lambda: data)})()}
+
+        class _Body:
+            @staticmethod
+            def read(amt: int | None = None) -> bytes:
+                return data if amt is None else data[:amt]
+
+        return {"Body": _Body(), "ContentLength": len(data)}
+
+    def list_objects_v2(self, *, Bucket: str, Prefix: str, MaxKeys: int = 1000) -> dict[str, Any]:  # noqa: N803
+        keys = sorted(k for k in self.objects if k.startswith(Prefix))[:MaxKeys]
+        return {"Contents": [{"Key": k} for k in keys]} if keys else {}
+
+    def delete_object(self, *, Bucket: str, Key: str) -> None:  # noqa: N803
+        self.objects.pop(Key, None)
 
     def get_paginator(self, name: str) -> Any:
         assert name == "list_objects_v2"
@@ -269,3 +284,124 @@ def test_build_cad_store_selects_a_backend_from_settings(
     )
     assert isinstance(both, S3CadStore)  # S3 wins when both are set
     assert created["service"] == "s3"
+
+
+# ---------------------------------------------------------------- Phase 4 fixes
+
+
+class _FailingDeleteS3Client(_FakeS3Client):
+    """`DeleteObjects` answers 200 with per-key `Errors` (S3's partial-failure shape)."""
+
+    def __init__(self, failing: set[str]) -> None:
+        super().__init__()
+        self.failing = failing
+
+    def delete_objects(self, *, Bucket: str, Delete: dict[str, Any]) -> dict[str, Any]:  # noqa: N803
+        errors = []
+        for item in Delete["Objects"]:
+            if item["Key"] in self.failing:
+                errors.append({"Key": item["Key"], "Code": "AccessDenied", "Message": "nope"})
+            else:
+                self.objects.pop(item["Key"], None)
+        return {"Errors": errors} if errors else {}
+
+
+async def test_s3_delete_account_raises_when_delete_objects_reports_errors() -> None:
+    client = _FailingDeleteS3Client(set())
+    store = S3CadStore("bucket", client=client, max_object_bytes=1024)
+    keys = [await store.put(SCOPE_A, bytes([i])) for i in range(3)]
+    client.failing = {keys[1]}
+
+    with pytest.raises(CadDeleteError):
+        await store.delete_account(SCOPE_A)
+
+    assert keys[1] in client.objects  # the failed key is still there, and we said so
+    client.failing = set()
+    assert await store.delete_account(SCOPE_A) == 1  # only what was actually deleted is counted
+
+
+async def test_s3_delete_account_raises_when_the_prefix_is_not_empty_afterwards() -> None:
+    store, client = _s3()
+    await store.put(SCOPE_A, b"x")
+    client.delete_objects = lambda **_: {}  # type: ignore[method-assign]  # silently deletes nothing
+    with pytest.raises(CadDeleteError):
+        await store.delete_account(SCOPE_A)
+
+
+async def test_delete_account_hash_matches_delete_account(store: CadStore) -> None:
+    key = await store.put(SCOPE_A, b"x")
+    assert await store.delete_account_hash(account_hash(SCOPE_A)) == 1
+    assert await store.get(key) is None
+    with pytest.raises(InvalidCadKeyError):
+        await store.delete_account_hash("../..")
+
+
+async def test_delete_removes_one_object_and_validates_the_key(store: CadStore) -> None:
+    first = await store.put(SCOPE_A, b"one")
+    second = await store.put(SCOPE_A, b"two")
+    await store.delete(first)
+    assert await store.get(first) is None and await store.get(second) == b"two"
+    await store.delete(first)  # idempotent
+    with pytest.raises(InvalidCadKeyError):
+        await store.delete("cad/../../etc/passwd")
+
+
+async def test_local_put_writes_every_byte_even_when_os_write_is_short(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _local(tmp_path, max_bytes=1024)
+    real_write = os.write
+
+    def short_write(fd: int, data: Any) -> int:
+        return real_write(fd, bytes(data)[:3])
+
+    monkeypatch.setattr("solus_api.storage.cad_store.os.write", short_write)
+    payload = bytes(range(200))
+    key = await store.put(SCOPE_A, payload)
+    assert await store.get(key) == payload
+
+
+async def test_get_refuses_an_object_larger_than_the_cap_without_reading_it(
+    tmp_path: Path,
+) -> None:
+    local = _local(tmp_path, max_bytes=1024)
+    key = await local.put(SCOPE_A, b"x" * 10)
+    local.max_object_bytes = 5
+    with pytest.raises(CadObjectTooLargeError):
+        await local.get(key)
+
+    s3, client = _s3(max_bytes=1024)
+    s3_key = await s3.put(SCOPE_A, b"x" * 10)
+    s3.max_object_bytes = 5
+    with pytest.raises(CadObjectTooLargeError):
+        await s3.get(s3_key)
+
+    class _NoLengthBody:
+        @staticmethod
+        def read(amt: int | None = None) -> bytes:
+            return b"x" * (100 if amt is None else min(amt, 100))
+
+    client.get_object = lambda **_: {"Body": _NoLengthBody()}  # type: ignore[method-assign]
+    with pytest.raises(CadObjectTooLargeError):  # no ContentLength: the bounded read catches it
+        await s3.get(s3_key)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("onshape_quiet_period_seconds", -1),
+        ("onshape_quiet_period_seconds", 601),
+        ("cad_store_max_object_bytes", 1024 * 1024 - 1),
+        ("cad_store_max_object_bytes", 1024**3 + 1),
+    ],
+)
+def test_store_and_quiet_period_settings_are_bounded(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        _settings(**{field: value})
+
+
+def test_store_and_quiet_period_settings_accept_their_bounds() -> None:
+    assert _settings(onshape_quiet_period_seconds=0).onshape_quiet_period_seconds == 0
+    assert _settings(onshape_quiet_period_seconds=600).onshape_quiet_period_seconds == 600
+    assert _settings(cad_store_max_object_bytes=1024 * 1024).cad_store_max_object_bytes == 1024**2
+    assert _settings(cad_store_max_object_bytes=1024**3).cad_store_max_object_bytes == 1024**3

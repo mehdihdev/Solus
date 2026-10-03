@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     onshape_app_distribution: Literal["private", "app_store"] = "private"
     #: ADR-038 §2. Seconds after the LAST change hint before an Onshape export runs,
     #: so a burst of edits costs one export instead of several aborted ones.
-    onshape_quiet_period_seconds: int = 90
+    onshape_quiet_period_seconds: int = Field(default=90, ge=0, le=600)
     #: ADR-038 §2. Sent as `X-Session-ID` on Solus's Onshape writes and registered as
     #: the webhook `externalSessionId`, so Onshape can tell Solus's own edits apart.
     onshape_session_id: str = "solus-api"
@@ -313,7 +313,7 @@ class Settings(BaseSettings):
     # never the artifact bucket: artifacts expire after an hour by design.
     cad_store_local_root: str | None = None
     cad_store_s3_bucket: str | None = None
-    cad_store_max_object_bytes: int = 256 * 1024 * 1024
+    cad_store_max_object_bytes: int = Field(default=256 * 1024 * 1024, ge=1024 * 1024, le=1024**3)
     # Bridge-upload artifacts are a hand-off buffer, not a document store (§4.2):
     # the ARQ sweep soft-deletes rows past this TTL and deletes their bytes.
     artifact_ttl_seconds: int = 3600
