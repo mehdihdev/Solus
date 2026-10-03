@@ -284,11 +284,13 @@ def recorded_workspaces(cursor: Any) -> dict[str, str]:
 def connector_cache(connector: Any) -> tuple[IntegrationCache, str] | None:
     """The account-keyed integration cache a scoped connector was built with.
 
-    The single touchpoint on the connector's cache attributes; `None` for the
-    unscoped connector, which then reads the provider directly as before.
+    Uses the connector's public `mirror_handle()`; `None` for the unscoped
+    connector (or a double without one), which then reads the provider directly.
     """
-    cache = getattr(connector, "_cache", None)
-    account_ref = getattr(connector, "_account_ref", "")
+    handle = getattr(connector, "mirror_handle", None)
+    if not callable(handle):
+        return None
+    cache, account_ref = handle()
     if (
         not isinstance(cache, IntegrationCache)
         or not isinstance(account_ref, str)

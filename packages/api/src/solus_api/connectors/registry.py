@@ -312,6 +312,7 @@ def build_registry(
         lambda: OnshapeConnector(
             client_id=settings.onshape_client_id or "",
             client_secret=settings.onshape_client_secret or "",
+            session_id=settings.onshape_session_id,
         ),
     )
     # SOLUSDEV-167: a SCOPED Onshape factory, so outbound calls are counted
@@ -327,6 +328,7 @@ def build_registry(
         lambda ctx: OnshapeConnector(
             client_id=settings.onshape_client_id or "",
             client_secret=settings.onshape_client_secret or "",
+            session_id=settings.onshape_session_id,
             meter=_onshape_meter(settings, redis, ctx),
             cache=cache,
             account_ref=_cache_account_ref(ctx),

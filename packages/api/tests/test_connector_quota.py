@@ -324,6 +324,7 @@ def test_a_route_connector_is_metered_by_default() -> None:
         integration_degrade_ratio: float = 0.7
         onshape_quota_pool: str = "owner"
         onshape_app_distribution: str = "private"
+        onshape_session_id: str = "solus-api"
         integration_signal_ttl_seconds: int = 3600
         integration_signal_sweep_reuse_seconds: int = 300
 
