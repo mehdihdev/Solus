@@ -1035,3 +1035,48 @@ requires cross-member change notifications.
 
 **Consequences:** one more long-lived connection per desktop; staging
 needs Redis before running more than one API task.
+
+## ADR-038: Onshape mirror — durable revision-keyed CAD store, webhook-first freshness, owner-pool metering
+
+**Status:** Accepted (2026-10-02, SOLUSDEV-312 branch; approved in-chat against the concrete text below).
+
+**Context:** Onshape bills private-OAuth-app REST successes to the app owner's
+single annual pool. The SOLUSDEV-261/312 audits measured ~1.5-2k calls/day for
+one small team: whole-document re-export per edit, hourly polling (webhooks
+never registered), duplicate probes, uncached SOL reads, and a Redis-only
+payload cache (8 MiB, 30 days).
+
+**Decision:**
+
+1. Durable CAD derivative store. Onshape-derived artifacts (STEP exports, part
+   metadata, mass properties, meshes) are written ONCE to S3 (local disk in dev)
+   under server-generated keys, indexed by (provider account, document, element,
+   immutable microversion, configuration, kind), never mutated, SSE-encrypted,
+   never shared across accounts, and deleted when the account connection is
+   revoked. Redis holds only the index, signals and meter. Per-object cap 256 MiB.
+2. Webhook-first freshness. Registered webhooks are the primary change signal;
+   exports wait for a configurable quiet period after the last hint; the
+   scheduled sweep probes only sources without a healthy subscription; Solus
+   writes send `X-Session-ID` so their own echoes are ignored;
+   `translation.complete` replaces status polling where a webhook is healthy.
+3. Export granularity. Exports are cached per element microversion combined
+   with a fingerprint of the in-document elements it may depend on (Part
+   Studios, Variable Studios); invalidation is never broader than the document.
+4. Metering models the bill. While the OAuth app is private, Onshape usage is
+   metered as ONE pool per OAuth application with a configured annual
+   allowance, and every call records its purpose (sync, sweep, agent read, agent
+   write, picker). `onshape_app_distribution=app_store` disables the
+   annual-allowance degrade; rate limits and the 402 latch remain. This amends
+   the ADR-019 quota-identity amendment.
+5. SOL reads through the mirror: at most one current-microversion probe per
+   document per turn; immutable reads served from the store; writes keep live
+   reads, `sourceMicroversion` and readback.
+
+**Consequences:** S3 holds customer CAD derivatives (bucket IAM + lifecycle
+needed); staging needs a public HTTPS callback for webhooks; per-element keys
+need a live cross-tab verification.
+
+**Recorded choices (in-chat, 2026-10-02):** built with the intent to publish on
+the Onshape App Store; until then `onshape_app_distribution=private`, pool =
+owner (`onshape_quota_pool=owner`, with a `user` override kept for
+verification), annual allowance 2,500, quiet period 90 s.
