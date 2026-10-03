@@ -33,7 +33,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -43,10 +43,12 @@ from solus_contracts.live_events import (
     ACCOUNT_EVENT_TYPES,
     KEEPALIVE_SECONDS,
     PROJECT_EVENT_TYPES,
-    REVERIFY_SECONDS,
     AccessRevoked,
     AccountStreamReady,
     ProjectStreamReady,
+)
+from solus_contracts.live_events import (
+    REVERIFY_SECONDS as _CONTRACT_REVERIFY_SECONDS,
 )
 from starlette.background import BackgroundTask
 
@@ -71,6 +73,8 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 #: Sent when the stream idles, to keep proxies from reaping it and to let the
 #: client notice a dead connection. A comment line, ignored by EventSource.
 _KEEPALIVE_SECONDS = float(KEEPALIVE_SECONDS)
+#: Upper bound between access re-verifications. A module global so tests can patch it.
+REVERIFY_SECONDS = float(_CONTRACT_REVERIFY_SECONDS)
 
 _EVENT_TYPE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")  # fullmatch: `$` would admit a trailing newline
 
@@ -186,7 +190,7 @@ async def _project_frames(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     reason: list[str],
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
     yield _sse("ready", ProjectStreamReady(project_id=project_id).model_dump_json())
     reverify_at = time.monotonic() + REVERIFY_SECONDS
     while True:
@@ -295,7 +299,7 @@ async def _account_frames(
     user_id: uuid.UUID,
     team_ids: list[uuid.UUID],
     reason: list[str],
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
     def ready() -> str:
         return _sse(
             "ready", AccountStreamReady(user_id=user_id, team_ids=team_ids).model_dump_json()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -422,12 +423,13 @@ async def test_source_insert_status_change_and_delete_publish_sources_changed(
     assert hub.published[0][1]["source_id"] == str(source.id)
     assert hub.published[0][0] == Channel.project(world.project.id)
 
-    for mutate in (
+    mutators: tuple[Callable[[Source], None], ...] = (
         lambda r: setattr(r, "status", SourceStatus.CONNECTED),
         lambda r: setattr(r, "name", "renamed"),
         lambda r: setattr(r, "last_synced_at", utcnow()),
         lambda r: setattr(r, "last_error", {"code": "x", "message": "y"}),
-    ):
+    )
+    for mutate in mutators:
         hub.published.clear()
         async with maker() as s:
             row = await s.get(Source, source.id)

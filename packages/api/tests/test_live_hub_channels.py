@@ -13,6 +13,13 @@ from solus_api.graph import live as live_module
 from solus_api.graph.live import Channel, LiveHub, ResyncMarker, parse_channel
 from solus_contracts.live_events import channel_name
 
+
+def _frame(item: tuple[Channel, str] | ResyncMarker) -> tuple[Channel, str]:
+    """Narrow a queue item to a delivered frame (fails the test on a resync marker)."""
+    assert not isinstance(item, ResyncMarker), "expected a frame, got a resync marker"
+    return item
+
+
 FRAME: dict[str, Any] = {"type": "team.updated", "at": "2026-09-30T00:00:00+00:00"}
 
 
@@ -109,10 +116,10 @@ async def test_a_subscription_receives_frames_from_each_of_its_channels() -> Non
     await hub.publish_to(Channel.team(team), FRAME)
     await hub.publish_to(Channel.user(user), FRAME)  # not subscribed
 
-    first = await asyncio.wait_for(sub.queue.get(), timeout=1)
-    second = await asyncio.wait_for(sub.queue.get(), timeout=1)
+    first = _frame(await asyncio.wait_for(sub.queue.get(), timeout=1))
+    second = _frame(await asyncio.wait_for(sub.queue.get(), timeout=1))
     assert first[0] == Channel.project(project)
-    assert second[0] == Channel.team(team)
+    assert _frame(second)[0] == Channel.team(team)
     assert json.loads(first[1])["type"] == "team.updated"
     assert sub.queue.empty()
 
@@ -137,7 +144,7 @@ async def test_resubscribe_replaces_the_channel_set() -> None:
     await hub.publish_to(Channel.team(add), FRAME)
     await hub.publish_to(Channel.team(keep), FRAME)
 
-    got = [sub.queue.get_nowait()[0] for _ in range(2)]
+    got = [_frame(sub.queue.get_nowait())[0] for _ in range(2)]
     assert got == [Channel.team(add), Channel.team(keep)]
     assert sub.queue.empty()
     assert sub.channels == frozenset({Channel.team(keep), Channel.team(add)})
@@ -228,7 +235,7 @@ async def test_publish_to_falls_back_to_local_delivery_when_redis_fails() -> Non
 
     await hub.publish_to(Channel.team(team), FRAME)
 
-    assert (await asyncio.wait_for(sub.queue.get(), timeout=1))[0] == Channel.team(team)
+    assert _frame(await asyncio.wait_for(sub.queue.get(), timeout=1))[0] == Channel.team(team)
 
 
 async def test_publish_to_without_redis_delivers_locally() -> None:
@@ -262,7 +269,7 @@ async def test_legacy_and_multi_channel_subscribers_both_receive_project_frames(
     await hub.publish(project, FRAME)
 
     assert "team.updated" in legacy.get_nowait()
-    assert multi.queue.get_nowait()[0] == Channel.project(project)
+    assert _frame(multi.queue.get_nowait())[0] == Channel.project(project)
     hub.unsubscribe(project, legacy)
     hub.unsubscribe_channels(multi)
     assert hub.subscribed_project_ids() == []
@@ -277,7 +284,7 @@ async def test_publish_local_never_touches_redis_and_reaches_project_subscribers
     hub.publish_local(project, {"type": "hardware.devices_changed"})
 
     assert redis.published == []
-    assert "hardware.devices_changed" in sub.queue.get_nowait()[1]
+    assert "hardware.devices_changed" in _frame(sub.queue.get_nowait())[1]
 
 
 def test_fanout_mode_reports_redis_or_local_only() -> None:
@@ -311,7 +318,7 @@ async def test_the_relay_subscribes_both_patterns_and_delivers_by_parsed_channel
     await hub.start()
     try:
         for name, sub in subs.items():
-            channel, _payload = await asyncio.wait_for(sub.queue.get(), timeout=1)
+            channel, _payload = _frame(await asyncio.wait_for(sub.queue.get(), timeout=1))
             assert channel.kind == (name if name != "legacy" else "project")
         await asyncio.sleep(0.05)
         assert all(sub.queue.empty() for sub in subs.values()), "malformed channel was delivered"
@@ -341,7 +348,7 @@ async def test_a_hanging_redis_publish_is_bounded_and_falls_back_to_local_delive
 
     await asyncio.wait_for(hub.publish_to(Channel.team(scope), FRAME), timeout=2)
 
-    assert sub.queue.get_nowait()[0] == Channel.team(scope)
+    assert _frame(sub.queue.get_nowait())[0] == Channel.team(scope)
 
 
 async def test_a_carriage_return_bearing_payload_is_dropped() -> None:
@@ -367,7 +374,7 @@ async def test_the_relay_drops_payloads_that_are_not_json_objects() -> None:
 
     await hub.start()
     try:
-        _channel, payload = await asyncio.wait_for(sub.queue.get(), timeout=1)
+        _channel, payload = _frame(await asyncio.wait_for(sub.queue.get(), timeout=1))
         await asyncio.sleep(0.05)
         assert json.loads(payload) == FRAME
         assert sub.queue.empty(), "a non-object payload was delivered"
@@ -402,8 +409,9 @@ class _ScriptedPubSub(_PubSub):
 
 class _ListenFails(_PubSub):
     async def listen(self) -> AsyncIterator[dict[str, Any]]:
+        for _ in ():  # an async generator that fails on first iteration
+            yield {}
         raise ConnectionError("connection reset")
-        yield {}  # pragma: no cover
 
 
 async def test_the_relay_recovers_from_a_failure_and_tells_subscribers_to_resync(
@@ -424,7 +432,7 @@ async def test_the_relay_recovers_from_a_failure_and_tells_subscribers_to_resync
         await hub.stop()
 
     assert isinstance(first, ResyncMarker), "resync must precede post-recovery frames"
-    assert second[0] == Channel.team(team)
+    assert _frame(second)[0] == Channel.team(team)
     assert redis.connections == 3
     assert any("relay" in r.message for r in caplog.records)
 
@@ -453,7 +461,7 @@ async def test_the_relay_resubscribes_after_listen_dies_mid_stream(
         await hub.stop()
 
     assert isinstance(first, ResyncMarker)
-    assert second[0] == Channel.team(team)
+    assert _frame(second)[0] == Channel.team(team)
     assert broken.closed, "a failed connection must be closed before reconnecting"
 
 

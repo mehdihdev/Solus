@@ -176,11 +176,12 @@ async def test_token_decoding_runs_off_the_event_loop(
     """PyJWKClient can block on a JWKS fetch, so the decode must not run on the loop."""
     import threading
 
+    from solus_api.core import security
     from solus_api.graph import live_access
 
     loop_thread = threading.get_ident()
     seen: list[int] = []
-    real = live_access.decode_token
+    real = security.decode_token
 
     def spy(*args: Any, **kwargs: Any) -> Any:
         seen.append(threading.get_ident())

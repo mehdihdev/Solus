@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as resources from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { useTeamData } from './useTeamData'
+import { statusAfterFailure, useTeamData } from './useTeamData'
 import { liveKeys, resetLiveRevisions } from '../../store/liveRevisionStore'
 import { bumpLive } from '../live/testBump'
 
@@ -164,5 +164,18 @@ describe('useTeamData — live refresh (ADR-037)', () => {
     await bumpLive(liveKeys.team('t1'))
     expect(result.current.team?.name).toBe('Strider Robotics')
     expect(result.current.status).toBe('ready')
+  })
+})
+
+describe('statusAfterFailure', () => {
+  it('keeps a ready screen ready when a quiet refetch fails offline', () => {
+    expect(statusAfterFailure('ready', 'offline', true)).toBe('ready')
+  })
+  it('reports offline for a loud failure or a screen that was not ready', () => {
+    expect(statusAfterFailure('ready', 'offline', false)).toBe('offline')
+    expect(statusAfterFailure('loading', 'offline', true)).toBe('offline')
+  })
+  it('always reports gone', () => {
+    expect(statusAfterFailure('ready', 'gone', true)).toBe('gone')
   })
 })

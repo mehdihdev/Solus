@@ -41,6 +41,15 @@ export interface TeamData {
   actions: TeamActions
 }
 
+/** A quiet (live) refetch that fails offline keeps a ready screen ready; `gone` always wins. */
+export function statusAfterFailure(
+  current: TeamDataStatus,
+  verdict: 'gone' | 'offline',
+  quiet: boolean
+): TeamDataStatus {
+  return quiet && verdict === 'offline' && current === 'ready' ? 'ready' : verdict
+}
+
 export function useTeamData(): TeamData {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const storedTeamId = useWorkspaceStore((s) => s.teamId)
@@ -71,11 +80,7 @@ export function useTeamData(): TeamData {
       } catch (error: unknown) {
         // A 404 means the team is gone — not "the backend is down" (errors.ts).
         const verdict = classifyFetchError(error) === 'gone' ? 'gone' : 'offline'
-        setStatus((current) =>
-          options?.quiet === true && verdict === 'offline' && current === 'ready'
-            ? 'ready'
-            : verdict
-        )
+        setStatus((current) => statusAfterFailure(current, verdict, options?.quiet === true))
       }
     },
     [fetchEnabled, storedTeamId]

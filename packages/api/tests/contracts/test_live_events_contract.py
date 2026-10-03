@@ -40,7 +40,10 @@ MODELS: list[type[BaseModel]] = [
 _ANY_FRAME: TypeAdapter[le.ProjectFrame | le.AccountFrame] = TypeAdapter(
     le.ProjectFrame | le.AccountFrame
 )
-_READY = {"account-ready": le.AccountStreamReady, "project-ready": le.ProjectStreamReady}
+_READY: dict[str, type[BaseModel]] = {
+    "account-ready": le.AccountStreamReady,
+    "project-ready": le.ProjectStreamReady,
+}
 
 
 def _fixtures(valid: bool) -> list[Path]:
@@ -55,7 +58,8 @@ def _validate(path: Path) -> BaseModel:
     data = json.loads(path.read_text())
     ready = _READY.get(path.stem)
     if ready is not None:
-        return ready.model_validate(data)
+        validated: BaseModel = ready.model_validate(data)
+        return validated
     result: BaseModel = _ANY_FRAME.validate_python(data)
     return result
 
