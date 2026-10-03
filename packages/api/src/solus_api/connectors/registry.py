@@ -198,13 +198,17 @@ def _onshape_meter(
     over on 1 January. Onshape's licence year is the subscription anniversary,
     which we do not know — documented in ADR-019's amendment rather than guessed.
     """
-    account_scope = onshape_pool_scope(settings, ctx)
+    pool_scope = onshape_pool_scope(settings, ctx)
+    account = ctx.account_ref or f"source-scope:{ctx.project_id}"
     return quota.CallMeter(
         redis,
         provider="onshape",
         # Never empty: a blank account id would put every such source on ONE
         # ledger key, letting one team exhaust and latch another team's quota.
-        account_ref=account_scope,
+        account_ref=pool_scope,
+        # ADR-038 amendment: the caller's own ledger/latch beside the pool. Equal
+        # to the pool scope in user mode, which collapses to one ledger.
+        account_scope=onshape_quota_scope(account, ctx.onshape_application),
         year=datetime.now(UTC).year,
         allowance=settings.onshape_annual_call_allowance,
         degrade_ratio=settings.integration_degrade_ratio,

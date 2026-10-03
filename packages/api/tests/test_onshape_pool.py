@@ -24,6 +24,7 @@ from test_connector_quota import BrokenRedis, FakeRedis
 APP = hashlib.sha256(b"app-one").hexdigest()
 OTHER_APP = hashlib.sha256(b"app-two").hexdigest()
 THRESHOLD = 1750  # 70% of 2,500
+POOL_ACCOUNT_A_PREFIX = f"solus:intq:onshape:acct:oauth-app%3A{APP}%3Aaccount%3Aacct-a"
 
 
 def _settings(
@@ -68,14 +69,17 @@ def _meter(
 
 
 async def test_owner_pool_shares_one_ledger_across_accounts() -> None:
+    # ADR-038 amendment item 3: the POOL ledger is shared (admission) but each
+    # account's read-out shows only its own usage.
     redis = FakeRedis()
     a = _meter(redis, account="acct-a")
     b = _meter(redis, account="acct-b")
     await a.record(200)
     await b.record(200)
     await b.record(200)
-    assert (await a.state()).used == 3
-    assert (await b.state()).used == 3
+    assert redis.values[f"solus:intq:onshape:acct:oauth-app%3A{APP}:{a._year}"] == "3"  # noqa: SLF001
+    assert (await a.state()).used == 1
+    assert (await b.state()).used == 2
 
 
 async def test_owner_pool_year_key_format() -> None:
@@ -103,13 +107,17 @@ async def test_owner_pool_degrade_at_seventy_percent_hits_every_account() -> Non
     await _meter(redis, account="acct-c", purpose="user").admit()
 
 
-async def test_owner_pool_402_latches_every_account_in_the_pool() -> None:
+async def test_owner_pool_402s_from_two_accounts_latch_every_account_in_the_pool() -> None:
+    # ADR-038 amendment item 2: one 402 latches only its account; the pool
+    # latches at two distinct accounts.
     redis = FakeRedis()
     await _meter(redis, account="acct-a").record(402)
+    await _meter(redis, account="acct-b").admit()
+    await _meter(redis, account="acct-b").record(402)
     with pytest.raises(QuotaBlockedError) as err:
-        await _meter(redis, account="acct-b").admit()
+        await _meter(redis, account="acct-c").admit()
     assert err.value.code == "quota_exhausted"
-    assert (await _meter(redis, account="acct-b").state()).exhausted
+    assert (await _meter(redis, account="acct-c").state()).exhausted
 
 
 async def test_owner_pool_does_not_cross_oauth_applications() -> None:
@@ -123,7 +131,9 @@ async def test_legacy_source_without_application_uses_hashed_client_id() -> None
     legacy = _meter(redis, application=None, account="acct-a")
     bound = _meter(redis, application=APP, account="acct-b")
     await legacy.record(200)
-    assert (await bound.state()).used == 1, "legacy fallback joins the app's pool"
+    assert redis.values[f"solus:intq:onshape:acct:oauth-app%3A{APP}:{bound._year}"] == "1", (  # noqa: SLF001
+        "legacy fallback joins the app's pool"
+    )
     assert all("app-one" not in k for k in redis.values), "raw client id never in a key"
     assert all("shh-secret" not in k for k in redis.values)
 
@@ -186,6 +196,7 @@ async def test_app_store_never_degrades_or_blocks_deferrable_work() -> None:
     redis.values[f"solus:intq:onshape:acct:oauth-app%3A{APP}:{year}"] = "9999"
     await meter.admit()
     await _meter(redis, distribution="app_store", purpose="agent").admit()
+    redis.values[f"{POOL_ACCOUNT_A_PREFIX}:{year}"] = "9999"
     state = await meter.state()
     assert state.used == 9999
     assert not state.degraded
@@ -231,9 +242,13 @@ async def test_label_counters_increment_per_label_in_the_pool() -> None:
     await _meter(redis, label="webhook", account="acct-a").record(200)
     await _meter(redis, label="webhook", account="acct-b").record(200)
     await _meter(redis, label="picker").record(200)
+    # Amendment item 3: the read-out is the account's own; pool counters sit beside it.
     state = await _meter(redis).state()
-    assert state.by_label == {"webhook": 2, "picker": 1}
-    assert state.used == 3
+    assert state.by_label == {"webhook": 1, "picker": 1}
+    assert state.used == 2
+    year = _meter(redis)._year  # noqa: SLF001
+    assert redis.values[f"solus:intq:onshape:acct:oauth-app%3A{APP}:{year}:webhook"] == "2"
+    assert redis.values[f"solus:intq:onshape:acct:oauth-app%3A{APP}:{year}"] == "3"
 
 
 async def test_default_labels_derive_from_purpose() -> None:
@@ -269,11 +284,13 @@ async def test_label_counters_are_per_year_and_have_ttl() -> None:
     redis = FakeRedis()
     meter = _meter(redis, label="recovery")
     await meter.record(200)
+    # Amendment item 1: one pool counter and one per-account counter.
     label_keys = [k for k in redis.values if "recovery" in k]
-    assert len(label_keys) == 1
-    assert label_keys[0].endswith("recovery")
-    assert str(meter._year) in label_keys[0]  # noqa: SLF001
-    assert label_keys[0] in redis.expiries
+    assert len(label_keys) == 2
+    for key in label_keys:
+        assert key.endswith("recovery")
+        assert str(meter._year) in key  # noqa: SLF001
+        assert key in redis.expiries
 
 
 async def test_user_mode_label_counters_stay_per_account() -> None:
@@ -466,8 +483,8 @@ async def test_owner_mode_readout_is_aggregate_only_no_tenant_identity() -> None
     await team_a.record(200)
     await team_b.record(200)
     payload = (await team_a.state()).readout()
-    assert payload["used"] == 2
-    assert payload["by_label"] == {"sync": 1, "sweep": 1}
+    assert payload["used"] == 1  # amendment item 3: own usage, not the pool total
+    assert payload["by_label"] == {"sync": 1}
     assert set(payload) == {
         "status",
         "used",
@@ -532,18 +549,30 @@ async def test_sources_quota_states_user_mode_isolates_tenants() -> None:
     assert b_states[team_b.id].by_label == {}
 
 
-async def test_sources_quota_states_owner_mode_shows_shared_aggregate() -> None:
+async def test_sources_quota_states_owner_mode_each_team_sees_only_own_usage() -> None:
+    # Replaces the pre-amendment "every team sees pool totals" test (item 3).
     from solus_api.routers.sources import _quota_states
 
     redis = FakeRedis()
     mine, other_tenant = _source(APP, "acct-a"), _source(APP, "acct-b")
     settings = _settings(pool="owner")
-    await _meter(redis, application=APP, account="acct-b", label="sweep").record(200)
+    await _meter(redis, application=APP, account="acct-a", label="sync").record(200)
+    for _ in range(3):
+        await _meter(redis, application=APP, account="acct-b", label="sweep").record(200)
     states = await _quota_states(_request(settings, redis), [mine, other_tenant])
-    assert states[mine.id].readout() == states[other_tenant.id].readout()
-    payload = states[mine.id].readout()
-    assert payload["used"] == 1 and payload["pool"] == "owner"
-    assert "acct-b" not in repr(payload)
+    assert states[mine.id].used == 1 and states[mine.id].by_label == {"sync": 1}
+    assert states[other_tenant.id].used == 3
+    assert states[other_tenant.id].by_label == {"sweep": 3}
+    redis.values[f"solus:intq:onshape:acct:oauth-app%3A{APP}:{_meter(redis)._year}"] = str(  # noqa: SLF001
+        THRESHOLD
+    )
+    states = await _quota_states(_request(settings, redis), [mine, other_tenant])
+    assert states[mine.id].status == states[other_tenant.id].status == "degraded"
+    assert (states[mine.id].used, states[other_tenant.id].used) == (1, 3)
+    for state in states.values():
+        payload = state.readout()
+        assert "acct-a" not in repr(payload) and "acct-b" not in repr(payload)
+        assert payload["pool"] == "owner"
 
 
 async def test_list_sources_route_carries_the_additive_quota_fields(

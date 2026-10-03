@@ -546,4 +546,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # SOLUSDEV-246: first-party bundle capability routes (widget-bundles.md §3).
     app.include_router(widgets.router)
     app.include_router(sourcing.router)
+    from solus_api.routers import staff_integrations
+
+    app.include_router(staff_integrations.router)
     return app

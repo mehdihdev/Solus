@@ -265,3 +265,37 @@ async def test_the_transition_marker_survives_a_bytes_answering_redis(
     await _connections(client, alice_headers)
     await _connections(client, alice_headers)
     assert len(await _events(db, "integration.quota_degraded")) == 1
+
+
+async def test_owner_pool_degraded_event_carries_the_accounts_numbers_not_the_pools(
+    app: FastAPI, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """ADR-038 amendment item 3: the pool band flips the account to degraded, but
+    the read-out and the data event report only THIS account's usage."""
+    from solus_api.connectors.registry import ConnectorContext, _onshape_meter
+
+    redis = FakeRedis()
+    app.state.redis = redis
+    app.state.settings = app.state.settings.model_copy(
+        update={
+            "onshape_quota_pool": "owner",
+            "onshape_client_id": "app-one",
+            "onshape_client_secret": "shh-secret",
+        }
+    )
+    await _consent(client, alice_headers)
+    await _connect_account(client, alice_headers)
+    mine = _onshape_meter(app.state.settings, redis, ConnectorContext(account_ref="42"))
+    for _ in range(3):
+        await mine.record(200)
+    other = _onshape_meter(app.state.settings, redis, ConnectorContext(account_ref="another"))
+    for _ in range(int(ALLOWANCE * 0.8)):
+        await other.record(200)
+
+    [row] = await _connections(client, alice_headers)
+    assert row["health"] == "degraded"
+    assert row["quota"]["status"] == "degraded" and row["quota"]["used"] == 3
+    assert row["quota"]["pool"] == "owner" and row["quota"]["by_label"] == {"sync": 3}
+    [event] = await _events(db, "integration.quota_degraded")
+    assert event.payload["used"] == 3 and event.payload["allowance"] == ALLOWANCE
+    assert "2000" not in repr(event.payload)

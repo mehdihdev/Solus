@@ -13,11 +13,12 @@ from solus_api.connectors.quota import CallMeter, QuotaBlockedError
 
 
 class FakeRedis:
-    """Just the four commands the meter uses."""
+    """Just the commands the meter uses."""
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expiries: dict[str, int] = {}
+        self.sets: dict[str, set[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
@@ -34,6 +35,19 @@ class FakeRedis:
 
     async def expire(self, key: str, seconds: int) -> None:
         self.expiries[key] = seconds
+
+    # Set commands (ADR-038 amendment: 402-accounts set, pool registry).
+    async def sadd(self, key: str, *members: str) -> int:
+        current = self.sets.setdefault(key, set())
+        before = len(current)
+        current.update(members)
+        return len(current) - before
+
+    async def scard(self, key: str) -> int:
+        return len(self.sets.get(key, set()))
+
+    async def smembers(self, key: str) -> list[str]:
+        return list(self.sets.get(key, ()))
 
 
 class BrokenRedis(FakeRedis):
