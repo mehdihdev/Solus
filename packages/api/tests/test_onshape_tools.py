@@ -755,7 +755,8 @@ async def test_tool_connector_uses_scoped_provider_account_budget(
         team_id=team_id,
         acting_user_id=actor_id,
         account_ref=expected_ref,
-        purpose="scheduled",
+        purpose="agent",
+        label="agent_read",
     )
     if account_bound:
         from solus_api.agent.tools.tool import ToolException

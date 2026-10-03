@@ -47,10 +47,24 @@ from solus_api.connectors.contracts import ConnectorError, Credentials
 from solus_api.connectors.onshape import ONSHAPE_ID_RE, tracked_document_ids
 from solus_api.connectors.onshape_confirmation import ConfirmedOnshapeTool, PreviewBinding
 from solus_api.connectors.onshape_ops import OnshapeOperation, every_operation
+from solus_api.connectors.onshape_read_cache import (
+    ReadScope,
+    TurnReadMemo,
+    bind_read_scope,
+    connector_cache,
+    recorded_workspaces,
+)
 from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry, UnknownConnectorError
 from solus_api.connectors.runtime import call_with_refresh, refresh_secret_ref, resolve_credentials
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
-from solus_api.models import AccountConnection, ConnectionStatus, Source, SourceStatus, SourceType
+from solus_api.models import (
+    AccountConnection,
+    ConnectionStatus,
+    GraphEntity,
+    Source,
+    SourceStatus,
+    SourceType,
+)
 from solus_api.services.connections import onshape_application_for
 
 if TYPE_CHECKING:
@@ -207,7 +221,10 @@ async def _prepare(
                 acting_user_id=source.created_by,
                 account_ref=account_ref,
                 onshape_application=onshape_application,
-                purpose="scheduled",
+                # ADR-038 section 4: SOL's calls are attributed (and, past the
+                # degrade band, deferrable) as agent reads or agent writes.
+                purpose="agent",
+                label="agent_write" if is_write else "agent_read",
             ),
         )
     except UnknownConnectorError as exc:  # pragma: no cover - registry always has it
@@ -400,13 +417,66 @@ async def _invoke_bound(
         raise _tool_error(exc) from exc
 
 
+def _retire_probes(memo: TurnReadMemo, args: dict[str, Any], *, retire: bool) -> None:
+    """Even a failed write may have moved the microversion: the next read of the
+    document in this turn must ask Onshape again."""
+    document_id = args.get("document_id")
+    if retire and isinstance(document_id, str):
+        memo.forget_probes(document_id)
+
+
+def _account_ref(connector: OnshapeConnector, source: Source) -> str:
+    """The provider account the connector's cache and meter are keyed by."""
+    mirror = connector_cache(connector)
+    return mirror[1] if mirror is not None else f"source:{getattr(source, 'id', '')}"
+
+
+async def _known_document_name(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    secret_store: SecretStore,
+    connectors: ConnectorRegistry,
+    memo: TurnReadMemo,
+    document_id: str,
+) -> str | None:
+    """A document's name from local knowledge only — no provider call."""
+    connector, _credentials, source = await _prepare(
+        session_factory, project_id, secret_store, connectors, is_write=False
+    )
+    account_ref = _account_ref(connector, source)
+    info = memo.peek((account_ref, document_id, "doc"))
+    named = info.get("name") if isinstance(info, dict) else None
+    if isinstance(named, str) and named:
+        return named
+    async with session_factory() as session:
+        node = await session.scalar(
+            select(GraphEntity.name).where(
+                GraphEntity.project_id == project_id,
+                GraphEntity.source_id == source.id,
+                GraphEntity.external_ref == f"{document_id}:document",
+                GraphEntity.deleted_at.is_(None),
+            )
+        )
+    if node:
+        return node
+    mirror = connector_cache(connector)
+    listing = await mirror[0].cached_listing("onshape", mirror[1]) if mirror else None
+    return (
+        next((item["name"] for item in listing.value if item["id"] == document_id), None)
+        if listing
+        else None
+    )
+
+
 def _build_tool(
     operation: OnshapeOperation,
     session_factory: async_sessionmaker[AsyncSession],
     project_id: uuid.UUID,
     secret_store: SecretStore,
     connectors: ConnectorRegistry,
+    turn_memo: TurnReadMemo | None = None,
 ) -> Tool:
+    memo = turn_memo if turn_memo is not None else TurnReadMemo()
     is_write = "write" in operation.tags
     binding = PreviewBinding(
         enabled=operation.name
@@ -441,20 +511,29 @@ def _build_tool(
             async with connector.http(creds) as client:
                 return await step(connector, client, args)
 
+        scope = ReadScope(
+            memo=memo,
+            account_ref=_account_ref(connector, source),
+            workspaces=recorded_workspaces(getattr(source, "cursor", None)),
+            is_write=is_write,
+        )
         try:
-            return await _run_with_refresh(
-                session_factory,
-                source,
-                connector,
-                credentials,
-                secret_store,
-                args,
-                run,
-                is_write=is_write,
-            )
+            with bind_read_scope(scope):
+                return await _run_with_refresh(
+                    session_factory,
+                    source,
+                    connector,
+                    credentials,
+                    secret_store,
+                    args,
+                    run,
+                    is_write=is_write,
+                )
         except ConnectorError as exc:
             logger.info("onshape tool %s failed: %s", operation.name, exc.code)
             raise _tool_error(exc, preview_only=preview_only) from exc
+        finally:
+            _retire_probes(memo, args, retire=is_write and not preview_only)
 
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         return await _invoke_bound(binding, args, lambda: _call(args, operation.run))
@@ -477,42 +556,27 @@ def _build_tool(
         edit, a firmware flash and a robot command all render the same rows, and
         an Onshape lookup in that function would be a domain leak.
 
-        A failed lookup degrades to the id rather than blocking the park — a
-        weaker card beats an unreachable action. The name is Onshape-supplied, so
-        it rides the same `_single_line` + `redact_text` gate as every other row.
+        ADR-038 section 5: the name is NEVER fetched for the card. It comes from
+        what this turn already read, the graph's document node, or the account's
+        cached listing, in that order; a card whose name is unknown degrades to
+        the id rather than blocking the park — a weaker card beats an unreachable
+        action. The name is Onshape-supplied, so it rides the same `_single_line`
+        + `redact_text` gate as every other row.
 
         Stable by construction, so it cannot manufacture a false STALE: a
         document's name does not change under a model edit.
-
-        ponytail: this is a SECOND GET of `/documents/{did}` — `workspace_for`
-        already fetches it, and that same response carries the name. Previews run
-        twice (park and decide), so a gated write costs two extra calls against
-        the customer's 2,500/year allowance. Memoise `/documents/{did}` per
-        request on the connector if the meter starts complaining; it is metered
-        like every other call, so it will show up honestly if it matters.
         """
         document_id = args.get("document_id")
         if not isinstance(document_id, str) or not is_write:
             return []
         try:
-            connector, credentials, _ = await _prepare(
-                session_factory, project_id, secret_store, connectors, is_write=is_write
+            name = await _known_document_name(
+                session_factory, project_id, secret_store, connectors, memo, document_id
             )
-            async with connector.http(credentials) as client:
-                body = await connector.get_json(
-                    client, f"/api/v6/documents/{document_id}", what="document"
-                )
-            name = body.get("name") if isinstance(body, dict) else None
         except Exception:
             logger.info("could not name Onshape document for the consent card")
             name = None
-        return [
-            {
-                "label": "document",
-                "before": None,
-                "after": name if isinstance(name, str) and name else document_id,
-            }
-        ]
+        return [{"label": "document", "before": None, "after": name or document_id}]
 
     tool_class = ConfirmedOnshapeTool if binding.enabled else InProcessTool
     return tool_class(
@@ -543,8 +607,11 @@ def build_onshape_tools(
     """
     if secret_store is None:
         return []
+    # One registry is one SOL turn (`deps.get_sol_registry` builds it per
+    # request), so this memo lives exactly as long as the turn does.
+    memo = TurnReadMemo()
     return [
-        _build_tool(operation, session_factory, project_id, secret_store, connectors)
+        _build_tool(operation, session_factory, project_id, secret_store, connectors, memo)
         for operation in every_operation()
     ]
 

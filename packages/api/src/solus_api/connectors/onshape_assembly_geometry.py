@@ -13,10 +13,10 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from solus_api.connectors.contracts import ConnectorError
-from solus_api.connectors.onshape import ONSHAPE_ID_RE, OnshapeConnector, element_base_path
+from solus_api.connectors.onshape import ONSHAPE_ID_RE, OnshapeConnector
 from solus_api.connectors.onshape_circle_geometry import _rigid, circle_frame
 from solus_api.connectors.onshape_geometry import _contained_size_bound
-from solus_api.connectors.onshape_ops import OnshapeOperation, workspace_for
+from solus_api.connectors.onshape_ops import OnshapeOperation, read_element, workspace_for
 
 _TOPOLOGY = r"^[A-Za-z0-9_+/-]{1,128}$"
 _TOLERANCE = 1e-8
@@ -393,8 +393,15 @@ async def inspect_geometry(
     except (ValidationError, ConnectorError):
         raise ConnectorError("config_invalid", "Invalid assembly inspection arguments") from None
     workspace = await workspace_for(connector, client, args.model_dump(exclude_none=True))
-    base = element_base_path("assemblies", args.document_id, workspace, args.element_id)
-    payload = await connector.get_json(client, base, what="assembly geometry inspection")
+    payload = await read_element(
+        connector,
+        client,
+        kind="assemblies",
+        document_id=args.document_id,
+        workspace_id=workspace,
+        element_id=args.element_id,
+        what="assembly geometry inspection",
+    )
     root = _complete(_complete(payload).get("rootAssembly"))
     revision = _identity(root.get("documentMicroversion"), url=True)
     if args.include_nested:
@@ -457,6 +464,7 @@ INSPECTION_OPERATIONS = (
             "occurrence paths, and view=coaxial_circles for shared axis lines "
             "with separated centers. "
             "Coaxial pairs are geometric observations, not joint recommendations. "
+            "Continuing pages reuses one cached read of the assembly. "
             "No images or writes."
         ),
         params=InspectionArgs.model_json_schema(),
