@@ -104,8 +104,11 @@ class IntegrationCache:
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
         listing_refresh_cooldown_seconds: int = DEFAULT_LISTING_REFRESH_COOLDOWN_SECONDS,
         clock: Callable[[], float] = time.time,
+        durable_store: Any | None = None,
     ) -> None:
         self._store = store
+        #: ADR-038 §1 durable, revision-keyed CAD derivative store (None = Redis only).
+        self._durable = durable_store
         self.listing_ttl_seconds = listing_ttl_seconds
         self.signal_ttl_seconds = signal_ttl_seconds
         self.payload_ttl_seconds = payload_ttl_seconds

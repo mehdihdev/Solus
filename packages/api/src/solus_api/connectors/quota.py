@@ -45,6 +45,12 @@ _LATCH_TTL_SECONDS = 24 * 3600
 Purpose = Literal["user", "scheduled", "agent"]
 _DEFERRABLE: frozenset[str] = frozenset({"scheduled", "agent"})
 
+#: ADR-038 §4 — WHAT a call was for, recorded per call so the budget can be
+#: attributed. Independent of `Purpose`, which decides admission.
+CallLabel = Literal[
+    "sync", "sweep", "webhook", "recovery", "agent_read", "agent_write", "picker", "connect"
+]
+
 
 class QuotaBlockedError(Exception):
     """Refused before the call left the process. Carries a stable code so the

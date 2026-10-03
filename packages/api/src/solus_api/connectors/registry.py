@@ -61,6 +61,8 @@ class ConnectorContext:
     #: Who is spending. Only "user" survives the degraded band; scheduled sweeps
     #: and agent turns can wait.
     purpose: Purpose = "user"
+    #: ADR-038 §4: what the calls are for (metering attribution only).
+    label: quota.CallLabel | None = None
 
 
 ScopedConnectorFactory = Callable[[ConnectorContext], Connector]
@@ -186,7 +188,9 @@ def _onshape_meter(
     )
 
 
-def build_integration_cache(settings: Settings, store: CacheStore) -> IntegrationCache:
+def build_integration_cache(
+    settings: Settings, store: CacheStore, durable: Any | None = None
+) -> IntegrationCache:
     """The read side of the change-signal spine (SOLUSDEV-241), over whichever
     store the app assembled — Redis when configured, per-process otherwise."""
     return IntegrationCache(
@@ -196,6 +200,7 @@ def build_integration_cache(settings: Settings, store: CacheStore) -> Integratio
         payload_ttl_seconds=settings.integration_payload_ttl_seconds,
         max_payload_bytes=settings.integration_cache_max_payload_bytes,
         listing_refresh_cooldown_seconds=settings.integration_listing_refresh_cooldown_seconds,
+        durable_store=durable,
     )
 
 
