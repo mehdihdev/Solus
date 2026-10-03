@@ -24,19 +24,37 @@ the annual allowance. Every change that arrives by push is a probe not spent.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
+import re
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.connectors.integration_cache import IntegrationCache
+from solus_api.connectors.onshape import (
+    TRANSLATION_RECORD_TTL_SECONDS,
+    translation_done_key,
+    translation_pending_key,
+)
 from solus_api.connectors.webhook_token import WEBHOOK_TOKEN_KEY, token_matches
 from solus_api.core.errors import APIError
 from solus_api.deps import SessionDep, SettingsDep
 from solus_api.models import Source, SourceStatus
 from solus_api.services.connections import account_ref_for, invalidate_listing
+from solus_api.services.onshape_webhooks import (
+    DEFAULT_QUIET_SECONDS,
+    LISTING_EVENT_PREFIX,
+    TRANSLATION_COMPLETE_EVENT,
+    claim_schedule,
+    hint_state,
+    save_state,
+    state_for,
+)
 
 logger = logging.getLogger("solus.webhooks")
 
@@ -95,7 +113,6 @@ async def _defer_onshape_recovery(session: AsyncSession, source: Source) -> None
     from datetime import timedelta
 
     from solus_api.models import utcnow
-    from solus_api.services.onshape_webhooks import save_state, state_for
 
     if source.type.value == "onshape":
         await session.refresh(source, with_for_update=True)
@@ -106,47 +123,107 @@ async def _defer_onshape_recovery(session: AsyncSession, source: Source) -> None
         await session.commit()
 
 
-async def _accept_onshape_hint(session: AsyncSession, source: Source, body: bytes) -> bool:
-    from solus_api.connectors.onshape import tracked_document_ids
-    from solus_api.models import utcnow
-    from solus_api.services.onshape_webhooks import (
-        claim_schedule,
-        hint_state,
-        save_state,
-        state_for,
+@dataclasses.dataclass(frozen=True)
+class _Hint:
+    """What an accepted Onshape delivery asks of us."""
+
+    schedule: bool
+    #: True only for events that can change the account's document listing.
+    listing_relevant: bool = False
+
+
+_NO_HINT = _Hint(schedule=False)
+_TRANSLATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+async def _record_translation_complete(
+    cache: IntegrationCache | None, source: Source, payload: dict[str, Any]
+) -> None:
+    """Note that a translation THIS source's account started has finished.
+
+    The scope is the Source row's account, never anything in the payload, and only a
+    translation the account itself announced can be recorded. Nothing else from the payload
+    is kept: the export wait confirms with one authoritative status read."""
+    translation = payload.get("translationId")
+    if (
+        cache is None
+        or not isinstance(translation, str)
+        or not _TRANSLATION_ID_RE.fullmatch(translation)
+    ):
+        return
+    account = account_ref_for(source)
+    if await cache.get(translation_pending_key(account, translation)) is None:
+        return
+    await cache.put(
+        translation_done_key(account, translation),
+        {"state": "complete"},
+        TRANSLATION_RECORD_TTL_SECONDS,
     )
 
-    if source.status not in (SourceStatus.CONNECTED, SourceStatus.SYNCING):
-        return False
+
+def _json_object(body: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(body)
     except (ValueError, UnicodeDecodeError):
         raise APIError(400, "invalid_payload", "Expected a JSON webhook object") from None
     if not isinstance(payload, dict):
         raise APIError(400, "invalid_payload", "Expected a JSON webhook object")
-    document = payload.get("documentId")
-    if document is not None and document not in tracked_document_ids(source.config):
-        return False
-    state = state_for(source)
+    return payload
+
+
+def _event_identity(payload: dict[str, Any]) -> str | None:
     event_id = payload.get("messageId")
     if event_id is not None and (not isinstance(event_id, str) or len(event_id) > 256):
         raise APIError(400, "invalid_payload", "Invalid event identity")
+    return event_id
+
+
+async def _accept_onshape_hint(
+    session: AsyncSession,
+    source: Source,
+    body: bytes,
+    *,
+    cache: IntegrationCache | None = None,
+    quiet_seconds: int = DEFAULT_QUIET_SECONDS,
+) -> _Hint:
+    from solus_api.connectors.onshape import tracked_document_ids
+    from solus_api.models import utcnow
+
+    if source.status not in (SourceStatus.CONNECTED, SourceStatus.SYNCING):
+        return _NO_HINT
+    payload = _json_object(body)
+    document = payload.get("documentId")
+    if document is not None and document not in tracked_document_ids(source.config):
+        return _NO_HINT
+    state = state_for(source)
+    event_id = _event_identity(payload)
+    event = payload.get("event")
+    event = event if isinstance(event, str) and len(event) <= 128 else None
     if document and state.get("subscriptions", {}).get(document) == payload.get("webhookId"):
         state["deliveries"] = {**state.get("deliveries", {}), document: utcnow().isoformat()}
-    if payload.get("event") == "webhook.unregister":
+    if event == "webhook.unregister":
         state["status"] = "failed"
+    if event == TRANSLATION_COMPLETE_EVENT:
+        # Our own export finishing is not a change to the document: record it, schedule nothing.
+        await _record_translation_complete(cache, source, payload)
+        save_state(source, state)
+        await session.commit()
+        return _NO_HINT
     previous_generation = state.get("generation", 0)
-    if payload.get("event") not in ("webhook.register", "webhook.ping"):
-        state = hint_state(state, event_id=event_id)
+    if event not in ("webhook.register", "webhook.ping"):
+        state = hint_state(state, event_id=event_id, quiet_seconds=quiet_seconds)
     if state.get("generation", 0) == previous_generation:
         save_state(source, state)
         await session.commit()
-        return False
+        return _NO_HINT
     state, should_enqueue = claim_schedule(state)
     save_state(source, state)
     await session.commit()
 
-    return should_enqueue
+    return _Hint(
+        schedule=should_enqueue,
+        listing_relevant=event is not None and event.startswith(LISTING_EVENT_PREFIX),
+    )
 
 
 @router.post("/{provider}/{source_id}/{token}", status_code=204)
@@ -191,8 +268,18 @@ async def provider_webhook(
         logger.info("webhook rejected provider=%.32r source=%s", provider, source_id)
         raise APIError(404, "not_found", "Unknown webhook endpoint")
 
-    if provider == "onshape" and not await _accept_onshape_hint(session, source, body):
-        return Response(status_code=204)
+    listing_relevant = True  # other providers keep their existing behaviour
+    if provider == "onshape":
+        hint = await _accept_onshape_hint(
+            session,
+            source,
+            body,
+            cache=getattr(request.app.state, "integration_cache", None),
+            quiet_seconds=settings.onshape_quiet_period_seconds,
+        )
+        if not hint.schedule:
+            return Response(status_code=204)
+        listing_relevant = hint.listing_relevant
 
     # Rate-limit every AUTHORIZED delivery, before deciding what to do with it.
     # Ordering matters: a storm against a source that is mid-sync or errored must
@@ -219,10 +306,11 @@ async def provider_webhook(
         return Response(status_code=204)
 
     logger.info("webhook accepted provider=%s source=%s", provider, source_id)
-    # SOLUSDEV-241: the doorbell is the one signal that can move the ACCOUNT's
-    # cached listing (a rename, a new document) without a user spending quota.
+    # SOLUSDEV-241: a document lifecycle event is a signal that can move the ACCOUNT's
+    # cached listing (a rename, a new document) without a user spending quota. A model
+    # edit cannot, so it no longer costs the next picker open a full re-walk.
     cache = getattr(request.app.state, "integration_cache", None)
-    if cache is not None:
+    if cache is not None and listing_relevant:
         await invalidate_listing(cache, provider=provider, account_ref=account_ref_for(source))
     background.add_task(_probe_source, request.app, source_id)
     return Response(status_code=204)
@@ -235,30 +323,70 @@ async def _probe_source(app: FastAPI, source_id: uuid.UUID) -> None:
     inherits the freshness gate (an already-current document costs one probe, not
     an export) and single-flight (a retry storm collapses) without either being
     reimplemented here.
+
+    Onshape syncs are DEFERRED by the quiet period (ADR-038 §2): one job per source under a
+    stable id (arq drops later enqueues while it is pending), or in-process when there is no
+    worker, so a burst of edits becomes one sync after the last of them.
     """
-    from solus_api.connectors.worker import execute_source_sync
+    from solus_api.connectors import worker
     from solus_api.models import SyncTrigger
 
     state = app.state
+    settings = state.settings
     try:
         pool = getattr(state, "arq_pool", None)
-        if pool is None and state.settings.redis_url:
+        if pool is None and settings.redis_url:
             from solus_api.routers.sources import _arq_pool
 
             pool = await _arq_pool(app)
+        source_type = await _source_type(state.sessionmaker, source_id)
+        if pool is not None and source_type == "onshape":
+            await pool.enqueue_job(
+                "sync_source",
+                str(source_id),
+                webhook=True,
+                quiet=True,
+                _job_id=worker.quiet_job_id(source_id),
+                _defer_by=settings.onshape_quiet_period_seconds,
+            )
+            return
         if pool is not None:
             await pool.enqueue_job(
                 "sync_source", str(source_id), _job_id=f"onshape-hint:{source_id}"
             )
             return
-        await execute_source_sync(
-            sessionmaker=state.sessionmaker,
-            registry=state.connector_registry,
-            secret_store=state.secret_store,
-            source_id=source_id,
-            trigger=SyncTrigger.WEBHOOK,
-            store=getattr(state, "integration_store", None),
-            hub=getattr(state, "graph_hub", None),
-        )
+
+        async def run() -> None:
+            try:
+                await worker.execute_source_sync(
+                    sessionmaker=state.sessionmaker,
+                    registry=state.connector_registry,
+                    secret_store=state.secret_store,
+                    source_id=source_id,
+                    trigger=SyncTrigger.WEBHOOK,
+                    store=getattr(state, "integration_store", None),
+                    hub=getattr(state, "graph_hub", None),
+                    artifact_store=getattr(state, "artifact_store", None),
+                    webhook_callback_base=settings.public_api_base_url,
+                    label="webhook",
+                )
+            except Exception:  # noqa: BLE001 — a webhook must never surface an error
+                logger.exception("webhook-triggered sync failed source=%s", source_id)
+
+        if source_type == "onshape":
+            worker.schedule_inline_quiet(
+                source_id,
+                sessionmaker=state.sessionmaker,
+                quiet_seconds=settings.onshape_quiet_period_seconds,
+                run=run,
+            )
+            return
+        await run()
     except Exception:  # noqa: BLE001 — a webhook must never surface an error
         logger.exception("webhook-triggered sync failed source=%s", source_id)
+
+
+async def _source_type(sessionmaker: Any, source_id: uuid.UUID) -> str | None:
+    async with sessionmaker() as session:
+        source = await session.get(Source, source_id)
+        return source.type.value if source is not None else None

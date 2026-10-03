@@ -363,7 +363,12 @@ async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker):
     redis = AsyncMock()
     assert await recover_onshape_hints({"sessionmaker": maker, "redis": redis}) == 1
     redis.enqueue_job.assert_awaited_once_with(
-        "sync_source", str(source.id), _job_id=f"onshape-recovery:{source.id}", webhook=True
+        "sync_source",
+        str(source.id),
+        _job_id=f"onshape-quiet:{source.id}",
+        webhook=True,
+        quiet=True,
+        label="recovery",
     )
 
 

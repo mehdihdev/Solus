@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import hashlib
 import logging
 import random
@@ -84,6 +85,41 @@ _ID_RE = re.compile(r"^[A-Za-z0-9]{1,40}$")
 ONSHAPE_ID_RE = _ID_RE
 
 
+@functools.lru_cache(maxsize=1)
+def ambient_settings() -> Any | None:
+    """The process's `Settings`, for seams constructed without any (the registry's Onshape
+    factories, the inline sync path). None when the environment cannot build them, in which
+    case callers use their documented defaults."""
+    from solus_api.core.config import Settings
+
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except Exception:  # noqa: BLE001 — no configuration is a defaultable state
+        logger.warning("ambient settings unavailable; using defaults")
+        return None
+
+
+def onshape_session_id() -> str:
+    """The configured `X-Session-ID` / webhook `externalSessionId`, or a safe default."""
+    settings = ambient_settings()
+    value = getattr(settings, "onshape_session_id", None)
+    return (
+        value if isinstance(value, str) and _SESSION_ID_RE.fullmatch(value) else DEFAULT_SESSION_ID
+    )
+
+
+def translation_pending_key(account_ref: str, translation_id: str) -> str:
+    """Marker: THIS account started that translation. Redis-only (a `signal` kind)."""
+    item = f"translation-pending:{translation_id}"
+    return IntegrationCache.signal_key("onshape", account_ref, item)
+
+
+def translation_done_key(account_ref: str, translation_id: str) -> str:
+    """Record: a webhook said that translation finished. Keyed on the source's account."""
+    item = f"translation-done:{translation_id}"
+    return IntegrationCache.signal_key("onshape", account_ref, item)
+
+
 def element_base_path(kind: str, document_id: str, workspace_id: str, element_id: str) -> str:
     """The `/{kind}/d/{did}/w/{wid}/e/{eid}` prefix every element call hangs off.
 
@@ -114,6 +150,18 @@ _DOWNLOAD_DEADLINE_SECONDS = 300.0
 #: download only, so before SOLUSDEV-167 the poll loop had none at all.
 _POLL_DEADLINE_SECONDS = 45.0
 _POLL_MAX_INTERVAL_SECONDS = 8.0
+#: ADR-038 §2: with a healthy webhook subscription the wait is for a `translation.complete`
+#: record (a free local read every tick), and Onshape is asked only on this sparse
+#: backoff (ticks between polls: 2, 5, 15, 30, then every 30), bounded in total.
+_WEBHOOK_POLL_GAPS = (2, 5, 15, 30)
+_WEBHOOK_WAIT_TICKS = 120
+_WEBHOOK_WAIT_DEADLINE_SECONDS = 150.0
+#: How long a "started" marker or a "completed" record lives (more than any export).
+TRANSLATION_RECORD_TTL_SECONDS = 600
+#: Sent on every non-GET request; see `OnshapeConnector.request`.
+SESSION_HEADER = "X-Session-ID"
+DEFAULT_SESSION_ID = "solus-api"
+_SESSION_ID_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
 _EXPORT_FORMAT = "STEP"
 _TOO_LARGE = f"export exceeds the {MAX_CAD_EXPORT_BYTES // (1024 * 1024)} MiB parse limit"
 
@@ -478,6 +526,7 @@ class OnshapeConnector(OAuthConnector):
         cache: IntegrationCache | None = None,
         account_ref: str | None = None,
         signal_max_age_seconds: float | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.scene_export_observer: Callable[[str, str, str, str], None] | None = None
         self._client_id = client_id
@@ -508,6 +557,11 @@ class OnshapeConnector(OAuthConnector):
         self._cache = cache if account_ref else None
         self._account_ref = account_ref or ""
         self._signal_max_age = signal_max_age_seconds
+        self._session_id = session_id
+        #: ADR-038 §2: set by the sync runner from the Source row. True only when every
+        #: tracked document has a verified-delivering subscription; it is what lets a
+        #: recorded `translation.complete` replace polling.
+        self.webhook_healthy = False
         #: ADR-038 §3: the latest element listing per document (version, rows), handed
         #: from `_elements_at` to `_plan` so one listing serves both the target
         #: list and the export keys.
@@ -1225,6 +1279,7 @@ class OnshapeConnector(OAuthConnector):
             # malformed JSON/IDs, auth and quota failures remain terminal.
             raise _RejectedTranslationError(exc.code, str(exc)) from exc
         request_id = _safe_upstream_id(str(started.get("id", "")))
+        await self._announce_translation(request_id)
 
         external_id = _safe_upstream_id(await self._poll_translation(client, request_id))
         return await self._download_bounded(
@@ -1251,6 +1306,7 @@ class OnshapeConnector(OAuthConnector):
                             # This path does NOT go through `request()`, which is
                             # exactly why the audit found it uncounted.
                             await self._meter.record(response.status_code)
+                            await self._observe_rate_limit(response)
                         if response.status_code != 429:
                             return await self._read_export(response)
                         wait = _retry_wait(response, attempt)
@@ -1298,8 +1354,11 @@ class OnshapeConnector(OAuthConnector):
         rather than bounding it, and with `sync_inline` that time is held inside
         an HTTP request.
         """
+        deadline = (
+            _WEBHOOK_WAIT_DEADLINE_SECONDS if self._awaits_webhook else _POLL_DEADLINE_SECONDS
+        )
         try:
-            async with asyncio.timeout(_POLL_DEADLINE_SECONDS):
+            async with asyncio.timeout(deadline):
                 return await self._poll_until_done(client, request_id)
         except TimeoutError as exc:
             raise ConnectorError(
@@ -1307,29 +1366,84 @@ class OnshapeConnector(OAuthConnector):
                 f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
             ) from exc
 
-    async def _poll_until_done(self, client: httpx.AsyncClient, request_id: str) -> str:
-        delay = self._poll_interval
-        for attempt in range(self._poll_attempts):
-            body = await self.get_json(
-                client, f"/api/v8/translations/{request_id}", what="translation status"
-            )
-            state = str(body.get("requestState", ""))
-            if state == "DONE":
-                ids = body.get("resultExternalDataIds") or []
-                if not ids:
-                    raise ConnectorError(
-                        "export_unavailable",
-                        "Onshape reported a finished translation with no result",
-                    )
-                return str(ids[0])
-            if state == "FAILED":
+    def mirror_handle(self) -> tuple[IntegrationCache | None, str | None]:
+        """Read-only `(integration cache, cache account ref)` for read-through callers.
+
+        `(None, None)` when this connector caches nothing (no cache, or no account identity),
+        so a caller can never key a read under an unidentified account."""
+        if self._cache is None or not self._account_ref:
+            return None, None
+        return self._cache, self._account_ref
+
+    @property
+    def _awaits_webhook(self) -> bool:
+        return self.webhook_healthy and self._cache is not None
+
+    async def _announce_translation(self, request_id: str) -> None:
+        """Mark a translation THIS account started, so only its completion can be recorded."""
+        if not self._awaits_webhook or self._cache is None:
+            return
+        await self._cache.put(
+            translation_pending_key(self._account_ref, request_id),
+            {"state": "pending"},
+            TRANSLATION_RECORD_TTL_SECONDS,
+        )
+
+    async def _translation_result(self, client: httpx.AsyncClient, request_id: str) -> str | None:
+        """One status read: the result id when DONE, None while ACTIVE, an error on FAILED."""
+        body = await self.get_json(
+            client, f"/api/v8/translations/{request_id}", what="translation status"
+        )
+        state = str(body.get("requestState", ""))
+        if state == "DONE":
+            ids = body.get("resultExternalDataIds") or []
+            if not ids:
                 raise ConnectorError(
                     "export_unavailable",
-                    f"Onshape could not translate the element to {_EXPORT_FORMAT}",
+                    "Onshape reported a finished translation with no result",
                 )
+            return str(ids[0])
+        if state == "FAILED":
+            raise ConnectorError(
+                "export_unavailable",
+                f"Onshape could not translate the element to {_EXPORT_FORMAT}",
+            )
+        return None
+
+    async def _poll_until_done(self, client: httpx.AsyncClient, request_id: str) -> str:
+        if self._awaits_webhook:
+            return await self._await_completion(client, request_id)
+        delay = self._poll_interval
+        for attempt in range(self._poll_attempts):
+            result = await self._translation_result(client, request_id)
+            if result is not None:
+                return result
             if attempt + 1 < self._poll_attempts:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, _POLL_MAX_INTERVAL_SECONDS)
+        raise ConnectorError(
+            "export_timeout",
+            f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
+        )
+
+    async def _await_completion(self, client: httpx.AsyncClient, request_id: str) -> str:
+        """Wait for the webhook's completion record (a free local read per tick). A record
+        costs ONE confirming status read, never trusted for the result id; with no record,
+        Onshape is asked only on the sparse backoff as a fallback for a lost delivery."""
+        assert self._cache is not None
+        done_key = translation_done_key(self._account_ref, request_id)
+        gaps = iter(_WEBHOOK_POLL_GAPS)
+        next_poll = next(gaps)
+        confirmed = False
+        for tick in range(_WEBHOOK_WAIT_TICKS):
+            recorded = not confirmed and await self._cache.get(done_key) is not None
+            if recorded or tick >= next_poll:
+                confirmed = confirmed or recorded
+                result = await self._translation_result(client, request_id)
+                if result is not None:
+                    return result
+                next_poll = tick + next(gaps, _WEBHOOK_POLL_GAPS[-1])
+            await asyncio.sleep(self._poll_interval)
         raise ConnectorError(
             "export_timeout",
             f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
@@ -1432,6 +1546,27 @@ class OnshapeConnector(OAuthConnector):
             },
         )
 
+    @property
+    def session_id(self) -> str:
+        """The `X-Session-ID` for writes: the explicit one, else the configured setting."""
+        if self._session_id is not None and _SESSION_ID_RE.fullmatch(self._session_id):
+            return self._session_id
+        return DEFAULT_SESSION_ID if self._session_id is not None else onshape_session_id()
+
+    async def _observe_rate_limit(self, response: httpx.Response) -> None:
+        """Hand the provider's own `X-Rate-Limit-Remaining` to the meter. The header is
+        untrusted: an unparsable one is ignored and the meter bounds the value."""
+        if self._meter is None:
+            return
+        raw = response.headers.get("X-Rate-Limit-Remaining", "").strip()
+        try:
+            remaining = int(raw)
+        except ValueError:
+            return
+        retry = response.headers.get("Retry-After", "").strip()
+        retry_after = float(retry) if retry.isascii() and retry.isdigit() else None
+        await self._meter.observe_rate_limit(remaining, retry_after)
+
     async def _admit(self) -> None:
         """Ask the meter before spending. Its error is translated into a
         `ConnectorError` so no caller has to learn a second exception type — and
@@ -1459,9 +1594,14 @@ class OnshapeConnector(OAuthConnector):
             # Admission is UNCONDITIONAL — before the retry ladder, so a refused
             # call is refused once rather than four times.
             await self._admit()
+        # ADR-038 §2: every write carries the session id Onshape was told at webhook
+        # registration, so the change events our own writes cause are recognisably ours.
+        headers = {SESSION_HEADER: self.session_id} if method.upper() != "GET" else None
         for attempt in range(_RATE_LIMIT_RETRIES + 1):
             try:
-                response = await client.request(method, path, json=json_body, params=params)
+                response = await client.request(
+                    method, path, json=json_body, params=params, headers=headers
+                )
             except httpx.HTTPError as exc:
                 raise ConnectorError(
                     "api_unreachable", f"could not reach Onshape for {what}"
@@ -1471,6 +1611,7 @@ class OnshapeConnector(OAuthConnector):
                 # and only 2xx/3xx move the ledger, so the 429 retries below are
                 # free in quota terms even though they cost wall-clock.
                 await self._meter.record(response.status_code)
+                await self._observe_rate_limit(response)
             if response.status_code != 429:
                 break
             if attempt < _RATE_LIMIT_RETRIES:
@@ -1615,4 +1756,8 @@ __all__ = [
     "SELECTION_KEY",
     "OnshapeConnector",
     "SyncError",
+    "ambient_settings",
+    "onshape_session_id",
+    "translation_done_key",
+    "translation_pending_key",
 ]

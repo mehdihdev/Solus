@@ -856,3 +856,86 @@ async def test_a_revision_changed_abort_keeps_the_exports_that_completed(
     async with maker() as db:
         statuses = (await db.scalars(select(Sync.status).where(Sync.source_id == source_id))).all()
     assert JobStatus.SUCCEEDED in statuses
+
+
+# ------------------------------------------------ ADR-038 §2: webhook-first freshness
+
+
+def _healthy_state() -> dict[str, Any]:
+    from solus_api.models import utcnow
+
+    return {
+        "status": "registered",
+        "subscriptions": {DID: "hook1"},
+        "deliveries": {DID: utcnow().isoformat()},
+        "health_checked_at": utcnow().isoformat(),
+    }
+
+
+async def _mark_healthy(maker: Any, source_id: uuid.UUID) -> None:
+    from solus_api.services.onshape_webhooks import save_state
+
+    async with maker() as db:
+        row = await db.get(Source, source_id)
+        save_state(row, _healthy_state())
+        await db.commit()
+
+
+async def test_an_idle_hour_with_healthy_webhooks_costs_zero_calls(
+    onshape: Any, maker: Any
+) -> None:
+    """Before: the hourly sweep probed every source (one microversion read per
+    tracked document per hour, ~24/day). After: a healthy subscription is not probed."""
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.worker import run_change_detection
+
+    _, meter = onshape
+    secrets = InMemorySecretStore()
+    source_id = await _seed_shared(maker, secrets)
+    await _mark_healthy(maker, source_id)
+    cache, _ = _shared_cache()
+    meter.reset()
+
+    for _hour in range(2):
+        await run_change_detection(
+            sessionmaker=maker,
+            registry=_cached_registry(cache),
+            secret_store=secrets,
+            enqueue=AsyncMock(),
+        )
+
+    assert meter.attempts == 0
+
+
+async def test_a_three_minute_editing_burst_costs_one_sync_not_ten(
+    onshape: Any, maker: Any
+) -> None:
+    fake, meter = onshape
+    fake.poll_depth = 2
+
+    # Before: ten change events, each its own probe + export, legacy polling.
+    secrets = InMemorySecretStore()
+    before_id = await _seed_shared(maker, secrets, account="acct-before")
+    cache, _ = _shared_cache()
+    registry = _cached_registry(cache)
+    await _sync_cached(maker, registry, before_id, secrets)
+    meter.reset()
+    for index in range(10):
+        fake.bump_microversion(f"edit{index:04d}")
+        await _sync_cached(maker, registry, before_id, secrets, trigger=SyncTrigger.WEBHOOK)
+    before = meter.counted
+
+    # After: the same ten events fall inside one quiet window, so ONE sync runs
+    # for the final state, from a source with a healthy subscription.
+    after_id = await _seed_shared(maker, secrets, account="acct-after")
+    await _mark_healthy(maker, after_id)
+    await _sync_cached(maker, registry, after_id, secrets)
+    meter.reset()
+    for index in range(10):
+        fake.bump_microversion(f"next{index:04d}")
+    await _sync_cached(maker, registry, after_id, secrets, trigger=SyncTrigger.WEBHOOK)
+    after = meter.counted
+
+    print(f"burst of 10 change events: before={before} calls, after={after} calls")
+    assert after * 5 <= before
