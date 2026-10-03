@@ -294,3 +294,23 @@ bracket is one part), block attributes carry the manufacturer part number the fi
 wants, and xrefs are the only `depends_on` available. There is **no mass and no volume**; anything
 expecting them from a mechanical source must tolerate absence rather than default, since a defaulted
 mass is the same class of lie as the SolidWorks finding.
+
+## 📋 SOLUSDEV-312 — Redis, CAD store bucket and Onshape webhooks (ADR-037 / ADR-038)
+
+**Redis (ElastiCache)** — required for live fan-out across API tasks, the ARQ worker, the quota meter and the CAD store index.
+- Node-based Redis/Valkey, **cluster mode disabled** (live channels use `PSUBSCRIBE solus:live:*`), same VPC/private subnets as ECS, in-transit encryption + AUTH token.
+- Parameter group `maxmemory-policy = noeviction` (ARQ queue + CAD index must not be evicted).
+- SG: inbound 6379 only from the API and worker task SGs.
+- Store `rediss://:<token>@<primary-endpoint>:6379/0` in Secrets Manager; inject as `SOLUS_REDIS_URL` via the task definition `secrets` block on **both** API and worker.
+- Deploy the ARQ worker service (SOLUSDEV-144): same image/env, command `uv run arq solus_api.worker_main.WorkerSettings`.
+
+**CAD store bucket** (`SOLUS_CAD_STORE_S3_BUCKET`) — a dedicated bucket, never the artifact bucket (artifacts expire after 1 h).
+- Block Public Access: all on. **Versioning OFF** (or a 1-day noncurrent-version expiry) — with versioning, revocation deletes would only add delete markers and old CAD would survive.
+- Bucket policy: deny any request without `aws:SecureTransport`; deny `s3:PutObject` without `s3:x-amz-server-side-encryption`.
+- Default encryption SSE-S3 (the app also sends `AES256` on every put); optionally SSE-KMS with a dedicated key.
+- Task role (API + worker): `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::<bucket>/cad/*`; `s3:ListBucket` on the bucket with condition `s3:prefix` = `cad/*`.
+- Optional cost guard: lifecycle rule expiring `cad/` objects after e.g. 400 days (re-exported on demand).
+
+**Webhooks** — `SOLUS_PUBLIC_API_BASE_URL` must be the public **HTTPS** API origin (the ALB/front door). Onshape posts to `/api/v1/webhooks/onshape/{source_id}/{token}`; keep that path reachable from the internet.
+
+**Migration** — run `alembic upgrade head` (adds `cad_purge_requests`, revision `a38000000001`).
