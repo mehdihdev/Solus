@@ -54,30 +54,16 @@ function PositionedNavigator(props: GraphNavigatorProps): React.JSX.Element {
   )
 }
 
-function NavigationViewport({
-  model,
-  scopeRootIds,
-  ...props
-}: GraphNavigatorProps & {
-  model: NavigationModel
-}): React.JSX.Element {
-  const {
-    bounds,
-    location,
-    viewportRef,
-    key,
-    links,
-    points,
-    parent,
-    visible,
-    index,
-    select,
-    enter,
-    back,
-    preview
-  } = model
-  const { scopeGraph, projectId } = props
-  const previews = useMemo(
+type ChildPreviews = ReturnType<typeof useChildPreviews>
+
+/** Child previews per visible node, resolved against the scoped graph when one applies. */
+function useChildPreviews(
+  { visible, index }: NavigationModel,
+  scopeRootIds: GraphNavigatorProps['scopeRootIds'],
+  scopeGraph: GraphNavigatorProps['scopeGraph'],
+  projectId: string
+) {
+  return useMemo(
     () =>
       new Map(
         visible.map(({ id }) => {
@@ -101,6 +87,54 @@ function NavigationViewport({
       ),
     [index, visible, scopeRootIds, scopeGraph, projectId]
   )
+}
+
+function NavigationCards({
+  model,
+  scopeRootIds,
+  offset,
+  previews,
+  ...props
+}: GraphNavigatorProps & {
+  model: NavigationModel
+  offset: { x: number; y: number }
+  previews: ChildPreviews
+}): React.JSX.Element {
+  const { visible, points, select, enter, back, preview } = model
+  return (
+    <>
+      {visible.map((entity) => (
+        <GraphCard
+          key={entity.id}
+          entity={entity}
+          point={points[entity.id]}
+          offset={offset}
+          focused={props.focusedId === entity.id}
+          childCount={previews.get(entity.id)?.length ?? 0}
+          onRevealChild={scopeRootIds?.includes(entity.id) ? model.revealEntity : undefined}
+          childPreviews={previews.get(entity.id)}
+          onSelect={select}
+          onEnter={enter}
+          onBack={back}
+          onPreview={preview}
+          onMove={props.onMove}
+          onContextMenu={props.onContextMenu}
+          renderContent={props.renderContent}
+        />
+      ))}
+    </>
+  )
+}
+
+function NavigationViewport({
+  model,
+  scopeRootIds,
+  ...props
+}: GraphNavigatorProps & {
+  model: NavigationModel
+}): React.JSX.Element {
+  const { bounds, location, viewportRef, key, links, points, parent, visible, index, back } = model
+  const previews = useChildPreviews(model, scopeRootIds, props.scopeGraph, props.projectId)
   const offset = useMemo(() => ({ x: bounds.left, y: bounds.top }), [bounds.left, bounds.top])
   return (
     <div className="graph-viewport" ref={viewportRef}>
@@ -126,25 +160,13 @@ function NavigationViewport({
           parentName={parent?.name}
           onBack={back}
         />
-        {visible.map((entity) => (
-          <GraphCard
-            key={entity.id}
-            entity={entity}
-            point={points[entity.id]}
-            offset={offset}
-            focused={props.focusedId === entity.id}
-            childCount={previews.get(entity.id)?.length ?? 0}
-            onRevealChild={scopeRootIds?.includes(entity.id) ? model.revealEntity : undefined}
-            childPreviews={previews.get(entity.id)}
-            onSelect={select}
-            onEnter={enter}
-            onBack={back}
-            onPreview={preview}
-            onMove={props.onMove}
-            onContextMenu={props.onContextMenu}
-            renderContent={props.renderContent}
-          />
-        ))}
+        <NavigationCards
+          {...props}
+          model={model}
+          scopeRootIds={scopeRootIds}
+          offset={offset}
+          previews={previews}
+        />
         {props.onSuggestionsChanged && (
           <GraphSuggestions
             projectId={props.projectId}
