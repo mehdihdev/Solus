@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { bumpLive } from '../live/testBump'
+import { liveKeys } from '../../store/liveRevisionStore'
 import { useAuthStore } from '../../store/authStore'
 import * as resources from '../../lib/api/resources'
 import * as workspace from '../../lib/api/workspace'
@@ -226,4 +228,25 @@ it('isolates refresh transports and prevents an obsolete response overwriting th
   view.unmount()
   const reopened = renderHook(() => useWorkspaceGraph())
   await waitFor(() => expect(reopened.result.current.entities?.[0]?.id).toBe('e'))
+})
+
+it('re-reads project detail on a live project-detail bump so source counts update', async () => {
+  const hook = renderHook(() => useWorkspaceGraph())
+  await waitFor(() => expect(hook.result.current.status).toBe('ready'))
+  expect(hook.result.current.sourceCount).toBe(0)
+  const source = { id: 's1', project_id: 'p1', type: 'github' } as resources.Source
+  vi.mocked(resources.getProject).mockResolvedValue({
+    id: 'p1',
+    team_id: 't',
+    name: 'Robot',
+    description: null,
+    archived_at: null,
+    created_at: '',
+    updated_at: '',
+    sources: [source],
+    stats: { entities: 1, relations: 0 }
+  })
+  vi.mocked(resources.listAllSources).mockResolvedValue([source])
+  await bumpLive(liveKeys.projectDetail('p1'))
+  await waitFor(() => expect(hook.result.current.sourceCount).toBe(1))
 })

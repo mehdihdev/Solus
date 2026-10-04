@@ -20,6 +20,7 @@ import { SolScreen } from '../sol/SolScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
+import { useLiveProject } from './useLiveProject'
 import { StoreScreen } from '../extensions/StoreScreen'
 import { useExtensionsStore } from '../extensions/extensionsStore'
 import { ExtensionPageScreen } from '../extensions/pageview/ExtensionPageScreen'
@@ -193,6 +194,8 @@ export function WorkspaceShell(): React.JSX.Element {
   // Confirm it once, so a dead id drops us to Home instead of 404ing every
   // project-scoped screen with no way back.
   useValidateProject()
+  // ...and follows a teammate's rename/archive live (ADR-037).
+  useLiveProject()
   useHydrateDevExtensions()
 
   return (

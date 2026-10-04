@@ -261,3 +261,18 @@ it('stops permanently on 401 and 404, and on 401 resumes after a token change', 
     view.unmount()
   }
 })
+
+it('sources.changed also bumps project detail so the footer counts re-read', async () => {
+  vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+    yield 'ready'
+    yield { type: 'sources.changed' }
+    await new Promise(() => undefined)
+  })
+  renderHook(() => useWorkspaceEvents('p1', vi.fn()))
+  await act(async () => {})
+  await flush()
+  expect(revisions()).toEqual({
+    [liveKeys.projectSources('p1')]: 1,
+    [liveKeys.projectDetail('p1')]: 1
+  })
+})

@@ -433,6 +433,43 @@ describe('useHomeTeam — live refresh (ADR-037): invites', () => {
   })
 })
 
+describe('useHomeTeam — live refresh (ADR-037): role change sequencing', () => {
+  it('admin demoted to member: the same bump never calls the invites route', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    const { result } = await ready()
+    const before = calls().invites
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'member' })
+    vi.mocked(resources.listInvites).mockRejectedValue(new ApiError(403, 'forbidden', 'no'))
+    // membership.changed bumps the team detail and invites together.
+    await bumpLive(liveKeys.team('t1'), liveKeys.teamMembers('t1'), liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.myRole).toBe('member'))
+    expect(calls().invites).toBe(before)
+    expect(result.current.status).toBe('ready')
+  })
+
+  it('member promoted to admin: the same bump loads invites exactly once', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'member' })
+    const { result } = await ready()
+    const before = calls().invites
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    vi.mocked(resources.listInvites).mockResolvedValue([{ ...INVITE, token: undefined }])
+    await bumpLive(liveKeys.team('t1'), liveKeys.teamMembers('t1'), liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.myRole).toBe('admin'))
+    await waitFor(() => expect(result.current.invites).toHaveLength(1))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls().invites).toBe(before + 1)
+  })
+
+  it('a 403 on the invites hint refetch is silent: nothing thrown, status stays ready', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    const { result } = await ready()
+    vi.mocked(resources.listInvites).mockRejectedValue(new ApiError(403, 'forbidden', 'no'))
+    await bumpLive(liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.invites).toEqual([]))
+    expect(result.current.status).toBe('ready')
+  })
+})
+
 describe('useHomeTeam — live refresh (ADR-037): activity and scope', () => {
   it('teamActivity(id) refreshes the first page', async () => {
     const { result } = await ready()

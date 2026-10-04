@@ -258,7 +258,7 @@ async def test_a_lying_small_content_length_is_still_capped_while_streaming(
     assert resp.status_code == 413
 
 
-async def test_onshape_hints_remain_durable_while_syncing(client, maker):
+async def test_onshape_hints_remain_durable_while_syncing(client: Any, maker: Any) -> None:
     from solus_api.services.onshape_webhooks import STATE_KEY
 
     source_id, token = await _seed(maker, status=SourceStatus.SYNCING)
@@ -270,7 +270,7 @@ async def test_onshape_hints_remain_durable_while_syncing(client, maker):
         assert source.config[STATE_KEY]["generation"] == 1
 
 
-async def test_onshape_foreign_document_does_not_dirty_source(client, maker):
+async def test_onshape_foreign_document_does_not_dirty_source(client: Any, maker: Any) -> None:
     from solus_api.services.onshape_webhooks import STATE_KEY
 
     source_id, token = await _seed(maker)

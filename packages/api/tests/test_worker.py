@@ -208,7 +208,9 @@ async def test_one_large_tenant_cannot_starve_every_other_team(engine: Any) -> N
     )
 
 
-async def test_onshape_reconciliation_acknowledges_only_captured_generation(maker, monkeypatch):
+async def test_onshape_reconciliation_acknowledges_only_captured_generation(
+    maker: Any, monkeypatch: Any
+) -> None:
     from solus_api.connectors.worker import _run
     from solus_api.services.onshape_webhooks import hint_state, save_state, state_for
 
@@ -220,7 +222,7 @@ async def test_onshape_reconciliation_acknowledges_only_captured_generation(make
         save_state(row, hint_state({}))
         await db.commit()
 
-    async def reconcile(**kwargs):
+    async def reconcile(**kwargs: Any) -> Any:
         async with maker() as db:
             row = await db.get(Source, source.id, with_for_update=True)
             save_state(row, hint_state(state_for(row)))
@@ -241,7 +243,7 @@ async def test_onshape_reconciliation_acknowledges_only_captured_generation(make
         assert state_for(row)["acknowledged"] == 1
 
 
-async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker):
+async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker: Any) -> None:
     from unittest.mock import AsyncMock
 
     from solus_api.models import utcnow
@@ -273,7 +275,7 @@ async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker):
     enqueue.assert_not_called()
 
 
-async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
+async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker: Any) -> None:
     from unittest.mock import AsyncMock
 
     from solus_api.connectors.httpcache import InMemoryCacheStore
@@ -305,7 +307,7 @@ async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
     fresh_probe = AsyncMock(return_value="new")
     synced = AsyncMock(return_value=SyncResult(cursor={"microversions": {document: "new"}}))
 
-    def factory(ctx):
+    def factory(ctx: Any) -> Any:
         connector = OnshapeConnector(
             client_id="test",
             client_secret="test",
@@ -313,8 +315,8 @@ async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
             account_ref=ctx.account_ref,
             signal_max_age_seconds=None if ctx.purpose == "webhook" else 300,
         )
-        connector._current_microversion = fresh_probe
-        connector.sync = synced
+        connector._current_microversion = fresh_probe  # type: ignore[method-assign]  # test double replaces the instance method
+        connector.sync = synced  # type: ignore[method-assign]  # test double replaces the instance method
         return connector
 
     registry = ConnectorRegistry()
@@ -332,7 +334,7 @@ async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
         assert state_for(row)["acknowledged"] == 1
 
 
-async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker):
+async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker: Any) -> None:
     from datetime import timedelta
     from unittest.mock import AsyncMock
 
@@ -372,7 +374,7 @@ async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker):
     )
 
 
-async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker):
+async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker: Any) -> None:
     from datetime import timedelta
     from unittest.mock import AsyncMock
 

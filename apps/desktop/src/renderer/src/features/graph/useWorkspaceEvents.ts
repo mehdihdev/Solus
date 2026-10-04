@@ -22,7 +22,8 @@ function applyLiveHint(projectId: string, event: HintEvent): void {
       live.bump([liveKeys.projectLayout(projectId)])
       return
     case 'sources.changed':
-      live.bump([liveKeys.projectSources(projectId)])
+      // Detail carries the source list the footer count reads (ADR-037).
+      live.bump([liveKeys.projectSources(projectId), liveKeys.projectDetail(projectId)])
       return
     case 'project.updated':
       live.bump([liveKeys.projectDetail(projectId)])

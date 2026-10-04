@@ -152,7 +152,7 @@ def specs() -> dict[str, Any]:
     return {"featureSpecs": result}
 
 
-def fastened_frames():
+def fastened_frames() -> dict[str, Any]:
     payload = assembly()
     root = payload["rootAssembly"]
     root["instances"].append({**root["instances"][0], "id": "part+2"})
@@ -178,7 +178,7 @@ def fastened_frames():
 
 
 @respx.mock
-async def test_fastened_preview_selects_measured_secondary_axis():
+async def test_fastened_preview_selects_measured_secondary_axis() -> None:
     reads()
     payload = fastened_frames()
     cs = payload["rootAssembly"]["features"][1]["featureData"]["mateConnectorCS"]
@@ -194,7 +194,7 @@ async def test_fastened_preview_selects_measured_secondary_axis():
 
 
 @respx.mock
-async def test_fastened_missing_measured_frames_refuses_before_write():
+async def test_fastened_missing_measured_frames_refuses_before_write() -> None:
     reads()
     respx.get(BASE).respond(200, json=assembly())
     with pytest.raises(ConnectorError):
@@ -479,6 +479,7 @@ async def test_mate_preview_reuses_immutable_donor_but_rereads_target() -> None:
         client_id="fixture", client_secret="fixture", cache=cache, account_ref="account-a"
     )
     operation = MATE_OPERATIONS[0]
+    assert operation.preview is not None
     async with connector.http(Credentials(token="fixture")) as client:
         await operation.preview(connector, client, copy.deepcopy(ARGS[0]))
         await operation.preview(connector, client, copy.deepcopy(ARGS[0]))

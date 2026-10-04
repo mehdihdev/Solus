@@ -11,6 +11,8 @@ import {
   type WorkspaceLayout
 } from '../../lib/api/workspace'
 
+/** `auto`: default placement the app wrote itself; `user`: a drag or deliberate placement. */
+export type MoveOrigin = 'user' | 'auto'
 type Status = 'loading' | 'ready' | 'saving' | 'error' | 'offline'
 interface Identity {
   token: string | null
@@ -47,6 +49,8 @@ class LayoutSession {
   private busy = false
   private layout: WorkspaceLayout | null = null
   private pending: Record<string, Point> = {}
+  /** Pending ids whose latest write was default placement, not a user move. */
+  private autoIds = new Set<string>()
   private liveIds: ReadonlySet<string> | null
   private removedIds = new Set<string>()
   private status: Status = 'loading'
@@ -95,6 +99,7 @@ class LayoutSession {
     }
     this.liveIds = next
     this.pending = this.prune(this.pending)
+    this.forgetSettledAutos()
     if (this.layout) this.accept(this.layout)
     this.show(this.status, this.error)
   }
@@ -159,18 +164,43 @@ class LayoutSession {
   private async applyLatest(): Promise<void> {
     const latest = await getWorkspaceLayout(this.projectId, this.client)
     if (!this.canPublish() || !this.layout) return
-    if (!this.busy && latest.version > this.layout.version) this.accept(latest)
+    const adopted = !this.busy && latest.version > this.layout.version
+    if (adopted) this.accept(latest)
+    // A banner is about unsaved USER moves; once the newest layout is ours and
+    // none remain, it no longer describes anything.
+    if (adopted && this.status === 'error' && !this.hasUserMoves(this.pending)) {
+      this.dropAutoPending()
+      this.show('ready')
+      return
+    }
     this.show(this.status, this.error)
+  }
+
+  private hasUserMoves(moves: Record<string, Point>): boolean {
+    return Object.keys(moves).some((id) => !this.autoIds.has(id))
+  }
+
+  private forgetSettledAutos(): void {
+    for (const id of this.autoIds) if (!(id in this.pending)) this.autoIds.delete(id)
+  }
+
+  private dropAutoPending(): void {
+    this.pending = Object.fromEntries(
+      Object.entries(this.pending).filter(([id]) => !this.autoIds.has(id))
+    )
+    this.autoIds.clear()
   }
 
   private canPublish(): boolean {
     return this.attached && sameIdentity(this.identity)
   }
 
-  move(entityId: string, point: Point): void {
+  move(entityId: string, point: Point, origin: MoveOrigin = 'user'): void {
     if (!this.attached || !this.layout || !this.isLive(entityId) || !sameIdentity(this.identity))
       return
     this.pending = { ...this.pending, [entityId]: point }
+    if (origin === 'auto') this.autoIds.add(entityId)
+    else this.autoIds.delete(entityId)
     this.show('saving')
     void this.flush()
   }
@@ -182,10 +212,19 @@ class LayoutSession {
       this.show('error', 'Positions could not be saved. Retry to save your moved nodes.')
       return
     }
+    let adopted = false
     try {
       this.accept(await getWorkspaceLayout(this.projectId, this.client))
+      adopted = true
     } catch {
       /* Keep the unsaved moves for explicit retry. */
+    }
+    // Two clients opening a new project both write default placement; the
+    // loser moved nothing, so the winner's layout simply stands (no banner).
+    if (adopted && !this.hasUserMoves(this.pending)) {
+      this.dropAutoPending()
+      this.show('ready')
+      return
     }
     this.show('error', 'Layout changed elsewhere. Retry to save your moved nodes.')
   }
@@ -207,6 +246,7 @@ class LayoutSession {
       const layout = await saveWorkspaceLayout(this.projectId, body, this.client)
       if (!sameIdentity(this.identity)) return
       this.accept(layout)
+      this.forgetSettledAutos()
       saved = true
     } catch (error) {
       await this.failedSave(error, moves)
@@ -238,7 +278,7 @@ export function useWorkspaceLayout(
   positions: Record<string, Point>
   status: Status
   error: string | null
-  move: (entityId: string, point: Point) => void
+  move: (entityId: string, point: Point, origin?: MoveOrigin) => void
   retry: () => void
 } {
   const token = useAuthStore((state) => state.accessToken)
@@ -271,8 +311,8 @@ export function useWorkspaceLayout(
     },
     enabled && projectId !== null
   )
-  const move = useCallback((id: string, point: Point) => {
-    session.current?.move(id, point)
+  const move = useCallback((id: string, point: Point, origin?: MoveOrigin) => {
+    session.current?.move(id, point, origin)
   }, [])
   const retry = useCallback(() => {
     session.current?.retry()

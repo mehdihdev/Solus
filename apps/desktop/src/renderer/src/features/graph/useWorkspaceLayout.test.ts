@@ -366,3 +366,80 @@ it('a failed live reload keeps the current positions and status', async () => {
   expect(result.current.status).toBe('ready')
   expect(result.current.error).toBeNull()
 })
+
+// Initial auto-placement is written by every client that opens a fresh project;
+// the loser of that race moved nothing, so it must not be told it has a conflict.
+const conflict = (): ApiError => new ApiError(409, 'conflict', 'Changed')
+
+it('a 409 on an auto-placement-only save silently adopts the server layout', async () => {
+  vi.mocked(workspace.saveWorkspaceLayout).mockRejectedValueOnce(conflict())
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({
+    version: 1,
+    positions: { e1: { x: 1, y: 2 } }
+  })
+  const seen: Array<string | null> = []
+  const poll = setInterval(() => seen.push(result.current.error), 1)
+  act(() => result.current.move('e1', { x: 10, y: 20 }, 'auto'))
+  await waitFor(() => expect(result.current.positions).toEqual({ e1: { x: 1, y: 2 } }))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  clearInterval(poll)
+  expect(seen.every((error) => error === null)).toBe(true)
+  expect(result.current.error).toBeNull()
+  expect(workspace.saveWorkspaceLayout).toHaveBeenCalledTimes(1)
+})
+
+it('a 409 that also carries a user move keeps the banner and the move', async () => {
+  vi.mocked(workspace.saveWorkspaceLayout).mockRejectedValueOnce(conflict())
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({ version: 1, positions: {} })
+  act(() => {
+    result.current.move('auto1', { x: 1, y: 1 }, 'auto')
+    result.current.move('e2', { x: 5, y: 5 })
+  })
+  await waitFor(() => expect(result.current.error).toMatch(/changed elsewhere/i))
+  expect(result.current.positions).toMatchObject({ e2: { x: 5, y: 5 } })
+})
+
+it('a user drag of an auto-placed node makes its conflict a real one', async () => {
+  vi.mocked(workspace.saveWorkspaceLayout).mockRejectedValueOnce(conflict())
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({ version: 1, positions: {} })
+  act(() => {
+    result.current.move('e1', { x: 1, y: 1 }, 'auto')
+    result.current.move('e1', { x: 9, y: 9 })
+  })
+  await waitFor(() => expect(result.current.error).toMatch(/changed elsewhere/i))
+})
+
+it('adopting a newer layout clears a stale banner when only auto placements remain', async () => {
+  vi.mocked(workspace.saveWorkspaceLayout).mockRejectedValueOnce(new Error('blip'))
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  act(() => result.current.move('e1', { x: 1, y: 1 }, 'auto'))
+  await waitFor(() => expect(result.current.status).toBe('error'))
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({
+    version: 3,
+    positions: { e1: { x: 7, y: 8 } }
+  })
+  await layoutChanged('p1', 3)
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  expect(result.current.error).toBeNull()
+  expect(result.current.positions).toEqual({ e1: { x: 7, y: 8 } })
+})
+
+it('adopting a newer layout keeps the banner while the user still has unsaved moves', async () => {
+  vi.mocked(workspace.saveWorkspaceLayout).mockRejectedValueOnce(new Error('blip'))
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  act(() => result.current.move('e1', { x: 1, y: 1 }))
+  await waitFor(() => expect(result.current.status).toBe('error'))
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({ version: 3, positions: {} })
+  await layoutChanged('p1', 3)
+  await waitFor(() => expect(workspace.getWorkspaceLayout).toHaveBeenCalledTimes(2))
+  expect(result.current.status).toBe('error')
+  expect(result.current.error).toMatch(/could not be saved/i)
+})

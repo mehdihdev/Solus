@@ -477,11 +477,29 @@ function useLiveTeamRefresh(context: LiveTeamRefresh): void {
   }
   const useWatch = (key: (id: string) => string, run: () => Promise<void>, enabled = true): void =>
     useLiveRefetch([teamId ? key(teamId) : null], () => void run(), enabled && teamId !== null)
-  useWatch(liveKeys.team, () => refresh(getTeamDetail, writers.setDetail))
+  // The role the hook trusts for gating, and the team-detail refresh the current
+  // bump started (if any): an invites hint waits for it so a demotion that
+  // arrives in the same bump never makes a now-forbidden request.
+  const roleRef = useRef(role)
+  roleRef.current = role
+  const detailRefresh = useRef<Promise<void> | null>(null)
+  useWatch(liveKeys.team, () => {
+    const pending = refresh(getTeamDetail, (detail) => {
+      roleRef.current = detail.role
+      writers.setDetail(detail)
+    }).finally(() => {
+      if (detailRefresh.current === pending) detailRefresh.current = null
+    })
+    detailRefresh.current = pending
+    return pending
+  })
   useWatch(liveKeys.teamMembers, () => refresh(listMembers, writers.setMembers))
   useWatch(
     liveKeys.teamInvites,
-    () => refresh(invitesOrNone, writers.setInvites),
+    async () => {
+      await detailRefresh.current
+      if (canListInvites(roleRef.current)) await refresh(invitesOrNone, writers.setInvites)
+    },
     canListInvites(role)
   )
   useWatch(liveKeys.teamActivity, () =>

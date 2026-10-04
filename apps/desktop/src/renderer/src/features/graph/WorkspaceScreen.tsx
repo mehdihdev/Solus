@@ -31,7 +31,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { useWorkspaceGraph, type GraphSummary } from './useWorkspaceGraph'
 import { useOptimisticGraph } from './useOptimisticGraph'
 import { mergeOptimistic } from './graphCache'
-import { useWorkspaceLayout } from './useWorkspaceLayout'
+import { useWorkspaceLayout, type MoveOrigin } from './useWorkspaceLayout'
 import { RobotTopologyGraph } from './robots/RobotTopologyGraph'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { toSharedFocus } from '../workspace/useSharedFocus'
@@ -187,7 +187,7 @@ interface GraphBodyProps {
   layout: WorkspaceLayout
   copy: EmptyCopy
   onSelect: (entity: Entity, ancestors: SelectionPath) => void
-  onMove: (entityId: string, point: Point) => void
+  onMove: (entityId: string, point: Point, origin?: MoveOrigin) => void
   onContextMenu: (event: React.MouseEvent, entity: Entity) => void
   renderContent: (entity: Entity) => React.ReactNode
   toolbar: React.ReactNode
@@ -423,8 +423,8 @@ function useWorkspaceSnapshot() {
   const layout = useWorkspaceLayout(projectId, summary.status === 'ready', liveEntityIds)
   const move = layout.move
   const onMove = useCallback(
-    (entityId: string, point: Point) => {
-      if (!isAccountAnchor(entityId)) move(entityId, point)
+    (entityId: string, point: Point, origin?: MoveOrigin) => {
+      if (!isAccountAnchor(entityId)) move(entityId, point, origin)
     },
     [move]
   )

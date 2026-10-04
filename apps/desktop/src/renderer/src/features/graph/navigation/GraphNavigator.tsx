@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import type { Entity, Relation } from '../../../lib/api/resources'
 import type { Point } from '../../../lib/api/workspace'
+import type { MoveOrigin } from '../useWorkspaceLayout'
 import { GraphCard } from './GraphCard'
 import { GraphLinkDrawing, GraphLinkList } from './GraphLinks'
 import { HelpPopover } from './HelpPopover'
@@ -27,7 +28,7 @@ export interface GraphNavigatorProps {
   scopeGraph?: (rootId: string | null) => { entities: Entity[]; relations: Relation[] }
   scopeRootIds?: readonly string[]
   onSelect: (entity: Entity, path: readonly NavigationStep[]) => void
-  onMove: (entityId: string, point: Point) => void
+  onMove: (entityId: string, point: Point, origin?: MoveOrigin) => void
   onContextMenu?: (event: React.MouseEvent, entity: Entity) => void
   renderContent?: (entity: Entity) => ReactNode
   toolbar?: ReactNode
@@ -241,7 +242,7 @@ function useDefaultPositions(
     for (const entity of visible) {
       if (positions[entity.id] || sent.current.has(entity.id)) continue
       sent.current.add(entity.id)
-      onMove(entity.id, points[entity.id])
+      onMove(entity.id, points[entity.id], 'auto')
     }
   }, [persistDefaults, positions, onMove, visible, points])
 }

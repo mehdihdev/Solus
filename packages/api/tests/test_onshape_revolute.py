@@ -109,10 +109,10 @@ async def test_revolute_preview_and_verified_payload_preserve_one_rotation() -> 
 
 @pytest.mark.parametrize("distance", [0.025, -0.00015])
 @respx.mock
-async def test_measured_offset_serializes_vendor_sign_and_preserves_poses(distance):
+async def test_measured_offset_serializes_vendor_sign_and_preserves_poses(distance: Any) -> None:
     setup(distance=distance)
 
-    def post(request):
+    def post(request: httpx.Request) -> httpx.Response:
         feature = json.loads(request.content)["feature"]
         params = {p["parameterId"]: p for p in feature["parameters"]}
         assert params["mateOffsetEnabled"]["value"] is True
@@ -135,7 +135,7 @@ async def test_measured_offset_serializes_vendor_sign_and_preserves_poses(distan
 
 @pytest.mark.parametrize("requested", [None, 0.02, True, float("nan"), 501])
 @respx.mock
-async def test_unmeasured_or_invalid_offset_refuses_before_post(requested):
+async def test_unmeasured_or_invalid_offset_refuses_before_post(requested: Any) -> None:
     setup(distance=0.025)
     changes = {} if requested is None else {"axial_offset_m": requested}
     with pytest.raises(ConnectorError):
@@ -144,10 +144,10 @@ async def test_unmeasured_or_invalid_offset_refuses_before_post(requested):
 
 
 @respx.mock
-async def test_revolute_postwrite_pose_change_is_uncertain_without_replay():
+async def test_revolute_postwrite_pose_change_is_uncertain_without_replay() -> None:
     setup()
 
-    def post(request):
+    def post(request: httpx.Request) -> httpx.Response:
         feature = json.loads(request.content)["feature"]
         feature["featureId"] = "joint"
         after = tree()
@@ -205,7 +205,7 @@ async def test_revolute_requires_bound_preview() -> None:
 
 
 @respx.mock
-async def test_same_direction_revolute_uses_measured_unflipped_primary():
+async def test_same_direction_revolute_uses_measured_unflipped_primary() -> None:
     from solus_api.connectors.contracts import Credentials
     from solus_api.connectors.onshape import OnshapeConnector
     from solus_api.connectors.onshape_mates import _Mate
@@ -262,7 +262,7 @@ async def test_wrong_enum_or_failed_regeneration_is_uncertain_without_replay(
 
 @pytest.mark.parametrize("quantity_type", [None, "ANGLE"])
 @respx.mock
-async def test_revolute_requires_observed_length_offset_spec(quantity_type) -> None:
+async def test_revolute_requires_observed_length_offset_spec(quantity_type: Any) -> None:
     setup()
     body = observed_specs()
     parameters = body["featureSpecs"][1]["parameters"]
@@ -297,12 +297,12 @@ def test_real_factory_attests_revolute_for_normal_build_policy() -> None:
         tool for tool in registry.tools() if tool.descriptor.name == "onshape.create_revolute_mate"
     )
     assert tool.descriptor.requires_confirmation
-    assert tool.requires_complete_preview
+    assert tool.requires_complete_preview  # type: ignore[attr-defined]  # set dynamically on the concrete tool
     assert getattr(tool, "_build_authority", None) is not None
 
 
 @respx.mock
-async def test_actual_revolute_preview_is_admitted_once_in_build(engine) -> None:
+async def test_actual_revolute_preview_is_admitted_once_in_build(engine: Any) -> None:
     from solus_api.agent.execution_policy import BuildExecutionPolicy
     from solus_api.agent.modes import ActionMode
     from solus_api.agent.runtime import build_sol_registry
@@ -318,6 +318,7 @@ async def test_actual_revolute_preview_is_admitted_once_in_build(engine) -> None
     project, reference = await _seed(maker, documents=["document", "donor"])
     async with maker() as session:
         source = await session.scalar(select(Source).where(Source.project_id == project))
+        assert source is not None
         source.config = {**source.config, "access": "write"}
         await session.commit()
     store = InMemorySecretStore()
