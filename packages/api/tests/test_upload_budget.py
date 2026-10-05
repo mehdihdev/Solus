@@ -25,8 +25,13 @@ class FakeRedis:
         self.counts[key] = self.counts.get(key, 0) + amount
         return self.counts[key]
 
-    async def expire(self, key: str, seconds: int) -> bool:
-        self.ttls[key] = seconds
+    async def set(self, key: str, value: int, *, ex: int, nx: bool) -> bool:
+        if self.fail:
+            raise ConnectionError("redis down")
+        if nx and key in self.counts:
+            return False
+        self.counts[key] = value
+        self.ttls[key] = ex
         return True
 
 
@@ -100,15 +105,27 @@ async def test_budget_recovers_to_redis_after_outage() -> None:
 
 
 class _HungRedis:
-    async def incrby(self, name: str, amount: int) -> int:
+    async def set(self, name: str, value: int, *, ex: int, nx: bool) -> bool:
         await asyncio.Event().wait()
-        return 0
-
-    async def expire(self, name: str, time: int) -> bool:
         return True
+
+    async def incrby(self, name: str, amount: int) -> int:
+        return 0
 
 
 async def test_budget_falls_back_when_redis_hangs() -> None:
     budget = UploadBudget("hang", 60, _HungRedis())
     total = await asyncio.wait_for(budget.bump("k"), timeout=5)
     assert total == 1
+
+
+class _IncrFailsRedis(FakeRedis):
+    async def incrby(self, key: str, amount: int) -> int:
+        raise ConnectionError("incrby failed")
+
+
+async def test_failure_after_ttl_set_never_leaves_a_ttl_less_key() -> None:
+    redis = _IncrFailsRedis()
+    budget = UploadBudget("atomic", 60, redis)
+    await budget.bump("k")
+    assert redis.counts and set(redis.counts) == set(redis.ttls)

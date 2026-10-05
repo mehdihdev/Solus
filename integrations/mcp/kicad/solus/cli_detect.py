@@ -38,12 +38,27 @@ def detect_kicad_cli() -> str | None:
     launch-posture fact, not a per-call question.
     """
     pinned = os.environ.get("KICAD_CLI_PATH", "")
-    if pinned and os.path.isfile(pinned) and os.access(pinned, os.X_OK):
+    if _trusted_pinned(pinned):
         return pinned
     native = shutil.which("kicad-cli")
     if native is not None:
         return native
     return _flatpak_cli()
+
+
+def _trusted_pinned(pinned: str) -> bool:
+    """An absolute executable regular file that does not live in the (untrusted)
+    project workspace — the launcher's cwd — so repo content can never be run."""
+    if not (pinned and os.path.isabs(pinned) and os.path.isfile(pinned)):
+        return False
+    if not os.access(pinned, os.X_OK):
+        return False
+    workspace = os.environ.get("SOLUS_MCP_WORKSPACE", "")
+    if workspace:
+        root = os.path.realpath(workspace)
+        if os.path.commonpath([root, os.path.realpath(pinned)]) == root:
+            return False
+    return True
 
 
 def _flatpak_cli() -> str | None:

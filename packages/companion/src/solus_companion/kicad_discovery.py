@@ -32,13 +32,12 @@ def candidate_paths(platform: str) -> tuple[str, ...]:
 
 def _is_pinnable(path: str) -> bool:
     """An absolute path naming a regular, executable file."""
-    absolute = os.path.isabs(path) or (len(path) > 2 and path[1:3] == ":\\")
-    return absolute and os.path.isfile(path) and os.access(path, os.X_OK)
+    return os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)
 
 
 def find_kicad_cli(candidates: tuple[str, ...] | None = None) -> str | None:
     """The first installed `kicad-cli`, or None. *candidates* is a test seam."""
     for path in candidate_paths(sys.platform) if candidates is None else candidates:
         if _is_pinnable(path):
-            return path
+            return os.path.realpath(path)
     return None

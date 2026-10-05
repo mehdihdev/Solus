@@ -126,3 +126,25 @@ def test_default_detection_does_not_trust_arbitrary_flatpak_path(
         assert detect_kicad_cli() is None
     finally:
         detect_kicad_cli.cache_clear()
+
+
+def test_relative_or_workspace_kicad_cli_path_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from solus.cli_detect import detect_kicad_cli
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    planted = workspace / "kicad-cli"
+    planted.write_text("#!/bin/sh\nexit 0\n")
+    planted.chmod(0o755)
+    monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(workspace))
+    monkeypatch.setattr("solus.cli_detect.shutil.which", lambda name: None)
+    for hostile in (str(planted), "./kicad-cli", "kicad-cli"):
+        monkeypatch.setenv("KICAD_CLI_PATH", hostile)
+        monkeypatch.chdir(workspace)
+        detect_kicad_cli.cache_clear()
+        try:
+            assert detect_kicad_cli() is None, hostile
+        finally:
+            detect_kicad_cli.cache_clear()

@@ -1,5 +1,6 @@
 """KiCad install discovery: fixed absolute candidates, regular executables only."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,7 @@ def test_candidates_are_absolute_and_os_specific() -> None:
 def test_finds_first_executable_candidate(tmp_path: Path) -> None:
     first = _make_exe(tmp_path / "a" / "kicad-cli")
     second = _make_exe(tmp_path / "b" / "kicad-cli")
-    assert find_kicad_cli(candidates=(str(first), str(second))) == str(first)
+    assert find_kicad_cli(candidates=(str(first), str(second))) == os.path.realpath(first)
 
 
 def test_skips_missing_directory_nonexecutable_and_relative(tmp_path: Path) -> None:
@@ -45,7 +46,7 @@ def test_skips_missing_directory_nonexecutable_and_relative(tmp_path: Path) -> N
             str(good),
         )
     )
-    assert found == str(good)
+    assert found == os.path.realpath(good)
 
 
 def test_none_when_nothing_installed(tmp_path: Path) -> None:
@@ -92,3 +93,14 @@ def test_discover_servers_omits_kicad_cli_path_when_absent(
 def test_other_servers_never_get_kicad_cli_path() -> None:
     fixture = Path(__file__).parent / "fixtures" / "mcp_root"
     assert KICAD_CLI_ENV not in discover_servers(fixture)[0].env
+
+
+def test_hostile_ambient_kicad_cli_path_never_reaches_child_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from solus_companion.supervisor import child_env
+
+    monkeypatch.setattr("solus_companion.config.find_kicad_cli", lambda: None)
+    server = discover_servers(_kicad_root(tmp_path / "root"))[0]
+    ambient = {"PATH": "/usr/bin", "HOME": "/h", KICAD_CLI_ENV: "/hostile"}
+    assert KICAD_CLI_ENV not in child_env(server.env, server.env_passthrough, source=ambient)

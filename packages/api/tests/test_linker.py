@@ -523,6 +523,38 @@ async def test_cross_project_refs_never_resolve(db: AsyncSession) -> None:
     assert await _live_link_edges(db, project_b) == []
 
 
+async def test_relinking_project_a_never_retracts_project_b_same_as_edges(
+    db: AsyncSession,
+) -> None:
+    """Retraction is a destructive write: it must stay inside the caller's project."""
+    project_a = await _project(db, "lnk-retract-a")
+    project_b = await _project(db, "lnk-retract-b")
+    for project in (project_a, project_b):
+        circuit = await _entity(db, project, external_ref="U1")
+        cad = await _entity(
+            db, project, external_ref="JHD-1", connector="onshape", domain=Domain.MECHANICAL
+        )
+        part = _part(
+            "LM358",
+            (
+                _mm(_ref("U1", entity_id=circuit.id)),
+                _mm(
+                    _ref("JHD-1", "onshape", entity_id=cad.id),
+                    modality=Modality.CAD_MODEL,
+                ),
+            ),
+        )
+        await link(db, _output(part), project_id=project.id)
+    assert len(await _live_link_edges(db, project_a)) == 1
+    assert len(await _live_link_edges(db, project_b)) == 1
+
+    result = await link(db, _output(), project_id=project_a.id)
+
+    assert result.retracted == 1
+    assert await _live_link_edges(db, project_a) == []
+    assert len(await _live_link_edges(db, project_b)) == 1
+
+
 # --- The committed mock, end to end ------------------------------------------------
 
 

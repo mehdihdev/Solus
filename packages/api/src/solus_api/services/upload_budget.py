@@ -28,7 +28,7 @@ _REDIS_CALL_TIMEOUT_SECONDS = 0.25
 
 class BudgetRedis(Protocol):
     async def incrby(self, name: str, amount: int) -> int: ...
-    async def expire(self, name: str, time: int) -> bool: ...
+    async def set(self, name: str, value: int, *, ex: int, nx: bool) -> object: ...
 
 
 class UploadBudget:
@@ -46,9 +46,15 @@ class UploadBudget:
         redis_key = f"{_KEY_PREFIX}:{self._name}:{window}:{key}"
         try:
             async with asyncio.timeout(_REDIS_CALL_TIMEOUT_SECONDS):
+                # TTL first (NX): a failure between the two calls can then never leave a
+                # counter without an expiry. INCRBY preserves the TTL.
+                await self._redis.set(redis_key, 0, ex=self._window_seconds * _TTL_WINDOWS, nx=True)
                 total = await self._redis.incrby(redis_key, amount)
-                await self._redis.expire(redis_key, self._window_seconds * _TTL_WINDOWS)
-        except Exception:  # noqa: BLE001 — any Redis fault degrades, never fails the upload
-            logger.warning("upload budget %s: redis unavailable, per-process fallback", self._name)
+        except Exception as exc:  # noqa: BLE001 — any Redis fault degrades, never fails the upload
+            logger.warning(
+                "upload budget %s: redis unavailable (%s), per-process fallback",
+                self._name,
+                type(exc).__name__,
+            )
             return self._fallback.bump(key, amount)
         return total
