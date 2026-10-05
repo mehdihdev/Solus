@@ -42,9 +42,13 @@ It contains `uno_fsr_divider.kicad_pro`, `.kicad_sch`, `.net.xml`, `.pdf`, `.svg
 - [x] Solus' actual parser and graph mapper produce 34 entities, 35 relations
   and zero mapping errors. This includes native unconnected-pin net records;
   the three shared ground pins remain on one component-to-net relation.
-- [ ] Authenticated project's KiCad source is bound to this schematic, and its
+- [x] Authenticated project's KiCad source is bound to this schematic, and its
   change signal updates persisted graph topology. Pure graph mapping above does
   not establish this step; local-folder discovery alone only creates a project node.
+  Proven end to end by `packages/api/tests/test_kicad_change_signal_graph.py`
+  (companion `change` frame -> live export -> persisted entities/relations; a second
+  team's source is never dispatched to or modified). Walkthrough step 6 below remains
+  the live-application confirmation.
 
 The FSR uses the real generic `Device:R_Variable` symbol with no invented footprint
 or manufacturer pin numbering. Its value identifies it as a generic FSR402 model.
