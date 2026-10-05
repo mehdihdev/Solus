@@ -1,6 +1,7 @@
 """Tests for the connector worker glue: provider resolution + inline execution,
 and the scheduled change-detection sweep (SOLUSDEV-103 'schedules detect_changes')."""
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -25,6 +26,7 @@ from solus_api.models import (
     Sync,
     Team,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 
@@ -414,3 +416,85 @@ async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker: Any)
     assert await run_change_detection(**kwargs) == 0
     assert await run_change_detection(**kwargs) == 1
     enqueue.assert_awaited_once_with(source.id)
+
+
+# ------------------- SOLUSDEV-100 L4: a hung change-detection probe is bounded
+
+
+class HangingConnector(StubConnector):
+    async def detect_changes(self, ctx: SyncContext) -> bool:
+        await asyncio.sleep(3600)
+        return True
+
+
+async def test_hung_probe_times_out_and_records_retryable_error(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    registry = ConnectorRegistry()
+    registry.register("github", HangingConnector)
+    enqueued: list[uuid.UUID] = []
+
+    async def fake_enqueue(source_id: uuid.UUID) -> None:
+        enqueued.append(source_id)
+
+    count = await asyncio.wait_for(
+        run_change_detection(
+            sessionmaker=maker,
+            registry=registry,
+            secret_store=store,
+            enqueue=fake_enqueue,
+            probe_timeout_seconds=0.05,
+        ),
+        timeout=10,
+    )
+
+    assert count == 0 and enqueued == []
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        assert row is not None
+        assert row.status is SourceStatus.CONNECTED, "timeout is retryable, not a terminal error"
+        assert row.last_error is not None and row.last_error.get("code")
+
+
+async def test_hung_probe_does_not_block_other_sources(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    store = InMemorySecretStore()
+    hung = await _source(maker, store)
+    healthy = await _source(maker, store)
+    registry = ConnectorRegistry()
+    calls = {"n": 0}
+
+    def factory() -> Connector:
+        calls["n"] += 1
+        # The sweep is ordered fairly, not by creation: hang exactly one probe.
+        return HangingConnector() if calls["n"] == 1 else StubConnector(changed=True)
+
+    registry.register("github", factory)
+    enqueued: list[uuid.UUID] = []
+
+    async def fake_enqueue(source_id: uuid.UUID) -> None:
+        enqueued.append(source_id)
+
+    count = await asyncio.wait_for(
+        run_change_detection(
+            sessionmaker=maker,
+            registry=registry,
+            secret_store=store,
+            enqueue=fake_enqueue,
+            probe_timeout_seconds=0.05,
+        ),
+        timeout=10,
+    )
+
+    assert count == 1 and len(enqueued) == 1
+    assert enqueued[0] in {hung.id, healthy.id}
+    async with maker() as db:
+        errored = [
+            s
+            for s in (await db.scalars(select(Source).where(Source.id.in_([hung.id, healthy.id]))))
+            if s.last_error
+        ]
+        assert len(errored) == 1 and errored[0].id != enqueued[0]
