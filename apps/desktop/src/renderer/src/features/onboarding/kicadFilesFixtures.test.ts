@@ -54,7 +54,7 @@ describe('classifyKicadFile on the committed KiCad files', () => {
   })
 
   it('still classifies by content after a UTF-8 BOM and leading blank lines', () => {
-    expect(classifyKicadFile(`﻿\n\n${SEXPR_NETLIST}`)).toBe('sexpr-netlist')
+    expect(classifyKicadFile(`${BOM}\n\n${SEXPR_NETLIST}`)).toBe('sexpr-netlist')
     expect(classifyKicadFile(`${BOM}  ${XML_NETLIST}`)).toBe('xml-netlist')
   })
 })
