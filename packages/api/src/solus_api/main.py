@@ -93,6 +93,7 @@ from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.cad_purge import run_startup_cad_purges
 from solus_api.services.supabase_admin import build_supabase_admin
+from solus_api.services.upload_budget import UploadBudget
 from solus_api.storage import build_artifact_store
 from solus_api.storage.cad_store import build_cad_store
 from solus_api.toolkb import router as toolkb
@@ -457,8 +458,10 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # Per-source cap on deliveries of any kind (pings, translation.complete, hints) so
     # non-scheduling traffic is bounded too; see WEBHOOK_INGEST_PER_MINUTE.
     app.state.webhook_ingest_limiter = FixedWindowLimiter(window_seconds=60)
-    app.state.artifact_upload_request_limiter = FixedWindowLimiter(window_seconds=60)
-    app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
+    # SOLUSDEV-100 M2 follow-up: Redis-backed (aggregate across instances) with an
+    # in-memory fallback when Redis is unset or down.
+    app.state.artifact_upload_request_limiter = UploadBudget("requests", 60, app.state.redis)
+    app.state.artifact_upload_byte_limiter = UploadBudget("bytes", 3600, app.state.redis)
 
     register_error_handlers(app)
     # SOLUSDEV-252 review M1: innermost, so a 411/413 still carries CORS headers

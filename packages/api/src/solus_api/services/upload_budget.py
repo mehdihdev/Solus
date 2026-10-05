@@ -1,0 +1,48 @@
+"""Shared fixed-window upload budgets (SOLUSDEV-100 Phase 4 M2 follow-up).
+
+`FixedWindowLimiter` is per-process, so on N API instances a budget of L really
+admits `L * N`. `UploadBudget` counts in Redis (INCRBY on a window-stamped key) so the
+budget is aggregate, and degrades to a per-process `FixedWindowLimiter` whenever Redis is
+unconfigured or errors — a Redis outage tightens to the old behaviour, it never opens the
+gate and never fails the upload request."""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Protocol
+
+from solus_api.services.artifacts import FixedWindowLimiter
+
+logger = logging.getLogger("solus.artifacts.budget")
+
+_KEY_PREFIX = "solus:upload-budget"
+#: Keys carry their window index, so a TTL of two windows is always enough.
+_TTL_WINDOWS = 2
+
+
+class BudgetRedis(Protocol):
+    async def incrby(self, name: str, amount: int) -> int: ...
+    async def expire(self, name: str, time: int) -> bool: ...
+
+
+class UploadBudget:
+    def __init__(self, name: str, window_seconds: int, redis: BudgetRedis | None) -> None:
+        self._name = name
+        self._window_seconds = window_seconds
+        self._redis = redis
+        self._fallback = FixedWindowLimiter(window_seconds=window_seconds)
+
+    async def bump(self, key: str, amount: int = 1) -> int:
+        """Add `amount` to `key`'s current-window total and return the new total."""
+        if self._redis is None:
+            return self._fallback.bump(key, amount)
+        window = int(time.time()) // self._window_seconds
+        redis_key = f"{_KEY_PREFIX}:{self._name}:{window}:{key}"
+        try:
+            total = await self._redis.incrby(redis_key, amount)
+            await self._redis.expire(redis_key, self._window_seconds * _TTL_WINDOWS)
+        except Exception:  # noqa: BLE001 — any Redis fault degrades, never fails the upload
+            logger.warning("upload budget %s: redis unavailable, per-process fallback", self._name)
+            return self._fallback.bump(key, amount)
+        return total

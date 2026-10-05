@@ -17,7 +17,6 @@ from solus_api.deps import ProjectCtx, SessionDep, SettingsDep, require_role
 from solus_api.models import Role
 from solus_api.schemas import serialize_artifact, serialize_artifact_ref
 from solus_api.services.artifacts import (
-    FixedWindowLimiter,
     create_artifact,
     get_artifact_metadata,
     read_artifact_content,
@@ -27,6 +26,7 @@ from solus_api.services.artifacts import (
     validate_source_tool,
 )
 from solus_api.services.events import emit_event
+from solus_api.services.upload_budget import UploadBudget
 from solus_api.storage import ArtifactStore
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/artifacts")
@@ -77,16 +77,16 @@ def _rate_limited(message: str, retry_after_seconds: int) -> Response:
     return resp
 
 
-def _upload_request_limit_exceeded(request: Request, user_id: uuid.UUID, limit: int) -> bool:
-    limiter: FixedWindowLimiter = request.app.state.artifact_upload_request_limiter
-    return limiter.bump(str(user_id)) > limit
+async def _upload_request_limit_exceeded(request: Request, user_id: uuid.UUID, limit: int) -> bool:
+    budget: UploadBudget = request.app.state.artifact_upload_request_limiter
+    return await budget.bump(str(user_id)) > limit
 
 
-def _upload_byte_budget_exceeded(
+async def _upload_byte_budget_exceeded(
     request: Request, team_id: uuid.UUID, accepted_bytes: int, limit: int
 ) -> bool:
-    limiter: FixedWindowLimiter = request.app.state.artifact_upload_byte_limiter
-    return limiter.bump(str(team_id), accepted_bytes) > limit
+    budget: UploadBudget = request.app.state.artifact_upload_byte_limiter
+    return await budget.bump(str(team_id), accepted_bytes) > limit
 
 
 @router.post("", status_code=201, response_model=None)
@@ -100,7 +100,7 @@ async def upload_artifact(
     store = _get_artifact_store(request)
 
     _reject_if_content_length_exceeds_cap(request, settings.artifact_max_bytes)
-    if _upload_request_limit_exceeded(
+    if await _upload_request_limit_exceeded(
         request, ctx.user.id, settings.artifact_uploads_per_minute_per_user
     ):
         return _rate_limited("Too many artifact uploads; slow down", retry_after_seconds=60)
@@ -119,7 +119,7 @@ async def upload_artifact(
     tool_call_id = validate_call_id(_form_str(form.get("call_id")))
 
     data = await read_bounded(upload, settings.artifact_max_bytes)
-    if _upload_byte_budget_exceeded(
+    if await _upload_byte_budget_exceeded(
         request, ctx.team.id, len(data), settings.artifact_upload_bytes_per_hour_per_team
     ):
         return _rate_limited("Team upload byte budget exceeded", retry_after_seconds=3600)

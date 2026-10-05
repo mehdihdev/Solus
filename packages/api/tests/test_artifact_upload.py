@@ -15,8 +15,10 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.core.config import Settings
 from solus_api.models import Artifact, ProjectMembership
+from solus_api.services.upload_budget import UploadBudget
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from test_upload_budget import FakeRedis
 
 
 async def _project(client: AsyncClient, headers: dict[str, str]) -> str:
@@ -360,3 +362,21 @@ async def test_upload_without_content_length_is_rejected_before_parsing(
     resp = await client.send(request)
     assert resp.status_code == 411
     assert resp.json()["error"]["code"] == "length_required"
+
+
+async def test_upload_budget_is_redis_backed_and_survives_a_redis_outage(
+    client: AsyncClient, alice_headers: dict[str, str], app: FastAPI
+) -> None:
+    """M2 follow-up: the route's budgets count in Redis when configured and fall back
+    to the per-process counter on a Redis fault (still enforced, never open)."""
+    redis = FakeRedis()
+    app.state.artifact_upload_request_limiter = UploadBudget("requests", 60, redis)
+    project_id = await _project(client, alice_headers)
+    app.state.settings.artifact_uploads_per_minute_per_user = 2
+
+    assert (await _upload(client, alice_headers, project_id)).status_code == 201
+    assert redis.counts, "request budget landed in redis"
+    redis.fail = True  # outage mid-flight: fallback counter takes over
+    assert (await _upload(client, alice_headers, project_id)).status_code == 201
+    assert (await _upload(client, alice_headers, project_id)).status_code == 201
+    assert (await _upload(client, alice_headers, project_id)).status_code == 429
