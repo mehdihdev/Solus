@@ -19,9 +19,9 @@ from conftest import create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.agent.tools.shapes import ToolResult
-from solus_api.bridge.frames import parse_frame
+from solus_api.bridge.frames import InboundFrame, parse_frame
 from solus_api.bridge.service import ingest_result
-from solus_api.models import GraphEntity, GraphEdge
+from solus_api.models import GraphEdge, GraphEntity
 from solus_api.routers import bridge as bridge_mod
 from sqlalchemy import func, select
 from test_sync_live_acquisition import _live_session
@@ -111,6 +111,7 @@ async def test_change_frame_updates_graph_topology_and_isolates_teams(
 
     frame = parse_frame('{"type":"change","data":{}}', control_cap=16 * 1024, tool_result_cap=1024)
     answer = asyncio.create_task(_answer_once(a_sent, a_session, _netlist(connected=True)))
+    assert isinstance(frame, InboundFrame)
     violation = bridge_mod._handle_notification(app.state, a_session, frame, frozenset(), None)
     assert violation is False
     await asyncio.wait_for(bridge_mod._INFLIGHT_RESYNC[a_session.session_id], timeout=15)
