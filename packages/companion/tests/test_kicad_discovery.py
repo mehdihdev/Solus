@@ -38,7 +38,13 @@ def test_skips_missing_directory_nonexecutable_and_relative(tmp_path: Path) -> N
     plain.chmod(0o644)
     good = _make_exe(tmp_path / "good" / "kicad-cli")
     found = find_kicad_cli(
-        candidates=(str(tmp_path / "nope"), str(tmp_path / "dir"), str(plain), "kicad-cli", str(good))
+        candidates=(
+            str(tmp_path / "nope"),
+            str(tmp_path / "dir"),
+            str(plain),
+            "kicad-cli",
+            str(good),
+        )
     )
     assert found == str(good)
 

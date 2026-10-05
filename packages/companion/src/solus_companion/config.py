@@ -409,6 +409,14 @@ def _env_passthrough(server_dir: Path, name: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _host_discovered_env(name: str) -> dict[str, str]:
+    """Values only the companion can discover about this machine, by server.
+
+    The kicad fork cannot find a GUI install under its pinned PATH; we can."""
+    cli = find_kicad_cli() if name == "kicad" else None
+    return {KICAD_CLI_ENV: cli} if cli is not None else {}
+
+
 def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[ServerLaunch, ...]:
     """Scan `<root>/*/allowlist.yaml` for vendored servers (ADR-031).
 
@@ -458,11 +466,7 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
         interpreter = _private_interpreter(root_resolved, server_dir, name)
         if interpreter is not None:
             env[INTERPRETER_ENV] = str(interpreter)
-        if name == "kicad":
-            # The fork cannot find a GUI install under its pinned PATH; we can.
-            cli = find_kicad_cli()
-            if cli is not None:
-                env[KICAD_CLI_ENV] = cli
+        env.update(_host_discovered_env(name))
         servers.append(
             ServerLaunch(
                 name=name,
