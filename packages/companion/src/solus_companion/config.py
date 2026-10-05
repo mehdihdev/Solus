@@ -414,6 +414,8 @@ def _host_discovered_env(name: str) -> dict[str, str]:
 
     The kicad fork cannot find a GUI install under its pinned PATH; we can."""
     cli = find_kicad_cli() if name == "kicad" else None
+    if name == "kicad" and cli is None:
+        logger.info("no KiCad install found in the standard locations; kicad exports will degrade")
     return {KICAD_CLI_ENV: cli} if cli is not None else {}
 
 

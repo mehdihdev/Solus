@@ -1,3 +1,5 @@
+> **Superseded by [`COWORK_QA_kicad-integration.md`](COWORK_QA_kicad-integration.md)** — the consolidated checklist. Kept for detail.
+
 # KiCad development — SOLUSDEV-261
 
 This is an execution checklist, not a claim that the live circuit is complete.

@@ -1,6 +1,5 @@
 """KiCad install discovery: fixed absolute candidates, regular executables only."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -93,4 +92,3 @@ def test_discover_servers_omits_kicad_cli_path_when_absent(
 def test_other_servers_never_get_kicad_cli_path() -> None:
     fixture = Path(__file__).parent / "fixtures" / "mcp_root"
     assert KICAD_CLI_ENV not in discover_servers(fixture)[0].env
-    assert os.name  # keep os import meaningful for platforms without fixtures

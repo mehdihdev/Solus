@@ -233,9 +233,10 @@ Both budgets are `UploadBudget` instances (`services/upload_budget.py`). When
 `SOLUS_REDIS_URL` is configured they count in **Redis** (`INCRBY` on a window-stamped key
 `solus:upload-budget:{name}:{window}:{key}`, expiring after two windows), so the budget is
 **aggregate across API instances** (Phase 4 M2 follow-up closed). If Redis is unset or any
-Redis call fails, the budget degrades to a per-process `FixedWindowLimiter` and logs a
-warning: enforcement tightens to `limit x instance_count`, it never fails open and never
-fails the upload request. `FixedWindowLimiter` prunes stale per-key counters lazily on every
+Redis call fails or exceeds a 250 ms timeout, the budget degrades to a per-process `FixedWindowLimiter` and logs a
+warning: the budget becomes per-instance (aggregate `limit x instance_count`) with counts
+restarting from zero, so a Redis flap can admit up to about twice the limit for that window;
+it never fails the upload request. `FixedWindowLimiter` prunes stale per-key counters lazily on every
 `bump()`, so fallback memory is bounded by the distinct keys of the CURRENT window.
 
 ### 4.6 Storage backends — the `ArtifactStore` protocol

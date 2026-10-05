@@ -3,6 +3,7 @@ dedicated `FixedWindowLimiter` stale-eviction unit test."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -96,3 +97,18 @@ async def test_budget_recovers_to_redis_after_outage() -> None:
     await budget.bump("u")
     redis.fail = False
     assert await budget.bump("u") == 1, "redis counter starts fresh once reachable"
+
+
+class _HungRedis:
+    async def incrby(self, name: str, amount: int) -> int:
+        await asyncio.Event().wait()
+        return 0
+
+    async def expire(self, name: str, time: int) -> bool:
+        return True
+
+
+async def test_budget_falls_back_when_redis_hangs() -> None:
+    budget = UploadBudget("hang", 60, _HungRedis())
+    total = await asyncio.wait_for(budget.bump("k"), timeout=5)
+    assert total == 1
