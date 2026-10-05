@@ -1,4 +1,5 @@
 """ERC success requires an actual complete report, never the netlist fallback."""
+# mypy: disable-error-code="import-not-found,no-untyped-def"
 
 import json
 import subprocess

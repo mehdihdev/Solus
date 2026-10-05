@@ -1,4 +1,5 @@
 """The installed Flatpak cannot forward FDs; create the capability inside it."""
+# mypy: disable-error-code="import-not-found,no-untyped-def"
 
 import subprocess
 from pathlib import Path

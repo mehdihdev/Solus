@@ -1,8 +1,10 @@
 """Open-in-KiCad conflict: a write must never clobber, or be clobbered by, a
 schematic the user is editing in the KiCad GUI (stable `stale_plan` refusal)."""
+# mypy: disable-error-code="import-not-found,no-untyped-def"
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,8 +23,11 @@ def _copy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return target
 
 
-def _edit(target: Path, fp: str, dry_run: bool = False) -> dict:
-    return set_symbol_property_impl(target.name, "U1", "MPN", "NEW-123", fp, dry_run)
+def _edit(target: Path, fp: str, dry_run: bool = False) -> dict[str, Any]:
+    result: dict[str, Any] = set_symbol_property_impl(
+        target.name, "U1", "MPN", "NEW-123", fp, dry_run
+    )
+    return result
 
 
 def test_write_refused_when_file_changed_since_it_was_read(

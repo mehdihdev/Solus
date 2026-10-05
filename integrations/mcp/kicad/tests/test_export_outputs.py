@@ -1,4 +1,5 @@
 """An export must not follow mutable output aliases or delete external files."""
+# mypy: disable-error-code="import-not-found,no-untyped-def"
 
 import os
 import stat
