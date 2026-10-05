@@ -431,6 +431,18 @@ async def disconnect_source(
         domain="integrations",
         payload={"type": source.type.value, "retain_entities": retain_entities},
     )
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="source.disconnected",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={
+            "source_id": str(source.id),
+            "source_type": source.type.value,
+            "retain_entities": retain_entities,
+        },
+    )
     await session.delete(source)
     await session.commit()
     await run_cad_purges_after_commit(session, cache.durable_store)

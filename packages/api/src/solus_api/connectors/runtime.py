@@ -32,6 +32,7 @@ from solus_api.connectors.contracts import (
     SyncResult,
 )
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
+from solus_api.connectors.sync_events import emit_sync_outcome
 from solus_api.graph.live import graph_changed_frame
 from solus_api.models import (
     GraphEdge,
@@ -676,6 +677,7 @@ async def _commit_success(
         sync.errors = errors
         sync.finished_at = utcnow()
         await _mark_job(session, job_id, JobStatus.SUCCEEDED, progress=100)
+        await emit_sync_outcome(session, job_id=job_id, source=source, sync=sync)
         await session.commit()
         project_id = source.project_id
         logger.info(
@@ -778,6 +780,14 @@ async def _record_failure(
             sync.errors = [*sync.errors, {"item": "sync", "message": payload["message"]}]
             sync.finished_at = utcnow()
         await _mark_job(session, job_id, JobStatus.FAILED, error=dict(payload))
+        if source is not None and sync is not None:
+            await emit_sync_outcome(
+                session,
+                job_id=job_id,
+                source=source,
+                sync=sync,
+                error_code=str(payload["code"]),
+            )
         await session.commit()
 
 

@@ -122,8 +122,7 @@ and worker still up, and the same source recovers on the next valid file:
 
 ## Known limitations (not bugs)
 
-- No data event is emitted when a sync FINISHES or fails (ADR-011 gap; event names need a
-  schema decision) — pinned as xfail `test_a_finished_kicad_sync_emits_an_outcome_event`.
+- Scheduled sweep syncs (no job) emit no outcome event — there is no acting user to attribute.
 - Live acquisition runs only in the API process; the worker path uses committed exports.
 - Artifacts are served via the API (presigned S3 deferred).
 - `modality_hints` are not exposed on entity responses (no API doc defines it).

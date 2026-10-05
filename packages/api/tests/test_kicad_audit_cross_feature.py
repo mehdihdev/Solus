@@ -14,7 +14,7 @@ entities into the neighbouring features:
 * Data collection (ADR-011): consented users get `source.connected` and
   `source.sync_started` events with no design content in the payload;
   non-consenting users get none; the activity feed records the lifecycle.
-  KNOWN GAP (strict xfail): no event is emitted when a sync FINISHES.
+  Sync outcomes, disconnect and budget hits: tests/test_outcome_and_rate_limit_events.py.
 """
 
 from __future__ import annotations
@@ -338,8 +338,12 @@ async def test_consented_kicad_actions_emit_scoped_events_without_design_content
     await sync(client, alice_headers, project_id, source["id"])
 
     events = [e for e in await _events(db, project_id) if e.event_type.startswith("source.")]
-    assert [e.event_type for e in events] == ["source.connected", "source.sync_started"]
-    connected, started = events
+    assert [e.event_type for e in events] == [
+        "source.connected",
+        "source.sync_started",
+        "source.sync_succeeded",
+    ]
+    connected, started, _finished = events
     assert connected.payload == {"type": "kicad"}
     assert started.payload == {"source_id": source["id"]}
     for event in events:
@@ -360,27 +364,3 @@ async def test_kicad_actions_without_consent_store_no_events(
     source = await connect_kicad(client, alice_headers, project_id, export=KICAD_XML)
     await sync(client, alice_headers, project_id, source["id"])
     assert [e for e in await _events(db, project_id) if e.event_type.startswith("source.")] == []
-
-
-SYNC_OUTCOME_EVENTS = {"source.synced", "source.sync_completed", "source.sync_succeeded"}
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN GAP (SOLUSDEV-312 audit): ADR-011 lists every sync as a meaningful event, but "
-        "runtime._commit_success/_record_failure emit nothing — only source.sync_started exists. "
-        "Needs an event-name decision from a human; flip this test when it lands."
-    ),
-)
-async def test_a_finished_kicad_sync_emits_an_outcome_event(
-    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
-) -> None:
-    from conftest import me
-
-    user = await me(client, alice_headers)
-    await _consent(db, user["id"])
-    project_id = await new_project(client, alice_headers)
-    source = await connect_kicad(client, alice_headers, project_id, export=KICAD_XML)
-    await sync(client, alice_headers, project_id, source["id"])
-    assert {e.event_type for e in await _events(db, project_id)} & SYNC_OUTCOME_EVENTS

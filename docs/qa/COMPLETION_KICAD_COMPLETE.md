@@ -19,7 +19,7 @@ plans. Consolidated QA: `COWORK_QA_kicad-integration.md`. Test audit: `KICAD_TES
 | 7   | Dev tools + change signal | Proven by test                            | `test_kicad_change_signal_graph.py` (frame → persisted topology; team B untouched). **Live desktop walkthrough not run**                                                              |
 | 8   | Open-in-KiCad conflict    | Done                                      | guard already existed (`stale_plan`: changed fingerprint or `~name.lck`); now pinned by `test_write_tool_open_in_kicad.py`, documented                                                |
 | 9   | Isolation/security        | Done                                      | `test_kicad_audit_isolation.py` (47), `test_kicad_audit_model_context.py`                                                                                                             |
-| 10  | Cross-feature             | Done except events                        | `test_kicad_audit_cross_feature.py`; **outcome event missing (below)**                                                                                                                |
+| 10  | Cross-feature             | Done                        | `test_kicad_audit_cross_feature.py`, `test_outcome_and_rate_limit_events.py`                                                                                                                |
 | 11  | SOL-100 follow-ups        | Done as approved                          | Redis budgets + eviction test; probe-timeout tests; `modality_hints` NOT exposed (no API doc defines it); worker seam + presigned S3 deferred by human                                |
 | 12  | Docs                      | Done                                      | QA consolidated, old plans point to it, artifacts/kicad-development docs updated                                                                                                      |
 
@@ -37,8 +37,7 @@ plans. Consolidated QA: `COWORK_QA_kicad-integration.md`. Test audit: `KICAD_TES
 
 ## Open items for humans
 
-1. **Data event gap:** no event on sync finish/failure or disconnect (ADR-011). Names are a
-   schema decision; pinned as strict xfail `test_a_finished_kicad_sync_emits_an_outcome_event`.
+1. ~~Data event gap~~ closed: `source.sync_succeeded`/`sync_failed`/`disconnected` and `rate_limit.exceeded` now emitted (no contract change; names documented in `docs/api/API.md`).
 2. Fork tree hash in `PROVENANCE.md` must be re-signed (fork test files changed); both-devs
    signatures, allowlist ratification, push/MR remain human gates.
 3. Linux CI images not verified; real desktop/bridge walkthroughs (QA §5, §7) need the Cowork pass.

@@ -236,7 +236,9 @@ Both budgets are `UploadBudget` instances (`services/upload_budget.py`). When
 Redis call fails or exceeds a 250 ms timeout, the budget degrades to a per-process `FixedWindowLimiter` and logs a
 warning: the budget becomes per-instance (aggregate `limit x instance_count`) with counts
 restarting from zero, so a Redis flap can admit up to about twice the limit for that window;
-it never fails the upload request. `FixedWindowLimiter` prunes stale per-key counters lazily on every
+it never fails the upload request. Every 429 from either budget also records a consent-gated
+`rate_limit.exceeded` data event (payload `{budget: "artifact_upload_requests"|"artifact_upload_bytes",
+ retry_after_seconds}`; no content), attributed to the uploading user, team and project. `FixedWindowLimiter` prunes stale per-key counters lazily on every
 `bump()`, so fallback memory is bounded by the distinct keys of the CURRENT window.
 
 ### 4.6 Storage backends — the `ArtifactStore` protocol
