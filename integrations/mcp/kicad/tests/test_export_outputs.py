@@ -33,7 +33,7 @@ def test_cli_output_alias_swap_cannot_write_read_or_delete_external_sentinel(
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         nonlocal descriptor_seen
         output = Path(argv[-2])
-        if str(output).startswith("/proc/self/fd/"):
+        if str(output).startswith(("/proc/self/fd/", "/dev/fd/")):
             descriptor = int(output.name)
             assert descriptor in kwargs["pass_fds"]
             descriptor_seen = True

@@ -35,6 +35,7 @@ from solus_contracts import SOLUS_HOME_DIRNAME
 
 from solus_companion import __version__
 from solus_companion.credentials import CredentialRelay
+from solus_companion.kicad_discovery import KICAD_CLI_ENV, find_kicad_cli
 from solus_companion.platforms import unavailable_reason
 
 logger = logging.getLogger("solus.companion.config")
@@ -457,6 +458,11 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
         interpreter = _private_interpreter(root_resolved, server_dir, name)
         if interpreter is not None:
             env[INTERPRETER_ENV] = str(interpreter)
+        if name == "kicad":
+            # The fork cannot find a GUI install under its pinned PATH; we can.
+            cli = find_kicad_cli()
+            if cli is not None:
+                env[KICAD_CLI_ENV] = cli
         servers.append(
             ServerLaunch(
                 name=name,

@@ -43,7 +43,7 @@ def test_container_helper_native_writer_uses_anonymous_output_descriptor(
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         assert argv[0] == "/app/bin/kicad-cli"
         output = Path(argv[-2])
-        assert str(output).startswith("/proc/self/fd/")
+        assert str(output).startswith(("/proc/self/fd/", "/dev/fd/"))
         assert int(output.name) in kwargs["pass_fds"]
         assert kwargs["stdout"] == subprocess.DEVNULL
         assert kwargs["stderr"] == subprocess.DEVNULL
@@ -66,7 +66,7 @@ def test_container_erc_preserves_violation_exit_code_and_uses_fd(
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         assert argv[:3] == ["/app/bin/kicad-cli", "sch", "erc"]
         output = Path(argv[-2])
-        assert str(output).startswith("/proc/self/fd/")
+        assert str(output).startswith(("/proc/self/fd/", "/dev/fd/"))
         assert int(output.name) in kwargs["pass_fds"]
         output.write_bytes(b'{"violations":[]}')
         return subprocess.CompletedProcess(argv, 5)

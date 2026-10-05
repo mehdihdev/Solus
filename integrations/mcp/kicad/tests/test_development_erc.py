@@ -215,7 +215,7 @@ def test_erc_native_output_cannot_be_redirected_before_write(
 
     def redirect(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         output = Path(argv[-2])
-        if str(output).startswith("/proc/self/fd/"):
+        if str(output).startswith(("/proc/self/fd/", "/dev/fd/")):
             assert int(output.name) in kwargs["pass_fds"]
         else:
             output.parent.rename(output.parent.with_name(output.parent.name + "-moved"))
