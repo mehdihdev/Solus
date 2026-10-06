@@ -157,3 +157,24 @@ def test_adaptive_retry_reserves_final_serialization_headroom(
         module, "MESH_BYTES", len(json.dumps({"a": {"vertices": [0.0] * 9}}).encode())
     )
     assert len(module.tessellate_step("STEP", ["a"])["a"]["vertices"]) == 9
+
+
+def test_resource_limits_tolerate_a_platform_that_refuses_address_space_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """macOS rejects RLIMIT_AS ("current limit exceeds maximum limit"); that must not kill the
+    tessellation worker. The remaining limits (CPU) are still applied."""
+    import resource
+
+    from solus_api.connectors.step_tessellation import _apply_resource_limits
+
+    applied: list[int] = []
+
+    def setrlimit(kind: int, limits: tuple[int, int]) -> None:
+        if kind == resource.RLIMIT_AS:
+            raise ValueError("current limit exceeds maximum limit")
+        applied.append(kind)
+
+    monkeypatch.setattr(resource, "setrlimit", setrlimit)
+    _apply_resource_limits()
+    assert applied == [resource.RLIMIT_CPU]

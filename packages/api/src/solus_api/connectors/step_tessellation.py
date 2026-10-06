@@ -146,11 +146,24 @@ async def tessellate_isolated(content: str, keys: list[str]) -> dict[str, Any]:
                 await process.wait()
 
 
-def _main() -> None:
+def _apply_resource_limits() -> None:
+    """Best-effort child caps. macOS refuses `RLIMIT_AS` ("current limit exceeds maximum
+    limit"), which previously killed the worker on every Mac. Where a cap cannot be set the
+    wall-clock timeout, input/output size bounds and triangle limits still apply."""
     import resource
 
-    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
-    resource.setrlimit(resource.RLIMIT_CPU, (20, 20))
+    for kind, limit in (
+        (resource.RLIMIT_AS, 2 * 1024**3),
+        (resource.RLIMIT_CPU, 20),
+    ):
+        try:
+            resource.setrlimit(kind, (limit, limit))
+        except (ValueError, OSError):
+            continue
+
+
+def _main() -> None:
+    _apply_resource_limits()
     source, target = map(Path, sys.argv[1:])
     if source.stat().st_size > MAX_BYTES * 2:
         raise ValueError("Oversized process input")
