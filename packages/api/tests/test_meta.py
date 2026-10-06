@@ -88,3 +88,30 @@ async def test_version_is_unversioned_path_and_unauthenticated(client: AsyncClie
     body = resp.json()["data"]
     assert body["version"] == "0.1.0"
     assert body["build_sha"] == "dev"
+
+
+async def test_health_reports_live_fanout_per_adr_037(client: AsyncClient) -> None:
+    """ADR-037 §4: `/health` reports `live_fanout=local_only` when Redis is absent."""
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["status"] == "ok"
+    assert body["checks"]["live_fanout"] == "local_only"
+    assert body["checks"]["database"] == "ok"
+
+
+async def test_health_is_503_when_the_database_is_unreachable(settings: Settings) -> None:
+    broken = create_async_engine(UNREACHABLE_DB_URL)
+    try:
+        app = create_app(settings=settings, engine=broken)
+        async with app_client(app) as c:
+            resp = await c.get("/health")
+        assert resp.status_code == 503
+    finally:
+        await broken.dispose()
+
+
+async def test_health_is_exempt_from_rate_limiting() -> None:
+    from solus_api.core.ratelimit import EXEMPT_PATHS
+
+    assert "/health" in EXEMPT_PATHS

@@ -28,8 +28,25 @@
     "/readyz": {
       "get": {
         "summary": "Readyz",
-        "description": "Readiness. 503 only when the database is unreachable.\n\nRedis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a\nlive ping: the API holds no persistent Redis connection, so a ping would\nadd a fresh TCP connect \u2014 new latency and a new crash surface \u2014 to every\nload-balancer probe. And a missing queue is an ACCEPTED degraded state this\ncycle (infrastructure/aws/README.md): it must be visible here without\nfailing readiness, so a reachability result could never change the status\ncode anyway.",
+        "description": "Readiness. 503 only when the database is unreachable. Also served at `/health`\n(ADR-037 \u00a74) \u2014 one handler, so the two can never disagree.\n\nRedis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a\nlive ping: the API holds no persistent Redis connection, so a ping would\nadd a fresh TCP connect \u2014 new latency and a new crash surface \u2014 to every\nload-balancer probe. And a missing queue is an ACCEPTED degraded state this\ncycle (infrastructure/aws/README.md): it must be visible here without\nfailing readiness, so a reachability result could never change the status\ncode anyway.",
         "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Readyz",
+        "description": "Readiness. 503 only when the database is unreachable. Also served at `/health`\n(ADR-037 \u00a74) \u2014 one handler, so the two can never disagree.\n\nRedis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a\nlive ping: the API holds no persistent Redis connection, so a ping would\nadd a fresh TCP connect \u2014 new latency and a new crash surface \u2014 to every\nload-balancer probe. And a missing queue is an ACCEPTED degraded state this\ncycle (infrastructure/aws/README.md): it must be visible here without\nfailing readiness, so a reachability result could never change the status\ncode anyway.",
+        "operationId": "readyz_health_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -11231,7 +11248,7 @@
           "live"
         ],
         "summary": "Project Events",
-        "description": "Subscribe to this project's change stream.\n\nYields `graph.changed` frames \u2014 an invalidation hint the client answers by\nrefetching the one thing it is already showing \u2014 and, on the local API only,\n`hardware.devices_changed` (SOLUSDEV-250, `hardware/device_watch.py`).",
+        "description": "Subscribe to this project's change stream.\n\nYields the project channel's frames \u2014 `graph.changed`, `layout.changed`,\n`sources.changed`, `project.updated`, `job.updated`, `access.revoked` and, on the local\nAPI only, `hardware.devices_changed` (SOLUSDEV-250). Ends with `access.revoked` when\nthe caller loses access.",
         "operationId": "project_events_api_v1_projects__project_id__events_get",
         "security": [
           {
@@ -11270,6 +11287,31 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/users/me/events": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Account Events",
+        "description": "Subscribe to the caller's own channel and every team channel they belong to.\n\nFirst event `ready` names the teams; it is sent again whenever membership changes the\nset. Ends with `access.revoked` if the account or token stops being valid.",
+        "operationId": "account_events_api_v1_users_me_events_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/extensions/publish": {
@@ -13400,6 +13442,31 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/staff/integrations/onshape/quota": {
+      "get": {
+        "summary": "Onshape Pool Quota",
+        "operationId": "onshape_pool_quota_api_v1_staff_integrations_onshape_quota_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Onshape Pool Quota Api V1 Staff Integrations Onshape Quota Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     }
   },

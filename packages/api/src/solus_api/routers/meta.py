@@ -21,9 +21,11 @@ async def healthz() -> dict[str, Any]:
     return envelope({"status": "ok"})
 
 
+@router.get("/health")  # ADR-037 §4 names `/health` as where `live_fanout` is reported
 @router.get("/readyz")
 async def readyz(request: Request) -> JSONResponse:
-    """Readiness. 503 only when the database is unreachable.
+    """Readiness. 503 only when the database is unreachable. Also served at `/health`
+    (ADR-037 §4) — one handler, so the two can never disagree.
 
     Redis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a
     live ping: the API holds no persistent Redis connection, so a ping would

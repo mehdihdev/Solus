@@ -28,7 +28,7 @@ This document covers four surfaces:
 
 - All REST routes live under `/api/v1/`. URL-path versioning (skill recommendation); no v2 until a breaking change forces it.
 - WebSockets under `/ws/v1/`, MCP under `/mcp/v1`.
-- Infrastructure endpoints (`/healthz`, `/readyz`) are unversioned and unauthenticated.
+- Infrastructure endpoints (`/healthz`, `/readyz`, `/health`) are unversioned and unauthenticated.
 
 ### 1.2 Authentication (ADR-009)
 
@@ -88,6 +88,7 @@ the `credit_ledger` row for attribution, and still meters the **invoking user** 
 | ------ | ----------------- | ---- | -------------------------------------- |
 | GET    | `/healthz`        | none | Liveness probe                         |
 | GET    | `/readyz`         | none | Readiness (DB, Redis, queue reachable) |
+| GET    | `/health`         | none | Alias of `/readyz` named by ADR-037 §4; `checks.live_fanout` = `redis` \| `local_only` |
 | GET    | `/api/v1/version` | none | API version, build SHA                 |
 
 ### 2.1 Users & settings
@@ -527,7 +528,7 @@ established channels stale instead of deleting their cards or inventing samples.
 - **Project stream additions:** `layout.changed` (`version`), `sources.changed`, `project.updated`, `job.updated`, `access.revoked`. This supersedes the "`warnings` and `jobs` become additional event types" note above for jobs; `warnings` remain future.
 - **Re-verification.** Both streams re-verify access (token re-decoded, membership/share re-checked in a short-lived session) at most every 30 s and immediately on a `membership.changed`/`access.revoked` for the caller. When access is gone the server sends `access.revoked` and ends the response. A removed member therefore stops receiving hints within 30 s at worst.
 - **No replay.** Reconnecting clients revalidate everything on `ready`.
-- **Limits.** At most 8 concurrent live streams per user per API process (`429 rate_limited`). `/readyz` reports `checks.live_fanout = redis | local_only`; without Redis, delivery is process-local and multi-instance deploys would split subscribers.
+- **Limits.** At most 8 concurrent live streams per user per API process (`429 rate_limited`). `/health` (alias of `/readyz`, ADR-037 §4) reports `checks.live_fanout = redis | local_only`; without Redis, delivery is process-local and multi-instance deploys would split subscribers.
 - `presence` remains **[DEFERRED — §7.2.4]**.
 
 ---
