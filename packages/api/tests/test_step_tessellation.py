@@ -1,6 +1,8 @@
 """Actual STEP cut geometry and bounded isolated scene tessellation."""
 
+import asyncio
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,7 +11,7 @@ from solus_api.connectors.step_tessellation import tessellate_step
 
 
 @pytest.mark.skipif(not step_reader_available(), reason="OCCT unavailable")
-def test_interior_cut_changes_triangles_without_changing_bbox(tmp_path):
+def test_interior_cut_changes_triangles_without_changing_bbox(tmp_path: Path) -> None:
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
     from OCP.gp import gp_Pnt
@@ -35,35 +37,34 @@ def test_interior_cut_changes_triangles_without_changing_bbox(tmp_path):
 
 
 @pytest.mark.parametrize("keys", [[], ["a", "a"], ["a"] * 129])
-def test_invalid_occurrence_selection_rejected(keys):
+def test_invalid_occurrence_selection_rejected(keys: list[str]) -> None:
     with pytest.raises(ValueError):
         tessellate_step("", keys)
 
 
-async def test_native_tessellation_deadline_kills_child(monkeypatch):
-    import asyncio
-
+async def test_native_tessellation_deadline_kills_child(monkeypatch: pytest.MonkeyPatch) -> None:
     from solus_api.connectors import step_tessellation as module
 
     class Process:
         returncode = None
         killed = False
 
-        async def wait(self):
+        async def wait(self) -> int:
             if self.killed:
                 self.returncode = -9
                 return -9
             await asyncio.sleep(60)
+            return 0
 
-        def kill(self):
+        def kill(self) -> None:
             self.killed = True
 
     process = Process()
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: object, **kwargs: object) -> Process:
         return process
 
-    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     monkeypatch.setattr(module, "TIMEOUT_SECONDS", 0.01)
     with pytest.raises(TimeoutError):
         await module.tessellate_isolated("text", ["part"])
@@ -73,7 +74,9 @@ async def test_native_tessellation_deadline_kills_child(monkeypatch):
 @pytest.mark.parametrize(
     "token", ["DOCUMENT_FILE", "EXTERNAL_SOURCE", "EXTERNALLY_DEFINED_REPRESENTATION"]
 )
-def test_external_step_resources_refused_before_native_reader(monkeypatch, token):
+def test_external_step_resources_refused_before_native_reader(
+    monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
     from unittest.mock import Mock
 
     from solus_api.connectors import step_tessellation as module
@@ -135,7 +138,7 @@ async def test_isolated_limit_error_is_allowlisted(monkeypatch: pytest.MonkeyPat
         process.wait.return_value = 0
         return process
 
-    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     with pytest.raises(module.CadGeometryError, match="^geometry_limit_exceeded$"):
         await module.tessellate_isolated("private geometry", ["part"])
 
