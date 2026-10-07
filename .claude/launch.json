@@ -4,20 +4,39 @@
     {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@solus/web", "dev"],
+      "runtimeArgs": [
+        "--filter",
+        "@solus/web",
+        "dev"
+      ],
       "port": 3000
     },
     {
       "name": "api",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev:api"],
+      "runtimeArgs": [
+        "dev:api"
+      ],
       "port": 8000
     },
     {
       "name": "desktop",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev:desktop"],
+      "runtimeArgs": [
+        "dev:desktop"
+      ],
       "port": 5173
+    },
+    {
+      "name": "api-qa",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SOLUS_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://[::1]:5173",
+        "SOLUS_CAD_STORE_LOCAL_ROOT=/private/tmp/claude-501/-Users-mehdihdev-Solus/866dfe92-105d-4a81-81ca-9e4b6bc467d8/scratchpad/cadstore",
+        "pnpm",
+        "dev:api"
+      ],
+      "port": 8000
     }
   ]
 }
