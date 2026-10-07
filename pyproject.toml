@@ -76,6 +76,17 @@ ignore_missing_imports = true
 module = ["kicad_mcp.*", "kicad_sch_api.*", "sexpdata", "eda_agent.*"]
 ignore_missing_imports = true
 
+# kicad's solus/strict_tool.py subclasses fastmcp's FunctionTool. fastmcp lives only in the
+# fork's private virtualenv (bin/launch), so the root environment cannot resolve it; CI never
+# type-checks the fork (`mypy packages/api/src packages/companion/src`), only the by-path hooks do.
+[[tool.mypy.overrides]]
+module = ["fastmcp", "fastmcp.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["solus.strict_tool"]
+disallow_subclassing_any = false
+
 # mypy's `exclude` does not apply to explicitly-passed files (the H8/H10 hooks
 # pass changed files by path), so vendored-tree modules are additionally
 # silenced per-module. "main"/"run_tests"/"tests.*" are the vendored fork's
