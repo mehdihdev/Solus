@@ -14,6 +14,7 @@ vendored `lamaalrajih/kicad-mcp` fork:
   for every deviation from verbatim, and BLANK (human-only) sign-offs;
 - `requirements.lock.txt` is fully hash-pinned (`name==version --hash=...`).
 """
+# mypy: disable-error-code="import-not-found"
 
 import os
 import re
