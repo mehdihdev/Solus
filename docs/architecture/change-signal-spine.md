@@ -324,3 +324,50 @@ reads and mandatory write readbacks remain immediate. Exports started before a
 hold still rely on revision bracketing and may fail; this is not transactional
 isolation against concurrent editors. Generation acknowledgments never clear
 later changes. No new public route, database column or tool authority is added.
+
+## Live channels beyond the graph — SOLUSDEV-312 (ADR-037)
+
+The fan-out half of the spine now carries more than `graph.changed`. `LiveHub`
+routes on three channel kinds — `project:{id}`, `team:{id}`, `user:{id}` — over
+Redis `solus:live:{kind}:{id}` (the relay still accepts legacy
+`solus:graph:{project_id}` during rollout).
+
+```
+REST mutation / worker job ─► ORM flush ─► live_publisher derives hints from
+  changed rows (Activity, Notification, Team, Membership, ProjectMembership,
+  Invite, Project, Source, WorkspaceLayout, Job) ─► queued on the session
+  ─► after_commit ─► hub.publish_to(channel) ─► Redis ─► every API process
+  ─► SSE: /projects/{id}/events (project channel)
+          /users/me/events      (user channel + every team channel)
+```
+
+Properties carried over unchanged from the graph path: hints never deltas,
+committed-only, structural routing, drop-on-full, newline frames dropped. New:
+streams re-verify access every 30 s and immediately on a revocation hint, and
+`/readyz` reports `live_fanout = redis | local_only`. Connector sync status
+changes reach clients as `sources.changed` / `job.updated` without any new
+producer code — they are derived from the same `Source`/`Job` row writes the
+worker already commits. The contract is `docs/contracts/live-events.md`.
+
+
+## The Onshape mirror — ADR-038 (SOLUSDEV-312)
+
+- **Producers gain a quiet period.** Webhook, sweep-detected and recovery hints record
+  `last_hint_at`/`first_hint_at` and schedule `sync_source(quiet=True)` under the stable job id
+  `onshape-quiet:{source}` deferred by `onshape_quiet_period_seconds` (90 s); a run inside the
+  window re-defers (`Retry(defer=…)`), capped at 10 min per burst. User syncs are not delayed.
+  `sync_source` uses `keep_result=0` so a stable job id never swallows the next hint.
+- **Webhook-first, sweep as fallback.** Healthy subscriptions skip the hourly probe; a daily
+  subscription check is the only steady-state call. Registration happens on every dispatch path
+  whenever `public_api_base_url` is public HTTPS. Solus writes carry `X-Session-ID`.
+- **`translation.complete`** is recorded only when a pending marker exists under the source's
+  own account (scope from the Source row, never the payload) and short-circuits polling.
+- **One probe per sync.** `detect_changes` hands its observation to `sync._plan` (120 s) instead
+  of a second, trust-disabled probe. Change evidence remains mandatory.
+- **Export keys** are per element microversion + in-document dependency fingerprint, namespace
+  `revision-v3`; completed exports survive a `revision_changed` abort.
+- **Payloads are durable.** `IntegrationCache` writes payload kinds to the CAD store (write-once,
+  account-prefixed, sha-verified) and keeps only the index in Redis; listings and signals stay in
+  Redis. This supersedes "payloads in Redis, 8 MiB, 30 days" above when a CAD store is configured.
+- **Metering** is one pool per OAuth application (`onshape_quota_pool=owner`) with per-call labels;
+  `onshape_app_distribution=app_store` disables the annual degrade.

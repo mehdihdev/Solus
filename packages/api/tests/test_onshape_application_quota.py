@@ -1,4 +1,7 @@
-"""Application replacement must not inherit another OAuth app's quota refusal."""
+"""Application replacement must not inherit another OAuth app's quota refusal.
+
+Pinned to `onshape_quota_pool="user"` (per-account ledgers); the owner pool is in
+test_onshape_pool.py."""
 
 import hashlib
 import uuid
@@ -18,11 +21,12 @@ def meter(
     secret: str = "test",
     bound_app: str | None = None,
 ) -> CallMeter:
-    settings = Settings(
+    settings = Settings(  # type: ignore[call-arg]
         _env_file=None,
         supabase_jwt_secret=TEST_JWT_SECRET,
         onshape_client_id=app,
         onshape_client_secret=secret,
+        onshape_quota_pool="user",
     )
     return _onshape_meter(
         settings,
@@ -71,8 +75,11 @@ async def test_verified_new_grant_preserves_old_legacy_latch() -> None:
 
 async def test_missing_account_retains_project_isolation() -> None:
     redis = FakeRedis()
-    settings = Settings(
-        _env_file=None, supabase_jwt_secret=TEST_JWT_SECRET, onshape_client_id="same-app"
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        supabase_jwt_secret=TEST_JWT_SECRET,
+        onshape_client_id="same-app",
+        onshape_quota_pool="user",
     )
     one = _onshape_meter(settings, redis, ConnectorContext(project_id=uuid.uuid4()))
     two = _onshape_meter(settings, redis, ConnectorContext(project_id=uuid.uuid4()))
@@ -90,8 +97,11 @@ async def test_settings_change_does_not_rebind_old_grant() -> None:
 async def test_unknown_legacy_grant_retains_existing_bucket() -> None:
     redis = FakeRedis()
     redis.values["solus:intq:onshape:acct:account-a:402"] = "1"
-    settings = Settings(
-        _env_file=None, supabase_jwt_secret=TEST_JWT_SECRET, onshape_client_id="new-app"
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        supabase_jwt_secret=TEST_JWT_SECRET,
+        onshape_client_id="new-app",
+        onshape_quota_pool="user",
     )
     with pytest.raises(QuotaBlockedError):
         await _onshape_meter(settings, redis, ConnectorContext(account_ref="account-a")).admit()

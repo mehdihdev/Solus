@@ -15,7 +15,7 @@ from starlette.types import ASGIApp
 
 from solus_api.core.errors import error_response
 
-EXEMPT_PATHS = frozenset({"/healthz", "/readyz"})
+EXEMPT_PATHS = frozenset({"/healthz", "/readyz", "/health"})
 WINDOW_SECONDS = 60
 MAX_TRACKED_KEYS = 10_000
 #: Methods that read. Everything else is a write and draws on the (smaller)

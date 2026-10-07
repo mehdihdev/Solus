@@ -1,6 +1,7 @@
 """Tests for the connector worker glue: provider resolution + inline execution,
 and the scheduled change-detection sweep (SOLUSDEV-103 'schedules detect_changes')."""
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -25,6 +26,7 @@ from solus_api.models import (
     Sync,
     Team,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 
@@ -208,7 +210,9 @@ async def test_one_large_tenant_cannot_starve_every_other_team(engine: Any) -> N
     )
 
 
-async def test_onshape_reconciliation_acknowledges_only_captured_generation(maker, monkeypatch):
+async def test_onshape_reconciliation_acknowledges_only_captured_generation(
+    maker: Any, monkeypatch: Any
+) -> None:
     from solus_api.connectors.worker import _run
     from solus_api.services.onshape_webhooks import hint_state, save_state, state_for
 
@@ -220,7 +224,7 @@ async def test_onshape_reconciliation_acknowledges_only_captured_generation(make
         save_state(row, hint_state({}))
         await db.commit()
 
-    async def reconcile(**kwargs):
+    async def reconcile(**kwargs: Any) -> Any:
         async with maker() as db:
             row = await db.get(Source, source.id, with_for_update=True)
             save_state(row, hint_state(state_for(row)))
@@ -241,7 +245,7 @@ async def test_onshape_reconciliation_acknowledges_only_captured_generation(make
         assert state_for(row)["acknowledged"] == 1
 
 
-async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker):
+async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker: Any) -> None:
     from unittest.mock import AsyncMock
 
     from solus_api.models import utcnow
@@ -273,7 +277,7 @@ async def test_healthy_onshape_subscription_spends_zero_polling_calls(maker):
     enqueue.assert_not_called()
 
 
-async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
+async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker: Any) -> None:
     from unittest.mock import AsyncMock
 
     from solus_api.connectors.httpcache import InMemoryCacheStore
@@ -305,7 +309,7 @@ async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
     fresh_probe = AsyncMock(return_value="new")
     synced = AsyncMock(return_value=SyncResult(cursor={"microversions": {document: "new"}}))
 
-    def factory(ctx):
+    def factory(ctx: Any) -> Any:
         connector = OnshapeConnector(
             client_id="test",
             client_secret="test",
@@ -313,8 +317,8 @@ async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
             account_ref=ctx.account_ref,
             signal_max_age_seconds=None if ctx.purpose == "webhook" else 300,
         )
-        connector._current_microversion = fresh_probe
-        connector.sync = synced
+        connector._current_microversion = fresh_probe  # type: ignore[method-assign]  # test double replaces the instance method
+        connector.sync = synced  # type: ignore[method-assign]  # test double replaces the instance method
         return connector
 
     registry = ConnectorRegistry()
@@ -332,7 +336,7 @@ async def test_queued_webhook_bypasses_warm_signal_before_acknowledging(maker):
         assert state_for(row)["acknowledged"] == 1
 
 
-async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker):
+async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker: Any) -> None:
     from datetime import timedelta
     from unittest.mock import AsyncMock
 
@@ -363,11 +367,16 @@ async def test_recovery_ranks_dirty_sources_before_clean_team_neighbors(maker):
     redis = AsyncMock()
     assert await recover_onshape_hints({"sessionmaker": maker, "redis": redis}) == 1
     redis.enqueue_job.assert_awaited_once_with(
-        "sync_source", str(source.id), _job_id=f"onshape-recovery:{source.id}", webhook=True
+        "sync_source",
+        str(source.id),
+        _job_id=f"onshape-quiet:{source.id}",
+        webhook=True,
+        quiet=True,
+        label="recovery",
     )
 
 
-async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker):
+async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker: Any) -> None:
     from datetime import timedelta
     from unittest.mock import AsyncMock
 
@@ -407,3 +416,85 @@ async def test_healthy_local_skips_rotate_so_fourth_source_is_probed(maker):
     assert await run_change_detection(**kwargs) == 0
     assert await run_change_detection(**kwargs) == 1
     enqueue.assert_awaited_once_with(source.id)
+
+
+# ------------------- SOLUSDEV-100 L4: a hung change-detection probe is bounded
+
+
+class HangingConnector(StubConnector):
+    async def detect_changes(self, ctx: SyncContext) -> bool:
+        await asyncio.sleep(3600)
+        return True
+
+
+async def test_hung_probe_times_out_and_records_retryable_error(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    store = InMemorySecretStore()
+    source = await _source(maker, store)
+    registry = ConnectorRegistry()
+    registry.register("github", HangingConnector)
+    enqueued: list[uuid.UUID] = []
+
+    async def fake_enqueue(source_id: uuid.UUID) -> None:
+        enqueued.append(source_id)
+
+    count = await asyncio.wait_for(
+        run_change_detection(
+            sessionmaker=maker,
+            registry=registry,
+            secret_store=store,
+            enqueue=fake_enqueue,
+            probe_timeout_seconds=0.05,
+        ),
+        timeout=10,
+    )
+
+    assert count == 0 and enqueued == []
+    async with maker() as db:
+        row = await db.get(Source, source.id)
+        assert row is not None
+        assert row.status is SourceStatus.CONNECTED, "timeout is retryable, not a terminal error"
+        assert row.last_error is not None and row.last_error.get("code")
+
+
+async def test_hung_probe_does_not_block_other_sources(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    store = InMemorySecretStore()
+    hung = await _source(maker, store)
+    healthy = await _source(maker, store)
+    registry = ConnectorRegistry()
+    calls = {"n": 0}
+
+    def factory() -> Connector:
+        calls["n"] += 1
+        # The sweep is ordered fairly, not by creation: hang exactly one probe.
+        return HangingConnector() if calls["n"] == 1 else StubConnector(changed=True)
+
+    registry.register("github", factory)
+    enqueued: list[uuid.UUID] = []
+
+    async def fake_enqueue(source_id: uuid.UUID) -> None:
+        enqueued.append(source_id)
+
+    count = await asyncio.wait_for(
+        run_change_detection(
+            sessionmaker=maker,
+            registry=registry,
+            secret_store=store,
+            enqueue=fake_enqueue,
+            probe_timeout_seconds=0.05,
+        ),
+        timeout=10,
+    )
+
+    assert count == 1 and len(enqueued) == 1
+    assert enqueued[0] in {hung.id, healthy.id}
+    async with maker() as db:
+        errored = [
+            s
+            for s in (await db.scalars(select(Source).where(Source.id.in_([hung.id, healthy.id]))))
+            if s.last_error
+        ]
+        assert len(errored) == 1 and errored[0].id != enqueued[0]

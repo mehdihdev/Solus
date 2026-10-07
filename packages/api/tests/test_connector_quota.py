@@ -13,17 +13,20 @@ from solus_api.connectors.quota import CallMeter, QuotaBlockedError
 
 
 class FakeRedis:
-    """Just the four commands the meter uses."""
+    """Just the commands the meter uses."""
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expiries: dict[str, int] = {}
+        self.sets: dict[str, set[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.values[key] = value
+        if ex is not None:
+            self.expiries[key] = ex
 
     async def incr(self, key: str) -> int:
         nxt = int(self.values.get(key, 0)) + 1
@@ -32,6 +35,19 @@ class FakeRedis:
 
     async def expire(self, key: str, seconds: int) -> None:
         self.expiries[key] = seconds
+
+    # Set commands (ADR-038 amendment: 402-accounts set, pool registry).
+    async def sadd(self, key: str, *members: str) -> int:
+        current = self.sets.setdefault(key, set())
+        before = len(current)
+        current.update(members)
+        return len(current) - before
+
+    async def scard(self, key: str) -> int:
+        return len(self.sets.get(key, set()))
+
+    async def smembers(self, key: str) -> list[str]:
+        return list(self.sets.get(key, ()))
 
 
 class BrokenRedis(FakeRedis):
@@ -259,6 +275,10 @@ def test_the_source_payload_carries_the_quota_block() -> None:
         "used": 1400,
         "allowance": 1800,
         "estimated": True,
+        "pool": "user",
+        "distribution": "private",
+        "by_label": {},
+        "rate_limit_remaining": None,
     }
 
 
@@ -316,6 +336,9 @@ def test_a_route_connector_is_metered_by_default() -> None:
         onshape_client_secret: str = "sec"
         onshape_annual_call_allowance: int = 1800
         integration_degrade_ratio: float = 0.7
+        onshape_quota_pool: str = "owner"
+        onshape_app_distribution: str = "private"
+        onshape_session_id: str = "solus-api"
         integration_signal_ttl_seconds: int = 3600
         integration_signal_sweep_reuse_seconds: int = 300
 

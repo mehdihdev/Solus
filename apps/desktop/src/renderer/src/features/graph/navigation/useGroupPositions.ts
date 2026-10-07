@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { Point } from '../../../lib/api/workspace'
+import type { MoveOrigin } from '../useWorkspaceLayout'
 import { isAccountAnchor } from '../accountAnchors'
 import { boundedPoint } from './layout'
 
@@ -34,10 +35,10 @@ export function useGroupPositions(
   projectId: string,
   email: string | undefined,
   positions: Record<string, Point>,
-  onMove: (id: string, point: Point) => void
+  onMove: (id: string, point: Point, origin?: MoveOrigin) => void
 ): {
   positions: Record<string, Point>
-  move: (id: string, point: Point) => void
+  move: (id: string, point: Point, origin?: MoveOrigin) => void
   error: string | null
 } {
   const key = email
@@ -47,9 +48,11 @@ export function useGroupPositions(
   const currentGroups = useRef(groups)
   const [error, setError] = useState<string | null>(null)
   const move = useCallback(
-    (id: string, point: Point): void => {
+    (id: string, point: Point, origin?: MoveOrigin): void => {
       if (!isAccountAnchor(id)) {
-        onMove(id, point)
+        // Forward the origin only when given: a user drag stays a two-argument call.
+        if (origin) onMove(id, point, origin)
+        else onMove(id, point)
         return
       }
       const next = Object.fromEntries(

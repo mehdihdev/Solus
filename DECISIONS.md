@@ -1000,3 +1000,110 @@ rotation or reconnect on the same application in the same bucket. Changing the
 OAuth application must not inherit the previous application's exhaustion flag.
 This separates observed accounting contexts; it does not assert that the provider
 has granted a new allowance. Provider refusals remain authoritative.
+
+## ADR-037: Live channels — project, team and user change hints
+
+**Status:** Accepted (2026-09-30, SOLUSDEV-312; approved in-chat against the concrete text below).
+
+**Context:** SOLUSDEV-167 built a project-scoped SSE stream carrying
+`graph.changed` hints via LiveHub (Redis pub/sub). Team state (members,
+invites, projects, notifications, activity) and workspace layout are
+pull-only, so teammates never see each other's changes. Feature area 10
+requires cross-member change notifications.
+
+**Decision:**
+
+1. Three channel kinds: `project:{id}`, `team:{id}`, `user:{id}`. Routing is
+   structural — derived server-side from the committed row's scope,
+   never from client input or frame bodies.
+2. Frames are invalidation HINTS (ids, counts, versions), never deltas
+   or content: no names, emails, invite tokens or CAD data. Clients
+   refetch via existing REST routes.
+3. Publish only after commit: frames queue on the DB session and flush
+   in an `after_commit` hook; rollback discards them. A publish failure
+   never fails the request.
+4. Redis pub/sub (`solus:live:{kind}:{id}`) is the cross-process bus.
+   Without Redis, delivery is process-local and `/health` reports
+   `live_fanout=local_only`. Multi-instance deploys require Redis.
+5. Transport stays SSE + Bearer. `/projects/{id}/events` gains event
+   types; new `GET /users/me/events` carries the user channel plus every
+   team they belong to. Streams re-verify access at most every 30s and
+   immediately on `access.revoked`, closing when access ends.
+6. No replay: a `ready` frame on (re)connect tells clients to
+   revalidate everything.
+7. Presence and CRDT co-editing stay deferred (API.md §7.2.4; ADR-004).
+
+**Consequences:** one more long-lived connection per desktop; staging
+needs Redis before running more than one API task.
+
+## ADR-038: Onshape mirror — durable revision-keyed CAD store, webhook-first freshness, owner-pool metering
+
+**Status:** Accepted (2026-10-02, SOLUSDEV-312 branch; approved in-chat against the concrete text below).
+
+**Context:** Onshape bills private-OAuth-app REST successes to the app owner's
+single annual pool. The SOLUSDEV-261/312 audits measured ~1.5-2k calls/day for
+one small team: whole-document re-export per edit, hourly polling (webhooks
+never registered), duplicate probes, uncached SOL reads, and a Redis-only
+payload cache (8 MiB, 30 days).
+
+**Decision:**
+
+1. Durable CAD derivative store. Onshape-derived artifacts (STEP exports, part
+   metadata, mass properties, meshes) are written ONCE to S3 (local disk in dev)
+   under server-generated keys, indexed by (provider account, document, element,
+   immutable microversion, configuration, kind), never mutated, SSE-encrypted,
+   never shared across accounts, and deleted when the account connection is
+   revoked. Redis holds only the index, signals and meter. Per-object cap 256 MiB.
+2. Webhook-first freshness. Registered webhooks are the primary change signal;
+   exports wait for a configurable quiet period after the last hint; the
+   scheduled sweep probes only sources without a healthy subscription; Solus
+   writes send `X-Session-ID` so their own echoes are ignored;
+   `translation.complete` replaces status polling where a webhook is healthy.
+3. Export granularity. Exports are cached per element microversion combined
+   with a fingerprint of the in-document elements it may depend on (Part
+   Studios, Variable Studios); invalidation is never broader than the document.
+4. Metering models the bill. While the OAuth app is private, Onshape usage is
+   metered as ONE pool per OAuth application with a configured annual
+   allowance, and every call records its purpose (sync, sweep, agent read, agent
+   write, picker). `onshape_app_distribution=app_store` disables the
+   annual-allowance degrade; rate limits and the 402 latch remain. This amends
+   the ADR-019 quota-identity amendment.
+5. SOL reads through the mirror: at most one current-microversion probe per
+   document per turn; immutable reads served from the store; writes keep live
+   reads, `sourceMicroversion` and readback.
+
+**Consequences:** S3 holds customer CAD derivatives (bucket IAM + lifecycle
+needed); staging needs a public HTTPS callback for webhooks; per-element keys
+need a live cross-tab verification.
+
+**Recorded choices (in-chat, 2026-10-02):** built with the intent to publish on
+the Onshape App Store; until then `onshape_app_distribution=private`, pool =
+owner (`onshape_quota_pool=owner`, with a `user` override kept for
+verification), annual allowance 2,500, quiet period 90 s.
+
+## ADR-038 amendment: fairness, latch, read-out and purge records
+
+**Status:** Accepted (2026-10-02, SOLUSDEV-312; approved in-chat against the concrete text below).
+
+1. **No per-tenant sub-limit.** The owner pool is shared without a per-account
+   or per-team cap. ACCEPTED RISK, decided by the humans as an explicit
+   exception to CLAUDE.md §7's starvation rule: one tenant's usage can push
+   every tenant into the degraded band or exhaust the pool. Mitigations:
+   account-first latching (2), per-call labels for attribution, and App Store
+   publication, which removes the annual limit.
+2. **402 latch:** an Onshape 402 latches only the calling account for 24 h. The
+   owner pool latches only after 2 or more distinct accounts observe a 402
+   within 24 h.
+3. **Read-out:** a team sees its own account's usage and per-label breakdown
+   plus the pool's status band (ok, degraded, exhausted). Pool-wide totals and
+   breakdown are staff-only.
+4. **Revocation purge:** deletion of durable CAD is recorded in
+   `cad_purge_requests` (non-tenant table; holds only
+   `sha256(provider:account_ref)`, joining the ADR-027 opaque-id exceptions) in
+   the same transaction as the revocation, then run inline, by an ARQ cron and
+   at startup, with backoff, twice (the second pass catches in-flight syncs),
+   until the prefix is empty. A 1 h tombstone blocks new durable writes for a
+   revoked account.
+5. **Durable scope:** only STEP exports and immutable reads over 256 KiB are
+   stored durably; replaced objects are deleted. Writes always resolve the
+   target workspace live.

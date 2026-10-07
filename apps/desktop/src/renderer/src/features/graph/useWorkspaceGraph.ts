@@ -12,6 +12,8 @@ import { listAllRelations } from '../../lib/api/workspace'
 import { classifyFetchError } from '../../lib/api/errors'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
+import { liveKeys } from '../../store/liveRevisionStore'
+import { useLiveRevisionSum } from '../live/useLiveRefetch'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 import { countsOf, graphVersionOf, GRAPH_CACHE_TTL_MS } from './graphCache'
 import { useSourceViewVersion } from './sourceViewEvents'
@@ -107,12 +109,19 @@ async function readSnapshot(
   return graph
 }
 
+function useDetailRevision(projectId: string | null): number {
+  return useLiveRevisionSum([projectId ? liveKeys.projectDetail(projectId) : null])
+}
+
 /** Keep the last complete snapshot during a refresh; never mix projects or partial links. */
 export function useWorkspaceGraph(revision = 0, validation = 0): WorkspaceGraph {
   const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
   const viewVersion = useSourceViewVersion(projectId)
   const enabled = useWorkspaceFetchEnabled()
   const identity = useAuthStore((s) => `${s.status}:${s.user?.email ?? ''}`)
+  // A live project-detail hint (sources/project changed) re-runs the cheap
+  // version check: counts re-read, the entity list only when its version moved.
+  const detailRevision = useDetailRevision(projectId)
   const [snapshot, setSnapshot] = useState<{
     projectId: string
     identity: string
@@ -143,7 +152,7 @@ export function useWorkspaceGraph(revision = 0, validation = 0): WorkspaceGraph 
     return () => {
       active = false
     }
-  }, [projectId, enabled, revision, identity, validation, viewVersion])
+  }, [projectId, enabled, revision, identity, validation, viewVersion, detailRevision])
   if (!projectId || !enabled) return EMPTY
   if (snapshot?.projectId === projectId && snapshot.identity === identity) return snapshot.graph
   return retained.get(projectId)?.graph ?? { ...EMPTY, status: 'loading' }

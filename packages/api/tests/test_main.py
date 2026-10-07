@@ -1,7 +1,12 @@
 """App factory wiring."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 from fastapi import FastAPI
+from solus_api.core.config import Settings
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 
 @pytest.mark.parametrize("failure", ["startup", "body", "cleanup"])
@@ -113,3 +118,47 @@ def test_sentry_init_kwargs_scrub_requests_and_disable_log_events(
     scrubbed = _scrub_sentry_event(event, {})
     assert "query_string" not in scrubbed["request"]
     assert scrubbed["request"]["url"] == "https://a/x"
+
+
+def test_integration_cache_has_no_durable_store_by_default(app: FastAPI) -> None:
+    assert app.state.cad_store is None
+    assert app.state.integration_cache._durable is None
+
+
+async def test_create_app_wires_the_durable_cad_store_into_the_integration_cache(
+    settings: Settings, engine: AsyncEngine, tmp_path: Path
+) -> None:
+    from solus_api.main import create_app
+    from solus_api.storage.cad_store import LocalCadStore
+
+    configured = settings.model_copy(update={"cad_store_local_root": str(tmp_path / "cad")})
+    application = create_app(settings=configured, engine=engine)
+    await application.state.hardware_connections.aclose()
+
+    assert isinstance(application.state.cad_store, LocalCadStore)
+    assert application.state.integration_cache._durable is application.state.cad_store
+
+
+async def test_worker_startup_wires_the_durable_cad_store_into_its_cache(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from solus_api.connectors import worker
+    from solus_api.storage.cad_store import LocalCadStore
+
+    class _Engine:
+        async def dispose(self) -> None:
+            return None
+
+    configured = settings.model_copy(update={"cad_store_local_root": str(tmp_path / "cad")})
+    monkeypatch.setattr("solus_api.core.config.Settings", lambda: configured)
+    monkeypatch.setattr(worker, "build_engine", lambda _url: _Engine())
+    monkeypatch.setattr(worker, "build_registry", lambda *_a, **_k: object())
+    monkeypatch.setattr(worker, "build_secret_store", lambda *_a, **_k: object())
+    monkeypatch.setattr("solus_api.storage.build_artifact_store", lambda _s: object())
+    ctx: dict[str, Any] = {}
+
+    await worker._on_startup(ctx)
+
+    assert isinstance(ctx["cad_store"], LocalCadStore)
+    assert ctx["integration_cache"]._durable is ctx["cad_store"]
+    await worker._on_shutdown(ctx)

@@ -1,3 +1,5 @@
+> **Superseded by [`COWORK_QA_kicad-integration.md`](COWORK_QA_kicad-integration.md)** — the consolidated checklist. Kept for detail.
+
 # Cowork QA — KiCad natural ingestion (SOLUSDEV-252)
 
 Self-sufficient end-to-end test plan for SOLUSDEV-252: the KiCad connector now accepts the

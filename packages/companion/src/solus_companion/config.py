@@ -35,6 +35,7 @@ from solus_contracts import SOLUS_HOME_DIRNAME
 
 from solus_companion import __version__
 from solus_companion.credentials import CredentialRelay
+from solus_companion.kicad_discovery import KICAD_CLI_ENV, find_kicad_cli
 from solus_companion.platforms import unavailable_reason
 
 logger = logging.getLogger("solus.companion.config")
@@ -408,6 +409,16 @@ def _env_passthrough(server_dir: Path, name: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _host_discovered_env(name: str) -> dict[str, str]:
+    """Values only the companion can discover about this machine, by server.
+
+    The kicad fork cannot find a GUI install under its pinned PATH; we can."""
+    cli = find_kicad_cli() if name == "kicad" else None
+    if name == "kicad" and cli is None:
+        logger.info("no KiCad install found in the standard locations; kicad exports will degrade")
+    return {KICAD_CLI_ENV: cli} if cli is not None else {}
+
+
 def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[ServerLaunch, ...]:
     """Scan `<root>/*/allowlist.yaml` for vendored servers (ADR-031).
 
@@ -457,6 +468,7 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
         interpreter = _private_interpreter(root_resolved, server_dir, name)
         if interpreter is not None:
             env[INTERPRETER_ENV] = str(interpreter)
+        env.update(_host_discovered_env(name))
         servers.append(
             ServerLaunch(
                 name=name,

@@ -18,6 +18,8 @@ import { catalogItem, installRow, manifest } from '../extensions/testing/fixture
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import { usePinsStore } from '../extensions/pinsStore'
 import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
+import { useAccountEvents } from '../live/useAccountEvents'
+import { useLiveProject } from './useLiveProject'
 
 const workspaceActions = vi.hoisted(() => ({ enabled: false }))
 vi.mock('../graph/WorkspaceScreen', async (importOriginal) => {
@@ -55,6 +57,12 @@ vi.mock('../bench/BenchScreen', async (importOriginal) => {
 // Populate the topbar project switcher deterministically (its live fetch is
 // offline in jsdom). Other tests don't open the switcher, so this is inert.
 vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
+
+// The live account channel opens a real stream; the shell tests only prove it mounts once.
+vi.mock('../live/useAccountEvents', () => ({ useAccountEvents: vi.fn() }))
+
+// The live project-name refetch is proven in useLiveProject.test.ts; the shell only mounts it.
+vi.mock('./useLiveProject', () => ({ useLiveProject: vi.fn() }))
 
 // Sign-out must drop the retained graph snapshots (WS-01); the module's own clear is the seam.
 vi.mock('../graph/useWorkspaceGraph', async (importOriginal) => ({
@@ -194,6 +202,18 @@ beforeEach(() => {
 })
 
 describe('WorkspaceShell — chrome', () => {
+  it('mounts the live account channel from the shell', () => {
+    vi.mocked(useAccountEvents).mockClear()
+    renderShell()
+    expect(useAccountEvents).toHaveBeenCalled()
+  })
+
+  it('mounts the live project-name follower from the shell', () => {
+    vi.mocked(useLiveProject).mockClear()
+    renderShell()
+    expect(useLiveProject).toHaveBeenCalled()
+  })
+
   it('routes registered widget actions from Workspace to Bench and extension pages', async () => {
     workspaceActions.enabled = true
     renderShell()

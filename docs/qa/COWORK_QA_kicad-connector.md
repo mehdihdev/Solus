@@ -1,3 +1,5 @@
+> **Superseded by [`COWORK_QA_kicad-integration.md`](COWORK_QA_kicad-integration.md)** — the consolidated checklist. Kept for detail.
+
 # COWORK_QA — KiCad Connector (SOLUSDEV-100, SOLUS-EDA-01)
 
 > **Phase 2 (MCP) — tested separately.** SOLUSDEV-100 phase 2 added the vendored KiCad

@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
 from solus_api.core.errors import APIError, error_response
@@ -17,7 +18,6 @@ from solus_api.deps import ProjectCtx, SessionDep, SettingsDep, require_role
 from solus_api.models import Role
 from solus_api.schemas import serialize_artifact, serialize_artifact_ref
 from solus_api.services.artifacts import (
-    FixedWindowLimiter,
     create_artifact,
     get_artifact_metadata,
     read_artifact_content,
@@ -27,6 +27,7 @@ from solus_api.services.artifacts import (
     validate_source_tool,
 )
 from solus_api.services.events import emit_event
+from solus_api.services.upload_budget import UploadBudget
 from solus_api.storage import ArtifactStore
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/artifacts")
@@ -70,6 +71,22 @@ def _reject_if_content_length_exceeds_cap(request: Request, max_bytes: int) -> N
         raise APIError(413, "payload_too_large", "Upload exceeds the size limit")
 
 
+async def _record_budget_hit(
+    session: AsyncSession, ctx: ProjectCtx, budget: str, retry_after_seconds: int
+) -> None:
+    """ADR-011 / CLAUDE.md §7: budget hits feed abuse detection. Persisted here because
+    a 429 is returned, not raised, and the event must outlive the refused request."""
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="rate_limit.exceeded",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={"budget": budget, "retry_after_seconds": retry_after_seconds},
+    )
+    await session.commit()
+
+
 def _rate_limited(message: str, retry_after_seconds: int) -> Response:
     """§4.5: exceeded → 429 rate_limited + Retry-After."""
     resp = error_response(429, "rate_limited", message)
@@ -77,16 +94,16 @@ def _rate_limited(message: str, retry_after_seconds: int) -> Response:
     return resp
 
 
-def _upload_request_limit_exceeded(request: Request, user_id: uuid.UUID, limit: int) -> bool:
-    limiter: FixedWindowLimiter = request.app.state.artifact_upload_request_limiter
-    return limiter.bump(str(user_id)) > limit
+async def _upload_request_limit_exceeded(request: Request, user_id: uuid.UUID, limit: int) -> bool:
+    budget: UploadBudget = request.app.state.artifact_upload_request_limiter
+    return await budget.bump(str(user_id)) > limit
 
 
-def _upload_byte_budget_exceeded(
+async def _upload_byte_budget_exceeded(
     request: Request, team_id: uuid.UUID, accepted_bytes: int, limit: int
 ) -> bool:
-    limiter: FixedWindowLimiter = request.app.state.artifact_upload_byte_limiter
-    return limiter.bump(str(team_id), accepted_bytes) > limit
+    budget: UploadBudget = request.app.state.artifact_upload_byte_limiter
+    return await budget.bump(str(team_id), accepted_bytes) > limit
 
 
 @router.post("", status_code=201, response_model=None)
@@ -100,9 +117,10 @@ async def upload_artifact(
     store = _get_artifact_store(request)
 
     _reject_if_content_length_exceeds_cap(request, settings.artifact_max_bytes)
-    if _upload_request_limit_exceeded(
+    if await _upload_request_limit_exceeded(
         request, ctx.user.id, settings.artifact_uploads_per_minute_per_user
     ):
+        await _record_budget_hit(session, ctx, "artifact_upload_requests", 60)
         return _rate_limited("Too many artifact uploads; slow down", retry_after_seconds=60)
 
     form = await request.form()
@@ -119,9 +137,10 @@ async def upload_artifact(
     tool_call_id = validate_call_id(_form_str(form.get("call_id")))
 
     data = await read_bounded(upload, settings.artifact_max_bytes)
-    if _upload_byte_budget_exceeded(
+    if await _upload_byte_budget_exceeded(
         request, ctx.team.id, len(data), settings.artifact_upload_bytes_per_hour_per_team
     ):
+        await _record_budget_hit(session, ctx, "artifact_upload_bytes", 3600)
         return _rate_limited("Team upload byte budget exceeded", retry_after_seconds=3600)
 
     artifact = await create_artifact(

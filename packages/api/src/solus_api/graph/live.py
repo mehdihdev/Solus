@@ -1,4 +1,8 @@
-"""Live graph-change fan-out (SOLUSDEV-167).
+"""Live change fan-out (SOLUSDEV-167; channel kinds added by SOLUSDEV-312 / ADR-037).
+
+SOLUSDEV-312: subscribers are now keyed by CHANNEL — `project`, `team` or `user` — and one
+subscription may span several (`subscribe_channels`). Everything below about project routing
+holds for every kind: the channel decides delivery, never a frame body.
 
 One engineer's sync must reach every teammate's open session without anyone
 polling. This is the fan-out half of that:
@@ -39,11 +43,22 @@ import contextlib
 import json
 import logging
 import uuid
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, NamedTuple
+
+from solus_contracts.live_events import CHANNEL_KINDS, ChannelKind, channel_name
 
 logger = logging.getLogger("solus.graph.live")
 
-_CHANNEL_PREFIX = "solus:graph"
+#: Pre-ADR-037 project channel prefix. The relay still reads it so a mixed-version
+#: worker/API rollout (old worker publishing, new API relaying) loses nothing.
+_LEGACY_PREFIX = "solus:graph"
+_LIVE_PATTERN = "solus:live:*"
+_LEGACY_PATTERN = f"{_LEGACY_PREFIX}:*"
+
+#: Key under which `build_sessionmaker` stores the hub in every session's `info`, so the
+#: publish-after-commit listeners (graph/live_publisher.py) can find it.
+HUB_INFO_KEY = "solus.live_hub"
 
 #: Per-subscriber queue depth. A client that stops reading (a laptop that slept)
 #: must not grow a queue without bound, and must not slow anyone else down: past
@@ -51,9 +66,89 @@ _CHANNEL_PREFIX = "solus:graph"
 #: frame is a hint — the next one it does receive triggers the same refetch.
 _QUEUE_DEPTH = 32
 
+#: A Redis publish that has not returned by now is treated as failed (and delivered locally).
+#: Bound here rather than with a client `socket_timeout`, which would also break the
+#: relay's blocking pubsub `listen()`.
+_PUBLISH_TIMEOUT_SECONDS = 2.0
+
+#: Relay reconnect backoff: doubles from the minimum to the cap.
+_RELAY_BACKOFF_MIN_SECONDS = 1.0
+_RELAY_BACKOFF_MAX_SECONDS = 30.0
+
+
+class ResyncMarker:
+    """Internal queue item: the relay was down, so hints may have been lost. Streams turn it
+    into a fresh `ready` (clients revalidate everything). Never serialized to a client."""
+
+    __slots__ = ()
+
+
+RESYNC = ResyncMarker()
+QueueItem = tuple["Channel", str] | ResyncMarker
+
+
+class Channel(NamedTuple):
+    """One routing scope (ADR-037 §1). Structural: delivery is decided by this, never by a
+    frame body."""
+
+    kind: ChannelKind
+    scope_id: uuid.UUID
+
+    @classmethod
+    def project(cls, scope_id: uuid.UUID) -> Channel:
+        return cls("project", scope_id)
+
+    @classmethod
+    def team(cls, scope_id: uuid.UUID) -> Channel:
+        return cls("team", scope_id)
+
+    @classmethod
+    def user(cls, scope_id: uuid.UUID) -> Channel:
+        return cls("user", scope_id)
+
+    @property
+    def name(self) -> str:
+        return channel_name(self.kind, self.scope_id)
+
+
+def parse_channel(raw: str) -> Channel | None:
+    """Strictly parse a Redis channel name (contract or legacy); None when malformed.
+
+    Strict on purpose: the relay psubscribes to a wildcard, so anything else that publishes
+    under the prefix reaches this parser. The id must round-trip as a canonical UUID.
+    """
+    parts = raw.split(":")
+    if parts[:2] == ["solus", "live"] and len(parts) == 4 and parts[2] in CHANNEL_KINDS:
+        kind: ChannelKind | None = next(k for k in CHANNEL_KINDS if k == parts[2])
+        scope = parts[3]
+    elif parts[:2] == ["solus", "graph"] and len(parts) == 3:
+        kind, scope = "project", parts[2]
+    else:
+        return None
+    try:
+        scope_id = uuid.UUID(scope)
+    except ValueError:
+        return None
+    if kind is None or str(scope_id) != scope:
+        return None
+    return Channel(kind, scope_id)
+
 
 def channel(project_id: uuid.UUID) -> str:
-    return f"{_CHANNEL_PREFIX}:{project_id}"
+    """The Redis channel name of a project (kept for existing callers)."""
+    return Channel.project(project_id).name
+
+
+class Subscription:
+    """One consumer's live set of channels. `queue` yields `(Channel, payload)` — or the
+    internal `RESYNC` marker after a relay outage."""
+
+    __slots__ = ("channels", "closed", "queue")
+
+    def __init__(self, channels: frozenset[Channel]) -> None:
+        self.channels = channels
+        self.closed = False
+        self.queue: asyncio.Queue[QueueItem] = asyncio.Queue(maxsize=_QUEUE_DEPTH)
 
 
 def graph_changed_frame(
@@ -98,14 +193,56 @@ def hardware_devices_frame(
 
 
 class LiveHub:
-    """Project-scoped fan-out. Redis-optional, per the repo's convention."""
+    """Channel-scoped fan-out. Redis-optional, per the repo's convention."""
 
     def __init__(self, redis: Any | None = None) -> None:
         self._redis = redis
+        self._subscriptions: dict[Channel, set[Subscription]] = {}
+        # Pre-ADR-037 per-project queues, kept for `subscribe`/`unsubscribe` callers.
         self._subscribers: dict[uuid.UUID, set[asyncio.Queue[str]]] = {}
         self._reader: asyncio.Task[None] | None = None
 
+    @property
+    def fanout_mode(self) -> str:
+        """`redis` fans out across processes; `local_only` reaches this process alone."""
+        return "redis" if self._redis is not None else "local_only"
+
     # ------------------------------------------------------------ subscribing
+
+    def subscribe_channels(self, channels: Iterable[Channel]) -> Subscription:
+        subscription = Subscription(frozenset(channels))
+        for target in subscription.channels:
+            self._subscriptions.setdefault(target, set()).add(subscription)
+        return subscription
+
+    def resubscribe(self, subscription: Subscription, channels: Iterable[Channel]) -> None:
+        """Replace the channel set in one synchronous step — no await point, so no frame is
+        routed against a half-updated set. A no-op for an already-unsubscribed subscription."""
+        if not self._is_active(subscription):
+            return
+        wanted = frozenset(channels)
+        for target in subscription.channels - wanted:
+            self._discard(target, subscription)
+        for target in wanted - subscription.channels:
+            self._subscriptions.setdefault(target, set()).add(subscription)
+        subscription.channels = wanted
+
+    def unsubscribe_channels(self, subscription: Subscription) -> None:
+        for target in subscription.channels:
+            self._discard(target, subscription)
+        subscription.channels = frozenset()
+        subscription.closed = True
+
+    def _is_active(self, subscription: Subscription) -> bool:
+        return not subscription.closed
+
+    def _discard(self, target: Channel, subscription: Subscription) -> None:
+        members = self._subscriptions.get(target)
+        if members is None:
+            return
+        members.discard(subscription)
+        if not members:
+            del self._subscriptions[target]
 
     def subscribe(self, project_id: uuid.UUID) -> asyncio.Queue[str]:
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_QUEUE_DEPTH)
@@ -121,15 +258,18 @@ class LiveHub:
             del self._subscribers[project_id]
 
     def subscriber_count(self, project_id: uuid.UUID) -> int:
-        return len(self._subscribers.get(project_id, ()))
+        multi = len(self._subscriptions.get(Channel.project(project_id), ()))
+        return multi + len(self._subscribers.get(project_id, ()))
 
     def subscribed_project_ids(self) -> list[uuid.UUID]:
-        return list(self._subscribers)
+        ids = dict.fromkeys(self._subscribers)
+        ids.update(dict.fromkeys(c.scope_id for c in self._subscriptions if c.kind == "project"))
+        return list(ids)
 
     # ------------------------------------------------------------- publishing
 
-    async def publish(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
-        """Fan a frame out to this project's subscribers.
+    async def publish_to(self, target: Channel, frame: dict[str, Any]) -> None:
+        """Fan a frame out to one channel's subscribers.
 
         With Redis, publish ONLY — delivery happens in the reader loop, including
         for this process. That removes every "have I already delivered locally?"
@@ -139,33 +279,48 @@ class LiveHub:
         payload = json.dumps(frame, separators=(",", ":"))
         if self._redis is not None:
             try:
-                await self._redis.publish(channel(project_id), payload)
+                await asyncio.wait_for(
+                    self._redis.publish(target.name, payload), timeout=_PUBLISH_TIMEOUT_SECONDS
+                )
                 return
-            except Exception:  # noqa: BLE001 — never fail a sync on fan-out
-                logger.warning("redis publish failed; delivering locally instead")
-        self._deliver(project_id, payload)
+            except Exception:  # noqa: BLE001 — never fail a request or sync on fan-out
+                logger.warning("redis publish failed or timed out; delivering locally instead")
+        self._deliver(target, payload)
+
+    async def publish(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
+        """Fan a frame out to this project's subscribers (the pre-ADR-037 entry point)."""
+        await self.publish_to(Channel.project(project_id), frame)
 
     def publish_local(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
         """Deliver to THIS process's subscribers only — never Redis. For frames that describe
         this machine (its enumerated devices): one machine's list must never reach another
         machine's session."""
-        self._deliver(project_id, json.dumps(frame, separators=(",", ":")))
+        self._deliver(Channel.project(project_id), json.dumps(frame, separators=(",", ":")))
 
-    def _deliver(self, project_id: uuid.UUID, payload: str) -> None:
+    def _deliver(self, target: Channel | uuid.UUID, payload: str) -> None:
+        if isinstance(target, uuid.UUID):  # legacy callers name a project
+            target = Channel.project(target)
         # SSE frames are newline-delimited, so a payload containing a blank line
         # would END the frame and let everything after it be read as further
         # events — arbitrary event injection into a subscriber's stream.
-        # `graph_changed_frame` + json.dumps cannot produce one today, but the
-        # relay psubscribes to a WILDCARD and parses nothing, so any future
-        # publisher on that pattern would inherit the hole. Drop rather than
-        # sanitise: a frame we cannot vouch for is a frame worth losing, and the
-        # next one triggers the same refetch.
-        if "\n" in payload:
-            logger.warning("dropping a graph frame containing a newline")
+        # `json.dumps` cannot produce one today, but the relay psubscribes to a
+        # WILDCARD and parses nothing in the body, so any future publisher on that
+        # pattern would inherit the hole. Drop rather than sanitise: a frame we
+        # cannot vouch for is a frame worth losing, and the next one triggers the
+        # same refetch.
+        if "\n" in payload or "\r" in payload:
+            logger.warning("dropping a live frame containing a line break")
             return
-        # Iterate a SNAPSHOT: a subscriber that disconnects mid-fan-out mutates
-        # the set, and a slow one must not stall its neighbours.
-        for queue in list(self._subscribers.get(project_id, ())):
+        # Iterate SNAPSHOTS: a subscriber that disconnects mid-fan-out mutates
+        # the sets, and a slow one must not stall its neighbours.
+        for subscription in list(self._subscriptions.get(target, ())):
+            try:
+                subscription.queue.put_nowait((target, payload))
+            except asyncio.QueueFull:
+                logger.debug("dropping frame for a subscriber that is not reading")
+        if target.kind != "project":
+            return
+        for queue in list(self._subscribers.get(target.scope_id, ())):
             try:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
@@ -187,37 +342,63 @@ class LiveHub:
             await self._reader
         self._reader = None
 
+    def _notify_resync(self) -> None:
+        """Tell every local subscription to revalidate. A full queue is drained first: its
+        frames are hints the revalidation supersedes, and the marker must not be lost."""
+        for subscription in {s for members in self._subscriptions.values() for s in members}:
+            queue = subscription.queue
+            while queue.full():
+                queue.get_nowait()
+            queue.put_nowait(RESYNC)
+
     async def _relay(self) -> None:
         redis = self._redis
         if redis is None:  # unreachable: `start` guards it. Narrows for mypy.
             return
-        pubsub = redis.pubsub()
-        try:
-            await pubsub.psubscribe(f"{_CHANNEL_PREFIX}:*")
-            async for message in pubsub.listen():
-                if message.get("type") != "pmessage":
-                    continue
-                raw_channel = message.get("channel")
-                if isinstance(raw_channel, bytes):
-                    raw_channel = raw_channel.decode()
-                data = message.get("data")
-                if isinstance(data, bytes):
-                    data = data.decode()
-                project_id = _project_of(str(raw_channel))
-                if project_id is not None and isinstance(data, str):
-                    self._deliver(project_id, data)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 — a dead relay must not kill the app
-            logger.exception("graph live relay stopped")
-        finally:
-            with contextlib.suppress(Exception):
-                await pubsub.close()
+        backoff = _RELAY_BACKOFF_MIN_SECONDS
+        recovering = False
+        while True:
+            pubsub = redis.pubsub()
+            try:
+                await pubsub.psubscribe(_LIVE_PATTERN, _LEGACY_PATTERN)
+                backoff = _RELAY_BACKOFF_MIN_SECONDS
+                if recovering:
+                    recovering = False
+                    self._notify_resync()
+                async for message in pubsub.listen():
+                    self._relay_message(message)
+                raise ConnectionError("pubsub stream ended")
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — a dead relay must not kill the app
+                recovering = True
+                logger.warning("live relay failed; retrying in %.1fs", backoff, exc_info=True)
+            finally:
+                with contextlib.suppress(Exception):
+                    await pubsub.close()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _RELAY_BACKOFF_MAX_SECONDS)
+
+    def _relay_message(self, message: dict[str, Any]) -> None:
+        if message.get("type") != "pmessage":
+            return
+        raw_channel = message.get("channel")
+        if isinstance(raw_channel, bytes):
+            raw_channel = raw_channel.decode()
+        data = message.get("data")
+        if isinstance(data, bytes):
+            data = data.decode()
+        target = parse_channel(str(raw_channel))
+        if target is None or not isinstance(data, str):
+            return
+        if not _is_json_object(data):
+            logger.warning("dropping a relayed live frame that is not a JSON object")
+            return
+        self._deliver(target, data)
 
 
-def _project_of(raw_channel: str) -> uuid.UUID | None:
-    _, _, tail = raw_channel.rpartition(":")
+def _is_json_object(payload: str) -> bool:
     try:
-        return uuid.UUID(tail)
+        return isinstance(json.loads(payload), dict)
     except ValueError:
-        return None
+        return False

@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -18,11 +19,13 @@ from solus_api.models import (
     User,
 )
 from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+Scope = tuple[async_sessionmaker[AsyncSession], Source, AccountConnection]
 
 
 @pytest.fixture
-async def scope(engine: AsyncEngine):
+async def scope(engine: AsyncEngine) -> Scope:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as db:
         user = User(supabase_user_id=str(uuid.uuid4()), email="sync@example.test")
@@ -55,7 +58,7 @@ async def scope(engine: AsyncEngine):
     return maker, source, connection
 
 
-async def test_invalidates_only_target_signal_before_enqueue(scope):
+async def test_invalidates_only_target_signal_before_enqueue(scope: Scope) -> None:
     maker, source, connection = scope
     store = InMemoryCacheStore()
     keys = [
@@ -69,7 +72,7 @@ async def test_invalidates_only_target_signal_before_enqueue(scope):
         await store.set(key, "cached", 300)
     job_id = uuid.uuid4()
 
-    async def enqueue(db, selected):
+    async def enqueue(db: AsyncSession, selected: Source) -> uuid.UUID:
         assert selected.id == source.id
         assert all([await store.get(key) is None for key in keys])
         assert await store.get("untouched-payload") == "cached"
@@ -90,7 +93,7 @@ async def test_invalidates_only_target_signal_before_enqueue(scope):
 @pytest.mark.parametrize(
     "change", ["project", "team", "document", "disconnected", "revoked", "revision"]
 )
-async def test_never_schedules_outside_live_scope(scope, change):
+async def test_never_schedules_outside_live_scope(scope: Scope, change: str) -> None:
     maker, source, connection = scope
     project_id, team_id, document_id = source.project_id, source.team_id, "doc1"
     if change == "project":
@@ -102,12 +105,14 @@ async def test_never_schedules_outside_live_scope(scope, change):
     else:
         async with maker() as db:
             row = await db.get(Source, source.id)
+            assert row is not None
             if change == "disconnected":
                 row.status = SourceStatus.DISCONNECTED
             elif change == "revision":
                 row.revision_base_source_id = source.id
             else:
                 account = await db.get(AccountConnection, connection.id)
+                assert account is not None
                 account.status = ConnectionStatus.REVOKED
             await db.commit()
     enqueue = AsyncMock()
@@ -120,12 +125,12 @@ async def test_never_schedules_outside_live_scope(scope, change):
         store=InMemoryCacheStore(),
         enqueue=enqueue,
     )
-    assert result["status"] == "unavailable"
+    assert result is not None and result["status"] == "unavailable"
     enqueue.assert_not_awaited()
 
 
 @pytest.mark.parametrize("tool", ["onshape.list_parts", "hosted.anything", "onshape.unknown"])
-async def test_non_native_writes_do_not_schedule(scope, tool):
+async def test_non_native_writes_do_not_schedule(scope: Scope, tool: str) -> None:
     maker, source, _ = scope
     enqueue = AsyncMock()
     result = await schedule_onshape_write_sync(
@@ -142,12 +147,14 @@ async def test_non_native_writes_do_not_schedule(scope, tool):
 
 
 @pytest.mark.parametrize("failure", ["cache", "enqueue"])
-async def test_scheduling_failure_is_separate_from_applied_write(scope, failure):
+async def test_scheduling_failure_is_separate_from_applied_write(
+    scope: Scope, failure: str
+) -> None:
     maker, source, _ = scope
     store = InMemoryCacheStore()
     enqueue = AsyncMock(return_value=uuid.uuid4())
     if failure == "cache":
-        store.delete = AsyncMock(side_effect=RuntimeError("private vendor detail"))
+        store.delete = AsyncMock(side_effect=RuntimeError("private vendor detail"))  # type: ignore[method-assign]
     else:
         enqueue.side_effect = RuntimeError("private vendor detail")
     result = await schedule_onshape_write_sync(
@@ -169,19 +176,21 @@ async def test_scheduling_failure_is_separate_from_applied_write(scope, failure)
 
 
 @pytest.mark.parametrize("hang", ["cache", "enqueue"])
-async def test_scheduling_has_a_deadline(scope, monkeypatch, hang):
+async def test_scheduling_has_a_deadline(
+    scope: Scope, monkeypatch: pytest.MonkeyPatch, hang: str
+) -> None:
     from solus_api.services import onshape_write_sync
 
     maker, source, _ = scope
     monkeypatch.setattr(onshape_write_sync, "SCHEDULING_TIMEOUT_SECONDS", 0.05, raising=False)
     store = InMemoryCacheStore()
 
-    async def never_returns(*args):
+    async def never_returns(*args: Any) -> None:
         await asyncio.Event().wait()
 
     enqueue = AsyncMock(return_value=uuid.uuid4())
     if hang == "cache":
-        store.delete = never_returns
+        store.delete = never_returns  # type: ignore[method-assign,assignment]
     else:
         enqueue.side_effect = never_returns
     result = await asyncio.wait_for(
@@ -196,4 +205,4 @@ async def test_scheduling_has_a_deadline(scope, monkeypatch, hang):
         ),
         timeout=1,
     )
-    assert result["status"] == "failed"
+    assert result is not None and result["status"] == "failed"

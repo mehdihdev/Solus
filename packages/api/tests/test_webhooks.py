@@ -258,7 +258,7 @@ async def test_a_lying_small_content_length_is_still_capped_while_streaming(
     assert resp.status_code == 413
 
 
-async def test_onshape_hints_remain_durable_while_syncing(client, maker):
+async def test_onshape_hints_remain_durable_while_syncing(client: Any, maker: Any) -> None:
     from solus_api.services.onshape_webhooks import STATE_KEY
 
     source_id, token = await _seed(maker, status=SourceStatus.SYNCING)
@@ -270,7 +270,7 @@ async def test_onshape_hints_remain_durable_while_syncing(client, maker):
         assert source.config[STATE_KEY]["generation"] == 1
 
 
-async def test_onshape_foreign_document_does_not_dirty_source(client, maker):
+async def test_onshape_foreign_document_does_not_dirty_source(client: Any, maker: Any) -> None:
     from solus_api.services.onshape_webhooks import STATE_KEY
 
     source_id, token = await _seed(maker)
@@ -281,3 +281,94 @@ async def test_onshape_foreign_document_does_not_dirty_source(client, maker):
     async with maker() as session:
         source = await session.get(Source, source_id)
         assert STATE_KEY not in source.config
+
+
+async def test_deliveries_that_will_not_schedule_are_rate_limited_before_any_state_work(
+    client: AsyncClient, maker: Any, monkeypatch: Any
+) -> None:
+    """Pings and `translation.complete` never schedule a sync, so the per-DAY scheduling
+    budget never sees them - yet each one used to cost a row lock, a commit and a Redis
+    write. A per-source ingest budget now bounds that work (still 204, never an error)."""
+    from solus_api.routers import webhooks as router_module
+
+    calls = 0
+
+    async def _counted(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return router_module._NO_HINT
+
+    monkeypatch.setattr(router_module, "_accept_onshape_hint", _counted)
+    source_id, token = await _seed(maker)
+    url = f"/api/v1/webhooks/onshape/{source_id}/{token}"
+    event = {"event": "onshape.model.translation.complete"}
+
+    codes = [
+        (await client.post(url, json=event)).status_code
+        for _ in range(router_module.WEBHOOK_INGEST_PER_MINUTE + 25)
+    ]
+
+    assert set(codes) == {204}
+    assert calls == router_module.WEBHOOK_INGEST_PER_MINUTE
+
+
+async def test_the_ingest_budget_is_per_source_and_leaves_the_scheduling_budget_alone(
+    client: AsyncClient, maker: Any, monkeypatch: Any
+) -> None:
+    scheduled: list[uuid.UUID] = []
+
+    async def _fake(app: object, source_id: uuid.UUID) -> None:
+        scheduled.append(source_id)
+
+    monkeypatch.setattr("solus_api.routers.webhooks._probe_source", _fake)
+    first_id, first_token = await _seed(maker)
+    second_id, second_token = await _seed(maker)
+    first = f"/api/v1/webhooks/onshape/{first_id}/{first_token}"
+    second = f"/api/v1/webhooks/onshape/{second_id}/{second_token}"
+
+    for _ in range(30):
+        await client.post(first, json={})
+    await client.post(second, json={})
+
+    assert scheduled.count(first_id) == 1  # the debounce lease, as before
+    assert scheduled.count(second_id) == 1  # another source is unaffected by the first's traffic
+
+
+async def test_a_wrong_token_never_spends_a_sources_ingest_budget(
+    client: AsyncClient, maker: Any, monkeypatch: Any
+) -> None:
+    """The limiter keys on an AUTHENTICATED source, so an anonymous caller who knows only
+    the source id cannot exhaust the real provider's budget."""
+    from solus_api.routers import webhooks as router_module
+
+    source_id, token = await _seed(maker)
+    for _ in range(router_module.WEBHOOK_INGEST_PER_MINUTE + 10):
+        assert (
+            await client.post(f"/api/v1/webhooks/onshape/{source_id}/wrong-token", json={})
+        ).status_code == 404
+
+    assert (
+        await client.post(f"/api/v1/webhooks/onshape/{source_id}/{token}", json={})
+    ).status_code == 204
+
+
+async def test_a_missing_ingest_limiter_does_not_drop_deliveries(
+    client: AsyncClient, maker: Any, monkeypatch: Any
+) -> None:
+    from solus_api.routers import webhooks as router_module
+
+    calls = 0
+
+    async def _counted(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return router_module._NO_HINT
+
+    monkeypatch.setattr(router_module, "_accept_onshape_hint", _counted)
+    monkeypatch.delattr(client._transport.app.state, "webhook_ingest_limiter", raising=False)  # type: ignore[attr-defined]
+    source_id, token = await _seed(maker)
+
+    for _ in range(router_module.WEBHOOK_INGEST_PER_MINUTE + 5):
+        await client.post(f"/api/v1/webhooks/onshape/{source_id}/{token}", json={})
+
+    assert calls == router_module.WEBHOOK_INGEST_PER_MINUTE + 5

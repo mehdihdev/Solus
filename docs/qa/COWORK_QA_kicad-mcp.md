@@ -1,3 +1,5 @@
+> **Superseded by [`COWORK_QA_kicad-integration.md`](COWORK_QA_kicad-integration.md)** — the consolidated checklist. Kept for detail.
+
 # Cowork QA — KiCad MCP Fork & Live Export Acquisition (SOLUSDEV-100 phase 2)
 
 Self-sufficient end-to-end test plan for SOLUSDEV-100 phase 2: the vendored KiCad MCP

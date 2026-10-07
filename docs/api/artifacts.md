@@ -229,14 +229,17 @@ data-collection system:
 Exceeded → `429 rate_limited` (+ `Retry-After`). **Numbers are provisional pending the F13
 security pass** — the settings names are the contract here, not the values.
 
-`FixedWindowLimiter` (the mechanism behind both budgets above) has two documented v1
-characteristics (Phase 4 M2): it is **per-process, in-memory** — on a multi-instance API
-deployment, each instance enforces the limit independently, so the real aggregate budget is
-`limit × instance_count`; a shared Redis counter is the named follow-up when the API goes
-multi-instance (mirrors `bridge_revocation_poll_seconds`'s own documented single-instance gap).
-Stale per-key counters are pruned lazily on every `bump()` call, so memory stays bounded by the
-number of distinct keys seen in the CURRENT window, never by the lifetime count of every key the
-process has ever seen.
+Both budgets are `UploadBudget` instances (`services/upload_budget.py`). When
+`SOLUS_REDIS_URL` is configured they count in **Redis** (`INCRBY` on a window-stamped key
+`solus:upload-budget:{name}:{window}:{key}`, expiring after two windows), so the budget is
+**aggregate across API instances** (Phase 4 M2 follow-up closed). If Redis is unset or any
+Redis call fails or exceeds a 250 ms timeout, the budget degrades to a per-process `FixedWindowLimiter` and logs a
+warning: the budget becomes per-instance (aggregate `limit x instance_count`) with counts
+restarting from zero, so a Redis flap can admit up to about twice the limit for that window;
+it never fails the upload request. Every 429 from either budget also records a consent-gated
+`rate_limit.exceeded` data event (payload `{budget: "artifact_upload_requests"|"artifact_upload_bytes",
+ retry_after_seconds}`; no content), attributed to the uploading user, team and project. `FixedWindowLimiter` prunes stale per-key counters lazily on every
+`bump()`, so fallback memory is bounded by the distinct keys of the CURRENT window.
 
 ### 4.6 Storage backends — the `ArtifactStore` protocol
 

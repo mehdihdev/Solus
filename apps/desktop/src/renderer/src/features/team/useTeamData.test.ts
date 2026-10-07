@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as resources from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { useTeamData } from './useTeamData'
+import { statusAfterFailure, useTeamData } from './useTeamData'
+import { liveKeys, resetLiveRevisions } from '../../store/liveRevisionStore'
+import { bumpLive } from '../live/testBump'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -60,6 +62,7 @@ const ME: resources.Me = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetLiveRevisions()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ linked: true, teamId: 't1' })
   vi.mocked(resources.getMe).mockResolvedValue(ME)
@@ -122,5 +125,57 @@ describe('useTeamData', () => {
     expect(useWorkspaceStore.getState().teamId).toBe('t-me')
     vi.mocked(resources.deleteTeam).mockRejectedValueOnce(new ApiError(403, 'forbidden', 'x'))
     expect(await result.current.actions.deleteTeam()).toBe(false)
+  })
+})
+
+describe('useTeamData — live refresh (ADR-037)', () => {
+  it('team(id) refetches the detail', async () => {
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getMe).mockResolvedValue(ME)
+    vi.mocked(resources.getTeamDetail).mockResolvedValue(TEAM)
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...TEAM, name: 'Renamed' })
+    await bumpLive(liveKeys.team('t1'))
+    await waitFor(() => expect(result.current.team?.name).toBe('Renamed'))
+    expect(result.current.status).toBe('ready')
+  })
+
+  it('teams refreshes the team list; other teams and keys are ignored', async () => {
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getMe).mockResolvedValue(ME)
+    vi.mocked(resources.getTeamDetail).mockResolvedValue(TEAM)
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await bumpLive(liveKeys.team('other'), liveKeys.teamMembers('t1'), liveKeys.me)
+    expect(resources.getTeamDetail).toHaveBeenCalledTimes(1)
+    vi.mocked(resources.getMe).mockResolvedValue({ ...ME, teams: [ME.teams[0]] })
+    await bumpLive(liveKeys.teams)
+    await waitFor(() => expect(result.current.teams).toHaveLength(1))
+  })
+
+  it('keeps the team on screen when a live refetch fails', async () => {
+    useWorkspaceStore.setState({ linked: true, teamId: 't1' })
+    vi.mocked(resources.getMe).mockResolvedValue(ME)
+    vi.mocked(resources.getTeamDetail).mockResolvedValue(TEAM)
+    const { result } = renderHook(() => useTeamData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.getTeamDetail).mockRejectedValue(new Error('blip'))
+    await bumpLive(liveKeys.team('t1'))
+    expect(result.current.team?.name).toBe('Strider Robotics')
+    expect(result.current.status).toBe('ready')
+  })
+})
+
+describe('statusAfterFailure', () => {
+  it('keeps a ready screen ready when a quiet refetch fails offline', () => {
+    expect(statusAfterFailure('ready', 'offline', true)).toBe('ready')
+  })
+  it('reports offline for a loud failure or a screen that was not ready', () => {
+    expect(statusAfterFailure('ready', 'offline', false)).toBe('offline')
+    expect(statusAfterFailure('loading', 'offline', true)).toBe('offline')
+  })
+  it('always reports gone', () => {
+    expect(statusAfterFailure('ready', 'gone', true)).toBe('gone')
   })
 })

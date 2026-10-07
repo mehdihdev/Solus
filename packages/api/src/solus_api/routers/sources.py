@@ -60,6 +60,7 @@ from solus_api.schemas import (
     serialize_sync,
 )
 from solus_api.services.activity import record_activity
+from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.connections import (
     account_ref_for,
     bind_to_account,
@@ -69,6 +70,7 @@ from solus_api.services.connections import (
     onshape_application_for,
     owned_connection,
     reusable_source,
+    schedule_legacy_grant_purge,
     sweep_after_commit,
 )
 from solus_api.services.events import emit_event
@@ -172,6 +174,16 @@ async def _quota_states(request: Request, sources: list[Source]) -> dict[uuid.UU
     return states
 
 
+def _source_row(source: Source, entity_count: int, state: Any | None) -> dict[str, Any]:
+    """`serialize_source` plus the ADR-038 additive quota read-out (pool,
+    distribution, by_label, rate_limit_remaining). Only the meter's aggregate
+    for the pool THIS source's connection uses — never another tenant's data."""
+    row = serialize_source(source, entity_count=entity_count, quota=state)
+    if state is not None:
+        row["quota"] = state.readout()
+    return row
+
+
 @router.get("")
 async def list_sources(
     request: Request,
@@ -191,10 +203,7 @@ async def list_sources(
     visible, meta = page_meta(list((await session.scalars(stmt)).all()), limit)
     counts = await source_entity_counts(session, [s.id for s in visible])
     quotas = await _quota_states(request, visible)
-    out = [
-        serialize_source(s, entity_count=counts.get(s.id, 0), quota=quotas.get(s.id))
-        for s in visible
-    ]
+    out = [_source_row(s, counts.get(s.id, 0), quotas.get(s.id)) for s in visible]
     return envelope(out, meta=meta)
 
 
@@ -367,6 +376,7 @@ async def disconnect_source(
     ctx: ProjectCtx,
     session: SessionDep,
     secret_store: SecretStoreDep,
+    cache: IntegrationCacheDep,
     retain_entities: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
@@ -391,6 +401,9 @@ async def disconnect_source(
         # enabled on their account; our ability to act as them does not.
         for hosted_ref in hosted_refs(source.secret_ref):
             await secret_store.delete(hosted_ref)
+        # ADR-038 §1: the grant is gone, so the CAD derived through it goes too — unless a
+        # live connection or another live source still shares that account's cache.
+        await schedule_legacy_grant_purge(session, cache, [source], deleting_ids=[source.id])
     if retain_entities:
         # Orphan the graph data into manual, user-owned entities rather than
         # removing it with the source.
@@ -418,8 +431,21 @@ async def disconnect_source(
         domain="integrations",
         payload={"type": source.type.value, "retain_entities": retain_entities},
     )
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="source.disconnected",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={
+            "source_id": str(source.id),
+            "source_type": source.type.value,
+            "retain_entities": retain_entities,
+        },
+    )
     await session.delete(source)
     await session.commit()
+    await run_cad_purges_after_commit(session, cache.durable_store)
     return envelope({"id": source_id, "retained_entities": retain_entities})
 
 

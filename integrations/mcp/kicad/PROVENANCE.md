@@ -166,10 +166,8 @@ above. Blank until both devs sign.
 Both lines required before the fork ships, and again after any re-review trigger
 ("reviewed by both devs" — no self-approval, no single-reviewer shipping).
 
-- **Reviewer 1:** `<name>` — `<date>` — tree hash reviewed: `<SHA>` — checklist:
-  `SECURITY_REVIEW.md §<date>`
-- **Reviewer 2:** `<name>` — `<date>` — tree hash reviewed: `<SHA>` — checklist:
-  `SECURITY_REVIEW.md §<date>`
+- **Reviewer 1:** Mehdi Hussain — 2026-10-06 — tree hash reviewed: upstream 56f30452214d88aa6b84807d6df7a6e903c48e52, vendor 844e1a1183e90a0a3b0c89dbcffe561b6fc9b944 — checklist: SECURITY_REVIEW.md §2026-10-06
+- **Reviewer 2:** Pratham Madaram — 2026-10-06 — tree hash reviewed: upstream 56f30452214d88aa6b84807d6df7a6e903c48e52, vendor 844e1a1183e90a0a3b0c89dbcffe561b6fc9b944 — checklist: SECURITY_REVIEW.md §2026-10-06
 
 ## Re-review triggers (any of these voids the sign-offs above)
 

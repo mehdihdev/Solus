@@ -13,6 +13,7 @@
 import { describe, expect, test } from "vitest";
 import actionGateFields from "../fixtures/action-gate/_fields.json";
 import impactFields from "../fixtures/impact/_fields.json";
+import liveEventFields from "../fixtures/live-events/_fields.json";
 import toolKnowledgeFields from "../fixtures/tool-knowledge/_fields.json";
 import { DIFF_ROW_FIELDS, TOOL_CONFIRMATION_EVENT_FIELDS } from "./action-gate";
 import {
@@ -22,6 +23,25 @@ import {
   IMPACT_RESULT_FIELDS,
   SOL_ACTION_FIELDS,
 } from "./impact";
+import {
+  ACCESS_REVOKED_FIELDS,
+  ACCOUNT_STREAM_READY_FIELDS,
+  GRAPH_CHANGED_FIELDS,
+  GRAPH_CHANGE_COUNTS_FIELDS,
+  HARDWARE_DEVICES_CHANGED_FIELDS,
+  JOB_UPDATED_FIELDS,
+  LAYOUT_CHANGED_FIELDS,
+  MEMBERSHIP_CHANGED_FIELDS,
+  NOTIFICATION_CREATED_FIELDS,
+  PROJECT_STREAM_READY_FIELDS,
+  PROJECT_UPDATED_FIELDS,
+  SOURCES_CHANGED_FIELDS,
+  TEAM_ACTIVITY_FIELDS,
+  TEAM_INVITES_CHANGED_FIELDS,
+  TEAM_MEMBERS_CHANGED_FIELDS,
+  TEAM_PROJECTS_CHANGED_FIELDS,
+  TEAM_UPDATED_FIELDS,
+} from "./live-events";
 import {
   INVOCATION_FIELDS,
   SCREEN_LOCATOR_FIELDS,
@@ -39,6 +59,23 @@ const PAIRS: readonly (readonly [string, readonly string[], readonly string[]])[
   ["ToolKnowledge", TOOL_KNOWLEDGE_FIELDS, toolKnowledgeFields.ToolKnowledge],
   ["Invocation", INVOCATION_FIELDS, toolKnowledgeFields.Invocation],
   ["ScreenLocator", SCREEN_LOCATOR_FIELDS, toolKnowledgeFields.ScreenLocator],
+  ["GraphChangeCounts", GRAPH_CHANGE_COUNTS_FIELDS, liveEventFields.GraphChangeCounts],
+  ["GraphChanged", GRAPH_CHANGED_FIELDS, liveEventFields.GraphChanged],
+  ["HardwareDevicesChanged", HARDWARE_DEVICES_CHANGED_FIELDS, liveEventFields.HardwareDevicesChanged],
+  ["LayoutChanged", LAYOUT_CHANGED_FIELDS, liveEventFields.LayoutChanged],
+  ["SourcesChanged", SOURCES_CHANGED_FIELDS, liveEventFields.SourcesChanged],
+  ["ProjectUpdated", PROJECT_UPDATED_FIELDS, liveEventFields.ProjectUpdated],
+  ["JobUpdated", JOB_UPDATED_FIELDS, liveEventFields.JobUpdated],
+  ["ProjectStreamReady", PROJECT_STREAM_READY_FIELDS, liveEventFields.ProjectStreamReady],
+  ["TeamUpdated", TEAM_UPDATED_FIELDS, liveEventFields.TeamUpdated],
+  ["TeamMembersChanged", TEAM_MEMBERS_CHANGED_FIELDS, liveEventFields.TeamMembersChanged],
+  ["TeamInvitesChanged", TEAM_INVITES_CHANGED_FIELDS, liveEventFields.TeamInvitesChanged],
+  ["TeamProjectsChanged", TEAM_PROJECTS_CHANGED_FIELDS, liveEventFields.TeamProjectsChanged],
+  ["TeamActivity", TEAM_ACTIVITY_FIELDS, liveEventFields.TeamActivity],
+  ["NotificationCreated", NOTIFICATION_CREATED_FIELDS, liveEventFields.NotificationCreated],
+  ["MembershipChanged", MEMBERSHIP_CHANGED_FIELDS, liveEventFields.MembershipChanged],
+  ["AccessRevoked", ACCESS_REVOKED_FIELDS, liveEventFields.AccessRevoked],
+  ["AccountStreamReady", ACCOUNT_STREAM_READY_FIELDS, liveEventFields.AccountStreamReady],
 ];
 
 describe("the TypeScript and Pydantic definitions declare the same fields", () => {
@@ -47,6 +84,6 @@ describe("the TypeScript and Pydantic definitions declare the same fields", () =
   });
 
   test("every paired contract is covered — a new one must be added here", () => {
-    expect(PAIRS).toHaveLength(10);
+    expect(PAIRS).toHaveLength(27);
   });
 });

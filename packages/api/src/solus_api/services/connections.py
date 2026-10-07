@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -55,6 +55,7 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+from solus_api.services.cad_purge import schedule_cad_purge
 
 logger = logging.getLogger("solus.connections")
 
@@ -443,6 +444,93 @@ async def delete_connection_secrets(
         await secret_store.delete(hosted_ref)
 
 
+async def _drop_account_cache(
+    session: AsyncSession,
+    cache: IntegrationCache,
+    connection: AccountConnection,
+    bound: Sequence[Source],
+) -> None:
+    """Drop the Redis side now and queue the durable purge in THIS transaction (ADR-038 §1).
+
+    Both the connection's account ref and every bound source's own ref are covered: a
+    source with no recorded account id caches under `source:<id>`, a different prefix.
+    The caller runs `run_cad_purges_after_commit` once the revocation has committed."""
+    provider = connection.provider.value
+    refs = list(dict.fromkeys([account_ref_for(connection), *(account_ref_for(s) for s in bound)]))
+    for ref in refs:
+        await cache.invalidate_account(provider, ref, delete_durable=False)
+    await schedule_cad_purge(session, cache, provider, refs)
+
+
+async def account_ref_in_use(
+    session: AsyncSession,
+    provider: SourceType,
+    account_ref: str,
+    *,
+    exclude_source_ids: Collection[uuid.UUID] = (),
+) -> bool:
+    """Whether a LIVE connection or source (other than `exclude_source_ids`) still uses
+    this account ref, i.e. still shares the cache keyed on it. Pseudo-refs
+    (`source:<id>`, `connection:<id>`) belong to one row and are never shared."""
+    connection_id = await session.scalar(
+        select(AccountConnection.id)
+        .where(
+            AccountConnection.provider == provider,
+            AccountConnection.account_external_id == account_ref,
+            AccountConnection.status != ConnectionStatus.REVOKED,
+        )
+        .limit(1)
+    )
+    if connection_id is not None:
+        return True
+    live_source = (
+        select(Source.id)
+        .where(
+            Source.type == provider,
+            Source.account_external_id == account_ref,
+            Source.status != SourceStatus.DISCONNECTED,
+        )
+        .limit(1)
+    )
+    if exclude_source_ids:
+        live_source = live_source.where(Source.id.not_in(list(exclude_source_ids)))
+    return await session.scalar(live_source) is not None
+
+
+async def schedule_legacy_grant_purge(
+    session: AsyncSession,
+    cache: IntegrationCache,
+    sources: Sequence[Source],
+    *,
+    deleting_ids: Collection[uuid.UUID],
+) -> None:
+    """Queue the durable purge for legacy per-source Onshape grants that are going away
+    (source disconnect, project / team / account teardown).
+
+    A legacy grant caches under `account_ref_for(source)`. Skipped when a live
+    connection or another live source still uses that ref, so other projects keep
+    their cache. Only Onshape ever writes durable objects, so other providers are
+    ignored."""
+    refs: list[str] = []
+    for source in sources:
+        if (
+            source.type is not SourceType.ONSHAPE
+            or not source.secret_ref
+            or is_connection_owned(source.secret_ref)
+        ):
+            continue
+        ref = account_ref_for(source)
+        if ref in refs or await account_ref_in_use(
+            session, source.type, ref, exclude_source_ids=deleting_ids
+        ):
+            continue
+        refs.append(ref)
+    provider = SourceType.ONSHAPE.value
+    for ref in refs:
+        await cache.invalidate_account(provider, ref, delete_durable=False)
+    await schedule_cad_purge(session, cache, provider, refs)
+
+
 async def revoke_connection(
     session: AsyncSession,
     secret_store: SecretStore,
@@ -464,13 +552,13 @@ async def revoke_connection(
         return 0
     connection = locked
     await delete_connection_secrets(secret_store, connection)
-    if cache is not None:
-        await cache.invalidate_account(connection.provider.value, account_ref_for(connection))
     bound = (
         await session.scalars(
             select(Source).where(Source.connection_id == connection.id).with_for_update()
         )
     ).all()
+    if cache is not None:
+        await _drop_account_cache(session, cache, connection, bound)
     for source in bound:
         if source.type is SourceType.ONSHAPE:
             from solus_api.connectors.webhook_token import WEBHOOK_TOKEN_KEY

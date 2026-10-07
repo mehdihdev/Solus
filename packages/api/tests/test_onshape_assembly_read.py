@@ -103,6 +103,7 @@ def test_feature_view_is_registered_on_existing_operation() -> None:
     from solus_api.connectors.onshape_ops import operation_by_name
 
     operation = operation_by_name("onshape.get_assembly_definition")
+    assert operation is not None
     assert operation.params["properties"]["view"]["const"] == "features"
 
 
@@ -174,6 +175,7 @@ async def test_feature_view_reads_fresh_root_and_tree_and_preserves_workspace() 
         connector = OnshapeConnector(client_id="fixture", client_secret="fixture")
         async with connector.http(Credentials(token="fixture")) as client:
             operation = operation_by_name("onshape.get_assembly_definition")
+            assert operation is not None
             result = await operation.run(
                 connector,
                 client,

@@ -7,6 +7,8 @@ import * as resources from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useHomeTeam } from './useHomeTeam'
+import { liveKeys, resetLiveRevisions } from '../../store/liveRevisionStore'
+import { bumpLive } from '../live/testBump'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -104,6 +106,7 @@ const refreshHome = vi.fn(async () => undefined)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetLiveRevisions()
   useWorkspaceStore.getState().reset()
   useWorkspaceStore.setState({ teamId: 't1', linked: true })
   vi.mocked(resources.getTeamDetail).mockResolvedValue(DETAIL)
@@ -342,3 +345,193 @@ function homeTeamMembershipMutationsTests(): void {
     expect(useWorkspaceStore.getState().teamId).toBe('t-me')
   })
 }
+
+async function ready(team: resources.TeamSummary | null = TEAM): Promise<ReturnType<typeof mount>> {
+  const view = mount(team)
+  await waitFor(() => expect(view.result.current.status).toBe('ready'))
+  return view
+}
+const calls = (): Record<'detail' | 'members' | 'invites' | 'activity', number> => ({
+  detail: vi.mocked(resources.getTeamDetail).mock.calls.length,
+  members: vi.mocked(resources.listMembers).mock.calls.length,
+  invites: vi.mocked(resources.listInvites).mock.calls.length,
+  activity: vi.mocked(resources.listActivityPage).mock.calls.length
+})
+
+describe('useHomeTeam — live refresh (ADR-037): slices', () => {
+  it('team(id) refetches the detail only, silently', async () => {
+    const { result } = await ready()
+    const before = calls()
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, name: 'Renamed' })
+    await bumpLive(liveKeys.team('t1'))
+    await waitFor(() => expect(result.current.detail?.name).toBe('Renamed'))
+    expect(calls()).toEqual({ ...before, detail: before.detail + 1 })
+    expect(result.current.status).toBe('ready')
+    expect(result.current.members).toHaveLength(2)
+  })
+
+  it('teamMembers(id) refetches members only', async () => {
+    const { result } = await ready()
+    const before = calls()
+    vi.mocked(resources.listMembers).mockResolvedValue([
+      ...MEMBERS,
+      { ...MEMBERS[1], user_id: 'u3' }
+    ])
+    await bumpLive(liveKeys.teamMembers('t1'))
+    await waitFor(() => expect(result.current.members).toHaveLength(3))
+    expect(calls()).toEqual({ ...before, members: before.members + 1 })
+  })
+})
+
+describe('useHomeTeam — live refresh (ADR-037): invites', () => {
+  it('teamInvites(id) refetches invites for an owner', async () => {
+    const { result } = await ready()
+    const before = calls()
+    vi.mocked(resources.listInvites).mockResolvedValue([
+      { ...INVITE, token: undefined },
+      { ...INVITE, id: 'i2', token: undefined }
+    ])
+    await bumpLive(liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.invites).toHaveLength(2))
+    expect(calls().invites).toBe(before.invites + 1)
+  })
+
+  it('teamInvites(id) refetches invites for an admin', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    await ready()
+    const before = calls().invites
+    await bumpLive(liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(calls().invites).toBe(before + 1))
+  })
+
+  it.each(['member', 'viewer'] as const)(
+    'a %s never calls the invites route on a hint',
+    async (role) => {
+      vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role })
+      const { result } = await ready()
+      const before = calls()
+      await bumpLive(liveKeys.teamInvites('t1'))
+      expect(calls()).toEqual(before)
+      expect(result.current.myRole).toBe(role)
+    }
+  )
+
+  it('loads invites once a member is promoted to admin after an invites hint arrived as member', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'member' })
+    vi.mocked(resources.listInvites).mockResolvedValue([])
+    const { result } = await ready()
+    expect(result.current.invites).toHaveLength(0)
+    // membership.changed bumps invites while the role is still `member`.
+    await bumpLive(liveKeys.teamInvites('t1'))
+    const before = calls().invites
+    vi.mocked(resources.listInvites).mockResolvedValue([{ ...INVITE, token: undefined }])
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    await bumpLive(liveKeys.team('t1'))
+    await waitFor(() => expect(result.current.myRole).toBe('admin'))
+    await waitFor(() => expect(result.current.invites).toHaveLength(1))
+    expect(calls().invites).toBe(before + 1)
+  })
+})
+
+describe('useHomeTeam — live refresh (ADR-037): role change sequencing', () => {
+  it('admin demoted to member: the same bump never calls the invites route', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    const { result } = await ready()
+    const before = calls().invites
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'member' })
+    vi.mocked(resources.listInvites).mockRejectedValue(new ApiError(403, 'forbidden', 'no'))
+    // membership.changed bumps the team detail and invites together.
+    await bumpLive(liveKeys.team('t1'), liveKeys.teamMembers('t1'), liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.myRole).toBe('member'))
+    expect(calls().invites).toBe(before)
+    expect(result.current.status).toBe('ready')
+  })
+
+  it('member promoted to admin: the same bump loads invites exactly once', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'member' })
+    const { result } = await ready()
+    const before = calls().invites
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    vi.mocked(resources.listInvites).mockResolvedValue([{ ...INVITE, token: undefined }])
+    await bumpLive(liveKeys.team('t1'), liveKeys.teamMembers('t1'), liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.myRole).toBe('admin'))
+    await waitFor(() => expect(result.current.invites).toHaveLength(1))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls().invites).toBe(before + 1)
+  })
+
+  it('a 403 on the invites hint refetch is silent: nothing thrown, status stays ready', async () => {
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, role: 'admin' })
+    const { result } = await ready()
+    vi.mocked(resources.listInvites).mockRejectedValue(new ApiError(403, 'forbidden', 'no'))
+    await bumpLive(liveKeys.teamInvites('t1'))
+    await waitFor(() => expect(result.current.invites).toEqual([]))
+    expect(result.current.status).toBe('ready')
+  })
+})
+
+describe('useHomeTeam — live refresh (ADR-037): activity and scope', () => {
+  it('teamActivity(id) refreshes the first page', async () => {
+    const { result } = await ready()
+    const newer = { ...FEED.data[0], id: 'a0' }
+    vi.mocked(resources.listActivityPage).mockResolvedValue({
+      data: [newer, FEED.data[0]],
+      meta: { total: 10, has_next: true, next_cursor: 'c3' }
+    })
+    await bumpLive(liveKeys.teamActivity('t1'))
+    await waitFor(() => expect(result.current.activity.map((a) => a.id)).toEqual(['a0', 'a1']))
+    expect(result.current.activityTotal).toBe(10)
+  })
+
+  it('a refresh after load-more keeps the older pages and a valid cursor', async () => {
+    const { result } = await ready()
+    const older = { ...FEED.data[0], id: 'a-old' }
+    vi.mocked(resources.listActivityPage).mockResolvedValueOnce({
+      data: [older],
+      meta: { total: 9, has_next: false }
+    })
+    await act(async () => result.current.actions.loadMoreActivity())
+    expect(result.current.activity.map((a) => a.id)).toEqual(['a1', 'a-old'])
+    const newest = { ...FEED.data[0], id: 'a-new' }
+    vi.mocked(resources.listActivityPage).mockResolvedValue({
+      data: [newest, FEED.data[0]],
+      meta: { total: 10, has_next: true, next_cursor: 'c-fresh' }
+    })
+    await bumpLive(liveKeys.teamActivity('t1'))
+    await waitFor(() =>
+      expect(result.current.activity.map((a) => a.id)).toEqual(['a-new', 'a1', 'a-old'])
+    )
+    expect(result.current.activityHasMore).toBe(false)
+    expect(result.current.activityTotal).toBe(10)
+  })
+
+  it('ignores hints for other teams', async () => {
+    await ready()
+    const before = calls()
+    await bumpLive(
+      liveKeys.team('t2'),
+      liveKeys.teamMembers('t2'),
+      liveKeys.teamInvites('t2'),
+      liveKeys.teamActivity('t2')
+    )
+    expect(calls()).toEqual(before)
+  })
+
+  it('drops a refresh that lands after the user switched teams', async () => {
+    let release!: (rows: resources.TeamMemberApi[]) => void
+    const { result, rerender } = renderHook(({ team }) => useHomeTeam(team, ME, refreshHome), {
+      initialProps: { team: TEAM }
+    })
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.mocked(resources.listMembers).mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve))
+    )
+    await bumpLive(liveKeys.teamMembers('t1'))
+    vi.mocked(resources.getTeamDetail).mockResolvedValue({ ...DETAIL, id: 't2', name: 'Arm Lab' })
+    vi.mocked(resources.listMembers).mockResolvedValue([MEMBERS[0]])
+    rerender({ team: OTHER })
+    await waitFor(() => expect(result.current.detail?.name).toBe('Arm Lab'))
+    await act(async () => release([...MEMBERS, { ...MEMBERS[1], user_id: 'late' }]))
+    expect(result.current.members).toHaveLength(1)
+  })
+})

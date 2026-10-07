@@ -631,3 +631,311 @@ async def test_expired_payload_cache_does_not_trigger_ingestion(onshape: Any, ma
     await _sync_cached(maker, registry, source_id, secrets)
     assert meter.counted == 0
     assert meter.by_route["translations_start"] == 0
+
+
+# --------------------------------------------------------------- ADR-038 (T-A1)
+#
+# Per-element export keys + the durable CAD store. One document with 3 Part
+# Studios, 2 assemblies and 1 drawing; every number is a counted translation
+# (or microversion probe), not a claim.
+
+_PART_STUDIOS = ("ps1", "ps2", "ps3")
+_ASSEMBLIES = ("as1", "as2")
+_DRAWING = "dr1"
+_STEP_PADDING_BYTES = 9 * 1024 * 1024
+
+
+class _Elements(FakeOnshape):
+    """FakeOnshape whose element listing carries per-element `microversionId`s,
+    and which records which element each translation was for."""
+
+    def __init__(self, *, padded_export: bool = False) -> None:
+        super().__init__(poll_depth=0)
+        self.versions: dict[str, str] = {
+            **{e: f"{e}v0" for e in (*_PART_STUDIOS, *_ASSEMBLIES, _DRAWING)}
+        }
+        self.exported: list[str] = []
+        self._edits = 0
+        self._padded = padded_export
+        #: Run at the start of the Nth translation (1-based) — the "edit lands
+        #: mid-sync" lever.
+        self.on_translation: dict[int, Any] = {}
+
+    def edit(self, element_id: str) -> None:
+        self._edits += 1
+        self.versions[element_id] = f"{element_id}v{self._edits}"
+        self.bump_microversion(f"docv{self._edits}")
+
+    def _elements(self, request: Any) -> Any:
+        import httpx
+
+        kinds = {
+            **{e: "PARTSTUDIO" for e in _PART_STUDIOS},
+            **{e: "ASSEMBLY" for e in _ASSEMBLIES},
+            _DRAWING: "DRAWING",
+        }
+        return httpx.Response(
+            200,
+            json=[
+                {"id": e, "name": e, "elementType": kind, "microversionId": self.versions[e]}
+                for e, kind in kinds.items()
+            ],
+        )
+
+    def _translation_start(self, request: Any) -> Any:
+        self.exported.append(request.url.path.split("/e/")[1].split("/")[0])
+        hook = self.on_translation.get(len(self.exported))
+        if hook is not None:
+            hook()
+        return super()._translation_start(request)
+
+    def _handlers(self) -> Any:
+        import httpx
+        from fixtures.onshape_sample import STEP_EXPORT
+
+        handlers = super()._handlers()
+        if self._padded:
+            padded = STEP_EXPORT + "/*" + "x" * _STEP_PADDING_BYTES + "*/\n"
+            handlers["externaldata"] = lambda _r: httpx.Response(200, text=padded)
+        return handlers
+
+
+@pytest.fixture
+async def multi(request: pytest.FixtureRequest) -> AsyncIterator[tuple[_Elements, Meter]]:
+    fake = _Elements(padded_export=bool(getattr(request, "param", False)))
+    async with respx.mock(assert_all_called=False) as router:
+        router.route().mock(side_effect=fake)
+        yield fake, Meter(router)
+    assert fake.unhandled == [], f"unhandled Onshape endpoints: {fake.unhandled}"
+
+
+def _durable_cache(tmp_path: Any) -> IntegrationCache:
+    from solus_api.storage.cad_store import LocalCadStore
+
+    return IntegrationCache(
+        InMemoryCacheStore(),
+        durable_store=LocalCadStore(str(tmp_path / "cad"), max_object_bytes=256 * 1024 * 1024),
+    )
+
+
+async def _webhook(
+    maker: Any, registry: ConnectorRegistry, source_id: uuid.UUID, store: Any
+) -> None:
+    await _sync_cached(maker, registry, source_id, store, trigger=SyncTrigger.WEBHOOK)
+
+
+async def _cold(
+    multi: tuple[_Elements, Meter], maker: Any, tmp_path: Any
+) -> tuple[ConnectorRegistry, uuid.UUID, InMemorySecretStore]:
+    fake, meter = multi
+    secrets = InMemorySecretStore()
+    registry = _cached_registry(_durable_cache(tmp_path))
+    source_id = await _seed_shared(maker, secrets)
+    await _sync_cached(maker, registry, source_id, secrets)
+    assert sorted(fake.exported) == sorted((*_PART_STUDIOS, *_ASSEMBLIES)), (
+        "the cold sync exports every Part Studio and assembly, and never the drawing"
+    )
+    fake.exported.clear()
+    meter.reset()
+    return registry, source_id, secrets
+
+
+async def test_editing_one_part_studio_reexports_part_studios_and_assemblies_only(
+    multi: Any, maker: Any, tmp_path: Any
+) -> None:
+    fake, meter = multi
+    registry, source_id, secrets = await _cold(multi, maker, tmp_path)
+    fake.edit("ps2")
+    await _webhook(maker, registry, source_id, secrets)
+    # Assemblies may reference any Part Studio in the document, so they follow it.
+    assert sorted(fake.exported) == sorted((*_PART_STUDIOS, *_ASSEMBLIES))
+    assert _DRAWING not in fake.exported
+
+
+async def test_editing_an_assembly_reexports_assemblies_only(
+    multi: Any, maker: Any, tmp_path: Any
+) -> None:
+    fake, meter = multi
+    registry, source_id, secrets = await _cold(multi, maker, tmp_path)
+    fake.edit("as1")
+    await _webhook(maker, registry, source_id, secrets)
+    assert sorted(fake.exported) == sorted(_ASSEMBLIES), (
+        f"exports after an assembly edit: {fake.exported}"
+    )
+
+
+async def test_editing_the_drawing_exports_nothing(multi: Any, maker: Any, tmp_path: Any) -> None:
+    fake, meter = multi
+    registry, source_id, secrets = await _cold(multi, maker, tmp_path)
+    fake.edit(_DRAWING)
+    await _webhook(maker, registry, source_id, secrets)
+    assert fake.exported == [], f"a drawing edit re-exported {fake.exported}"
+    assert meter.by_route["translations_start"] == 0
+    assert meter.by_route["externaldata"] == 0
+
+
+async def test_a_sync_probes_each_document_once_not_twice(
+    multi: Any, maker: Any, tmp_path: Any
+) -> None:
+    """detect_changes already read the document's microversion this sync; the plan
+    must reuse it rather than ask again (the webhook posture trusts no recorded
+    signal, so it used to pay twice)."""
+    fake, meter = multi
+    registry, source_id, secrets = await _cold(multi, maker, tmp_path)
+    fake.edit(_DRAWING)
+    await _webhook(maker, registry, source_id, secrets)
+    assert meter.by_route["microversion"] == 1, dict(meter.by_route)
+    # Change evidence stays mandatory: the one probe is what saw the new version.
+    assert meter.by_route["elements"] == 1
+
+
+async def test_a_second_sync_after_a_probe_does_not_reuse_a_stale_observation(
+    multi: Any, maker: Any, tmp_path: Any
+) -> None:
+    fake, meter = multi
+    registry, source_id, secrets = await _cold(multi, maker, tmp_path)
+    fake.edit(_DRAWING)
+    await _webhook(maker, registry, source_id, secrets)
+    meter.reset()
+    fake.edit(_DRAWING)
+    await _webhook(maker, registry, source_id, secrets)
+    assert meter.by_route["microversion"] == 1
+    assert meter.by_route["elements"] == 1, "the new version must be re-listed"
+
+
+@pytest.mark.parametrize("multi", [True], indirect=True)
+async def test_an_unchanged_oversized_tab_is_served_from_the_durable_store(
+    multi: Any, maker: Any, tmp_path: Any
+) -> None:
+    fake, meter = multi
+    secrets = InMemorySecretStore()
+    cache = _durable_cache(tmp_path)
+    registry = _cached_registry(cache)
+    first = await _seed_shared(maker, secrets)
+    await _sync_cached(maker, registry, first, secrets)
+    assert len(fake.exported) == 5, "the cold sync exports each tab once"
+
+    # A second project on the same account: >8 MiB exports used to be uncacheable.
+    fake.exported.clear()
+    meter.reset()
+    second = await _seed_shared(maker, secrets)
+    await _sync_cached(maker, registry, second, secrets)
+    assert fake.exported == [] and meter.by_route["translations_start"] == 0
+    assert meter.counted == 0, dict(meter.by_route)
+
+    # And an edit elsewhere in the document never re-exports them.
+    fake.edit(_DRAWING)
+    meter.reset()
+    await _webhook(maker, registry, first, secrets)
+    assert fake.exported == [] and meter.by_route["externaldata"] == 0
+
+
+async def test_a_revision_changed_abort_keeps_the_exports_that_completed(
+    multi: Any, maker: Any, tmp_path: Any
+) -> None:
+    fake, meter = multi
+    secrets = InMemorySecretStore()
+    registry = _cached_registry(_durable_cache(tmp_path))
+    source_id = await _seed_shared(maker, secrets, documents=[DID])
+    # The drawing is edited while the SECOND tab is being exported.
+    fake.on_translation[2] = lambda: fake.edit(_DRAWING)
+
+    await _sync_cached(maker, registry, source_id, secrets)
+    async with maker() as db:
+        failed = (await db.scalars(select(Sync).where(Sync.source_id == source_id))).all()
+    assert [s.status for s in failed] == [JobStatus.FAILED], "the bracketed export must abort"
+    completed = fake.exported[:1]
+    fake.exported.clear()
+    fake.on_translation.clear()
+
+    await _webhook(maker, registry, source_id, secrets)
+    # The retry exports only what the abort never verified, not the tab that
+    # had completed (the drawing edit does not touch any exportable tab).
+    assert completed[0] not in fake.exported, f"re-exported {completed}: {fake.exported}"
+    assert sorted([*completed, *fake.exported]) == sorted((*_PART_STUDIOS, *_ASSEMBLIES))
+    async with maker() as db:
+        statuses = (await db.scalars(select(Sync.status).where(Sync.source_id == source_id))).all()
+    assert JobStatus.SUCCEEDED in statuses
+
+
+# ------------------------------------------------ ADR-038 §2: webhook-first freshness
+
+
+def _healthy_state() -> dict[str, Any]:
+    from solus_api.models import utcnow
+
+    return {
+        "status": "registered",
+        "subscriptions": {DID: "hook1"},
+        "deliveries": {DID: utcnow().isoformat()},
+        "health_checked_at": utcnow().isoformat(),
+    }
+
+
+async def _mark_healthy(maker: Any, source_id: uuid.UUID) -> None:
+    from solus_api.services.onshape_webhooks import save_state
+
+    async with maker() as db:
+        row = await db.get(Source, source_id)
+        save_state(row, _healthy_state())
+        await db.commit()
+
+
+async def test_an_idle_hour_with_healthy_webhooks_costs_zero_calls(
+    onshape: Any, maker: Any
+) -> None:
+    """Before: the hourly sweep probed every source (one microversion read per
+    tracked document per hour, ~24/day). After: a healthy subscription is not probed."""
+    from unittest.mock import AsyncMock
+
+    from solus_api.connectors.worker import run_change_detection
+
+    _, meter = onshape
+    secrets = InMemorySecretStore()
+    source_id = await _seed_shared(maker, secrets)
+    await _mark_healthy(maker, source_id)
+    cache, _ = _shared_cache()
+    meter.reset()
+
+    for _hour in range(2):
+        await run_change_detection(
+            sessionmaker=maker,
+            registry=_cached_registry(cache),
+            secret_store=secrets,
+            enqueue=AsyncMock(),
+        )
+
+    assert meter.attempts == 0
+
+
+async def test_a_three_minute_editing_burst_costs_one_sync_not_ten(
+    onshape: Any, maker: Any
+) -> None:
+    fake, meter = onshape
+    fake.poll_depth = 2
+
+    # Before: ten change events, each its own probe + export, legacy polling.
+    secrets = InMemorySecretStore()
+    before_id = await _seed_shared(maker, secrets, account="acct-before")
+    cache, _ = _shared_cache()
+    registry = _cached_registry(cache)
+    await _sync_cached(maker, registry, before_id, secrets)
+    meter.reset()
+    for index in range(10):
+        fake.bump_microversion(f"edit{index:04d}")
+        await _sync_cached(maker, registry, before_id, secrets, trigger=SyncTrigger.WEBHOOK)
+    before = meter.counted
+
+    # After: the same ten events fall inside one quiet window, so ONE sync runs
+    # for the final state, from a source with a healthy subscription.
+    after_id = await _seed_shared(maker, secrets, account="acct-after")
+    await _mark_healthy(maker, after_id)
+    await _sync_cached(maker, registry, after_id, secrets)
+    meter.reset()
+    for index in range(10):
+        fake.bump_microversion(f"next{index:04d}")
+    await _sync_cached(maker, registry, after_id, secrets, trigger=SyncTrigger.WEBHOOK)
+    after = meter.counted
+
+    print(f"burst of 10 change events: before={before} calls, after={after} calls")
+    assert after * 5 <= before

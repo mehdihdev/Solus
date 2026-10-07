@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 import httpx
 import pytest
@@ -755,7 +756,8 @@ async def test_tool_connector_uses_scoped_provider_account_budget(
         team_id=team_id,
         acting_user_id=actor_id,
         account_ref=expected_ref,
-        purpose="scheduled",
+        purpose="agent",
+        label="agent_read",
     )
     if account_bound:
         from solus_api.agent.tools.tool import ToolException
@@ -791,7 +793,7 @@ async def test_insert_preview_refuses_donor_deselected_before_approval(
     insert = tools["onshape.insert_part"]
     assert insert.descriptor.requires_confirmation is True
     with pytest.raises(ToolException) as error:
-        await insert.preview(
+        await insert.preview(  # type: ignore[attr-defined]  # preview exists on the concrete tool
             {
                 "document_id": "d1",
                 "workspace_id": "w1",
@@ -910,7 +912,7 @@ async def test_revoke_during_refresh_does_not_restore_tokens_or_retry_insert(
         },
     )
     tool = next(t for t in registry.tools() if t.descriptor.name == call.tool)
-    await tool.preview(call.args)
+    await tool.preview(call.args)  # type: ignore[attr-defined]  # preview exists on the concrete tool
     result = await registry.invoke(call)
     if change == "unchanged":
         assert result.ok is True
@@ -931,7 +933,7 @@ async def test_revoke_during_refresh_does_not_restore_tokens_or_retry_insert(
             assert await store.get(refresh_secret_ref(ref)) == "old-refresh"
 
 
-async def test_variable_replacement_requires_complete_preview(maker):
+async def test_variable_replacement_requires_complete_preview(maker: Any) -> None:
     project_id, _ = await _seed_access(maker, "write")
     tools = build_onshape_tools(
         maker, project_id, secret_store=InMemorySecretStore(), connectors=_connectors()
@@ -945,7 +947,9 @@ async def test_variable_replacement_requires_complete_preview(maker):
 @pytest.mark.parametrize(
     "error_code", [None, "revision_changed", "oauth_invalid_grant", "quota_exhausted"]
 )
-async def test_graph_sync_preserves_live_onshape_read_authority(maker, status, error_code):
+async def test_graph_sync_preserves_live_onshape_read_authority(
+    maker: Any, status: Any, error_code: Any
+) -> None:
     project_id, ref = await _seed(maker, status=status)
     async with maker() as db:
         source = await db.scalar(select(Source).where(Source.project_id == project_id))
@@ -974,8 +978,8 @@ async def test_graph_sync_preserves_live_onshape_read_authority(maker, status, e
     "error_code", [None, "revision_changed", "oauth_invalid_grant", "quota_exhausted"]
 )
 async def test_refresh_admission_keeps_syncing_source_but_rejects_unusable_states(
-    maker, status, error_code
-):
+    maker: Any, status: Any, error_code: Any
+) -> None:
     from solus_api.agent.tools.onshape_tools import _AccountRefreshStore
     from solus_api.agent.tools.tool import ToolException
     from solus_api.models import AccountConnection, ConnectionStatus, User
@@ -1010,7 +1014,7 @@ async def test_refresh_admission_keeps_syncing_source_but_rejects_unusable_state
                 await guard._admit()
 
 
-async def test_compact_assembly_inspection_refuses_untracked_root_before_http(maker):
+async def test_compact_assembly_inspection_refuses_untracked_root_before_http(maker: Any) -> None:
     project_id, ref = await _seed(maker, documents=["allowed"])
     store = InMemorySecretStore()
     await store.put(ref, "access")

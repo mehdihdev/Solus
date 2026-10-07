@@ -501,6 +501,8 @@ it('persists missing defaults once and leaves saved points untouched on an impor
   })
   expect(onMove).toHaveBeenCalledTimes(1)
   expect(onMove.mock.calls[0][0]).toBe('b')
+  // Default placement is labelled so a layout conflict on it is never shown as a user's loss.
+  expect(onMove.mock.calls[0][2]).toBe('auto')
   const b = onMove.mock.calls[0][1] as { x: number; y: number }
   rerender(
     <GraphNavigator

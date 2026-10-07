@@ -33,9 +33,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
+import hashlib
 import logging
 import random
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -82,6 +85,41 @@ _ID_RE = re.compile(r"^[A-Za-z0-9]{1,40}$")
 ONSHAPE_ID_RE = _ID_RE
 
 
+@functools.lru_cache(maxsize=1)
+def ambient_settings() -> Any | None:
+    """The process's `Settings`, for seams constructed without any (the registry's Onshape
+    factories, the inline sync path). None when the environment cannot build them, in which
+    case callers use their documented defaults."""
+    from solus_api.core.config import Settings
+
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except Exception:  # noqa: BLE001 — no configuration is a defaultable state
+        logger.warning("ambient settings unavailable; using defaults")
+        return None
+
+
+def onshape_session_id() -> str:
+    """The configured `X-Session-ID` / webhook `externalSessionId`, or a safe default."""
+    settings = ambient_settings()
+    value = getattr(settings, "onshape_session_id", None)
+    return (
+        value if isinstance(value, str) and _SESSION_ID_RE.fullmatch(value) else DEFAULT_SESSION_ID
+    )
+
+
+def translation_pending_key(account_ref: str, translation_id: str) -> str:
+    """Marker: THIS account started that translation. Redis-only (a `signal` kind)."""
+    item = f"translation-pending:{translation_id}"
+    return IntegrationCache.signal_key("onshape", account_ref, item)
+
+
+def translation_done_key(account_ref: str, translation_id: str) -> str:
+    """Record: a webhook said that translation finished. Keyed on the source's account."""
+    item = f"translation-done:{translation_id}"
+    return IntegrationCache.signal_key("onshape", account_ref, item)
+
+
 def element_base_path(kind: str, document_id: str, workspace_id: str, element_id: str) -> str:
     """The `/{kind}/d/{did}/w/{wid}/e/{eid}` prefix every element call hangs off.
 
@@ -112,6 +150,18 @@ _DOWNLOAD_DEADLINE_SECONDS = 300.0
 #: download only, so before SOLUSDEV-167 the poll loop had none at all.
 _POLL_DEADLINE_SECONDS = 45.0
 _POLL_MAX_INTERVAL_SECONDS = 8.0
+#: ADR-038 §2: with a healthy webhook subscription the wait is for a `translation.complete`
+#: record (a free local read every tick), and Onshape is asked only on this sparse
+#: backoff (ticks between polls: 2, 5, 15, 30, then every 30), bounded in total.
+_WEBHOOK_POLL_GAPS = (2, 5, 15, 30)
+_WEBHOOK_WAIT_TICKS = 120
+_WEBHOOK_WAIT_DEADLINE_SECONDS = 150.0
+#: How long a "started" marker or a "completed" record lives (more than any export).
+TRANSLATION_RECORD_TTL_SECONDS = 600
+#: Sent on every non-GET request; see `OnshapeConnector.request`.
+SESSION_HEADER = "X-Session-ID"
+DEFAULT_SESSION_ID = "solus-api"
+_SESSION_ID_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
 _EXPORT_FORMAT = "STEP"
 _TOO_LARGE = f"export exceeds the {MAX_CAD_EXPORT_BYTES // (1024 * 1024)} MiB parse limit"
 
@@ -146,6 +196,20 @@ _LEGACY_KEYS = ("document_id", "workspace_id", "element_id")
 #: and blobs; exporting those would spend a translation job to fail.
 _ASSEMBLIES = "assemblies"
 EXPORTABLE_COLLECTIONS: dict[str, str] = {"ASSEMBLY": _ASSEMBLIES, "PARTSTUDIO": "partstudios"}
+
+#: ADR-038 §3 — the in-document elements an export may depend on. A Part Studio
+#: derives from other Part Studios, Variable Studios, Feature Studios (custom features)
+#: and blobs (imported geometry can be consumed by a Part Studio or an assembly); an
+#: assembly additionally instantiates other assemblies. Drawings and app elements never
+#: feed an export, so editing one must not invalidate it.
+_STUDIO_TYPES = frozenset({"PARTSTUDIO", "VARIABLESTUDIO", "FEATURESTUDIO", "BLOB"})
+_ASSEMBLY_TYPE = "ASSEMBLY"
+_TRACKED_TYPES = _STUDIO_TYPES | {_ASSEMBLY_TYPE}
+#: Export-key fingerprint used when the listing carries no usable per-element
+#: microversion: the key then degrades to document granularity (the old, safe one).
+_DOCUMENT_KEYED = "doc"
+#: How long a probe's observation may be handed to the plan of the SAME sync.
+_OBSERVATION_TTL_SECONDS = 120.0
 
 #: Bounds on an account-level sync. Onshape rate-caps a private OAuth app, and
 #: each element costs a translation job — so both the selection and the expanded
@@ -248,6 +312,11 @@ class _Target:
     #: "partstudios". Only Part Studios support the optional parts metadata
     #: enrichment; both collections share STEP parsing and graph projection.
     collection: str = _ASSEMBLIES
+    #: ADR-038 §3 export-cache identity: this element's own microversion and a
+    #: fingerprint of the in-document elements it may depend on. None when the
+    #: listing did not carry them (the export is then keyed by the document).
+    revision: str | None = None
+    fingerprint: str | None = None
 
     @property
     def scope(self) -> str:
@@ -277,6 +346,17 @@ class _DocumentPlan:
     workspace_id: str | None
     microversion: str
     targets: list[_Target]
+
+
+def _fingerprint(domain: str, elements: list[tuple[str, str]]) -> str | None:
+    """sha256 over the sorted `(element_id, microversion)` pairs an export may depend
+    on, or None when any pair lacks a microversion (the caller then keys by document)."""
+    if any(not micro for _, micro in elements):
+        return None
+    digest = hashlib.sha256(domain.encode())
+    for element_id, micro in sorted(elements):
+        digest.update(f"\n{element_id}:{micro}".encode())
+    return digest.hexdigest()
 
 
 def _text(value: Any) -> str:
@@ -447,6 +527,7 @@ class OnshapeConnector(OAuthConnector):
         cache: IntegrationCache | None = None,
         account_ref: str | None = None,
         signal_max_age_seconds: float | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.scene_export_observer: Callable[[str, str, str, str], None] | None = None
         self._client_id = client_id
@@ -477,6 +558,18 @@ class OnshapeConnector(OAuthConnector):
         self._cache = cache if account_ref else None
         self._account_ref = account_ref or ""
         self._signal_max_age = signal_max_age_seconds
+        self._session_id = session_id
+        #: ADR-038 §2: set by the sync runner from the Source row. True only when every
+        #: tracked document has a verified-delivering subscription; it is what lets a
+        #: recorded `translation.complete` replace polling.
+        self.webhook_healthy = False
+        #: ADR-038 §3: the latest element listing per document (version, rows), handed
+        #: from `_elements_at` to `_plan` so one listing serves both the target
+        #: list and the export keys.
+        self._listings: dict[str, tuple[str, list[tuple[str, str, str]]]] = {}
+        #: ADR-038 §5c: what this sync's change probe already learned per document —
+        #: `(workspace_id, microversion, observed_at)` — consumed once by `_plan`.
+        self._observed: dict[str, tuple[str, str, float]] = {}
 
     # ----------------------------------------------------------- oauth
 
@@ -574,7 +667,10 @@ class OnshapeConnector(OAuthConnector):
                 if current != stored.get(document_id):
                     return True
 
-        return bool(document_ids) and ctx.cursor.get("projection_version") != PROJECTION_VERSION
+        changed = bool(document_ids) and ctx.cursor.get("projection_version") != PROJECTION_VERSION
+        if not changed:
+            self._observed.clear()  # nothing follows this probe; leave no stale evidence
+        return changed
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
         """Ingest every tracked document. One source now spans many documents, so
@@ -656,8 +752,17 @@ class OnshapeConnector(OAuthConnector):
         version: str,
     ) -> tuple[list[Any], list[Any]]:
         """One element → graph records, namespaced to its document."""
+        # ADR-038 §3: keyed by the ELEMENT's microversion + a dependency fingerprint,
+        # so an edit elsewhere in the document does not re-export this tab. The
+        # bracketing inside `_geometry_export` still proves the bytes match `version`.
         export = await self._cached(
-            self._payload_key("export", target.document_id, version, target.element_id),
+            self._payload_key(
+                "export",
+                target.document_id,
+                target.revision or version,
+                target.element_id,
+                target.fingerprint or _DOCUMENT_KEYED,
+            ),
             lambda: self._geometry_export(client, target, version),
         )
         if export is None:
@@ -757,7 +862,7 @@ class OnshapeConnector(OAuthConnector):
 
     def _payload_key(self, kind: str, document_id: str, version: str, *parts: str) -> str:
         return IntegrationCache.payload_key(
-            self.provider, self._account_ref, document_id, version, f"revision-v2-{kind}", *parts
+            self.provider, self._account_ref, document_id, version, f"revision-v3-{kind}", *parts
         )
 
     async def _cached[T](self, key: str, fetch: Callable[[], Awaitable[T]]) -> T:
@@ -823,8 +928,13 @@ class OnshapeConnector(OAuthConnector):
         """
         legacy = self._legacy_target(ctx)
         if legacy is not None:
-            microversion = await self._current_microversion(
-                client, legacy.document_id, legacy.workspace_id
+            observed = self._take_observed(legacy.document_id)
+            microversion = (
+                observed[1]
+                if observed is not None
+                else await self._current_microversion(
+                    client, legacy.document_id, legacy.workspace_id
+                )
             )
             return [_DocumentPlan(legacy.document_id, legacy.workspace_id, microversion, [legacy])]
 
@@ -832,7 +942,12 @@ class OnshapeConnector(OAuthConnector):
         seen = 0
         for document_id in self._selected_document_ids(ctx):
             try:
-                workspace_id, microversion = await self._locate(client, ctx, document_id)
+                # ADR-038 §5c: the change probe of THIS sync already asked; the
+                # webhook posture trusts no recorded signal and would pay twice.
+                located = self._take_observed(document_id) or await self._locate(
+                    client, ctx, document_id
+                )
+                workspace_id, microversion = located
                 elements = await self._elements_at(client, document_id, workspace_id, microversion)
             except ConnectorError as exc:
                 if exc.code != "not_found":
@@ -843,6 +958,7 @@ class OnshapeConnector(OAuthConnector):
                 plans.append(_DocumentPlan(document_id, None, _GONE, []))
                 continue
             targets: list[_Target] = []
+            revisions = self._export_revisions(document_id, microversion)
             for element_id, collection in elements:
                 seen += 1
                 if seen > self._max_elements:
@@ -866,6 +982,8 @@ class OnshapeConnector(OAuthConnector):
                         workspace_id=workspace_id,
                         element_id=str(element_id),
                         collection=str(collection),
+                        revision=revisions.get(str(element_id), (None, None))[0],
+                        fingerprint=revisions.get(str(element_id), (None, None))[1],
                     )
                 )
             plans.append(_DocumentPlan(document_id, workspace_id, microversion, targets))
@@ -877,12 +995,53 @@ class OnshapeConnector(OAuthConnector):
         """The exportable elements at one version — cached by it."""
         self._validate_revision(version)
 
-        async def fetch() -> list[tuple[str, str]]:
+        async def fetch() -> list[tuple[str, str, str]]:
             return await self._exportable_elements(client, document_id, version)
 
-        rows = await self._cached(self._payload_key("elements", document_id, version), fetch)
-        # A cached list comes back as JSON lists; the plan wants pairs.
-        return [(str(element_id), str(collection)) for element_id, collection in rows]
+        cached = await self._cached(self._payload_key("elements", document_id, version), fetch)
+        # A cached list comes back as JSON lists; keep only well-formed rows.
+        rows = [
+            (str(row[0]), str(row[1]), str(row[2]))
+            for row in cached
+            if isinstance(row, list | tuple) and len(row) == 3
+        ]
+        self._listings[document_id] = (version, rows)
+        return [
+            (element_id, EXPORTABLE_COLLECTIONS[kind])
+            for element_id, kind, _ in rows
+            if kind in EXPORTABLE_COLLECTIONS
+        ]
+
+    def _export_revisions(self, document_id: str, version: str) -> dict[str, tuple[str, str]]:
+        """`element_id -> (element microversion, dependency fingerprint)` from the
+        listing `_elements_at` just read (ADR-038 §3).
+
+        A Part Studio's fingerprint covers every Part/Variable/Feature Studio and blob in
+        the document; an assembly's adds every assembly. An element — or any element
+        its fingerprint covers — without a usable microversion is simply absent,
+        so its export falls back to document-level keys rather than trusting
+        data Onshape did not give us."""
+        held = self._listings.pop(document_id, None)
+        if held is None or held[0] != version:
+            return {}
+        rows = held[1]
+        studios = [(i, m) for i, kind, m in rows if kind in _STUDIO_TYPES]
+        assemblies = [(i, m) for i, kind, m in rows if kind == _ASSEMBLY_TYPE]
+        studio_print = _fingerprint("ps", studios)
+        assembly_print = _fingerprint("as", [*studios, *assemblies])
+        revisions: dict[str, tuple[str, str]] = {}
+        for element_id, kind, micro in rows:
+            print_ = studio_print if kind == "PARTSTUDIO" else assembly_print
+            if kind in EXPORTABLE_COLLECTIONS and micro and print_:
+                revisions[element_id] = (micro, print_)
+        return revisions
+
+    def _take_observed(self, document_id: str) -> tuple[str, str] | None:
+        """This sync's own probe result for `document_id`, once, if still young."""
+        held = self._observed.pop(document_id, None)
+        if held is None or time.monotonic() - held[2] > _OBSERVATION_TTL_SECONDS:
+            return None
+        return held[0], held[1]
 
     async def _locate(
         self, client: httpx.AsyncClient, ctx: SyncContext, document_id: str
@@ -954,11 +1113,12 @@ class OnshapeConnector(OAuthConnector):
         cursor. SOLUSDEV-241: costs ZERO when a trusted signal is recorded.
         """
         try:
-            _workspace_id, microversion = await self._locate(client, ctx, document_id)
+            workspace_id, microversion = await self._locate(client, ctx, document_id)
         except ConnectorError as exc:
             if exc.code != "not_found":
                 raise
             return _GONE
+        self._observed[document_id] = (workspace_id, microversion, time.monotonic())
         return microversion
 
     def _known_workspace(self, ctx: SyncContext, document_id: str) -> str | None:
@@ -982,8 +1142,13 @@ class OnshapeConnector(OAuthConnector):
 
     async def _exportable_elements(
         self, client: httpx.AsyncClient, document_id: str, version: str
-    ) -> list[tuple[str, str]]:
-        """Every exportable element as `(element_id, collection)`.
+    ) -> list[tuple[str, str, str]]:
+        """Every export-relevant element as `(element_id, elementType, microversion)`.
+
+        Exportable ones (Part Studios, assemblies) become targets; Variable
+        Studios ride along only to fingerprint what an export depends on. The
+        microversion is Onshape's per-element `microversionId` ("" when the
+        listing omits or mangles it).
 
         Onshape's `elementType` filter is SINGLE-VALUED, so asking for both
         families would cost a second request per document against an annual
@@ -996,14 +1161,18 @@ class OnshapeConnector(OAuthConnector):
             f"/api/v6/documents/d/{document_id}/m/{version}/elements",
             what="document elements",
         )
-        elements: list[tuple[str, str]] = []
+        elements: list[tuple[str, str, str]] = []
         for element in body if isinstance(body, list) else []:
             if not isinstance(element, dict):
                 continue
-            collection = EXPORTABLE_COLLECTIONS.get(str(element.get("elementType", "")))
+            kind = str(element.get("elementType", ""))
             raw = element.get("id", "")
-            if collection and isinstance(raw, str) and _ID_RE.fullmatch(raw):
-                elements.append((raw, collection))
+            if kind not in _TRACKED_TYPES or not isinstance(raw, str) or not _ID_RE.fullmatch(raw):
+                continue
+            micro = element.get("microversionId", "")
+            elements.append(
+                (raw, kind, micro if isinstance(micro, str) and _ID_RE.fullmatch(micro) else "")
+            )
         return elements
 
     def validate_selection(self, ids: list[str]) -> None:
@@ -1111,6 +1280,7 @@ class OnshapeConnector(OAuthConnector):
             # malformed JSON/IDs, auth and quota failures remain terminal.
             raise _RejectedTranslationError(exc.code, str(exc)) from exc
         request_id = _safe_upstream_id(str(started.get("id", "")))
+        await self._announce_translation(request_id)
 
         external_id = _safe_upstream_id(await self._poll_translation(client, request_id))
         return await self._download_bounded(
@@ -1137,6 +1307,7 @@ class OnshapeConnector(OAuthConnector):
                             # This path does NOT go through `request()`, which is
                             # exactly why the audit found it uncounted.
                             await self._meter.record(response.status_code)
+                            await self._observe_rate_limit(response)
                         if response.status_code != 429:
                             return await self._read_export(response)
                         wait = _retry_wait(response, attempt)
@@ -1184,8 +1355,11 @@ class OnshapeConnector(OAuthConnector):
         rather than bounding it, and with `sync_inline` that time is held inside
         an HTTP request.
         """
+        deadline = (
+            _WEBHOOK_WAIT_DEADLINE_SECONDS if self._awaits_webhook else _POLL_DEADLINE_SECONDS
+        )
         try:
-            async with asyncio.timeout(_POLL_DEADLINE_SECONDS):
+            async with asyncio.timeout(deadline):
                 return await self._poll_until_done(client, request_id)
         except TimeoutError as exc:
             raise ConnectorError(
@@ -1193,29 +1367,87 @@ class OnshapeConnector(OAuthConnector):
                 f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
             ) from exc
 
-    async def _poll_until_done(self, client: httpx.AsyncClient, request_id: str) -> str:
-        delay = self._poll_interval
-        for attempt in range(self._poll_attempts):
-            body = await self.get_json(
-                client, f"/api/v8/translations/{request_id}", what="translation status"
-            )
-            state = str(body.get("requestState", ""))
-            if state == "DONE":
-                ids = body.get("resultExternalDataIds") or []
-                if not ids:
-                    raise ConnectorError(
-                        "export_unavailable",
-                        "Onshape reported a finished translation with no result",
-                    )
-                return str(ids[0])
-            if state == "FAILED":
+    def mirror_handle(self) -> tuple[IntegrationCache | None, str | None]:
+        """Read-only `(integration cache, cache account ref)` for read-through callers.
+
+        `(None, None)` when this connector caches nothing (no cache, or no account identity),
+        so a caller can never key a read under an unidentified account."""
+        if self._cache is None or not self._account_ref:
+            return None, None
+        return self._cache, self._account_ref
+
+    @property
+    def _awaits_webhook(self) -> bool:
+        return self.webhook_healthy and self._cache is not None
+
+    async def _announce_translation(self, request_id: str) -> None:
+        """Mark a translation THIS account started, so only its completion can be recorded."""
+        if not self._awaits_webhook or self._cache is None:
+            return
+        await self._cache.put(
+            translation_pending_key(self._account_ref, request_id),
+            {"state": "pending"},
+            TRANSLATION_RECORD_TTL_SECONDS,
+        )
+
+    async def _translation_result(self, client: httpx.AsyncClient, request_id: str) -> str | None:
+        """One status read: the result id when DONE, None while ACTIVE, an error on FAILED."""
+        body = await self.get_json(
+            client, f"/api/v8/translations/{request_id}", what="translation status"
+        )
+        state = str(body.get("requestState", ""))
+        if state == "DONE":
+            ids = body.get("resultExternalDataIds") or []
+            if not ids:
                 raise ConnectorError(
                     "export_unavailable",
-                    f"Onshape could not translate the element to {_EXPORT_FORMAT}",
+                    "Onshape reported a finished translation with no result",
                 )
+            return str(ids[0])
+        if state == "FAILED":
+            raise ConnectorError(
+                "export_unavailable",
+                f"Onshape could not translate the element to {_EXPORT_FORMAT}",
+            )
+        return None
+
+    async def _poll_until_done(self, client: httpx.AsyncClient, request_id: str) -> str:
+        if self._awaits_webhook:
+            return await self._await_completion(client, request_id)
+        delay = self._poll_interval
+        for attempt in range(self._poll_attempts):
+            result = await self._translation_result(client, request_id)
+            if result is not None:
+                return result
             if attempt + 1 < self._poll_attempts:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, _POLL_MAX_INTERVAL_SECONDS)
+        raise ConnectorError(
+            "export_timeout",
+            f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
+        )
+
+    async def _await_completion(self, client: httpx.AsyncClient, request_id: str) -> str:
+        """Wait for the webhook's completion record (a free local read per tick). A record
+        costs ONE confirming status read, never trusted for the result id; with no record,
+        Onshape is asked only on the sparse backoff as a fallback for a lost delivery."""
+        if self._cache is None:
+            raise ConnectorError(
+                "unavailable", "Onshape translation completion needs the integration cache"
+            )
+        done_key = translation_done_key(self._account_ref, request_id)
+        gaps = iter(_WEBHOOK_POLL_GAPS)
+        next_poll = next(gaps)
+        confirmed = False
+        for tick in range(_WEBHOOK_WAIT_TICKS):
+            recorded = not confirmed and await self._cache.get(done_key) is not None
+            if recorded or tick >= next_poll:
+                confirmed = confirmed or recorded
+                result = await self._translation_result(client, request_id)
+                if result is not None:
+                    return result
+                next_poll = tick + next(gaps, _WEBHOOK_POLL_GAPS[-1])
+            await asyncio.sleep(self._poll_interval)
         raise ConnectorError(
             "export_timeout",
             f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
@@ -1318,12 +1550,34 @@ class OnshapeConnector(OAuthConnector):
             },
         )
 
+    @property
+    def session_id(self) -> str:
+        """The `X-Session-ID` for writes: the explicit one, else the configured setting."""
+        if self._session_id is not None and _SESSION_ID_RE.fullmatch(self._session_id):
+            return self._session_id
+        return DEFAULT_SESSION_ID if self._session_id is not None else onshape_session_id()
+
+    async def _observe_rate_limit(self, response: httpx.Response) -> None:
+        """Hand the provider's own `X-Rate-Limit-Remaining` to the meter. The header is
+        untrusted: an unparsable one is ignored and the meter bounds the value."""
+        if self._meter is None:
+            return
+        raw = response.headers.get("X-Rate-Limit-Remaining", "").strip()
+        try:
+            remaining = int(raw)
+        except ValueError:
+            return
+        retry = response.headers.get("Retry-After", "").strip()
+        retry_after = float(retry) if retry.isascii() and retry.isdigit() else None
+        await self._meter.observe_rate_limit(remaining, retry_after)
+
     async def _admit(self) -> None:
         """Ask the meter before spending. Its error is translated into a
         `ConnectorError` so no caller has to learn a second exception type — and
         both codes are in NO_SIGNAL_CODES, so a refusal reads as "could not ask"
         rather than "it changed" and never buys a full re-sync."""
-        assert self._meter is not None
+        if self._meter is None:
+            raise ConnectorError("unavailable", "Onshape call metering is not configured")
         try:
             await self._meter.admit()
         except QuotaBlockedError as exc:
@@ -1345,9 +1599,14 @@ class OnshapeConnector(OAuthConnector):
             # Admission is UNCONDITIONAL — before the retry ladder, so a refused
             # call is refused once rather than four times.
             await self._admit()
+        # ADR-038 §2: every write carries the session id Onshape was told at webhook
+        # registration, so the change events our own writes cause are recognisably ours.
+        headers = {SESSION_HEADER: self.session_id} if method.upper() != "GET" else None
         for attempt in range(_RATE_LIMIT_RETRIES + 1):
             try:
-                response = await client.request(method, path, json=json_body, params=params)
+                response = await client.request(
+                    method, path, json=json_body, params=params, headers=headers
+                )
             except httpx.HTTPError as exc:
                 raise ConnectorError(
                     "api_unreachable", f"could not reach Onshape for {what}"
@@ -1357,6 +1616,7 @@ class OnshapeConnector(OAuthConnector):
                 # and only 2xx/3xx move the ledger, so the 429 retries below are
                 # free in quota terms even though they cost wall-clock.
                 await self._meter.record(response.status_code)
+                await self._observe_rate_limit(response)
             if response.status_code != 429:
                 break
             if attempt < _RATE_LIMIT_RETRIES:
@@ -1501,4 +1761,8 @@ __all__ = [
     "SELECTION_KEY",
     "OnshapeConnector",
     "SyncError",
+    "ambient_settings",
+    "onshape_session_id",
+    "translation_done_key",
+    "translation_pending_key",
 ]

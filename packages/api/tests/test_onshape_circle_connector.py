@@ -112,7 +112,7 @@ def test_occurrence_transform_must_be_proper_rigid(index: int, value: float) -> 
     from solus_api.connectors.onshape_circle_geometry import circle_frame
 
     transform = TRANSFORM.copy()
-    transform[index] = value
+    transform[index] = value  # type: ignore[call-overload]  # parametrized value is float
     with pytest.raises(ConnectorError):
         circle_frame(part(), "circle+/", transform)
 
@@ -285,5 +285,5 @@ def test_circle_operation_has_state_bound_normal_build_authority() -> None:
     tool = next(
         t for t in registry.tools() if t.descriptor.name == "onshape.create_circle_mate_connector"
     )
-    assert tool.requires_complete_preview
+    assert tool.requires_complete_preview  # type: ignore[attr-defined]  # set dynamically on the concrete tool
     assert getattr(tool, "_build_authority", None) is not None

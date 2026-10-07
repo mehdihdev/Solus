@@ -80,6 +80,8 @@ The fingerprint covers the entire selected body, not just the returned page.
 Subsequent pages must echo it; a changed body refuses with stale_state. Once total
 and fingerprint are known, independent offsets may be requested in parallel,
 with each checking the fingerprint. This avoids spending a model round per page.
+**ADR-038 (SOLUSDEV-312):** pages are sliced from ONE payload fetched per
+immutable microversion and cached, so extra pages cost no provider calls.
 A missing
 body or absent collection is not_found; malformed/duplicate vendor identities
 are api_error, never an invented empty collection. An observed empty list is valid.
@@ -592,3 +594,29 @@ when it is a printable string of at most 200 characters, otherwise null. Labels
 remain untrusted descriptive data and are never inferred from geometry or used
 as authority. They are bound into the observation snapshot and the existing
 whole-page size limit still applies.
+
+
+## ADR-038 — SOL reads through the mirror (SOLUSDEV-312)
+
+- Agent tool connectors are built with `purpose="agent"` (deferrable) and a
+  metering label: `agent_read` for reads, `agent_write` for writes and their
+  previews/readbacks.
+- One SOL turn = one tool registry = one `TurnReadMemo` (entries also expire
+  after 60 s). Within a turn each `(account, document)` costs at most ONE
+  `currentmicroversion` probe; reads then use immutable `/m/{mv}` paths cached in
+  the integration cache (`mirrored_get`). Incomplete or error payloads are never
+  cached.
+- `workspace_for` uses the workspace recorded on the source cursor
+  (`cursor["workspaces"]`) before falling back to one `GET /documents/{d}` per
+  turn; a stale recorded workspace heals once.
+- Preview cards name the document from the turn memo → graph document node →
+  cached listing → id, with no provider call.
+- `list_documents` serves from the account's cached listing (the pickers' cache);
+  `refresh=true` walks the provider, bounded by the listing cooldown and the
+  10-page limit.
+- **Writes are unchanged in their safety properties:** live pre-write read,
+  `sourceMicroversion` + `rejectMicroversionSkew`, mandatory readback,
+  `mutation_unverified` on doubt. A write retires that document's memoised probe
+  (even on failure), so the next read re-probes.
+- Measured (tests): a Guide turn of four reads on one synced document costs 5
+  requests cold and 1 warm (was 8); a two-write Build turn costs 10 (was 20).

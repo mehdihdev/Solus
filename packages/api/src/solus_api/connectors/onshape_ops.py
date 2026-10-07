@@ -42,6 +42,7 @@ from typing import Any, Final
 import httpx
 
 from solus_api.connectors.contracts import ConnectorError
+from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.onshape import (
     ONSHAPE_ID_RE,
     ONSHAPE_MAX_PAGE_LIMIT,
@@ -51,6 +52,13 @@ from solus_api.connectors.onshape import (
 from solus_api.connectors.onshape_assembly_read import AssemblyFeaturePage
 from solus_api.connectors.onshape_confirmation import require_matching_preview
 from solus_api.connectors.onshape_geometry import GeometryPage
+from solus_api.connectors.onshape_read_cache import (
+    connector_cache,
+    current_read_scope,
+    fetch_if_complete,
+    mirrored_get,
+    resolve_workspace,
+)
 
 #: Feature names travel to a UI; a model-supplied one is bounded.
 _NAME_CAP: Final = 120
@@ -121,10 +129,47 @@ async def workspace_for(
 
     Making a model carry a workspace id it never saw is a needless failure mode —
     every read here is against the default workspace unless told otherwise.
+
+    Inside a READ tool call the default is the workspace the last sync recorded on the
+    source cursor, and only when there is none is `GET /documents/{d}` made, once
+    per document per turn (ADR-038 section 5). A WRITE always asks Onshape for the
+    current default, ignoring the cursor and the turn memo. Called bare, it asks Onshape.
     """
     if args.get("workspace_id") is not None:
         return validated_id(args, "workspace_id")
-    return await connector.default_workspace(client, validated_id(args, "document_id"))
+    document_id = validated_id(args, "document_id")
+    scope = current_read_scope()
+    if scope is None:
+        return await connector.default_workspace(client, document_id)
+    return await resolve_workspace(scope, connector, client, document_id)
+
+
+async def read_element(
+    connector: OnshapeConnector,
+    client: httpx.AsyncClient,
+    *,
+    kind: str,
+    document_id: str,
+    workspace_id: str,
+    element_id: str,
+    suffix: str = "",
+    what: str,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    """One element READ, through the mirror when the caller may use it."""
+
+    def path_for(selector: str, identifier: str) -> str:
+        return f"/api/v6/{kind}/d/{document_id}/{selector}/{identifier}/e/{element_id}{suffix}"
+
+    return await mirrored_get(
+        connector,
+        client,
+        document_id=document_id,
+        workspace_id=workspace_id,
+        path_for=path_for,
+        what=what,
+        params=params,
+    )
 
 
 def schema(
@@ -196,25 +241,111 @@ async def _list_documents(
     if not allowed:
         return {"documents": []}
 
-    documents: list[dict[str, str]] = []
-    # Onshape caps `limit` at 20, so a project tracking more than a page's worth
-    # would silently lose the rest of its own documents on a single-page read.
+    mirror = connector_cache(connector)
+    if mirror is None:
+        rows = [item async for item in _tracked_pages(connector, client, allowed)]
+    else:
+        rows = [
+            item
+            for item in await _cached_listing(
+                connector, client, mirror, refresh=args.get("refresh") is True
+            )
+            if item["id"] in allowed
+        ]
+    return {
+        "documents": [
+            {"id": item["id"], "name": item["name"], "owner": item["subtitle"]} for item in rows
+        ]
+    }
+
+
+async def _tracked_pages(
+    connector: OnshapeConnector, client: httpx.AsyncClient, allowed: set[str]
+) -> AsyncIterator[dict[str, str]]:
+    """No cache attached: walk until every tracked document has been seen.
+
+    Onshape caps `limit` at 20, so a project tracking more than a page's worth
+    would silently lose the rest of its own documents on a single-page read.
+    """
+    found = 0
     async for item in _document_pages(connector, client):
         if item.get("id") in allowed:
-            documents.append(
-                {
-                    "id": item.get("id", ""),
-                    "name": item.get("name", ""),
-                    "owner": (item.get("owner") or {}).get("name", ""),
-                }
-            )
-        if len(documents) == len(allowed):
-            break
-    return {"documents": documents}
+            found += 1
+            yield _listing_row(item)
+        if found == len(allowed):
+            return
+
+
+def _listing_row(item: dict[str, Any]) -> dict[str, str]:
+    """The picker's own listing shape (`id`, `name`, `subtitle`) for one document."""
+    from solus_api.connectors.onshape import _owner_name, _text
+
+    identifier = item.get("id", "")
+    return {
+        "id": identifier,
+        "name": _text(item.get("name")) or identifier,
+        "subtitle": _owner_name(item),
+    }
+
+
+async def _cached_listing(
+    connector: OnshapeConnector,
+    client: httpx.AsyncClient,
+    mirror: tuple[IntegrationCache, str],
+    *,
+    refresh: bool,
+) -> list[dict[str, str]]:
+    """The account's listing from the SAME cache the pickers fill and read.
+
+    The provider is walked (bounded by `_MAX_DOCUMENT_PAGES`) only when nothing
+    is cached, or when the user explicitly asks to refresh, and a refresh is
+    still limited to one walk per cooldown per account. A walk that hit the page
+    bound is served but never stored: an incomplete listing must not stand in
+    for the account's whole menu.
+    """
+    cache, account_ref = mirror
+    complete = [False]
+
+    async def walk() -> list[dict[str, str]]:
+        walked = _Walk()
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+        async for item in _document_pages(connector, client, walked):
+            row = _listing_row(item)
+            if ONSHAPE_ID_RE.fullmatch(row["id"]) and row["id"] not in seen:
+                seen.add(row["id"])
+                rows.append(row)
+        complete[0] = walked.complete
+        return rows
+
+    listing = await fetch_if_complete(
+        cache,
+        cache.listing_key(connector.provider, account_ref),
+        ttl_seconds=cache.listing_ttl_seconds,
+        fetch=walk,
+        admit=lambda _: complete[0],
+        refresh=refresh,
+        min_age_seconds=cache.listing_refresh_cooldown_seconds,
+    )
+    return [
+        {
+            "id": item["id"],
+            "name": str(item.get("name", "")),
+            "subtitle": str(item.get("subtitle", "")),
+        }
+        for item in listing[0]
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+
+
+class _Walk:
+    """Whether a document walk reached the provider's last page."""
+
+    complete = False
 
 
 async def _document_pages(
-    connector: OnshapeConnector, client: httpx.AsyncClient
+    connector: OnshapeConnector, client: httpx.AsyncClient, walk: _Walk | None = None
 ) -> AsyncIterator[dict[str, Any]]:
     """Every document the account can open, page by page and bounded."""
     for page in range(_MAX_DOCUMENT_PAGES):
@@ -231,6 +362,8 @@ async def _document_pages(
         for item in rows:
             yield item
         if len(rows) < ONSHAPE_MAX_PAGE_LIMIT:
+            if walk is not None:
+                walk.complete = True
             return
 
 
@@ -239,9 +372,14 @@ async def _list_elements(
 ) -> dict[str, Any]:
     document_id = validated_id(args, "document_id")
     workspace_id = await workspace_for(connector, client, args)
-    body = await connector.get_json(
+    body = await mirrored_get(
+        connector,
         client,
-        f"/api/v6/documents/d/{document_id}/w/{workspace_id}/elements",
+        document_id=document_id,
+        workspace_id=workspace_id,
+        path_for=lambda selector, identifier: (
+            f"/api/v6/documents/d/{document_id}/{selector}/{identifier}/elements"
+        ),
         what="element list",
     )
     elements = [
@@ -269,8 +407,17 @@ async def _element_read(
     document_id = validated_id(args, "document_id")
     element_id = validated_id(args, "element_id")
     workspace_id = await workspace_for(connector, client, args)
-    path = element_base_path(kind, document_id, workspace_id, element_id) + suffix
-    return await connector.get_json(client, path, what=what, params=params)
+    return await read_element(
+        connector,
+        client,
+        kind=kind,
+        document_id=document_id,
+        workspace_id=workspace_id,
+        element_id=element_id,
+        suffix=suffix,
+        what=what,
+        params=params,
+    )
 
 
 def _read_messages(items: Any) -> list[dict[str, Any]]:
@@ -360,9 +507,9 @@ async def _get_feature_specs(
     identity = _feature_filter(args, "feature_type")
     document_id = validated_id(args, "document_id")
     element_id = validated_id(args, "element_id")
-    workspace_id = await workspace_for(connector, client, args)
-    base = element_base_path("partstudios", document_id, workspace_id, element_id)
-    tree = await connector.get_json(client, f"{base}/features", what="feature tree")
+    tree = await _element_read(
+        connector, client, args, kind="partstudios", suffix="/features", what="feature tree"
+    )
     body = await connector.immutable_feature_specs(
         client,
         document_id=document_id,
@@ -464,8 +611,20 @@ _ELEMENT_REQUIRED = ("document_id", "element_id")
 READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
     OnshapeOperation(
         name="onshape.list_documents",
-        description="List the Onshape documents this account can open.",
-        params=schema(document=False),
+        description=(
+            "List this project's tracked Onshape documents by name. Served from the "
+            "account's cached listing; set refresh only when the user says a document "
+            "is missing or renamed, because a refresh spends Onshape calls."
+        ),
+        params=schema(
+            document=False,
+            extra={
+                "refresh": {
+                    "type": "boolean",
+                    "description": "Re-read the listing from Onshape (rate limited).",
+                }
+            },
+        ),
         returns={"type": "object"},
         run=_list_documents,
         tags=("read",),
@@ -517,8 +676,8 @@ READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
             "These ids are what a geometry-referencing edit points at. When a body/part id "
             "is known, request body_id and collection with limit=1 for complete geometry. "
             "Continue with next_offset and expected_fingerprint from the first page. "
-            "Once total and fingerprint are known, independent offsets can be requested "
-            "in parallel to avoid exhausting model rounds on a sequential traversal. "
+            "Every page is cut from one cached read of the model revision, so paging "
+            "costs no extra Onshape calls; request only the pages you need. "
             "A page fingerprint is not a vendor microversion or write authorization."
         ),
         params=schema(
@@ -543,7 +702,8 @@ READ_OPERATIONS: Final[tuple[OnshapeOperation, ...]] = (
         description=(
             "An assembly's instances, occurrences and mate features. Use view=features "
             "for complete bounded feature IDs, current health and measured connector world "
-            "frames; continue with next_offset and expected_snapshot."
+            "frames; continue with next_offset and expected_snapshot. Pages are cut from "
+            "one cached read, so continuing costs no extra Onshape calls."
         ),
         params=schema(
             element=True,

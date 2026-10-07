@@ -310,11 +310,14 @@ async def link(
     )
     desired, entities, unresolved, ties, capped_parts = _collect_supports(output, resolved)
 
+    # NOT `edge_predicate()`: that hides edges whose endpoint is soft-deleted, so a
+    # linker edge to a part a re-sync just removed would never be retracted and would
+    # stay live forever, dangling. Linker-owned edges are project-scoped by id alone.
     live = (
         (
             await session.execute(
                 select(GraphEdge).where(
-                    GraphReadScope(project_id).edge_predicate(),
+                    GraphEdge.project_id == project_id,
                     GraphEdge.origin == LINK_ORIGIN,
                     GraphEdge.relation_type == RELATION_SAME_AS,
                     GraphEdge.deleted_at.is_(None),

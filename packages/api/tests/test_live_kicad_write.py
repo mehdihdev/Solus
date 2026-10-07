@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from solus_companion.kicad_discovery import find_kicad_cli
 
 pytestmark = pytest.mark.live
 
@@ -23,6 +24,9 @@ VENV_PY = FORK / ".venv" / "bin" / "python3"
 skip_without_fork = pytest.mark.skipif(
     not VENV_PY.exists(), reason="kicad fork venv not materialised (make mcp-forks)"
 )
+# The companion supplies KICAD_CLI_PATH from the same fixed install locations.
+KICAD_CLI = find_kicad_cli()
+skip_without_kicad = pytest.mark.skipif(KICAD_CLI is None, reason="kicad-cli not installed")
 
 
 async def _call(workspace: Path, tool: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -36,6 +40,7 @@ async def _call(workspace: Path, tool: str, args: dict[str, Any]) -> dict[str, A
             "SOLUS_MCP_WORKSPACE": str(workspace),
             "HOME": os.environ.get("HOME", ""),
             "PATH": "/usr/bin:/bin",
+            **({"KICAD_CLI_PATH": KICAD_CLI} if KICAD_CLI else {}),
         },
     )
     async with stdio_client(params) as (read, write):
@@ -49,6 +54,7 @@ async def _call(workspace: Path, tool: str, args: dict[str, Any]) -> dict[str, A
 
 
 @skip_without_fork
+@skip_without_kicad
 async def test_kicad_read_operate_write_read_back(tmp_path: Path) -> None:
     project = tmp_path / "hw"
     shutil.copytree(FIXTURE, project)

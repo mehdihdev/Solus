@@ -20,6 +20,7 @@ import { SolScreen } from '../sol/SolScreen'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
+import { useLiveProject } from './useLiveProject'
 import { StoreScreen } from '../extensions/StoreScreen'
 import { useExtensionsStore } from '../extensions/extensionsStore'
 import { ExtensionPageScreen } from '../extensions/pageview/ExtensionPageScreen'
@@ -32,6 +33,7 @@ import { HomeScreen } from './HomeScreen'
 import { ProjectSwitcher } from './ProjectSwitcher'
 import { useMe, displayName } from './useMe'
 import { useNotifications } from './useNotifications'
+import { useAccountEvents } from '../live/useAccountEvents'
 import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { TitleBar } from './TitleBar'
 import { MenuBar } from './MenuBar'
@@ -167,11 +169,21 @@ const SHELL_STYLE: React.CSSProperties = {
   overflow: 'hidden'
 }
 
+/** Developer registrations (EXT-20) live in main's index.json; hydrate once so a
+ * dev extension's frame resolves before the user ever opens Settings. */
+function useHydrateDevExtensions(): void {
+  useEffect(() => {
+    void useDevExtensionsStore.getState().hydrate()
+  }, [])
+}
+
 export function WorkspaceShell(): React.JSX.Element {
   const nav = useShellNavigation()
   const { route, notifOpen, setNotifOpen, go } = nav
   const me = useMe()
   const notifs = useNotifications()
+  // The one live account channel (ADR-037): quiet hints that refresh the data above.
+  useAccountEvents()
   const online = notifs.status === 'ready'
   const rail = useExtensionRail()
   const name = route.name
@@ -182,11 +194,9 @@ export function WorkspaceShell(): React.JSX.Element {
   // Confirm it once, so a dead id drops us to Home instead of 404ing every
   // project-scoped screen with no way back.
   useValidateProject()
-  // Developer registrations (EXT-20) live in main's index.json; hydrate once so a
-  // dev extension's frame resolves before the user ever opens Settings.
-  useEffect(() => {
-    void useDevExtensionsStore.getState().hydrate()
-  }, [])
+  // ...and follows a teammate's rename/archive live (ADR-037).
+  useLiveProject()
+  useHydrateDevExtensions()
 
   return (
     <div style={SHELL_STYLE} onClick={() => notifOpen && setNotifOpen(false)}>
@@ -365,6 +375,36 @@ function ExtensionPageRoute({
   )
 }
 
+/** The Bench "Add Hardware" hand-off to the Workspace screen, scoped to the session generation. */
+function useAddHardwareRequest(
+  project: WorkspaceProject | null,
+  navigate: (screen: MainScreen) => void
+): {
+  request: () => void
+  openAddRequest: { tab: 'hardware'; sequence: number } | undefined
+  onConsumed: (consumed: number) => void
+} {
+  const generation = useWorkspaceSessionGeneration()
+  const sequence = useRef(0)
+  const [pendingAdd, setPendingAdd] = useState<{ generation: number; sequence: number } | null>(
+    null
+  )
+  const request = (): void => {
+    if (!project) return
+    setPendingAdd({ generation, sequence: ++sequence.current })
+    navigate('workspace')
+  }
+  const openAddRequest =
+    pendingAdd?.generation === generation
+      ? { tab: 'hardware' as const, sequence: pendingAdd.sequence }
+      : undefined
+  const onConsumed = (consumed: number): void =>
+    setPendingAdd((current) =>
+      current?.generation === generation && current.sequence === consumed ? null : current
+    )
+  return { request, openAddRequest, onConsumed }
+}
+
 function ScreenView({
   route,
   project,
@@ -384,16 +424,7 @@ function ScreenView({
   openExtensionPage: (slug: string) => void
   goBack: () => void
 }): React.JSX.Element | null {
-  const generation = useWorkspaceSessionGeneration()
-  const sequence = useRef(0)
-  const [pendingAdd, setPendingAdd] = useState<{ generation: number; sequence: number } | null>(
-    null
-  )
-  const requestAddHardware = (): void => {
-    if (!project) return
-    setPendingAdd({ generation, sequence: ++sequence.current })
-    navigate('workspace')
-  }
+  const addHardware = useAddHardwareRequest(project, navigate)
   const screen = ((): React.JSX.Element | null => {
     switch (route.name) {
       case 'home':
@@ -403,21 +434,13 @@ function ScreenView({
           <WorkspaceScreen
             onOpenBench={() => navigate('bench')}
             onOpenWidget={openExtensionPage}
-            openAddRequest={
-              pendingAdd?.generation === generation
-                ? { tab: 'hardware', sequence: pendingAdd.sequence }
-                : undefined
-            }
-            onAddRequestConsumed={(consumed) =>
-              setPendingAdd((current) =>
-                current?.generation === generation && current.sequence === consumed ? null : current
-              )
-            }
+            openAddRequest={addHardware.openAddRequest}
+            onAddRequestConsumed={addHardware.onConsumed}
           />
         )
       case 'bench':
         // Add Hardware opens the existing Workspace onboarding flow.
-        return <BenchScreen onNavigate={navigate} onAddHardware={requestAddHardware} />
+        return <BenchScreen onNavigate={navigate} onAddHardware={addHardware.request} />
       case 'alert':
         return <AlertScreen onBack={goBack} />
       case 'ext-page':

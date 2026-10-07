@@ -7,6 +7,7 @@ registration. The catalog feeds `GET /api/v1/integrations` (API.md §2.5).
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 #: degraded quota band (SOLUSDEV-167): a human's explicit action ("user") reads
 #: the cache and may spend; the sweep ("scheduled") refreshes the signal and
 #: defers; a doorbell ("webhook") never trusts a recorded signal.
-Purpose = Literal["user", "scheduled", "webhook"]
+Purpose = Literal["user", "scheduled", "webhook", "agent"]
 
 ConnectorFactory = Callable[[], Connector]
 
@@ -61,6 +62,8 @@ class ConnectorContext:
     #: Who is spending. Only "user" survives the degraded band; scheduled sweeps
     #: and agent turns can wait.
     purpose: Purpose = "user"
+    #: ADR-038 §4: what the calls are for (metering attribution only).
+    label: quota.CallLabel | None = None
 
 
 ScopedConnectorFactory = Callable[[ConnectorContext], Connector]
@@ -156,6 +159,33 @@ def onshape_quota_scope(account_ref: str, application: str | None) -> str:
     return f"oauth-app:{application}:account:{account_ref}"
 
 
+def onshape_pool_scope(settings: Settings, ctx: ConnectorContext) -> str:
+    """The ledger scope an Onshape call is charged to (ADR-038 §4).
+
+    `owner` (default): a private OAuth app's calls bill the app OWNER, so every
+    account under one application shares `oauth-app:<application>`. A legacy
+    source with no bound application falls back to a hash of the configured
+    client id — stable, and never the secret or the raw id. `user`: today's
+    per-account scope, unchanged.
+    """
+    account = ctx.account_ref or f"source-scope:{ctx.project_id}"
+    if settings.onshape_quota_pool == "user":
+        return onshape_quota_scope(account, ctx.onshape_application)
+    application = ctx.onshape_application
+    if application is None and settings.onshape_client_id:
+        application = hashlib.sha256(settings.onshape_client_id.encode()).hexdigest()
+    if application is None:
+        # Nothing identifies the pool: stay per-account rather than merge tenants.
+        return onshape_quota_scope(account, None)
+    return f"oauth-app:{application}"
+
+
+def _meter_purpose(purpose: str) -> quota.Purpose:
+    if purpose == "user":
+        return "user"
+    return "agent" if purpose == "agent" else "scheduled"
+
+
 def _onshape_meter(
     settings: Settings, redis: object | None, ctx: ConnectorContext
 ) -> quota.CallMeter:
@@ -168,25 +198,32 @@ def _onshape_meter(
     over on 1 January. Onshape's licence year is the subscription anniversary,
     which we do not know — documented in ADR-019's amendment rather than guessed.
     """
-    account_scope = onshape_quota_scope(
-        ctx.account_ref or f"source-scope:{ctx.project_id}", ctx.onshape_application
-    )
+    pool_scope = onshape_pool_scope(settings, ctx)
+    account = ctx.account_ref or f"source-scope:{ctx.project_id}"
     return quota.CallMeter(
         redis,
         provider="onshape",
         # Never empty: a blank account id would put every such source on ONE
         # ledger key, letting one team exhaust and latch another team's quota.
-        account_ref=account_scope,
+        account_ref=pool_scope,
+        # ADR-038 amendment: the caller's own ledger/latch beside the pool. Equal
+        # to the pool scope in user mode, which collapses to one ledger.
+        account_scope=onshape_quota_scope(account, ctx.onshape_application),
         year=datetime.now(UTC).year,
         allowance=settings.onshape_annual_call_allowance,
         degrade_ratio=settings.integration_degrade_ratio,
         # Anything but a human's explicit action is deferrable: a sweep or a
         # doorbell must not inherit the privilege to spend past the threshold.
-        purpose="user" if ctx.purpose == "user" else "scheduled",
+        purpose=_meter_purpose(ctx.purpose),
+        pool=settings.onshape_quota_pool,
+        distribution=settings.onshape_app_distribution,
+        label=ctx.label or quota.default_label(ctx.purpose),
     )
 
 
-def build_integration_cache(settings: Settings, store: CacheStore) -> IntegrationCache:
+def build_integration_cache(
+    settings: Settings, store: CacheStore, durable: Any | None = None
+) -> IntegrationCache:
     """The read side of the change-signal spine (SOLUSDEV-241), over whichever
     store the app assembled — Redis when configured, per-process otherwise."""
     return IntegrationCache(
@@ -196,6 +233,7 @@ def build_integration_cache(settings: Settings, store: CacheStore) -> Integratio
         payload_ttl_seconds=settings.integration_payload_ttl_seconds,
         max_payload_bytes=settings.integration_cache_max_payload_bytes,
         listing_refresh_cooldown_seconds=settings.integration_listing_refresh_cooldown_seconds,
+        durable_store=durable,
     )
 
 
@@ -209,7 +247,7 @@ def _signal_window(settings: Settings, purpose: str) -> float | None:
     """
     if purpose == "user":
         return float(settings.integration_signal_ttl_seconds)
-    if purpose == "scheduled":
+    if purpose in ("scheduled", "agent"):
         return float(settings.integration_signal_sweep_reuse_seconds)
     return None
 
@@ -278,6 +316,7 @@ def build_registry(
         lambda: OnshapeConnector(
             client_id=settings.onshape_client_id or "",
             client_secret=settings.onshape_client_secret or "",
+            session_id=settings.onshape_session_id,
         ),
     )
     # SOLUSDEV-167: a SCOPED Onshape factory, so outbound calls are counted
@@ -293,6 +332,7 @@ def build_registry(
         lambda ctx: OnshapeConnector(
             client_id=settings.onshape_client_id or "",
             client_secret=settings.onshape_client_secret or "",
+            session_id=settings.onshape_session_id,
             meter=_onshape_meter(settings, redis, ctx),
             cache=cache,
             account_ref=_cache_account_ref(ctx),

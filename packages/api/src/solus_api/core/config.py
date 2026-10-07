@@ -2,8 +2,9 @@
 
 import uuid
 from pathlib import Path
+from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -182,7 +183,21 @@ class Settings(BaseSettings):
     #: on Free/Standard; the self-imposed default sits below it so we degrade
     #: before the provider does — our count is a floor on our own spend, never
     #: a remaining balance, so leaving headroom is the honest posture.
-    onshape_annual_call_allowance: int = 1800
+    onshape_annual_call_allowance: int = 2500
+    #: ADR-038 §4. Whose annual pool Onshape charges. A PRIVATE OAuth app's REST
+    #: successes are billed to the app OWNER (one pool for every Solus user);
+    #: `user` meters per connected account and exists only to verify billing.
+    onshape_quota_pool: Literal["owner", "user"] = "owner"
+    #: ADR-038 §4. `app_store` once the OAuth app is publicly listed: annual-limit
+    #: metering stops degrading work (Onshape exempts public apps); per-endpoint
+    #: rate limits and the 402 latch stay enforced.
+    onshape_app_distribution: Literal["private", "app_store"] = "private"
+    #: ADR-038 §2. Seconds after the LAST change hint before an Onshape export runs,
+    #: so a burst of edits costs one export instead of several aborted ones.
+    onshape_quiet_period_seconds: int = Field(default=90, ge=0, le=600)
+    #: ADR-038 §2. Sent as `X-Session-ID` on Solus's Onshape writes and registered as
+    #: the webhook `externalSessionId`, so Onshape can tell Solus's own edits apart.
+    onshape_session_id: str = "solus-api"
     #: Fraction of the allowance above which DEFERRABLE work (the sweep, agent
     #: turns) pauses. A user's explicit action still reaches the provider.
     integration_degrade_ratio: float = 0.7
@@ -293,6 +308,12 @@ class Settings(BaseSettings):
     # Local filesystem backend root (dev). S3 wins when both are set.
     artifact_local_root: str | None = None
     artifact_s3_bucket: str | None = None
+    # --- Durable CAD derivative store (ADR-038 §1) ---
+    # Write-once, revision-keyed Onshape derivatives. Its OWN bucket (or local root),
+    # never the artifact bucket: artifacts expire after an hour by design.
+    cad_store_local_root: str | None = None
+    cad_store_s3_bucket: str | None = None
+    cad_store_max_object_bytes: int = Field(default=256 * 1024 * 1024, ge=1024 * 1024, le=1024**3)
     # Bridge-upload artifacts are a hand-off buffer, not a document store (§4.2):
     # the ARQ sweep soft-deletes rows past this TTL and deletes their bytes.
     artifact_ttl_seconds: int = 3600

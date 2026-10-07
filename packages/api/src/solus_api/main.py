@@ -41,6 +41,7 @@ from solus_api.corpus import router as corpus_router
 from solus_api.extensions.bom_catalog_setup import prepare_catalog
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
+from solus_api.graph.live_access import StreamLimiter
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.hardware import hardware_router, library_router
@@ -90,8 +91,11 @@ from solus_api.routers import (
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
+from solus_api.services.cad_purge import run_startup_cad_purges
 from solus_api.services.supabase_admin import build_supabase_admin
+from solus_api.services.upload_budget import UploadBudget
 from solus_api.storage import build_artifact_store
+from solus_api.storage.cad_store import build_cad_store
 from solus_api.toolkb import router as toolkb
 
 
@@ -207,6 +211,10 @@ def _scrub_sentry_event(event: Any, _hint: Any) -> Any:
     return event
 
 
+#: Bounds Redis connection setup so a black-holed host cannot hang a request or the relay.
+_REDIS_CONNECT_TIMEOUT_SECONDS = 5.0
+
+
 def create_app(settings: Settings | None = None, engine: AsyncEngine | None = None) -> FastAPI:
     # Settings' required fields (the JWT secret) come from the environment at
     # runtime; mypy can't see env-driven init, hence the targeted ignore.
@@ -244,6 +252,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             await report_provider_refs(served.state.secret_store, resolved_settings)
         except Exception:
             logging.getLogger("solus.main").exception("provider ref check failed")
+        # ADR-038 §1: purges that were due while no process ran (also the only retry in
+        # inline mode, together with the next revoke-related request).
+        await run_startup_cad_purges(
+            served.state.sessionmaker, served.state.integration_cache.durable_store
+        )
         # SOLUSDEV-167: begin relaying cross-process graph frames. No-op without
         # Redis, in which case the hub still fans out within this process.
         async with AsyncExitStack() as cleanup:
@@ -280,7 +293,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.redis = (
         # redis.asyncio ships no stubs for from_url; the gate only needs the
         # five sorted-set commands its RedisLike protocol declares.
-        redis_asyncio.from_url(resolved_settings.redis_url)  # type: ignore[no-untyped-call]
+        # `socket_connect_timeout` bounds only connection setup; a `socket_timeout` would
+        # also break the relay's blocking pubsub `listen()`.
+        redis_asyncio.from_url(  # type: ignore[no-untyped-call]
+            resolved_settings.redis_url, socket_connect_timeout=_REDIS_CONNECT_TIMEOUT_SECONDS
+        )
         if resolved_settings.redis_url
         else None
     )
@@ -300,14 +317,33 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # SOLUSDEV-241: the read side of the spine — listings, change signals and
     # versioned payloads, keyed on the provider ACCOUNT so projects and
     # teammates on one grant share one fetch. Same store, same backend choice.
+    # ADR-038 §1: payloads (STEP exports, part metadata) are written once to the durable
+    # CAD store when one is configured; Redis then holds only the index.
+    app.state.cad_store = build_cad_store(resolved_settings)
+    logging.getLogger("solus.main").info(
+        "durable CAD store %s",
+        "enabled (%s)" % ("s3" if resolved_settings.cad_store_s3_bucket else "local")
+        if app.state.cad_store is not None
+        else "disabled (Redis-only payload cache, 8 MiB cap)",
+    )
     app.state.integration_cache = build_integration_cache(
-        resolved_settings, app.state.integration_store
+        resolved_settings, app.state.integration_store, durable=app.state.cad_store
     )
     # SOLUSDEV-167: project-scoped graph-change fan-out. Routing is structural
     # — one channel per project — so a frame's channel, never its body, decides
     # who receives it.
     app.state.graph_hub = LiveHub(app.state.redis)
-    app.state.sessionmaker = build_sessionmaker(resolved_engine, settings=resolved_settings)
+    # SOLUSDEV-312 (ADR-037): the hub rides every session so committed team/project changes
+    # publish themselves (graph/live_publisher.py), and the SSE routes share one stream cap.
+    app.state.sessionmaker = build_sessionmaker(
+        resolved_engine, settings=resolved_settings, hub=app.state.graph_hub
+    )
+    app.state.live_stream_limiter = StreamLimiter()
+    if app.state.graph_hub.fanout_mode == "local_only":
+        logging.getLogger("solus.main").warning(
+            "live fan-out is process-local (no SOLUS_REDIS_URL): teammates connected to a "
+            "different API process will not receive live updates"
+        )
     # Connector framework (SOLUSDEV-103): one registry + secret store per app.
     # T4b (MCP-04): the EDA family also gets a bridge export acquirer factory
     # here (the API process HAS a bridge session registry, unlike the ARQ
@@ -419,8 +455,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # the real ceiling is budget x instances — a shared Redis counter is the
     # upgrade, and the quota meter is the backstop underneath either way.
     app.state.webhook_limiter = FixedWindowLimiter(window_seconds=86_400)
-    app.state.artifact_upload_request_limiter = FixedWindowLimiter(window_seconds=60)
-    app.state.artifact_upload_byte_limiter = FixedWindowLimiter(window_seconds=3600)
+    # Per-source cap on deliveries of any kind (pings, translation.complete, hints) so
+    # non-scheduling traffic is bounded too; see WEBHOOK_INGEST_PER_MINUTE.
+    app.state.webhook_ingest_limiter = FixedWindowLimiter(window_seconds=60)
+    # SOLUSDEV-100 M2 follow-up: Redis-backed (aggregate across instances) with an
+    # in-memory fallback when Redis is unset or down.
+    app.state.artifact_upload_request_limiter = UploadBudget("requests", 60, app.state.redis)
+    app.state.artifact_upload_byte_limiter = UploadBudget("bytes", 3600, app.state.redis)
 
     register_error_handlers(app)
     # SOLUSDEV-252 review M1: innermost, so a 411/413 still carries CORS headers
@@ -501,10 +542,14 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(corpus_router.router)
     app.include_router(webhooks.router)
     app.include_router(live.router)
+    app.include_router(live.account_router)
     # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,
     # storage, layout, policy sub-routers mount onto it as the EXT tasks land).
     app.include_router(extensions.router)
     # SOLUSDEV-246: first-party bundle capability routes (widget-bundles.md §3).
     app.include_router(widgets.router)
     app.include_router(sourcing.router)
+    from solus_api.routers import staff_integrations
+
+    app.include_router(staff_integrations.router)
     return app

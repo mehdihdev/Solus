@@ -30,7 +30,8 @@ export interface paths {
     }
     /**
      * Readyz
-     * @description Readiness. 503 only when the database is unreachable.
+     * @description Readiness. 503 only when the database is unreachable. Also served at `/health`
+     *     (ADR-037 §4) — one handler, so the two can never disagree.
      *
      *     Redis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a
      *     live ping: the API holds no persistent Redis connection, so a ping would
@@ -41,6 +42,35 @@ export interface paths {
      *     code anyway.
      */
     get: operations['readyz_readyz_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/health': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Readyz
+     * @description Readiness. 503 only when the database is unreachable. Also served at `/health`
+     *     (ADR-037 §4) — one handler, so the two can never disagree.
+     *
+     *     Redis/queue state is config-level truth (is SOLUS_REDIS_URL set?), not a
+     *     live ping: the API holds no persistent Redis connection, so a ping would
+     *     add a fresh TCP connect — new latency and a new crash surface — to every
+     *     load-balancer probe. And a missing queue is an ACCEPTED degraded state this
+     *     cycle (infrastructure/aws/README.md): it must be visible here without
+     *     failing readiness, so a reachability result could never change the status
+     *     code anyway.
+     */
+    get: operations['readyz_health_get']
     put?: never
     post?: never
     delete?: never
@@ -2934,11 +2964,35 @@ export interface paths {
      * Project Events
      * @description Subscribe to this project's change stream.
      *
-     *     Yields `graph.changed` frames — an invalidation hint the client answers by
-     *     refetching the one thing it is already showing — and, on the local API only,
-     *     `hardware.devices_changed` (SOLUSDEV-250, `hardware/device_watch.py`).
+     *     Yields the project channel's frames — `graph.changed`, `layout.changed`,
+     *     `sources.changed`, `project.updated`, `job.updated`, `access.revoked` and, on the local
+     *     API only, `hardware.devices_changed` (SOLUSDEV-250). Ends with `access.revoked` when
+     *     the caller loses access.
      */
     get: operations['project_events_api_v1_projects__project_id__events_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/users/me/events': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Account Events
+     * @description Subscribe to the caller's own channel and every team channel they belong to.
+     *
+     *     First event `ready` names the teams; it is sent again whenever membership changes the
+     *     set. Ends with `access.revoked` if the account or token stops being valid.
+     */
+    get: operations['account_events_api_v1_users_me_events_get']
     put?: never
     post?: never
     delete?: never
@@ -3440,6 +3494,23 @@ export interface paths {
     put?: never
     /** Select Candidate */
     post: operations['select_candidate_api_v1_projects__project_id__sourcing_requests__request_id__select_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/staff/integrations/onshape/quota': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Onshape Pool Quota */
+    get: operations['onshape_pool_quota_api_v1_staff_integrations_onshape_quota_get']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -5679,6 +5750,26 @@ export interface operations {
     }
   }
   readyz_readyz_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+    }
+  }
+  readyz_health_get: {
     parameters: {
       query?: never
       header?: never
@@ -12110,6 +12201,26 @@ export interface operations {
       }
     }
   }
+  account_events_api_v1_users_me_events_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+    }
+  }
   publish_extension_api_v1_extensions_publish_post: {
     parameters: {
       query?: never
@@ -13431,6 +13542,28 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  onshape_pool_quota_api_v1_staff_integrations_onshape_quota_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
         }
       }
     }

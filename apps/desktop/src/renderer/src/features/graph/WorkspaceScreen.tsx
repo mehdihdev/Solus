@@ -31,7 +31,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { useWorkspaceGraph, type GraphSummary } from './useWorkspaceGraph'
 import { useOptimisticGraph } from './useOptimisticGraph'
 import { mergeOptimistic } from './graphCache'
-import { useWorkspaceLayout } from './useWorkspaceLayout'
+import { useWorkspaceLayout, type MoveOrigin } from './useWorkspaceLayout'
 import { RobotTopologyGraph } from './robots/RobotTopologyGraph'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { toSharedFocus } from '../workspace/useSharedFocus'
@@ -187,7 +187,7 @@ interface GraphBodyProps {
   layout: WorkspaceLayout
   copy: EmptyCopy
   onSelect: (entity: Entity, ancestors: SelectionPath) => void
-  onMove: (entityId: string, point: Point) => void
+  onMove: (entityId: string, point: Point, origin?: MoveOrigin) => void
   onContextMenu: (event: React.MouseEvent, entity: Entity) => void
   renderContent: (entity: Entity) => React.ReactNode
   toolbar: React.ReactNode
@@ -423,8 +423,8 @@ function useWorkspaceSnapshot() {
   const layout = useWorkspaceLayout(projectId, summary.status === 'ready', liveEntityIds)
   const move = layout.move
   const onMove = useCallback(
-    (entityId: string, point: Point) => {
-      if (!isAccountAnchor(entityId)) move(entityId, point)
+    (entityId: string, point: Point, origin?: MoveOrigin) => {
+      if (!isAccountAnchor(entityId)) move(entityId, point, origin)
     },
     [move]
   )
@@ -461,6 +461,42 @@ function useWorkspaceSnapshot() {
   }
 }
 
+/** Opens the add dialog once per externally issued request sequence. */
+function useOpenAddRequest(
+  { openAddRequest, onAddRequestConsumed }: WorkspaceScreenProps,
+  onOpenAdd: (tab: 'service' | 'hardware') => void
+): void {
+  const handledAddSequence = useRef<number | null>(null)
+  useEffect(() => {
+    if (!openAddRequest || handledAddSequence.current === openAddRequest.sequence) return
+    handledAddSequence.current = openAddRequest.sequence
+    onOpenAdd(openAddRequest.tab)
+    onAddRequestConsumed?.(openAddRequest.sequence)
+  }, [openAddRequest, onAddRequestConsumed, onOpenAdd])
+}
+
+interface WorkspaceSyncInput {
+  projectId: ReturnType<typeof useWorkspaceSnapshot>['projectId']
+  summary: GraphSummary
+  validateGraph: ReturnType<typeof useWorkspaceSnapshot>['validateGraph']
+  onDevices: ReturnType<typeof useWorkspaceSnapshot>['onDevices']
+}
+
+/** Live workspace events plus widget registrations for the current project. */
+function useWorkspaceSync(
+  { projectId, summary, validateGraph, onDevices }: WorkspaceSyncInput,
+  onGraphChanged: (removedId?: string) => void
+) {
+  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph, onDevices)
+  const registrations = useWidgetRegistrations(
+    projectId,
+    summary.status === 'ready',
+    summary.entities,
+    onGraphChanged
+  )
+  return { liveError, registrations }
+}
+
 function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
   const {
     summary,
@@ -480,19 +516,9 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     onOpenAdd,
     onGraphChanged
   } = useWorkspaceSnapshot()
-  const handledAddSequence = useRef<number | null>(null)
-  const { openAddRequest, onAddRequestConsumed } = callbacks
-  useEffect(() => {
-    if (!openAddRequest || handledAddSequence.current === openAddRequest.sequence) return
-    handledAddSequence.current = openAddRequest.sequence
-    onOpenAdd(openAddRequest.tab)
-    onAddRequestConsumed?.(openAddRequest.sequence)
-  }, [openAddRequest, onAddRequestConsumed, onOpenAdd])
-  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph, onDevices)
-  const registrations = useWidgetRegistrations(
-    projectId,
-    summary.status === 'ready',
-    summary.entities,
+  useOpenAddRequest(callbacks, onOpenAdd)
+  const { liveError, registrations } = useWorkspaceSync(
+    { projectId, summary, validateGraph, onDevices },
     onGraphChanged
   )
   // The reveal follows the authoritative snapshot: an entity is navigated to and

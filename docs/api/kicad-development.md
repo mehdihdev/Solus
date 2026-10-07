@@ -218,6 +218,13 @@ fingerprint. Confinement refusals use the same error path. Examples:
 `library_unavailable`, `unsupported_symbol`, `ambiguous_target`, `invalid_geometry`,
 `guard_failed`, `cli_unavailable`. No content or host path in exception text.
 
+Open-in-KiCad conflict: `stale_plan` is also the refusal when the schematic is
+open in the KiCad GUI. A write is refused if the file's bytes differ from the
+fingerprint Solus read (the user saved from KiCad since), or if KiCad's
+`~<name>.lck` / `<name>.lck` editor lock exists beside it. Either way nothing
+is written and the file is untouched; the user is told to save/close in KiCad
+and re-read. Pinned by `tests/test_write_tool_open_in_kicad.py`.
+
 Planner output fingerprints original bytes, exact proposed bytes, arguments,
 resolved entities, selected library bytes and generated UUIDs. UUIDs derive from a
 stable namespaced hash of workspace-relative file path, original fingerprint and

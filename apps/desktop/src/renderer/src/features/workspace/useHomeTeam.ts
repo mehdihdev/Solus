@@ -42,7 +42,10 @@ import {
   type TeamRole,
   type TeamSummary
 } from '../../lib/api/resources'
+import { liveKeys } from '../../store/liveRevisionStore'
 import { EMAIL_PATTERN } from '../team/MembersPanel'
+import { mergeActivityRefresh } from '../live/mergeActivity'
+import { useLiveRefetch } from '../live/useLiveRefetch'
 import { switchWorkspaceTeam } from './teamSwitch'
 
 /** `idle`: no active team. `gone`: the team no longer exists (not an outage). */
@@ -175,17 +178,21 @@ export function useHomeTeam(
   }, [load])
 
   useSubscriptionLimits(me?.id, setLimits)
+  useLiveTeamRefresh({
+    teamId,
+    role: detail?.role ?? null,
+    loadSeq,
+    teamIdRef,
+    feed: { activity, meta },
+    writers: { setDetail, setMembers, setInvites, setActivity, setMeta }
+  })
 
-  const refreshMembers = useCallback(async () => {
-    if (!teamId) return
-    const rows = await listMembers(teamId)
-    if (teamIdRef.current === teamId) setMembers(rows)
-  }, [teamId])
-  const refreshInvites = useCallback(async () => {
-    if (!teamId) return
-    const rows = await invitesOrNone(teamId)
-    if (teamIdRef.current === teamId) setInvites(rows)
-  }, [teamId])
+  const { refreshMembers, refreshInvites } = useSliceRefreshers(
+    teamId,
+    teamIdRef,
+    setMembers,
+    setInvites
+  )
 
   const actions = createHomeTeamActions({
     teamId,
@@ -206,11 +213,46 @@ export function useHomeTeam(
     members,
     invites,
     activity,
+    ...deriveTeamView(detail, activity, meta, me, limits),
+    actions
+  }
+}
+
+/** Quiet refetchers for the roster and invites that drop a reply for a team the hook has left. */
+function useSliceRefreshers(
+  teamId: string | null,
+  teamIdRef: RefObject<string | null>,
+  setMembers: Dispatch<SetStateAction<TeamMemberApi[]>>,
+  setInvites: Dispatch<SetStateAction<InviteApi[]>>
+): { refreshMembers: () => Promise<void>; refreshInvites: () => Promise<void> } {
+  const refreshMembers = useCallback(async () => {
+    if (!teamId) return
+    const rows = await listMembers(teamId)
+    if (teamIdRef.current === teamId) setMembers(rows)
+  }, [teamId, teamIdRef, setMembers])
+  const refreshInvites = useCallback(async () => {
+    if (!teamId) return
+    const rows = await invitesOrNone(teamId)
+    if (teamIdRef.current === teamId) setInvites(rows)
+  }, [teamId, teamIdRef, setInvites])
+  return { refreshMembers, refreshInvites }
+}
+
+type DerivedTeamView = Pick<HomeTeam, 'activityTotal' | 'activityHasMore' | 'myRole' | 'teamLimit'>
+
+/** Fields computed from the loaded slices rather than stored. */
+function deriveTeamView(
+  detail: TeamDetail | null,
+  activity: ActivityApi[],
+  meta: ApiMeta,
+  me: Me | null,
+  limits: Record<string, number | null> | null
+): DerivedTeamView {
+  return {
     activityTotal: meta.total ?? activity.length,
     activityHasMore: meta.has_next ?? false,
     myRole: detail?.role ?? null,
-    teamLimit: me ? teamLimitPosition(me.teams, limits) : null,
-    actions
+    teamLimit: me ? teamLimitPosition(me.teams, limits) : null
   }
 }
 
@@ -396,6 +438,83 @@ async function loadHomeTeam(
     if (seq !== loadSeq.current) return
     setStatus(classifyFetchError(error) === 'gone' ? 'gone' : 'offline')
   }
+}
+
+interface LiveTeamRefresh {
+  teamId: string | null
+  role: TeamRole | null
+  loadSeq: RefObject<number>
+  teamIdRef: RefObject<string | null>
+  feed: { activity: ActivityApi[]; meta: ApiMeta }
+  writers: Pick<
+    HomeTeamStateWriters,
+    'setDetail' | 'setMembers' | 'setInvites' | 'setActivity' | 'setMeta'
+  >
+}
+
+/** Only admins and owners may list invites; a hint must not make anyone else try. */
+const canListInvites = (role: TeamRole | null): boolean => role === 'owner' || role === 'admin'
+
+/** ADR-037: each live hint refetches ONLY the slice it names, quietly (no
+ *  loading flash). A reply is dropped when the team changed or a full load
+ *  started meanwhile, so a slow answer never lands on the wrong team. */
+function useLiveTeamRefresh(context: LiveTeamRefresh): void {
+  const { teamId, role, loadSeq, teamIdRef, writers } = context
+  const feedRef = useRef(context.feed)
+  feedRef.current = context.feed
+  const refresh = async <T>(
+    fetch: (id: string) => Promise<T>,
+    apply: (value: T) => void
+  ): Promise<void> => {
+    if (!teamId) return
+    const seq = loadSeq.current
+    try {
+      const value = await fetch(teamId)
+      if (teamIdRef.current === teamId && loadSeq.current === seq) apply(value)
+    } catch {
+      /* keep what is on screen; the next hint or a reload recovers */
+    }
+  }
+  const useWatch = (key: (id: string) => string, run: () => Promise<void>, enabled = true): void =>
+    useLiveRefetch([teamId ? key(teamId) : null], () => void run(), enabled && teamId !== null)
+  // The role the hook trusts for gating, and the team-detail refresh the current
+  // bump started (if any): an invites hint waits for it so a demotion that
+  // arrives in the same bump never makes a now-forbidden request.
+  const roleRef = useRef(role)
+  roleRef.current = role
+  const detailRefresh = useRef<Promise<void> | null>(null)
+  useWatch(liveKeys.team, () => {
+    const pending = refresh(getTeamDetail, (detail) => {
+      roleRef.current = detail.role
+      writers.setDetail(detail)
+    }).finally(() => {
+      if (detailRefresh.current === pending) detailRefresh.current = null
+    })
+    detailRefresh.current = pending
+    return pending
+  })
+  useWatch(liveKeys.teamMembers, () => refresh(listMembers, writers.setMembers))
+  useWatch(
+    liveKeys.teamInvites,
+    async () => {
+      await detailRefresh.current
+      if (canListInvites(roleRef.current)) await refresh(invitesOrNone, writers.setInvites)
+    },
+    canListInvites(role)
+  )
+  useWatch(liveKeys.teamActivity, () =>
+    refresh(
+      (id) => listActivityPage(id),
+      (page) => {
+        const merged = mergeActivityRefresh(
+          { items: feedRef.current.activity, meta: feedRef.current.meta },
+          page
+        )
+        writers.setActivity(merged.items)
+        writers.setMeta(merged.meta)
+      }
+    )
+  )
 }
 
 function useSubscriptionLimits(
