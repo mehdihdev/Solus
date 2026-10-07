@@ -546,3 +546,51 @@ over the touched `solus/` files — zero new hits).
 
 No new sign-off line added — this addendum stands under the SAME pending pair in PROVENANCE.md
 (both blank; the fork remains provisional).
+
+## 2026-10-06 — KiCad completion: install discovery, CLI pinning, open-in-KiCad guard (SOLUSDEV-312 branch)
+
+> Referenced by the 2026-10-06 sign-off lines in PROVENANCE.md. Drafted by the implementing agent
+> for the two human reviewers; the reviewers' own reading of the diff is the review.
+
+### What changed
+
+- **Companion-side install discovery** (`packages/companion/src/solus_companion/kicad_discovery.py`,
+  wired in `config.py::discover_servers`). The companion probes a FIXED set of absolute, per-OS
+  locations (macOS `/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli`; Linux `/usr/bin` and
+  `/usr/local/bin`; Windows `C:\Program Files\KiCad\{10.0,9.0,8.0}\bin\kicad-cli.exe`), accepts only
+  a regular executable file, returns its `realpath`, and passes it to the kicad fork as the declared
+  value of `KICAD_CLI_PATH`. It never reads `PATH` or an ambient `KICAD_CLI_PATH`; `child_env` applies
+  declared values last and the fork has no `env.allow`, so an ambient value cannot reach the child.
+  Windows is inert today (no Windows launcher; `_launch_command` refuses kicad there).
+- **`solus/cli_detect.py` hardened.** A pinned `KICAD_CLI_PATH` is now accepted only if it is an
+  absolute executable regular file that does NOT resolve inside `SOLUS_MCP_WORKSPACE` (the launcher's
+  cwd and customer repo content). A relative value or a binary planted in the workspace is refused.
+- **Open-in-KiCad conflict guard pinned by tests** (no code change): a write is refused with
+  `stale_plan` when the schematic's fingerprint changed since it was read, or when KiCad's
+  `~<name>.lck` / `<name>.lck` editor lock exists.
+- Portable test edits (`/dev/fd` as well as `/proc/self/fd`).
+
+### What did NOT change (re-review triggers checked)
+
+`upstream/` and `vendor/` are untouched (both tree hashes recomputed equal to PROVENANCE:
+upstream `56f30452214d88aa6b84807d6df7a6e903c48e52`, vendor `844e1a1183e90a0a3b0c89dbcffe561b6fc9b944`).
+No `allowlist.yaml` change, no `bin/launch` change, no declared env-allowlist change
+(`solus/env_allowlist.py` untouched), no lockfile change.
+
+### Evidence
+
+`tests/test_cli_detect.py::test_relative_or_workspace_kicad_cli_path_is_refused`;
+`packages/companion/tests/test_kicad_discovery.py` (fixed candidates, non-executable/relative skipped,
+hostile ambient env and `PATH` ignored, ambient `KICAD_CLI_PATH` never reaches the child env);
+`tests/test_write_tool_open_in_kicad.py`; real run on macOS/KiCad 10.0.1: companion-set
+`KICAD_CLI_PATH` → `official_kicadxml`, 9 components / 22 nets, not degraded. Fork suite 452 passed.
+
+### Known residuals
+
+Windows candidate paths are literal `C:\Program Files` — resolve via the known-folder API or the
+KiCad registry key before a Windows launcher ships. `/Applications` and `/usr/local/bin` are
+admin/user-writable on some systems (same-user risk only; no privilege boundary crossed).
+
+### Sign-off
+
+No new sign-off line added here; the 2026-10-06 lines in PROVENANCE.md cite this section.

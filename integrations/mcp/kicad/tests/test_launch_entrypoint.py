@@ -239,17 +239,23 @@ def test_provenance_logs_every_vendor_exclusion_and_none_ship() -> None:
     assert ".github" in section, "PROVENANCE modification log is missing the .github/ exclusion row"
 
 
-def test_provenance_sign_offs_are_present_but_blank() -> None:
+def test_provenance_sign_offs_are_blank_or_pin_the_current_tree_hashes() -> None:
+    """Sign-offs are a human-only act. A line is either the blank template placeholder, or a
+    complete signature that pins BOTH current vendored tree hashes — a stale hash voids it."""
     text = _provenance_text()
+    upstream = re.search(r"Vendored tree hash:\*\*\s*`([0-9a-f]{40})`", text)
+    vendor = re.search(r"Vendor tree hash:\*\*\s*`([0-9a-f]{40})`", text)
+    assert upstream is not None and vendor is not None
     for reviewer in ("Reviewer 1", "Reviewer 2"):
         line = next(
             (candidate for candidate in text.splitlines() if f"**{reviewer}:**" in candidate),
             None,
         )
         assert line is not None, f"PROVENANCE.md is missing the {reviewer} sign-off line"
-        assert "`<name>`" in line, (
-            f"{reviewer} sign-off must stay BLANK (template placeholder) — "
-            "filling it is a human-only act"
+        if "`<name>`" in line:
+            continue  # still the blank template placeholder
+        assert upstream.group(1) in line and vendor.group(1) in line, (
+            f"{reviewer} signed against stale or missing tree hashes — re-review required"
         )
 
 
