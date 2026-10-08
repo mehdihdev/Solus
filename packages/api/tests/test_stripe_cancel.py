@@ -291,14 +291,80 @@ async def test_customer_only_row_with_no_live_subscription_completes_as_a_tombst
     assert await is_tombstoned_customer(db, "cus_A")
 
 
-async def test_a_hinted_subscription_missing_from_the_listing_is_still_canceled(
+async def test_a_hint_owned_by_another_customer_is_never_canceled(db: AsyncSession) -> None:
+    await _enqueue(db, sub="sub_hint")
+    fake = _fake("sub_live")
+    fake.seed_subscription("sub_hint", customer_id="cus_elsewhere")
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert [c.args[0] for c in fake.calls_to("cancel_subscription")] == ["sub_live"]
+    assert fake.subscriptions["sub_hint"].status == "active"
+    assert (summary.completed, summary.failed) == (1, 0)
+    [row] = await _rows(db)
+    assert row.completed_at == NOW
+
+
+async def test_a_hint_owned_by_the_same_customer_but_absent_from_the_listing_is_canceled(
     db: AsyncSession,
 ) -> None:
     await _enqueue(db, sub="sub_hint")
     fake = _fake("sub_live")
-    fake.seed_subscription("sub_hint", customer_id="cus_elsewhere")
+    fake.seed_subscription("sub_hint", customer_id="cus_A")
+    fake.hide_from_listing("sub_hint")  # eventual consistency: retrievable, not yet listed
+
     await run_due_stripe_cancels(db, fake, now=NOW)
+
     assert {c.args[0] for c in fake.calls_to("cancel_subscription")} == {"sub_live", "sub_hint"}
+    assert fake.subscriptions["sub_hint"].status == "canceled"
+
+
+async def test_a_terminal_hint_absent_from_the_listing_is_skipped(db: AsyncSession) -> None:
+    await _enqueue(db, sub="sub_hint")
+    fake = _fake()
+    fake.seed_subscription("sub_hint", customer_id="cus_A", status="canceled")
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert fake.calls_to("cancel_subscription") == [] and summary.completed == 1
+
+
+async def test_a_hint_stripe_does_not_know_is_skipped_and_the_row_completes(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db, sub="sub_hint")
+    fake = _fake()  # sub_hint unknown: retrieve raises resource_missing
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert [c.args[0] for c in fake.calls_to("retrieve_subscription")] == ["sub_hint"]
+    assert fake.calls_to("cancel_subscription") == []
+    assert (summary.completed, summary.failed) == (1, 0)
+    [row] = await _rows(db)
+    assert row.completed_at == NOW
+
+
+async def test_a_hint_retrieve_failure_is_retried_and_cancels_nothing_unverified(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db, sub="sub_hint")
+    fake = _fake()
+    fake.seed_subscription("sub_hint", customer_id="cus_A")
+    fake.hide_from_listing("sub_hint")
+    fake.fail_next("retrieve_subscription", FakeStripeGateway.connection_error())
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert summary.failed == 1 and fake.calls_to("cancel_subscription") == []
+    [row] = await _rows(db)
+    assert row.completed_at is None and row.attempts == 1
+
+
+async def test_a_listed_hint_is_not_retrieved(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake("sub_A")
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    assert fake.calls_to("retrieve_subscription") == []
 
 
 async def test_list_failure_is_retried_with_backoff(db: AsyncSession) -> None:
@@ -351,7 +417,9 @@ async def test_limit_and_ordering_oldest_due_first(db: AsyncSession) -> None:
         assert row is not None
         row.next_attempt_at = NOW - timedelta(seconds=offset)
     await db.commit()
-    fake = _fake("sub_0", "sub_1", "sub_2")
+    fake = FakeStripeGateway()
+    for i in range(3):
+        fake.seed_subscription(f"sub_{i}", customer_id=f"cus_{i}")
 
     summary = await run_due_stripe_cancels(db, fake, now=NOW, limit=2)
 
@@ -597,3 +665,121 @@ async def test_startup_drains_due_rows_and_never_raises(engine: AsyncEngine) -> 
         raise RuntimeError("no db")
 
     await run_startup_stripe_cancels(broken, fake)
+
+
+# ---------------------------------------------------------------- lease vs batch, completed rows
+
+
+def test_the_lease_outlives_a_whole_batch_of_row_timeouts() -> None:
+    assert stripe_cancel.LEASE_SECONDS > stripe_cancel.BATCH * stripe_cancel.ROW_TIMEOUT_SECONDS
+
+
+async def test_a_row_still_inside_a_batch_lease_is_not_reclaimed(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake("sub_A")
+    # Claim only (lease), simulate a slow earlier row: nothing else may take it meanwhile.
+    claimed = await stripe_cancel._claim_due(db, NOW, 5, None)
+    assert len(claimed) == 1
+    inside = NOW + timedelta(seconds=stripe_cancel.BATCH * 50)
+    assert (await run_due_stripe_cancels(db, fake, now=inside)).attempted == 0
+
+
+async def test_a_late_failure_on_an_already_completed_row_is_ignored(
+    engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as setup:
+        await _enqueue(setup)
+    after_lease = NOW + timedelta(seconds=LEASE_SECONDS + 1)
+
+    class _Racing(FakeStripeGateway):
+        """Runner 1 stalls in its listing; its lease expires; runner 2 finishes the row."""
+
+        done = False
+
+        async def list_customer_subscriptions(self, customer_id: str) -> list[str]:
+            if not self.done:
+                self.done = True
+                async with maker() as other:
+                    await run_due_stripe_cancels(other, self, now=after_lease)
+                raise StripeOperationError("x", code="invalid", retryable=False)
+            return await super().list_customer_subscriptions(customer_id)
+
+    racing = _Racing()
+    racing.seed_subscription("sub_A", customer_id="cus_A")
+    caplog.set_level("DEBUG")
+    async with maker() as s:
+        summary = await run_due_stripe_cancels(s, racing, now=NOW)
+
+    assert len(racing.calls_to("cancel_subscription")) == 1
+    assert racing.subscriptions["sub_A"].status == "canceled"
+    async with maker() as check:
+        [row] = await _rows(check)
+    assert row.completed_at == after_lease and row.attempts == 0
+    assert not any("NON-RETRYABLE" in r.getMessage() for r in caplog.records)
+    assert not any("Stripe cancel failed" in r.getMessage() for r in caplog.records)
+    assert summary.attempted == 1
+
+
+# ---------------------------------------------------------------- truncated listing
+
+
+async def test_a_truncated_listing_cancels_what_it_collected_then_retries(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db, sub=None)
+    fake = _fake("sub_X", "sub_Z", "sub_W")
+    fake.truncate_listing_after(2)
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert [c.args[0] for c in fake.calls_to("cancel_subscription")] == ["sub_X", "sub_Z"]
+    assert (summary.completed, summary.failed) == (0, 1)
+    [row] = await _rows(db)
+    assert row.completed_at is None and row.attempts == 1
+    assert row.next_attempt_at == NOW + timedelta(seconds=BACKOFF_BASE_SECONDS)
+
+
+# ---------------------------------------------------------------- clock
+
+
+async def test_each_rows_backoff_counts_from_when_it_failed_not_from_the_run_start(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db, "cus_A", "sub_A")
+    await _enqueue(db, "cus_B", "sub_B")
+    fake = _fake("sub_A")
+    fake.seed_subscription("sub_B", customer_id="cus_B")
+    fake.fail_always("cancel_subscription", FakeStripeGateway.connection_error())
+    ticks = iter(NOW + timedelta(seconds=100 * i) for i in range(100))
+
+    await run_due_stripe_cancels(db, fake, clock=lambda: next(ticks))
+
+    rows = sorted(await _rows(db), key=lambda r: r.next_attempt_at)
+    first, second = rows
+    assert second.next_attempt_at - first.next_attempt_at >= timedelta(seconds=100)
+    assert min(r.next_attempt_at for r in rows) >= NOW + timedelta(seconds=BACKOFF_BASE_SECONDS)
+
+
+# ---------------------------------------------------------------- DB-error logging
+
+
+async def test_inline_and_startup_db_errors_log_only_the_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Broken:
+        async def scalars(self, *a: object, **k: object) -> None:
+            raise RuntimeError("password=hunter2 bound-parameter")
+
+        async def rollback(self) -> None:
+            raise RuntimeError("password=hunter2 rollback")
+
+    def broken() -> Any:
+        raise RuntimeError("password=hunter2 connect")
+
+    caplog.set_level("DEBUG")
+    await run_stripe_cancels_after_commit(_Broken(), _fake())  # type: ignore[arg-type]
+    await run_startup_stripe_cancels(broken, _fake())
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in text and "hunter2" not in text
+    assert all(r.exc_info is None for r in caplog.records)

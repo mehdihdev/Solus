@@ -29,6 +29,7 @@ from solus_api.billing.stripe_gateway import (
     StripeIdempotencyConflictError,
     StripeOperationError,
     StripeResourceMissingError,
+    SubscriptionListTruncatedError,
     SubscriptionSnapshot,
     _check_comp_coupon,
     _check_extra_metadata,
@@ -57,6 +58,8 @@ class FakeStripeGateway:
     _failures: dict[str, list[Exception]] = field(default_factory=dict)
     _always: dict[str, Exception] = field(default_factory=dict)
     _idem_store: dict[str, tuple[Any, Any]] = field(default_factory=dict)
+    _hidden: set[str] = field(default_factory=set)
+    _list_cap: int | None = None
 
     # ---- test helpers --------------------------------------------------- #
 
@@ -66,11 +69,16 @@ class FakeStripeGateway:
         *,
         price_id: str = "price_seed",
         status: str = "active",
-        customer_id: str = "cus_fake",
+        customer_id: str | None = "cus_fake",
         coupon_id: str | None = None,
+        coupon_ids: tuple[str, ...] = (),
         schedule_id: str | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> SubscriptionSnapshot:
+        if coupon_id is not None and not coupon_ids:
+            coupon_ids = (coupon_id,)
+        elif coupon_ids and coupon_id is None:
+            coupon_id = next((c for c in coupon_ids if c.startswith("solus-comp-")), coupon_ids[0])
         snap = SubscriptionSnapshot(
             subscription_id=sub_id,
             status=status,
@@ -86,9 +94,18 @@ class FakeStripeGateway:
             schedule_id=schedule_id,
             latest_invoice_id=f"in_{sub_id}",
             metadata=dict(metadata or {}),
+            coupon_ids=coupon_ids,
         )
         self.subscriptions[sub_id] = snap
         return snap
+
+    def hide_from_listing(self, sub_id: str) -> None:
+        """Retrievable but absent from `list_customer_subscriptions` (listing lag)."""
+        self._hidden.add(sub_id)
+
+    def truncate_listing_after(self, count: int) -> None:
+        """Make `list_customer_subscriptions` hit its pagination cap after `count` ids."""
+        self._list_cap = count
 
     def calls_to(self, method: str) -> list[FakeCall]:
         return [c for c in self.calls if c.method == method]
@@ -181,11 +198,16 @@ class FakeStripeGateway:
     async def list_customer_subscriptions(self, customer_id: str) -> list[str]:
         _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
         self._enter("list_customer_subscriptions", (customer_id,), {})
-        return [
+        live = [
             s.subscription_id
             for s in self.subscriptions.values()
-            if s.customer_id == customer_id and s.status not in _TERMINAL_SUBSCRIPTION_STATUSES
+            if s.customer_id == customer_id
+            and s.status not in _TERMINAL_SUBSCRIPTION_STATUSES
+            and s.subscription_id not in self._hidden
         ]
+        if self._list_cap is not None and len(live) > self._list_cap:
+            raise SubscriptionListTruncatedError(live[: self._list_cap])
+        return live
 
     async def change_subscription_price(
         self,
@@ -224,6 +246,7 @@ class FakeStripeGateway:
             }
             if coupon_id is not None:
                 changes["coupon_id"] = coupon_id
+                changes["coupon_ids"] = (coupon_id,)
             return self._put(sub_id, **changes)
 
         return self._once(_idem(audit_action_id, "change-price"), (sub_id, price_id, kwargs), run)  # type: ignore[no-any-return]
@@ -251,7 +274,7 @@ class FakeStripeGateway:
         def run() -> SubscriptionSnapshot:
             snap = self._get(sub_id)
             meta = self._audit(snap, audit_action_id, actor, {})
-            return self._put(sub_id, coupon_id=coupon_id, metadata=meta)
+            return self._put(sub_id, coupon_id=coupon_id, coupon_ids=(coupon_id,), metadata=meta)
 
         return self._once(  # type: ignore[no-any-return]
             _idem(audit_action_id, "apply-coupon"), (sub_id, coupon_id), run
@@ -268,7 +291,7 @@ class FakeStripeGateway:
         def run() -> SubscriptionSnapshot:
             snap = self._get(sub_id)
             meta = self._audit(snap, audit_action_id, actor, {})
-            return self._put(sub_id, coupon_id=None, metadata=meta)
+            return self._put(sub_id, coupon_id=None, coupon_ids=(), metadata=meta)
 
         return self._once(  # type: ignore[no-any-return]
             _idem(audit_action_id, "remove-coupon"), (sub_id,), run

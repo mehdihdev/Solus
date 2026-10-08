@@ -9,6 +9,7 @@ from solus_api.billing.stripe_gateway import (
     StripeIdempotencyConflictError,
     StripeOperationError,
     StripeResourceMissingError,
+    SubscriptionListTruncatedError,
 )
 
 
@@ -208,3 +209,29 @@ async def test_list_customer_subscriptions_validates_and_injects_failures() -> N
     with pytest.raises(StripeOperationError):
         await fake.list_customer_subscriptions("cus_1")
     assert await fake.list_customer_subscriptions("cus_1") == []
+
+
+async def test_listing_helpers_hide_and_truncate() -> None:
+    fake = FakeStripeGateway()
+    for sub in ("sub_a", "sub_b", "sub_c"):
+        fake.seed_subscription(sub, customer_id="cus_1")
+    fake.hide_from_listing("sub_b")
+    assert await fake.list_customer_subscriptions("cus_1") == ["sub_a", "sub_c"]
+    assert (await fake.retrieve_subscription("sub_b")).subscription_id == "sub_b"
+    fake.truncate_listing_after(1)
+    with pytest.raises(SubscriptionListTruncatedError) as err:
+        await fake.list_customer_subscriptions("cus_1")
+    assert err.value.partial == ["sub_a"] and err.value.retryable is True
+
+
+async def test_seeded_coupon_ids_and_coupon_changes_stay_in_sync() -> None:
+    fake = FakeStripeGateway()
+    snap = fake.seed_subscription("sub_1", coupon_ids=("promo_x", "solus-comp-once"))
+    assert snap.coupon_id == "solus-comp-once" and snap.coupon_ids == ("promo_x", "solus-comp-once")
+    plain = fake.seed_subscription("sub_2", coupon_id="solus-comp-forever")
+    assert plain.coupon_ids == ("solus-comp-forever",)
+    applied = await fake.apply_comp_coupon("sub_1", "solus-comp-forever", "a1", "s")
+    assert applied.coupon_ids == ("solus-comp-forever",)
+    cleared = await fake.remove_comp_coupon("sub_1", "a2", "s")
+    assert cleared.coupon_ids == () and cleared.coupon_id is None
+    assert fake.seed_subscription("sub_3", customer_id=None).customer_id is None

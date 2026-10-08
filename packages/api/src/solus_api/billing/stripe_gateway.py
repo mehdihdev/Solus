@@ -96,6 +96,16 @@ class StripeResourceMissingError(StripeOperationError):
     """Stripe reported `resource_missing` (unknown/deleted id)."""
 
 
+class SubscriptionListTruncatedError(StripeOperationError):
+    """`list_customer_subscriptions` hit its pagination cap. `partial` holds every live
+    subscription id collected before the cap, so a caller can act on them and then retry
+    for the remainder (it is retryable)."""
+
+    def __init__(self, partial: list[str]) -> None:
+        super().__init__("subscription.list", code="list_cap_exceeded", retryable=True)
+        self.partial = list(partial)
+
+
 def _check_token(value: object, label: str) -> str:
     if not isinstance(value, str) or not _AUDIT_TOKEN_RE.fullmatch(value):
         raise ValueError(f"{label} must match [A-Za-z0-9_.:-]{{1,64}}")
@@ -191,6 +201,9 @@ class SubscriptionSnapshot:
     schedule_id: str | None
     latest_invoice_id: str | None
     metadata: Mapping[str, str] = field(default_factory=dict)
+    #: EVERY attached discount coupon id. `coupon_id` is the Solus comp coupon when one is
+    #: attached (a customer promo can sort ahead of it), else the first coupon.
+    coupon_ids: tuple[str, ...] = ()
 
     def stripe_refs(self) -> dict[str, str]:
         refs = {
@@ -235,6 +248,11 @@ class ScheduleResult:
         return {k: v for k, v in refs.items() if v}
 
 
+def _primary_coupon(coupons: list[str]) -> str | None:
+    comp = next((c for c in coupons if _COMP_COUPON_RE.fullmatch(c)), None)
+    return comp or (coupons[0] if coupons else None)
+
+
 def snapshot_from_stripe(sub: Any) -> SubscriptionSnapshot:
     items = _g(_g(sub, "items"), "data") or []
     item = items[0] if items else None
@@ -251,10 +269,11 @@ def snapshot_from_stripe(sub: Any) -> SubscriptionSnapshot:
         cancel_at=_g(sub, "cancel_at"),
         cancel_at_period_end=bool(_g(sub, "cancel_at_period_end", False)),
         current_period_end=period_end,
-        coupon_id=coupons[0] if coupons else None,
+        coupon_id=_primary_coupon(coupons),
         schedule_id=_id_of(_g(sub, "schedule")),
         latest_invoice_id=_id_of(_g(sub, "latest_invoice")),
         metadata=dict(_g(sub, "metadata") or {}),
+        coupon_ids=tuple(coupons),
     )
 
 
@@ -385,7 +404,8 @@ class StripeGateway:
         """Ids of every NON-terminal subscription of the customer (not canceled /
         incomplete_expired), oldest page first. Used by the account-deletion cancel runner,
         which treats its row as a customer tombstone. Paginated up to a hard cap; exceeding
-        it raises a non-retryable error rather than silently missing subscriptions."""
+        it raises `SubscriptionListTruncatedError` carrying the ids collected so far, so none of
+        them is stranded and the remainder is retried."""
         _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
         live: list[str] = []
         cursor: str | None = None
@@ -411,7 +431,7 @@ class StripeGateway:
             if not _g(page, "has_more") or not isinstance(last, str):
                 return live
             cursor = last
-        raise StripeOperationError("subscription.list", code="list_cap_exceeded", retryable=False)
+        raise SubscriptionListTruncatedError(live)
 
     async def _modify_subscription(
         self, sub_id: str, op: str, audit_action_id: str, actor: str | None, **params: Any
