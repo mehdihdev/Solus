@@ -340,13 +340,15 @@ class AdminBillingOperations:
             return
         try:
             await outcome.after_commit()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — the change is durable; a retry re-runs the grant
             await self._session.rollback()
-            logger.exception(
-                "admin op=%s credit grant failed after commit target=%s audit=%s",
+            # Type name only: a DB traceback would carry bound parameters (ids, amounts).
+            logger.error(
+                "admin op=%s credit grant failed after commit target=%s audit=%s (%s)",
                 operation,
                 target_user_id,
                 audit.audit_action_id,
+                type(exc).__name__,
             )
 
     async def _load(self, target_user_id: uuid.UUID, audit: AuditContext) -> Target:

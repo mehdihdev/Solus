@@ -120,6 +120,28 @@ async def test_cancel_wrapper_never_raises() -> None:
     assert await cancel_stripe_subscriptions(ctx) == 0
 
 
+async def test_cron_wrappers_log_only_the_exception_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A DB error's message/traceback can echo bound parameters (Stripe ids, user ids):
+    the wrappers must log the exception TYPE only, with no traceback attached."""
+
+    def leaky() -> Any:
+        raise RuntimeError("SENTINEL-bound-param cus_SECRET sub_SECRET")
+
+    with caplog.at_level("ERROR", logger=worker.logger.name):
+        ctx = {"sessionmaker": leaky, "stripe_gateway": FakeStripeGateway()}
+        assert await cancel_stripe_subscriptions(ctx) == 0
+        assert await worker.expire_comps({"sessionmaker": leaky}) == 0
+
+    records = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(records) == 2
+    for record in records:
+        assert "RuntimeError" in record.getMessage()
+        assert record.exc_info is None
+    assert "SENTINEL" not in caplog.text and "SECRET" not in caplog.text
+
+
 # ------------------------------------------------------------ comp wrapper
 
 

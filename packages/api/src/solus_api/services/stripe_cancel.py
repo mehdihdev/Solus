@@ -297,6 +297,9 @@ async def _record_outcome(
     if row.completed_at is not None:
         # Another runner finished this row while we worked (our lease had lapsed): its
         # result stands; a late failure of ours must not bump attempts or raise an alarm.
+        # Residual window: if that runner listed BEFORE a subscription was created, the
+        # new subscription is caught by its own webhook, which re-arms the (tombstoned)
+        # row (billing/stripe_events.py `_cancel_if_tombstoned`) — that is the backstop.
         await session.rollback()
         return
     if error is not None:

@@ -566,7 +566,10 @@ async def test_credit_grant_failure_after_commit_is_logged_and_result_still_retu
     assert (await _sub(maker, uid)).comp_plan is PlanType.PRO  # durable
     record = next(r for r in caplog.records if "credit grant failed" in r.getMessage())
     assert str(uid) in record.getMessage() and "audit-1" in record.getMessage()
-    assert record.exc_info is not None
+    # Type name only: a DB traceback would carry bound parameters (user ids, amounts).
+    assert "RuntimeError" in record.getMessage()
+    assert "ledger down" not in caplog.text
+    assert record.exc_info is None
 
 
 async def test_a_retry_after_a_failed_grant_recovers_it(
