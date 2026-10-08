@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits
-from solus_api.billing.plan_grants import grant_plan_credits
+from solus_api.billing.plan_grants import LIVE_STATUSES, grant_plan_credits
 from solus_api.billing.plans import plan_for_price_id
 from solus_api.billing.stripe_gateway import ADMIN_ACTION_METADATA_KEY
 from solus_api.models import (
@@ -160,14 +160,10 @@ async def _handle_unmatched(
 
 
 async def _apply_subscription(
-    session: AsyncSession,
-    obj: dict[str, Any],
-    etype: str,
-    created: datetime,
-    plan_prices: dict[str, str],
-    plan_credit_grants: dict[str, int],
-    previous: dict[str, Any],
+    session: AsyncSession, obj: dict[str, Any], meta: "_EventMeta"
 ) -> None:
+    etype, created, previous = meta.etype, meta.created, meta.previous_attributes
+    plan_prices, plan_credit_grants = meta.plan_prices, meta.plan_credit_grants
     sub_id = _as_id(obj.get("id"))
     customer = _as_id(obj.get("customer"))
     local = await _sub_by(session, customer=customer, sub_id=sub_id)
@@ -181,7 +177,7 @@ async def _apply_subscription(
     if local.stripe_event_at is not None and created < local.stripe_event_at:
         return
     old_plan, old_status = local.plan, local.status
-    first_link = sub_id is not None and local.stripe_subscription_id is None
+    new_link = _is_new_link(local.stripe_subscription_id, sub_id)
     if sub_id:
         local.stripe_subscription_id = sub_id
     if customer:
@@ -201,9 +197,9 @@ async def _apply_subscription(
                 local.limits = default_limits(plan)
         local.cancel_at = _cancel_at_dt(obj)
     local.stripe_event_at = created
-    if first_link and local.status is not SubscriptionStatus.CANCELED:
+    if new_link and local.status is not SubscriptionStatus.CANCELED:
         _clear_comp(local)
-    if local.status is SubscriptionStatus.CANCELED and old_status in _LIVE_STATUSES:
+    if local.status is SubscriptionStatus.CANCELED and old_status in LIVE_STATUSES:
         _apply_term_end(session, local)
     else:
         _notify_cancel_transition(session, local, old_cancel_at)
@@ -217,8 +213,15 @@ async def _apply_subscription(
     await grant_plan_credits(session, local, plan_credit_grants)
 
 
+def _is_new_link(stored_sub_id: str | None, incoming_sub_id: str | None) -> bool:
+    """True when an incoming subscription id differs from the one stored (or none is
+    stored): a resubscribe after cancellation gets a NEW id, so it counts; replays of
+    the already-linked id do not."""
+    return incoming_sub_id is not None and incoming_sub_id != stored_sub_id
+
+
 def _clear_comp(local: Subscription) -> None:
-    """A paid Stripe subscription was linked for the first time: it supersedes any local
+    """A paid Stripe subscription was linked (a new subscription id): it supersedes any local
     staff comp (plan/limits come from what was bought). `limits_override` is untouched."""
     local.comp_plan = None
     local.comp_expires_at = None
@@ -262,7 +265,7 @@ def _notify_cancel_transition(
 ) -> None:
     """Notify when a LIVE subscription's scheduled cancellation appears or is
     undone. Same-state replays/renewals stay silent."""
-    if local.status not in _LIVE_STATUSES:
+    if local.status not in LIVE_STATUSES:
         return
     plan_label = local.plan.value.capitalize()
     if local.cancel_at is not None and old_cancel_at is None:
@@ -288,9 +291,6 @@ def _notify_cancel_transition(
         )
 
 
-_LIVE_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
-
-
 def _notify_if_entitlement_changed(
     session: AsyncSession,
     local: Subscription,
@@ -303,9 +303,9 @@ def _notify_if_entitlement_changed(
     (active/trialing) status, or switching plans while live. Routine renewals
     (same plan, still live) stay silent; the event-id dedupe and out-of-order
     guards upstream make this at-most-once per Stripe event."""
-    if local.status not in _LIVE_STATUSES:
+    if local.status not in LIVE_STATUSES:
         return
-    became_live = old_status not in _LIVE_STATUSES
+    became_live = old_status not in LIVE_STATUSES
     plan_changed = local.plan != old_plan
     if not (became_live or plan_changed):
         return
@@ -374,8 +374,8 @@ async def _link_subscription_customer(
     if customer:
         local.stripe_customer_id = customer
     if stripe_sub:
-        if local.stripe_subscription_id is None:
-            _clear_comp(local)  # first paid link supersedes a local comp
+        if _is_new_link(local.stripe_subscription_id, stripe_sub):
+            _clear_comp(local)  # a new paid link supersedes a local comp
         local.stripe_subscription_id = stripe_sub
     return True
 
@@ -458,15 +458,7 @@ class _EventMeta:
 
 
 async def _on_subscription(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
-    await _apply_subscription(
-        session,
-        obj,
-        meta.etype,
-        meta.created,
-        meta.plan_prices,
-        meta.plan_credit_grants,
-        meta.previous_attributes,
-    )
+    await _apply_subscription(session, obj, meta)
 
 
 async def _on_checkout(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
