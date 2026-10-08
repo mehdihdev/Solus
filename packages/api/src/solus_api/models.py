@@ -273,11 +273,14 @@ class TurnRole(enum.StrEnum):
     TOOL = "tool"
 
 
-def _enum_column(enum_cls: type[enum.StrEnum]) -> Enum:
+def _enum_column(enum_cls: type[enum.StrEnum], *, name: str | None = None) -> Enum:
     # native_enum=False + create_constraint=True → VARCHAR with a DB CHECK on the
     # allowed values (portable, and validity enforced in the database, not just app code).
+    # `name` overrides the CHECK's name (default: lower-cased class) — needed when one
+    # table holds two columns of the same enum, whose constraint names would collide.
     return Enum(
         enum_cls,
+        name=name,
         native_enum=False,
         length=32,
         create_constraint=True,
@@ -491,6 +494,16 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     # `created` timestamp of the last Stripe event applied to this row (SOLUSDEV-83).
     # Out-of-order/replayed webhooks only apply when newer, so state converges.
     stripe_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Staff-set per-key limit override (ADR-023 clarification 2026-10-07, SOLUSDEV-313):
+    # merged over plan defaults at read time (`billing/entitlements.py`); explicit null
+    # = unlimited, an absent key falls through. Billing events never write or clear it.
+    limits_override: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    # Staff comp: grants `comp_plan`'s defaults without a Stripe purchase. NULL
+    # `comp_expires_at` with `comp_plan` set = forever; an expired comp is ignored at read.
+    comp_plan: Mapped[PlanType | None] = mapped_column(
+        _enum_column(PlanType, name="subscription_comp_plan"), default=None
+    )
+    comp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):
@@ -582,6 +595,32 @@ class CadPurgeRequest(UuidPkMixin, Base):
     next_attempt_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, index=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class StripeCancelRequest(UuidPkMixin, Base):
+    """A durable "cancel this Stripe customer's subscription" obligation, written in the
+    SAME transaction as the account deletion that creates the duty (SOLUSDEV-313).
+
+    It holds ONLY Stripe identifiers — never a user id, email or token. It doubles as the
+    deleted-customer tombstone (a late webhook for `stripe_customer_id` is ignored), so it
+    is RETAINED after success (`completed_at`), never deleted. `stripe_customer_id` is
+    UNIQUE: one row per customer. A later subscription for the same customer re-arms the
+    existing row (reset `completed_at`/`attempts`, update the subscription id) instead of
+    inserting, which keeps the tombstone lookup a single-row read and makes a concurrent
+    double-enqueue a harmless unique violation rather than a duplicate duty."""
+
+    __tablename__ = "stripe_cancel_requests"
+
+    stripe_customer_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
