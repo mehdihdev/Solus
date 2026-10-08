@@ -77,7 +77,7 @@ from solus_api.services.connections import (
 from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_team
 from solus_api.services.stripe_cancel import (
-    _CancelGateway,
+    CancelGateway,
     enqueue_stripe_cancel,
     run_stripe_cancels_after_commit,
 )
@@ -283,13 +283,16 @@ class AccountDeletionService:
         secret_store: SecretStore,
         supabase_admin: AuthUserRemover,
         cache: IntegrationCache,
-        gateway: _CancelGateway | None,
+        gateway: CancelGateway | None,
     ) -> None:
         self._session = session
         self._secret_store = secret_store
         self._supabase_admin = supabase_admin
         self._cache = cache
         self._gateway = gateway
+        # Stripe customers enqueued by THIS deletion: the inline post-commit run is scoped to
+        # them so it never drains the global queue on the request path.
+        self._cancel_customers: tuple[str, ...] = ()
 
     async def delete_account(
         self,
@@ -426,9 +429,11 @@ class AccountDeletionService:
         subscription rows away. One request per Stripe customer; a customer-only request
         (no subscription id) is the tombstone for a checkout still in flight."""
         rows = await self._session.scalars(
-            select(Subscription).where(
-                Subscription.user_id == user.id, Subscription.stripe_customer_id.is_not(None)
-            )
+            select(Subscription)
+            .where(Subscription.user_id == user.id, Subscription.stripe_customer_id.is_not(None))
+            # Row lock: a concurrent webhook cannot commit a new subscription id between this
+            # read and the `delete(User)` cascade that removes the rows.
+            .with_for_update()
         )
         by_customer: dict[str, str | None] = {}
         for row in rows.all():
@@ -445,6 +450,7 @@ class AccountDeletionService:
             await enqueue_stripe_cancel(
                 self._session, customer_id=customer_id, subscription_id=subscription_id
             )
+        self._cancel_customers = tuple(by_customer)
 
     # -- after the commit (best-effort, never blocking)
     async def _after_commit(self, supabase_user_id: str) -> None:
@@ -453,7 +459,9 @@ class AccountDeletionService:
         await run_cad_purges_after_commit(self._session, self._cache.durable_store)
         # SOLUSDEV-313: cancel the Stripe subscription (bounded, never raises; the durable
         # row is retried by the worker / API start when Stripe is down or unconfigured).
-        await run_stripe_cancels_after_commit(self._session, self._gateway)
+        await run_stripe_cancels_after_commit(
+            self._session, self._gateway, customer_ids=self._cancel_customers
+        )
         # Best-effort remote revoke AFTER the local commit: kills the Supabase session /
         # auth user. A failure here is logged, not fatal — the tombstone already blocks
         # re-provision and local data is gone.
