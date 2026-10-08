@@ -3,7 +3,9 @@
 SECURITY CONTRACT: this layer TRUSTS ITS CALLER. It performs no staff authentication
 or authorization; it must only be called from staff-authorized code (the SOLUSDEV-314
 admin app). Every operation is scoped strictly to the target user's own live
-subscription (loaded by `target_user_id` with FOR UPDATE).
+subscription (loaded by `target_user_id` with FOR UPDATE). Stripe-backed operations
+additionally verify that the Stripe subscription's customer is the target's own
+`stripe_customer_id` before any write.
 
 Backing modes (decided per call):
   * Stripe-backed = `stripe_subscription_id` set and status != CANCELED. Stripe is the
@@ -14,39 +16,84 @@ Backing modes (decided per call):
 
 The service COMMITS its own local writes (and the data-collection event). Stripe only
 ever receives `audit_action_id` and `actor="staff:<uuid>"` — never the free-text
-`reason` (it is for the caller's audit log) and never PII. Stripe writes are keyed off
-`audit_action_id`, so retrying the same id is safe; a retry of a half-finished Stripe
-operation resumes it. Local operations are naturally idempotent (same target state ->
-`noop=True`, no duplicate event or credit).
+`reason` (it is for the caller's audit log) and never PII.
+
+IDEMPOTENCY CONTRACT FOR SOLUSDEV-314: `audit_action_id` is the Stripe idempotency
+token. 314 MUST mint a UNIQUE id per staff action and PERSIST it BEFORE calling this
+layer, then reuse the same id only to retry that same action. Stripe remembers an
+idempotency key for 24 hours only; after that a reused id is no longer deduplicated
+there. Retrying the same id with different parameters raises the gateway's
+`StripeIdempotencyConflictError`. Local operations ignore the id for deduplication
+(they are naturally idempotent: same target state -> `noop=True`, no duplicate event or
+credit).
+
+Comps on Stripe-backed subscriptions: `change_plan` REFUSES while a comp coupon is
+attached (a forever comp would make the new price free, and a later `remove_comp`
+would silently undo the plan change) — call `remove_comp` first. `remove_comp` needs
+both a `solus-comp-*` coupon and the previous-price marker; markers alone (left behind
+after a comp ended naturally) never re-price a customer.
+
+Every operation runs under `OPERATION_TIMEOUT_SECONDS`; on expiry the transaction is
+rolled back, the row lock released and the retryable `AdminOperationTimeoutError` is
+raised.
 
 Errors are `AdminOperationError` subclasses with a stable `code`; the gateway's own
 typed errors (`StripeOperationError`, `StripeIdempotencyConflictError`, ...) pass
 through unchanged.
 """
 
-import calendar
-import inspect
+import asyncio
 import logging
-import re
 import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.billing.entitlements import effective_limits, effective_plan
+from solus_api.billing.admin_projection import (
+    bare_snapshot,
+    comp_prev_price,
+    detached,
+    epoch_to_datetime,
+    has_comp_coupon,
+    is_stripe_backed,
+    local_outcome,
+    stripe_outcome,
+    view,
+)
+from solus_api.billing.admin_types import (
+    AdminOperationError,
+    AdminOperationTimeoutError,
+    AdminOpResult,
+    AdminStripeGateway,
+    AuditContext,
+    InvalidOperation,
+    NotCompedError,
+    Outcome,
+    SubscriptionView,
+    Target,
+    TargetNotFound,
+    UnsupportedForNonStripe,
+)
+from solus_api.billing.admin_validation import (
+    add_months,
+    check_bools,
+    check_comp_terms,
+    check_interval,
+    check_override,
+    check_plan,
+    check_proration,
+    same_expiry,
+    validate_audit,
+)
 from solus_api.billing.plan_grants import grant_plan_credits
-from solus_api.billing.plans import VALID_INTERVALS, plan_for_price_id, plan_price_id
+from solus_api.billing.plans import plan_price_id
 from solus_api.billing.stripe_gateway import (
     ADMIN_ACTION_METADATA_KEY,
     COMP_PLAN_METADATA_KEY,
     COMP_PREV_PRICE_METADATA_KEY,
-    MAX_COMP_MONTHS,
-    MIN_COMP_MONTHS,
-    CancelResult,
+    CancelMode,
     CompDuration,
     Proration,
     ScheduleResult,
@@ -55,7 +102,6 @@ from solus_api.billing.stripe_gateway import (
 )
 from solus_api.core.config import Settings
 from solus_api.models import (
-    PLAN_LIMITS,
     NotificationType,
     PlanType,
     Subscription,
@@ -67,295 +113,31 @@ from solus_api.models import (
 from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_user
 
+__all__ = [
+    "AdminBillingOperations",
+    "AdminOpResult",
+    "AdminOperationError",
+    "AdminOperationTimeoutError",
+    "AdminStripeGateway",
+    "InvalidOperation",
+    "NotCompedError",
+    "SubscriptionView",
+    "TargetNotFound",
+    "UnsupportedForNonStripe",
+]
+
 logger = logging.getLogger("solus.billing.admin_operations")
 
 EVENT_TYPE = "subscription.admin_changed"
-VALID_PRORATIONS = ("create_prorations", "none", "always_invoice")
-VALID_DURATIONS = ("once", "repeating", "forever")
-MAX_REASON_LEN = 2000
-# Limit keys enforcement reads (services/limits.py) — plus every key any plan defines.
-ENFORCED_LIMIT_KEYS = frozenset({"max_integrations", "max_projects", "max_teams", "byo_paid_tools"})
-KNOWN_LIMIT_KEYS = ENFORCED_LIMIT_KEYS | frozenset(k for p in PLAN_LIMITS.values() for k in p)
-# A same-plan comp whose expiry differs by less than this is a retry, not a change.
-COMP_RETRY_TOLERANCE = timedelta(hours=1)
-_AUDIT_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")  # mirrors the gateway's token rule
-_COMP_PLANS = frozenset(PlanType)
+# Worst case of one operation is ~6 sequential Stripe calls (retrieve, coupon, release,
+# price change, schedule find/create/modify); the per-call bound is the gateway's own
+# timeout, assumed here to be 20 s. The whole run (and so the FOR UPDATE lock) is capped.
+_ASSUMED_STRIPE_CALL_TIMEOUT_SECONDS = 20.0
+_WORST_CASE_SEQUENTIAL_CALLS = 6
+OPERATION_TIMEOUT_SECONDS = _ASSUMED_STRIPE_CALL_TIMEOUT_SECONDS * _WORST_CASE_SEQUENTIAL_CALLS
+_CLEARED_COMP_MARKERS = {COMP_PREV_PRICE_METADATA_KEY: "", COMP_PLAN_METADATA_KEY: ""}
 
 
-# --------------------------------------------------------------------- errors
-class AdminOperationError(Exception):
-    """Base error: a stable machine `code`, a human `message`, and `context`."""
-
-    code = "admin_operation_error"
-
-    def __init__(self, message: str, **context: Any) -> None:
-        super().__init__(message)
-        self.message = message
-        self.context: dict[str, Any] = context
-
-
-class TargetNotFound(AdminOperationError):  # noqa: N818 - name fixed by the 314 contract
-    code = "target_not_found"
-
-
-class InvalidOperation(AdminOperationError):  # noqa: N818 - name fixed by the 314 contract
-    code = "invalid_operation"
-
-
-class NotCompedError(AdminOperationError):
-    code = "not_comped"
-
-
-class UnsupportedForNonStripe(AdminOperationError):  # noqa: N818 - name fixed by the 314 contract
-    code = "unsupported_for_non_stripe"
-
-
-# -------------------------------------------------------------------- results
-@dataclass(frozen=True)
-class SubscriptionView:
-    """Frozen, JSON-friendly snapshot of one subscription (plain str/int/None values)."""
-
-    plan: str
-    effective_plan: str
-    status: str
-    effective_limits: dict[str, int | None]
-    limits_override: dict[str, int | None] | None
-    comp_plan: str | None
-    comp_expires_at: str | None
-    stripe_customer_id: str | None
-    stripe_subscription_id: str | None
-    cancel_at: str | None
-    expires_at: str | None
-    stripe_price_id: str | None = None
-    stripe_coupon_id: str | None = None
-    stripe_schedule_id: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
-class AdminOpResult:
-    """What 314 records in its audit log. `before`/`after` are Stripe-projected for
-    Stripe-backed operations; `noop` means nothing changed (and nothing was emitted)."""
-
-    operation: str
-    target_user_id: uuid.UUID
-    audit_action_id: str
-    before: SubscriptionView
-    after: SubscriptionView
-    stripe_refs: dict[str, str] = field(default_factory=dict)
-    converges_via_webhook: bool = False
-    noop: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "operation": self.operation,
-            "target_user_id": str(self.target_user_id),
-            "audit_action_id": self.audit_action_id,
-            "before": self.before.to_dict(),
-            "after": self.after.to_dict(),
-            "stripe_refs": dict(self.stripe_refs),
-            "converges_via_webhook": self.converges_via_webhook,
-            "noop": self.noop,
-        }
-
-
-class AdminStripeGateway(Protocol):
-    """The slice of `StripeGateway` this layer uses (satisfied by the real gateway and
-    by `tests/fixtures/stripe_fake.FakeStripeGateway`)."""
-
-    async def retrieve_subscription(self, sub_id: str) -> SubscriptionSnapshot: ...
-
-    async def change_subscription_price(
-        self,
-        sub_id: str,
-        price_id: str,
-        *,
-        proration: Proration,
-        audit_action_id: str,
-        actor: str,
-        coupon_id: str | None = None,
-        extra_metadata: Mapping[str, str] | None = None,
-    ) -> SubscriptionSnapshot: ...
-
-    async def ensure_comp_coupon(
-        self, duration: CompDuration, months: int | None = None
-    ) -> str: ...
-
-    async def remove_comp_coupon(
-        self, sub_id: str, audit_action_id: str, actor: str
-    ) -> SubscriptionSnapshot: ...
-
-    async def cancel_subscription(
-        self,
-        sub_id: str,
-        *,
-        mode: Any,
-        invoice_now: bool,
-        prorate: bool,
-        audit_action_id: str,
-        actor: str | None,
-    ) -> CancelResult: ...
-
-    async def create_revert_schedule(
-        self,
-        sub_id: str,
-        revert_price_id: str,
-        *,
-        comp_months: int,
-        audit_action_id: str,
-        actor: str,
-    ) -> ScheduleResult: ...
-
-    async def release_subscription_schedule(
-        self, sub_or_schedule_id: str, audit_action_id: str, actor: str
-    ) -> ScheduleResult: ...
-
-
-# ------------------------------------------------------------- pure helpers
-def add_months(moment: datetime, months: int) -> datetime:
-    """Calendar-correct month arithmetic (Jan 31 + 1 month = Feb 28/29)."""
-    index = moment.year * 12 + (moment.month - 1) + months
-    year, month = divmod(index, 12)
-    day = min(moment.day, calendar.monthrange(year, month + 1)[1])
-    return moment.replace(year=year, month=month + 1, day=day)
-
-
-def _iso(moment: datetime | None) -> str | None:
-    return moment.isoformat() if moment is not None else None
-
-
-def _detached(sub: Subscription, **changes: Any) -> Subscription:
-    """A transient copy of `sub` with `changes` applied; never added to a session."""
-    fields: dict[str, Any] = {
-        "user_id": sub.user_id,
-        "plan": sub.plan,
-        "status": sub.status,
-        "limits": dict(sub.limits or {}),
-        "expires_at": sub.expires_at,
-        "cancel_at": sub.cancel_at,
-        "stripe_customer_id": sub.stripe_customer_id,
-        "stripe_subscription_id": sub.stripe_subscription_id,
-        "limits_override": sub.limits_override,
-        "comp_plan": sub.comp_plan,
-        "comp_expires_at": sub.comp_expires_at,
-    }
-    return Subscription(**{**fields, **changes})
-
-
-def _view(
-    sub: Subscription,
-    now: datetime,
-    snap: SubscriptionSnapshot | None = None,
-    schedule_id: str | None = None,
-) -> SubscriptionView:
-    override = dict(sub.limits_override) if sub.limits_override is not None else None
-    return SubscriptionView(
-        plan=sub.plan.value,
-        effective_plan=effective_plan(sub, now).value,
-        status=sub.status.value,
-        effective_limits=effective_limits(sub, now),
-        limits_override=override,
-        comp_plan=sub.comp_plan.value if sub.comp_plan else None,
-        comp_expires_at=_iso(sub.comp_expires_at),
-        stripe_customer_id=sub.stripe_customer_id,
-        stripe_subscription_id=sub.stripe_subscription_id,
-        cancel_at=_iso(sub.cancel_at),
-        expires_at=_iso(sub.expires_at),
-        stripe_price_id=snap.price_id if snap else None,
-        stripe_coupon_id=snap.coupon_id if snap else None,
-        stripe_schedule_id=schedule_id or (snap.schedule_id if snap else None),
-    )
-
-
-def _is_stripe_backed(sub: Subscription) -> bool:
-    return bool(sub.stripe_subscription_id) and sub.status is not SubscriptionStatus.CANCELED
-
-
-def _ts(epoch: int | None) -> datetime | None:
-    return datetime.fromtimestamp(epoch, tz=UTC) if epoch else None
-
-
-def _check_proration(proration: object) -> Proration:
-    if proration not in VALID_PRORATIONS:
-        raise InvalidOperation("proration must be one of " + ", ".join(VALID_PRORATIONS))
-    return proration  # type: ignore[return-value]
-
-
-def _check_interval(interval: object, *, required: bool) -> str | None:
-    if interval is None and not required:
-        return None
-    if interval not in VALID_INTERVALS:
-        raise InvalidOperation("interval must be 'month' or 'year' for a Stripe subscription")
-    return str(interval)
-
-
-def _check_plan(plan: object) -> PlanType:
-    if not isinstance(plan, PlanType):
-        raise InvalidOperation("plan must be a PlanType")
-    return plan
-
-
-def _check_comp_terms(duration: object, months: object) -> tuple[CompDuration, int | None]:
-    if duration not in VALID_DURATIONS:
-        raise InvalidOperation("duration must be 'once', 'repeating' or 'forever'")
-    if duration == "repeating":
-        if type(months) is not int or not MIN_COMP_MONTHS <= months <= MAX_COMP_MONTHS:
-            raise InvalidOperation(
-                f"months must be an int in {MIN_COMP_MONTHS}..{MAX_COMP_MONTHS} when repeating"
-            )
-        return "repeating", months
-    if months is not None:
-        raise InvalidOperation("months is only valid with duration='repeating'")
-    return duration, None  # type: ignore[return-value]
-
-
-def _check_override(limits: object) -> dict[str, int | None] | None:
-    if limits is None:
-        return None
-    if not isinstance(limits, Mapping) or not limits:
-        raise InvalidOperation("limits must be a non-empty mapping (use None to clear)")
-    clean: dict[str, int | None] = {}
-    for key, value in limits.items():
-        if key not in KNOWN_LIMIT_KEYS:
-            raise InvalidOperation(f"unknown limit key {key!r}", known=sorted(KNOWN_LIMIT_KEYS))
-        if value is not None and (type(value) is not int or value < 0):
-            raise InvalidOperation(f"limit {key!r} must be an int >= 0 or None (unlimited)")
-        clean[key] = value
-    return clean
-
-
-@dataclass(frozen=True)
-class _Audit:
-    actor_staff_user_id: uuid.UUID
-    audit_action_id: str
-    reason: str
-
-    @classmethod
-    def validated(cls, actor: object, audit_action_id: object, reason: object) -> "_Audit":
-        if not isinstance(actor, uuid.UUID):
-            raise InvalidOperation("actor_staff_user_id must be a UUID")
-        if not isinstance(audit_action_id, str) or not _AUDIT_ID_RE.fullmatch(audit_action_id):
-            raise InvalidOperation("audit_action_id must match [A-Za-z0-9_.:-]{1,64}")
-        if not isinstance(reason, str) or not reason.strip() or len(reason) > MAX_REASON_LEN:
-            raise InvalidOperation(f"reason must be 1..{MAX_REASON_LEN} characters")
-        return cls(actor, audit_action_id, reason)
-
-    @property
-    def actor(self) -> str:
-        return f"staff:{self.actor_staff_user_id}"
-
-
-@dataclass(frozen=True)
-class _Target:
-    user: User
-    sub: Subscription
-    audit: _Audit
-    before: SubscriptionView
-
-
-# --------------------------------------------------------------------- service
 class AdminBillingOperations:
     """Staff billing operations over one `AsyncSession` and one Stripe gateway.
 
@@ -386,12 +168,13 @@ class AdminBillingOperations:
         interval: str | None = None,
         proration: Proration = "create_prorations",
     ) -> AdminOpResult:
-        """Set the target's plan. Stripe-backed: swap the price (interval required);
-        local: set plan + default limits and clear any comp. No credit grant."""
-        audit = _Audit.validated(actor_staff_user_id, audit_action_id, reason)
-        _check_plan(plan)
-        _check_proration(proration)
-        _check_interval(interval, required=False)
+        """Set the target's plan. Stripe-backed: swap the price (interval required;
+        refused while comped); local: set plan + default limits and clear any comp.
+        No credit grant."""
+        audit = validate_audit(actor_staff_user_id, audit_action_id, reason)
+        check_plan(plan)
+        check_proration(proration)
+        check_interval(interval, required=False)
         return await self._guarded(
             "change_plan",
             target_user_id,
@@ -415,11 +198,11 @@ class AdminBillingOperations:
         """Complimentary upgrade. Stripe-backed: 100%-off coupon + revert schedule (the
         comp end reverts to the previous price). Local: comp_plan/comp_expires_at, then
         the plan's one-time starting credits (idempotent per user+plan)."""
-        audit = _Audit.validated(actor_staff_user_id, audit_action_id, reason)
-        _check_plan(plan)
-        _check_proration(proration)
-        _check_interval(interval, required=False)
-        terms = _check_comp_terms(duration, months)
+        audit = validate_audit(actor_staff_user_id, audit_action_id, reason)
+        check_plan(plan)
+        check_proration(proration)
+        check_interval(interval, required=False)
+        terms = check_comp_terms(duration, months)
         return await self._guarded(
             "comp_upgrade",
             target_user_id,
@@ -438,8 +221,8 @@ class AdminBillingOperations:
     ) -> AdminOpResult:
         """End a comp now: Stripe-backed restores the previous price and removes the
         coupon; local clears the comp fields. `NotCompedError` if there is no comp."""
-        audit = _Audit.validated(actor_staff_user_id, audit_action_id, reason)
-        _check_proration(proration)
+        audit = validate_audit(actor_staff_user_id, audit_action_id, reason)
+        check_proration(proration)
         return await self._guarded(
             "remove_comp", target_user_id, audit, lambda t: self._remove_comp(t, proration)
         )
@@ -455,8 +238,8 @@ class AdminBillingOperations:
     ) -> AdminOpResult:
         """Set (or, with `limits=None`, clear) the per-key limit override. Local write
         only; Stripe is never involved and `sub.limits` is never touched."""
-        audit = _Audit.validated(actor_staff_user_id, audit_action_id, reason)
-        clean = _check_override(limits)
+        audit = validate_audit(actor_staff_user_id, audit_action_id, reason)
+        clean = check_override(limits)
         return await self._guarded(
             "set_limits_override", target_user_id, audit, lambda t: self._set_override(t, clean)
         )
@@ -473,9 +256,8 @@ class AdminBillingOperations:
         prorate: bool = False,
     ) -> AdminOpResult:
         """Cancel now (`immediate=True`) or at period end (Stripe-backed only)."""
-        audit = _Audit.validated(actor_staff_user_id, audit_action_id, reason)
-        if not all(isinstance(v, bool) for v in (immediate, invoice_now, prorate)):
-            raise InvalidOperation("immediate, invoice_now and prorate must be bool")
+        audit = validate_audit(actor_staff_user_id, audit_action_id, reason)
+        check_bools(immediate=immediate, invoice_now=invoice_now, prorate=prorate)
         return await self._guarded(
             "cancel_subscription",
             target_user_id,
@@ -488,21 +270,20 @@ class AdminBillingOperations:
         self,
         operation: str,
         target_user_id: uuid.UUID,
-        audit: _Audit,
-        run: Callable[[_Target], Any],
+        audit: AuditContext,
+        run: Callable[[Target], Awaitable[Outcome]],
     ) -> AdminOpResult:
         """Load + lock the target, run the operation, and always release the lock."""
         try:
             target = await self._load(target_user_id, audit)
-            produced = run(target)
-            outcome: _Outcome = await produced if inspect.isawaitable(produced) else produced
+            outcome = await self._run_bounded(operation, target, run)
             result = AdminOpResult(
                 operation=operation,
                 target_user_id=target_user_id,
                 audit_action_id=audit.audit_action_id,
                 before=target.before,
                 after=outcome.after,
-                stripe_refs=outcome.refs,
+                stripe_refs=dict(outcome.refs),
                 converges_via_webhook=outcome.converges,
                 noop=outcome.noop,
             )
@@ -514,8 +295,7 @@ class AdminBillingOperations:
         except BaseException:
             await self._session.rollback()
             raise
-        if outcome.after_commit is not None:
-            await outcome.after_commit()
+        await self._run_after_commit(outcome, operation, target_user_id, audit)
         logger.info(
             "admin op=%s target=%s audit=%s noop=%s",
             operation,
@@ -525,7 +305,50 @@ class AdminBillingOperations:
         )
         return result
 
-    async def _load(self, target_user_id: uuid.UUID, audit: _Audit) -> _Target:
+    async def _run_bounded(
+        self,
+        operation: str,
+        target: Target,
+        run: Callable[[Target], Awaitable[Outcome]],
+    ) -> Outcome:
+        """Run under the operation deadline so no hung call can pin the row lock."""
+        try:
+            async with asyncio.timeout(OPERATION_TIMEOUT_SECONDS) as scope:
+                return await run(target)
+        except TimeoutError as exc:
+            if not scope.expired():
+                raise  # a timeout raised by something else, not our deadline
+            raise AdminOperationTimeoutError(
+                "the operation timed out and was rolled back; retry with the same audit id",
+                operation=operation,
+                target_user_id=str(target.sub.user_id),
+                audit_action_id=target.audit.audit_action_id,
+            ) from exc
+
+    async def _run_after_commit(
+        self,
+        outcome: Outcome,
+        operation: str,
+        target_user_id: uuid.UUID,
+        audit: AuditContext,
+    ) -> None:
+        """Post-commit work (credit grant). The change is already durable, so a failure
+        here is logged with context and NOT raised; a retry of the same action is a
+        noop that re-runs the (idempotent) grant."""
+        if outcome.after_commit is None:
+            return
+        try:
+            await outcome.after_commit()
+        except Exception:
+            await self._session.rollback()
+            logger.exception(
+                "admin op=%s credit grant failed after commit target=%s audit=%s",
+                operation,
+                target_user_id,
+                audit.audit_action_id,
+            )
+
+    async def _load(self, target_user_id: uuid.UUID, audit: AuditContext) -> Target:
         sub = await self._session.scalar(
             select(Subscription)
             .where(Subscription.user_id == target_user_id, Subscription.deleted_at.is_(None))
@@ -536,9 +359,9 @@ class AdminBillingOperations:
             raise TargetNotFound(
                 "no live subscription for the target user", target_user_id=str(target_user_id)
             )
-        return _Target(user, sub, audit, _view(sub, self._now()))
+        return Target(user, sub, audit, view(sub, self._now()))
 
-    def _emit(self, target: _Target, result: AdminOpResult) -> None:
+    def _emit(self, target: Target, result: AdminOpResult) -> None:
         emit_event(
             self._session,
             user=target.user,
@@ -552,9 +375,13 @@ class AdminBillingOperations:
         )
 
     def _local_outcome(
-        self, sub: Subscription, *, noop: bool, after_commit: Callable[[], Any] | None = None
-    ) -> "_Outcome":
-        return _Outcome(_view(sub, self._now()), noop=noop, after_commit=after_commit)
+        self,
+        sub: Subscription,
+        *,
+        noop: bool,
+        after_commit: Callable[[], Awaitable[None]] | None = None,
+    ) -> Outcome:
+        return local_outcome(sub, self._now(), noop=noop, after_commit=after_commit)
 
     def _stripe_outcome(
         self,
@@ -567,30 +394,37 @@ class AdminBillingOperations:
         noop: bool = False,
         schedule_id: str | None = None,
         extra_refs: Mapping[str, str] | None = None,
-    ) -> "_Outcome":
-        """Project the post-write state from the Stripe snapshot (no local write)."""
-        projected_plan = (
-            plan
-            or plan_for_price_id(self._settings.stripe_plan_prices, snap.price_id or "")
-            or sub.plan
-        )
-        shadow = _detached(
+    ) -> Outcome:
+        return stripe_outcome(
             sub,
-            plan=projected_plan,
-            limits=default_limits(projected_plan),
-            status=status or sub.status,
-            cancel_at=cancel_at if cancel_at is not None else sub.cancel_at,
-        )
-        refs = {**snap.stripe_refs(), **(extra_refs or {})}
-        return _Outcome(
-            _view(shadow, self._now(), snap, schedule_id),
-            refs=refs,
-            converges=True,
+            snap,
+            self._now(),
+            self._settings.stripe_plan_prices,
+            plan=plan,
+            status=status,
+            cancel_at=cancel_at,
             noop=noop,
+            schedule_id=schedule_id,
+            extra_refs=extra_refs,
         )
 
+    async def _retrieve_owned(self, t: Target) -> SubscriptionSnapshot:
+        """Retrieve the target's Stripe subscription and prove it belongs to the
+        target's own Stripe customer, BEFORE anything is written."""
+        snap = await self._gateway.retrieve_subscription(str(t.sub.stripe_subscription_id))
+        self._verify_customer(t, snap)
+        return snap
+
+    @staticmethod
+    def _verify_customer(t: Target, snap: SubscriptionSnapshot) -> None:
+        if snap.customer_id != t.sub.stripe_customer_id:
+            raise InvalidOperation(
+                "the Stripe subscription does not belong to the target's customer",
+                target_user_id=str(t.sub.user_id),
+            )
+
     async def _release_schedule(
-        self, target: _Target, snap: SubscriptionSnapshot | None, replay: bool
+        self, target: Target, snap: SubscriptionSnapshot | None, replay: bool
     ) -> bool:
         """Release an attached schedule (price/cancel changes must not fight it).
         Skipped on a replay of this same audit action: the schedule then IS our own
@@ -603,32 +437,43 @@ class AdminBillingOperations:
         return True
 
     @staticmethod
-    def _is_replay(snap: SubscriptionSnapshot, audit: _Audit) -> bool:
+    def _is_replay(snap: SubscriptionSnapshot, audit: AuditContext) -> bool:
         return snap.metadata.get(ADMIN_ACTION_METADATA_KEY) == audit.audit_action_id
 
     # ---------------------------------------------------------- change_plan
     async def _change_plan(
-        self, t: _Target, plan: PlanType, interval: str | None, proration: Proration
-    ) -> "_Outcome":
-        if not _is_stripe_backed(t.sub):
+        self, t: Target, plan: PlanType, interval: str | None, proration: Proration
+    ) -> Outcome:
+        if not is_stripe_backed(t.sub):
             return self._local_change_plan(t.sub, plan)
         price = self._stripe_price(plan, interval)
         sid = str(t.sub.stripe_subscription_id)
-        snap = await self._gateway.retrieve_subscription(sid)
+        snap = await self._retrieve_owned(t)
+        if has_comp_coupon(snap):
+            raise InvalidOperation(
+                "the subscription is comped; remove the comp first",
+                target_user_id=str(t.sub.user_id),
+            )
         replay = self._is_replay(snap, t.audit)
         released = await self._release_schedule(t, snap, replay)
         if snap.price_id == price and not replay:
-            return self._stripe_outcome(t.sub, snap, plan=plan, noop=not released, extra_refs={})
+            return self._stripe_outcome(t.sub, snap, plan=plan, noop=not released)
+        stale = bool(
+            snap.metadata.get(COMP_PREV_PRICE_METADATA_KEY)
+            or snap.metadata.get(COMP_PLAN_METADATA_KEY)
+        )
         new = await self._gateway.change_subscription_price(
             sid,
             price,
             proration=proration,
             audit_action_id=t.audit.audit_action_id,
             actor=t.audit.actor,
+            # comp markers left by a naturally ended comp must not outlive this change
+            extra_metadata=_CLEARED_COMP_MARKERS if stale else None,
         )
         return self._stripe_outcome(t.sub, new, plan=plan)
 
-    def _local_change_plan(self, sub: Subscription, plan: PlanType) -> "_Outcome":
+    def _local_change_plan(self, sub: Subscription, plan: PlanType) -> Outcome:
         unchanged = (
             sub.plan is plan
             and dict(sub.limits or {}) == default_limits(plan)
@@ -644,7 +489,7 @@ class AdminBillingOperations:
         return self._local_outcome(sub, noop=False)
 
     def _stripe_price(self, plan: PlanType, interval: str | None) -> str:
-        checked = _check_interval(interval, required=True)
+        checked = check_interval(interval, required=True)
         price = plan_price_id(self._settings, plan, str(checked))
         if price is None:
             raise InvalidOperation(
@@ -657,20 +502,21 @@ class AdminBillingOperations:
     # ------------------------------------------------------------ comp_upgrade
     async def _comp_upgrade(
         self,
-        t: _Target,
+        t: Target,
         plan: PlanType,
         terms: tuple[CompDuration, int | None],
         interval: str | None,
         proration: Proration,
-    ) -> "_Outcome":
+    ) -> Outcome:
         duration, months = terms
-        if not _is_stripe_backed(t.sub):
+        if not is_stripe_backed(t.sub):
             return self._local_comp(t, plan, duration, months)
         price = self._stripe_price(plan, interval)
         sid = str(t.sub.stripe_subscription_id)
-        snap = await self._gateway.retrieve_subscription(sid)
+        snap = await self._retrieve_owned(t)
         replay = self._is_replay(snap, t.audit)
-        prev = snap.metadata.get(COMP_PREV_PRICE_METADATA_KEY) or snap.price_id
+        # A re-comp keeps the ORIGINAL previous price; stale markers are not trusted.
+        prev = comp_prev_price(snap) or snap.price_id
         if not prev:
             raise InvalidOperation("subscription has no current price to revert to")
         coupon = await self._gateway.ensure_comp_coupon(duration, months)
@@ -702,20 +548,15 @@ class AdminBillingOperations:
         )
 
     def _local_comp(
-        self, t: _Target, plan: PlanType, duration: CompDuration, months: int | None
-    ) -> "_Outcome":
+        self, t: Target, plan: PlanType, duration: CompDuration, months: int | None
+    ) -> Outcome:
         sub = t.sub
-        now = self._now()
         expires = (
             None
             if duration == "forever"
-            else add_months(now, 1 if duration == "once" else int(months or 1))
+            else add_months(self._now(), 1 if duration == "once" else int(months or 1))
         )
-        already = (
-            sub.comp_plan is plan
-            and _same_expiry(sub.comp_expires_at, expires)
-            and sub.comp_plan is not None
-        )
+        already = sub.comp_plan is plan and same_expiry(sub.comp_expires_at, expires)
         grant = self._grant_after_commit(sub, plan)
         if already:
             return self._local_outcome(sub, noop=True, after_commit=grant)
@@ -723,11 +564,13 @@ class AdminBillingOperations:
         sub.comp_expires_at = expires
         return self._local_outcome(sub, noop=False, after_commit=grant)
 
-    def _grant_after_commit(self, sub: Subscription, plan: PlanType) -> Callable[[], Any]:
+    def _grant_after_commit(
+        self, sub: Subscription, plan: PlanType
+    ) -> Callable[[], Awaitable[None]]:
         """The comp plan's starting credits. `grant_plan_credits` commits mid-flow, so
         this runs only after our own write is durable; it keys on `local.plan`, hence
         the transient copy carrying the comp plan. Idempotent per (user, plan)."""
-        local = _detached(sub, plan=plan)
+        local = detached(sub, plan=plan)
         grants = self._settings.plan_credit_grants
 
         async def run() -> None:
@@ -737,18 +580,18 @@ class AdminBillingOperations:
         return run
 
     # ------------------------------------------------------------- remove_comp
-    async def _remove_comp(self, t: _Target, proration: Proration) -> "_Outcome":
+    async def _remove_comp(self, t: Target, proration: Proration) -> Outcome:
         sub = t.sub
-        if not _is_stripe_backed(sub):
+        if not is_stripe_backed(sub):
             if sub.comp_plan is None:
                 raise NotCompedError("target has no comp", target_user_id=str(sub.user_id))
             sub.comp_plan = None
             sub.comp_expires_at = None
             return self._local_outcome(sub, noop=False)
         sid = str(sub.stripe_subscription_id)
-        snap = await self._gateway.retrieve_subscription(sid)
-        prev = snap.metadata.get(COMP_PREV_PRICE_METADATA_KEY)
-        if not prev:
+        snap = await self._retrieve_owned(t)
+        prev = comp_prev_price(snap)  # needs the comp coupon AND the marker
+        if prev is None:
             if self._is_replay(snap, t.audit):  # a retry that finds the work done
                 return await self._finish_remove(t, snap, noop_if_clean=True)
             raise NotCompedError(
@@ -761,14 +604,14 @@ class AdminBillingOperations:
             proration=proration,
             audit_action_id=t.audit.audit_action_id,
             actor=t.audit.actor,
-            extra_metadata={COMP_PREV_PRICE_METADATA_KEY: "", COMP_PLAN_METADATA_KEY: ""},
+            extra_metadata=_CLEARED_COMP_MARKERS,
         )
         return await self._finish_remove(t, restored, noop_if_clean=False)
 
     async def _finish_remove(
-        self, t: _Target, snap: SubscriptionSnapshot, *, noop_if_clean: bool
-    ) -> "_Outcome":
-        had_coupon = bool(snap.coupon_id)
+        self, t: Target, snap: SubscriptionSnapshot, *, noop_if_clean: bool
+    ) -> Outcome:
+        had_coupon = has_comp_coupon(snap)
         if had_coupon:
             snap = await self._gateway.remove_comp_coupon(
                 str(t.sub.stripe_subscription_id), t.audit.audit_action_id, t.audit.actor
@@ -776,7 +619,7 @@ class AdminBillingOperations:
         return self._stripe_outcome(t.sub, snap, noop=noop_if_clean and not had_coupon)
 
     # ---------------------------------------------------------------- override
-    def _set_override(self, t: _Target, clean: dict[str, int | None] | None) -> "_Outcome":
+    async def _set_override(self, t: Target, clean: dict[str, int | None] | None) -> Outcome:
         sub = t.sub
         if (sub.limits_override or None) == clean:
             return self._local_outcome(sub, noop=True)
@@ -785,9 +628,9 @@ class AdminBillingOperations:
 
     # ------------------------------------------------------------------ cancel
     async def _cancel(
-        self, t: _Target, immediate: bool, invoice_now: bool, prorate: bool
-    ) -> "_Outcome":
-        if _is_stripe_backed(t.sub):
+        self, t: Target, immediate: bool, invoice_now: bool, prorate: bool
+    ) -> Outcome:
+        if is_stripe_backed(t.sub):
             return await self._stripe_cancel(t, immediate, invoice_now, prorate)
         if not immediate:
             raise UnsupportedForNonStripe(
@@ -817,62 +660,29 @@ class AdminBillingOperations:
         return self._local_outcome(sub, noop=False)
 
     async def _stripe_cancel(
-        self, t: _Target, immediate: bool, invoice_now: bool, prorate: bool
-    ) -> "_Outcome":
+        self, t: Target, immediate: bool, invoice_now: bool, prorate: bool
+    ) -> Outcome:
         sid = str(t.sub.stripe_subscription_id)
         try:
-            snap: SubscriptionSnapshot | None = await self._gateway.retrieve_subscription(sid)
+            snap: SubscriptionSnapshot | None = await self._retrieve_owned(t)
         except StripeResourceMissingError:
             snap = None  # already gone: cancel_subscription treats it as success
         replay = snap is not None and self._is_replay(snap, t.audit)
         await self._release_schedule(t, snap, replay)
+        mode: CancelMode = "immediate" if immediate else "period_end"
         res = await self._gateway.cancel_subscription(
             sid,
-            mode="immediate" if immediate else "period_end",
+            mode=mode,
             invoice_now=invoice_now,
             prorate=prorate,
             audit_action_id=t.audit.audit_action_id,
             actor=t.audit.actor,
         )
-        final = res.subscription or snap or _bare_snapshot(sid)
+        final = res.subscription or snap or bare_snapshot(sid)
         status = SubscriptionStatus.CANCELED if immediate or final.status == "canceled" else None
-        cancel_at = None if status else _ts(final.cancel_at or final.current_period_end)
-        outcome = self._stripe_outcome(
+        cancel_at = (
+            None if status else epoch_to_datetime(final.cancel_at or final.current_period_end)
+        )
+        return self._stripe_outcome(
             t.sub, final, status=status, cancel_at=cancel_at, noop=res.already_canceled
         )
-        return outcome
-
-
-def _same_expiry(existing: datetime | None, requested: datetime | None) -> bool:
-    if existing is None or requested is None:
-        return existing is None and requested is None
-    if existing.tzinfo is None:
-        existing = existing.replace(tzinfo=UTC)
-    return abs(requested - existing) <= COMP_RETRY_TOLERANCE
-
-
-def _bare_snapshot(sub_id: str) -> SubscriptionSnapshot:
-    return SubscriptionSnapshot(
-        subscription_id=sub_id,
-        status="canceled",
-        price_id=None,
-        item_id=None,
-        item_count=0,
-        quantity=1,
-        customer_id=None,
-        cancel_at=None,
-        cancel_at_period_end=False,
-        current_period_end=None,
-        coupon_id=None,
-        schedule_id=None,
-        latest_invoice_id=None,
-    )
-
-
-@dataclass
-class _Outcome:
-    after: SubscriptionView
-    refs: dict[str, str] = field(default_factory=dict)
-    converges: bool = False
-    noop: bool = False
-    after_commit: Callable[[], Any] | None = None

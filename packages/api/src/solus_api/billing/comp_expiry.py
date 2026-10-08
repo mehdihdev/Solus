@@ -19,19 +19,13 @@ from solus_api.services.notifications import notify_user
 logger = logging.getLogger("solus.billing.comp_expiry")
 
 DEFAULT_SWEEP_BATCH = 100
+# Bounds one run so a flood of expiries cannot monopolise the worker; the next cron
+# tick resumes where this one stopped.
+MAX_SWEEP_BATCHES = 50
 
 
-async def sweep_expired_comps(
-    session: AsyncSession, now: datetime | None = None, limit: int = DEFAULT_SWEEP_BATCH
-) -> list[uuid.UUID]:
-    """Clear up to `limit` expired comps (oldest expiry first) and notify each user.
-
-    Idempotent: a cleared row no longer matches. `FOR UPDATE SKIP LOCKED` lets
-    concurrent sweeps and admin operations coexist without blocking or double
-    notifying. Commits its own work; returns the affected user ids."""
-    if limit < 1:
-        raise ValueError("limit must be >= 1")
-    moment = now or utcnow()
+async def _sweep_batch(session: AsyncSession, moment: datetime, limit: int) -> list[uuid.UUID]:
+    """Clear and commit ONE batch (oldest expiry first); returns the affected user ids."""
     rows = (
         await session.scalars(
             select(Subscription)
@@ -65,6 +59,30 @@ async def sweep_expired_comps(
         )
         swept.append(sub.user_id)
     await session.commit()
+    return swept
+
+
+async def sweep_expired_comps(
+    session: AsyncSession,
+    now: datetime | None = None,
+    limit: int = DEFAULT_SWEEP_BATCH,
+    max_batches: int = MAX_SWEEP_BATCHES,
+) -> list[uuid.UUID]:
+    """Clear every expired comp (oldest expiry first, `limit` rows per batch, at most
+    `max_batches` batches) and notify each user.
+
+    Each batch is committed before the next. Idempotent: a cleared row no longer
+    matches. `FOR UPDATE SKIP LOCKED` lets concurrent sweeps and admin operations
+    coexist without blocking or double notifying. Returns the affected user ids."""
+    if limit < 1 or max_batches < 1:
+        raise ValueError("limit and max_batches must be >= 1")
+    moment = now or utcnow()
+    swept: list[uuid.UUID] = []
+    for _ in range(max_batches):
+        batch = await _sweep_batch(session, moment, limit)
+        swept.extend(batch)
+        if len(batch) < limit:
+            break
     if swept:
         logger.info("comp expiry swept count=%d", len(swept))
     return swept

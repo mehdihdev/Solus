@@ -3,15 +3,19 @@
 Stripe is the source of truth: the local row must stay untouched (the webhook
 converges it) and `after` is projected from the Stripe snapshot."""
 
+import asyncio
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from fixtures.stripe_fake import FakeStripeGateway
+from solus_api.billing import admin_operations
 from solus_api.billing.admin_operations import (
     AdminBillingOperations,
+    AdminOperationTimeoutError,
     InvalidOperation,
     NotCompedError,
 )
@@ -653,3 +657,231 @@ async def test_stripe_event_and_json_result(
     assert "goodwill" not in json.dumps(ev.payload) and "@" not in json.dumps(ev.payload)
     data = json.loads(json.dumps(res.to_dict()))
     assert data["after"]["stripe_price_id"] == PRO_P and data["converges_via_webhook"] is True
+
+
+# ------------------------------------------------- M-1: customer ownership check
+OTHER_CUSTOMER = "cus_someone_else"
+_CUSTOMER_OPS: list[tuple[str, dict[str, Any]]] = [
+    ("change_plan", {"plan": PlanType.PRO, "interval": "month"}),
+    ("comp_upgrade", {"plan": PlanType.PRO, "duration": "forever", "interval": "month"}),
+    ("remove_comp", {}),
+    ("cancel_subscription", {"immediate": True}),
+]
+_WRITES = (
+    "change_subscription_price",
+    "ensure_comp_coupon",
+    "remove_comp_coupon",
+    "cancel_subscription",
+    "create_revert_schedule",
+    "release_subscription_schedule",
+)
+
+
+@pytest.mark.parametrize(("op", "kwargs"), _CUSTOMER_OPS)
+async def test_every_stripe_op_refuses_a_subscription_of_another_customer(
+    maker: Maker, cfg: Settings, op: str, kwargs: dict[str, Any]
+) -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription(
+        SUB,
+        price_id=BASIC_P,
+        customer_id=OTHER_CUSTOMER,
+        coupon_id="solus-comp-forever",
+        schedule_id="sub_sched_9",
+        metadata={COMP_PREV_PRICE_METADATA_KEY: BASIC_P},
+    )
+    uid = await _user(maker, consent=True)
+    before_row = await _row(maker, uid)
+    with pytest.raises(InvalidOperation) as exc:
+        await _run(maker, cfg, fake, op, uid, **kwargs, **_audit())
+    assert exc.value.code == "invalid_operation"
+    leaked = repr(exc.value.context) + exc.value.message
+    assert OTHER_CUSTOMER not in leaked and "cus_fake" not in leaked
+    assert [c for c in fake.calls if c.method in _WRITES] == []
+    assert await _row(maker, uid) == before_row
+    async with maker() as s:
+        assert await s.scalar(select(func.count()).select_from(DataEvent)) == 0
+
+
+# --------------------------------------------- M-2: comp state vs plan changes
+async def test_change_plan_refuses_while_comped(
+    maker: Maker, cfg: Settings, fake: FakeStripeGateway
+) -> None:
+    uid = await _user(maker)
+    await _run(
+        maker,
+        cfg,
+        fake,
+        "comp_upgrade",
+        uid,
+        plan=PlanType.PRO,
+        duration="forever",
+        interval="month",
+        **_audit(1),
+    )
+    calls_before = len(fake.calls_to("change_subscription_price"))
+    with pytest.raises(InvalidOperation, match="remove the comp first"):
+        await _run(
+            maker, cfg, fake, "change_plan", uid, plan=PlanType.PRO, interval="year", **_audit(2)
+        )
+    assert len(fake.calls_to("change_subscription_price")) == calls_before
+    assert fake.calls_to("release_subscription_schedule") == []
+
+
+async def test_change_plan_after_natural_comp_end_clears_stale_metadata(
+    maker: Maker, cfg: Settings
+) -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription(  # comp ended naturally: no coupon, markers left behind
+        SUB,
+        price_id=BASIC_P,
+        metadata={COMP_PREV_PRICE_METADATA_KEY: "price_stale", COMP_PLAN_METADATA_KEY: "pro"},
+    )
+    uid = await _user(maker)
+    await _run(
+        maker, cfg, fake, "change_plan", uid, plan=PlanType.PRO, interval="month", **_audit()
+    )
+    (call,) = fake.calls_to("change_subscription_price")
+    assert call.kwargs["extra_metadata"] == {
+        COMP_PREV_PRICE_METADATA_KEY: "",
+        COMP_PLAN_METADATA_KEY: "",
+    }
+    assert not fake.subscriptions[SUB].metadata[COMP_PREV_PRICE_METADATA_KEY]
+
+
+async def test_change_plan_without_markers_sends_no_metadata(
+    maker: Maker, cfg: Settings, fake: FakeStripeGateway
+) -> None:
+    uid = await _user(maker)
+    await _run(
+        maker, cfg, fake, "change_plan", uid, plan=PlanType.PRO, interval="month", **_audit()
+    )
+    (call,) = fake.calls_to("change_subscription_price")
+    assert call.kwargs["extra_metadata"] == {}
+
+
+async def test_remove_comp_with_stale_metadata_after_natural_end_is_not_comped(
+    maker: Maker, cfg: Settings
+) -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription(
+        SUB,
+        price_id=PRO_P,  # the customer was legitimately moved to pro since
+        metadata={COMP_PREV_PRICE_METADATA_KEY: BASIC_P, COMP_PLAN_METADATA_KEY: "pro"},
+    )
+    uid = await _user(maker)
+    with pytest.raises(NotCompedError):
+        await _run(maker, cfg, fake, "remove_comp", uid, **_audit())
+    assert fake.calls_to("change_subscription_price") == []
+    assert fake.subscriptions[SUB].price_id == PRO_P
+
+
+async def test_remove_comp_with_coupon_but_no_prev_price_is_not_comped(
+    maker: Maker, cfg: Settings
+) -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription(SUB, price_id=BASIC_P, coupon_id="solus-comp-forever")
+    uid = await _user(maker)
+    with pytest.raises(NotCompedError):
+        await _run(maker, cfg, fake, "remove_comp", uid, **_audit())
+    assert fake.calls_to("change_subscription_price") == []
+
+
+async def test_remove_comp_ignores_a_non_comp_coupon(maker: Maker, cfg: Settings) -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription(
+        SUB,
+        price_id=PRO_P,
+        coupon_id="SPRING25",
+        metadata={COMP_PREV_PRICE_METADATA_KEY: BASIC_P},
+    )
+    uid = await _user(maker)
+    with pytest.raises(NotCompedError):
+        await _run(maker, cfg, fake, "remove_comp", uid, **_audit())
+    assert fake.calls_to("remove_comp_coupon") == []
+
+
+async def test_comp_upgrade_ignores_stale_prev_price_when_not_currently_comped(
+    maker: Maker, cfg: Settings
+) -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription(
+        SUB, price_id=PRO_P, metadata={COMP_PREV_PRICE_METADATA_KEY: "price_stale"}
+    )
+    uid = await _user(maker)
+    await _run(
+        maker,
+        cfg,
+        fake,
+        "comp_upgrade",
+        uid,
+        plan=PlanType.PRO,
+        duration="once",
+        interval="year",
+        **_audit(),
+    )
+    (change,) = fake.calls_to("change_subscription_price")
+    assert change.kwargs["extra_metadata"][COMP_PREV_PRICE_METADATA_KEY] == PRO_P
+
+
+# ------------------------------------------------------ M-5: bounded under lock
+class _HangingGateway(FakeStripeGateway):
+    async def retrieve_subscription(self, sub_id: str) -> Any:
+        await asyncio.sleep(30)
+        return await super().retrieve_subscription(sub_id)
+
+
+@pytest.mark.parametrize(("op", "kwargs"), _CUSTOMER_OPS)
+async def test_a_hanging_stripe_call_times_out_rolls_back_and_frees_the_lock(
+    maker: Maker,
+    cfg: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    op: str,
+    kwargs: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(admin_operations, "OPERATION_TIMEOUT_SECONDS", 0.05)
+    hanging = _HangingGateway()
+    hanging.seed_subscription(SUB, price_id=BASIC_P)
+    uid = await _user(maker, consent=True)
+    before_row = await _row(maker, uid)
+    with pytest.raises(AdminOperationTimeoutError) as exc:
+        await _run(maker, cfg, hanging, op, uid, **kwargs, **_audit())
+    assert exc.value.code == "operation_timeout" and exc.value.retryable is True
+    assert exc.value.context["operation"] == op
+    assert await _row(maker, uid) == before_row
+    # the FOR UPDATE lock is gone: another op on the same row proceeds immediately
+    await asyncio.wait_for(
+        _run(maker, cfg, hanging, "set_limits_override", uid, limits={"max_teams": 1}, **_audit(2)),
+        timeout=5,
+    )
+
+
+async def test_a_timeout_raised_by_the_gateway_itself_is_not_our_deadline(
+    maker: Maker, cfg: Settings, fake: FakeStripeGateway
+) -> None:
+    fake.fail_next("retrieve_subscription", TimeoutError("gateway-level"))
+    uid = await _user(maker)
+    with pytest.raises(TimeoutError, match="gateway-level"):
+        await _run(
+            maker, cfg, fake, "change_plan", uid, plan=PlanType.PRO, interval="month", **_audit()
+        )
+
+
+async def test_comp_upgrade_needs_a_current_price_to_revert_to(maker: Maker, cfg: Settings) -> None:
+    fake = FakeStripeGateway()
+    snap = fake.seed_subscription(SUB)
+    fake.subscriptions[SUB] = replace(snap, price_id=None)
+    uid = await _user(maker)
+    with pytest.raises(InvalidOperation, match="no current price"):
+        await _run(
+            maker,
+            cfg,
+            fake,
+            "comp_upgrade",
+            uid,
+            plan=PlanType.PRO,
+            duration="forever",
+            interval="month",
+            **_audit(),
+        )
+    assert fake.calls_to("change_subscription_price") == []

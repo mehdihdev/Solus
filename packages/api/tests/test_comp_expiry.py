@@ -124,9 +124,53 @@ async def test_sweep_is_batch_limited_and_resumes(maker: Maker) -> None:
         await _user(maker, comp_plan=PlanType.PRO, comp_expires_at=NOW - timedelta(days=3 - i))
         for i in range(3)
     ]
-    first = await _sweep(maker, limit=2)
+    first = await _sweep(maker, limit=2, max_batches=1)
     assert first == ids[:2]  # oldest expiry first
-    assert await _sweep(maker, limit=2) == [ids[2]]
+    assert await _sweep(maker, limit=2, max_batches=1) == [ids[2]]
+
+
+async def _expired_users(maker: Maker, count: int) -> list[uuid.UUID]:
+    return [
+        await _user(
+            maker, comp_plan=PlanType.PRO, comp_expires_at=NOW - timedelta(days=count + 1 - i)
+        )
+        for i in range(count)
+    ]
+
+
+async def test_sweep_loops_batches_until_nothing_is_left(maker: Maker) -> None:
+    ids = await _expired_users(maker, 5)
+    assert await _sweep(maker, limit=2) == ids  # 3 batches: 2 + 2 + 1
+    async with maker() as s:
+        assert len((await s.scalars(select(Notification))).all()) == 5
+    assert await _sweep(maker, limit=2) == []
+
+
+async def test_sweep_stops_at_the_batch_cap_and_the_next_run_resumes(maker: Maker) -> None:
+    ids = await _expired_users(maker, 5)
+    assert await _sweep(maker, limit=1, max_batches=3) == ids[:3]
+    assert await _sweep(maker, limit=1, max_batches=3) == ids[3:]
+
+
+async def test_each_batch_is_committed_before_the_next(maker: Maker) -> None:
+    ids = await _expired_users(maker, 3)
+    visible: list[int] = []
+    async with maker() as s:
+        real_commit = s.commit
+
+        async def observing_commit() -> None:
+            await real_commit()
+            async with maker() as other:  # another session sees the batch right away
+                visible.append(len((await other.scalars(select(Notification))).all()))
+
+        s.commit = observing_commit  # type: ignore[method-assign]
+        assert await sweep_expired_comps(s, now=NOW, limit=1) == ids
+    assert visible[:3] == [1, 2, 3]
+
+
+async def test_invalid_max_batches_rejected(maker: Maker) -> None:
+    with pytest.raises(ValueError):
+        await _sweep(maker, max_batches=0)
 
 
 async def test_soft_deleted_rows_are_ignored(maker: Maker) -> None:
