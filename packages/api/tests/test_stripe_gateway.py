@@ -13,6 +13,7 @@ from solus_api.billing.stripe_gateway import (
     STRIPE_API_KEY_NAME,
     BillingUnconfiguredError,
     StripeGateway,
+    SubscriptionListTruncatedError,
 )
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 
@@ -827,9 +828,11 @@ async def test_list_customer_subscriptions_hard_caps_pagination(
         return _list_page([(f"sub_{calls}", "active")], has_more=True)
 
     monkeypatch.setattr(stripe.Subscription, "list_async", endless)
-    with pytest.raises(StripeOperationError) as err:
+    with pytest.raises(SubscriptionListTruncatedError) as err:
         await gw().list_customer_subscriptions("cus_1")
-    assert calls == stripe_gateway.MAX_LIST_PAGES and err.value.retryable is False
+    assert calls == stripe_gateway.MAX_LIST_PAGES and err.value.retryable is True
+    # The collected pages are handed back so the caller can act on them before retrying.
+    assert err.value.partial == [f"sub_{i}" for i in range(1, stripe_gateway.MAX_LIST_PAGES + 1)]
 
 
 @pytest.mark.parametrize("bad", ["", "sub_1", "cus_", "cus_a b", None])
@@ -856,3 +859,26 @@ async def test_list_customer_subscriptions_translates_errors(
 async def test_list_customer_subscriptions_without_key_is_unconfigured() -> None:
     with pytest.raises(BillingUnconfiguredError):
         await StripeGateway(_FakeStore(None)).list_customer_subscriptions("cus_1")
+
+
+# ---- FIX-D: every discount coupon is visible ---------------------------------- #
+
+
+async def test_a_promo_sorting_ahead_of_the_comp_coupon_does_not_hide_the_comp(
+    st: _Stripe,
+) -> None:
+    st.results["sub.retrieve"] = _sub(
+        discounts=[{"coupon": {"id": "promo_SPRING"}}, {"coupon": {"id": "solus-comp-forever"}}]
+    )
+    snap = await gw().retrieve_subscription("sub_1")
+    assert snap.coupon_ids == ("promo_SPRING", "solus-comp-forever")
+    assert snap.coupon_id == "solus-comp-forever"
+
+
+async def test_without_a_comp_the_first_coupon_is_the_primary(st: _Stripe) -> None:
+    st.results["sub.retrieve"] = _sub(discounts=[{"coupon": {"id": "a"}}, {"coupon": {"id": "b"}}])
+    snap = await gw().retrieve_subscription("sub_1")
+    assert (snap.coupon_id, snap.coupon_ids) == ("a", ("a", "b"))
+    st.results["sub.retrieve"] = _sub(discounts=[])
+    snap = await gw().retrieve_subscription("sub_1")
+    assert (snap.coupon_id, snap.coupon_ids) == (None, ())

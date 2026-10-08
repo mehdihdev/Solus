@@ -138,3 +138,21 @@ def test_comp_prev_price_needs_both_the_coupon_and_the_marker() -> None:
         )
         is None
     )
+
+
+def test_a_comp_coupon_is_found_among_several_discounts() -> None:
+    both = _snap(coupon_id="promo_x", coupon_ids=("promo_x", "solus-comp-forever"))
+    assert has_comp_coupon(both)
+    assert not has_comp_coupon(_snap(coupon_id="promo_x", coupon_ids=("promo_x",)))
+    assert not has_comp_coupon(_snap(coupon_id=None, coupon_ids=()))
+    # Backwards compatible: a snapshot built with only `coupon_id` still works.
+    assert has_comp_coupon(_snap(coupon_id="solus-comp-once", coupon_ids=()))
+
+
+def test_comp_prev_price_survives_a_promo_listed_before_the_comp() -> None:
+    snap = _snap(
+        coupon_id="promo_x",
+        coupon_ids=("promo_x", "solus-comp-forever"),
+        metadata={COMP_PREV_PRICE_METADATA_KEY: "price_basic"},
+    )
+    assert comp_prev_price(snap) == "price_basic"

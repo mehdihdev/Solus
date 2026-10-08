@@ -136,7 +136,8 @@ def bare_snapshot(sub_id: str) -> SubscriptionSnapshot:
 def has_comp_coupon(snap: SubscriptionSnapshot) -> bool:
     """Whether a Solus comp coupon (`solus-comp-*`) is attached right now. A customer's
     own promo code does not count."""
-    return snap.coupon_id is not None and _COMP_COUPON_RE.fullmatch(snap.coupon_id) is not None
+    attached = {*snap.coupon_ids, *([snap.coupon_id] if snap.coupon_id else [])}
+    return any(_COMP_COUPON_RE.fullmatch(c) for c in attached)
 
 
 def comp_prev_price(snap: SubscriptionSnapshot) -> str | None:
