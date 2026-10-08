@@ -410,11 +410,9 @@ class StripeGateway:
         live: list[str] = []
         cursor: str | None = None
         for _ in range(MAX_LIST_PAGES):
-            params: dict[str, Any] = {
-                "customer": customer_id,
-                "status": "all",
-                "limit": LIST_PAGE_SIZE,
-            }
+            # No `status`: Stripe then lists every NON-canceled subscription, so a customer's
+            # cancellation history never counts toward the pagination cap.
+            params: dict[str, Any] = {"customer": customer_id, "limit": LIST_PAGE_SIZE}
             if cursor is not None:
                 params["starting_after"] = cursor
             page = await self._call("subscription.list", stripe.Subscription.list_async, **params)

@@ -77,7 +77,7 @@ def test_crons_are_registered_with_the_expected_cadence() -> None:
 async def test_cancel_wrapper_cancels_a_due_row_end_to_end(maker: Maker) -> None:
     await _enqueue(maker)
     fake = FakeStripeGateway()
-    fake.seed_subscription("sub_A")
+    fake.seed_subscription("sub_A", customer_id="cus_A")
 
     done = await cancel_stripe_subscriptions({"sessionmaker": maker, "stripe_gateway": fake})
 
@@ -90,7 +90,7 @@ async def test_cancel_wrapper_cancels_a_due_row_end_to_end(maker: Maker) -> None
 async def test_cancel_wrapper_leaves_the_row_for_retry_on_gateway_failure(maker: Maker) -> None:
     await _enqueue(maker)
     fake = FakeStripeGateway()
-    fake.seed_subscription("sub_A")
+    fake.seed_subscription("sub_A", customer_id="cus_A")
     fake.fail_always("cancel_subscription", FakeStripeGateway.connection_error())
 
     done = await cancel_stripe_subscriptions({"sessionmaker": maker, "stripe_gateway": fake})

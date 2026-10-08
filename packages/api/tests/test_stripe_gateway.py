@@ -794,7 +794,10 @@ async def test_list_customer_subscriptions_filters_dead_and_scopes_to_the_custom
     ids = await gw().list_customer_subscriptions("cus_1")
     assert ids == ["sub_live", "sub_due", "sub_inc"]
     [params] = seen
-    assert params["customer"] == "cus_1" and params["status"] == "all"
+    # Omitting `status` lists only non-canceled subscriptions (Stripe's default), so a
+    # long cancellation history never eats into the pagination cap; incomplete_expired
+    # is still filtered out in code.
+    assert params["customer"] == "cus_1" and "status" not in params
     assert params["api_key"] == KEY and 0 < params["limit"] <= 100
     assert "idempotency_key" not in params
 

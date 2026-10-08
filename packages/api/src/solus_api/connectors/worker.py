@@ -1129,8 +1129,9 @@ async def cancel_stripe_subscriptions(ctx: dict[str, Any]) -> int:
         gateway = ctx.get("stripe_gateway") or StripeGateway(ctx["secret_store"])
         async with ctx["sessionmaker"]() as session:
             summary = await run_due_stripe_cancels(session, gateway)
-    except Exception:  # noqa: BLE001 — logged; the durable rows are retried next minute
-        logger.exception("stripe cancel cron failed")
+    except Exception as exc:  # noqa: BLE001 — logged; the durable rows are retried next minute
+        # Type name only: DB tracebacks carry bound parameters (customer/subscription ids).
+        logger.error("stripe cancel cron failed: %s", type(exc).__name__)
         return 0
     return summary.completed
 
@@ -1144,8 +1145,8 @@ async def expire_comps(ctx: dict[str, Any]) -> int:
     try:
         async with ctx["sessionmaker"]() as session:
             return len(await sweep_expired_comps(session))
-    except Exception:  # noqa: BLE001 — logged; the sweep is idempotent and runs again
-        logger.exception("comp expiry sweep failed")
+    except Exception as exc:  # noqa: BLE001 — logged; the sweep is idempotent and runs again
+        logger.error("comp expiry sweep failed: %s", type(exc).__name__)
         return 0
 
 
